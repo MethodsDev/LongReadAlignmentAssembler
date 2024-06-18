@@ -92,5 +92,5 @@ ENV LRAA_VERSION="v0.1.0"
 #    cd LRAA && \
 #    git checkout ${LRAA_CO}
 
-COPY LRAA $SRC
+COPY LRAA $SRC/LRAA
 
