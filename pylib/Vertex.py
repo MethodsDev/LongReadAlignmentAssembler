@@ -1,14 +1,14 @@
 import sys, os, re
 from MultiPath import MultiPath
 from MultiPathGraph import MultiPathGraphNode
-from PASA_scored_path import PASA_scored_path
-import PASA_SALRAA_Globals
+from Scored_path import Scored_path
+import LRAA_Globals
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-class PASA_vertex:
+class Vertex:
 
 
     def __init__(self, multipath_graph_node):
@@ -20,7 +20,7 @@ class PASA_vertex:
         self._fromPaths = list() # hold scored paths.
 
         # add unextended current path node as initial path
-        initial_scored_path = PASA_scored_path([self._multipath_graph_node])
+        initial_scored_path = Scored_path([self._multipath_graph_node])
         self._fromPaths.append(initial_scored_path)
         
 
@@ -28,7 +28,7 @@ class PASA_vertex:
 
     
     def __repr__(self):
-        return("PASA_vertex for {}".format(self._multipath_graph_node.get_simple_path()))
+        return("Vertex for {}".format(self._multipath_graph_node.get_simple_path()))
         
     
     def get_multipath_graph_node(self):
@@ -54,7 +54,7 @@ class PASA_vertex:
         self_mpgn = self.get_mpgn()
         assert(type(self_mpgn) == MultiPathGraphNode)
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             path_ext_dir = "__path_extension_audits"
             if not os.path.exists(path_ext_dir):
                 os.makedirs(path_ext_dir)
@@ -71,21 +71,21 @@ class PASA_vertex:
         for prev_scored_path in prev_pasa_vertex.get_fromPaths():
             if prev_scored_path.incompatibility_detected(self_mpgn):
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     print("-incompatible extension of {}\nto prev scored path: {}".format(self_mpgn, prev_scored_path), file=extension_audit_ofh)
 
             else:
 
                 extension_path_candidate = prev_scored_path.create_scored_path_extension(self_mpgn)
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     print("-extension path candidate: {}".format(extension_path_candidate), file=extension_audit_ofh)
                 
                 if extension_path_candidate.get_score() > best_score:
                     best_score = extension_path_candidate.get_score()
                     best_prev_scored_path = extension_path_candidate
 
-                    if PASA_SALRAA_Globals.DEBUG:
+                    if LRAA_Globals.DEBUG:
                         print("\t** best so far.", file=extension_audit_ofh)
 
                     
@@ -94,7 +94,7 @@ class PASA_vertex:
             self._fromPaths.append(best_prev_scored_path)
             logger.debug("Added best extension path: {} to {}".format(best_prev_scored_path.get_simple_path(), self))
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 print("**  best selected extension path: {}".format(best_prev_scored_path), file=extension_audit_ofh)
             
         return

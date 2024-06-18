@@ -3,8 +3,8 @@
 
 import sys, os, re
 from collections import defaultdict
-import PASA_SALRAA_Globals
-from PASA_SALRAA_Globals import SPACER
+import LRAA_Globals
+from LRAA_Globals import SPACER
 from Splice_graph import Splice_graph
 from GenomeFeature import *
 from Util_funcs import coordpairs_overlap
@@ -679,7 +679,7 @@ def refine_TSS_simple_path(splice_graph, simple_path):
             # swap order
             (nodes_with_coords_list[0], nodes_with_coords_list[1]) = (nodes_with_coords_list[1], nodes_with_coords_list[0])
         
-        elif TSS_coord - lend_coord <= PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites']:
+        elif TSS_coord - lend_coord <= LRAA_Globals.config['max_dist_between_alt_TSS_sites']:
             nodes_with_coords_list = nodes_with_coords_list[TSS_index:]
 
     elif contig_strand == '-' and TSS_indices[-1] != len(nodes_with_coords_list)-1:
@@ -694,7 +694,7 @@ def refine_TSS_simple_path(splice_graph, simple_path):
             (nodes_with_coords_list[-2], nodes_with_coords_list[-1]) = (nodes_with_coords_list[-1], nodes_with_coords_list[-2])
         
         
-        elif rend_coord - TSS_coord <= PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites']:
+        elif rend_coord - TSS_coord <= LRAA_Globals.config['max_dist_between_alt_TSS_sites']:
             nodes_with_coords_list = nodes_with_coords_list[0:TSS_index+1]
         
             
@@ -752,7 +752,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
             (nodes_with_coords_list[-2], nodes_with_coords_list[-1]) = (nodes_with_coords_list[-1], nodes_with_coords_list[-2])
 
 
-        elif rend_coord - polyA_coord <= PASA_SALRAA_Globals.config['max_dist_between_alt_polyA_sites']:
+        elif rend_coord - polyA_coord <= LRAA_Globals.config['max_dist_between_alt_polyA_sites']:
             nodes_with_coords_list = nodes_with_coords_list[0:polyA_index+1]
 
             
@@ -767,7 +767,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
             # swap order
             (nodes_with_coords_list[0], nodes_with_coords_list[1]) = (nodes_with_coords_list[1], nodes_with_coords_list[0])
         
-        elif polyA_coord - lend_coord <= PASA_SALRAA_Globals.config['max_dist_between_alt_polyA_sites']:
+        elif polyA_coord - lend_coord <= LRAA_Globals.config['max_dist_between_alt_polyA_sites']:
             nodes_with_coords_list = nodes_with_coords_list[polyA_index:]
 
             

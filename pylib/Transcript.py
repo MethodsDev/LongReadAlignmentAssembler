@@ -1,7 +1,7 @@
 import sys, os, re
 from collections import defaultdict
 from GenomeFeature import GenomeFeature
-import PASA_scored_path
+import Scored_path
 
 
 class Transcript (GenomeFeature):
@@ -142,7 +142,7 @@ class Transcript (GenomeFeature):
         
         
     def set_scored_path_obj(self, scored_path_obj):
-        assert(type(scored_path_obj) == PASA_scored_path.PASA_scored_path)
+        assert(type(scored_path_obj) == Scored_path.Scored_path)
         self._scored_path_obj = scored_path_obj
         
         

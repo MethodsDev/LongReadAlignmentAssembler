@@ -6,8 +6,8 @@ import MultiPath
 import MultiPathCounter
 import Simple_path_utils as SPU
 from collections import defaultdict
-import PASA_SALRAA_Globals
-from PASA_SALRAA_Globals import SPACER, DEBUG
+import LRAA_Globals
+from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
 
@@ -72,7 +72,7 @@ class Quantify:
 
 
 
-    def _assign_reads_to_transcripts(self, splice_graph, mp_counter, fraction_read_align_overlap=PASA_SALRAA_Globals.config['fraction_read_align_overlap']):
+    def _assign_reads_to_transcripts(self, splice_graph, mp_counter, fraction_read_align_overlap=LRAA_Globals.config['fraction_read_align_overlap']):
 
         logger.info("# Assigning reads to transcripts")
         
@@ -540,7 +540,7 @@ class Quantify:
     @staticmethod
     def filter_isoforms_by_min_isoform_fraction(transcripts, min_isoform_fraction, run_EM):
 
-        min_frac_gene_unique_reads = PASA_SALRAA_Globals.config['min_frac_gene_unique_reads']
+        min_frac_gene_unique_reads = LRAA_Globals.config['min_frac_gene_unique_reads']
         
         logger.info("Filtering transcripts according to min isoform fraction: {}".format(min_isoform_fraction))
 
@@ -725,7 +725,7 @@ class Quantify:
                         subsume_J = False
                         
 
-                        if PASA_SALRAA_Globals.config['collapse_alt_TSS_and_PolyA']:
+                        if LRAA_Globals.config['collapse_alt_TSS_and_PolyA']:
                             logger.debug("Collapsing compatible path: {} into {}".format(transcript_j, transcript_i))
                             subsume_J = True
 
@@ -739,7 +739,7 @@ class Quantify:
                             logger.debug("frac_gene_express_j_TSS {} {} : {:.3f}".format(transcript_j_id, transcript_j_simple_path, frac_gene_express_j_TSS))
 
                             
-                            if frac_gene_express_j_TSS < PASA_SALRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']:
+                            if frac_gene_express_j_TSS < LRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']:
                                 logger.debug(
                                     "based on j_TSS count frac_gene_expression: {:.3f}, path_i: {} is subsuming path_j: {}".format(
                                         frac_gene_express_j_TSS, transcript_i_simple_path, transcript_j_simple_path)
@@ -755,7 +755,7 @@ class Quantify:
                                 logger.debug("frac_i_TSS: {:.3f} of path_j: {} to path_i{}".format(frac_i_TSS, transcript_j_simple_path, transcript_i_simple_path))
 
 
-                                if frac_i_TSS < PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
+                                if frac_i_TSS < LRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
                                     logger.debug("based on frac_i_TSS: {:.3f}, path_i: {} is subsuming path_j: {}".format(frac_i_TSS, transcript_i_simple_path, transcript_j_simple_path))
                                     subsume_J = True
 
@@ -778,7 +778,7 @@ class Quantify:
                         ## But dont subsume if they have polyA and they differ
                         if subsume_J:
                             # here we might resurrect it based on polyA status
-                            if frac_gene_expression_j >= PASA_SALRAA_Globals.config['min_frac_alignments_define_polyA_site']: 
+                            if frac_gene_expression_j >= LRAA_Globals.config['min_frac_alignments_define_polyA_site']: 
                             
                                 if i_polyA_id is not None and j_polyA_id is not None:
                                     if i_polyA_id != j_polyA_id:

@@ -5,8 +5,8 @@ import MultiPathGraph
 import MultiPathCounter
 import networkx as nx
 import Simple_path_utils as Simple_path_utils
-import PASA_SALRAA_Globals
-from PASA_SALRAA_Globals import SPACER
+import LRAA_Globals
+from LRAA_Globals import SPACER
 from GenomeFeature import *
 import math
 

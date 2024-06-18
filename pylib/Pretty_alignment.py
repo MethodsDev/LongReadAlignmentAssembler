@@ -6,7 +6,7 @@ import subprocess
 import logging
 import string
 import pysam
-import PASA_SALRAA_Globals
+import LRAA_Globals
 from collections import defaultdict
 
 
@@ -121,7 +121,7 @@ class Pretty_alignment:
         self.orig_right_soft_clipped_seq = right_soft_clipped_seq
         
         ## deal with polyA
-        min_PolyA_ident_length = PASA_SALRAA_Globals.config['min_PolyA_ident_length']
+        min_PolyA_ident_length = LRAA_Globals.config['min_PolyA_ident_length']
 
         if pysam_alignment.is_forward and right_soft_clipping >= min_PolyA_ident_length :
             polyA_regex = "A" * min_PolyA_ident_length + "+$"
@@ -162,7 +162,7 @@ class Pretty_alignment:
 
         logger.info("Attempting to correct alignments at soft-clips")
         
-        max_softclip_realign_test = PASA_SALRAA_Globals.config['max_softclip_realign_test']
+        max_softclip_realign_test = LRAA_Globals.config['max_softclip_realign_test']
 
         ##################
         # - more extreme verbose setting for debugging this method

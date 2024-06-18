@@ -3,7 +3,7 @@
 
 import sys, os, re
 from collections import defaultdict
-from PASA_SALRAA_Globals import SPACER
+from LRAA_Globals import SPACER
 import Simple_path_utils
 from Util_funcs import coordpairs_overlap
 import logging

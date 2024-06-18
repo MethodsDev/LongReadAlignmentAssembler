@@ -8,7 +8,7 @@ import string
 import pysam
 from collections import defaultdict
 from Pretty_alignment import Pretty_alignment
-import PASA_SALRAA_Globals
+import LRAA_Globals
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +43,13 @@ class Bam_alignment_extractor:
     
     
     def get_read_alignments(self, contig_acc, contig_strand=None, region_lend=None, region_rend=None,
-                            pretty=False, config=PASA_SALRAA_Globals.config):
+                            pretty=False, config=LRAA_Globals.config):
 
         discarded_read_counter = defaultdict(int)
 
         read_alignments = list()
 
-        MIN_MAPPING_QUALITY = int(PASA_SALRAA_Globals.config['min_mapping_quality'])
+        MIN_MAPPING_QUALITY = int(LRAA_Globals.config['min_mapping_quality'])
         
         # parse read alignments, capture introns and genome coverage info.
         read_fetcher = None
@@ -90,7 +90,7 @@ class Bam_alignment_extractor:
             
 
             # determine min per_id based on read type:
-            min_per_id = PASA_SALRAA_Globals.config['min_per_id']
+            min_per_id = LRAA_Globals.config['min_per_id']
             
             # check read alignment percent identity
             cigar_stats = read.get_cigar_stats()

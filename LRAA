@@ -9,11 +9,11 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "pylib"]))
 from Splice_graph import Splice_graph
-from PASA_SALRAA import PASA_SALRAA
+from LRAA import LRAA
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
 import Util_funcs
-import PASA_SALRAA_Globals
+import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
 
@@ -50,8 +50,8 @@ def main():
 
     parser.add_argument("--no_norm", action='store_true', default=False, help="do not run read coverage normalization before isoform reconstruction (equivalent to --normalize_max_cov_level 0)")
     
-    parser.add_argument("--normalize_max_cov_level", type=int, default=PASA_SALRAA_Globals.config['normalize_max_cov_level'],
-                        help="normalize to max read coverage level before assembly (default: {})".format(PASA_SALRAA_Globals.config['normalize_max_cov_level']))
+    parser.add_argument("--normalize_max_cov_level", type=int, default=LRAA_Globals.config['normalize_max_cov_level'],
+                        help="normalize to max read coverage level before assembly (default: {})".format(LRAA_Globals.config['normalize_max_cov_level']))
 
     parser.add_argument("--quant_only", action='store_true', default=False, help="perform quantification only (must specify --gtf with targets for quant)")
 
@@ -79,17 +79,17 @@ def main():
     # disabling spacers for now - important for illumina or dirty long reads
     #config_group.add_argument("--allow_spacers", action='store_true', default=False)
 
-    config_group.add_argument("--min_path_score", type=float, default=PASA_SALRAA_Globals.config['min_path_score'],
-                              help="minimum score for an isoform to be reported. default({})".format(PASA_SALRAA_Globals.config['min_path_score']))
+    config_group.add_argument("--min_path_score", type=float, default=LRAA_Globals.config['min_path_score'],
+                              help="minimum score for an isoform to be reported. default({})".format(LRAA_Globals.config['min_path_score']))
 
-    config_group.add_argument("--min_per_id", type=float, default=PASA_SALRAA_Globals.config['min_per_id'],
-                              help='min per_id for pacbio read alignments. default: ({})'.format(PASA_SALRAA_Globals.config['min_per_id']))
+    config_group.add_argument("--min_per_id", type=float, default=LRAA_Globals.config['min_per_id'],
+                              help='min per_id for pacbio read alignments. default: ({})'.format(LRAA_Globals.config['min_per_id']))
 
-    config_group.add_argument("--min_mapping_quality", type=int, default=PASA_SALRAA_Globals.config['min_mapping_quality'],
-                            help="minimum read alignment mapping quality (default: {})".format(PASA_SALRAA_Globals.config['min_mapping_quality']))
+    config_group.add_argument("--min_mapping_quality", type=int, default=LRAA_Globals.config['min_mapping_quality'],
+                            help="minimum read alignment mapping quality (default: {})".format(LRAA_Globals.config['min_mapping_quality']))
     
-    config_group.add_argument("--min_isoform_fraction", type=float, default=PASA_SALRAA_Globals.config['min_isoform_fraction'],
-                              help='exclude reconstructed isoforms that have read support less than this fraction of all isoforms at each gene (no impact on --quant_only). default: ({})'.format(PASA_SALRAA_Globals.config['min_isoform_fraction']))
+    config_group.add_argument("--min_isoform_fraction", type=float, default=LRAA_Globals.config['min_isoform_fraction'],
+                              help='exclude reconstructed isoforms that have read support less than this fraction of all isoforms at each gene (no impact on --quant_only). default: ({})'.format(LRAA_Globals.config['min_isoform_fraction']))
 
     config_group.add_argument("--no_infer_TSS", action='store_true', default=False, help='do not infer TSS')
     config_group.add_argument("--no_infer_PolyA", action='store_true', default=False, help='do not infer_PolyA')
@@ -103,11 +103,11 @@ def main():
     config_group_altsplice = parser.add_argument_group("alt splice settings")
 
     # TODO:// mv splice defaults to globals.config
-    config_group_altsplice.add_argument("--min_alt_splice_freq", type=float, default=PASA_SALRAA_Globals.config['min_alt_splice_freq'],
-                                        help="min fraction required for alt splicing at an exon boundary (default: {})".format(PASA_SALRAA_Globals.config['min_alt_splice_freq']))
+    config_group_altsplice.add_argument("--min_alt_splice_freq", type=float, default=LRAA_Globals.config['min_alt_splice_freq'],
+                                        help="min fraction required for alt splicing at an exon boundary (default: {})".format(LRAA_Globals.config['min_alt_splice_freq']))
     
-    config_group_altsplice.add_argument("--min_alt_unspliced_freq", type=float, default=PASA_SALRAA_Globals.config['min_alt_unspliced_freq'],
-                                        help="min fraction required for retained intron at splice boundary (default: {})".format(PASA_SALRAA_Globals.config['min_alt_unspliced_freq']))
+    config_group_altsplice.add_argument("--min_alt_unspliced_freq", type=float, default=LRAA_Globals.config['min_alt_unspliced_freq'],
+                                        help="min fraction required for retained intron at splice boundary (default: {})".format(LRAA_Globals.config['min_alt_unspliced_freq']))
     
     
     ## restrict to contig and optionally region of contig
@@ -141,20 +141,20 @@ def main():
     run_EM = args.EM
 
     #if args.collapse:
-    #    PASA_SALRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
+    #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
     
     
     if args.quant_only and input_gtf is None:
         sys.exit("If running --quant_only, must specify --gtf corresponding to targets of quantification")
     
     # update config
-    PASA_SALRAA_Globals.config['min_path_score'] = args.min_path_score
-    PASA_SALRAA_Globals.config['min_per_id'] = args.min_per_id
-    PASA_SALRAA_Globals.config['min_mapping_quality'] = args.min_mapping_quality
-    PASA_SALRAA_Globals.config['min_isoform_fraction'] = args.min_isoform_fraction
-    PASA_SALRAA_Globals.config['infer_TSS'] = not args.no_infer_TSS
-    PASA_SALRAA_Globals.config['infer_PolyA'] = not args.no_infer_PolyA
-    #PASA_SALRAA_Globals.config['try_correct_alignments'] = args.try_correct_alignments
+    LRAA_Globals.config['min_path_score'] = args.min_path_score
+    LRAA_Globals.config['min_per_id'] = args.min_per_id
+    LRAA_Globals.config['min_mapping_quality'] = args.min_mapping_quality
+    LRAA_Globals.config['min_isoform_fraction'] = args.min_isoform_fraction
+    LRAA_Globals.config['infer_TSS'] = not args.no_infer_TSS
+    LRAA_Globals.config['infer_PolyA'] = not args.no_infer_PolyA
+    #LRAA_Globals.config['try_correct_alignments'] = args.try_correct_alignments
     
     
     if args.mpm_monitor:
@@ -163,7 +163,7 @@ def main():
     
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-        PASA_SALRAA_Globals.DEBUG = True
+        LRAA_Globals.DEBUG = True
 
 
     allow_spacers = False
@@ -248,7 +248,7 @@ def main():
 
 
     prereconstruct_info_dir = "__prereconstruct"
-    if PASA_SALRAA_Globals.DEBUG: 
+    if LRAA_Globals.DEBUG: 
         if not os.path.exists(prereconstruct_info_dir):
             os.makedirs(prereconstruct_info_dir)
     
@@ -325,22 +325,22 @@ def main():
                     logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
                     continue
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     sg.write_intron_exon_splice_graph_bed_files("{}/__prereconstruct.{}.{}.pad1".format(prereconstruct_info_dir, contig_acc, contig_strand), pad=1)
 
                 
 
-                pasa_salraa_obj = PASA_SALRAA(sg, CPU)
+                lraa_obj = LRAA(sg, CPU)
                 logger.debug("\n//SECTION QUANT: Assigning input transcript paths in graph")
-                pasa_salraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+                lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     report_transcript_paths_in_graph(input_transcripts, "__input_transcripts_path_in_graph")
 
                     
                 
                 logger.debug("\n//SECTION QUANT: Assigning reads to paths in graph.")
-                mp_counter = pasa_salraa_obj._populate_read_multi_paths(contig_acc, contig_strand, contig_seq_str, bam_file_for_quant, allow_spacers)
+                mp_counter = lraa_obj._populate_read_multi_paths(contig_acc, contig_strand, contig_seq_str, bam_file_for_quant, allow_spacers)
 
                 q = Quantify()
                 logger.debug("\n//SECTION QUANT: Quantifying transcripts according to read support.")
@@ -360,25 +360,25 @@ def main():
                     logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
                     continue
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     sg.write_intron_exon_splice_graph_bed_files("{}/__prereconstruct.{}.{}.pad1".format(prereconstruct_info_dir, contig_acc, contig_strand), pad=1)
 
 
-                pasa_salraa_obj = PASA_SALRAA(sg, CPU)
+                lraa_obj = LRAA(sg, CPU)
                 logger.info(f"-building splice graph for {contig_acc}")
-                pasa_salraa_obj.build_multipath_graph(contig_acc, contig_strand, contig_seq_str, bam_file_for_sg, allow_spacers)
+                lraa_obj.build_multipath_graph(contig_acc, contig_strand, contig_seq_str, bam_file_for_sg, allow_spacers)
 
-                if input_transcripts and PASA_SALRAA_Globals.DEBUG:
-                    pasa_salraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+                if input_transcripts and LRAA_Globals.DEBUG:
+                    lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
                     report_transcript_paths_in_graph(input_transcripts, "__input_transcripts_path_in_graph")
                 
                 logger.info(f"-begin reconstructing isoforms for {contig_acc}")
-                transcripts = pasa_salraa_obj.reconstruct_isoforms(single_best_only)
+                transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
 
                 transcripts, frac_read_assignments = Quantify.prune_likely_degradation_products(transcripts, sg, run_EM)
                 
-                if PASA_SALRAA_Globals.DEBUG or args.include_asm_draft_quant:
+                if LRAA_Globals.DEBUG or args.include_asm_draft_quant:
                     prefilter_transcripts_ofh = open("__transcripts-prefilter.gtf", "at")
                     for transcript in transcripts:
                         prefilter_transcripts_ofh.write(transcript.to_GTF_format() + "\n")
@@ -397,13 +397,13 @@ def main():
 
                 logger.info("writing gtf output for {} [{}] containing {} transcripts".format(contig_acc, contig_strand, len(transcripts)))
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     report_transcript_paths_in_graph(transcripts, "__output_transcripts_path_in_graph")
                     
                 for transcript in transcripts:
                     ofh.write(transcript.to_GTF_format() + "\n")
 
-                if PASA_SALRAA_Globals.DEBUG or args.include_asm_draft_quant:
+                if LRAA_Globals.DEBUG or args.include_asm_draft_quant:
                     debug_quant_ofh = open("__quant_info.tsv", "at")
                     debug_quant_read_tracking_ofh = open("__quant_info.reads_tracked.tsv", "at")
                     q = Quantify()

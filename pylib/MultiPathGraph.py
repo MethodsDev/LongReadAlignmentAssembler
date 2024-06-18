@@ -4,8 +4,8 @@ import MultiPath
 import MultiPathCounter
 import networkx as nx
 import Simple_path_utils as Simple_path_utils
-import PASA_SALRAA_Globals
-from PASA_SALRAA_Globals import SPACER
+import LRAA_Globals
+from LRAA_Globals import SPACER
 from GenomeFeature import *
 from MultiPathGraphNode import MultiPathGraphNode
 from collections import defaultdict
@@ -94,14 +94,14 @@ class MultiPathGraph:
         
         
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             mpg_build_dir = f"__mpg_building/{self._contig_acc}"
             if not os.path.exists(mpg_build_dir):
                 os.makedirs(mpg_build_dir)
             #build_file = os.path.join(mpg_build_dir, "build-{}.txt".format(self._contig_acc))
             #build_ofh = open(build_file, "wt")
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             component_descr_file = "__MPGN_components_described.bed"
             component_descr_ofh = open(component_descr_file, "a")
 
@@ -112,7 +112,7 @@ class MultiPathGraph:
             #print(mp_node_set)
             num_paths = len(mp_node_set)
             logger.info(f"Component {component_id} has {num_paths} paths assigned.")
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 component_description_file = os.path.join(mpg_build_dir, f"{component_id}.comp.descr.tsv")
                 mp_nodes = [self._mp_id_to_node[mp_node_id] for mp_node_id in mp_node_set]
                 mp_nodes = sorted(mp_nodes, key=lambda x: x._lend)
@@ -144,7 +144,7 @@ class MultiPathGraph:
             num_ordered_nodes = len(ordered_nodes)
             logger.info(f"Building MP Graph for component_id {component_id} with {num_ordered_nodes} multipaths")
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 component_build_file = os.path.join(mpg_build_dir, f"{component_id}.comp.buildgraph.tsv")
                 build_ofh = open(component_build_file, "a")
 
@@ -156,12 +156,12 @@ class MultiPathGraph:
                 for j in range(i-1, -1, -1):
                     node_j = ordered_nodes[j]
 
-                    if PASA_SALRAA_Globals.DEBUG:
+                    if LRAA_Globals.DEBUG:
                         print("\n\n# comparing prev_j\n{}\nto_i\n{}".format(node_j, node_i), file=build_ofh)
 
                     # nope - need more clever logic tracking prev max rend in ordered list.
                     #if node_j._rend < node_i._lend:
-                    #    if PASA_SALRAA_Globals.DEBUG:
+                    #    if LRAA_Globals.DEBUG:
                     #        print("-non-overlapping, short-circuiting", file=build_ofh)
                     #    break # all earlier node j's will also be non-overlapping
 
@@ -171,35 +171,35 @@ class MultiPathGraph:
 
                     if node_i.contains_other_node(node_j):
                         # i contains j
-                        if PASA_SALRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG:
                             print("i-contains-j", file=build_ofh)
                         node_i.add_containment(node_j)
 
                     elif node_j.contains_other_node(node_i):
                         # j contains i
-                        if PASA_SALRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG:
                             print("j-contains-i", file=build_ofh)
                         node_j.add_containment(node_i)
 
                     elif node_i.compatible(node_j):
                         # draw edge between overlapping and compatible nodes.
-                        if PASA_SALRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG:
                             print("i-COMPATIBLE-j", file=build_ofh)
                             #logger.debug("adding edge: {},{}".format(node_j, node_i))
 
-                        if not PASA_SALRAA_Globals.config['restrict_asm_to_collapse']:
+                        if not LRAA_Globals.config['restrict_asm_to_collapse']:
                             self._mp_graph.add_edge(node_j, node_i)
 
 
                     else:
                         # incompatible pairs
-                        if PASA_SALRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG:
                             print("i-NOTcompatible-j", file=build_ofh)
                         incompatible_pair_token = MultiPathGraphNode.get_mpgn_pair_token(node_i, node_j)
                         self._incompatible_pairs.add(incompatible_pair_token)
                     
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             component_descr_ofh.close()
         
         logger.info(f"DONE building MultiPathGraph for {contig_acc}")

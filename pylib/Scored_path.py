@@ -5,14 +5,14 @@ import MultiPathGraphNode
 import GenomeFeature
 import Simple_path_utils
 import Transcript
-import PASA_SALRAA_Globals
+import LRAA_Globals
 
 import math
 import logging
 
 logger = logging.getLogger(__name__)
 
-class PASA_scored_path:
+class Scored_path:
 
     def __init__(self, path_list_of_multipath_graph_nodes):
 
@@ -60,7 +60,7 @@ class PASA_scored_path:
         
         
     def __repr__(self):
-        txt = "PASA_scored_path: {} (Score={:.5f}, InitScore={:.5f})\nmpgns:\n".format(self.get_multiPath_obj(), self.get_score(), self.get_initial_score())
+        txt = "Scored_path: {} (Score={:.5f}, InitScore={:.5f})\nmpgns:\n".format(self.get_multiPath_obj(), self.get_score(), self.get_initial_score())
         
         for mpgn in self.get_path_mpgn_list():
             txt += str(mpgn) + "\n"
@@ -116,7 +116,7 @@ class PASA_scored_path:
 
         path_list = self.get_path_mpgn_list() + [extension_mpgn]
 
-        extension_scored_path = PASA_scored_path(path_list)
+        extension_scored_path = Scored_path(path_list)
 
         return extension_scored_path
 
@@ -254,7 +254,7 @@ class PASA_scored_path:
 
         audit_txt = ""
         
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             audit_txt = "Computing path score for: {}\n".format(self._multiPath_obj)
         
         for mpgn in mpgn_list:
@@ -262,18 +262,18 @@ class PASA_scored_path:
                 score_increment = mpgn.get_score_INCLUDE_containments(use_prev_weight=False, mpgn_ignore=seen)
                 score += score_increment
 
-                if PASA_SALRAA_Globals.DEBUG:
+                if LRAA_Globals.DEBUG:
                     audit_txt += "\tscore subtotal: {:.5f}, increment {:.5f}, mpgn: {}\n".format(score, score_increment, mpgn)
                 
             seen.add(mpgn)
             for containment in mpgn.get_containments():
                 if containment not in seen:
                     seen.add(containment)
-                    if PASA_SALRAA_Globals.DEBUG:
+                    if LRAA_Globals.DEBUG:
                         audit_txt += "\t\tcontainment: {}\n".format(containment)
 
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             logger.debug(audit_txt)
            
         """

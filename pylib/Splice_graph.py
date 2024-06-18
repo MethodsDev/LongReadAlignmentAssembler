@@ -11,7 +11,7 @@ import networkx as nx
 import intervaltree as itree
 from GenomeFeature import *
 from Bam_alignment_extractor import Bam_alignment_extractor
-import PASA_SALRAA_Globals
+import LRAA_Globals
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ class Splice_graph:
 
                     logger.debug("\t\tRange {}-{} overlaps {}, overlap_len = {}, frac_feature_overlap = {:.3f}, frac_range_overlap = {:.3f}".format(range_lend, range_rend, node, overlap_len, frac_feature_len_overlap, frac_target_range_len_overlap))
                     
-                    if frac_feature_len_overlap >= min_frac_feature_overlap or frac_target_range_len_overlap >= min_frac_feature_overlap:  #PASA_SALRAA_Globals.config['min_feature_frac_overlap']:
+                    if frac_feature_len_overlap >= min_frac_feature_overlap or frac_target_range_len_overlap >= min_frac_feature_overlap:  #LRAA_Globals.config['min_feature_frac_overlap']:
                         overlapping_exon_segments.append(node)
 
                 else:
@@ -210,7 +210,7 @@ class Splice_graph:
             return None
 
         
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r1", pad=0)
             self.describe_graph("__prefilter_r1.graph")
                 
@@ -247,7 +247,7 @@ class Splice_graph:
 
 
         
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
             self.describe_graph("__prefilter_r2.graph")
 
@@ -265,7 +265,7 @@ class Splice_graph:
             # revise again
             self._merge_neighboring_proximal_unbranched_exon_segments()
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 self.write_intron_exon_splice_graph_bed_files("__prefilter_r3", pad=0)
                 self.describe_graph("__prefilter_r3.graph")
 
@@ -281,7 +281,7 @@ class Splice_graph:
                 self._finalize_splice_graph()
             
                
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__final_graph", pad=0)
             self.describe_graph("__final.graph")
             append_log_file("__TSS_info.bed", self._TSS_objs) 
@@ -389,7 +389,7 @@ class Splice_graph:
         polyA_position_counter = defaultdict(int)
 
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             TSS_reads_ofh = open("__TSS_read_support.tsv", "at")
             POLYA_reads_ofh = open("__POLYA_read_support.tsv", "at")
         
@@ -411,14 +411,14 @@ class Splice_graph:
             polyA_pos_soft_clipping = pretty_alignment.right_soft_clipping if contig_strand == '+' else pretty_alignment.left_soft_clipping
             
             
-            if TSS_pos_soft_clipping <= PASA_SALRAA_Globals.config['max_soft_clip_at_TSS']:
+            if TSS_pos_soft_clipping <= LRAA_Globals.config['max_soft_clip_at_TSS']:
                 TSS_position_counter[TSS_pos] += 1
 
-            if polyA_pos_soft_clipping <= PASA_SALRAA_Globals.config['max_soft_clip_at_PolyA']:
+            if polyA_pos_soft_clipping <= LRAA_Globals.config['max_soft_clip_at_PolyA']:
                 polyA_position_counter[polyA_pos] += 1
             
             
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 print("\t".join([contig_acc, contig_strand, str(TSS_pos), read_name]), file=TSS_reads_ofh)
                 print("\t".join([contig_acc, contig_strand, str(polyA_pos), read_name]), file=POLYA_reads_ofh)
             
@@ -481,17 +481,17 @@ class Splice_graph:
 
         
         # Define TSS and PolyA sites
-        if PASA_SALRAA_Globals.config['infer_TSS']:
+        if LRAA_Globals.config['infer_TSS']:
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 write_pos_counter_info("__prelim_TSS_raw_counts.tsv", TSS_position_counter, contig_acc, contig_strand)
 
 
                 
             
             TSS_grouped_positions = aggregate_sites_within_window(TSS_position_counter,
-                                                                  PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites'],
-                                                                  PASA_SALRAA_Globals.config['min_alignments_define_TSS_site'])
+                                                                  LRAA_Globals.config['max_dist_between_alt_TSS_sites'],
+                                                                  LRAA_Globals.config['min_alignments_define_TSS_site'])
             
 
             TSS_grouped_positions = filter_non_peaky_positions(TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand)
@@ -501,23 +501,23 @@ class Splice_graph:
                 position, count = TSS_peak
                 self._TSS_objs.append(TSS(contig_acc, position, position, contig_strand, count))
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 append_log_file("__prefilter_TSS_info.bed", self._TSS_objs)
                 
-        if PASA_SALRAA_Globals.config['infer_PolyA']:
+        if LRAA_Globals.config['infer_PolyA']:
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 write_pos_counter_info("__prelim_polyA_raw_counts.tsv", polyA_position_counter, contig_acc, contig_strand)
             
             PolyA_grouped_positions = aggregate_sites_within_window(polyA_position_counter,
-                                                                    PASA_SALRAA_Globals.config['max_dist_between_alt_polyA_sites'],
-                                                                    PASA_SALRAA_Globals.config['min_alignments_define_polyA_site'])
+                                                                    LRAA_Globals.config['max_dist_between_alt_polyA_sites'],
+                                                                    LRAA_Globals.config['min_alignments_define_polyA_site'])
 
             for polyA_site_grouping in PolyA_grouped_positions:
                 position, count = polyA_site_grouping
                 self._PolyA_objs.append(PolyAsite(contig_acc, position, position, contig_strand, count))
                 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 append_log_file("__prefilter_PolyAsite_info.bed", self._PolyA_objs)
                     
         return
@@ -905,7 +905,7 @@ class Splice_graph:
         introns_to_delete = set()
 
         ofh = None
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             ofh = open("__splice_neighbor_cov_ratios.dat", 'a')
         
         for intron in self._intron_objs.values():
@@ -922,7 +922,7 @@ class Splice_graph:
             
             ratio_C_D = (C_mean_cov + pseudocount) / (D_mean_cov + pseudocount)
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 ofh.write("{}".format(lend) +
                           "\tI:{}".format(intron_abundance) +
                           "\tA:{:.3f}".format(A_mean_cov) +
@@ -1000,7 +1000,7 @@ class Splice_graph:
             exon_segments.append([exon_seg_start, len(self._contig_base_cov)])
 
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             # write exon list to file
             with open("__exon_regions.init.bed", 'a') as ofh:
                 for segment in exon_segments:
@@ -1087,7 +1087,7 @@ class Splice_graph:
         if exons_to_purge:
             draft_splice_graph.remove_nodes_from(exons_to_purge)
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             exons_to_purge = list(exons_to_purge)
             exons_to_purge = sorted(exons_to_purge, key=lambda x: x._lend)
             with open("__exon_segments_to_purge.bed", 'a') as ofh:
@@ -1114,7 +1114,7 @@ class Splice_graph:
 
         logger.info("-pruning {} now disconnected introns".format(len(introns_to_remove)))
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             with open("__pruned_disconnected_introns.bed", 'a') as ofh:
                 for intron in introns_to_remove:
                     ofh.write(intron.get_bed_row(pad=1) + "\n")
@@ -1359,7 +1359,7 @@ class Splice_graph:
             else:
                 prev_node = next_node
                 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             with open("__merged_exons.list", "a") as ofh:
                 print("\n".join(merged_node_ids), file=ofh)
 
@@ -1385,8 +1385,8 @@ class Splice_graph:
 
             logger.debug("Evaluating {} as potential R_spur".format(exon_node))
 
-            if exon_node.get_feature_length() > PASA_SALRAA_Globals.config['max_exon_spur_length']:
-                logger.debug("{} not R spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), PASA_SALRAA_Globals.config['max_exon_spur_length']))
+            if exon_node.get_feature_length() > LRAA_Globals.config['max_exon_spur_length']:
+                logger.debug("{} not R spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), LRAA_Globals.config['max_exon_spur_length']))
                 return False
             
             has_successor = self._node_has_successors(exon_node)
@@ -1428,8 +1428,8 @@ class Splice_graph:
 
             logger.debug("Evaluating {} as potential L_spur".format(exon_node))
             
-            if exon_node.get_feature_length() > PASA_SALRAA_Globals.config['max_exon_spur_length']:
-                logger.debug("{} not L spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), PASA_SALRAA_Globals.config['max_exon_spur_length']))
+            if exon_node.get_feature_length() > LRAA_Globals.config['max_exon_spur_length']:
+                logger.debug("{} not L spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), LRAA_Globals.config['max_exon_spur_length']))
                 return False
 
             
@@ -1479,7 +1479,7 @@ class Splice_graph:
         if exons_to_prune:
             logger.info("-removing {} exon spurs".format(len(exons_to_prune)))
 
-            if PASA_SALRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG:
                 with open("__pruned_exon_spurs.list", "a") as ofh:
                     for exon in exons_to_prune:
                         print(exon.get_id(), file=ofh)
@@ -1503,13 +1503,13 @@ class Splice_graph:
 
             elif type(node) == TSS:
                 TSS_coord, _ = node.get_coords()
-                max_dist_between_alt_TSS_sites = PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites']
+                max_dist_between_alt_TSS_sites = LRAA_Globals.config['max_dist_between_alt_TSS_sites']
                 half_dist = int(max_dist_between_alt_TSS_sites/2)
                 self._itree_exon_segments[TSS_coord-half_dist : TSS_coord+half_dist+1] = node
 
             elif type(node) == PolyAsite:
                 polyAsite_coord, _ = node.get_coords()
-                max_dist_between_alt_polyA_sites = PASA_SALRAA_Globals.config['max_dist_between_alt_polyA_sites']
+                max_dist_between_alt_polyA_sites = LRAA_Globals.config['max_dist_between_alt_polyA_sites']
                 half_dist = int(max_dist_between_alt_polyA_sites/2)
                 self._itree_exon_segments[polyAsite_coord-half_dist : polyAsite_coord+half_dist+1] = node
 
@@ -1533,7 +1533,7 @@ class Splice_graph:
 
         itree = self._itree_exon_segments
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             with open("__itree_contents.txt", "wt") as ofh:
                 for interval in itree:
                     print(str(interval), file=ofh)
@@ -1613,7 +1613,7 @@ class Splice_graph:
         if exons_to_purge:
             draft_splice_graph.remove_nodes_from(exons_to_purge)
 
-        if PASA_SALRAA_Globals.DEBUG:
+        if LRAA_Globals.DEBUG:
             exons_to_purge = list(exons_to_purge)
             exons_to_purge = sorted(exons_to_purge, key=lambda x: x._lend)
             with open("__exon_segments_to_purge.bed", 'a') as ofh: # file should be already created based on earlier low expressed exon segments overlapping introns removal step
@@ -1645,7 +1645,7 @@ class Splice_graph:
                 sum_TSS_read_support += TSS_obj.get_read_support()
                 
             
-            min_TSS_iso_fraction = PASA_SALRAA_Globals.config['min_TSS_iso_fraction']
+            min_TSS_iso_fraction = LRAA_Globals.config['min_TSS_iso_fraction']
             
             TSS_to_purge = list()
 
@@ -1672,7 +1672,7 @@ class Splice_graph:
             # remove remaining potential degradation products
             # walk the splice graph along linear exon connections and prune alt TSSs that have lower than the frac dominant support
             TSS_to_purge = set() # reinit as set
-            max_frac_TSS_is_degradation = PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation'] # if neighboring TSS has this frac or less, gets purged as degradation product 
+            max_frac_TSS_is_degradation = LRAA_Globals.config['max_frac_alt_TSS_from_degradation'] # if neighboring TSS has this frac or less, gets purged as degradation product 
             for TSS_obj in TSS_list:
                 if TSS_obj in TSS_to_purge:
                     continue
@@ -1745,8 +1745,8 @@ def filter_non_peaky_positions(grouped_position_counts, position_counter, contig
     ofh = open("__TSS_filter_non_peaky_positions.tsv", "at")
     pseudocount = 1
     
-    window_len = PASA_SALRAA_Globals.config['TSS_window_read_enrich_len']
-    window_enrichment_factor = PASA_SALRAA_Globals.config['TSS_window_read_enrich_factor']
+    window_len = LRAA_Globals.config['TSS_window_read_enrich_len']
+    window_enrichment_factor = LRAA_Globals.config['TSS_window_read_enrich_factor']
     
     for grouped_position in grouped_position_counts:
         position, count = grouped_position
