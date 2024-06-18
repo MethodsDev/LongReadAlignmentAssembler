@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['E:192', 'I:97', 'E:193', 'I:106', 'E:197', 'I:104', 'E:204', 'E:208', 'E:210', 'E:211', 'E:206', 'I:105', 'E:207'] rtypes:set() rnames: set() (Score=5.00000, InitScore=5.00000)
-mpgns:
-<mp63x:['E:192', 'I:97', 'E:193', 'I:106', 'E:197', 'I:104', 'E:204', 'E:208', 'E:210', 'E:211', 'E:206', 'I:105', 'E:207'] 1001-147957 Count:5 W:1.00000000 Containments:0, ScoreExcCont:5.0000 ScoreInclCon:5.0000 len:2499 read_names:{'0-SIRV701', '1-SIRV701', '2-SIRV705', '1-SIRV705', '0-SIRV705'}>
-

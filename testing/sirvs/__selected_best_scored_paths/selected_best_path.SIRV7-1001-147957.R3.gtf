@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['POLYA:39', 'E:213', 'I:107', 'E:199', 'I:108', 'E:200', 'E:201', 'E:202', 'I:100', 'E:204', 'E:208', 'E:210', 'E:211', 'E:206', 'I:105', 'E:207'] rtypes:set() rnames: set() (Score=6.00000, InitScore=6.00000)
-mpgns:
-<mp65x:['POLYA:39', 'E:213', 'I:107', 'E:199', 'I:108', 'E:200', 'E:201', 'E:202', 'I:100', 'E:204', 'E:208', 'E:210', 'E:211', 'E:206', 'I:105', 'E:207'] 56032-147957 Count:6 W:1.00000000 Containments:0, ScoreExcCont:6.0000 ScoreInclCon:6.0000 len:949 read_names:{'2-SIRV706', '0-SIRV706', '1-SIRV706', '4-SIRV706', '3-SIRV706', '5-SIRV706'}>
-

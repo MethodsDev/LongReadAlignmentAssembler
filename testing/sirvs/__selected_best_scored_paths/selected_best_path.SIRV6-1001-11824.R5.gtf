@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['TSS:28', 'E:172', 'E:173', 'E:174', 'E:175', 'E:180', 'POLYA:30'] rtypes:set() rnames: set() (Score=8.00000, InitScore=8.00000)
-mpgns:
-<mp58x:['TSS:28', 'E:172', 'E:173', 'E:174', 'E:175', 'E:180', 'POLYA:30'] 9000-10968 Count:8 W:1.00000000 Containments:0, ScoreExcCont:8.0000 ScoreInclCon:8.0000 len:1969 read_names:{'7-SIRV603', '5-SIRV603', '1-SIRV603', '6-SIRV603', '2-SIRV603', '3-SIRV603', '0-SIRV603', '4-SIRV603'}>
-

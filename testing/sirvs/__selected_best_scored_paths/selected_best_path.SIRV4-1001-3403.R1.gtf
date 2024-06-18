@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['E:81', 'I:47', 'E:83', 'I:48', 'E:86', 'E:87', 'POLYA:16'] rtypes:set() rnames: set() (Score=4.00000, InitScore=4.00000)
-mpgns:
-<mp25x:['E:81', 'I:47', 'E:83', 'I:48', 'E:86', 'E:87', 'POLYA:16'] 1001-3403 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1567 read_names:{'1-SIRV409', '2-SIRV409', '0-SIRV409', '3-SIRV409'}>
-

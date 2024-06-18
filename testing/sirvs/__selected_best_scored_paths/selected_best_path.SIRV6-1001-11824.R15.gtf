@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['TSS:24', 'E:148', 'E:168', 'E:184', 'E:185', 'I:82', 'E:150', 'E:151', 'E:152', 'I:83', 'E:154', 'I:84', 'E:174'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
-mpgns:
-<mp52x:['TSS:24', 'E:148', 'E:168', 'E:184', 'E:185', 'I:82', 'E:150', 'E:151', 'E:152', 'I:83', 'E:154', 'I:84', 'E:174'] 2286-10815 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:572 read_names:{'0-SIRV606', '1-SIRV606'}>
-

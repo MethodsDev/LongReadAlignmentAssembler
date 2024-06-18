@@ -1,2 +1,0 @@
-<mp26x:['E:82', 'E:83', 'I:49', 'E:84', 'E:86', 'POLYA:17'] 1456-2771 Count:3 W:1.00000000 Containments:0, ScoreExcCont:3.0000 ScoreInclCon:3.0000 len:950 read_names:{'1-SIRV410', '0-SIRV410', '2-SIRV410'}>
-<mp25x:['E:81', 'I:47', 'E:83', 'I:48', 'E:86', 'E:87', 'POLYA:16'] 1001-3403 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1567 read_names:{'1-SIRV409', '2-SIRV409', '0-SIRV409', '3-SIRV409'}>

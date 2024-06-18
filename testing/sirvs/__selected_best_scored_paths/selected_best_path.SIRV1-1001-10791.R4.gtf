@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['POLYA:2', 'E:9', 'I:10', 'E:13', 'I:11', 'E:17', 'E:22', 'E:23', 'E:24', 'TSS:4'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
-mpgns:
-<mp4x:['POLYA:2', 'E:9', 'I:10', 'E:13', 'I:11', 'E:17', 'E:22', 'E:23', 'E:24', 'TSS:4'] 1001-10786 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:973 read_names:{'2-SIRV106', '4-SIRV106', '6-SIRV106', '3-SIRV106', '0-SIRV106', '5-SIRV106', '1-SIRV106'}>
-

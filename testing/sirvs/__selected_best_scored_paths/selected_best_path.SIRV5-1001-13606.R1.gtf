@@ -1,4 +1,0 @@
-Transcript path: PASA_scored_path: ['TSS:18', 'E:132', 'I:69', 'E:122', 'I:70', 'E:123', 'I:78', 'E:135', 'POLYA:23'] rtypes:set() rnames: set() (Score=15.00000, InitScore=15.00000)
-mpgns:
-<mp41x:['TSS:18', 'E:132', 'I:69', 'E:122', 'I:70', 'E:123', 'I:78', 'E:135', 'POLYA:23'] 8316-11866 Count:15 W:1.00000000 Containments:0, ScoreExcCont:15.0000 ScoreInclCon:15.0000 len:885 read_names:{'5-SIRV509', '1-SIRV509', '4-SIRV509', '14-SIRV509', '0-SIRV509', '3-SIRV509', '6-SIRV509', '12-SIRV509', '2-SIRV509', '10-SIRV509', '11-SIRV509', '13-SIRV509', '7-SIRV509', '8-SIRV509', '9-SIRV509'}>
-
