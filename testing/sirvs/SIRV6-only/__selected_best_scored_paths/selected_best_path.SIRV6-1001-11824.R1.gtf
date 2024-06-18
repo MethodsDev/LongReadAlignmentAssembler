@@ -1,0 +1,20 @@
+Transcript path: PASA_scored_path: ['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] rtypes:set() rnames: set() (Score=19.00000, InitScore=19.00000)
+mpgns:
+<mp14x:['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] 3107-11824 Count:13 W:1.00000000 Containments:1, ScoreExcCont:13.0000 ScoreInclCon:19.0000 len:1310 read_names:{'7-SIRV613', '4-SIRV615', '5-SIRV613', '2-SIRV613', '8-SIRV613', '2-SIRV615', '5-SIRV615', '11-SIRV613', '3-SIRV613', '10-SIRV613', '9-SIRV613', '3-SIRV615', '6-SIRV613', '1-SIRV613', '1-SIRV615', '0-SIRV613', '12-SIRV613', '0-SIRV615', '4-SIRV613'}>
+	contained: <mp16x:['E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38'] 10725-11331 Count:6 W:1.00000000 Containments:0, ScoreExcCont:6.0000 ScoreInclCon:6.0000 len:297 read_names:{'4-SIRV615', '2-SIRV615', '3-SIRV615', '0-SIRV615', '1-SIRV615', '5-SIRV615'}>
+
+Transcript path: PASA_scored_path: ['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] rtypes:set() rnames: set() (Score=19.00000, InitScore=19.00000)
+mpgns:
+<mp14x:['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] 3107-11824 Count:13 W:1.00000000 Containments:1, ScoreExcCont:13.0000 ScoreInclCon:19.0000 len:1310 read_names:{'0-SIRV613', '4-SIRV613', '7-SIRV613', '3-SIRV615', '4-SIRV615', '1-SIRV615', '2-SIRV613', '5-SIRV613', '6-SIRV613', '1-SIRV613', '12-SIRV613', '5-SIRV615', '8-SIRV613', '11-SIRV613', '3-SIRV613', '9-SIRV613', '10-SIRV613', '0-SIRV615', '2-SIRV615'}>
+	contained: <mp16x:['E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38'] 10725-11331 Count:6 W:1.00000000 Containments:0, ScoreExcCont:6.0000 ScoreInclCon:6.0000 len:297 read_names:{'5-SIRV615', '3-SIRV615', '0-SIRV615', '4-SIRV615', '2-SIRV615', '1-SIRV615'}>
+
+Transcript path: PASA_scored_path: ['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] rtypes:set() rnames: set() (Score=19.00000, InitScore=19.00000)
+mpgns:
+<mp14x:['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] 3107-11824 Count:13 W:1.00000000 Containments:1, ScoreExcCont:13.0000 ScoreInclCon:19.0000 len:1310 read_names:{'2-SIRV615', '1-SIRV613', '5-SIRV615', '8-SIRV613', '10-SIRV613', '2-SIRV613', '9-SIRV613', '6-SIRV613', '3-SIRV613', '12-SIRV613', '3-SIRV615', '4-SIRV613', '0-SIRV613', '11-SIRV613', '4-SIRV615', '1-SIRV615', '7-SIRV613', '0-SIRV615', '5-SIRV613'}>
+	contained: <mp16x:['E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38'] 10725-11331 Count:6 W:1.00000000 Containments:0, ScoreExcCont:6.0000 ScoreInclCon:6.0000 len:297 read_names:{'2-SIRV615', '4-SIRV615', '1-SIRV615', '0-SIRV615', '3-SIRV615', '5-SIRV615'}>
+
+Transcript path: PASA_scored_path: ['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] rtypes:set() rnames: set() (Score=19.00000, InitScore=19.00000)
+mpgns:
+<mp14x:['E:15', 'I:17', 'E:16', 'I:18', 'E:17', 'I:16', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'E:40', 'POLYA:2'] 3107-11824 Count:13 W:1.00000000 Containments:1, ScoreExcCont:13.0000 ScoreInclCon:19.0000 len:1310 read_names:{'0-SIRV615', '0-SIRV613', '2-SIRV613', '4-SIRV615', '10-SIRV613', '3-SIRV613', '11-SIRV613', '12-SIRV613', '5-SIRV613', '1-SIRV615', '5-SIRV615', '9-SIRV613', '7-SIRV613', '1-SIRV613', '4-SIRV613', '6-SIRV613', '8-SIRV613', '2-SIRV615', '3-SIRV615'}>
+	contained: <mp16x:['E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38'] 10725-11331 Count:6 W:1.00000000 Containments:0, ScoreExcCont:6.0000 ScoreInclCon:6.0000 len:297 read_names:{'0-SIRV615', '5-SIRV615', '4-SIRV615', '2-SIRV615', '1-SIRV615', '3-SIRV615'}>
+

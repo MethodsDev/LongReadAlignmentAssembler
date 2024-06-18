@@ -1,0 +1,115 @@
+############################
+# overall flow (pasa-salraa)
+############################
+
+foreach contig:
+    #build a splice graph:
+    sg = Splice_graph()
+    sg.build_splice_graph_for_contig(contig_acc, contig_seq_str, bam_file)
+
+	# build pasa-salraa object and reconstruct isoforms:
+	pasa_salraa_obj = PASA_SALRAA(sg, CPU)
+    pasa_salraa_obj.build_multipath_graph(contig_acc, contig_seq_str, bam_file, allow_spacers)
+    transcripts = pasa_salraa_obj.reconstruct_isoforms(single_best_only)
+
+
+##########################################################
+# pasa_salraa_obj.build_multipath_graph  (PASA_SALRAA.py)
+##########################################################
+
+# assign each read to a multi-path in the splice graph and count them up
+mp_counter = self._populate_read_multi_paths(contig_acc, contig_seq, bam_file)
+
+# build the multipath graph (mpg) where each node is a multipath with count assigned.
+multipath_graph = MultiPathGraph(mp_counter, self._splice_graph, PASA_SALRAA.min_mpgn_read_count, allow_spacers)
+multipath_graph.describe_graph("__multipath_graph.dat")
+
+
+###################################################
+# building the multipath graph: (MultiPathGraph.py)
+###################################################
+
+# convert multipaths to graph nodes (mpgn)
+for mpCountPair in multiPathCountPairs:
+  mp_graph_node = MultiPathGraphNode(mp, count, lend_coord, rend_coord, mpg=self)
+
+# define containments and overlapping compatibilities
+- edges are added between multipath graph nodes if they are overlapping and compatible.
+- containments are also defined. A contained mpgn gets added a node's containment list.
+
+
+###########################################################
+# isoform reconstruction (PASA_SALRAA.reconstruct_isoforms)
+###########################################################
+
+# mpg components are first identified based on having shared vertices in the splice graph:
+mpg_components = mpg.define_disjoint_graph_components_via_shared_splice_graph_vertex()
+- small ones get filtered out:
+mpg.write_mp_graph_nodes_to_gtf("mpgns.post_length_filter.gtf")
+
+# each component is then targeted for transcript reconstruction using multithreading:
+foreach mpg_component:
+	p = Process(target=self._reconstruct_isoforms_single_component,
+              args=(q, mpg_component, component_counter, mpg_token, single_best_only) )
+
+## reconstruction:
+
+- build DP trellis:
+pasa_vertices = self._build_trellis(mpg_component)
+
+- select best transcript path from trellis:
+transcript_path = self._retrieve_best_transcript(pasa_vertices)
+
+
+###########################################################################
+# Trellis construction ((PASA_SALRAA._build_trellis(self, mpg_component) )
+###########################################################################
+
+- mpgns are converted to pasa vertices (pv).
+	Each pv has:
+      - self._multipath_graph_nod  # stores the corresponding mpgn
+      - self._weight
+      - self._fromPaths  # holds scored paths, including one based on the current mnpgn alone at init.
+
+- pvs sorted by lend
+- for trellis construction, if edge between nodes j->i,  pv_i.add_highest_scoring_path_extension(pv_j) 
+	- for each prev node j, store the best extended path from j in as a from_path in i
+
+#################################################################################
+# creating path extensions (PASA_scored_path.create_scored_path_extension(mpgn) )
+#################################################################################
+
+
+########################################
+## Notes on TSS-definition and filtering
+    
+    - Splice graph construction:
+    	- count read end positions if reads have <= PASA_SALRAA_Globals.config['max_soft_clip_at_TSS']
+        	- writes: __prelim_TSS_raw_counts.tsv
+        - aggregates sites within window and according to min alignment count:
+               PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites']
+               PASA_SALRAA_Globals.config['min_alignments_define_TSS_site']
+
+       - TSS peaks in grouped positions are added as prelim TSS objects
+            - writes: __prefilter_TSS_info.bed
+
+       - TSS objs are incorporated into the splice graph, fracturing exon segments
+
+       - TSS filtering based on graph connected components:
+             - whole component: TSSs are eliminated if read support / total TSS read counts < PASA_SALRAA_Globals.config['min_TSS_iso_fraction']  
+    		- walking exons downstream from a top-read-count TSS, removing alt TSSs if alt TSS < PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation']  
+
+
+    - Reads are assigned paths based on the refined splice graph including remaining TSSs
+    - Read paths are clustered based on common paths.
+    - Quantify.prune_likely_degradation_products:
+    	various rules based on comparing two paths i,j where path_j is contained and compatible with path_i
+    		- frac_gene_express_j_TSS < PASA_SALRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']
+    		- frac_i_TSS =  j_TSS_read_count/i_TSS_read_count & frac_i_TSS < PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
+            - various polyA-based logic in case polyA sites differ
+
+    -  Quantify.filter_isoforms_by_min_isoform_fraction
+		- basic logic on filtering lowly supported isoforms, not exactly alt-TSS specific
+
+
+    

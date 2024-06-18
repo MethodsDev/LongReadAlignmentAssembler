@@ -1,0 +1,4 @@
+Transcript path: PASA_scored_path: ['E:29', 'POLYA:6'] rtypes:set() rnames: set() (Score=3.00000, InitScore=3.00000)
+mpgns:
+<mp9x:['E:29', 'POLYA:6'] 4034-4457 Count:3 W:1.00000000 Containments:0, ScoreExcCont:3.0000 ScoreInclCon:3.0000 len:424 read_names:{'2-SIRV206', '0-SIRV206', '1-SIRV206'}>
+

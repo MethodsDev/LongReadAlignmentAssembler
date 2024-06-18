@@ -1,0 +1,16 @@
+Transcript path: PASA_scored_path: ['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] rtypes:set() rnames: set() (Score=4.00000, InitScore=4.00000)
+mpgns:
+<mp11x:['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] 2471-11690 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1165 read_names:{'1-SIRV610', '3-SIRV610', '2-SIRV610', '0-SIRV610'}>
+
+Transcript path: PASA_scored_path: ['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] rtypes:set() rnames: set() (Score=4.00000, InitScore=4.00000)
+mpgns:
+<mp11x:['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] 2471-11690 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1165 read_names:{'0-SIRV610', '3-SIRV610', '2-SIRV610', '1-SIRV610'}>
+
+Transcript path: PASA_scored_path: ['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] rtypes:set() rnames: set() (Score=4.00000, InitScore=4.00000)
+mpgns:
+<mp11x:['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] 2471-11690 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1165 read_names:{'3-SIRV610', '0-SIRV610', '1-SIRV610', '2-SIRV610'}>
+
+Transcript path: PASA_scored_path: ['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] rtypes:set() rnames: set() (Score=4.00000, InitScore=4.00000)
+mpgns:
+<mp11x:['E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'E:31', 'E:32', 'E:21', 'E:22', 'I:8', 'E:37', 'E:38', 'E:39', 'POLYA:9'] 2471-11690 Count:4 W:1.00000000 Containments:0, ScoreExcCont:4.0000 ScoreInclCon:4.0000 len:1165 read_names:{'2-SIRV610', '0-SIRV610', '1-SIRV610', '3-SIRV610'}>
+

@@ -1,0 +1,540 @@
+#SIRV6:1304:1950:N:20:+	4-SIRV611,7-SIRV611,5-SIRV611,0-SIRV611,1-SIRV611,8-SIRV611,9-SIRV611,3-SIRV611,2-SIRV611,6-SIRV611
+SIRV6	PASA-SALRAA	transcript	1304	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1304	1381	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1641	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+
+#SIRV6:3024:11270:N:24:+	1-SIRV608,0-SIRV608,4-SIRV608,2-SIRV608,3-SIRV608
+SIRV6	PASA-SALRAA	transcript	3024	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	3024	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+
+#SIRV6:1001:11331:N:22:+	4-SIRV605,6-SIRV605,5-SIRV605,3-SIRV605,2-SIRV605,1-SIRV605,0-SIRV605
+SIRV6	PASA-SALRAA	transcript	1001	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	11032	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+
+#SIRV6:1001:11824:N:27:+	0-SIRV612,3-SIRV612,4-SIRV615,3-SIRV615,1-SIRV612,1-SIRV615,2-SIRV615,2-SIRV612,0-SIRV615,5-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+
+#SIRV6:1001:11270:N:31:+	1-SIRV602,0-SIRV602
+SIRV6	PASA-SALRAA	transcript	1001	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	2781	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+
+#SIRV6:1001:2540:N:23:+	6-SIRV607,0-SIRV607,4-SIRV607,1-SIRV607,3-SIRV607,5-SIRV607,2-SIRV607
+SIRV6	PASA-SALRAA	transcript	1001	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1469	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	2471	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+
+#SIRV6:1001:11824:N:29:+	2-SIRV601,4-SIRV615,3-SIRV615,1-SIRV615,0-SIRV601,2-SIRV615,1-SIRV601,0-SIRV615,5-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+
+#SIRV6:1001:2120:N:26:+	0-SIRV609,2-SIRV609,1-SIRV609,3-SIRV609,4-SIRV609
+SIRV6	PASA-SALRAA	transcript	1001	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1846	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+
+#SIRV6:9000:10968:N:21:+	1-SIRV603,5-SIRV603,3-SIRV603,0-SIRV603,7-SIRV603,6-SIRV603,2-SIRV603,4-SIRV603
+SIRV6	PASA-SALRAA	transcript	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+SIRV6	PASA-SALRAA	exon	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+
+#SIRV6:2471:11690:N:28:+	1-SIRV610,3-SIRV610,2-SIRV610,0-SIRV610
+SIRV6	PASA-SALRAA	transcript	2471	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	10725	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	11206	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+
+#SIRV6:3107:11824:N:17:+	7-SIRV613,4-SIRV615,5-SIRV613,2-SIRV613,8-SIRV613,2-SIRV615,5-SIRV615,11-SIRV613,3-SIRV613,10-SIRV613,3-SIRV615,9-SIRV613,1-SIRV615,1-SIRV613,6-SIRV613,0-SIRV613,12-SIRV613,0-SIRV615,4-SIRV613
+SIRV6	PASA-SALRAA	transcript	3107	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7105	7448	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+
+#SIRV6:2541:10815:N:18:+	1-SIRV614,6-SIRV614,7-SIRV614,13-SIRV614,14-SIRV614,10-SIRV614,11-SIRV614,0-SIRV614,8-SIRV614,4-SIRV614,9-SIRV614,12-SIRV614,5-SIRV614,3-SIRV614,2-SIRV614
+SIRV6	PASA-SALRAA	transcript	2541	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2541	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+
+#SIRV6:2286:10815:N:30:+	0-SIRV606,1-SIRV606
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+
+#SIRV6:2286:10815:N:25:+	4-SIRV616,0-SIRV616,3-SIRV616,2-SIRV616,1-SIRV616
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2741	2814	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+
+#SIRV6:1001:11824:N:19:+	0-SIRV604,2-SIRV604,6-SIRV604,7-SIRV604,3-SIRV604,9-SIRV604,4-SIRV604,8-SIRV604,10-SIRV604,1-SIRV604,5-SIRV604
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11035	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+
+#SIRV6:1545:1820:N:33:-	9-SIRV617,5-SIRV617,1-SIRV617,6-SIRV617,0-SIRV617,3-SIRV617,4-SIRV617,8-SIRV617,2-SIRV617,7-SIRV617
+SIRV6	PASA-SALRAA	transcript	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+
+#SIRV6:1001:11331:N:22:+	3-SIRV605,5-SIRV605,0-SIRV605,6-SIRV605,2-SIRV605,1-SIRV605,4-SIRV605
+SIRV6	PASA-SALRAA	transcript	1001	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	11032	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+
+#SIRV6:1001:11824:N:29:+	5-SIRV615,1-SIRV601,3-SIRV615,0-SIRV615,0-SIRV601,4-SIRV615,1-SIRV615,2-SIRV601,2-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+
+#SIRV6:2541:10815:N:18:+	10-SIRV614,5-SIRV614,1-SIRV614,11-SIRV614,2-SIRV614,13-SIRV614,7-SIRV614,3-SIRV614,8-SIRV614,9-SIRV614,12-SIRV614,0-SIRV614,14-SIRV614,4-SIRV614,6-SIRV614
+SIRV6	PASA-SALRAA	transcript	2541	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2541	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+
+#SIRV6:1001:11824:N:27:+	5-SIRV615,1-SIRV612,3-SIRV615,2-SIRV612,0-SIRV615,4-SIRV615,3-SIRV612,0-SIRV612,1-SIRV615,2-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+
+#SIRV6:2471:11690:N:28:+	0-SIRV610,3-SIRV610,2-SIRV610,1-SIRV610
+SIRV6	PASA-SALRAA	transcript	2471	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	10725	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	11206	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+
+#SIRV6:1001:11824:N:19:+	5-SIRV604,8-SIRV604,2-SIRV604,7-SIRV604,4-SIRV604,0-SIRV604,1-SIRV604,10-SIRV604,9-SIRV604,6-SIRV604,3-SIRV604
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11035	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+
+#SIRV6:1001:11270:N:31:+	1-SIRV602,0-SIRV602
+SIRV6	PASA-SALRAA	transcript	1001	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	2781	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+
+#SIRV6:9000:10968:N:21:+	4-SIRV603,0-SIRV603,2-SIRV603,5-SIRV603,3-SIRV603,7-SIRV603,6-SIRV603,1-SIRV603
+SIRV6	PASA-SALRAA	transcript	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+SIRV6	PASA-SALRAA	exon	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+
+#SIRV6:1001:2120:N:26:+	3-SIRV609,0-SIRV609,4-SIRV609,1-SIRV609,2-SIRV609
+SIRV6	PASA-SALRAA	transcript	1001	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1846	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+
+#SIRV6:1001:2540:N:23:+	4-SIRV607,3-SIRV607,5-SIRV607,2-SIRV607,6-SIRV607,1-SIRV607,0-SIRV607
+SIRV6	PASA-SALRAA	transcript	1001	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1469	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	2471	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+
+#SIRV6:1304:1950:N:20:+	3-SIRV611,9-SIRV611,1-SIRV611,8-SIRV611,2-SIRV611,6-SIRV611,5-SIRV611,7-SIRV611,4-SIRV611,0-SIRV611
+SIRV6	PASA-SALRAA	transcript	1304	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1304	1381	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1641	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+
+#SIRV6:3024:11270:N:24:+	2-SIRV608,0-SIRV608,1-SIRV608,4-SIRV608,3-SIRV608
+SIRV6	PASA-SALRAA	transcript	3024	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	3024	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+
+#SIRV6:3107:11824:N:17:+	0-SIRV613,3-SIRV615,7-SIRV613,4-SIRV613,4-SIRV615,1-SIRV615,2-SIRV613,5-SIRV613,6-SIRV613,1-SIRV613,12-SIRV613,5-SIRV615,8-SIRV613,11-SIRV613,3-SIRV613,9-SIRV613,10-SIRV613,0-SIRV615,2-SIRV615
+SIRV6	PASA-SALRAA	transcript	3107	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7105	7448	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+
+#SIRV6:2286:10815:N:25:+	2-SIRV616,1-SIRV616,3-SIRV616,0-SIRV616,4-SIRV616
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2741	2814	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+
+#SIRV6:2286:10815:N:30:+	1-SIRV606,0-SIRV606
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+
+#SIRV6:1545:1820:N:33:-	3-SIRV617,9-SIRV617,1-SIRV617,8-SIRV617,7-SIRV617,5-SIRV617,4-SIRV617,0-SIRV617,2-SIRV617,6-SIRV617
+SIRV6	PASA-SALRAA	transcript	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+
+#SIRV6:1001:11331:N:22:+	0-SIRV605,4-SIRV605,6-SIRV605,2-SIRV605,1-SIRV605,3-SIRV605,5-SIRV605
+SIRV6	PASA-SALRAA	transcript	1001	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	11032	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+
+#SIRV6:1001:11824:N:29:+	2-SIRV615,0-SIRV601,2-SIRV601,3-SIRV615,5-SIRV615,4-SIRV615,1-SIRV615,1-SIRV601,0-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+
+#SIRV6:2541:10815:N:18:+	12-SIRV614,2-SIRV614,13-SIRV614,1-SIRV614,10-SIRV614,3-SIRV614,8-SIRV614,4-SIRV614,7-SIRV614,6-SIRV614,11-SIRV614,9-SIRV614,14-SIRV614,5-SIRV614,0-SIRV614
+SIRV6	PASA-SALRAA	transcript	2541	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2541	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+
+#SIRV6:1001:11824:N:27:+	3-SIRV612,2-SIRV615,5-SIRV615,3-SIRV615,1-SIRV612,0-SIRV612,2-SIRV612,4-SIRV615,1-SIRV615,0-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+
+#SIRV6:2471:11690:N:28:+	3-SIRV610,0-SIRV610,1-SIRV610,2-SIRV610
+SIRV6	PASA-SALRAA	transcript	2471	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	10725	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	11206	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+
+#SIRV6:1001:11824:N:19:+	5-SIRV604,9-SIRV604,7-SIRV604,2-SIRV604,4-SIRV604,8-SIRV604,0-SIRV604,6-SIRV604,3-SIRV604,10-SIRV604,1-SIRV604
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11035	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+
+#SIRV6:1001:11270:N:31:+	1-SIRV602,0-SIRV602
+SIRV6	PASA-SALRAA	transcript	1001	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	2781	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+
+#SIRV6:9000:10968:N:21:+	6-SIRV603,3-SIRV603,4-SIRV603,1-SIRV603,2-SIRV603,5-SIRV603,7-SIRV603,0-SIRV603
+SIRV6	PASA-SALRAA	transcript	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+SIRV6	PASA-SALRAA	exon	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+
+#SIRV6:1001:2120:N:26:+	4-SIRV609,0-SIRV609,2-SIRV609,1-SIRV609,3-SIRV609
+SIRV6	PASA-SALRAA	transcript	1001	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1846	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+
+#SIRV6:1001:2540:N:23:+	5-SIRV607,3-SIRV607,1-SIRV607,6-SIRV607,2-SIRV607,0-SIRV607,4-SIRV607
+SIRV6	PASA-SALRAA	transcript	1001	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1469	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	2471	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+
+#SIRV6:1304:1950:N:20:+	1-SIRV611,2-SIRV611,5-SIRV611,4-SIRV611,0-SIRV611,6-SIRV611,3-SIRV611,9-SIRV611,8-SIRV611,7-SIRV611
+SIRV6	PASA-SALRAA	transcript	1304	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1304	1381	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1641	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+
+#SIRV6:3024:11270:N:24:+	3-SIRV608,4-SIRV608,0-SIRV608,2-SIRV608,1-SIRV608
+SIRV6	PASA-SALRAA	transcript	3024	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	3024	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+
+#SIRV6:3107:11824:N:17:+	2-SIRV615,1-SIRV613,5-SIRV615,8-SIRV613,2-SIRV613,10-SIRV613,6-SIRV613,9-SIRV613,3-SIRV613,12-SIRV613,3-SIRV615,4-SIRV613,0-SIRV613,11-SIRV613,4-SIRV615,1-SIRV615,7-SIRV613,0-SIRV615,5-SIRV613
+SIRV6	PASA-SALRAA	transcript	3107	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7105	7448	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+
+#SIRV6:2286:10815:N:25:+	4-SIRV616,0-SIRV616,3-SIRV616,1-SIRV616,2-SIRV616
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2741	2814	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+
+#SIRV6:2286:10815:N:30:+	1-SIRV606,0-SIRV606
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+
+#SIRV6:1545:1820:N:33:-	2-SIRV617,3-SIRV617,5-SIRV617,9-SIRV617,8-SIRV617,4-SIRV617,0-SIRV617,6-SIRV617,1-SIRV617,7-SIRV617
+SIRV6	PASA-SALRAA	transcript	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+
+#SIRV6:1001:11331:N:22:+	4-SIRV605,2-SIRV605,6-SIRV605,0-SIRV605,1-SIRV605,3-SIRV605,5-SIRV605
+SIRV6	PASA-SALRAA	transcript	1001	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	PASA-SALRAA	exon	11032	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+
+#SIRV6:1001:11824:N:29:+	0-SIRV615,5-SIRV615,1-SIRV601,2-SIRV601,2-SIRV615,4-SIRV615,1-SIRV615,3-SIRV615,0-SIRV601
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+
+#SIRV6:2541:10815:N:18:+	1-SIRV614,2-SIRV614,6-SIRV614,0-SIRV614,7-SIRV614,4-SIRV614,13-SIRV614,9-SIRV614,8-SIRV614,14-SIRV614,3-SIRV614,5-SIRV614,10-SIRV614,11-SIRV614,12-SIRV614
+SIRV6	PASA-SALRAA	transcript	2541	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2541	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+
+#SIRV6:1001:11824:N:27:+	0-SIRV615,5-SIRV615,1-SIRV612,3-SIRV612,0-SIRV612,2-SIRV612,4-SIRV615,2-SIRV615,1-SIRV615,3-SIRV615
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+
+#SIRV6:2471:11690:N:28:+	2-SIRV610,0-SIRV610,1-SIRV610,3-SIRV610
+SIRV6	PASA-SALRAA	transcript	2471	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	10725	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	PASA-SALRAA	exon	11206	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+
+#SIRV6:1001:11824:N:19:+	2-SIRV604,7-SIRV604,1-SIRV604,9-SIRV604,8-SIRV604,3-SIRV604,0-SIRV604,10-SIRV604,6-SIRV604,4-SIRV604,5-SIRV604
+SIRV6	PASA-SALRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11035	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+
+#SIRV6:1001:11270:N:31:+	0-SIRV602,1-SIRV602
+SIRV6	PASA-SALRAA	transcript	1001	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	2781	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+
+#SIRV6:9000:10968:N:21:+	0-SIRV603,1-SIRV603,2-SIRV603,3-SIRV603,4-SIRV603,7-SIRV603,6-SIRV603,5-SIRV603
+SIRV6	PASA-SALRAA	transcript	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+SIRV6	PASA-SALRAA	exon	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+
+#SIRV6:1001:2120:N:26:+	0-SIRV609,2-SIRV609,4-SIRV609,1-SIRV609,3-SIRV609
+SIRV6	PASA-SALRAA	transcript	1001	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	PASA-SALRAA	exon	1846	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+
+#SIRV6:1001:2540:N:23:+	3-SIRV607,6-SIRV607,1-SIRV607,0-SIRV607,2-SIRV607,4-SIRV607,5-SIRV607
+SIRV6	PASA-SALRAA	transcript	1001	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1469	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	PASA-SALRAA	exon	2471	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+
+#SIRV6:1304:1950:N:20:+	7-SIRV611,5-SIRV611,2-SIRV611,0-SIRV611,6-SIRV611,9-SIRV611,4-SIRV611,3-SIRV611,8-SIRV611,1-SIRV611
+SIRV6	PASA-SALRAA	transcript	1304	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1304	1381	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	PASA-SALRAA	exon	1641	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+
+#SIRV6:3024:11270:N:24:+	3-SIRV608,1-SIRV608,4-SIRV608,0-SIRV608,2-SIRV608
+SIRV6	PASA-SALRAA	transcript	3024	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	3024	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	PASA-SALRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+
+#SIRV6:3107:11824:N:17:+	0-SIRV615,0-SIRV613,2-SIRV613,4-SIRV615,10-SIRV613,3-SIRV613,1-SIRV615,12-SIRV613,5-SIRV613,11-SIRV613,5-SIRV615,9-SIRV613,7-SIRV613,1-SIRV613,4-SIRV613,6-SIRV613,8-SIRV613,2-SIRV615,3-SIRV615
+SIRV6	PASA-SALRAA	transcript	3107	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7105	7448	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+
+#SIRV6:2286:10815:N:25:+	0-SIRV616,2-SIRV616,1-SIRV616,4-SIRV616,3-SIRV616
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	2741	2814	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+
+#SIRV6:2286:10815:N:30:+	0-SIRV606,1-SIRV606
+SIRV6	PASA-SALRAA	transcript	2286	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	PASA-SALRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+
+#SIRV6:1545:1820:N:33:-	7-SIRV617,4-SIRV617,9-SIRV617,6-SIRV617,2-SIRV617,0-SIRV617,8-SIRV617,1-SIRV617,3-SIRV617,5-SIRV617
+SIRV6	PASA-SALRAA	transcript	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+SIRV6	PASA-SALRAA	exon	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+

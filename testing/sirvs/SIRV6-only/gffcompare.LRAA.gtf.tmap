@@ -1,0 +1,17 @@
+ref_gene_id	ref_id	class_code	qry_gene_id	qry_id	num_exons	FPKM	TPM	cov	len	major_iso_id	ref_match_len
+SIRV6	SIRV605	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-6	9	0.000000	0.000000	0.000000	1218	t:SIRV6:+:comp-1:iso-5	1088
+SIRV6	SIRV601	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-13	9	0.000000	0.000000	0.000000	1433	t:SIRV6:+:comp-1:iso-5	1435
+SIRV6	SIRV614	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-2	5	0.000000	0.000000	0.000000	435	t:SIRV6:+:comp-1:iso-5	459
+SIRV6	SIRV612	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-11	10	0.000000	0.000000	0.000000	1614	t:SIRV6:+:comp-1:iso-5	1528
+SIRV6	SIRV610	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-12	5	0.000000	0.000000	0.000000	1165	t:SIRV6:+:comp-1:iso-5	1163
+SIRV6	SIRV604	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-3	10	0.000000	0.000000	0.000000	1611	t:SIRV6:+:comp-1:iso-5	1537
+SIRV6	SIRV602	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-15	8	0.000000	0.000000	0.000000	689	t:SIRV6:+:comp-1:iso-5	574
+SIRV6	SIRV603	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-5	1	0.000000	0.000000	0.000000	1969	t:SIRV6:+:comp-1:iso-5	1969
+SIRV6	SIRV609	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-10	4	0.000000	0.000000	0.000000	622	t:SIRV6:+:comp-1:iso-5	485
+SIRV6	SIRV607	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-7	4	0.000000	0.000000	0.000000	704	t:SIRV6:+:comp-1:iso-5	574
+SIRV6	SIRV611	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-4	3	0.000000	0.000000	0.000000	454	t:SIRV6:+:comp-1:iso-5	454
+SIRV6	SIRV608	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-8	4	0.000000	0.000000	0.000000	377	t:SIRV6:+:comp-1:iso-5	377
+SIRV6	SIRV613	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-1	6	0.000000	0.000000	0.000000	1310	t:SIRV6:+:comp-1:iso-5	1311
+SIRV6	SIRV616	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-9	4	0.000000	0.000000	0.000000	558	t:SIRV6:+:comp-1:iso-5	531
+SIRV6	SIRV606	=	g:SIRV6:+:comp-1	t:SIRV6:+:comp-1:iso-14	4	0.000000	0.000000	0.000000	572	t:SIRV6:+:comp-1:iso-5	545
+SIRV6	SIRV617	=	g:SIRV6:-:comp-1	t:SIRV6:-:comp-1:iso-1	1	0.000000	0.000000	0.000000	276	t:SIRV6:-:comp-1:iso-1	276

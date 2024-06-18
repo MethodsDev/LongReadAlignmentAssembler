@@ -1,0 +1,13 @@
+## pasa vertex:
+PASA_vertex for ['POLYA:26', 'E:139', 'TSS:20']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:26', 'E:139', 'TSS:20'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp43x:['POLYA:26', 'E:139', 'TSS:20'] 2178-2406 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:229 read_names:{'6-SIRV512', '0-SIRV512', '1-SIRV512', '3-SIRV512', '2-SIRV512', '4-SIRV512', '5-SIRV512'}>
+
+
+#SIRV5:2178:2406:N:83:-	6-SIRV512,0-SIRV512,1-SIRV512,2-SIRV512,3-SIRV512,4-SIRV512,5-SIRV512
+SIRV5	PASA-SALRAA	transcript	2178	2406	.	-	.	gene_id "g.SIRV5:2178:2406:N:83:-"; transcript_id "t.SIRV5:2178:2406:N:83:-"; score "7";
+SIRV5	PASA-SALRAA	exon	2178	2406	.	-	.	gene_id "g.SIRV5:2178:2406:N:83:-"; transcript_id "t.SIRV5:2178:2406:N:83:-";
+
+

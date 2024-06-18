@@ -1,0 +1,4 @@
+Transcript path: PASA_scored_path: ['E:30', 'I:18', 'E:31', 'I:19', 'E:32', 'I:20', 'E:33', 'I:21', 'E:34', 'I:22', 'E:35', 'I:25', 'E:38', 'I:14', 'E:39', 'I:16', 'E:41', 'I:15', 'E:42', 'I:24', 'E:44'] rtypes:set() rnames: set() (Score=14.00000, InitScore=14.00000)
+mpgns:
+<mp11x:['E:30', 'I:18', 'E:31', 'I:19', 'E:32', 'I:20', 'E:33', 'I:21', 'E:34', 'I:22', 'E:35', 'I:25', 'E:38', 'I:14', 'E:39', 'I:16', 'E:41', 'I:15', 'E:42', 'I:24', 'E:44'] 1001-5911 Count:14 W:1.00000000 Containments:0, ScoreExcCont:14.0000 ScoreInclCon:14.0000 len:2006 read_names:{'10-SIRV202', '2-SIRV202', '5-SIRV202', '1-SIRV202', '13-SIRV202', '6-SIRV202', '7-SIRV202', '11-SIRV202', '12-SIRV202', '4-SIRV202', '0-SIRV202', '3-SIRV202', '9-SIRV202', '8-SIRV202'}>
+

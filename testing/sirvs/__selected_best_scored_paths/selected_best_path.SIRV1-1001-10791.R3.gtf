@@ -1,0 +1,4 @@
+Transcript path: PASA_scored_path: ['E:9', 'I:5', 'E:26', 'E:27', 'E:11', 'E:12', 'I:6', 'E:13', 'E:14', 'I:7', 'E:15', 'TSS:2'] rtypes:set() rnames: set() (Score=9.00000, InitScore=9.00000)
+mpgns:
+<mp6x:['E:9', 'I:5', 'E:26', 'E:27', 'E:11', 'E:12', 'I:6', 'E:13', 'E:14', 'I:7', 'E:15', 'TSS:2'] 1001-10366 Count:9 W:1.00000000 Containments:0, ScoreExcCont:9.0000 ScoreInclCon:9.0000 len:1306 read_names:{'2-SIRV102', '1-SIRV102', '0-SIRV102', '5-SIRV102', '8-SIRV102', '7-SIRV102', '4-SIRV102', '3-SIRV102', '6-SIRV102'}>
+

@@ -1,0 +1,4 @@
+Transcript path: PASA_scored_path: ['TSS:22', 'E:167', 'I:79', 'E:142', 'I:80', 'E:144', 'I:90', 'E:151', 'E:152', 'I:83', 'E:154', 'I:84', 'E:174', 'E:175', 'I:85', 'E:160', 'E:161', 'I:86', 'E:186', 'POLYA:33'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp47x:['TSS:22', 'E:167', 'I:79', 'E:142', 'I:80', 'E:144', 'I:90', 'E:151', 'E:152', 'I:83', 'E:154', 'I:84', 'E:174', 'E:175', 'I:85', 'E:160', 'E:161', 'I:86', 'E:186', 'POLYA:33'] 1131-11270 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:559 read_names:{'0-SIRV602', '1-SIRV602'}>
+

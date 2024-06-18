@@ -1,0 +1,16 @@
+Transcript path: PASA_scored_path: ['TSS:3', 'E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp9x:['TSS:3', 'E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] 2286-10815 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:572 read_names:{'0-SIRV606', '1-SIRV606'}>
+
+Transcript path: PASA_scored_path: ['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp9x:['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] 2286-10815 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:572 read_names:{'1-SIRV606', '0-SIRV606'}>
+
+Transcript path: PASA_scored_path: ['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp9x:['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] 2286-10815 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:572 read_names:{'1-SIRV606', '0-SIRV606'}>
+
+Transcript path: PASA_scored_path: ['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp9x:['E:9', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25'] 2286-10815 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:572 read_names:{'0-SIRV606', '1-SIRV606'}>
+

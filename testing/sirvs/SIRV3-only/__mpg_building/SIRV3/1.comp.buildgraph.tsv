@@ -1,0 +1,14 @@
+
+
+# comparing prev_j
+<mp10x:['POLYA:5', 'E:36', 'I:18', 'E:29', 'E:30', 'I:19', 'E:33', 'TSS:5'] 8798-9914 Count:14 W:1.00000000 Containments:0, ScoreExcCont:14.0000 ScoreInclCon:14.0000 len:551 read_names:{'0-SIRV310', '10-SIRV310', '3-SIRV310', '13-SIRV310', '9-SIRV310', '5-SIRV310', '4-SIRV310', '8-SIRV310', '1-SIRV310', '7-SIRV310', '11-SIRV310', '12-SIRV310', '6-SIRV310', '2-SIRV310'}>
+to_i
+<mp11x:['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] 8798-9943 Count:15 W:1.00000000 Containments:0, ScoreExcCont:15.0000 ScoreInclCon:15.0000 len:796 read_names:{'13-SIRV309', '3-SIRV309', '4-SIRV309', '5-SIRV309', '6-SIRV309', '0-SIRV309', '10-SIRV309', '1-SIRV309', '7-SIRV309', '11-SIRV309', '14-SIRV309', '12-SIRV309', '8-SIRV309', '2-SIRV309', '9-SIRV309'}>
+i-NOTcompatible-j
+
+
+# comparing prev_j
+<mp10x:['POLYA:5', 'E:36', 'I:18', 'E:29', 'E:30', 'I:19', 'E:33', 'TSS:5'] 8798-9914 Count:14 W:1.00000000 Containments:0, ScoreExcCont:14.0000 ScoreInclCon:14.0000 len:551 read_names:{'8-SIRV310', '11-SIRV310', '9-SIRV310', '5-SIRV310', '6-SIRV310', '2-SIRV310', '4-SIRV310', '1-SIRV310', '0-SIRV310', '12-SIRV310', '10-SIRV310', '3-SIRV310', '13-SIRV310', '7-SIRV310'}>
+to_i
+<mp11x:['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] 8798-9943 Count:15 W:1.00000000 Containments:0, ScoreExcCont:15.0000 ScoreInclCon:15.0000 len:796 read_names:{'3-SIRV309', '2-SIRV309', '6-SIRV309', '4-SIRV309', '9-SIRV309', '10-SIRV309', '13-SIRV309', '7-SIRV309', '11-SIRV309', '12-SIRV309', '0-SIRV309', '14-SIRV309', '8-SIRV309', '1-SIRV309', '5-SIRV309'}>
+i-NOTcompatible-j

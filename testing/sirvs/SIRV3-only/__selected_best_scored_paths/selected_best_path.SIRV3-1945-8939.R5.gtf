@@ -1,0 +1,8 @@
+Transcript path: PASA_scored_path: ['TSS:2', 'E:17', 'E:18', 'I:3', 'E:3', 'E:4', 'E:5', 'I:4', 'E:6', 'E:7', 'E:21', 'E:22', 'E:9', 'E:19', 'E:20', 'E:11', 'I:5', 'E:14', 'I:6', 'E:16', 'POLYA:2'] rtypes:set() rnames: set() (Score=9.00000, InitScore=9.00000)
+mpgns:
+<mp1x:['TSS:2', 'E:17', 'E:18', 'I:3', 'E:3', 'E:4', 'E:5', 'I:4', 'E:6', 'E:7', 'E:21', 'E:22', 'E:9', 'E:19', 'E:20', 'E:11', 'I:5', 'E:14', 'I:6', 'E:16', 'POLYA:2'] 1945-8939 Count:9 W:1.00000000 Containments:0, ScoreExcCont:9.0000 ScoreInclCon:9.0000 len:2467 read_names:{'3-SIRV301', '4-SIRV301', '0-SIRV301', '7-SIRV301', '5-SIRV301', '2-SIRV301', '6-SIRV301', '1-SIRV301', '8-SIRV301'}>
+
+Transcript path: PASA_scored_path: ['TSS:2', 'E:17', 'E:18', 'I:3', 'E:3', 'E:4', 'E:5', 'I:4', 'E:6', 'E:7', 'E:21', 'E:22', 'E:9', 'E:19', 'E:20', 'E:11', 'I:5', 'E:14', 'I:6', 'E:16', 'POLYA:2'] rtypes:set() rnames: set() (Score=9.00000, InitScore=9.00000)
+mpgns:
+<mp1x:['TSS:2', 'E:17', 'E:18', 'I:3', 'E:3', 'E:4', 'E:5', 'I:4', 'E:6', 'E:7', 'E:21', 'E:22', 'E:9', 'E:19', 'E:20', 'E:11', 'I:5', 'E:14', 'I:6', 'E:16', 'POLYA:2'] 1945-8939 Count:9 W:1.00000000 Containments:0, ScoreExcCont:9.0000 ScoreInclCon:9.0000 len:2467 read_names:{'8-SIRV301', '5-SIRV301', '3-SIRV301', '4-SIRV301', '7-SIRV301', '2-SIRV301', '0-SIRV301', '1-SIRV301', '6-SIRV301'}>
+

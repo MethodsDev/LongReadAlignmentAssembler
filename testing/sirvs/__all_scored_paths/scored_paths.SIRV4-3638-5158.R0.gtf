@@ -1,0 +1,14 @@
+## pasa vertex:
+PASA_vertex for ['POLYA:20', 'E:88', 'I:50', 'E:89']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:20', 'E:88', 'I:50', 'E:89'] rtypes:set() rnames: set() (Score=3.00000, InitScore=3.00000)
+mpgns:
+<mp27x:['POLYA:20', 'E:88', 'I:50', 'E:89'] 3638-5158 Count:3 W:1.00000000 Containments:0, ScoreExcCont:3.0000 ScoreInclCon:3.0000 len:617 read_names:{'2-SIRV406', '0-SIRV406', '1-SIRV406'}>
+
+
+#SIRV4:3638:5158:N:59:-	0-SIRV406,2-SIRV406,1-SIRV406
+SIRV4	PASA-SALRAA	transcript	3638	5158	.	-	.	gene_id "g.SIRV4:3638:5158:N:59:-"; transcript_id "t.SIRV4:3638:5158:N:59:-"; score "3";
+SIRV4	PASA-SALRAA	exon	3638	4103	.	-	.	gene_id "g.SIRV4:3638:5158:N:59:-"; transcript_id "t.SIRV4:3638:5158:N:59:-";
+SIRV4	PASA-SALRAA	exon	5008	5158	.	-	.	gene_id "g.SIRV4:3638:5158:N:59:-"; transcript_id "t.SIRV4:3638:5158:N:59:-";
+
+

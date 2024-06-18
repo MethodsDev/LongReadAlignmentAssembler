@@ -1,0 +1,6 @@
+SIRV6	LexogenSIRVData	exon	2359	2547	.	-	0	gene_id "SIRV6"; transcript_id "SIRV618"; exon_assignment "SIRV618_0";
+
+SIRV6	LexogenSIRVData	exon	10238	10818	.	+	0	gene_id "SIRV6"; transcript_id "SIRV615"; exon_assignment "SIRV615_0";
+SIRV6	LexogenSIRVData	exon	11032	11108	.	+	0	gene_id "SIRV6"; transcript_id "SIRV615"; exon_assignment "SIRV615_1";
+SIRV6	LexogenSIRVData	exon	11206	11330	.	+	0	gene_id "SIRV6"; transcript_id "SIRV615"; exon_assignment "SIRV615_2";
+

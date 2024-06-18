@@ -1,0 +1,1466 @@
+2024-05-16 08:50:15,879 INFO LRAA.root.main:
+	-processing contig: SIRV1 +
+
+2024-05-16 08:50:15,880 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV1^+
+
+2024-05-16 08:50:15,880 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV1 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,880 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 12643
+
+2024-05-16 08:50:15,880 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 9 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,880 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 9 pretty alignments.
+
+2024-05-16 08:50:15,881 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 9
+
+2024-05-16 08:50:15,881 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,881 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,883 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,883 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,883 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,883 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,883 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,884 INFO LRAA.root.main:
+	-building splice graph for SIRV1
+
+2024-05-16 08:50:15,884 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV1
+
+2024-05-16 08:50:15,884 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 9 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,884 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 9 pretty alignments grouped into 9 alignment groups.
+
+2024-05-16 08:50:15,884 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 9 =  0.00   2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:15,885 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV1
+
+2024-05-16 08:50:15,885 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 2 paths assigned.
+
+2024-05-16 08:50:15,885 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 2 multipaths
+
+2024-05-16 08:50:15,885 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV1
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:15,885 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV1
+
+2024-05-16 08:50:15,885 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV1:10583-11643
+
+2024-05-16 08:50:15,885 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 2
+
+2024-05-16 08:50:15,886 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 2 transcripts from component 2
+
+2024-05-16 08:50:15,886 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:15,886 INFO LRAA.root.main:
+	writing gtf output for SIRV1 [+] containing 2 transcripts
+
+2024-05-16 08:50:15,886 INFO LRAA.root.main:
+	-processing contig: SIRV1 -
+
+2024-05-16 08:50:15,886 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV1^-
+
+2024-05-16 08:50:15,886 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV1 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,886 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 12643
+
+2024-05-16 08:50:15,886 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 62 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,887 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 62 pretty alignments.
+
+2024-05-16 08:50:15,893 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 62
+
+2024-05-16 08:50:15,893 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,893 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,894 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,894 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,895 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,895 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,896 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,896 INFO LRAA.root.main:
+	-building splice graph for SIRV1
+
+2024-05-16 08:50:15,896 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV1
+
+2024-05-16 08:50:15,896 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 62 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,897 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 62 pretty alignments grouped into 62 alignment groups.
+
+2024-05-16 08:50:15,897 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 62 =  0.00   2024-05-16 08:50:15,906 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:15,906 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV1
+
+2024-05-16 08:50:15,906 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 5 paths assigned.
+
+2024-05-16 08:50:15,906 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 5 multipaths
+
+2024-05-16 08:50:15,907 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV1
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:15,907 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV1
+
+2024-05-16 08:50:15,907 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV1:1001-10791
+
+2024-05-16 08:50:15,907 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 5
+
+2024-05-16 08:50:15,908 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 5 transcripts from component 5
+
+2024-05-16 08:50:15,908 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:15,908 INFO LRAA.root.main:
+	writing gtf output for SIRV1 [-] containing 5 transcripts
+
+2024-05-16 08:50:15,924 INFO LRAA.root.main:
+	-processing contig: SIRV2 +
+
+2024-05-16 08:50:15,924 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV2^+
+
+2024-05-16 08:50:15,924 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV2 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,924 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 6911
+
+2024-05-16 08:50:15,925 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,925 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 7 pretty alignments.
+
+2024-05-16 08:50:15,925 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 7
+
+2024-05-16 08:50:15,925 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,925 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,926 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,926 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,926 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,926 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,926 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,927 INFO LRAA.root.main:
+	-building splice graph for SIRV2
+
+2024-05-16 08:50:15,927 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV2
+
+2024-05-16 08:50:15,927 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,927 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 7 pretty alignments grouped into 7 alignment groups.
+
+2024-05-16 08:50:15,927 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 7 =  0.00   2024-05-16 08:50:15,927 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:15,927 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV2
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 1 paths assigned.
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 1 has 1 paths assigned.
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 1 multipaths
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 1 with 1 multipaths
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV2
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:15,928 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV2
+
+2024-05-16 08:50:15,928 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 2 disjoint graph components
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 connected components identified
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV2:1109-1631
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 2 region: SIRV2:4034-4457
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:15,928 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:15,928 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:15,928 INFO LRAA.root.main:
+	writing gtf output for SIRV2 [+] containing 2 transcripts
+
+2024-05-16 08:50:15,928 INFO LRAA.root.main:
+	-processing contig: SIRV2 -
+
+2024-05-16 08:50:15,928 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV2^-
+
+2024-05-16 08:50:15,928 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV2 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,928 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 6911
+
+2024-05-16 08:50:15,929 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 39 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,929 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 39 pretty alignments.
+
+2024-05-16 08:50:15,935 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 39
+
+2024-05-16 08:50:15,935 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,935 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,936 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,936 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,936 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,937 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,938 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,938 INFO LRAA.root.main:
+	-building splice graph for SIRV2
+
+2024-05-16 08:50:15,938 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV2
+
+2024-05-16 08:50:15,938 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 39 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,939 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 39 pretty alignments grouped into 39 alignment groups.
+
+2024-05-16 08:50:15,939 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 39 =  0.00   2024-05-16 08:50:15,948 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:15,949 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV2
+
+2024-05-16 08:50:15,949 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 4 paths assigned.
+
+2024-05-16 08:50:15,949 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 4 multipaths
+
+2024-05-16 08:50:15,949 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV2
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:15,949 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV2
+
+2024-05-16 08:50:15,949 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV2:1001-5911
+
+2024-05-16 08:50:15,949 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 4
+
+2024-05-16 08:50:15,950 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 4 transcripts from component 4
+
+2024-05-16 08:50:15,951 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:15,951 INFO LRAA.root.main:
+	writing gtf output for SIRV2 [-] containing 4 transcripts
+
+2024-05-16 08:50:15,960 INFO LRAA.root.main:
+	-processing contig: SIRV3 +
+
+2024-05-16 08:50:15,960 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV3^+
+
+2024-05-16 08:50:15,960 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV3 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,960 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 10943
+
+2024-05-16 08:50:15,961 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 65 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,962 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 65 pretty alignments.
+
+2024-05-16 08:50:15,970 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 65
+
+2024-05-16 08:50:15,970 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,970 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,972 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,972 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,972 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,973 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,974 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,974 INFO LRAA.root.main:
+	-building splice graph for SIRV3
+
+2024-05-16 08:50:15,974 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV3
+
+2024-05-16 08:50:15,974 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 65 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,975 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 65 pretty alignments grouped into 65 alignment groups.
+
+2024-05-16 08:50:15,975 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 65 =  0.00   2024-05-16 08:50:15,985 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:15,985 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV3
+
+2024-05-16 08:50:15,985 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 7 paths assigned.
+
+2024-05-16 08:50:15,985 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 7 multipaths
+
+2024-05-16 08:50:15,986 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV3
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:15,986 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV3
+
+2024-05-16 08:50:15,986 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV3:1945-8939
+
+2024-05-16 08:50:15,986 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 7
+
+2024-05-16 08:50:15,987 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 7 transcripts from component 7
+
+2024-05-16 08:50:15,988 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:15,988 INFO LRAA.root.main:
+	writing gtf output for SIRV3 [+] containing 6 transcripts
+
+2024-05-16 08:50:15,988 INFO LRAA.root.main:
+	-processing contig: SIRV3 -
+
+2024-05-16 08:50:15,988 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV3^-
+
+2024-05-16 08:50:15,988 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV3 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:15,988 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 10943
+
+2024-05-16 08:50:15,989 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 53 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,989 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 53 pretty alignments.
+
+2024-05-16 08:50:15,992 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 53
+
+2024-05-16 08:50:15,992 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:15,992 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:15,993 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:15,993 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:15,993 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,994 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,994 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:15,994 INFO LRAA.root.main:
+	-building splice graph for SIRV3
+
+2024-05-16 08:50:15,994 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV3
+
+2024-05-16 08:50:15,995 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 53 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:15,995 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 53 pretty alignments grouped into 53 alignment groups.
+
+2024-05-16 08:50:15,995 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 53 =  0.00   2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV3
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 1 has 2 paths assigned.
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 1 paths assigned.
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 2 has 1 paths assigned.
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 1 with 2 multipaths
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 1 multipaths
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 2 with 1 multipaths
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV3
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,000 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV3
+
+2024-05-16 08:50:16,000 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 3 disjoint graph components
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	3 connected components identified
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV3:1001-1982
+
+2024-05-16 08:50:16,000 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:16,001 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:16,001 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 2 region: SIRV3:8798-9943
+
+2024-05-16 08:50:16,001 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 2
+
+2024-05-16 08:50:16,001 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 2 transcripts from component 2
+
+2024-05-16 08:50:16,001 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,001 INFO LRAA.root.main:
+	writing gtf output for SIRV3 [-] containing 3 transcripts
+
+2024-05-16 08:50:16,019 INFO LRAA.root.main:
+	-processing contig: SIRV4 +
+
+2024-05-16 08:50:16,019 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV4^+
+
+2024-05-16 08:50:16,019 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV4 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,019 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 16122
+
+2024-05-16 08:50:16,019 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,020 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 7 pretty alignments.
+
+2024-05-16 08:50:16,020 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 7
+
+2024-05-16 08:50:16,020 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,020 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,022 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,022 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,022 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,023 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,023 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,023 INFO LRAA.root.main:
+	-building splice graph for SIRV4
+
+2024-05-16 08:50:16,023 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV4
+
+2024-05-16 08:50:16,023 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,023 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 7 pretty alignments grouped into 7 alignment groups.
+
+2024-05-16 08:50:16,023 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 7 =  0.00   2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,024 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV4
+
+2024-05-16 08:50:16,024 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 2 paths assigned.
+
+2024-05-16 08:50:16,024 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 2 multipaths
+
+2024-05-16 08:50:16,024 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV4
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,024 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV4
+
+2024-05-16 08:50:16,024 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV4:1001-3403
+
+2024-05-16 08:50:16,024 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 2
+
+2024-05-16 08:50:16,025 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 2 transcripts from component 2
+
+2024-05-16 08:50:16,025 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,025 INFO LRAA.root.main:
+	writing gtf output for SIRV4 [+] containing 2 transcripts
+
+2024-05-16 08:50:16,025 INFO LRAA.root.main:
+	-processing contig: SIRV4 -
+
+2024-05-16 08:50:16,025 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV4^-
+
+2024-05-16 08:50:16,025 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV4 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,025 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 16122
+
+2024-05-16 08:50:16,025 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 38 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,026 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 38 pretty alignments.
+
+2024-05-16 08:50:16,028 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 38
+
+2024-05-16 08:50:16,028 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,028 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,030 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,030 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,030 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,030 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,031 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,031 INFO LRAA.root.main:
+	-building splice graph for SIRV4
+
+2024-05-16 08:50:16,031 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV4
+
+2024-05-16 08:50:16,031 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 38 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,032 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 38 pretty alignments grouped into 38 alignment groups.
+
+2024-05-16 08:50:16,032 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 38 =  0.00   2024-05-16 08:50:16,036 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,036 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV4
+
+2024-05-16 08:50:16,036 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 1 has 4 paths assigned.
+
+2024-05-16 08:50:16,036 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 1 paths assigned.
+
+2024-05-16 08:50:16,036 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 1 with 4 multipaths
+
+2024-05-16 08:50:16,037 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 1 multipaths
+
+2024-05-16 08:50:16,037 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV4
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,037 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV4
+
+2024-05-16 08:50:16,037 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 2 disjoint graph components
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 connected components identified
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV4:8323-15122
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 4
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 4 transcripts from component 4
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 2 region: SIRV4:3638-5158
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:16,037 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:16,038 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,038 INFO LRAA.root.main:
+	writing gtf output for SIRV4 [-] containing 5 transcripts
+
+2024-05-16 08:50:16,051 INFO LRAA.root.main:
+	-processing contig: SIRV5 +
+
+2024-05-16 08:50:16,051 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV5^+
+
+2024-05-16 08:50:16,051 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV5 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,051 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 14606
+
+2024-05-16 08:50:16,052 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 102 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,054 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 102 pretty alignments.
+
+2024-05-16 08:50:16,066 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 102
+
+2024-05-16 08:50:16,066 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,066 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,069 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,069 INFO Splice_graph.Splice_graph._prune_exon_spurs_at_introns:
+	-removing 1 exon spurs
+
+2024-05-16 08:50:16,069 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,069 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,071 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,072 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,072 INFO LRAA.root.main:
+	-building splice graph for SIRV5
+
+2024-05-16 08:50:16,072 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV5
+
+2024-05-16 08:50:16,073 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 102 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,075 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 102 pretty alignments grouped into 102 alignment groups.
+
+2024-05-16 08:50:16,075 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 102 =  0.00   [100 / 102 =  98.04   2024-05-16 08:50:16,105 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,105 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV5
+
+2024-05-16 08:50:16,105 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 11 paths assigned.
+
+2024-05-16 08:50:16,105 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 11 multipaths
+
+2024-05-16 08:50:16,107 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV5
+
+2024-05-16 08:50:16,107 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,107 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV5
+
+2024-05-16 08:50:16,109 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:16,109 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:16,109 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,109 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,109 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV5:1001-13606
+
+2024-05-16 08:50:16,109 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 11
+
+2024-05-16 08:50:16,111 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 11 transcripts from component 11
+
+2024-05-16 08:50:16,114 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,114 INFO LRAA.root.main:
+	writing gtf output for SIRV5 [+] containing 11 transcripts
+
+2024-05-16 08:50:16,114 INFO LRAA.root.main:
+	-processing contig: SIRV5 -
+
+2024-05-16 08:50:16,114 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV5^-
+
+2024-05-16 08:50:16,114 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV5 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,114 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 14606
+
+2024-05-16 08:50:16,115 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,115 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 7 pretty alignments.
+
+2024-05-16 08:50:16,116 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 7
+
+2024-05-16 08:50:16,116 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,116 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,117 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,117 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,117 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,117 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,117 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,117 INFO LRAA.root.main:
+	-building splice graph for SIRV5
+
+2024-05-16 08:50:16,117 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV5
+
+2024-05-16 08:50:16,118 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 7 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 7 pretty alignments grouped into 7 alignment groups.
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 7 =  0.00   2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,118 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV5
+
+2024-05-16 08:50:16,118 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 1 paths assigned.
+
+2024-05-16 08:50:16,118 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 1 multipaths
+
+2024-05-16 08:50:16,118 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV5
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,118 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV5
+
+2024-05-16 08:50:16,118 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV5:2178-2406
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:16,118 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:16,119 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,119 INFO LRAA.root.main:
+	writing gtf output for SIRV5 [-] containing 1 transcripts
+
+2024-05-16 08:50:16,127 INFO LRAA.root.main:
+	-processing contig: SIRV6 +
+
+2024-05-16 08:50:16,128 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV6^+
+
+2024-05-16 08:50:16,128 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV6 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,128 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 12837
+
+2024-05-16 08:50:16,128 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 107 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,130 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 107 pretty alignments.
+
+2024-05-16 08:50:16,138 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 107
+
+2024-05-16 08:50:16,138 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,138 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,140 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,141 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,141 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,143 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,144 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,144 INFO LRAA.root.main:
+	-building splice graph for SIRV6
+
+2024-05-16 08:50:16,144 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV6
+
+2024-05-16 08:50:16,145 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 107 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,146 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 107 pretty alignments grouped into 107 alignment groups.
+
+2024-05-16 08:50:16,146 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 107 =  0.00   [100 / 107 =  93.46   2024-05-16 08:50:16,170 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,170 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV6
+
+2024-05-16 08:50:16,170 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 16 paths assigned.
+
+2024-05-16 08:50:16,170 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 16 multipaths
+
+2024-05-16 08:50:16,173 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV6
+
+2024-05-16 08:50:16,173 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,173 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV6
+
+2024-05-16 08:50:16,175 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:16,175 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:16,175 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,175 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,175 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV6:1001-11824
+
+2024-05-16 08:50:16,175 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 16
+
+2024-05-16 08:50:16,178 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 16 transcripts from component 16
+
+2024-05-16 08:50:16,181 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,182 INFO LRAA.root.main:
+	writing gtf output for SIRV6 [+] containing 16 transcripts
+
+2024-05-16 08:50:16,182 INFO LRAA.root.main:
+	-processing contig: SIRV6 -
+
+2024-05-16 08:50:16,182 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV6^-
+
+2024-05-16 08:50:16,182 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV6 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,182 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 12837
+
+2024-05-16 08:50:16,182 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 12 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,183 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 12 pretty alignments.
+
+2024-05-16 08:50:16,183 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 12
+
+2024-05-16 08:50:16,183 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,183 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,184 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,184 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,184 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,184 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,184 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,184 INFO LRAA.root.main:
+	-building splice graph for SIRV6
+
+2024-05-16 08:50:16,184 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV6
+
+2024-05-16 08:50:16,185 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 12 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,185 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 12 pretty alignments grouped into 12 alignment groups.
+
+2024-05-16 08:50:16,185 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 12 =  0.00   2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV6
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 1 paths assigned.
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 1 has 1 paths assigned.
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 1 multipaths
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 1 with 1 multipaths
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV6
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,186 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV6
+
+2024-05-16 08:50:16,186 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 2 disjoint graph components
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	2 connected components identified
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV6:1545-1820
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 1
+
+2024-05-16 08:50:16,186 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 1 transcripts from component 1
+
+2024-05-16 08:50:16,186 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,186 INFO LRAA.root.main:
+	writing gtf output for SIRV6 [-] containing 1 transcripts
+
+2024-05-16 08:50:16,196 INFO LRAA.root.main:
+	-processing contig: SIRV7 +
+
+2024-05-16 08:50:16,196 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV7^+
+
+2024-05-16 08:50:16,196 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV7 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,196 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 148957
+
+2024-05-16 08:50:16,199 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 0 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,199 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 0 pretty alignments.
+
+2024-05-16 08:50:16,199 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 0
+
+2024-05-16 08:50:16,199 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,199 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,210 INFO LRAA.root.main:
+	-no splice graph created for contig: SIRV7.... skipping.
+
+2024-05-16 08:50:16,210 INFO LRAA.root.main:
+	-processing contig: SIRV7 -
+
+2024-05-16 08:50:16,210 INFO LRAA.root.main:
+	Have 0 transcripts on SIRV7^-
+
+2024-05-16 08:50:16,210 INFO Splice_graph.Splice_graph.build_splice_graph_for_contig:
+	creating splice graph for SIRV7 leveraging bam data/sim.fasta.mm2.bam
+
+2024-05-16 08:50:16,210 INFO Splice_graph.root._initialize_contig_coverage:
+	initing coverage array of len: 148957
+
+2024-05-16 08:50:16,213 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 45 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,213 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-got 45 pretty alignments.
+
+2024-05-16 08:50:16,218 INFO Splice_graph.Splice_graph._populate_exon_coverage_and_extract_introns:
+	-total read alignments used: 45
+
+2024-05-16 08:50:16,218 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared left coord
+
+2024-05-16 08:50:16,218 INFO Splice_graph.Splice_graph._prune_spurious_introns_shared_boundary:
+	removing 0 low frequency introns with shared right coord
+
+2024-05-16 08:50:16,232 INFO Splice_graph.Splice_graph._prune_lowly_expressed_intron_overlapping_exon_segments:
+	-removing 0 lowly expressed exon segments based on intron overlap
+
+2024-05-16 08:50:16,232 INFO Splice_graph.Splice_graph._prune_exon_spurs_at_introns:
+	-removing 1 exon spurs
+
+2024-05-16 08:50:16,232 INFO Splice_graph.Splice_graph._prune_disconnected_introns:
+	-pruning 0 now disconnected introns
+
+2024-05-16 08:50:16,232 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,233 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,233 INFO Splice_graph.Splice_graph._validate_itree:
+	itree validates.
+
+2024-05-16 08:50:16,234 INFO LRAA.root.main:
+	-building splice graph for SIRV7
+
+2024-05-16 08:50:16,234 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-building multipath graph for SIRV7
+
+2024-05-16 08:50:16,234 INFO Bam_alignment_extractor.Bam_alignment_extractor.get_read_alignments:
+	reads kept: 45 and discarded: defaultdict(<class 'int'>, {})
+
+2024-05-16 08:50:16,236 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-got 45 pretty alignments grouped into 43 alignment groups.
+
+2024-05-16 08:50:16,236 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-start: mapping read alignments to the graph
+
+[0 / 43 =  0.00   2024-05-16 08:50:16,243 INFO PASA_SALRAA.PASA_SALRAA._populate_read_multi_paths:
+	-done: mapping read alignments to the graph
+
+2024-05-16 08:50:16,243 INFO MultiPathGraph.MultiPathGraph.__init__:
+	START building MultiPathGraph for SIRV7
+
+2024-05-16 08:50:16,243 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Component 0 has 6 paths assigned.
+
+2024-05-16 08:50:16,243 INFO MultiPathGraph.MultiPathGraph.__init__:
+	Building MP Graph for component_id 0 with 6 multipaths
+
+2024-05-16 08:50:16,244 INFO MultiPathGraph.MultiPathGraph.__init__:
+	DONE building MultiPathGraph for SIRV7
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA.build_multipath_graph:
+	-multipath graph building took 0.0 seconds.
+
+2024-05-16 08:50:16,244 INFO LRAA.root.main:
+	-begin reconstructing isoforms for SIRV7
+
+2024-05-16 08:50:16,244 INFO MultiPathGraph.MultiPathGraph.define_disjoint_graph_components_via_shared_splice_graph_vertex:
+	identified 1 disjoint graph components
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 connected components identified
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	1 components surviving the min length 200 criterion.
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	-Running using single thread, so multiprocessing disabled here.
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA.reconstruct_isoforms:
+	PASA_SALRAA - assembly of component 1 region: SIRV7:1001-147957
+
+2024-05-16 08:50:16,244 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-num vertices for trellis: 6
+
+2024-05-16 08:50:16,245 INFO PASA_SALRAA.PASA_SALRAA._reconstruct_isoforms_single_component:
+	-reconstructed 5 transcripts from component 5
+
+2024-05-16 08:50:16,245 INFO Quantify.Quantify.filter_isoforms_by_min_isoform_fraction:
+	Filtering transcripts according to min isoform fraction: 0.01
+
+2024-05-16 08:50:16,245 INFO LRAA.root.main:
+	writing gtf output for SIRV7 [-] containing 5 transcripts
+
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: [Intron: I:78 SIRV5:10992-11311 [+] count:15 rtypes:['PacBio'], Intron: I:77 SIRV5:10992-11133 [+] count:6 rtypes:['PacBio']]
+Got right overlapping introns: []
+Got right overlapping introns: []

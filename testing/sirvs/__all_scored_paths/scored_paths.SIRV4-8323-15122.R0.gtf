@@ -1,0 +1,63 @@
+## pasa vertex:
+PASA_vertex for ['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'I:53', 'E:97']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'I:53', 'E:97'] rtypes:set() rnames: set() (Score=3.00000, InitScore=3.00000)
+mpgns:
+<mp28x:['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'I:53', 'E:97'] 8323-14623 Count:3 W:1.00000000 Containments:0, ScoreExcCont:3.0000 ScoreInclCon:3.0000 len:592 read_names:{'1-SIRV404', '0-SIRV404', '2-SIRV404'}>
+
+
+#SIRV4:8323:14623:N:51:-	1-SIRV404,0-SIRV404,2-SIRV404
+SIRV4	PASA-SALRAA	transcript	8323	14623	.	-	.	gene_id "g.SIRV4:8323:14623:N:51:-"; transcript_id "t.SIRV4:8323:14623:N:51:-"; score "3";
+SIRV4	PASA-SALRAA	exon	8323	8372	.	-	.	gene_id "g.SIRV4:8323:14623:N:51:-"; transcript_id "t.SIRV4:8323:14623:N:51:-";
+SIRV4	PASA-SALRAA	exon	8630	8990	.	-	.	gene_id "g.SIRV4:8323:14623:N:51:-"; transcript_id "t.SIRV4:8323:14623:N:51:-";
+SIRV4	PASA-SALRAA	exon	13673	13822	.	-	.	gene_id "g.SIRV4:8323:14623:N:51:-"; transcript_id "t.SIRV4:8323:14623:N:51:-";
+SIRV4	PASA-SALRAA	exon	14593	14623	.	-	.	gene_id "g.SIRV4:8323:14623:N:51:-"; transcript_id "t.SIRV4:8323:14623:N:51:-";
+
+
+## pasa vertex:
+PASA_vertex for ['E:90', 'I:52', 'E:91', 'I:55', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15']
+
+	[fromPath:1] PASA_scored_path: ['E:90', 'I:52', 'E:91', 'I:55', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15'] rtypes:set() rnames: set() (Score=13.00000, InitScore=13.00000)
+mpgns:
+<mp30x:['E:90', 'I:52', 'E:91', 'I:55', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15'] 8323-15122 Count:13 W:1.00000000 Containments:0, ScoreExcCont:13.0000 ScoreInclCon:13.0000 len:571 read_names:{'8-SIRV408', '2-SIRV408', '6-SIRV408', '7-SIRV408', '12-SIRV408', '9-SIRV408', '11-SIRV408', '3-SIRV408', '5-SIRV408', '0-SIRV408', '4-SIRV408', '1-SIRV408', '10-SIRV408'}>
+
+
+#SIRV4:8323:15122:N:52:-	8-SIRV408,12-SIRV408,7-SIRV408,2-SIRV408,6-SIRV408,1-SIRV408,11-SIRV408,3-SIRV408,5-SIRV408,0-SIRV408,4-SIRV408,9-SIRV408,10-SIRV408
+SIRV4	PASA-SALRAA	transcript	8323	15122	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-"; score "13";
+SIRV4	PASA-SALRAA	exon	8323	8372	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-";
+SIRV4	PASA-SALRAA	exon	8630	8747	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-";
+SIRV4	PASA-SALRAA	exon	8847	8990	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-";
+SIRV4	PASA-SALRAA	exon	13673	13828	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-";
+SIRV4	PASA-SALRAA	exon	15020	15122	.	-	.	gene_id "g.SIRV4:8323:15122:N:52:-"; transcript_id "t.SIRV4:8323:15122:N:52:-";
+
+
+## pasa vertex:
+PASA_vertex for ['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15'] rtypes:set() rnames: set() (Score=11.00000, InitScore=11.00000)
+mpgns:
+<mp29x:['POLYA:18', 'E:90', 'I:52', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'I:54', 'E:98', 'TSS:15'] 8323-15122 Count:11 W:1.00000000 Containments:0, ScoreExcCont:11.0000 ScoreInclCon:11.0000 len:670 read_names:{'6-SIRV403', '9-SIRV403', '8-SIRV403', '3-SIRV403', '7-SIRV403', '5-SIRV403', '2-SIRV403', '10-SIRV403', '4-SIRV403', '0-SIRV403', '1-SIRV403'}>
+
+
+#SIRV4:8323:15122:N:53:-	6-SIRV403,1-SIRV403,9-SIRV403,8-SIRV403,3-SIRV403,7-SIRV403,5-SIRV403,2-SIRV403,4-SIRV403,0-SIRV403,10-SIRV403
+SIRV4	PASA-SALRAA	transcript	8323	15122	.	-	.	gene_id "g.SIRV4:8323:15122:N:53:-"; transcript_id "t.SIRV4:8323:15122:N:53:-"; score "11";
+SIRV4	PASA-SALRAA	exon	8323	8372	.	-	.	gene_id "g.SIRV4:8323:15122:N:53:-"; transcript_id "t.SIRV4:8323:15122:N:53:-";
+SIRV4	PASA-SALRAA	exon	8630	8990	.	-	.	gene_id "g.SIRV4:8323:15122:N:53:-"; transcript_id "t.SIRV4:8323:15122:N:53:-";
+SIRV4	PASA-SALRAA	exon	13673	13828	.	-	.	gene_id "g.SIRV4:8323:15122:N:53:-"; transcript_id "t.SIRV4:8323:15122:N:53:-";
+SIRV4	PASA-SALRAA	exon	15020	15122	.	-	.	gene_id "g.SIRV4:8323:15122:N:53:-"; transcript_id "t.SIRV4:8323:15122:N:53:-";
+
+
+## pasa vertex:
+PASA_vertex for ['POLYA:19', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'E:96', 'TSS:14']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:19', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'E:96', 'TSS:14'] rtypes:set() rnames: set() (Score=8.00000, InitScore=8.00000)
+mpgns:
+<mp31x:['POLYA:19', 'E:91', 'E:92', 'E:93', 'I:51', 'E:94', 'E:95', 'E:96', 'TSS:14'] 8630-13937 Count:8 W:1.00000000 Containments:0, ScoreExcCont:8.0000 ScoreInclCon:8.0000 len:626 read_names:{'5-SIRV405', '3-SIRV405', '7-SIRV405', '1-SIRV405', '4-SIRV405', '6-SIRV405', '0-SIRV405', '2-SIRV405'}>
+
+
+#SIRV4:8630:13937:N:54:-	5-SIRV405,3-SIRV405,7-SIRV405,1-SIRV405,4-SIRV405,6-SIRV405,0-SIRV405,2-SIRV405
+SIRV4	PASA-SALRAA	transcript	8630	13937	.	-	.	gene_id "g.SIRV4:8630:13937:N:54:-"; transcript_id "t.SIRV4:8630:13937:N:54:-"; score "8";
+SIRV4	PASA-SALRAA	exon	8630	8990	.	-	.	gene_id "g.SIRV4:8630:13937:N:54:-"; transcript_id "t.SIRV4:8630:13937:N:54:-";
+SIRV4	PASA-SALRAA	exon	13673	13937	.	-	.	gene_id "g.SIRV4:8630:13937:N:54:-"; transcript_id "t.SIRV4:8630:13937:N:54:-";
+
+

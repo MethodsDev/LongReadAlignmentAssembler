@@ -1,0 +1,7 @@
+
+
+java -jar $PICARD_HOME/picard.jar AddOrReplaceReadGroups I=pacbioccsminimap.minig.bam O=pacbioccsminimap.minig.PBLR.bam RGID=PBLR RGLB=lib2 RGPL=pacbio RGPU=unit2 RGSM=pacbio VALIDATION_STRINGENCY=LENIENT 
+
+
+samtools merge illumina_plus_pacbio.merged.bam illumina_regular_frags.minig.bam pacbioccsminimap.minig.PBLR.bam 
+

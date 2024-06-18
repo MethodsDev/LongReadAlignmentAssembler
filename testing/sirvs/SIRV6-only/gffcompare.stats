@@ -1,0 +1,30 @@
+# gffcompare v0.12.6 | Command line was:
+#gffcompare -r SIRV6.annot.gtf LRAA.gtf -o gffcompare
+#
+
+#= Summary for dataset: LRAA.gtf 
+#     Query mRNAs :      16 in       2 loci  (14 multi-exon transcripts)
+#            (1 multi-transcript loci, ~8.0 transcripts per locus)
+# Reference mRNAs :      18 in       3 loci  (15 multi-exon)
+# Super-loci w/ reference transcripts:        2
+#-----------------| Sensitivity | Precision  |
+        Base level:    96.1     |   100.0    |
+        Exon level:    88.6     |   100.0    |
+      Intron level:   100.0     |   100.0    |
+Intron chain level:    93.3     |   100.0    |
+  Transcript level:    88.9     |   100.0    |
+       Locus level:    66.7     |   100.0    |
+
+     Matching intron chains:      14
+       Matching transcripts:      16
+              Matching loci:       2
+
+          Missed exons:       1/44	(  2.3%)
+           Novel exons:       0/30	(  0.0%)
+        Missed introns:       0/18	(  0.0%)
+         Novel introns:       0/18	(  0.0%)
+           Missed loci:       1/3	( 33.3%)
+            Novel loci:       0/2	(  0.0%)
+
+ Total union super-loci across all input datasets: 2 
+16 out of 16 consensus transcripts written in gffcompare.annotated.gtf (0 discarded as redundant)

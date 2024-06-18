@@ -1,0 +1,254 @@
+TSS: TSS:5 SIRV6:1001-1001 [+] read_count:3	<Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732>	Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']
+.	<TSS: TSS:5 SIRV6:1001-1001 [+] read_count:3>	Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732
+Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732	<Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+TSS: TSS:1 SIRV6:1304-1304 [+] read_count:10	<Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0>	Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']
+.	<TSS: TSS:1 SIRV6:1304-1304 [+] read_count:10>	Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0
+Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0	<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>;<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']	<Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0>	Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>;<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>;<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']	<Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0>	Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>;<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']	<Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569>	Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>;<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10>	.
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>	Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>;<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0>	PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5
+Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0	<PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5>	.
+TSS: TSS:3 SIRV6:2286-2286 [+] read_count:7	<Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+.	<TSS: TSS:3 SIRV6:2286-2286 [+] read_count:7>	Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0
+Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>;<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']	<Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334>	Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>;<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7>	.
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>	Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']
+Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334	<Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']>	Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0
+Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']	<Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']	<Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0>	Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>;<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0>	Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']
+Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0	<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+TSS: TSS:4 SIRV6:3024-3024 [+] read_count:5	<Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+.	<TSS: TSS:4 SIRV6:3024-3024 [+] read_count:5>	Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097
+Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>;<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>;<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']	<Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0>	Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']>	Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0
+Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']	<Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0>	Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']
+Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0	<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']	<Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0>	Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']
+Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0	<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+TSS: TSS:2 SIRV6:9000-9000 [+] read_count:8	<Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+.	<TSS: TSS:2 SIRV6:9000-9000 [+] read_count:8>	Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261
+Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>;<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']	<Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532>	Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>;<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22>	.
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>	Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>;<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408>	Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>;<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8>	.
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408	<Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']	<Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0>	Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>;<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>;<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']	<Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036>	Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7>	.
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>	PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>;<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>	.
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036>	Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4>	.
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>	Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31>	.
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>	.
+PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10	<Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0>	TSS: TSS:6 SIRV6:1820-1820 [-] read_count:10
+.	<PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10>	Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0
+Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0	<TSS: TSS:6 SIRV6:1820-1820 [-] read_count:10>	.
+.	<Exon: E:42 SIRV6:2359-2547 [-] mean_cov:2.0>	.
+.	<Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732>	Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']
+Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732	<Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+.	<Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0>	Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']
+Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0	<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>;<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']	<Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0>	Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>;<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>;<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']	<Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0>	Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>;<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']	<Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569>	Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>;<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10>	.
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>	Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>;<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0>	PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5
+Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0	<PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5>	.
+.	<Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>;<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']	<Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334>	Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>;<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7>	.
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>	Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']
+Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334	<Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']>	Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0
+Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']	<Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']	<Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0>	Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>;<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0>	Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']
+Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0	<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+.	<Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>;<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>;<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']	<Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0>	Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']>	Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0
+Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']	<Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0>	Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']
+Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0	<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']	<Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0>	Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']
+Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0	<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+.	<Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>;<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']	<Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532>	Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>;<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22>	.
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>	Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>;<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408>	Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>;<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8>	.
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408	<Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']	<Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0>	Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>;<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>;<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']	<Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036>	Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7>	.
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>	PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>;<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>	.
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036>	Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4>	.
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>	Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31>	.
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>	.
+PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10	<Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0>	.
+.	<PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10>	Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0
+.	<Exon: E:42 SIRV6:2359-2547 [-] mean_cov:2.0>	.
+.	<Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732>	Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']
+Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732	<Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+.	<Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0>	Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']
+Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0	<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>;<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']	<Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0>	Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>;<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>;<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']	<Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0>	Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>;<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']	<Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569>	Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>;<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10>	.
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>	Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>;<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0>	PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5
+Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0	<PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5>	.
+.	<Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>;<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']	<Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334>	Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>;<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7>	.
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>	Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']
+Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334	<Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']>	Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0
+Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']	<Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']	<Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0>	Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>;<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0>	Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']
+Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0	<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+.	<Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>;<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>;<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']	<Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0>	Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']>	Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0
+Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']	<Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0>	Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']
+Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0	<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']	<Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0>	Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']
+Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0	<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+.	<Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>;<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']	<Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532>	Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>;<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22>	.
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>	Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>;<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408>	Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>;<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8>	.
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408	<Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']	<Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0>	Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>;<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>;<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']	<Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036>	Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7>	.
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>	PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>;<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>	.
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036>	Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4>	.
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>	Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31>	.
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>	.
+PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10	<Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0>	.
+.	<PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10>	Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0
+.	<Exon: E:42 SIRV6:2359-2547 [-] mean_cov:2.0>	.
+.	<Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732>	Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']
+Exon: E:1 SIRV6:1001-1186 [+] mean_cov:17.182795698924732	<Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+.	<Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0>	Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']
+Exon: E:2 SIRV6:1304-1381 [+] mean_cov:10.0	<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']>	Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0
+Intron: I:1 SIRV6:1187-1468 [+] count:39 rtypes:['PacBio']>;<Intron: I:13 SIRV6:1382-1468 [+] count:10 rtypes:['PacBio']	<Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0>	Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>;<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:3 SIRV6:1469-1534 [+] mean_cov:49.0	<Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>	Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0
+Exon: E:4 SIRV6:1535-1640 [+] mean_cov:7.0>;<Intron: I:2 SIRV6:1535-1640 [+] count:42 rtypes:['PacBio']	<Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0>	Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>;<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:5 SIRV6:1641-1735 [+] mean_cov:49.0	<Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>	Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569
+Exon: E:6 SIRV6:1736-1845 [+] mean_cov:10.0>;<Intron: I:9 SIRV6:1736-1845 [+] count:34 rtypes:['PacBio']	<Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569>	Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>;<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<PolyAsite: POLYA:3 SIRV6:1950-1950 [+] read_count:10>	.
+Exon: E:29 SIRV6:1846-1950 [+] mean_cov:39.80110497237569	<Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569>	Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>;<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:30 SIRV6:1951-2026 [+] mean_cov:39.80110497237569	<Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0>	PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5
+Exon: E:8 SIRV6:2027-2120 [+] mean_cov:5.0	<PolyAsite: POLYA:8 SIRV6:2120-2120 [+] read_count:5>	.
+.	<Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>	Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334
+Exon: E:9 SIRV6:2286-2470 [+] mean_cov:7.0>;<Intron: I:3 SIRV6:1736-2470 [+] count:3 rtypes:['PacBio']>;<Intron: I:10 SIRV6:2027-2470 [+] count:29 rtypes:['PacBio']	<Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334>	Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>;<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<PolyAsite: POLYA:6 SIRV6:2540-2540 [+] read_count:7>	.
+Exon: E:35 SIRV6:2471-2540 [+] mean_cov:49.61333333333334	<Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334>	Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']
+Exon: E:36 SIRV6:2541-2620 [+] mean_cov:49.61333333333334	<Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']>	Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0
+Intron: I:4 SIRV6:2621-2740 [+] count:51 rtypes:['PacBio']	<Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>	Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0
+Exon: E:11 SIRV6:2741-2780 [+] mean_cov:51.0>;<Intron: I:12 SIRV6:1736-2780 [+] count:2 rtypes:['PacBio']	<Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0>	Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>;<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:12 SIRV6:2781-2814 [+] mean_cov:53.0	<Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0>	Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']
+Exon: E:13 SIRV6:2815-2828 [+] mean_cov:48.0	<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+.	<Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>	Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0
+Exon: E:14 SIRV6:3024-3106 [+] mean_cov:5.156626506024097>;<Intron: I:5 SIRV6:2829-3106 [+] count:48 rtypes:['PacBio']>;<Intron: I:14 SIRV6:2815-3106 [+] count:5 rtypes:['PacBio']	<Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0>	Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Exon: E:15 SIRV6:3107-3164 [+] mean_cov:71.0	<Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']>	Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0
+Intron: I:17 SIRV6:3165-7104 [+] count:13 rtypes:['PacBio']	<Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0>	Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']
+Exon: E:16 SIRV6:7105-7448 [+] mean_cov:13.0	<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']>	Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0
+Intron: I:15 SIRV6:3165-7805 [+] count:15 rtypes:['PacBio']>;<Intron: I:18 SIRV6:7449-7805 [+] count:13 rtypes:['PacBio']	<Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0>	Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']
+Exon: E:17 SIRV6:7806-7923 [+] mean_cov:28.0	<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+.	<Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>	Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532
+Exon: E:18 SIRV6:9000-10724 [+] mean_cov:9.693913043478261>;<Intron: I:6 SIRV6:3165-10724 [+] count:43 rtypes:['PacBio']>;<Intron: I:16 SIRV6:7924-10724 [+] count:28 rtypes:['PacBio']	<Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532>	Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>;<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<PolyAsite: POLYA:1 SIRV6:10815-10815 [+] read_count:22>	.
+Exon: E:25 SIRV6:10725-10815 [+] mean_cov:82.2872340425532	<Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532>	Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>;<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:26 SIRV6:10816-10818 [+] mean_cov:82.2872340425532	<Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408>	Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>;<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<PolyAsite: POLYA:4 SIRV6:10968-10968 [+] read_count:8>	.
+Exon: E:31 SIRV6:10819-10968 [+] mean_cov:9.633802816901408	<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408>	Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0
+Intron: I:7 SIRV6:10819-11031 [+] count:40 rtypes:['PacBio']>;<Exon: E:32 SIRV6:10969-11031 [+] mean_cov:9.633802816901408	<Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>	Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0
+Exon: E:21 SIRV6:11032-11034 [+] mean_cov:44.0>;<Intron: I:11 SIRV6:10819-11034 [+] count:11 rtypes:['PacBio']	<Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0>	Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>;<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:22 SIRV6:11035-11108 [+] mean_cov:55.0	<Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>	Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036
+Exon: E:23 SIRV6:11109-11205 [+] mean_cov:7.0>;<Intron: I:8 SIRV6:11109-11205 [+] count:48 rtypes:['PacBio']	<Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036>	Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:7 SIRV6:11270-11270 [+] read_count:7>	.
+Exon: E:37 SIRV6:11206-11270 [+] mean_cov:37.004746835443036	<Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036>	PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>;<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:5 SIRV6:11331-11331 [+] read_count:13>	.
+Exon: E:38 SIRV6:11271-11331 [+] mean_cov:37.004746835443036	<Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036>	Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:9 SIRV6:11690-11690 [+] read_count:4>	.
+Exon: E:39 SIRV6:11332-11690 [+] mean_cov:37.004746835443036	<Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036>	Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>;<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<PolyAsite: POLYA:2 SIRV6:11824-11824 [+] read_count:31>	.
+Exon: E:40 SIRV6:11691-11824 [+] mean_cov:37.004746835443036	<Exon: E:28 SIRV6:11825-11837 [+] mean_cov:37.004746835443036>	.
+PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10	<Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0>	.
+.	<PolyAsite: POLYA:10 SIRV6:1545-1545 [-] read_count:10>	Exon: E:41 SIRV6:1545-1820 [-] mean_cov:10.0
+.	<Exon: E:42 SIRV6:2359-2547 [-] mean_cov:2.0>	.

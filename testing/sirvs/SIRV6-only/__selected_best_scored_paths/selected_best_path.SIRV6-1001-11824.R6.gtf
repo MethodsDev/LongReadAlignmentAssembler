@@ -1,0 +1,16 @@
+Transcript path: PASA_scored_path: ['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp5x:['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] 1001-11331 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:1218 read_names:{'4-SIRV605', '6-SIRV605', '5-SIRV605', '3-SIRV605', '2-SIRV605', '1-SIRV605', '0-SIRV605'}>
+
+Transcript path: PASA_scored_path: ['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp5x:['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] 1001-11331 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:1218 read_names:{'3-SIRV605', '5-SIRV605', '0-SIRV605', '6-SIRV605', '2-SIRV605', '1-SIRV605', '4-SIRV605'}>
+
+Transcript path: PASA_scored_path: ['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp5x:['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] 1001-11331 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:1218 read_names:{'0-SIRV605', '4-SIRV605', '6-SIRV605', '2-SIRV605', '1-SIRV605', '3-SIRV605', '5-SIRV605'}>
+
+Transcript path: PASA_scored_path: ['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp5x:['E:1', 'I:1', 'E:3', 'I:2', 'E:5', 'I:9', 'E:29', 'E:30', 'I:10', 'E:35', 'E:36', 'I:4', 'E:11', 'E:12', 'E:13', 'I:5', 'E:15', 'I:6', 'E:25', 'E:26', 'I:7', 'E:21', 'E:22', 'E:23', 'E:37', 'E:38', 'POLYA:5'] 1001-11331 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:1218 read_names:{'4-SIRV605', '2-SIRV605', '6-SIRV605', '0-SIRV605', '1-SIRV605', '3-SIRV605', '5-SIRV605'}>
+

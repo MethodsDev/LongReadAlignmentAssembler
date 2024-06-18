@@ -1,0 +1,30 @@
+## pasa vertex:
+PASA_vertex for ['E:7', 'E:8', 'I:1', 'E:3', 'E:4', 'I:2', 'E:5', 'E:6']
+
+	[fromPath:1] PASA_scored_path: ['E:7', 'E:8', 'I:1', 'E:3', 'E:4', 'I:2', 'E:5', 'E:6'] rtypes:set() rnames: set() (Score=2.00000, InitScore=2.00000)
+mpgns:
+<mp1x:['E:7', 'E:8', 'I:1', 'E:3', 'E:4', 'I:2', 'E:5', 'E:6'] 10583-11643 Count:2 W:1.00000000 Containments:0, ScoreExcCont:2.0000 ScoreInclCon:2.0000 len:739 read_names:{'0-SIRV108', '1-SIRV108'}>
+
+
+#SIRV1:10583:11643:N:1:+	0-SIRV108,1-SIRV108
+SIRV1	PASA-SALRAA	transcript	10583	11643	.	+	.	gene_id "g.SIRV1:10583:11643:N:1:+"; transcript_id "t.SIRV1:10583:11643:N:1:+"; score "2";
+SIRV1	PASA-SALRAA	exon	10583	10791	.	+	.	gene_id "g.SIRV1:10583:11643:N:1:+"; transcript_id "t.SIRV1:10583:11643:N:1:+";
+SIRV1	PASA-SALRAA	exon	10898	11187	.	+	.	gene_id "g.SIRV1:10583:11643:N:1:+"; transcript_id "t.SIRV1:10583:11643:N:1:+";
+SIRV1	PASA-SALRAA	exon	11404	11643	.	+	.	gene_id "g.SIRV1:10583:11643:N:1:+"; transcript_id "t.SIRV1:10583:11643:N:1:+";
+
+
+## pasa vertex:
+PASA_vertex for ['TSS:1', 'E:8', 'I:3', 'E:2', 'E:3', 'I:4', 'E:6', 'POLYA:1']
+
+	[fromPath:1] PASA_scored_path: ['TSS:1', 'E:8', 'I:3', 'E:2', 'E:3', 'I:4', 'E:6', 'POLYA:1'] rtypes:set() rnames: set() (Score=7.00000, InitScore=7.00000)
+mpgns:
+<mp2x:['TSS:1', 'E:8', 'I:3', 'E:2', 'E:3', 'I:4', 'E:6', 'POLYA:1'] 10712-11643 Count:7 W:1.00000000 Containments:0, ScoreExcCont:7.0000 ScoreInclCon:7.0000 len:464 read_names:{'3-SIRV109', '5-SIRV109', '2-SIRV109', '1-SIRV109', '4-SIRV109', '0-SIRV109', '6-SIRV109'}>
+
+
+#SIRV1:10712:11643:N:2:+	3-SIRV109,5-SIRV109,2-SIRV109,1-SIRV109,4-SIRV109,0-SIRV109,6-SIRV109
+SIRV1	PASA-SALRAA	transcript	10712	11643	.	+	.	gene_id "g.SIRV1:10712:11643:N:2:+"; transcript_id "t.SIRV1:10712:11643:N:2:+"; score "7";
+SIRV1	PASA-SALRAA	exon	10712	10791	.	+	.	gene_id "g.SIRV1:10712:11643:N:2:+"; transcript_id "t.SIRV1:10712:11643:N:2:+";
+SIRV1	PASA-SALRAA	exon	10883	11057	.	+	.	gene_id "g.SIRV1:10712:11643:N:2:+"; transcript_id "t.SIRV1:10712:11643:N:2:+";
+SIRV1	PASA-SALRAA	exon	11435	11643	.	+	.	gene_id "g.SIRV1:10712:11643:N:2:+"; transcript_id "t.SIRV1:10712:11643:N:2:+";
+
+

@@ -1,0 +1,15 @@
+## pasa vertex:
+PASA_vertex for ['POLYA:15', 'E:67', 'I:41', 'E:68', 'I:42', 'E:69', 'TSS:10']
+
+	[fromPath:1] PASA_scored_path: ['POLYA:15', 'E:67', 'I:41', 'E:68', 'I:42', 'E:69', 'TSS:10'] rtypes:set() rnames: set() (Score=11.00000, InitScore=11.00000)
+mpgns:
+<mp21x:['POLYA:15', 'E:67', 'I:41', 'E:68', 'I:42', 'E:69', 'TSS:10'] 1001-1982 Count:11 W:1.00000000 Containments:0, ScoreExcCont:11.0000 ScoreInclCon:11.0000 len:479 read_names:{'8-SIRV308', '4-SIRV308', '1-SIRV308', '0-SIRV308', '7-SIRV308', '10-SIRV308', '9-SIRV308', '2-SIRV308', '3-SIRV308', '6-SIRV308', '5-SIRV308'}>
+
+
+#SIRV3:1001:1982:N:41:-	8-SIRV308,4-SIRV308,1-SIRV308,0-SIRV308,7-SIRV308,10-SIRV308,9-SIRV308,2-SIRV308,3-SIRV308,6-SIRV308,5-SIRV308
+SIRV3	PASA-SALRAA	transcript	1001	1982	.	-	.	gene_id "g.SIRV3:1001:1982:N:41:-"; transcript_id "t.SIRV3:1001:1982:N:41:-"; score "11";
+SIRV3	PASA-SALRAA	exon	1001	1167	.	-	.	gene_id "g.SIRV3:1001:1982:N:41:-"; transcript_id "t.SIRV3:1001:1982:N:41:-";
+SIRV3	PASA-SALRAA	exon	1533	1764	.	-	.	gene_id "g.SIRV3:1001:1982:N:41:-"; transcript_id "t.SIRV3:1001:1982:N:41:-";
+SIRV3	PASA-SALRAA	exon	1903	1982	.	-	.	gene_id "g.SIRV3:1001:1982:N:41:-"; transcript_id "t.SIRV3:1001:1982:N:41:-";
+
+

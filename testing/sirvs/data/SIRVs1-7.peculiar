@@ -1,0 +1,6 @@
+# SIRV107 orient(a-/s-) align: 10648(744)-10791(601)>GT....AG<10883(600)-11242(241)>CT....AG<11404(240)-11643(1) ERROR: Splice site validations failed
+SIRV1	SIRVs1-7.annot.gtf	transcript	10648	11643	.	-	.	gene_id "SIRV107"; transcript_id "SIRV107";
+SIRV1	SIRVs1-7.annot.gtf	exon	10648	10791	100	-	.	gene_id "SIRV107"; transcript_id "SIRV107";
+SIRV1	SIRVs1-7.annot.gtf	exon	10883	11242	100	-	.	gene_id "SIRV107"; transcript_id "SIRV107";
+SIRV1	SIRVs1-7.annot.gtf	exon	11404	11643	100	-	.	gene_id "SIRV107"; transcript_id "SIRV107";
+
