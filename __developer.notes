@@ -1,5 +1,5 @@
 ############################
-# overall flow (pasa-salraa)
+# overall flow (lraa)
 ############################
 
 foreach contig:
@@ -7,21 +7,21 @@ foreach contig:
     sg = Splice_graph()
     sg.build_splice_graph_for_contig(contig_acc, contig_seq_str, bam_file)
 
-	# build pasa-salraa object and reconstruct isoforms:
-	pasa_salraa_obj = PASA_SALRAA(sg, CPU)
-    pasa_salraa_obj.build_multipath_graph(contig_acc, contig_seq_str, bam_file, allow_spacers)
-    transcripts = pasa_salraa_obj.reconstruct_isoforms(single_best_only)
+	# build lraa object and reconstruct isoforms:
+	lraa_obj = LRAA(sg, CPU)
+    lraa_obj.build_multipath_graph(contig_acc, contig_seq_str, bam_file, allow_spacers)
+    transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
 
 ##########################################################
-# pasa_salraa_obj.build_multipath_graph  (PASA_SALRAA.py)
+# lraa_obj.build_multipath_graph  (LRAA.py)
 ##########################################################
 
 # assign each read to a multi-path in the splice graph and count them up
 mp_counter = self._populate_read_multi_paths(contig_acc, contig_seq, bam_file)
 
 # build the multipath graph (mpg) where each node is a multipath with count assigned.
-multipath_graph = MultiPathGraph(mp_counter, self._splice_graph, PASA_SALRAA.min_mpgn_read_count, allow_spacers)
+multipath_graph = MultiPathGraph(mp_counter, self._splice_graph, LRAA.min_mpgn_read_count, allow_spacers)
 multipath_graph.describe_graph("__multipath_graph.dat")
 
 
@@ -39,7 +39,7 @@ for mpCountPair in multiPathCountPairs:
 
 
 ###########################################################
-# isoform reconstruction (PASA_SALRAA.reconstruct_isoforms)
+# isoform reconstruction (LRAA.reconstruct_isoforms)
 ###########################################################
 
 # mpg components are first identified based on having shared vertices in the splice graph:
@@ -55,17 +55,17 @@ foreach mpg_component:
 ## reconstruction:
 
 - build DP trellis:
-pasa_vertices = self._build_trellis(mpg_component)
+vertices = self._build_trellis(mpg_component)
 
 - select best transcript path from trellis:
-transcript_path = self._retrieve_best_transcript(pasa_vertices)
+transcript_path = self._retrieve_best_transcript(vertices)
 
 
 ###########################################################################
-# Trellis construction ((PASA_SALRAA._build_trellis(self, mpg_component) )
+# Trellis construction ((LRAA._build_trellis(self, mpg_component) )
 ###########################################################################
 
-- mpgns are converted to pasa vertices (pv).
+- mpgns are converted to vertices (pv).
 	Each pv has:
       - self._multipath_graph_nod  # stores the corresponding mpgn
       - self._weight
@@ -76,7 +76,7 @@ transcript_path = self._retrieve_best_transcript(pasa_vertices)
 	- for each prev node j, store the best extended path from j in as a from_path in i
 
 #################################################################################
-# creating path extensions (PASA_scored_path.create_scored_path_extension(mpgn) )
+# creating path extensions (Scored_path.create_scored_path_extension(mpgn) )
 #################################################################################
 
 
@@ -84,11 +84,11 @@ transcript_path = self._retrieve_best_transcript(pasa_vertices)
 ## Notes on TSS-definition and filtering
     
     - Splice graph construction:
-    	- count read end positions if reads have <= PASA_SALRAA_Globals.config['max_soft_clip_at_TSS']
+    	- count read end positions if reads have <= LRAA_Globals.config['max_soft_clip_at_TSS']
         	- writes: __prelim_TSS_raw_counts.tsv
         - aggregates sites within window and according to min alignment count:
-               PASA_SALRAA_Globals.config['max_dist_between_alt_TSS_sites']
-               PASA_SALRAA_Globals.config['min_alignments_define_TSS_site']
+               LRAA_Globals.config['max_dist_between_alt_TSS_sites']
+               LRAA_Globals.config['min_alignments_define_TSS_site']
 
        - TSS peaks in grouped positions are added as prelim TSS objects
             - writes: __prefilter_TSS_info.bed
@@ -96,16 +96,16 @@ transcript_path = self._retrieve_best_transcript(pasa_vertices)
        - TSS objs are incorporated into the splice graph, fracturing exon segments
 
        - TSS filtering based on graph connected components:
-             - whole component: TSSs are eliminated if read support / total TSS read counts < PASA_SALRAA_Globals.config['min_TSS_iso_fraction']  
-    		- walking exons downstream from a top-read-count TSS, removing alt TSSs if alt TSS < PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation']  
+             - whole component: TSSs are eliminated if read support / total TSS read counts < LRAA_Globals.config['min_TSS_iso_fraction']  
+    		- walking exons downstream from a top-read-count TSS, removing alt TSSs if alt TSS < LRAA_Globals.config['max_frac_alt_TSS_from_degradation']  
 
 
     - Reads are assigned paths based on the refined splice graph including remaining TSSs
     - Read paths are clustered based on common paths.
     - Quantify.prune_likely_degradation_products:
     	various rules based on comparing two paths i,j where path_j is contained and compatible with path_i
-    		- frac_gene_express_j_TSS < PASA_SALRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']
-    		- frac_i_TSS =  j_TSS_read_count/i_TSS_read_count & frac_i_TSS < PASA_SALRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
+    		- frac_gene_express_j_TSS < LRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']
+    		- frac_i_TSS =  j_TSS_read_count/i_TSS_read_count & frac_i_TSS < LRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
             - various polyA-based logic in case polyA sites differ
 
     -  Quantify.filter_isoforms_by_min_isoform_fraction
