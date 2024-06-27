@@ -64,6 +64,10 @@ class Splice_graph:
 
         self._TSS_objs = list() # TSS objects
         self._PolyA_objs = list() # PolyA site objects
+
+
+        self._input_transcript_lend_boundaries = set()
+        self._input_transcript_rend_boundaries = set()
         
         return
 
@@ -547,10 +551,16 @@ class Splice_graph:
             last_rend = None
 
             logger.debug("Integrating transcript: {}".format(transcript))
+
+            trans_lend, trans_rend = transcript.get_coords()
             
+            self._input_transcript_lend_boundaries.add(trans_lend)
+            self._input_transcript_rend_boundaries.add(trans_rend)
+                        
             # add coverage for exonic region
             for exon_segment in exon_segments:
                 lend, rend = exon_segment
+                                
                 logger.debug("-ensuring coverage for exon: {}-{}".format(lend, rend))
                 for i in range(lend, rend + 1):
                     if i > self._contig_seq_len:
@@ -984,12 +994,12 @@ class Splice_graph:
                     exon_seg_start = None
 
             # splice breakpoint logic
-            if i+1 in left_splice_sites:
+            if i+1 in left_splice_sites or i+1 in self._input_transcript_lend_boundaries:
                 if exon_seg_start is not None:
                     exon_segments.append([exon_seg_start, i])
                 exon_seg_start = None
 
-            if i in right_splice_sites:
+            if i in right_splice_sites or i in self._input_transcript_rend_boundaries:
                 if exon_seg_start is not None:
                     exon_segments.append([exon_seg_start, i])
                 exon_seg_start = None
@@ -1238,18 +1248,36 @@ class Splice_graph:
         ## identify all exon segments that are not preceded by exon segments
         def branched_left(node):
             assert type(node) == Exon
-            return (len(list(self._splice_graph.predecessors(node))) > 1)
+
+            lend, rend = node.get_coords()
+            if lend in self._input_transcript_lend_boundaries or (lend-1) in self._input_transcript_rend_boundaries:
+                return True
+            
+            if (len(list(self._splice_graph.predecessors(node))) > 1):
+                return True
+
+            return False
 
         def branched_right(node):
             assert type(node) == Exon
-            return (len(list(self._splice_graph.successors(node))) > 1)
-                
+
+            lend, rend = node.get_coords()
+
+            if rend in self._input_transcript_rend_boundaries or (rend+1) in self._input_transcript_lend_boundaries:
+                return True
+            
+            if (len(list(self._splice_graph.successors(node))) > 1):
+                return True
+
+            return False
+        
                
         def branched_or_nothing_left(node):
 
             if branched_left(node):
                 return True
 
+                        
             pred_nodes = list(self._splice_graph.predecessors(node))
             if len(pred_nodes) == 0:
                 return True
