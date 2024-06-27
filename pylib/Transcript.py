@@ -2,6 +2,10 @@ import sys, os, re
 from collections import defaultdict
 from GenomeFeature import GenomeFeature
 import Scored_path
+import LRAA_Globals
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Transcript (GenomeFeature):
@@ -268,6 +272,9 @@ class GTF_contig_to_transcripts:
         gene_id_to_meta = defaultdict(dict)
         transcript_id_to_meta = defaultdict(dict)
         transcript_id_to_genome_info = defaultdict(dict)
+
+
+        local_debug = False
         
         with open(gtf_filename, "rt") as fh:
             for line in fh:
@@ -290,14 +297,17 @@ class GTF_contig_to_transcripts:
 
                 if chr_restrict is not None:
                     if chr_restrict != contig:
+                        if local_debug: logger.debug("skipping {} since contig {} != restricted to {}".format(line, contig, chr_restrict))
                         continue
 
                 if strand_restrict is not None:
                     if strand != strand_restrict:
+                        if local_debug: logger.debug("skipping {} since strand {} != restricted to {}".format(line, strand, strand_restrict))
                         continue
 
                 if lend_restrict is not None and rend_restrict is not None:
                     if lend < lend_restrict or rend > rend_restrict:
+                        if local_debug: logger.debug("skipping {} as lend {} and rend {} are not within range {}-{}".format(line, lend, rend, lend_restrict, rend_restrict)) 
                         continue
 
 
@@ -307,11 +317,13 @@ class GTF_contig_to_transcripts:
                 if feature_type == 'gene':
                     gene_id = info_dict['gene_id']
                     gene_id_to_meta[gene_id] = info_dict
-                    
-                if 'transcript_id' not in info_dict:
-                    continue
+
 
                 if feature_type != 'exon':
+                    continue
+                    
+                if 'transcript_id' not in info_dict:
+                    if local_debug: logger.debug("skipping {} as transcript_id not in info_dict".format(line))
                     continue
 
                 
@@ -329,6 +341,9 @@ class GTF_contig_to_transcripts:
 
         contig_to_transcripts = defaultdict(list)
 
+        if LRAA_Globals.DEBUG:
+            debug_fh = open("__transcript_gtf_features_parsed.tsv", "wt")
+        
         for transcript_id in transcript_id_to_genome_info:
             transcript_info_dict = transcript_id_to_genome_info[transcript_id]
             contig = transcript_info_dict['contig']
@@ -348,7 +363,13 @@ class GTF_contig_to_transcripts:
             
             contig_to_transcripts[contig].append(transcript_obj)
 
+            if LRAA_Globals.DEBUG:
+                print("\t".join([contig, gene_id, transcript_id, strand, str(coords_list)]), file=debug_fh) 
             
+
+        if LRAA_Globals.DEBUG:
+            debug_fh.close()
+                
         return contig_to_transcripts
 
 

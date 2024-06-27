@@ -54,8 +54,14 @@ class Bam_alignment_extractor:
         # parse read alignments, capture introns and genome coverage info.
         read_fetcher = None
         if region_lend is not None and region_rend is not None:
+            if contig_strand is not None:
+                logger.debug("Fetching alignments for {}{}:{}-{}".format(contig_acc, contig_strand, region_lend, region_rend))
+            else:
+                logger.debug("Fetching alignments for {}:{}-{}".format(contig_acc, region_lend, region_rend))
+
             read_fetcher = self._pysam_reader.fetch(contig_acc, region_lend, region_rend)
         else:
+            logger.debug("Fetching all alignments for contig: {} strand {}".format(contig_acc, contig_strand))
             read_fetcher = self._pysam_reader.fetch(contig_acc)
 
         for read in read_fetcher:
