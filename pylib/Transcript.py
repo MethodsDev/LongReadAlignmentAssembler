@@ -259,8 +259,12 @@ class Transcript (GenomeFeature):
 class GTF_contig_to_transcripts:
 
     @classmethod
-    def parse_GTF_to_Transcripts(cls, gtf_filename):
-
+    def parse_GTF_to_Transcripts(cls, gtf_filename,
+                                 chr_restrict = None,
+                                 strand_restrict = None,
+                                 lend_restrict = None,
+                                 rend_restrict = None):
+        
         gene_id_to_meta = defaultdict(dict)
         transcript_id_to_meta = defaultdict(dict)
         transcript_id_to_genome_info = defaultdict(dict)
@@ -283,8 +287,21 @@ class GTF_contig_to_transcripts:
                 lend = int(vals[3])
                 rend = int(vals[4])
                 strand = vals[6]
+
+                if chr_restrict is not None:
+                    if chr_restrict != contig:
+                        continue
+
+                if strand_restrict is not None:
+                    if strand != strand_restrict:
+                        continue
+
+                if lend_restrict is not None and rend_restrict is not None:
+                    if lend < lend_restrict or rend > rend_restrict:
+                        continue
+
+
                 info = vals[8]
-                
                 info_dict = cls._parse_info(info)
 
                 if feature_type == 'gene':

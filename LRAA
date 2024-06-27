@@ -117,7 +117,7 @@ def main():
     contig_group_setting.add_argument("--restrict_to_contig", type=str, default=None,
                                       help="restrict run to single contig")
     contig_group_setting.add_argument("--restrict_region_range", type=str, default=None,
-                                      help="restrict to region on contig lend:rend")
+                                      help="restrict to region on contig chr\d+[+-]?:\d+-\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand")
 
     
 
@@ -241,12 +241,28 @@ def main():
 
     restrict_region_lend, restrict_region_rend = None, None
     if args.restrict_region_range:
-        restrict_region_lend, restrict_region_rend = re.split("[\\:\\-]", args.restrict_region_range)
+        m = re.search("^(\w+)([\\+\\-]?):(\d+)-(\d+)$", args.restrict_region_range)
+        if m is None:
+            raise RuntimeError("Error, could not parse region range: {}".format(args.restrict_region_range))
+
+        restricted_contig = m.group(1)
+
+        genome_contigs_list = [restricted_contig] 
+        
+        restrict_to_contig_orient = m.group(2)
+        if restrict_to_contig_orient not in ('+', '-'):
+            restrict_to_contig_orient = None
+        
+        restrict_region_lend = m.group(3)
+        restrict_region_rend = m.group(4)
+
         restrict_region_lend = int(restrict_region_lend)
         restrict_region_rend = int(restrict_region_rend)
         assert restrict_region_lend < restrict_region_rend, f"Error, {args.restrict_region_range} invalid range"
 
+        print("{}\t{}\t{}\t{}".format(restricted_contig, restrict_to_contig_orient, restrict_region_lend, restrict_region_rend))
 
+    
     prereconstruct_info_dir = "__prereconstruct"
     if LRAA_Globals.DEBUG: 
         if not os.path.exists(prereconstruct_info_dir):
@@ -255,7 +271,9 @@ def main():
     contig_strand_to_input_transcripts = defaultdict(list)
     if input_gtf:
         logger.info(f"-capturing input transcripts from gtf {input_gtf}")
-        contig_to_input_transcripts = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(input_gtf)
+        contig_to_input_transcripts = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(input_gtf, restricted_contig,
+                                                                                         restrict_to_contig_orient,
+                                                                                         restrict_region_lend, restrict_region_rend)
         for contig, transcript_obj_list in contig_to_input_transcripts.items():
             for transcript in transcript_obj_list:
                 transcript_strand = transcript.get_strand()
@@ -282,7 +300,7 @@ def main():
     
     
     for contig_acc in genome_contigs_list:
-
+        
         contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(contig_acc, genome_fasta_filename)
         
         for contig_strand in ('+','-'):
