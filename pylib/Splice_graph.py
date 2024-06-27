@@ -664,7 +664,6 @@ class Splice_graph:
 
                 logger.debug("TSS incorporation: Split {} into {} and {}".format(exon_interval, new_split_exon_left, new_split_exon_right))
 
-
         
         return
 
