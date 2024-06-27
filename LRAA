@@ -226,6 +226,7 @@ def main():
     # build from reads.
     # define coverage intervals and introns as graph components.
 
+    restricted_contig = None
     restrict_to_contig_orient = None
 
     if args.restrict_to_contig:

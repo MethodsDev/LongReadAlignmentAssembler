@@ -102,34 +102,49 @@ class Quantify:
             
             sp = mp.get_simple_path()
 
-            top_gene = self._get_gene_with_best_node_matches_to_simplepath(sp)
+            top_genes = self._get_all_genes_with_node_matches_to_simplepath(sp)
 
-            if top_gene is None:
+            if top_genes is None:
                 gene_unanchored_mp_count_pairs.append(mp_count_pair)
                 logger.debug("mp_count_pair unanchored: " + str(mp_count_pair))
                 
                 continue
 
-            logger.debug("mp_count_pair {} anchored to gene: {}".format(mp_count_pair, top_gene))
+            logger.debug("mp_count_pair {} anchored to genes: {}".format(mp_count_pair, top_genes))
             num_paths_anchored_to_gene += 1
             num_read_counts_anchored_to_gene += count
             
             
             ## assign reads to transcripts
-            gene_isoforms = self._gene_id_to_transcript_objs[top_gene]
-            transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
-                                                                   trim_TSS_polyA = False, test_exact=True)
+            gene_isoforms = set()
+            for top_gene in top_genes:
+                isoforms = self._gene_id_to_transcript_objs[top_gene]
+                for isoform in isoforms:
+                    gene_isoforms.add(isoform)
 
+            
+            logger.debug("mp_count_pair {} assigned to gene {} with isoforms to test for read assignment:\n\t{}".format(mp, top_gene, "\n\t".join(["{}\t{}".format(x.get_transcript_id(), x._simplepath) for x in gene_isoforms])))
+            
+            transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
+                                                                   trim_TSS_polyA = False, test_exact=True, anchor_PolyA_TSS=True)
+
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact
+                transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
+                                                                    trim_TSS_polyA = False, test_exact=False, anchor_PolyA_TSS=True)
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact
+                transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
+                                                                    trim_TSS_polyA = False, test_exact=False, anchor_PolyA_TSS=False)
             if transcripts_assigned is None:
                 # try again with TSS and polyA trimming
                 transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
-                                                                       trim_TSS_polyA = True, test_exact=True)          
+                                                                       trim_TSS_polyA = True, test_exact=True, anchor_PolyA_TSS=False)          
             
-
             if transcripts_assigned is None:
                 # try again with TSS and PolyA trimmed off
                 transcripts_assigned = self._assign_path_to_transcript(splice_graph, mp, gene_isoforms, fraction_read_align_overlap,
-                                                                       trim_TSS_polyA = True, test_exact=False)
+                                                                       trim_TSS_polyA = True, test_exact=False, anchor_PolyA_TSS=False)
 
             if transcripts_assigned is None:
                 # last resort, do majority voting
@@ -140,7 +155,7 @@ class Quantify:
             if transcripts_assigned is None:
                 logger.debug("mp_count_pair {} maps to gene but no isoform(transcript)".format(mp_count_pair))
             else:
-                logger.debug("mp_count_pair {} maps to transcripts: {}".format(mp_count_pair, transcripts_assigned))
+                logger.info("mp_count_pair {} maps to transcripts:\n{}".format(mp_count_pair, "\n".join(["{}\t{}".format(x.get_transcript_id(), x._simplepath) for x in transcripts_assigned])))
                 for transcript in transcripts_assigned:
                     transcript.add_read_names(mp.get_read_names())
                     
@@ -188,11 +203,30 @@ class Quantify:
         else:
             genes_ranked = sorted(gene_ranker.keys(), key=lambda x: gene_ranker[x], reverse=True)
             return genes_ranked[0]
+
+
+        
+    def _get_all_genes_with_node_matches_to_simplepath(self, simplepath):
+
+        gene_ranker = defaultdict(int)
+
+        for node in simplepath:
+            if node != SPACER:
+                if node in self._path_node_id_to_gene_ids:
+                    gene_set = self._path_node_id_to_gene_ids[node]
+                    for gene_id in gene_set:
+                        gene_ranker[gene_id] += 1
+
+        if len(gene_ranker) == 0:
+            return None
+        else:
+            genes_ranked = sorted(gene_ranker.keys(), key=lambda x: gene_ranker[x], reverse=True)
+            return genes_ranked
         
 
         
     def _assign_path_to_transcript(self, splice_graph, mp, transcripts, fraction_read_align_overlap,
-                                   trim_TSS_polyA = False, test_exact=True):
+                                   trim_TSS_polyA = False, test_exact=True, anchor_PolyA_TSS=False):
         
         assert type(mp) == MultiPath.MultiPath
         assert type(transcripts) == set, "Error, type(transcripts) is {} not set ".format(type(transcripts))
@@ -209,23 +243,44 @@ class Quantify:
         for read_name in mp.get_read_names():
             self._read_name_to_multipath[read_name] = mp
 
-        
+
+        def is_PolyA_or_TSS (simple_node):
+            if re.match("^(TSS|POLYA):", simple_node):
+                return True
+            else:
+                return False
+                    
         transcripts_compatible_with_read = list()
+
+        logger.debug("Assessing transcript compatibility for: {}".format(mp))
         
         for transcript in transcripts:
             transcript_sp = transcript._simplepath
-                        
+
+            logger.debug("-evaluating transcript: {} {}".format(transcript.get_transcript_id(), transcript_sp))
+            
             assert transcript_sp is not None
 
             if trim_TSS_polyA:
                 transcript_sp, transcript_TSS_id, transcript_polyA_id = SPU.trim_TSS_and_PolyA(transcript_sp, contig_strand)
-                
+
+            else:
+                if anchor_PolyA_TSS:
+                    if is_PolyA_or_TSS(transcript_sp[0]) or is_PolyA_or_TSS(read_sp[0]):
+                        if transcript_sp[0] != read_sp[0]:
+                            continue
+
+                    if is_PolyA_or_TSS(transcript_sp[-1]) or is_PolyA_or_TSS(read_sp[-1]):
+                        if transcript_sp[-1] != read_sp[-1]:
+                            continue
 
             if test_exact:
 
                 if transcript_sp == read_sp:
-                    logger.debug("[trim_TSS_polyA={} test_exact={}]  Read {} IDENTICAL with transcript {}".format(trim_TSS_polyA, test_exact, read_sp, transcript_sp))
+                    logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} IDENTICAL with transcript {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, read_sp, transcript_sp))
                     transcripts_compatible_with_read.append(transcript)
+                else:
+                    logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_identical with transcript {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, read_sp, transcript_sp))
                     
 
             else:
@@ -234,12 +289,12 @@ class Quantify:
                     and
                     SPU.fraction_read_overlap(splice_graph, read_sp, transcript_sp) >= fraction_read_align_overlap):
 
-                    logger.debug("[trim_TSS_polyA={} test_exact={}]  Read {} COMPATIBLE with transcript {}".format(trim_TSS_polyA, test_exact, read_sp, transcript_sp))
+                    logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE with transcript {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, read_sp, transcript_sp))
                     #print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
                     transcripts_compatible_with_read.append(transcript)
 
                 else:
-                    logger.debug("[trim_TSS_polyA={} test_exact={}]  Read {} NOT_compatible with transcript {}".format(trim_TSS_polyA, test_exact,read_sp, transcript_sp))
+                    logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_compatible with transcript {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, read_sp, transcript_sp))
                         
 
         if len(transcripts_compatible_with_read) == 0:
