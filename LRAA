@@ -114,9 +114,9 @@ def main():
 
     contig_group_setting = parser.add_argument_group("target specific contig (or region of contig)")
 
-    contig_group_setting.add_argument("--restrict_to_contig", type=str, default=None,
+    contig_group_setting.add_argument("--contig", type=str, default=None,
                                       help="restrict run to single contig")
-    contig_group_setting.add_argument("--restrict_region_range", type=str, default=None,
+    contig_group_setting.add_argument("--region", type=str, default=None,
                                       help="restrict to region on contig chr\d+[+-]?:\d+-\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand")
 
     
@@ -229,8 +229,8 @@ def main():
     restricted_contig = None
     restrict_to_contig_orient = None
 
-    if args.restrict_to_contig:
-        restricted_contig = args.restrict_to_contig
+    if args.contig:
+        restricted_contig = contig
         m = re.search("^(\\w+)([\\+\\-])$", restricted_contig)
         if m is not None:
             restricted_contig = m.group(1)
@@ -241,10 +241,10 @@ def main():
         genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
 
     restrict_region_lend, restrict_region_rend = None, None
-    if args.restrict_region_range:
-        m = re.search("^(\w+)([\\+\\-]?):(\d+)-(\d+)$", args.restrict_region_range)
+    if args.region:
+        m = re.search("^(\w+)([\\+\\-]?):(\d+)-(\d+)$", args.region)
         if m is None:
-            raise RuntimeError("Error, could not parse region range: {}".format(args.restrict_region_range))
+            raise RuntimeError("Error, could not parse region range: {}".format(args.region))
 
         restricted_contig = m.group(1)
 
@@ -259,7 +259,7 @@ def main():
 
         restrict_region_lend = int(restrict_region_lend)
         restrict_region_rend = int(restrict_region_rend)
-        assert restrict_region_lend < restrict_region_rend, f"Error, {args.restrict_region_range} invalid range"
+        assert restrict_region_lend < restrict_region_rend, f"Error, {args.region} invalid range"
 
         print("{}\t{}\t{}\t{}".format(restricted_contig, restrict_to_contig_orient, restrict_region_lend, restrict_region_rend))
 
