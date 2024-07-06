@@ -253,11 +253,12 @@ class Quantify:
         transcripts_compatible_with_read = list()
 
         logger.debug("Assessing transcript compatibility for: {}".format(mp))
-        
-        for transcript in transcripts:
+
+        for i, transcript in enumerate(transcripts):
             transcript_sp = transcript._simplepath
 
-            logger.debug("-evaluating transcript: {} {}".format(transcript.get_transcript_id(), transcript_sp))
+            
+
             
             assert transcript_sp is not None
 
@@ -266,13 +267,29 @@ class Quantify:
 
             else:
                 if anchor_PolyA_TSS:
-                    if is_PolyA_or_TSS(transcript_sp[0]) or is_PolyA_or_TSS(read_sp[0]):
-                        if transcript_sp[0] != read_sp[0]:
-                            continue
+                    # test first position of read
 
-                    if is_PolyA_or_TSS(transcript_sp[-1]) or is_PolyA_or_TSS(read_sp[-1]):
-                        if transcript_sp[-1] != read_sp[-1]:
-                            continue
+                    fail_msg = None
+                    if is_PolyA_or_TSS(read_sp[0]) and not is_PolyA_or_TSS(transcript_sp[0]):
+                        fail_msg = "read TSS or polyA pos[0] incosistent w/ transcript"
+
+                    elif is_PolyA_or_TSS(transcript_sp[0]) and is_PolyA_or_TSS(read_sp[0]) and transcript_sp[0] != read_sp[0]:
+                        fail_msg = "read TSS or polyA pos[0] incosistent w/ transcript"
+                    
+                    # test last position of read
+                    elif is_PolyA_or_TSS(read_sp[-1]) and not is_PolyA_or_TSS(transcript_sp[-1]):
+                        fail_msg = "read TSS or polyA pos[-1] incosistent w/ transcript"
+                        
+                    elif is_PolyA_or_TSS(read_sp[-1]) and is_PolyA_or_TSS(transcript_sp[-1]) and transcript_sp[-1] != read_sp[-1]:
+                        fail_msg = "read TSS or polyA pos[-1] incosistent w/ transcript"
+
+
+                    if fail_msg is not None:
+                        logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}, FAIL MSG: {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, i+1, len(transcripts), transcript.get_transcript_id(), transcript_sp, fail_msg))
+                        continue
+                        
+
+            logger.debug("[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}".format(trim_TSS_polyA, test_exact, anchor_PolyA_TSS, i+1, len(transcripts), transcript.get_transcript_id(), transcript_sp))                    
 
             if test_exact:
 
