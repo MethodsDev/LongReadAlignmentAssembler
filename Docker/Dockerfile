@@ -85,7 +85,7 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
 
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.0"
+ENV LRAA_VERSION="v0.2.1"
 #ENV LRAA_CO=746cbac8db89814c101c8835768135413529bda1
 
 #RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembler.git LRAA && \
