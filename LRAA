@@ -16,6 +16,8 @@ import Util_funcs
 import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
+import lmdb
+import shutil
 
 
 
@@ -54,6 +56,8 @@ def main():
                         help="normalize to max read coverage level before assembly (default: {})".format(LRAA_Globals.config['normalize_max_cov_level']))
 
     parser.add_argument("--quant_only", action='store_true', default=False, help="perform quantification only (must specify --gtf with targets for quant)")
+
+    parser.add_argument("--tag_bam", action='store_true', default=False, help="if performing quant, also output a copy of the BAM with additional tags containing classification and quant")
 
     parser.add_argument("--EM", action='store_true', default=False, help="run EM alg (default: not EM, simply divide uncertain mappings equally among assigned target isoforms")
 
@@ -135,6 +139,7 @@ def main():
     single_best_only = args.single_best_only
     CPU = args.CPU
     QUANT_ONLY = args.quant_only
+    TAG_BAM = args.tag_bam
     input_gtf = args.gtf
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
@@ -285,12 +290,20 @@ def main():
     ## Begin, target each contig separately
 
     ofh_quant_read_tracker = None
+    ofh_quant_read_tracking_lmdb = None
     if QUANT_ONLY:
         output_filename = f"{output_prefix}.quant.expr"
         ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
         ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
         # write header
         print("\t".join(["gene_id", "transcript_id", "read_name", "frac_assigned"]), file=ofh_quant_read_tracker)
+
+        if TAG_BAM:
+            ofh_quant_read_tracking_lmdb_filename = f"{output_prefix}.quant.tracking.lmdb"
+            # since the LMDB doesn't get reset automatically, make sure there isn't old data leftover
+            if os.path.exists(ofh_quant_read_tracking_lmdb_filename):
+                shutil.rmtree(ofh_quant_read_tracking_lmdb_filename)
+            ofh_quant_read_tracking_lmdb = lmdb.open(ofh_quant_read_tracking_lmdb_filename, map_size=int(1e11), metasync=False, sync=False)
     else:
         output_filename = f"{output_prefix}.gtf"
         
@@ -364,7 +377,7 @@ def main():
                 q = Quantify()
                 logger.debug("\n//SECTION QUANT: Quantifying transcripts according to read support.")
                 read_name_to_fractional_transcript_assignment = q.quantify(sg, input_transcripts, mp_counter, run_EM)
-                q.report_quant_results(input_transcripts, read_name_to_fractional_transcript_assignment, ofh, ofh_quant_read_tracker)
+                q.report_quant_results(input_transcripts, read_name_to_fractional_transcript_assignment, ofh, ofh_quant_read_tracker, ofh_quant_read_tracking_lmdb)
 
 
             else:
@@ -434,6 +447,34 @@ def main():
     ofh.close()
     if QUANT_ONLY:
         ofh_quant_read_tracker.close()
+        if TAG_BAM:
+            # explicitly delete the writeable lmdb environment to close it since there is no .close()
+            del ofh_quant_read_tracking_lmdb
+
+            # reopen in read-only mode
+            ofh_quant_read_tracking_lmdb = lmdb.open(ofh_quant_read_tracking_lmdb_filename, readonly=True, lock=False)
+            output_bam_filename = f"{output_prefix}.tagged.bam"
+
+            with ofh_quant_read_tracking_lmdb.begin(write=False) as txn, pysam.AlignmentFile(bam_filename, "rb", threads=4) as bam_in, pysam.AlignmentFile(output_bam_filename, "wb", template=bam_in, threads=4) as bam_out:
+                for read in bam_in.fetch(until_eof=True):
+                    data = txn.get(read.query_name.encode('utf-8'))
+                    if data:
+                        row = data.decode('utf-8').split(',')
+                        if read.has_tag("XG") or read.has_tag("XI"):
+                            raise ValueError("Error, read already has XG or XI tag, so cannot set them without overwriting")
+
+                        gene_ids = ",".join(row[i] for i in range(0, len(row), 3))
+                        transcript_ids = ",".join(row[i+1] for i in range(0, len(row), 3))
+                        frac_assigned = ",".join(row[i+2] for i in range(0, len(row), 3))
+
+                        read.set_tag("XG", gene_ids, "Z")
+                        read.set_tag("XI", transcript_ids, "Z")
+                        read.set_tag("XF", frac_assigned, "Z")
+
+                    bam_out.write(read)
+
+
+            ofh_quant_read_tracking_lmdb.close()
 
     
     return

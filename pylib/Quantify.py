@@ -10,6 +10,7 @@ import LRAA_Globals
 from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
+import lmdb
 
 logger = logging.getLogger(__name__)
 
@@ -530,7 +531,7 @@ class Quantify:
         
     
                 
-    def report_quant_results(self, transcripts, transcript_to_fractional_read_assignment, ofh_quant_vals, ofh_read_tracking):
+    def report_quant_results(self, transcripts, transcript_to_fractional_read_assignment, ofh_quant_vals, ofh_read_tracking, ofh_quant_read_tracking_lmdb=None):
                 
         ## generate final report.
 
@@ -558,11 +559,32 @@ class Quantify:
 
             num_uniquely_assigned_reads = 0
             
+            txn = None
+            if ofh_quant_read_tracking_lmdb is not None:
+                txn = ofh_quant_read_tracking_lmdb.begin(write=True)
+
             for readname in readnames:
                 frac_read_assigned = transcript_to_fractional_read_assignment[transcript_id][readname]
                 print("\t".join([gene_id, transcript_id, readname, "{:.3f}".format(frac_read_assigned)]), file=ofh_read_tracking)
+
+                # add to LMDB
+                if txn is not None:
+                    key = readname.encode('utf-8')
+                    existing_data = txn.get(key)
+                    lmdb_data = [gene_id, transcript_id, "{:.3f}".format(frac_read_assigned)]
+                    if existing_data:
+                        # Append new data as comma-separated string
+                        existing_data = existing_data.decode('utf-8')
+                        combined_data = f"{existing_data},{','.join(lmdb_data)}"
+                    else:
+                        combined_data = ','.join(lmdb_data)
+                    txn.put(key, combined_data.encode('utf-8'))
+
                 if frac_read_assigned == 1:
                     num_uniquely_assigned_reads += 1
+
+            if txn is not None:
+                txn.commit()
 
             gene_read_count = gene_to_read_count[gene_id]
             unique_gene_read_fraction = num_uniquely_assigned_reads / gene_read_count if gene_read_count > 0 else 0
