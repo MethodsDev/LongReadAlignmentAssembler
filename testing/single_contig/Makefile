@@ -15,13 +15,13 @@ test_include_ref_annot_guide:
 
 
 test_quant:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --CPU 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --CPU 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only --tag_bam
 
 
 all: test_reads_only test_include_ref_annot_guide test_quant
 
 
 clean:
-	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant
+	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant ./LRAA*.lmdb ./LRAA.ref.tagged.bam
 
 

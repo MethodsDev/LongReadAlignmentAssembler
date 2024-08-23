@@ -8,7 +8,7 @@ test:
 	diff gffcompare.LRAA.gtf.refmap.full.summary.tsv data/latest_summary.tsv
 
 # test quant
-	../../LRAA --quant_only --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf
+	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf
 	diff LRAA.quant.expr data/latest_quant_info.tsv
 
 
@@ -21,6 +21,6 @@ test_docker:
 
 
 clean:
-	rm -rf ./gffcompare* ./LRAA.gtf ./__* ./*_lraa_wf ./_LAST
+	rm -rf ./gffcompare* ./LRAA.gtf ./__* ./*_lraa_wf ./_LAST ./LRAA.*.lmdb ./LRAA.tagged.bam
 
 
