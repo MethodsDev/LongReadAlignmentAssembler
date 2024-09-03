@@ -7,6 +7,7 @@ import logging
 import string
 import pysam
 import LRAA_Globals
+import Util_funcs
 from collections import defaultdict
 
 
@@ -47,9 +48,10 @@ class Pretty_alignment:
         return str(self._pretty_alignment_segments)
 
     def get_read_name(self):
-        return self._pysam_alignment.query_name
+        read = self._pysam_alignment
+        return Util_funcs.get_read_name_include_sc_encoding(read)
+
     
-        
     def get_pysam_alignment(self):
         return self._pysam_alignment
 
@@ -123,17 +125,19 @@ class Pretty_alignment:
         ## deal with polyA
         min_PolyA_ident_length = LRAA_Globals.config['min_PolyA_ident_length']
 
+        read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
+        
         if pysam_alignment.is_forward and right_soft_clipping >= min_PolyA_ident_length :
             polyA_regex = "A" * min_PolyA_ident_length + "+$"
             right_soft_clippled_seq = re.sub(polyA_regex, "", right_soft_clipped_seq)
             right_soft_clipping = len(right_soft_clipped_seq)
-            logger.debug("Stripped polyA from end of read {}".format(pysam_alignment.query_name))
+            logger.debug("Stripped polyA from end of read {}".format(read_name))
 
         elif pysam_alignment.is_reverse and left_soft_clipping >= min_PolyA_ident_length:
             polyT_regex = "^" + "T"*min_PolyA_ident_length + "+"
             left_soft_clipped_seq = re.sub(polyT_regex, "", left_soft_clipped_seq)
             left_soft_clipping = len(left_soft_clipped_seq)
-            logger.debug("Stripped polyT from beginning of read {}".format(pysam_alignment.query_name))
+            logger.debug("Stripped polyT from beginning of read {}".format(read_name))
         
 
         # set obj vars

@@ -444,7 +444,7 @@ class LRAA:
 
         for pretty_alignment in pretty_alignments:
             pysam_alignment = pretty_alignment.get_pysam_alignment()
-            read_name = pysam_alignment.query_name
+            read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
             grouped_alignments[read_name].append(pretty_alignment)
 
         return grouped_alignments

@@ -5,6 +5,7 @@ import sys, os, re
 import subprocess
 import logging
 import string
+import pysam
 
 from collections import defaultdict
 
@@ -50,3 +51,17 @@ def get_num_overlapping_bases(coordset_A, coordset_B):
     return overlap_len
 
                     
+
+def get_read_name_include_sc_encoding(pysam_read_alignment):
+
+    read = pysam_read_alignment
+    if read.has_tag("CB") and read.has_tag("XM"):
+        cell_barcode = read.get_tag("CB")
+        umi = read.get_tag("XM")
+        read_name = "^".join([cell_barcode, umi, read.query_name])
+        return read_name
+    else:
+        return read.query_name
+
+    
+    

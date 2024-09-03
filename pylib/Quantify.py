@@ -156,7 +156,7 @@ class Quantify:
             if transcripts_assigned is None:
                 logger.debug("mp_count_pair {} maps to gene but no isoform(transcript)".format(mp_count_pair))
             else:
-                logger.info("mp_count_pair {} maps to transcripts:\n{}".format(mp_count_pair, "\n".join(["{}\t{}".format(x.get_transcript_id(), x._simplepath) for x in transcripts_assigned])))
+                logger.debug("mp_count_pair {} maps to transcripts:\n{}".format(mp_count_pair, "\n".join(["{}\t{}".format(x.get_transcript_id(), x._simplepath) for x in transcripts_assigned])))
                 for transcript in transcripts_assigned:
                     transcript.add_read_names(mp.get_read_names())
                     
@@ -183,7 +183,7 @@ class Quantify:
                                                                                                                   num_read_counts_assigned/num_read_counts_total*100)])
         
                 
-        logger.info(audit_txt)
+        logger.debug(audit_txt)
                 
         return
 
@@ -596,7 +596,7 @@ class Quantify:
                                     f"{isoform_frac:.3f}",
                                     f"{unique_gene_read_fraction:0.3f}"])
             
-            logger.info(report_txt)
+            logger.debug(report_txt)
             print(report_txt, file=ofh_quant_vals)
             
                 

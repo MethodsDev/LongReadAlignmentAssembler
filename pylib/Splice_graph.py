@@ -1769,7 +1769,10 @@ def filter_non_peaky_positions(grouped_position_counts, position_counter, contig
     grouped_position_counts_kept = list()
 
     grouped_position_counts = sorted(grouped_position_counts, key=lambda x: x[0])
-    ofh = open("__TSS_filter_non_peaky_positions.tsv", "at")
+
+    if LRAA_Globals.DEBUG:
+        ofh = open("__TSS_filter_non_peaky_positions.tsv", "at")
+
     pseudocount = 1
     
     window_len = LRAA_Globals.config['TSS_window_read_enrich_len']
@@ -1790,8 +1793,9 @@ def filter_non_peaky_positions(grouped_position_counts, position_counter, contig
         pos_frac_counts = (position_real_count + pseudocount) / (median_adjacent_count + pseudocount)
         
         kept = (pos_frac_counts >= window_enrichment_factor)
-        
-        print("\t".join([contig_acc, contig_strand, str(position), str(position_real_count), str(median_adjacent_count), str(pos_frac_counts), str(kept)]), file=ofh)
+
+        if LRAA_Globals.DEBUG:
+            print("\t".join([contig_acc, contig_strand, str(position), str(position_real_count), str(median_adjacent_count), str(pos_frac_counts), str(kept)]), file=ofh)
 
         if kept:
             grouped_position_counts_kept.append(grouped_position)
