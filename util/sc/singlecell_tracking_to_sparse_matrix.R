@@ -8,7 +8,7 @@ parser$add_argument("--tracking", help="input data file quant.tracking", require
 parser$add_argument("--output_prefix", help="output prefix", required=TRUE, nargs=1)
 
 args = parser$parse_args()    
-dat_filename = args$dat
+dat_filename = args$tracking
 output_prefix = args$output_prefix
 
 library(tidyverse)

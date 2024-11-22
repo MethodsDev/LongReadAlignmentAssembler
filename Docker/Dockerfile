@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 MAINTAINER bhaas@broadinstitute.org
 
 
@@ -43,7 +43,6 @@ RUN apt-get -qq update && apt-get -qq -y install \
     pkg-config \
     python3 \
     python3-dev \
-    python3-distutils \
     python3-pip \
     python3-setuptools \
     rsync \
@@ -53,6 +52,7 @@ RUN apt-get -qq update && apt-get -qq -y install \
     wget \
     x11-common \
     zlib1g-dev
+
 
 
 ## Perl stuff
@@ -69,11 +69,11 @@ ENV BIN /usr/local/bin
 ## Python 3 stuff
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-RUN pip install argparse pysam networkx lmdb
+RUN pip install argparse pysam networkx lmdb --break-system-packages
 
 WORKDIR $SRC
 
-RUN pip install intervaltree
+RUN pip install intervaltree --break-system-packages
 
 ## Samtools
 ENV SAMTOOLS_VERSION 1.13
@@ -81,6 +81,26 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
     tar xvf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     cd samtools-${SAMTOOLS_VERSION} && \
     ./configure && make && make install
+
+
+
+## R-stuff
+RUN apt-get install -y r-base r-base-dev
+
+RUN R -e 'install.packages("BiocManager", repos="http://cran.us.r-project.org")'
+RUN R -e 'BiocManager::install("tidyverse")'
+RUN R -e 'BiocManager::install("argparse")'
+RUN R -e 'BiocManager::install("devtools")'
+RUN R -e 'BiocManager::install("Matrix")'
+RUN R -e 'BiocManager::install("FNN")'
+RUN R -e 'BiocManager::install("gtable")'
+RUN R -e 'BiocManager::install("pak")'
+RUN R -e 'pak::pak("igraph/rigraph")'
+RUN R -e 'BiocManager::install("leiden")'
+
+RUN R -e 'remotes::install_github("satijalab/seurat", "seurat5", quiet = FALSE)'
+
+RUN R -e 'BiocManager::install("clustermole")'
 
 
 WORKDIR $SRC
@@ -92,5 +112,5 @@ ENV LRAA_VERSION="v0.2.2"
 #    cd LRAA && \
 #    git checkout ${LRAA_CO}
 
-COPY LRAA $SRC/LRAA
+#COPY LRAA $SRC/LRAA
 
