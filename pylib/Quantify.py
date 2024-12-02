@@ -719,8 +719,6 @@ class Quantify:
 
         ## generate final report.
 
-        num_total_reads = LRAA_Globals.config["num_total_reads"]
-
         ## sort descendingly by read support
         transcripts = sorted(
             transcripts,
@@ -743,6 +741,8 @@ class Quantify:
 
             readnames = transcript.get_read_names()
             readnames = sorted(readnames)
+
+            tpm = transcript.get_TPM()
 
             num_uniquely_assigned_reads = 0
 
@@ -796,8 +796,6 @@ class Quantify:
                 else 0
             )
 
-            tpm = counts / num_total_reads * 1e6
-
             report_txt = "\t".join(
                 [
                     gene_id,
@@ -839,6 +837,18 @@ class Quantify:
                 gene_id_to_read_count[gene_id] += frac_assigned
 
         return gene_id_to_read_count
+
+    @staticmethod
+    def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
+
+        transcripts_retained = list()
+
+        for transcript in transcripts:
+            tpm = transcript.get_TPM()
+            if tpm >= min_TPM:
+                transcripts_retained.append(transcript)
+
+        return transcripts_retained
 
     @staticmethod
     def filter_isoforms_by_min_isoform_fraction(
@@ -942,7 +952,7 @@ class Quantify:
             # reset list of transcripts
             transcripts = transcripts_retained
 
-        return (transcripts, frac_read_assignments)
+        return transcripts
 
     @staticmethod
     def prune_likely_degradation_products(transcripts, splice_graph, run_EM):

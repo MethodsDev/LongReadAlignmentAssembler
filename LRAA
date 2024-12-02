@@ -195,9 +195,15 @@ def main():
         help="do not infer_PolyA",
     )
 
-    # config_group.add_argument("--try_correct_alignments", action='store_true', default=False, help='try to correct alignments at terminal soft clips')
-
-    # config_group.add_argument("--collapse", action='store_true', default=False, help='collapse isoforms that are compatible and contained by longer isoforms')
+    config_group.add_argument(
+        "--min_monoexonic_TPM",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["min_monoexonic_TPM"],
+        help="minimum TPM for mono-exonic isoforms (default: {})".format(
+            LRAA_Globals.config["min_monoexonic_TPM"]
+        ),
+    )
 
     ## alt splice settings
 
@@ -265,6 +271,7 @@ def main():
             "If running --quant_only, must specify --gtf corresponding to targets of quantification"
         )
 
+    ###############
     # update config
     LRAA_Globals.config["min_path_score"] = args.min_path_score
     LRAA_Globals.config["min_per_id"] = args.min_per_id
@@ -272,7 +279,7 @@ def main():
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["infer_TSS"] = not args.no_infer_TSS
     LRAA_Globals.config["infer_PolyA"] = not args.no_infer_PolyA
-    # LRAA_Globals.config['try_correct_alignments'] = args.try_correct_alignments
+    LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -667,10 +674,13 @@ def main():
                     debug_quant_read_tracking_ofh.close()
 
                 if min_isoform_fraction > 0:
-                    transcripts, frac_read_assignments = (
-                        Quantify.filter_isoforms_by_min_isoform_fraction(
-                            transcripts, min_isoform_fraction, run_EM
-                        )
+                    transcripts = Quantify.filter_isoforms_by_min_isoform_fraction(
+                        transcripts, min_isoform_fraction, run_EM
+                    )
+
+                if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
+                    transcripts = Quantify.filter_monoexonic_isoforms_by_TPM_threshold(
+                        transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                     )
 
                 logger.info(
@@ -693,6 +703,9 @@ def main():
                         "__quant_info.reads_tracked.tsv", "at"
                     )
                     q = Quantify()
+                    frac_read_assignments = q._estimate_isoform_read_support(
+                        transcripts_retained, run_EM
+                    )
                     q.report_quant_results(
                         transcripts,
                         frac_read_assignments,
