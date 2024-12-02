@@ -142,6 +142,14 @@ def main():
     # config_group.add_argument("--allow_spacers", action='store_true', default=False)
 
     config_group.add_argument(
+        "--num_total_reads",
+        "-N",
+        type=int,
+        default=None,
+        help="total number of reads for use in TPM calculations",
+    )
+
+    config_group.add_argument(
         "--min_path_score",
         type=float,
         default=LRAA_Globals.config["min_path_score"],
@@ -287,6 +295,14 @@ def main():
 
     bam_file_for_quant = pre_norm_bam_filename
     bam_file_for_sg = pre_norm_bam_filename
+
+    if args.num_total_reads is None:
+        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
+            bam_file_for_quant
+        )
+
+    else:
+        LRAA_Globals.config["num_total_reads"] = args.num_total_reads
 
     if (not QUANT_ONLY) and (not NO_NORM) and (args.normalize_max_cov_level > 0):
 
@@ -762,6 +778,11 @@ def report_transcript_paths_in_graph(transcripts, filename):
             print("\t".join([transcript_id, str(exon_segments), str(sp)]), file=ofh)
 
     return
+
+
+def count_reads_from_bam(bam_filename):
+    total = pysam.AlignmentFile(bam_filename).count(until_eof=True)
+    return total
 
 
 if __name__ == "__main__":
