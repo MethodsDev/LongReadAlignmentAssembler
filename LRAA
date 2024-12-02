@@ -476,6 +476,7 @@ def main():
                     "all_reads",
                     "isoform_fraction",
                     "unique_gene_read_fraction",
+                    "TPM",
                 ]
             ),
             file=ofh,
