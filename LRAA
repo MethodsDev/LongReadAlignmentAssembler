@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding: utf-8
 
 import sys, os, re
@@ -14,6 +14,7 @@ from Splice_graph import Splice_graph
 from LRAA import LRAA
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
+import Internal_priming
 import Util_funcs
 import LRAA_Globals
 import MultiProcessManager as mpm
@@ -683,6 +684,12 @@ def main():
                         transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                     )
 
+                if LRAA_Globals.config["filter_internal_priming"]:
+                    transcripts = Internal_priming.filter_internally_primed_transcripts(
+                        transcripts, contig_seq_str
+                    )
+
+                ## report transcripts in GTF format
                 logger.info(
                     "writing gtf output for {} [{}] containing {} transcripts".format(
                         contig_acc, contig_strand, len(transcripts)

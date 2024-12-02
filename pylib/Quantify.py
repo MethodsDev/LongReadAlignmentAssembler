@@ -845,7 +845,11 @@ class Quantify:
 
         for transcript in transcripts:
             tpm = transcript.get_TPM()
-            if tpm >= min_TPM:
+            if transcript.is_monoexonic() and tpm < min_TPM:
+                # gbye
+                pass
+            else:
+                # keep
                 transcripts_retained.append(transcript)
 
         return transcripts_retained

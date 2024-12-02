@@ -56,6 +56,7 @@ config = {
     "min_isoform_fraction": 0.01,
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
     "min_monoexonic_TPM": 1.0,
+    "filter_internal_priming": True,
     #
     ##########
     # assembly

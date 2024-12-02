@@ -70,6 +70,12 @@ class Transcript(GenomeFeature):
     def get_exon_segments(self):
         return self._exon_segments.copy()
 
+    def get_num_exon_segments(self):
+        return len(self._exon_segments)
+
+    def is_monoexonic(self):
+        return self.get_num_exon_segments() == 1
+
     def get_introns(self):
         intron_coordsets = list()
         exon_segments = self.get_exon_segments()
