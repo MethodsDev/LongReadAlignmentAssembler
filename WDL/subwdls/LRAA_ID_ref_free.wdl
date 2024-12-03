@@ -45,6 +45,7 @@ task splitBAMByChromosome {
 task lraaPerChromosome {
     input {
         File inputBAM
+        Int num_total_reads
         File referenceGenome
         String OutDir
         String docker
@@ -65,7 +66,8 @@ task lraaPerChromosome {
         /usr/local/src/LRAA/LRAA --genome ~{referenceGenome} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{OutDir}/ID_reffree/LRAA_reffree \
-                                 ~{no_norm_flag} --CPU 1
+                                 ~{no_norm_flag} --CPU 1 \
+                                 --num_total_reads ~{num_total_reads}
     >>>
     
     output {
@@ -123,6 +125,7 @@ workflow lraaWorkflow {
         Array[File]? inputBAMArray
         Array[File]? referenceGenomeArray
         File referenceGenome
+        Int num_total_reads
         Int numThreads = 4
         Int memoryGB = 32
         Int diskSizeGB = 128
@@ -152,6 +155,7 @@ workflow lraaWorkflow {
                 input:
                     inputBAM = splitBAMByChromosome.chromosomeBAMs[i],
                     referenceGenome = splitBAMByChromosome.chromosomeFASTAs[i],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
@@ -171,6 +175,7 @@ workflow lraaWorkflow {
                 input:
                     inputBAM = nonOptionalInputBAMArray[j],
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,

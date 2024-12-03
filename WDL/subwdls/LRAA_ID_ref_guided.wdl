@@ -49,6 +49,7 @@ task splitBAMAndGTFByChromosome {
 task lraaPerChromosome {
     input {
         File inputBAM
+        Int num_total_reads
         File referenceGenome
         String OutDir
         String docker
@@ -70,7 +71,8 @@ task lraaPerChromosome {
         /usr/local/src/LRAA/LRAA --genome ~{referenceGenome} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{OutDir}/ID_refguided/LRAA_refguided \
-                                 ~{no_norm_flag} --CPU 1 --gtf ~{referenceAnnotation_reduced} 
+                                 ~{no_norm_flag} --CPU 1 --gtf ~{referenceAnnotation_reduced} \
+                                 --num_total_reads ~{num_total_reads}
     >>>
     
     output {
@@ -127,6 +129,7 @@ workflow lraaWorkflow {
         File? inputBAM
         Array[File]? inputBAMArray
         Array[File]? referenceGenomeArray
+        Int num_total_reads
         File referenceAnnotation_reduced
         File referenceGenome
         Int numThreads = 4
@@ -160,6 +163,7 @@ workflow lraaWorkflow {
                     inputBAM = splitBAMAndGTFByChromosome.chromosomeBAMs[i],
                     referenceGenome = splitBAMAndGTFByChromosome.chromosomeFASTAs[i],
                     referenceAnnotation_reduced = splitBAMAndGTFByChromosome.chromosomeGTFs[i],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
@@ -181,6 +185,7 @@ workflow lraaWorkflow {
                     inputBAM = nonOptionalInputBAMArray[j],
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
                     referenceAnnotation_reduced = nonOptionalChromosomeGTFs[j],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,

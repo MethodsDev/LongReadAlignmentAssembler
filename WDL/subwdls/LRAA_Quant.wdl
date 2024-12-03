@@ -80,6 +80,7 @@ task splitGTFByChromosome {
 task lraaPerChromosome {
     input {
         File inputBAM
+        Int num_total_reads
         File referenceGenome
         String OutDir
         String docker
@@ -106,7 +107,8 @@ task lraaPerChromosome {
                                  --quant_only \
                                  ~{no_norm_flag} \
                                  --gtf ~{referenceAnnotation_full} \
-                                 ~{min_mapping_quality_flag} --CPU 1
+                                 ~{min_mapping_quality_flag} --CPU 1 \
+                                 --num_total_reads ~{num_total_reads}
     >>>
     
     output {
@@ -176,6 +178,7 @@ workflow lraaWorkflow {
         Array[File]? inputBAMArray
         File? referenceGenome
         Array[File]? referenceGenomeArray
+        Int num_total_reads
         Int? LRAA_min_mapping_quality
         Boolean? LRAA_no_norm
         Int numThreads = 4
@@ -209,6 +212,7 @@ workflow lraaWorkflow {
                 input:
                     inputBAM = splitBAMByChromosome.chromosomeBAMs[i],
                     referenceGenome = splitBAMByChromosome.chromosomeFASTAs[i],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
@@ -239,6 +243,7 @@ workflow lraaWorkflow {
                 input:
                     inputBAM = nonOptionalInputBAMArray[j],
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
+                    num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
