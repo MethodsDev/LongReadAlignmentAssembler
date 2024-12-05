@@ -135,6 +135,8 @@ task count_bam {
   >>>
   runtime {
     docker: "quay.io/ucsc_cgl/samtools"
+    disks: "local-disk " + ceil(2 * size(bam, "GB") )
+    memory: "4G"
   }
   output {
     Int count = read_int(stdout())
