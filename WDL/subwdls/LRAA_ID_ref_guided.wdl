@@ -97,7 +97,7 @@ task mergeResults {
 
         set -eo pipefail
 
-        gtf_output="~{outputFilePrefix}_merged.gtf"
+        gtf_output="~{outputFilePrefix}.LRAA_ref-guided.gtf"
         touch "$gtf_output"
 
         gtf_files_str="~{sep=' ' gtfFiles}"

@@ -1,8 +1,8 @@
 {
-    "CombinedWorkflow.sample_id" : "test.ID_ref_free_Quant_mode",
+    "CombinedWorkflow.sample_id" : "test.ID_ref_guided_Quant_mode",
     "CombinedWorkflow.inputBAM" : "pacbio.PBLR.small.bam",
     "CombinedWorkflow.referenceGenome" : "ref_genome.fa",
     "CombinedWorkflow.referenceGTF" : "ref_annot.gtf",
     "CombinedWorkflow.main_chromosomes" : "minigenome",
-    "CombinedWorkflow.mode" : "ID_ref_free_Quant_mode"
+    "CombinedWorkflow.mode" : "ID_ref_guided_Quant_mode"
 }

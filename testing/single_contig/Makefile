@@ -20,15 +20,30 @@ test_quant:
 	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --CPU 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only --tag_bam
 
 
+## WDLs
+
+test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only
+
 test_wdl_ID_ref_free: clean_miniwdl
 	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.ID_ref_free_Quant_mode.json
 
 test_wdl_ID_ref_guided: clean_miniwdl
 	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.ID_ref_guided_Quant_mode.json
 
+test_wdl_Quant_only: clean_miniwdl
+#	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.Quant_only_mode.json
+# - note miniwdl errors out... but cromwell works fine
+	java -jar ~/BIN/cromwell-85.jar run ../../WDL/LRAA.scatter.wdl -i wdl.Quant_only_mode.json 
 
-clean_miniwdl:
-	rm -rf ./*CombinedWorkflow _LAST
+
+
+## Cleaning
+
+clean_miniwdl: clean_cromwell
+	rm -rf ./*CombinedWorkflow ./_LAST
+
+clean_cromwell:
+	sudo rm -rf ./cromwell-*
 
 clean: clean_miniwdl
 	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant ./LRAA*.lmdb ./LRAA.ref.tagged.bam
