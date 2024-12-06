@@ -10,12 +10,9 @@ task splitBAMByChromosome {
         File referenceAnnotation_full
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
-
         set -eo pipefail
         mkdir -p split_bams
         
@@ -79,41 +76,39 @@ task splitGTFByChromosome {
 
 task lraaPerChromosome {
     input {
+        String sample_id
+        Int shardno
         File inputBAM
         Int num_total_reads
         File referenceGenome
         String OutDir
         String docker
         Int numThreads
-        Boolean? LRAA_no_norm
         Int? LRAA_min_mapping_quality
         File referenceAnnotation_full
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
-    String no_norm_flag = if defined(LRAA_no_norm) && LRAA_no_norm then "--no_norm" else ""
+
     String min_mapping_quality_flag = "--min_mapping_quality=" + select_first([LRAA_min_mapping_quality, 0])
     
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
 
         mkdir -p ~{OutDir}/Quant_noEM_minMapQ
     
         /usr/local/src/LRAA/LRAA --genome ~{referenceGenome} \
                                  --bam ~{inputBAM} \
-                                 --output_prefix ~{OutDir}/Quant_noEM_minMapQ/LRAA.quant \
+                                 --output_prefix ~{OutDir}/~{sample_id}.shardno-~{shardno}.LRAA \
                                  --quant_only \
-                                 ~{no_norm_flag} \
                                  --gtf ~{referenceAnnotation_full} \
                                  ~{min_mapping_quality_flag} --CPU 1 \
                                  --num_total_reads ~{num_total_reads}
     >>>
     
     output {
-        File lraaQuantExpr = "~{OutDir}/Quant_noEM_minMapQ/LRAA.quant.quant.expr"
-        File lraaQuantTracking = "~{OutDir}/Quant_noEM_minMapQ/LRAA.quant.quant.tracking"
+        File lraaQuantExpr = "~{OutDir}/~{sample_id}.shardno-~{shardno}.LRAA.quant.expr"
+        File lraaQuantTracking = "~{OutDir}/~{sample_id}.shardno-~{shardno}.LRAA.quant.tracking"
     }
     runtime {
         docker: docker
@@ -132,15 +127,12 @@ task mergeResults {
         String docker
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
-
         set -eo pipefail
 
-        quant_expr_output="~{outputFilePrefix}_merged_quant.expr"
+        quant_expr_output="~{outputFilePrefix}.quant.expr"
         for file in ~{sep=' ' quantExprFiles}; do
             if [[ ! -f "$quant_expr_output" ]]; then
                 cp "$file" "$quant_expr_output"
@@ -149,7 +141,7 @@ task mergeResults {
             fi
         done
 
-        quant_tracking_output="~{outputFilePrefix}_merged_quant.tracking"
+        quant_tracking_output="~{outputFilePrefix}.quant.tracking"
         for file in ~{sep=' ' quantTrackingFiles}; do
             if [[ ! -f "$quant_tracking_output" ]]; then
                 cp "$file" "$quant_tracking_output"
@@ -160,10 +152,10 @@ task mergeResults {
     >>>
 
     output {
-        File mergedQuantExprFile = "~{outputFilePrefix}_merged_quant.expr"
-        File mergedQuantTrackingFile = "~{outputFilePrefix}_merged_quant.tracking"
+        File mergedQuantExprFile = "~{outputFilePrefix}.quant.expr"
+        File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking"
     }
-
+    
     runtime {
         docker: docker
         cpu: 1
@@ -173,14 +165,14 @@ task mergeResults {
 }
 
 workflow lraaWorkflow {
-    input {
+     input {
+        String sample_id
         File? inputBAM
         Array[File]? inputBAMArray
         File? referenceGenome
         Array[File]? referenceGenomeArray
         Int num_total_reads
         Int? LRAA_min_mapping_quality
-        Boolean? LRAA_no_norm
         Int numThreads = 4
         Int memoryGB = 32
         Int diskSizeGB = 128
@@ -210,13 +202,14 @@ workflow lraaWorkflow {
         scatter (i in range(length(splitBAMByChromosome.chromosomeBAMs))) {
             call lraaPerChromosome {
                 input:
+                    sample_id = sample_id,
+                    shardno = i,
                     inputBAM = splitBAMByChromosome.chromosomeBAMs[i],
                     referenceGenome = splitBAMByChromosome.chromosomeFASTAs[i],
                     num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
-                    LRAA_no_norm = LRAA_no_norm,
                     LRAA_min_mapping_quality = LRAA_min_mapping_quality,
                     referenceAnnotation_full = splitBAMByChromosome.fullAnnotations[i],
                     memoryGB = memoryGB,
@@ -241,13 +234,14 @@ workflow lraaWorkflow {
         scatter (j in range(length(nonOptionalInputBAMArray))) {
             call lraaPerChromosome as lraaPerChromosomeArray {
                 input:
+                    sample_id = sample_id,
+                    shardno = j,
                     inputBAM = nonOptionalInputBAMArray[j],
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
                     num_total_reads = num_total_reads,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
-                    LRAA_no_norm = LRAA_no_norm,
                     LRAA_min_mapping_quality = LRAA_min_mapping_quality,
                     referenceAnnotation_full = splitGTFByChromosome.chromosomeGTFs[j],
                     memoryGB = memoryGB,
@@ -264,7 +258,7 @@ workflow lraaWorkflow {
         input:
             quantExprFiles = quantExprFiles,
             quantTrackingFiles = quantTrackingFiles,
-            outputFilePrefix = "merged",
+            outputFilePrefix = sample_id,
             docker = docker,
             memoryGB = memoryGB,
             diskSizeGB = diskSizeGB

@@ -5,7 +5,8 @@ import "subwdls/LRAA_ID_ref_guided.wdl" as IDRefGuided
 import "subwdls/LRAA_Quant.wdl" as Quant
 
 workflow CombinedWorkflow {
-    input {
+     input {
+        String sample_id
         File inputBAM
         File referenceGenome
         File? referenceGTF
@@ -14,7 +15,7 @@ workflow CombinedWorkflow {
         Int numThreads = 4
         Int memoryGB = 32
         String main_chromosomes = "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY"
-        Boolean? LRAA_no_norm
+        Boolean LRAA_no_norm = false
         Int? LRAA_min_mapping_quality = 0
     }
 
@@ -31,7 +32,8 @@ workflow CombinedWorkflow {
     if (mode == "ID_ref_free_Quant_mode") {
 
         call IDRefFree.lraaWorkflow as IDRefFreeWorkflow {
-            input:
+          input:
+                sample_id = sample_id,
                 inputBAM = inputBAM,
                 referenceGenome = referenceGenome,
                 numThreads = numThreads,
@@ -44,7 +46,8 @@ workflow CombinedWorkflow {
         }
 
         call Quant.lraaWorkflow as QuantFree2Workflow {
-            input:
+             input:
+                sample_id = sample_id,
                 inputBAMArray = IDRefFreeWorkflow.splitBAMs,
                 referenceGenomeArray = IDRefFreeWorkflow.splitFASTAs,
                 numThreads = numThreads,
@@ -53,7 +56,6 @@ workflow CombinedWorkflow {
                 docker = dockerImage,
                 referenceAnnotation_full = IDRefFreeWorkflow.mergedReffreeGTF,
                 main_chromosomes = main_chromosomes,
-                LRAA_no_norm = LRAA_no_norm,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
                 num_total_reads = count_bam.count
         }
@@ -65,6 +67,7 @@ workflow CombinedWorkflow {
 
         call IDRefGuided.lraaWorkflow as IDRefGuidedWorkflow {
             input:
+                sample_id = sample_id,
                 inputBAM = inputBAM,
                 referenceGenome = referenceGenome,
                 referenceAnnotation_reduced = guaranteedRefGuided,
@@ -78,7 +81,8 @@ workflow CombinedWorkflow {
         }
         
         call Quant.lraaWorkflow as QuantGuided2Workflow {
-            input:
+          input:
+                sample_id = sample_id,
                 inputBAMArray = IDRefGuidedWorkflow.splitBAMs,
                 referenceGenomeArray = IDRefGuidedWorkflow.splitFASTAs,
                 numThreads = numThreads,
@@ -87,7 +91,6 @@ workflow CombinedWorkflow {
                 docker = dockerImage,
                 referenceAnnotation_full = IDRefGuidedWorkflow.mergedRefguidedGTF,
                 main_chromosomes = main_chromosomes,
-                LRAA_no_norm = LRAA_no_norm,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
                 num_total_reads = count_bam.count
         }
@@ -98,7 +101,8 @@ workflow CombinedWorkflow {
         File guaranteedRefQuantOnly = select_first([referenceGTF])
 
         call Quant.lraaWorkflow as QuantOnlyWorkflow {
-            input:
+             input:
+                sample_id = sample_id,
                 inputBAM = inputBAM,
                 referenceGenome = referenceGenome,
                 numThreads = numThreads,
@@ -107,7 +111,6 @@ workflow CombinedWorkflow {
                 docker = dockerImage,
                 referenceAnnotation_full = guaranteedRefQuantOnly,
                 main_chromosomes = main_chromosomes,
-                LRAA_no_norm = LRAA_no_norm,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
                 num_total_reads = count_bam.count
         }

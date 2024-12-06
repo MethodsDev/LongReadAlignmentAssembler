@@ -1,0 +1,6 @@
+{
+    "CombinedWorkflow.sample_id" : "test.ID_ref_free_Quant_mode",
+    "CombinedWorkflow.inputBAM" : "pacbio.PBLR.small.bam",
+    "CombinedWorkflow.referenceGenome" : "ref_genome.fa",
+    "CombinedWorkflow.mode" : "ID_ref_free_Quant_mode"
+}

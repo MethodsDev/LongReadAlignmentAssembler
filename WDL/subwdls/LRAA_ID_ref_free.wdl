@@ -9,12 +9,9 @@ task splitBAMByChromosome {
         File referenceGenome
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
-
         set -eo pipefail
         mkdir -p split_bams
         
@@ -43,35 +40,35 @@ task splitBAMByChromosome {
 }
 
 task lraaPerChromosome {
-    input {
+  input {
+        String sample_id
+        Int shardno
         File inputBAM
         Int num_total_reads
         File referenceGenome
         String OutDir
         String docker
         Int numThreads
-        Boolean? LRAA_no_norm
+        Boolean LRAA_no_norm
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
-    String no_norm_flag = if defined(LRAA_no_norm) && LRAA_no_norm then "--no_norm" else ""
+    String no_norm_flag = if (LRAA_no_norm) then "--no_norm" else ""
     
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
 
         mkdir -p ~{OutDir}/ID_reffree
     
         /usr/local/src/LRAA/LRAA --genome ~{referenceGenome} \
                                  --bam ~{inputBAM} \
-                                 --output_prefix ~{OutDir}/ID_reffree/LRAA_reffree \
+                                 --output_prefix ~{OutDir}/ID_reffree/~{sample_id}.shardno-~{shardno}.LRAA_ref-free \
                                  ~{no_norm_flag} --CPU 1 \
                                  --num_total_reads ~{num_total_reads}
     >>>
     
     output {
-        File lraaID_reffree_GTF = "~{OutDir}/ID_reffree/LRAA_reffree.gtf"
+        File lraaID_reffree_GTF = "~{OutDir}/ID_reffree/~{sample_id}.shardno-~{shardno}.LRAA_ref-free.gtf"
     }
     runtime {
         docker: docker
@@ -89,15 +86,13 @@ task mergeResults {
         String docker
         Int memoryGB
         Int diskSizeGB
-        File monitoringScript = "gs://mdl-ctat-genome-libs/terra_scripts/cromwell_monitoring_script2.sh"
     }
 
     command <<<
-        bash ~{monitoringScript} > monitoring.log &
 
         set -eo pipefail
 
-        gtf_output="~{outputFilePrefix}_merged.gtf"
+        gtf_output="~{outputFilePrefix}.LRAA_ref-free.gtf"
         touch "$gtf_output"
 
         gtf_files_str="~{sep=' ' gtfFiles}"
@@ -108,7 +103,7 @@ task mergeResults {
     >>>
 
     output {
-        File mergedGtfFile = "~{outputFilePrefix}_merged.gtf"
+        File mergedGtfFile = "~{outputFilePrefix}.LRAA_ref-free.gtf"
     }
 
     runtime {
@@ -120,7 +115,8 @@ task mergeResults {
 }
 
 workflow lraaWorkflow {
-    input {
+  input {
+        String sample_id
         File? inputBAM
         Array[File]? inputBAMArray
         Array[File]? referenceGenomeArray
@@ -131,7 +127,7 @@ workflow lraaWorkflow {
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         String main_chromosomes = "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY"
-        Boolean? LRAA_no_norm
+        Boolean LRAA_no_norm
     }
 
     String OutDir = "LRAA_out"
@@ -152,7 +148,9 @@ workflow lraaWorkflow {
 
         scatter (i in range(length(splitBAMByChromosome.chromosomeBAMs))) {
             call lraaPerChromosome {
-                input:
+                 input:
+                    sample_id = sample_id,
+                    shardno = i,
                     inputBAM = splitBAMByChromosome.chromosomeBAMs[i],
                     referenceGenome = splitBAMByChromosome.chromosomeFASTAs[i],
                     num_total_reads = num_total_reads,
@@ -173,6 +171,8 @@ workflow lraaWorkflow {
         scatter (j in range(length(nonOptionalInputBAMArray))) {
             call lraaPerChromosome as lraaPerChromosomeArray {
                 input:
+                    sample_id = sample_id,
+                    shardno = j,
                     inputBAM = nonOptionalInputBAMArray[j],
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
                     num_total_reads = num_total_reads,
@@ -191,7 +191,7 @@ workflow lraaWorkflow {
     call mergeResults {
         input:
             gtfFiles = nonOptionalGtfFiles,
-            outputFilePrefix = "merged",
+            outputFilePrefix = sample_id,
             docker = docker,
             memoryGB = memoryGB,
             diskSizeGB = diskSizeGB
