@@ -377,7 +377,7 @@ def main():
     restrict_to_contig_orient = None
 
     if args.contig:
-        restricted_contig = contig
+        restricted_contig = args.contig
         m = re.search("^(\\w+)([\\+\\-])$", restricted_contig)
         if m is not None:
             restricted_contig = m.group(1)
