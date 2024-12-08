@@ -49,6 +49,7 @@ task lraaPerChromosome {
         Int shardno
         File inputBAM
         Int num_total_reads
+        Float? min_per_id
         File referenceGenome
         String OutDir
         String docker
@@ -68,6 +69,7 @@ task lraaPerChromosome {
         /usr/local/src/LRAA/LRAA --genome ~{referenceGenome} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{OutDir}/ID_refguided/~{sample_id}.shardno-~{shardno}.LRAA_ref-guided \
+                                 ~{"--min_per_id " + min_per_id} \
                                  ~{no_norm_flag} --CPU 1 --gtf ~{referenceAnnotation_reduced} \
                                  --num_total_reads ~{num_total_reads}
     >>>
@@ -126,6 +128,7 @@ workflow lraaWorkflow {
         Array[File]? inputBAMArray
         Array[File]? referenceGenomeArray
         Int num_total_reads
+        Float? min_per_id
         File referenceAnnotation_reduced
         File referenceGenome
         Int numThreads = 4
@@ -162,6 +165,7 @@ workflow lraaWorkflow {
                     referenceGenome = splitBAMAndGTFByChromosome.chromosomeFASTAs[i],
                     referenceAnnotation_reduced = splitBAMAndGTFByChromosome.chromosomeGTFs[i],
                     num_total_reads = num_total_reads,
+                    min_per_id = min_per_id,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
@@ -186,6 +190,7 @@ workflow lraaWorkflow {
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
                     referenceAnnotation_reduced = nonOptionalChromosomeGTFs[j],
                     num_total_reads = num_total_reads,
+                    min_per_id = min_per_id,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,

@@ -17,6 +17,7 @@ workflow CombinedWorkflow {
         String main_chromosomes = "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY"
         Boolean LRAA_no_norm = false
         Int? LRAA_min_mapping_quality = 0
+        Float? min_per_id
     }
 
     Int diskSizeGB = 128
@@ -42,7 +43,8 @@ workflow CombinedWorkflow {
                 docker = dockerImage,
                 main_chromosomes = main_chromosomes,
                 LRAA_no_norm = LRAA_no_norm,
-                num_total_reads = count_bam.count
+                num_total_reads = count_bam.count,
+                min_per_id = min_per_id
         }
 
         call Quant.lraaWorkflow as QuantFree2Workflow {
@@ -57,7 +59,8 @@ workflow CombinedWorkflow {
                 referenceAnnotation_full = IDRefFreeWorkflow.mergedReffreeGTF,
                 main_chromosomes = main_chromosomes,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
-                num_total_reads = count_bam.count
+                num_total_reads = count_bam.count,
+                min_per_id = min_per_id
         }
     }
 
@@ -77,7 +80,8 @@ workflow CombinedWorkflow {
                 docker = dockerImage,
                 main_chromosomes = main_chromosomes,
                 LRAA_no_norm = LRAA_no_norm,
-                num_total_reads = count_bam.count
+                num_total_reads = count_bam.count,
+                min_per_id =  min_per_id
         }
         
         call Quant.lraaWorkflow as QuantGuided2Workflow {
@@ -92,7 +96,8 @@ workflow CombinedWorkflow {
                 referenceAnnotation_full = IDRefGuidedWorkflow.mergedRefguidedGTF,
                 main_chromosomes = main_chromosomes,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
-                num_total_reads = count_bam.count
+                num_total_reads = count_bam.count,
+                min_per_id = min_per_id
         }
     }
 
@@ -112,7 +117,8 @@ workflow CombinedWorkflow {
                 referenceAnnotation_full = guaranteedRefQuantOnly,
                 main_chromosomes = main_chromosomes,
                 LRAA_min_mapping_quality = LRAA_min_mapping_quality,
-                num_total_reads = count_bam.count
+                num_total_reads = count_bam.count,
+                min_per_id = min_per_id
         }
     }
 
