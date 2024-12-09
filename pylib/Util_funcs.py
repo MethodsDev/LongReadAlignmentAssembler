@@ -23,7 +23,7 @@ def retrieve_contig_seq_from_fasta_file(fasta_filename, contig_acc):
     contig_seq_str = contig_seq_str[1:]
     contig_seq_str = "".join(contig_seq_str)
 
-    contig_seq_str = re.sub("\s", "", contig_seq_str) # just in case
+    contig_seq_str = re.sub("\\s", "", contig_seq_str) # just in case
 
     return(contig_seq_str)
 
