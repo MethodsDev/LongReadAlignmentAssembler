@@ -33,7 +33,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 # VERSION="0.2.1"
-VERSION = "BLEEDING_EDGE-v0.2.4"
+VERSION = "BLEEDING_EDGE-v0.2.5"
 
 
 def main():
@@ -99,10 +99,10 @@ def main():
     )
 
     parser.add_argument(
-        "--EM",
+        "--no_EM",
         action="store_true",
         default=False,
-        help="run EM alg (default: not EM, simply divide uncertain mappings equally among assigned target isoforms",
+        help="do not run EM alg instead simply divide uncertain mappings equally among assigned target isoforms",
     )
 
     parser.add_argument(
@@ -262,8 +262,8 @@ def main():
     input_gtf = args.gtf
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
-    run_EM = args.EM
-
+    run_EM = not args.no_EM
+    
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
 

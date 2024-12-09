@@ -44,7 +44,7 @@ class Bam_alignment_extractor:
     
     
     def get_read_alignments(self, contig_acc, contig_strand=None, region_lend=None, region_rend=None,
-                            pretty=False, config=LRAA_Globals.config):
+                            pretty=False, per_id_QC_raise_error = False, config=LRAA_Globals.config):
 
         discarded_read_counter = defaultdict(int)
 
@@ -65,6 +65,10 @@ class Bam_alignment_extractor:
             logger.debug("Fetching all alignments for contig: {} strand {}".format(contig_acc, contig_strand))
             read_fetcher = self._pysam_reader.fetch(contig_acc)
 
+
+        num_alignments_per_id_ok = 0
+        num_alignments_per_id_fail = 0
+            
         for read in read_fetcher:
 
             if contig_strand is not None:
@@ -119,12 +123,24 @@ class Bam_alignment_extractor:
                     discarded_read_counter["low_perID"] += 1
                     #print(read)
                     #print("Cigar_stats: " + str(cigar_stats))
+                    num_alignments_per_id_fail += 1
                     continue
+                else:
+                    num_alignments_per_id_ok += 1
 
             read_alignments.append(read)
 
 
         logger.info("reads kept: {} and discarded: {}".format(len(read_alignments), discarded_read_counter))
+
+
+
+        if (num_alignments_per_id_fail + num_alignments_per_id_ok >= LRAA_Globals.config['min_total_alignments_engage_frac_per_id_check']):
+            frac_alignments_fail_per_id_check = num_alignments_per_id_fail / (num_alignments_per_id_fail + num_alignments_per_id_ok)
+        
+            if (frac_alignments_fail_per_id_check < LRAA_Globals.config['min_frac_alignments_pass_per_id_check"']):
+                raise RuntimeError("Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
+
         
         if pretty:
             return self.get_pretty_alignments(read_alignments)

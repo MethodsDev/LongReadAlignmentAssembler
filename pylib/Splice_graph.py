@@ -379,7 +379,9 @@ class Splice_graph:
         pretty_alignments = bam_extractor.get_read_alignments(contig_acc,
                                                               contig_strand,
                                                               region_lend=self._region_lend, region_rend=self._region_rend,
-                                                              pretty=True)
+                                                              pretty=True,
+                                                              per_id_QC_raise_error = True
+        )
 
         assert contig_strand in ('+','-')
         

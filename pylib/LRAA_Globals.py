@@ -11,6 +11,8 @@ config = {
     "min_mapping_quality": 20,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
+    "min_frac_alignments_pass_per_id_check" : 0.9,
+    "min_total_alignments_engage_frac_per_id_check" : 1000,
     #
     ####################################
     # splice graph construction criteria
