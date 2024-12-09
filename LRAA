@@ -809,23 +809,23 @@ def report_transcript_paths_in_graph(transcripts, filename):
 
 def count_reads_from_bam(bam_filename):
 
-    read_count_file = os.path.basename(bam_filename) + ".count"
-    if os.path.exists(read_count_file):
-        with open(read_count_file, "rt") as fh:
-            count = next(fh)
-            count = count.rstrip()
-            count = int(count)
-            assert count > 0, "Error, not finding counts of reads for bam: {}".format(
-                bam_filename
-            )
-            return count
+    read_count_file = os.path.basename(bam_filename) + ".flagstats"
+    if not os.path.exists(read_count_file):
+        subprocess.check_call(
+            f"samtools flagstats {bam_filename} > {read_count_file}", shell=True
+        )
 
-    else:
-        count = pysam.AlignmentFile(bam_filename).count(until_eof=True)
-        count = int(count)
-        with open(read_count_file, "wt") as ofh:
-            print(str(count), file=ofh)
-            return count
+    with open(read_count_file, "rt") as fh:
+        line = next(fh)
+        line = next(fh)
+        line = line.rstrip()
+        vals = line.split(" ")
+        assert (
+            vals[-1] == "primary"
+        ), "Error, 2nd line of flagstats file not recognized properly"
+        count = int(vals[0])
+
+        return count
 
 
 if __name__ == "__main__":
