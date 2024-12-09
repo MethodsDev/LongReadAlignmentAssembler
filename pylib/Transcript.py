@@ -196,6 +196,10 @@ class Transcript(GenomeFeature):
         else:
             self.read_names.append(read_names)
 
+    def prune_reftranscript_as_evidence(self):
+        self.read_names = [read_name for read_name in self.read_names if "reftranscript:" not in read_name]
+
+            
     def set_read_counts_assigned(self, read_counts):
         self._read_counts_assigned = read_counts
 

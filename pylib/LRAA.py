@@ -54,7 +54,7 @@ class LRAA:
         return
 
     def build_multipath_graph(
-        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers=False
+            self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers=False, input_transcripts=None
     ):
 
         logger.info(f"-building multipath graph for {contig_acc}")
@@ -63,6 +63,11 @@ class LRAA:
             contig_acc, contig_strand, contig_seq, bam_file, allow_spacers
         )
 
+        if input_transcripts is not None:
+            logger.info("-incorporating input transcripts into multpath graph")
+            self._incorporate_transcripts_into_mp_counter(mp_counter, input_transcripts)
+        
+        
         multipath_graph = MultiPathGraph(
             mp_counter,
             self._splice_graph,
@@ -205,6 +210,13 @@ class LRAA:
 
         return all_reconstructed_transcripts
 
+
+    def prune_ref_transcripts_as_evidence(self, transcripts):
+        for transcript in transcripts:
+            transcript.prune_reftranscript_as_evidence()
+
+            
+    
     ##################
     ## Private methods
     ##################
@@ -1093,3 +1105,20 @@ class LRAA:
                 transcripts_ret.append(merged_transcript)
 
         return transcripts_ret
+
+
+
+    def _incorporate_transcripts_into_mp_counter(self, mp_counter, input_transcripts):
+
+        for input_transcript in input_transcripts:
+            simple_path = input_transcript.get_simple_path()
+            mp = MultiPath(self._splice_graph,
+                           [ simple_path ],
+                           read_types={
+                               "reftranscript"
+                           },
+                           read_names = {
+                               "reftranscript:" + input_transcript.get_transcript_id()
+                           },
+            )
+            mp_counter.add(mp)
