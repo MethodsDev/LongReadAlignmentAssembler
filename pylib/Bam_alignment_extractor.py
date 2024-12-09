@@ -139,7 +139,8 @@ class Bam_alignment_extractor:
             frac_alignments_fail_per_id_check = num_alignments_per_id_fail / (num_alignments_per_id_fail + num_alignments_per_id_ok)
         
             if (frac_alignments_fail_per_id_check < LRAA_Globals.config['min_frac_alignments_pass_per_id_check']):
-                raise RuntimeError(f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
+                #raise RuntimeError(f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
+                logger.debug(f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
 
         
         if pretty:
