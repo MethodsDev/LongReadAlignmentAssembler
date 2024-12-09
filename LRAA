@@ -242,7 +242,7 @@ def main():
         "--region",
         type=str,
         default=None,
-        help="restrict to region on contig chr\d+[+-]?:\d+-\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
+        help="restrict to region on contig chr\\d+[+-]?:\\d+-\\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
     )
 
     if "--version" in sys.argv:
@@ -390,7 +390,7 @@ def main():
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
         args.region = args.region.replace(",", "")
-        m = re.search("^(\w+)([\\+\\-]?):(\d+)-(\d+)$", args.region)
+        m = re.search("^(\\w+)([\\+\\-]?):(\\d+)-(\\d+)$", args.region)
         if m is None:
             raise RuntimeError(
                 "Error, could not parse region range: {}".format(args.region)
@@ -812,8 +812,9 @@ def count_reads_from_bam(bam_filename):
     read_count_file = os.path.basename(bam_filename) + ".flagstats"
     if not os.path.exists(read_count_file):
         subprocess.check_call(
-            f"samtools flagstats {bam_filename} > {read_count_file}", shell=True
+            f"samtools flagstat {bam_filename} > {read_count_file}.tmp", shell=True
         )
+        os.rename(f"{read_count_file}.tmp", read_count_file)
 
     with open(read_count_file, "rt") as fh:
         line = next(fh)
