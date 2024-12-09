@@ -809,23 +809,18 @@ def report_transcript_paths_in_graph(transcripts, filename):
 
 def count_reads_from_bam(bam_filename):
 
-    read_count_file = os.path.basename(bam_filename) + ".flagstats"
+    read_count_file = os.path.basename(bam_filename) + ".count"
     if not os.path.exists(read_count_file):
         subprocess.check_call(
-            f"samtools flagstat {bam_filename} > {read_count_file}.tmp", shell=True
+            f"samtools view -c {bam_filename} > {read_count_file}.tmp", shell=True
         )
         os.rename(f"{read_count_file}.tmp", read_count_file)
 
     with open(read_count_file, "rt") as fh:
-        line = next(fh)
-        line = next(fh)
-        line = line.rstrip()
-        vals = line.split(" ")
-        assert (
-            vals[-1] == "primary"
-        ), "Error, 2nd line of flagstats file not recognized properly"
-        count = int(vals[0])
-
+        count = next(fh)
+        count = count.rstrip()
+        count = int(count)
+        assert count > 0, "Error, no reads counted from bam file..."
         return count
 
 
