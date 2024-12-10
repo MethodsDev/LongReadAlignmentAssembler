@@ -33,7 +33,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 # VERSION="0.2.1"
-VERSION = "BLEEDING_EDGE-v0.2.5"
+VERSION = "BLEEDING_EDGE-v0.2.6"
 
 
 def main():

@@ -1,0 +1,6 @@
+
+v0.2.6
+- during assembly mode, including input transcripts as substrates for path nodes instead of just for the splice graph construction
+
+v0.2.5
+- EM on by default (use --no_EM to disable)
