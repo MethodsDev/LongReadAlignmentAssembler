@@ -22,8 +22,8 @@ class Splice_graph:
     # ---------------
     # class variables
     # ---------------
-    
-    _read_aln_gap_merge_int = 10 ## internal alignment gap merging
+
+    _read_aln_gap_merge_int = 10  ## internal alignment gap merging
     _inter_exon_segment_merge_dist = 50  ## unbranched exon segments within this range get merged into single segments.
     _max_genomic_contig_length = 1e10
 
@@ -34,104 +34,111 @@ class Splice_graph:
     _min_intron_support = 1
     _min_terminal_splice_exon_anchor_length = 15
 
+    _remove_unspliced_introns = False  # True
 
-    _remove_unspliced_introns = False #True
-    
     def __init__(self):
 
         # ------------------
         # instance variables
-        #self._alignments_bam_filename = ""
-        
+        # self._alignments_bam_filename = ""
+
         self._contig_acc = ""
         self._contig_strand = None
         self._contig_seq_str = ""
         self._contig_len = 0
-        
+
         self._contig_base_cov = list()
-        
+
         self._splice_graph = None  # becomes networkx digraph TODO://rename this var as confusing when using _splice_graph as this obj in other modules
-        
+
         self._node_id_to_node = dict()
-        self._itree_exon_segments = None #itree.IntervalTree() # stores Exon, TSS, and PolyAsite objects
-        
-        self._intron_objs = dict() # "lend:rend" => intron_obj
-        self._itree_introns = None # itree.IntervalTree()
-        
+        self._itree_exon_segments = (
+            None  # itree.IntervalTree() # stores Exon, TSS, and PolyAsite objects
+        )
+
+        self._intron_objs = dict()  # "lend:rend" => intron_obj
+        self._itree_introns = None  # itree.IntervalTree()
+
         ## connected components (genes)
-        self._components = list() # ordered list of graph components
-        self._node_id_to_component = dict() # node_id -> component index
+        self._components = list()  # ordered list of graph components
+        self._node_id_to_component = dict()  # node_id -> component index
 
-        self._TSS_objs = list() # TSS objects
-        self._PolyA_objs = list() # PolyA site objects
-
+        self._TSS_objs = list()  # TSS objects
+        self._PolyA_objs = list()  # PolyA site objects
 
         self._input_transcript_lend_boundaries = set()
         self._input_transcript_rend_boundaries = set()
-        
+
         return
 
     @classmethod
     def init_sg_params(cls, params):
-        cls._read_aln_gap_merge_int = params['read_aln_gap_merge_int'] ## internal alignment gap merging
-        cls._inter_exon_segment_merge_dist = params['inter_exon_segment_merge_dist']  ## unbranched exon segments within this range get merged into single segments.
-        cls._max_genomic_contig_length = params['max_genomic_contig_length']
+        cls._read_aln_gap_merge_int = params[
+            "read_aln_gap_merge_int"
+        ]  ## internal alignment gap merging
+        cls._inter_exon_segment_merge_dist = params[
+            "inter_exon_segment_merge_dist"
+        ]  ## unbranched exon segments within this range get merged into single segments.
+        cls._max_genomic_contig_length = params["max_genomic_contig_length"]
 
         # noise filtering params
-        cls._min_alt_splice_freq = params['min_alt_splice_freq']
-        cls._min_alt_unspliced_freq = params['min_alt_unspliced_freq']
-        cls._max_intron_length_for_exon_segment_filtering = params['max_intron_length_for_exon_segment_filtering']
-        cls._min_intron_support = params['min_intron_support']
-        cls._min_terminal_splice_exon_anchor_length = params['min_terminal_splice_exon_anchor_length']
+        cls._min_alt_splice_freq = params["min_alt_splice_freq"]
+        cls._min_alt_unspliced_freq = params["min_alt_unspliced_freq"]
+        cls._max_intron_length_for_exon_segment_filtering = params[
+            "max_intron_length_for_exon_segment_filtering"
+        ]
+        cls._min_intron_support = params["min_intron_support"]
+        cls._min_terminal_splice_exon_anchor_length = params[
+            "min_terminal_splice_exon_anchor_length"
+        ]
 
-        cls._remove_unspliced_introns = params['remove_unspliced_introns']
-
-    
+        cls._remove_unspliced_introns = params["remove_unspliced_introns"]
 
     def get_contig_acc(self):
         return self._contig_acc
 
-
     def get_contig_strand(self):
         return self._contig_strand
-    
+
     def set_read_aln_gap_merge(self, read_aln_gap_merge_int):
 
         self._read_aln_gap_merge_int = read_aln_gap_merge_int
 
         return
 
-    
     def get_intron_node_obj(self, intron_lend, intron_rend):
 
         intron_token = "{}:{}".format(intron_lend, intron_rend)
-                
+
         if intron_token in self._intron_objs:
             return self._intron_objs[intron_token]
 
         return None
 
-
     def get_node_obj_via_id(self, node_id):
 
         if node_id not in self._node_id_to_node:
-            raise RuntimeError("Error, node_id: {} not recognized in splice graph".format(node_id))
-        
-        return(self._node_id_to_node[node_id])
+            raise RuntimeError(
+                "Error, node_id: {} not recognized in splice graph".format(node_id)
+            )
 
+        return self._node_id_to_node[node_id]
 
     def get_successors(self, node):
         return list(self._splice_graph.successors(node))
 
     def get_predecessors(self, node):
         return list(self._splice_graph.predecessors(node))
-            
-    
-    def get_overlapping_exon_segments(self, range_lend, range_rend, min_frac_feature_overlap = 0.0):
+
+    def get_overlapping_exon_segments(
+        self, range_lend, range_rend, min_frac_feature_overlap=0.0
+    ):
 
         overlapping_exon_segments = list()
 
-        for overlapping_interval in self._itree_exon_segments[range_lend:range_rend+1]:
+        for overlapping_interval in self._itree_exon_segments[
+            range_lend : range_rend + 1
+        ]:
 
             node = overlapping_interval.data
             lend, rend = node.get_coords()
@@ -144,50 +151,69 @@ class Splice_graph:
                     coords = sorted([lend, rend, range_lend, range_rend])
                     overlap_len = coords[2] - coords[1] + 1
                     frac_feature_len_overlap = overlap_len / feature_len
-                                        
-                                        
+
                     target_range_len = range_rend - range_lend + 1
                     frac_target_range_len_overlap = overlap_len / target_range_len
 
-                    logger.debug("\t\tRange {}-{} overlaps {}, overlap_len = {}, frac_feature_overlap = {:.3f}, frac_range_overlap = {:.3f}".format(range_lend, range_rend, node, overlap_len, frac_feature_len_overlap, frac_target_range_len_overlap))
-                    
-                    if frac_feature_len_overlap >= min_frac_feature_overlap or frac_target_range_len_overlap >= min_frac_feature_overlap:  #LRAA_Globals.config['min_feature_frac_overlap']:
+                    logger.debug(
+                        "\t\tRange {}-{} overlaps {}, overlap_len = {}, frac_feature_overlap = {:.3f}, frac_range_overlap = {:.3f}".format(
+                            range_lend,
+                            range_rend,
+                            node,
+                            overlap_len,
+                            frac_feature_len_overlap,
+                            frac_target_range_len_overlap,
+                        )
+                    )
+
+                    if (
+                        frac_feature_len_overlap >= min_frac_feature_overlap
+                        or frac_target_range_len_overlap >= min_frac_feature_overlap
+                    ):  # LRAA_Globals.config['min_feature_frac_overlap']:
                         overlapping_exon_segments.append(node)
 
                 else:
                     overlapping_exon_segments.append(node)
-                        
-        return overlapping_exon_segments
 
+        return overlapping_exon_segments
 
     def get_overlapping_introns(self, lend, rend):
 
         overlapping_introns = list()
-        
+
         for overlapping_intron_interval in self._itree_introns[lend : rend + 1]:
             overlapping_introns.append(overlapping_intron_interval.data)
 
         return overlapping_introns
 
-    
-    
+    def build_splice_graph_for_contig(
+        self,
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        alignments_bam_file,
+        region_lend,
+        region_rend,
+        input_transcripts=None,
+        quant_mode=False,
+    ):
 
-    def build_splice_graph_for_contig(self, contig_acc, contig_strand, contig_seq_str, alignments_bam_file,
-                                      region_lend, region_rend, input_transcripts=None, quant_mode=False):
+        logger.info(
+            "creating splice graph for {} leveraging bam {}".format(
+                contig_acc, alignments_bam_file
+            )
+        )
 
-        logger.info("creating splice graph for {} leveraging bam {}".format(contig_acc,
-                                                                            alignments_bam_file))
-        
         self._contig_acc = contig_acc
         self._contig_strand = contig_strand
         self._contig_seq_str = contig_seq_str
         self._contig_seq_len = len(contig_seq_str)
         self._region_lend = region_lend
         self._region_rend = region_rend
-        
+
         ## do the work:
-        
-        self._initialize_contig_coverage() # populates self._contig_base_cov
+
+        self._initialize_contig_coverage()  # populates self._contig_base_cov
 
         ##---------------------------------------------------
         ## intron extraction and exonic base coverage defined.
@@ -196,13 +222,17 @@ class Splice_graph:
         # - stores intron objs in self._intron_objs
         # - base coverage incremented under self._contig_base_cov
         # - defines and stores TSS and PolyA objects
-        
+
         if alignments_bam_file is not None:
-            self._populate_exon_coverage_and_extract_introns(alignments_bam_file, contig_acc, contig_strand)
+            self._populate_exon_coverage_and_extract_introns(
+                alignments_bam_file, contig_acc, contig_strand
+            )
 
         # incorporate guide structures if provided
         if input_transcripts:
-            self._integrate_input_transcript_structures(input_transcripts, contig_strand) # should already be limited to contig_acc
+            self._integrate_input_transcript_structures(
+                input_transcripts, contig_strand
+            )  # should already be limited to contig_acc
 
         ##--------------------------------------------------------------------------------
         # initializes self._splice_graph
@@ -213,58 +243,54 @@ class Splice_graph:
         if self.is_empty():
             return None
 
-        
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r1", pad=0)
             self.describe_graph("__prefilter_r1.graph")
-                
 
         ##----------------------------------------------
         ## Refine the splice graph
         ## removes exon segments, not introns, also removes unspliced introns if Splice_graph._remove_unspliced_introns flag is set.
 
         if not quant_mode:
-            self._prune_lowly_expressed_intron_overlapping_exon_segments()  
-        
+            self._prune_lowly_expressed_intron_overlapping_exon_segments()
+
         self._merge_neighboring_proximal_unbranched_exon_segments()
 
-        
-            
         if Splice_graph._remove_unspliced_introns and not quant_mode:
             self._prune_unspliced_introns()
-        
-        self._prune_disconnected_introns()
 
+        self._prune_low_support_introns()
+
+        self._prune_disconnected_introns()
 
         # populates self._itree_exon_segments for overlap queries
         self._finalize_splice_graph()
-        
+
         ## incorporate TSS and PolyA features
         if len(self._TSS_objs) > 0:
             self._incorporate_TSS()
 
         if len(self._PolyA_objs) > 0:
-               self._incorporate_PolyAsites()
-               
-        
-        self._finalize_splice_graph() # do again after TSS and PolyA integration
+            self._incorporate_PolyAsites()
 
+        self._finalize_splice_graph()  # do again after TSS and PolyA integration
 
-        
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
             self.describe_graph("__prefilter_r2.graph")
 
-        connected_components = list(nx.connected_components(self._splice_graph.to_undirected()))
+        connected_components = list(
+            nx.connected_components(self._splice_graph.to_undirected())
+        )
 
         # filter out TSS and PolyA features based on min isoform fraction
         if len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0:
 
             for connected_component in connected_components:
                 if len(self._TSS_objs) > 0:
-                    connected_component = self._eliminate_low_support_TSS(connected_component)
+                    self._eliminate_low_support_TSS(connected_component)
                 if len(self._PolyA_objs) > 0:
-                    connected_component = self._eliminate_low_support_PolyA(connected_component)
+                    self._eliminate_low_support_PolyA(connected_component)
 
             # revise again
             self._merge_neighboring_proximal_unbranched_exon_segments()
@@ -276,34 +302,31 @@ class Splice_graph:
             if not quant_mode:
                 self._prune_exon_spurs_at_introns()
 
-            self._finalize_splice_graph() # do again after TSS and PolyA integration
-            connected_components = list(nx.connected_components(self._splice_graph.to_undirected()))
+            self._finalize_splice_graph()  # do again after TSS and PolyA integration
+            connected_components = list(
+                nx.connected_components(self._splice_graph.to_undirected())
+            )
 
         else:
             if not quant_mode:
                 self._prune_exon_spurs_at_introns()
                 self._finalize_splice_graph()
-            
-               
+
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__final_graph", pad=0)
             self.describe_graph("__final.graph")
-            append_log_file("__TSS_info.bed", self._TSS_objs) 
+            append_log_file("__TSS_info.bed", self._TSS_objs)
             append_log_file("__PolyAsite_info.bed", self._PolyA_objs)
 
-        
         self._components = connected_components
-        for i,component in enumerate(self._components):
+        for i, component in enumerate(self._components):
             for node in component:
                 id = node.get_id()
                 logger.debug(f"assigning node {id} to component {i}")
                 self._node_id_to_component[id] = i
-        
 
         return self._splice_graph
-    
 
-    
     def _node_has_successors(self, node):
 
         if len(list(self._splice_graph.successors(node))) > 0:
@@ -317,7 +340,6 @@ class Splice_graph:
             return True
         else:
             return False
-        
 
     def _get_exon_and_intron_nodes(self):
 
@@ -331,16 +353,18 @@ class Splice_graph:
                 exon_segment_objs.append(node)
             elif type(node) in (TSS, PolyAsite):
                 pass
-                
+
             else:
-                raise RuntimeError("Error, not identifying node: {} as Exon or Intron type - instead {} ".format(node, type(node)))
+                raise RuntimeError(
+                    "Error, not identifying node: {} as Exon or Intron type - instead {} ".format(
+                        node, type(node)
+                    )
+                )
 
         exon_segment_objs = sorted(exon_segment_objs, key=lambda x: x._lend)
         intron_objs = sorted(intron_objs, key=lambda x: x._lend)
 
         return (exon_segment_objs, intron_objs)
-
-    
 
     def _initialize_contig_coverage(self):
 
@@ -348,103 +372,129 @@ class Splice_graph:
         # get genome contig sequence
         contig_seq_str = self._contig_seq_str
         contig_len = self._contig_seq_len
-        logging.info("initing coverage array of len: {}".format(contig_len)) 
-        if (contig_len > Splice_graph._max_genomic_contig_length):
-            raise RuntimeError("genomic contig length {} exceeds maximum allowed {}".format(contig_len, Splice_graph._max_genomic_contig_length))
+        logging.info("initing coverage array of len: {}".format(contig_len))
+        if contig_len > Splice_graph._max_genomic_contig_length:
+            raise RuntimeError(
+                "genomic contig length {} exceeds maximum allowed {}".format(
+                    contig_len, Splice_graph._max_genomic_contig_length
+                )
+            )
 
-        
         # init depth of coverage array
-        self._contig_base_cov = [0 for i in range(0,contig_len+1)]
+        self._contig_base_cov = [0 for i in range(0, contig_len + 1)]
 
         return
 
-    
-    def _populate_exon_coverage_and_extract_introns(self, bam_filename, contig_acc, contig_strand):
-        
+    def _populate_exon_coverage_and_extract_introns(
+        self, bam_filename, contig_acc, contig_strand
+    ):
+
         ## Intron Capture
 
         intron_counter = defaultdict(int)
 
         intron_to_read_types = defaultdict(set)
-        
+
         intron_splice_site_support = defaultdict(int)
-        
+
         bam_extractor = Bam_alignment_extractor(bam_filename)
 
-        
-        
         # get read alignments
         # - illumina and pacbio reads filtered based on tech-specific min per_id
         # - pretty alignments: store the pysam alignment record along with inferred transcript exons segments.
-        pretty_alignments = bam_extractor.get_read_alignments(contig_acc,
-                                                              contig_strand,
-                                                              region_lend=self._region_lend, region_rend=self._region_rend,
-                                                              pretty=True,
-                                                              per_id_QC_raise_error = True
+        pretty_alignments = bam_extractor.get_read_alignments(
+            contig_acc,
+            contig_strand,
+            region_lend=self._region_lend,
+            region_rend=self._region_rend,
+            pretty=True,
+            per_id_QC_raise_error=True,
         )
 
-        assert contig_strand in ('+','-')
-        
-        logger.info("-got {} pretty alignments.".format(len(pretty_alignments)))
-        
-        total_read_alignments_used = 0
+        assert contig_strand in ("+", "-")
 
+        logger.info("-got {} pretty alignments.".format(len(pretty_alignments)))
+
+        total_read_alignments_used = 0
 
         ## do not count boundaries with soft clipping for TSS sites.  TODO:// examine polyA on reads for polyA sites.
         TSS_position_counter = defaultdict(int)
         polyA_position_counter = defaultdict(int)
 
-
         if LRAA_Globals.DEBUG:
             TSS_reads_ofh = open("__TSS_read_support.tsv", "at")
             POLYA_reads_ofh = open("__POLYA_read_support.tsv", "at")
-        
 
-
-        if contig_strand == '+':
-            pretty_alignments = sorted(pretty_alignments, key=lambda x: x.get_alignment_span())
+        if contig_strand == "+":
+            pretty_alignments = sorted(
+                pretty_alignments, key=lambda x: x.get_alignment_span()
+            )
         else:
-            pretty_alignments = sorted(pretty_alignments, key=lambda x: list(reversed(x.get_alignment_span())))
+            pretty_alignments = sorted(
+                pretty_alignments, key=lambda x: list(reversed(x.get_alignment_span()))
+            )
 
-            
         for pretty_alignment in pretty_alignments:
-            
+
             read_name = pretty_alignment.get_read_name()
             align_lend, align_rend = pretty_alignment.get_alignment_span()
 
-            TSS_pos, polyA_pos = (align_lend, align_rend) if contig_strand == '+' else (align_rend, align_lend)
-            TSS_pos_soft_clipping = pretty_alignment.left_soft_clipping if contig_strand == '+' else pretty_alignment.right_soft_clipping
-            polyA_pos_soft_clipping = pretty_alignment.right_soft_clipping if contig_strand == '+' else pretty_alignment.left_soft_clipping
-            
-            
-            if TSS_pos_soft_clipping <= LRAA_Globals.config['max_soft_clip_at_TSS']:
+            TSS_pos, polyA_pos = (
+                (align_lend, align_rend)
+                if contig_strand == "+"
+                else (align_rend, align_lend)
+            )
+            TSS_pos_soft_clipping = (
+                pretty_alignment.left_soft_clipping
+                if contig_strand == "+"
+                else pretty_alignment.right_soft_clipping
+            )
+            polyA_pos_soft_clipping = (
+                pretty_alignment.right_soft_clipping
+                if contig_strand == "+"
+                else pretty_alignment.left_soft_clipping
+            )
+
+            if TSS_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]:
                 TSS_position_counter[TSS_pos] += 1
 
-            if polyA_pos_soft_clipping <= LRAA_Globals.config['max_soft_clip_at_PolyA']:
+            if polyA_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]:
                 polyA_position_counter[polyA_pos] += 1
-            
-            
+
             if LRAA_Globals.DEBUG:
-                print("\t".join([contig_acc, contig_strand, str(TSS_pos), read_name]), file=TSS_reads_ofh)
-                print("\t".join([contig_acc, contig_strand, str(polyA_pos), read_name]), file=POLYA_reads_ofh)
-            
+                print(
+                    "\t".join([contig_acc, contig_strand, str(TSS_pos), read_name]),
+                    file=TSS_reads_ofh,
+                )
+                print(
+                    "\t".join([contig_acc, contig_strand, str(polyA_pos), read_name]),
+                    file=POLYA_reads_ofh,
+                )
+
             alignment_segments = pretty_alignment.get_pretty_alignment_segments()
-            #print("Pretty alignment segments: " + str(alignment_segments))
-            logger.debug("Pretty alignment for read {} : {}".format(read_name, str(alignment_segments)))
-            
-            
+            # print("Pretty alignment segments: " + str(alignment_segments))
+            logger.debug(
+                "Pretty alignment for read {} : {}".format(
+                    read_name, str(alignment_segments)
+                )
+            )
+
             read_type = pretty_alignment.get_read_type()
-            
+
             if len(alignment_segments) > 1:
                 # ensure proper consensus splice sites.
-                introns_list = self._get_introns_matching_splicing_consensus(alignment_segments)
-                #print("introns list: " + str(introns_list))
-                logger.debug("\tread {} : introns found: {}".format(read_name, str(introns_list)))
+                introns_list = self._get_introns_matching_splicing_consensus(
+                    alignment_segments
+                )
+                # print("introns list: " + str(introns_list))
+                logger.debug(
+                    "\tread {} : introns found: {}".format(read_name, str(introns_list))
+                )
                 for intron in introns_list:
                     intron_counter[intron] += 1
                     intron_to_read_types[intron].add(read_type)
-                    
-                    intron_lend,intron_rend,splice_orient = intron
+
+                    intron_lend, intron_rend, splice_orient = intron
                     intron_splice_site_support[intron_lend] += 1
                     intron_splice_site_support[intron_rend] += 1
 
@@ -454,16 +504,18 @@ class Splice_graph:
                 for i in range(segment[0], segment[1] + 1):
                     if i > self._contig_seq_len:
                         break
-                    
+
                     self._contig_base_cov[i] += 1
 
-        logger.info("-total read alignments used: {}".format(total_read_alignments_used))
-        
+        logger.info(
+            "-total read alignments used: {}".format(total_read_alignments_used)
+        )
+
         # retain only those introns that meet the min threshold
         for intron_coords, count in intron_counter.items():
 
             read_types = intron_to_read_types[intron_coords]
-            
+
             if count >= Splice_graph._min_intron_support:
                 ## check splice support
                 intron_lend, intron_rend, intron_orient = intron_coords
@@ -473,74 +525,90 @@ class Splice_graph:
                 min_support = min(splice_support_left, splice_support_right)
                 max_support = max(splice_support_left, splice_support_right)
 
-                frac_intron_support = min_support/max_support
+                frac_intron_support = min_support / max_support
                 intron_coords_key = "{}:{}".format(intron_lend, intron_rend)
-                #if frac_intron_support >= Splice_graph._min_alt_splice_freq:
-                intron_obj = Intron(self._contig_acc, intron_lend, intron_rend, intron_orient, count)
+                # if frac_intron_support >= Splice_graph._min_alt_splice_freq:
+                intron_obj = Intron(
+                    self._contig_acc, intron_lend, intron_rend, intron_orient, count
+                )
                 intron_obj.add_read_types(list(read_types))
-                    
-                logger.debug("Adding intron {} with frac_intron_support {}".format(intron_coords_key, frac_intron_support))
+
+                logger.debug(
+                    "Adding intron {} with frac_intron_support {}".format(
+                        intron_coords_key, frac_intron_support
+                    )
+                )
                 self._intron_objs[intron_coords_key] = intron_obj
-                #else:
+                # else:
                 #    logger.debug("Excluding intron {} with insufficient frac_intron_support {} (below threshold Splice_graph._min_alt_splice_freq {})".format(intron_coords_key, frac_intron_support, Splice_graph._min_alt_splice_freq))
 
-
-        
         # Define TSS and PolyA sites
-        if LRAA_Globals.config['infer_TSS']:
+        if LRAA_Globals.config["infer_TSS"]:
 
             if LRAA_Globals.DEBUG:
-                write_pos_counter_info("__prelim_TSS_raw_counts.tsv", TSS_position_counter, contig_acc, contig_strand)
+                write_pos_counter_info(
+                    "__prelim_TSS_raw_counts.tsv",
+                    TSS_position_counter,
+                    contig_acc,
+                    contig_strand,
+                )
 
+            TSS_grouped_positions = aggregate_sites_within_window(
+                TSS_position_counter,
+                LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
+                LRAA_Globals.config["min_alignments_define_TSS_site"],
+            )
 
-                
-            
-            TSS_grouped_positions = aggregate_sites_within_window(TSS_position_counter,
-                                                                  LRAA_Globals.config['max_dist_between_alt_TSS_sites'],
-                                                                  LRAA_Globals.config['min_alignments_define_TSS_site'])
-            
+            TSS_grouped_positions = filter_non_peaky_positions(
+                TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
+            )
 
-            TSS_grouped_positions = filter_non_peaky_positions(TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand)
-            
-            
             for TSS_peak in TSS_grouped_positions:
                 position, count = TSS_peak
-                self._TSS_objs.append(TSS(contig_acc, position, position, contig_strand, count))
+                self._TSS_objs.append(
+                    TSS(contig_acc, position, position, contig_strand, count)
+                )
 
             if LRAA_Globals.DEBUG:
                 append_log_file("__prefilter_TSS_info.bed", self._TSS_objs)
-                
-        if LRAA_Globals.config['infer_PolyA']:
+
+        if LRAA_Globals.config["infer_PolyA"]:
 
             if LRAA_Globals.DEBUG:
-                write_pos_counter_info("__prelim_polyA_raw_counts.tsv", polyA_position_counter, contig_acc, contig_strand)
-            
-            PolyA_grouped_positions = aggregate_sites_within_window(polyA_position_counter,
-                                                                    LRAA_Globals.config['max_dist_between_alt_polyA_sites'],
-                                                                    LRAA_Globals.config['min_alignments_define_polyA_site'])
+                write_pos_counter_info(
+                    "__prelim_polyA_raw_counts.tsv",
+                    polyA_position_counter,
+                    contig_acc,
+                    contig_strand,
+                )
+
+            PolyA_grouped_positions = aggregate_sites_within_window(
+                polyA_position_counter,
+                LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
+                LRAA_Globals.config["min_alignments_define_polyA_site"],
+            )
 
             for polyA_site_grouping in PolyA_grouped_positions:
                 position, count = polyA_site_grouping
-                self._PolyA_objs.append(PolyAsite(contig_acc, position, position, contig_strand, count))
-                
+                self._PolyA_objs.append(
+                    PolyAsite(contig_acc, position, position, contig_strand, count)
+                )
+
             if LRAA_Globals.DEBUG:
                 append_log_file("__prefilter_PolyAsite_info.bed", self._PolyA_objs)
-                    
+
         return
-    
 
-    
     def _integrate_input_transcript_structures(self, transcripts, contig_strand):
-
         """
         Fold in the reference annotations:
         - add introns where they're missing
         - add base coverage where it's missing.
-        
+
         """
 
         logger.info("Integrating input transcript structures.")
-                
+
         ## Exon Coverage and Intron Capture
 
         for transcript in transcripts:
@@ -548,21 +616,21 @@ class Splice_graph:
 
             if contig_strand is not None and orient != contig_strand:
                 continue
-            
+
             exon_segments = transcript.get_exon_segments()
             last_rend = None
 
             logger.debug("Integrating transcript: {}".format(transcript))
 
             trans_lend, trans_rend = transcript.get_coords()
-            
+
             self._input_transcript_lend_boundaries.add(trans_lend)
             self._input_transcript_rend_boundaries.add(trans_rend)
-                        
+
             # add coverage for exonic region
             for exon_segment in exon_segments:
                 lend, rend = exon_segment
-                                
+
                 logger.debug("-ensuring coverage for exon: {}-{}".format(lend, rend))
                 for i in range(lend, rend + 1):
                     if i > self._contig_seq_len:
@@ -570,221 +638,280 @@ class Splice_graph:
                     if self._contig_base_cov[i] < 1:
                         self._contig_base_cov[i] = 1
 
-                
                 # add missing introns.:
                 if last_rend is not None:
                     intron_lend = last_rend + 1
                     intron_rend = lend - 1
                     intron_coords_key = "{}:{}".format(intron_lend, intron_rend)
-                    
+
                     if intron_coords_key not in self._intron_objs:
-                        intron_obj = Intron(self._contig_acc, intron_lend, intron_rend, orient, 1)
-                        intron_obj.add_read_types(['ref_transcript'])
+                        intron_obj = Intron(
+                            self._contig_acc, intron_lend, intron_rend, orient, 1
+                        )
+                        intron_obj.add_read_types(["ref_transcript"])
                         self._intron_objs[intron_coords_key] = intron_obj
                         logger.debug("adding intron {}".format(intron_coords_key))
                     else:
-                        logger.debug("intron {} already in splice graph".format(intron_coords_key))
+                        logger.debug(
+                            "intron {} already in splice graph".format(
+                                intron_coords_key
+                            )
+                        )
                         # ensure read type represented.
-                        self._intron_objs[intron_coords_key].add_read_types(['ref_transcript']) 
+                        self._intron_objs[intron_coords_key].add_read_types(
+                            ["ref_transcript"]
+                        )
 
                 last_rend = rend
 
-        
         return
-
-
 
     def _incorporate_TSS(self):
 
         contig_acc = self._contig_acc
         contig_strand = self._contig_strand
-        assert contig_strand in ('+', '-')
+        assert contig_strand in ("+", "-")
         sg = self._splice_graph
 
         for TSS_obj in self._TSS_objs:
 
             sg.add_node(TSS_obj)
-            
+
             TSS_coord, _ = TSS_obj.get_coords()
-            exon_intervals = self.get_overlapping_exon_segments(TSS_coord, TSS_coord, min_frac_feature_overlap=0.0)
+            exon_intervals = self.get_overlapping_exon_segments(
+                TSS_coord, TSS_coord, min_frac_feature_overlap=0.0
+            )
             logger.debug("TSS {} overlaps {}".format(TSS_obj, exon_intervals))
-            assert len(exon_intervals) <= 1, "Error, TSS {} overlaps multiple intervals: {}".format(TSS_obj, exon_intervals)
+            assert (
+                len(exon_intervals) <= 1
+            ), "Error, TSS {} overlaps multiple intervals: {}".format(
+                TSS_obj, exon_intervals
+            )
 
             if len(exon_intervals) == 0:
-                logger.warning("TSS {} candidate has no exon overlap in the splice graph.".format(TSS_obj))
+                logger.warning(
+                    "TSS {} candidate has no exon overlap in the splice graph.".format(
+                        TSS_obj
+                    )
+                )
                 continue
 
-            
             exon_interval = exon_intervals[0]
             # split exon interval at TSS
             exon_lend, exon_rend = exon_interval.get_coords()
 
             exon_coverage = exon_interval.get_read_support()
-            
+
             exon_predecessors = sg.predecessors(exon_interval)
             exon_successors = sg.successors(exon_interval)
 
-            if contig_strand == '+' and exon_lend == TSS_coord:
+            if contig_strand == "+" and exon_lend == TSS_coord:
                 # just add edge
-                logger.debug("Prefixing TSS {} to exon {}".format(TSS_obj, exon_interval))
+                logger.debug(
+                    "Prefixing TSS {} to exon {}".format(TSS_obj, exon_interval)
+                )
                 sg.add_edge(TSS_obj, exon_interval)
 
-            elif contig_strand == '-' and exon_rend == TSS_coord:
+            elif contig_strand == "-" and exon_rend == TSS_coord:
                 # just add edge
-                logger.debug("Postfixing TSS {} to exon {}".format(TSS_obj, exon_interval))
+                logger.debug(
+                    "Postfixing TSS {} to exon {}".format(TSS_obj, exon_interval)
+                )
                 sg.add_edge(exon_interval, TSS_obj)
             else:
                 # must split exon:
-            
-                if contig_strand == '+':
-                    break_lend, break_rend = TSS_coord-1, TSS_coord
-                else:
-                    break_lend, break_rend = TSS_coord, TSS_coord+1
 
-                new_split_exon_left = Exon(contig_acc, exon_lend, break_lend, contig_strand, exon_coverage)
+                if contig_strand == "+":
+                    break_lend, break_rend = TSS_coord - 1, TSS_coord
+                else:
+                    break_lend, break_rend = TSS_coord, TSS_coord + 1
+
+                new_split_exon_left = Exon(
+                    contig_acc, exon_lend, break_lend, contig_strand, exon_coverage
+                )
                 for exon_predecessor in exon_predecessors:
                     sg.add_edge(exon_predecessor, new_split_exon_left)
 
-                new_split_exon_right = Exon(contig_acc, break_rend, exon_rend, contig_strand, exon_coverage)
+                new_split_exon_right = Exon(
+                    contig_acc, break_rend, exon_rend, contig_strand, exon_coverage
+                )
                 for exon_successor in exon_successors:
                     sg.add_edge(new_split_exon_right, exon_successor)
 
-
                 sg.add_edge(new_split_exon_left, new_split_exon_right)
 
-                if contig_strand == '+':
+                if contig_strand == "+":
                     sg.add_edge(TSS_obj, new_split_exon_right)
                 else:
                     sg.add_edge(new_split_exon_left, TSS_obj)
 
-
                 # remove interval that got split.
                 sg.remove_node(exon_interval)
-                self._itree_exon_segments.remove(itree.Interval(exon_lend, exon_rend+1, exon_interval))
-                self._itree_exon_segments[exon_lend:break_lend+1] = new_split_exon_left
-                self._itree_exon_segments[break_rend:exon_rend+1] = new_split_exon_right
+                self._itree_exon_segments.remove(
+                    itree.Interval(exon_lend, exon_rend + 1, exon_interval)
+                )
+                self._itree_exon_segments[exon_lend : break_lend + 1] = (
+                    new_split_exon_left
+                )
+                self._itree_exon_segments[break_rend : exon_rend + 1] = (
+                    new_split_exon_right
+                )
 
-                logger.debug("TSS incorporation: Split {} into {} and {}".format(exon_interval, new_split_exon_left, new_split_exon_right))
+                logger.debug(
+                    "TSS incorporation: Split {} into {} and {}".format(
+                        exon_interval, new_split_exon_left, new_split_exon_right
+                    )
+                )
 
-        
         return
-
 
     def _incorporate_PolyAsites(self):
 
         contig_acc = self._contig_acc
         contig_strand = self._contig_strand
-        assert contig_strand in ('+', '-')
+        assert contig_strand in ("+", "-")
         sg = self._splice_graph
 
         for polyA_obj in self._PolyA_objs:
 
             sg.add_node(polyA_obj)
-            
+
             polyA_coord, _ = polyA_obj.get_coords()
-            exon_intervals = self.get_overlapping_exon_segments(polyA_coord, polyA_coord, min_frac_feature_overlap=0.0)
+            exon_intervals = self.get_overlapping_exon_segments(
+                polyA_coord, polyA_coord, min_frac_feature_overlap=0.0
+            )
             logger.debug("PolyA {} overlaps {}".format(polyA_obj, exon_intervals))
-            assert len(exon_intervals) <= 1, "Error, PolyA {} overlaps multiple exon intervals: {}".format(polyA_obj, exon_intervals)
+            assert (
+                len(exon_intervals) <= 1
+            ), "Error, PolyA {} overlaps multiple exon intervals: {}".format(
+                polyA_obj, exon_intervals
+            )
 
             if len(exon_intervals) == 0:
-                logger.warning("Warning, polyA site {} no longer overlaps an exon candidate in the graph".format(polyA_obj))
+                logger.warning(
+                    "Warning, polyA site {} no longer overlaps an exon candidate in the graph".format(
+                        polyA_obj
+                    )
+                )
                 continue
-            
+
             exon_interval = exon_intervals[0]
             # split exon interval at TSS
             exon_lend, exon_rend = exon_interval.get_coords()
 
             exon_coverage = exon_interval.get_read_support()
-            
+
             exon_predecessors = sg.predecessors(exon_interval)
             exon_successors = sg.successors(exon_interval)
 
-            if contig_strand == '+' and exon_rend == polyA_coord:
+            if contig_strand == "+" and exon_rend == polyA_coord:
                 # just add edge
-                logger.debug("Postfixing polyA {} to exon {}".format(polyA_obj, exon_interval))
+                logger.debug(
+                    "Postfixing polyA {} to exon {}".format(polyA_obj, exon_interval)
+                )
                 sg.add_edge(exon_interval, polyA_obj)
 
-            elif contig_strand == '-' and exon_lend == polyA_coord:
+            elif contig_strand == "-" and exon_lend == polyA_coord:
                 # just add edge
-                logger.debug("Prefixing polyA {} to exon {}".format(polyA_obj, exon_interval))
+                logger.debug(
+                    "Prefixing polyA {} to exon {}".format(polyA_obj, exon_interval)
+                )
                 sg.add_edge(polyA_obj, exon_interval)
             else:
                 # must split exon:
-            
-                if contig_strand == '+':
-                    break_lend, break_rend = polyA_coord, polyA_coord+1
-                else:
-                    break_lend, break_rend = polyA_coord-1, polyA_coord
 
-                new_split_exon_left = Exon(contig_acc, exon_lend, break_lend, contig_strand, exon_coverage)
+                if contig_strand == "+":
+                    break_lend, break_rend = polyA_coord, polyA_coord + 1
+                else:
+                    break_lend, break_rend = polyA_coord - 1, polyA_coord
+
+                new_split_exon_left = Exon(
+                    contig_acc, exon_lend, break_lend, contig_strand, exon_coverage
+                )
                 for exon_predecessor in exon_predecessors:
                     sg.add_edge(exon_predecessor, new_split_exon_left)
 
-                new_split_exon_right = Exon(contig_acc, break_rend, exon_rend, contig_strand, exon_coverage)
+                new_split_exon_right = Exon(
+                    contig_acc, break_rend, exon_rend, contig_strand, exon_coverage
+                )
                 for exon_successor in exon_successors:
                     sg.add_edge(new_split_exon_right, exon_successor)
 
-
                 sg.add_edge(new_split_exon_left, new_split_exon_right)
 
-                if contig_strand == '+':
+                if contig_strand == "+":
                     sg.add_edge(new_split_exon_left, polyA_obj)
                 else:
                     sg.add_edge(polyA_obj, new_split_exon_right)
 
                 # remove interval that got split.
                 sg.remove_node(exon_interval)
-                self._itree_exon_segments.remove(itree.Interval(exon_lend, exon_rend+1, exon_interval))
-                self._itree_exon_segments[exon_lend:break_lend+1] = new_split_exon_left
-                self._itree_exon_segments[break_rend:exon_rend+1] = new_split_exon_right
+                self._itree_exon_segments.remove(
+                    itree.Interval(exon_lend, exon_rend + 1, exon_interval)
+                )
+                self._itree_exon_segments[exon_lend : break_lend + 1] = (
+                    new_split_exon_left
+                )
+                self._itree_exon_segments[break_rend : exon_rend + 1] = (
+                    new_split_exon_right
+                )
 
-                logger.debug("PolyA incorporation: Split {} into {} and {}".format(exon_interval, new_split_exon_left, new_split_exon_right))
+                logger.debug(
+                    "PolyA incorporation: Split {} into {} and {}".format(
+                        exon_interval, new_split_exon_left, new_split_exon_right
+                    )
+                )
 
-
-    
     def _get_introns_matching_splicing_consensus(self, alignment_segments):
-        
+
         genome_seq = self._contig_seq_str
 
         contig_acc = self.get_contig_acc()
         contig_strand = self.get_contig_strand()
-        
+
         top_strand_agreement_count = 0
         bottom_strand_agreement_count = 0
-        
-        
+
         introns_list = list()
 
         num_introns_with_splice_signals = 0
         num_introns_conflicting_splice_signals = 0
-        
-        for i in range(len(alignment_segments) -1):
+
+        for i in range(len(alignment_segments) - 1):
             seg_left_rend = alignment_segments[i][1]  # exon coord not inclusive
-            seg_right_lend = alignment_segments[i+1][0] # exon coord inclusive
+            seg_right_lend = alignment_segments[i + 1][0]  # exon coord inclusive
 
             intron_lend = seg_left_rend + 1
             intron_rend = seg_right_lend - 1
 
-            splice_type = Intron.check_canonical_splicing(intron_lend, intron_rend, genome_seq)
+            splice_type = Intron.check_canonical_splicing(
+                intron_lend, intron_rend, genome_seq
+            )
 
             if splice_type is not None:
                 num_introns_with_splice_signals += 1
                 if splice_type == contig_strand:
-                    introns_list.append( (intron_lend, intron_rend, splice_type) )
+                    introns_list.append((intron_lend, intron_rend, splice_type))
 
                 else:
                     num_introns_conflicting_splice_signals += 1
-                    logger.debug("Splice type for intron {}:{}-{}[{}] is not consistent with read alignment orientation: {}".format(contig_acc, intron_lend, intron_rend, splice_type, contig_strand))
+                    logger.debug(
+                        "Splice type for intron {}:{}-{}[{}] is not consistent with read alignment orientation: {}".format(
+                            contig_acc,
+                            intron_lend,
+                            intron_rend,
+                            splice_type,
+                            contig_strand,
+                        )
+                    )
 
-
-        #logger.debug("Of the {} intron candidates, {} = {:.1f} % have conflicting orientation to contig.".format(
+        # logger.debug("Of the {} intron candidates, {} = {:.1f} % have conflicting orientation to contig.".format(
         #    num_introns_with_splice_signals,
         #    num_introns_conflicting_splice_signals,
         #    num_introns_conflicting_splice_signals/(num_introns_with_splice_signals+0.001)*100))
 
         return introns_list
 
-    
     def _build_draft_splice_graph(self):
 
         ## do some intron pruning
@@ -808,7 +935,6 @@ class Splice_graph:
 
             draft_splice_graph.add_node(intron)
 
-
         ## add exon nodes and connect to introns.
         ## also connect adjacent exon segments.
 
@@ -817,11 +943,17 @@ class Splice_graph:
             exon_lend, exon_rend = exon
 
             exon_mean_cov = self._get_mean_coverage(exon_lend, exon_rend)
-            
-            exon_obj = Exon(self._contig_acc, exon_lend, exon_rend, self._contig_strand, exon_mean_cov)
+
+            exon_obj = Exon(
+                self._contig_acc,
+                exon_lend,
+                exon_rend,
+                self._contig_strand,
+                exon_mean_cov,
+            )
 
             draft_splice_graph.add_node(exon_obj)
-            
+
             # connect adjacent exon segments.
             if prev_exon_obj is not None:
                 if prev_exon_obj._rend + 1 == exon_obj._lend:
@@ -830,7 +962,6 @@ class Splice_graph:
 
             prev_exon_obj = exon_obj
 
-            
             ## connect to introns where appropriate
             candidate_splice_left = exon_lend - 1
             if candidate_splice_left in rend_to_intron:
@@ -844,34 +975,27 @@ class Splice_graph:
                 for intron_obj in lend_to_intron[candidate_splice_right]:
                     draft_splice_graph.add_edge(exon_obj, intron_obj)
 
-
         self._splice_graph = draft_splice_graph
 
         return
-        
-        
-        
 
     def _prune_likely_false_introns(self):
 
         self._prune_spurious_introns_shared_boundary("left")
         self._prune_spurious_introns_shared_boundary("right")
 
-
-        
-        
     def _prune_spurious_introns_shared_boundary(self, left_or_right):
 
         idx = 0 if left_or_right == "left" else 1
-        
+
         introns_shared_coord = defaultdict(list)
-        
+
         for intron in self._intron_objs.values():
             intron_left = intron.get_coords()[idx]
             introns_shared_coord[intron_left].append(intron)
 
         introns_to_delete = set()
-        
+
         # see if there are relatively poorly supported junctions
         for intron_list in introns_shared_coord.values():
             intron_list = sorted(intron_list, key=lambda x: x.get_read_support())
@@ -879,27 +1003,58 @@ class Splice_graph:
             most_supported_intron_abundance = most_supported_intron.get_read_support()
             for alt_intron in intron_list:
                 alt_intron_abundance = alt_intron.get_read_support()
-                alt_intron_relative_freq = alt_intron_abundance / most_supported_intron_abundance
+                alt_intron_relative_freq = (
+                    alt_intron_abundance / most_supported_intron_abundance
+                )
 
-                if (alt_intron_relative_freq < Splice_graph._min_alt_splice_freq):
-                    logger.debug("alt intron: {}".format(alt_intron) + " has rel freq: {}".format(alt_intron_relative_freq))
+                if alt_intron_relative_freq < Splice_graph._min_alt_splice_freq:
+                    logger.debug(
+                        "alt intron: {}".format(alt_intron)
+                        + " has rel freq: {}".format(alt_intron_relative_freq)
+                    )
                     introns_to_delete.add(alt_intron)
 
-        logger.info("removing {} low frequency introns with shared {} coord".format(len(introns_to_delete), left_or_right))
-        
+        logger.info(
+            "removing {} low frequency introns with shared {} coord".format(
+                len(introns_to_delete), left_or_right
+            )
+        )
+
+        self.purge_introns_from_splice_graph(introns_to_delete)
+
+        return
+
+    def purge_introns_from_splice_graph(self, introns_to_delete):
+
+        introns_remove_from_splice_graph = set()
+
         for intron in introns_to_delete:
             intron_coords = intron.get_coords()
             intron_key = "{}:{}".format(intron_coords[0], intron_coords[1])
             intron_obj = self._intron_objs[intron_key]
             if intron_obj.has_read_type("ref_transcript"):
-                logger.debug("-retaining intron {} as having long read support".format(str(intron_obj)))
+                logger.debug(
+                    "-retaining intron {} as having ref_transcript support".format(
+                        str(intron_obj)
+                    )
+                )
             else:
-                logger.debug("removing intron: {} {}".format(intron_key, self._intron_objs[intron_key]))
+                logger.debug(
+                    "removing intron: {} {}".format(
+                        intron_key, self._intron_objs[intron_key]
+                    )
+                )
                 del self._intron_objs[intron_key]
-            
+                introns_remove_from_splice_graph.add(intron)
+
+        # remove from splice graph altogether.
+        if self._splice_graph is not None:
+            for intron in introns_remove_from_splice_graph:
+                if intron in self._splice_graph:
+                    self._splice_graph.remove_node(intron)
+
         return
 
-    
     def _prune_weak_splice_neighboring_segments(self):
 
         #                    I
@@ -912,50 +1067,52 @@ class Splice_graph:
         coverage_window_length = 10  # maybe make this configurable.
         pseudocount = 1
 
-        
         introns_to_delete = set()
 
         ofh = None
         if LRAA_Globals.DEBUG:
-            ofh = open("__splice_neighbor_cov_ratios.dat", 'a')
-        
+            ofh = open("__splice_neighbor_cov_ratios.dat", "a")
+
         for intron in self._intron_objs.values():
             lend, rend = intron.get_coords()
             intron_abundance = intron.get_read_support()
-            
-            A_mean_cov = self._get_mean_coverage(lend - coverage_window_length, lend - 1)
+
+            A_mean_cov = self._get_mean_coverage(
+                lend - coverage_window_length, lend - 1
+            )
             B_mean_cov = self._get_mean_coverage(lend, lend + coverage_window_length)
 
-            ratio_B_A = (B_mean_cov + pseudocount)  / (A_mean_cov + pseudocount)
-                        
+            ratio_B_A = (B_mean_cov + pseudocount) / (A_mean_cov + pseudocount)
+
             C_mean_cov = self._get_mean_coverage(rend - coverage_window_length, rend)
-            D_mean_cov = self._get_mean_coverage(rend + 1, rend + coverage_window_length)
-            
+            D_mean_cov = self._get_mean_coverage(
+                rend + 1, rend + coverage_window_length
+            )
+
             ratio_C_D = (C_mean_cov + pseudocount) / (D_mean_cov + pseudocount)
 
             if LRAA_Globals.DEBUG:
-                ofh.write("{}".format(lend) +
-                          "\tI:{}".format(intron_abundance) +
-                          "\tA:{:.3f}".format(A_mean_cov) +
-                          "\tB:{:.3f}".format(B_mean_cov) +
-                          "\tB/A:{:.3f}".format(ratio_B_A) +
-                          
-                          "\n{}".format(rend) +
-                          "\tC:{:.3f}".format(C_mean_cov) +
-                          "\tD:{:.3f}".format(D_mean_cov) +
-                          "\tC/D:{:.3f}".format(ratio_C_D) )
-            
+                ofh.write(
+                    "{}".format(lend)
+                    + "\tI:{}".format(intron_abundance)
+                    + "\tA:{:.3f}".format(A_mean_cov)
+                    + "\tB:{:.3f}".format(B_mean_cov)
+                    + "\tB/A:{:.3f}".format(ratio_B_A)
+                    + "\n{}".format(rend)
+                    + "\tC:{:.3f}".format(C_mean_cov)
+                    + "\tD:{:.3f}".format(D_mean_cov)
+                    + "\tC/D:{:.3f}".format(ratio_C_D)
+                )
+
         return
 
-
-    
     def _get_mean_coverage(self, start, end):
 
         cov_sum = 0
         cov_len = 0
-        
-        for i in range(start, end+1):
-            if i>= 0 and i < len(self._contig_base_cov):
+
+        for i in range(start, end + 1):
+            if i >= 0 and i < len(self._contig_base_cov):
                 cov_len += 1
                 cov_sum += self._contig_base_cov[i]
 
@@ -963,13 +1120,14 @@ class Splice_graph:
             mean_cov = cov_sum / cov_len
             return mean_cov
         else:
-            logger.warning("coverage requested to position {} extends beyond length of contig {}".format(end, self._contig_acc))
+            logger.warning(
+                "coverage requested to position {} extends beyond length of contig {}".format(
+                    end, self._contig_acc
+                )
+            )
             return 0
-        
-
 
     def _segment_exon_by_coverage_n_splicing(self):
-
 
         left_splice_sites = set()
         right_splice_sites = set()
@@ -978,7 +1136,6 @@ class Splice_graph:
             lend, rend = intron.get_coords()
             left_splice_sites.add(lend)
             right_splice_sites.add(rend)
-
 
         exon_segments = list()
         exon_seg_start = None
@@ -991,11 +1148,14 @@ class Splice_graph:
                 # handle current segment
                 if self._contig_base_cov[i] == 0:
                     # stop segment, add to seg list
-                    exon_segments.append([exon_seg_start, i-1])
+                    exon_segments.append([exon_seg_start, i - 1])
                     exon_seg_start = None
 
             # splice breakpoint logic
-            if i+1 in left_splice_sites or i+1 in self._input_transcript_lend_boundaries:
+            if (
+                i + 1 in left_splice_sites
+                or i + 1 in self._input_transcript_lend_boundaries
+            ):
                 if exon_seg_start is not None:
                     exon_segments.append([exon_seg_start, i])
                 exon_seg_start = None
@@ -1005,32 +1165,45 @@ class Splice_graph:
                     exon_segments.append([exon_seg_start, i])
                 exon_seg_start = None
 
-                
         # get last one if it runs off to the end of the contig
         if exon_seg_start is not None:
             exon_segments.append([exon_seg_start, len(self._contig_base_cov)])
 
-
         if LRAA_Globals.DEBUG:
             # write exon list to file
-            with open("__exon_regions.init.bed", 'a') as ofh:
+            with open("__exon_regions.init.bed", "a") as ofh:
                 for segment in exon_segments:
-                    ofh.write("\t".join([self._contig_acc, str(segment[0]-1), str(segment[1]+1)]) + "\n")
+                    ofh.write(
+                        "\t".join(
+                            [self._contig_acc, str(segment[0] - 1), str(segment[1] + 1)]
+                        )
+                        + "\n"
+                    )
 
-            with open("__introns.init.bed", 'a') as ofh:
+            with open("__introns.init.bed", "a") as ofh:
                 for intron in self._intron_objs.values():
                     intron_lend, intron_rend = intron.get_coords()
                     intron_support = intron.get_read_support()
-                    
-                    ofh.write("\t".join([self._contig_acc, str(intron_lend), str(intron_rend), "{}-{}".format(intron_lend, intron_rend), str(intron_support)]) + "\n")
-                
+
+                    ofh.write(
+                        "\t".join(
+                            [
+                                self._contig_acc,
+                                str(intron_lend),
+                                str(intron_rend),
+                                "{}-{}".format(intron_lend, intron_rend),
+                                str(intron_support),
+                            ]
+                        )
+                        + "\n"
+                    )
+
         return exon_segments
-    
 
     def _prune_lowly_expressed_intron_overlapping_exon_segments(self):
 
         draft_splice_graph = self._splice_graph
-        
+
         intron_objs = list()
         exon_segment_objs = list()
 
@@ -1040,7 +1213,11 @@ class Splice_graph:
             elif type(node) == Exon:
                 exon_segment_objs.append(node)
             else:
-                raise RuntimeError("Error, not identifying node: {} as Exon or Intron type - instead {} ".format(node, type(node)))
+                raise RuntimeError(
+                    "Error, not identifying node: {} as Exon or Intron type - instead {} ".format(
+                        node, type(node)
+                    )
+                )
 
         # store splice junction coordinates.
         splice_coords = set()
@@ -1048,34 +1225,34 @@ class Splice_graph:
             lend, rend = intron_obj.get_coords()
             splice_coords.add(lend)
             splice_coords.add(rend)
-        
-            
+
         # build interval tree for exon segments.
 
         exon_itree = itree.IntervalTree()
         for exon_seg in exon_segment_objs:
-            exon_lend,exon_rend = exon_seg.get_coords()
-            exon_itree[exon_lend:exon_rend+1] = exon_seg
-        
+            exon_lend, exon_rend = exon_seg.get_coords()
+            exon_itree[exon_lend : exon_rend + 1] = exon_seg
 
         exons_to_purge = set()
-            
+
         min_intron_cov_for_filtering = 1 / Splice_graph._min_alt_unspliced_freq + 1
-        
+
         for intron in intron_objs:
 
             if intron.get_read_support() < min_intron_cov_for_filtering:
                 continue
-            if intron.get_feature_length() > Splice_graph._max_intron_length_for_exon_segment_filtering:
+            if (
+                intron.get_feature_length()
+                > Splice_graph._max_intron_length_for_exon_segment_filtering
+            ):
                 continue
-            
-            
-            intron_lend,intron_rend = intron.get_coords()
-            overlapping_exon_segs = exon_itree[intron_lend:intron_rend+1]
-            #print("Intron: {}".format(intron))
-            
+
+            intron_lend, intron_rend = intron.get_coords()
+            overlapping_exon_segs = exon_itree[intron_lend : intron_rend + 1]
+            # print("Intron: {}".format(intron))
+
             for overlapping_exon_seg_iv in overlapping_exon_segs:
-                #print("\toverlaps: {}".format(overlapping_exon_seg))
+                # print("\toverlaps: {}".format(overlapping_exon_seg))
 
                 overlapping_exon_seg = overlapping_exon_seg_iv.data
 
@@ -1083,75 +1260,216 @@ class Splice_graph:
                 exon_lend, exon_rend = overlapping_exon_seg.get_coords()
                 if exon_lend - 1 in splice_coords or exon_rend + 1 in splice_coords:
                     continue
-                
 
-                if float(overlapping_exon_seg.get_read_support()) / float(intron.get_read_support()) < Splice_graph._min_alt_unspliced_freq:
-                    logger.debug("-pruning {} as has exon_read_support:{} / intron_read_support:{} < min_alt_unspliced_freq: {}".format(overlapping_exon_seg,
-                                                                                                                                        overlapping_exon_seg.get_read_support(),
-                                                                                                                                        intron.get_read_support(),
-                                                                                                                                        Splice_graph._min_alt_unspliced_freq) )
+                if (
+                    float(overlapping_exon_seg.get_read_support())
+                    / float(intron.get_read_support())
+                    < Splice_graph._min_alt_unspliced_freq
+                ):
+                    logger.debug(
+                        "-pruning {} as has exon_read_support:{} / intron_read_support:{} < min_alt_unspliced_freq: {}".format(
+                            overlapping_exon_seg,
+                            overlapping_exon_seg.get_read_support(),
+                            intron.get_read_support(),
+                            Splice_graph._min_alt_unspliced_freq,
+                        )
+                    )
                     exons_to_purge.add(overlapping_exon_seg)
-                    
 
-        
-        logger.info("-removing {} lowly expressed exon segments based on intron overlap".format(len(exons_to_purge)))
+        logger.info(
+            "-removing {} lowly expressed exon segments based on intron overlap".format(
+                len(exons_to_purge)
+            )
+        )
         if exons_to_purge:
             draft_splice_graph.remove_nodes_from(exons_to_purge)
 
         if LRAA_Globals.DEBUG:
             exons_to_purge = list(exons_to_purge)
             exons_to_purge = sorted(exons_to_purge, key=lambda x: x._lend)
-            with open("__exon_segments_to_purge.bed", 'a') as ofh:
+            with open("__exon_segments_to_purge.bed", "a") as ofh:
                 for exon in exons_to_purge:
                     ofh.write(exon.get_bed_row(pad=1) + "\n")
 
         return
 
-
-
     def _prune_disconnected_introns(self):
 
         draft_splice_graph = self._splice_graph
-        
+
         introns_to_remove = list()
         for node in draft_splice_graph:
             if type(node) == Intron:
                 ## check it has at least one parent and one child
-                if ( len(list(draft_splice_graph.predecessors(node))) == 0
-                         or
-                     len(list(draft_splice_graph.successors(node))) == 0 ):
+                if (
+                    len(list(draft_splice_graph.predecessors(node))) == 0
+                    or len(list(draft_splice_graph.successors(node))) == 0
+                ):
 
                     introns_to_remove.append(node)
 
-        logger.info("-pruning {} now disconnected introns".format(len(introns_to_remove)))
+        logger.info(
+            "-pruning {} now disconnected introns".format(len(introns_to_remove))
+        )
 
         if LRAA_Globals.DEBUG:
-            with open("__pruned_disconnected_introns.bed", 'a') as ofh:
+            with open("__pruned_disconnected_introns.bed", "a") as ofh:
                 for intron in introns_to_remove:
                     ofh.write(intron.get_bed_row(pad=1) + "\n")
 
         # remove introns
         for intron_to_remove in introns_to_remove:
-            intron_lend,intron_rend = intron_to_remove.get_coords()
-            intron_token = "{}:{}".format(intron_lend,intron_rend)
+            intron_lend, intron_rend = intron_to_remove.get_coords()
+            intron_token = "{}:{}".format(intron_lend, intron_rend)
             del self._intron_objs[intron_token]
-        
+
         draft_splice_graph.remove_nodes_from(introns_to_remove)
 
         return
-    
+
+    def get_exon_predecessor(self, exon_node):
+        assert type(exon_node) == Exon
+
+        predecessors = self._splice_graph.predecessors(exon_node)
+
+        exon_predecessors = list()
+
+        for pred in predecessors:
+            if type(pred) == Exon:
+                exon_predecessors.append(Exon)
+
+        assert len(exon_predecessors) <= 1
+
+        if len(exon_predecessors) == 1:
+            return exon_predecessors[0]
+        else:
+            return None
+
+    def get_exon_successor(self, exon_node):
+        assert type(exon_node) == Exon
+
+        successors = self._splice_graph.successors(exon_node)
+
+        exon_successors = list()
+
+        for succ in successors:
+            if type(succ) == Exon:
+                exon_successors.append(succ)
+
+        assert len(exon_successors) <= 1
+
+        if len(exon_successors) == 1:
+            return exon_successors[0]
+        else:
+            return None
+
+    def get_introns_attached_to_exon(self, exon_node):
+        assert type(exon_node) == Exon
+
+        attached_introns = set()
+        for node in self._splice_graph.predecessors(exon_node):
+            if type(node) == Intron:
+                attached_introns.add(node)
+
+        for node in self._splice_graph.successors(exon_node):
+            if type(node) == Intron:
+                attached_introns.add(node)
+
+        return attached_introns
+
+    def _prune_low_support_introns(self):
+
+        draft_splice_graph = self._splice_graph
+
+        introns_to_prune = set()
+
+        for node in draft_splice_graph:
+            # walk each exon island, capture all linked introns
+
+            if type(node) == Exon and self.get_exon_predecessor(node) is None:
+
+                logger.debug("INIT EXON FOUND: {}".format(node))
+
+                incidental_introns = self.get_introns_attached_to_exon(node)
+
+                logger.debug(
+                    "INIT EXON incidental introns: {}".format(incidental_introns)
+                )
+
+                next_exon = self.get_exon_successor(node)
+                while next_exon is not None:
+
+                    logger.debug("NEXT Exon found: {}".format(next_exon))
+
+                    next_incidental_introns = self.get_introns_attached_to_exon(
+                        next_exon
+                    )
+                    if len(next_incidental_introns) > 0:
+                        logger.debug(
+                            "NEXT incidental introns: {}".format(
+                                next_incidental_introns
+                            )
+                        )
+                        incidental_introns.update(next_incidental_introns)
+
+                    next_exon = self.get_exon_successor(next_exon)
+
+                # prune introns in group according to min alt splice freq
+                if len(incidental_introns) > 1:
+                    logger.debug(
+                        "-evaluating {} introns in exon island for intron pruning".format(
+                            len(incidental_introns)
+                        )
+                    )
+                    incidental_introns = sorted(
+                        incidental_introns,
+                        key=lambda x: x.get_read_support(),
+                        reverse=True,
+                    )
+                    top_support = incidental_introns[0].get_read_support()
+                    logger.debug(
+                        "-top supported intron in exon island has {} read support".format(
+                            top_support
+                        )
+                    )
+                    for i in range(1, len(incidental_introns)):
+                        intron_i_read_support = incidental_introns[i].get_read_support()
+                        frac_i_read_support = intron_i_read_support / top_support
+                        logger.debug(
+                            "-island neighboring incidental intron[{}] has {} read support = {} frac of dominant".format(
+                                i, intron_i_read_support, frac_i_read_support
+                            )
+                        )
+                        if (
+                            frac_i_read_support
+                            < LRAA_Globals.config["min_alt_splice_freq"]
+                        ):
+                            # insufficient support, prune all introns with that or lower support.
+                            for intron in incidental_introns[i:]:
+                                introns_to_prune.add(intron)
+                            break
+
+        logger.info(
+            "-removing {} low supported introns in exon islands according to min alt splice freq.".format(
+                len(introns_to_prune)
+            )
+        )
+
+        self.purge_introns_from_splice_graph(introns_to_prune)
+
+        return
 
     def write_intron_exon_splice_graph_bed_files(self, output_prefix, pad=0):
 
         exons_bed_file = "{}.exons.bed".format(output_prefix)
         introns_bed_file = "{}.introns.bed".format(output_prefix)
 
-        exons_ofh = open(exons_bed_file, 'a')
-        introns_ofh = open(introns_bed_file, 'a')
+        exons_ofh = open(exons_bed_file, "a")
+        introns_ofh = open(introns_bed_file, "a")
 
         exons_list = list()
         introns_list = list()
-        
+
         for node in self._splice_graph:
             if type(node) == Exon:
                 exons_list.append(node)
@@ -1160,8 +1478,7 @@ class Splice_graph:
             else:
                 # could be TSS or PolyA
                 pass
-                #raise RuntimeError("not intron or exon object... bug... ")
-
+                # raise RuntimeError("not intron or exon object... bug... ")
 
         exons_list = sorted(exons_list, key=lambda x: x._lend)
         introns_list = sorted(introns_list, key=lambda x: x._lend)
@@ -1171,17 +1488,16 @@ class Splice_graph:
 
         for intron in introns_list:
             introns_ofh.write(intron.get_bed_row(pad=pad) + "\n")
-        
+
         exons_ofh.close()
         introns_ofh.close()
 
         return
-    
 
     def describe_graph(self, outputfilename):
 
-        ofh = open(outputfilename, 'a')
-        
+        ofh = open(outputfilename, "a")
+
         nodes = list(self._splice_graph.nodes)
 
         nodes = sorted(nodes, key=lambda x: x._lend)
@@ -1191,21 +1507,18 @@ class Splice_graph:
             node_descr = self.describe_node(node)
             ofh.write(node_descr + "\n")
 
-
         ofh.close()
-
 
         return
 
-
     def describe_node(self, node):
-        
+
         node_descr = ""
         preds = list(self._splice_graph.predecessors(node))
         if preds:
             pred_strs = list()
             for pred in preds:
-                #print(pred)
+                # print(pred)
                 pred_strs.append(str(pred))
             node_descr += ">;<".join(pred_strs)
         else:
@@ -1222,18 +1535,11 @@ class Splice_graph:
         else:
             node_descr += "."
 
-
         return node_descr
 
-
-
-    
-    
     def _merge_neighboring_proximal_unbranched_exon_segments(self):
 
-
         merged_node_ids = list()
-
 
         #
         #       \/                           \/
@@ -1242,19 +1548,20 @@ class Splice_graph:
         #
         #       |~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
 
-
         # start at a left-branched exon segment or no predecessors.
 
-        
         ## identify all exon segments that are not preceded by exon segments
         def branched_left(node):
             assert type(node) == Exon
 
             lend, rend = node.get_coords()
-            if lend in self._input_transcript_lend_boundaries or (lend-1) in self._input_transcript_rend_boundaries:
+            if (
+                lend in self._input_transcript_lend_boundaries
+                or (lend - 1) in self._input_transcript_rend_boundaries
+            ):
                 return True
-            
-            if (len(list(self._splice_graph.predecessors(node))) > 1):
+
+            if len(list(self._splice_graph.predecessors(node))) > 1:
                 return True
 
             return False
@@ -1264,39 +1571,38 @@ class Splice_graph:
 
             lend, rend = node.get_coords()
 
-            if rend in self._input_transcript_rend_boundaries or (rend+1) in self._input_transcript_lend_boundaries:
+            if (
+                rend in self._input_transcript_rend_boundaries
+                or (rend + 1) in self._input_transcript_lend_boundaries
+            ):
                 return True
-            
-            if (len(list(self._splice_graph.successors(node))) > 1):
+
+            if len(list(self._splice_graph.successors(node))) > 1:
                 return True
 
             return False
-        
-               
+
         def branched_or_nothing_left(node):
 
             if branched_left(node):
                 return True
 
-                        
             pred_nodes = list(self._splice_graph.predecessors(node))
             if len(pred_nodes) == 0:
                 return True
 
-                        
             for pred_node in pred_nodes:
-                                
+
                 if type(pred_node) == Exon:
                     if branched_right(pred_node):
                         return True
-                    
+
                 else:
                     # non-exon pred
                     return True
 
             return False
-                
-        
+
         def branched_or_nothing_right(node):
 
             if branched_right(node):
@@ -1307,30 +1613,27 @@ class Splice_graph:
                 return True
 
             for succ_node in succ_nodes:
-                
+
                 if type(succ_node) == Exon:
                     if branched_left(succ_node):
                         return True
-                    
+
                 else:
                     # non-exon pred
                     return True
 
             return False
 
-
-        
         exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
-        
-        
 
         init_exons = list()
         for exon_segment in exon_segment_objs:
             assert type(exon_segment) == Exon
-            if branched_or_nothing_left(exon_segment) and not branched_or_nothing_right(exon_segment):
+            if branched_or_nothing_left(exon_segment) and not branched_or_nothing_right(
+                exon_segment
+            ):
                 init_exons.append(exon_segment)
 
-                
         def get_unbranched_exon_segments(init_node):
             exon_seg_list = [init_node]
 
@@ -1339,23 +1642,32 @@ class Splice_graph:
                 node = next(self._splice_graph.successors(node))
                 assert type(node) == Exon
                 exon_seg_list.append(node)
-                            
+
             return exon_seg_list
 
         for init_exon in init_exons:
-            logger.debug("Init exon candidate: {}".format(self.describe_node(init_exon)))
+            logger.debug(
+                "Init exon candidate: {}".format(self.describe_node(init_exon))
+            )
             assert type(init_exon) == Exon
 
-            
             exons_to_merge_list = get_unbranched_exon_segments(init_exon)
             if len(exons_to_merge_list) < 2:
                 continue
-            
+
             # do merge (keep first exon, update attributes, then delete the others.
             exons_to_merge_list[0]._rend = exons_to_merge_list[-1]._rend
-            exons_to_merge_list[0]._mean_coverage =  self._get_mean_coverage(exons_to_merge_list[0]._lend, exons_to_merge_list[0]._rend)
-            
-            logger.debug("Exons to merge: {}".format("\n".join([self.describe_node(exon) for exon in exons_to_merge_list])))
+            exons_to_merge_list[0]._mean_coverage = self._get_mean_coverage(
+                exons_to_merge_list[0]._lend, exons_to_merge_list[0]._rend
+            )
+
+            logger.debug(
+                "Exons to merge: {}".format(
+                    "\n".join(
+                        [self.describe_node(exon) for exon in exons_to_merge_list]
+                    )
+                )
+            )
 
             # direct first node to successors of last node.
             for succ_node in self._splice_graph.successors(exons_to_merge_list[-1]):
@@ -1363,8 +1675,7 @@ class Splice_graph:
 
             # prune the intervening nodes.
             self._splice_graph.remove_nodes_from(exons_to_merge_list[1:])
-        
-        
+
         """
             
         for i in range(1, len(exon_segment_objs)):
@@ -1393,118 +1704,146 @@ class Splice_graph:
                 print("\n".join(merged_node_ids), file=ofh)
 
         """
-        
-                
+
     def _prune_exon_spurs_at_introns(self):
 
         logger.info("checking for exon spurs at introns")
-        
-        exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
 
+        exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
 
         #######           ---------------------
         #                /       ^intron^      \
         #    -----------/===                 ===\-------------------
         #                R_spur              L_spur
 
+        ## //TODO: incorporate read coverage checks
 
-        ## //TODO: incorporate read coverage checks 
-        
         def is_R_spur(exon_node):
 
             logger.debug("Evaluating {} as potential R_spur".format(exon_node))
 
-            if exon_node.get_feature_length() > LRAA_Globals.config['max_exon_spur_length']:
-                logger.debug("{} not R spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), LRAA_Globals.config['max_exon_spur_length']))
+            if (
+                exon_node.get_feature_length()
+                > LRAA_Globals.config["max_exon_spur_length"]
+            ):
+                logger.debug(
+                    "{} not R spur, feature length: {} < max_exon_spur_length: {}".format(
+                        exon_node,
+                        exon_node.get_feature_length(),
+                        LRAA_Globals.config["max_exon_spur_length"],
+                    )
+                )
                 return False
-            
+
             has_successor = self._node_has_successors(exon_node)
 
             has_intron_predecessor = False
             has_alt_intron = False
-            
-            
+
             for predecessor in self._splice_graph.predecessors(exon_node):
                 if type(predecessor) == Intron:
                     has_intron_predecessor = True
-                
+
                 elif type(predecessor) == Exon:
                     for successor in self._splice_graph.successors(predecessor):
                         if type(successor) == Intron:
                             has_alt_intron = True
 
-            #return (not has_intron_successor) and (not has_intron_predecessor) and has_alt_intron
-            R_spur_boolean = (not has_successor) and (not has_intron_predecessor) and has_alt_intron
+            # return (not has_intron_successor) and (not has_intron_predecessor) and has_alt_intron
+            R_spur_boolean = (
+                (not has_successor) and (not has_intron_predecessor) and has_alt_intron
+            )
 
-            logger.debug("{} is R spur == {}, (not has_successor = {}), (not has_intron_predecessor = {}), and (has_alt_intron = {})".format(exon_node, R_spur_boolean,
-                                                                                                                                             not has_successor,
-                                                                                                                                             not has_intron_predecessor,
-                                                                                                                                             has_alt_intron))
-            
+            logger.debug(
+                "{} is R spur == {}, (not has_successor = {}), (not has_intron_predecessor = {}), and (has_alt_intron = {})".format(
+                    exon_node,
+                    R_spur_boolean,
+                    not has_successor,
+                    not has_intron_predecessor,
+                    has_alt_intron,
+                )
+            )
+
             return R_spur_boolean
 
-
-        
         #######           ---------------------
         #                /       ^intron^      \
         #    -----------/===                 ===\-------------------
         #                R_spur              L_spur
 
-
-        
         def is_L_spur(exon_node):
 
-
             logger.debug("Evaluating {} as potential L_spur".format(exon_node))
-            
-            if exon_node.get_feature_length() > LRAA_Globals.config['max_exon_spur_length']:
-                logger.debug("{} not L spur, feature length: {} < max_exon_spur_length: {}".format(exon_node, exon_node.get_feature_length(), LRAA_Globals.config['max_exon_spur_length']))
+
+            if (
+                exon_node.get_feature_length()
+                > LRAA_Globals.config["max_exon_spur_length"]
+            ):
+                logger.debug(
+                    "{} not L spur, feature length: {} < max_exon_spur_length: {}".format(
+                        exon_node,
+                        exon_node.get_feature_length(),
+                        LRAA_Globals.config["max_exon_spur_length"],
+                    )
+                )
                 return False
 
-            
             has_predecessor = self._node_has_predecessors(exon_node)
 
             if has_predecessor:
-                logger.debug("{} has predecessors: {}".format(exon_node, list(self._splice_graph.predecessors(exon_node)))) 
+                logger.debug(
+                    "{} has predecessors: {}".format(
+                        exon_node, list(self._splice_graph.predecessors(exon_node))
+                    )
+                )
 
-            
             has_intron_successor = False
             has_alt_intron = False
 
             for successor in self._splice_graph.successors(exon_node):
                 if type(successor) == Intron:
                     has_intron_successor = True
-                
+
                 elif type(successor) == Exon:
                     for predecessor in self._splice_graph.predecessors(successor):
-                        logger.debug("evaluating if predecessor {} of successor {} to {} is an intron".format(predecessor, successor, exon_node))
+                        logger.debug(
+                            "evaluating if predecessor {} of successor {} to {} is an intron".format(
+                                predecessor, successor, exon_node
+                            )
+                        )
                         if type(predecessor) == Intron:
                             has_alt_intron = True
 
+            L_spur_boolean = (
+                (not has_predecessor) and (not has_intron_successor) and has_alt_intron
+            )
 
+            logger.debug(
+                "{} is L spur == {}, (not has_predecessor = {}), (not has_intron_successor = {}), and (has_alt_intron = {})".format(
+                    exon_node,
+                    L_spur_boolean,
+                    not has_predecessor,
+                    not has_intron_successor,
+                    has_alt_intron,
+                )
+            )
 
-            L_spur_boolean = (not has_predecessor) and (not has_intron_successor) and has_alt_intron
-                            
-            logger.debug("{} is L spur == {}, (not has_predecessor = {}), (not has_intron_successor = {}), and (has_alt_intron = {})".format(exon_node, L_spur_boolean,
-                                                                                                                                             not has_predecessor,
-                                                                                                                                             not has_intron_successor,
-                                                                                                                                             has_alt_intron))
-            
             return L_spur_boolean
-        
 
         exons_to_prune = list()
-                
+
         for exon in exon_segment_objs:
-            if exon.get_feature_length() >= Splice_graph._min_terminal_splice_exon_anchor_length:
+            if (
+                exon.get_feature_length()
+                >= Splice_graph._min_terminal_splice_exon_anchor_length
+            ):
                 # long enough, we'll keep it for now.
                 continue
 
             # ok shortie, must see if it's a spur
             if is_L_spur(exon) or is_R_spur(exon):
                 exons_to_prune.append(exon)
-                
-        
+
         if exons_to_prune:
             logger.info("-removing {} exon spurs".format(len(exons_to_prune)))
 
@@ -1517,46 +1856,50 @@ class Splice_graph:
 
         return
 
-
     def _finalize_splice_graph(self):
 
         self._itree_exon_segments = itree.IntervalTree()
-        
+
         ## store node ID to node object
         for node in self._splice_graph:
-            self._node_id_to_node[ node.get_id() ] = node
+            self._node_id_to_node[node.get_id()] = node
             if type(node) == Exon:
                 # store exon, TSS, and PolyA features in itree for overlap queries
                 lend, rend = node.get_coords()
-                self._itree_exon_segments[lend:rend+1] = node
+                self._itree_exon_segments[lend : rend + 1] = node
 
             elif type(node) == TSS:
                 TSS_coord, _ = node.get_coords()
-                max_dist_between_alt_TSS_sites = LRAA_Globals.config['max_dist_between_alt_TSS_sites']
-                half_dist = int(max_dist_between_alt_TSS_sites/2)
-                self._itree_exon_segments[TSS_coord-half_dist : TSS_coord+half_dist+1] = node
+                max_dist_between_alt_TSS_sites = LRAA_Globals.config[
+                    "max_dist_between_alt_TSS_sites"
+                ]
+                half_dist = int(max_dist_between_alt_TSS_sites / 2)
+                self._itree_exon_segments[
+                    TSS_coord - half_dist : TSS_coord + half_dist + 1
+                ] = node
 
             elif type(node) == PolyAsite:
                 polyAsite_coord, _ = node.get_coords()
-                max_dist_between_alt_polyA_sites = LRAA_Globals.config['max_dist_between_alt_polyA_sites']
-                half_dist = int(max_dist_between_alt_polyA_sites/2)
-                self._itree_exon_segments[polyAsite_coord-half_dist : polyAsite_coord+half_dist+1] = node
-
+                max_dist_between_alt_polyA_sites = LRAA_Globals.config[
+                    "max_dist_between_alt_polyA_sites"
+                ]
+                half_dist = int(max_dist_between_alt_polyA_sites / 2)
+                self._itree_exon_segments[
+                    polyAsite_coord - half_dist : polyAsite_coord + half_dist + 1
+                ] = node
 
         self._validate_itree()
 
         ################################
         ## add introns to separate itree
-        
+
         self._itree_introns = itree.IntervalTree()
-        
+
         for intron_obj in self._intron_objs.values():
             lend, rend = intron_obj.get_coords()
             self._itree_introns[lend : rend + 1] = intron_obj
 
-        
         return
-
 
     def _validate_itree(self):
 
@@ -1566,46 +1909,46 @@ class Splice_graph:
             with open("__itree_contents.txt", "wt") as ofh:
                 for interval in itree:
                     print(str(interval), file=ofh)
-                
-        
+
         for node in self._splice_graph:
             if type(node) != Intron:
                 # ensure we find it when querying the itree
                 lend, rend = node.get_coords()
 
-                overlapping_intervals = itree[lend:rend+1]
+                overlapping_intervals = itree[lend : rend + 1]
                 overlapping_interval_nodes = [i.data for i in overlapping_intervals]
                 if node not in overlapping_interval_nodes:
-                    raise RuntimeError("Error, node {} not found among overlapping intervals in itree: {}".format(node, overlapping_intervals))
+                    raise RuntimeError(
+                        "Error, node {} not found among overlapping intervals in itree: {}".format(
+                            node, overlapping_intervals
+                        )
+                    )
 
         logger.info("itree validates.")
-    
 
     def _is_unspliced_exon_segment_artifact(self, exon, intron):
 
-
-        if exon.get_read_support() < Splice_graph._min_alt_unspliced_freq * intron.get_read_support():
+        if (
+            exon.get_read_support()
+            < Splice_graph._min_alt_unspliced_freq * intron.get_read_support()
+        ):
             return True
-        
-            
+
         intron_lend, intron_rend = intron.get_coords()
         exon_lend, exon_rend = exon.get_coords()
 
-        
         # prune singleton exon segments falling in sufficiently expressed introns:
-        if (not self._node_has_predecessors(exon)) and (not self._node_has_successors(exon)):
+        if (not self._node_has_predecessors(exon)) and (
+            not self._node_has_successors(exon)
+        ):
             return True
 
-                
-
         return False
-
-
 
     def _prune_unspliced_introns(self):
 
         draft_splice_graph = self._splice_graph
-        
+
         intron_objs = list()
         exon_segment_objs = list()
 
@@ -1615,54 +1958,62 @@ class Splice_graph:
             elif type(node) == Exon:
                 exon_segment_objs.append(node)
             else:
-                raise RuntimeError("Error, not identifying node: {} as Exon or Intron type - instead {} ".format(node, type(node)))
+                raise RuntimeError(
+                    "Error, not identifying node: {} as Exon or Intron type - instead {} ".format(
+                        node, type(node)
+                    )
+                )
 
         # build interval tree for exon segments.
 
         exon_itree = itree.IntervalTree()
         for exon_seg in exon_segment_objs:
-            exon_lend,exon_rend = exon_seg.get_coords()
-            exon_itree[exon_lend:exon_rend+1] = exon_seg
-        
+            exon_lend, exon_rend = exon_seg.get_coords()
+            exon_itree[exon_lend : exon_rend + 1] = exon_seg
 
         exons_to_purge = set()
 
         ## should we restrict to certain introns here? min coverage? YES!!!
-        
+
         for intron in intron_objs:
-            intron_lend,intron_rend = intron.get_coords()
-            overlapping_exon_segs = exon_itree[intron_lend:intron_rend+1]
+            intron_lend, intron_rend = intron.get_coords()
+            overlapping_exon_segs = exon_itree[intron_lend : intron_rend + 1]
 
             for overlapping_exon_seg in overlapping_exon_segs:
                 exon_seg = overlapping_exon_seg.data
-                if self._is_unspliced_exon_segment_artifact(exon=exon_seg, intron=intron):
+                if self._is_unspliced_exon_segment_artifact(
+                    exon=exon_seg, intron=intron
+                ):
                     exons_to_purge.add(exon_seg)
 
-        logger.info("-removing {} likely unspliced exon segments based on intron overlap".format(len(exons_to_purge)))
+        logger.info(
+            "-removing {} likely unspliced exon segments based on intron overlap".format(
+                len(exons_to_purge)
+            )
+        )
         if exons_to_purge:
             draft_splice_graph.remove_nodes_from(exons_to_purge)
 
         if LRAA_Globals.DEBUG:
             exons_to_purge = list(exons_to_purge)
             exons_to_purge = sorted(exons_to_purge, key=lambda x: x._lend)
-            with open("__exon_segments_to_purge.bed", 'a') as ofh: # file should be already created based on earlier low expressed exon segments overlapping introns removal step
+            with open(
+                "__exon_segments_to_purge.bed", "a"
+            ) as ofh:  # file should be already created based on earlier low expressed exon segments overlapping introns removal step
                 for exon in exons_to_purge:
                     ofh.write(exon.get_bed_row(pad=1) + "\n")
 
         return
 
-
     def is_empty(self):
         return len(self._splice_graph) == 0
 
-
-    
     def _eliminate_low_support_TSS(self, node_list):
 
         logger.debug("Eliminating low support TSS")
-        
+
         TSS_list = list()
-        
+
         for node in node_list:
             if type(node) == TSS:
                 TSS_list.append(node)
@@ -1672,13 +2023,14 @@ class Splice_graph:
             sum_TSS_read_support = 0
             for TSS_obj in TSS_list:
                 sum_TSS_read_support += TSS_obj.get_read_support()
-                
-            
-            min_TSS_iso_fraction = LRAA_Globals.config['min_TSS_iso_fraction']
-            
+
+            min_TSS_iso_fraction = LRAA_Globals.config["min_TSS_iso_fraction"]
+
             TSS_to_purge = list()
 
-            TSS_list = sorted(TSS_list, key=lambda x: x.get_read_support(), reverse=True)
+            TSS_list = sorted(
+                TSS_list, key=lambda x: x.get_read_support(), reverse=True
+            )
 
             for i, TSS_obj in enumerate(TSS_list):
                 frac_read_support = TSS_obj.get_read_support() / sum_TSS_read_support
@@ -1687,86 +2039,164 @@ class Splice_graph:
                     TSS_list = TSS_list[0:i]
                     break
 
-            
             if TSS_to_purge:
-                logger.debug("Purging TSSs due to min isoform fraction requirements: {}".format(TSS_to_purge))
+                logger.debug(
+                    "Purging TSSs due to min isoform fraction requirements: {}".format(
+                        TSS_to_purge
+                    )
+                )
                 for TSS_obj in TSS_to_purge:
                     self._TSS_objs.remove(TSS_obj)
                 self._splice_graph.remove_nodes_from(TSS_to_purge)
                 TSS_to_purge.clear()
 
-
-           
-                
             # remove remaining potential degradation products
             # walk the splice graph along linear exon connections and prune alt TSSs that have lower than the frac dominant support
-            TSS_to_purge = set() # reinit as set
-            max_frac_TSS_is_degradation = LRAA_Globals.config['max_frac_alt_TSS_from_degradation'] # if neighboring TSS has this frac or less, gets purged as degradation product 
+            TSS_to_purge = set()  # reinit as set
+            max_frac_TSS_is_degradation = LRAA_Globals.config[
+                "max_frac_alt_TSS_from_degradation"
+            ]  # if neighboring TSS has this frac or less, gets purged as degradation product
             for TSS_obj in TSS_list:
                 if TSS_obj in TSS_to_purge:
                     continue
 
-                logger.debug("Evaluationg TSS for purge as degradation TSS: {}".format(TSS_obj))
-                
+                logger.debug(
+                    "Evaluationg TSS for purge as degradation TSS: {}".format(TSS_obj)
+                )
+
                 # check if not connected
-                if len( list(self._splice_graph.successors(TSS_obj)) ) == 0 and len( list(self._splice_graph.predecessors(TSS_obj)) ) == 0:
+                if (
+                    len(list(self._splice_graph.successors(TSS_obj))) == 0
+                    and len(list(self._splice_graph.predecessors(TSS_obj))) == 0
+                ):
                     TSS_to_purge.add(TSS_obj)
-                    logger.warning("TSS_obj wasnt connected in the graph... removing it. {}".format(TSS_obj))
+                    logger.warning(
+                        "TSS_obj wasnt connected in the graph... removing it. {}".format(
+                            TSS_obj
+                        )
+                    )
                     continue
-                
+
                 this_TSS_support = TSS_obj.get_read_support()
-                
-                connected_exons = self._splice_graph.successors(TSS_obj) if self._contig_strand == '+' else self._splice_graph.predecessors(TSS_obj)
+
+                connected_exons = (
+                    self._splice_graph.successors(TSS_obj)
+                    if self._contig_strand == "+"
+                    else self._splice_graph.predecessors(TSS_obj)
+                )
                 connected_exons = [x for x in connected_exons if type(x) == Exon]
-                
-                assert len(connected_exons) == 1, "Error, TSS_obj is not connected to a single exon: {}, connected_exons: {} ".format(TSS_obj, connected_exons)
+
+                assert (
+                    len(connected_exons) == 1
+                ), "Error, TSS_obj is not connected to a single exon: {}, connected_exons: {} ".format(
+                    TSS_obj, connected_exons
+                )
                 connected_exon = connected_exons[0]
                 have_connected = True
                 while have_connected:
-                    logger.debug("Walking exon segments looking for alt TSSs from {}".format(connected_exon))
+                    logger.debug(
+                        "Walking exon segments looking for alt TSSs from {}".format(
+                            connected_exon
+                        )
+                    )
                     have_connected = False
-                    connected_exons = self._splice_graph.successors(connected_exon) if self._contig_strand == '+' else self._splice_graph.predecessors(connected_exon)
+                    connected_exons = (
+                        self._splice_graph.successors(connected_exon)
+                        if self._contig_strand == "+"
+                        else self._splice_graph.predecessors(connected_exon)
+                    )
                     connected_exons = [x for x in connected_exons if type(x) == Exon]
                     if len(connected_exons) == 1:
                         have_connected = True
                         connected_exon = connected_exons[0]
                         # examine potential alt TSS candidate
-                        alt_TSS_candidates = self._splice_graph.predecessors(connected_exon) if self._contig_strand == '+' else self._splice_graph.successors(connected_exon)
-                        alt_TSS_candidates = [x for x in alt_TSS_candidates if type(x) == TSS]
+                        alt_TSS_candidates = (
+                            self._splice_graph.predecessors(connected_exon)
+                            if self._contig_strand == "+"
+                            else self._splice_graph.successors(connected_exon)
+                        )
+                        alt_TSS_candidates = [
+                            x for x in alt_TSS_candidates if type(x) == TSS
+                        ]
                         if len(alt_TSS_candidates) == 1:
                             alt_TSS_candidate = alt_TSS_candidates[0]
-                            if alt_TSS_candidate not in TSS_to_purge and alt_TSS_candidate.get_read_support()/this_TSS_support <= max_frac_TSS_is_degradation:
+                            if (
+                                alt_TSS_candidate not in TSS_to_purge
+                                and alt_TSS_candidate.get_read_support()
+                                / this_TSS_support
+                                <= max_frac_TSS_is_degradation
+                            ):
                                 TSS_to_purge.add(alt_TSS_candidate)
-                                logger.debug("-purging degradation TSS: {}".format(alt_TSS_candidate))
+                                logger.debug(
+                                    "-purging degradation TSS: {}".format(
+                                        alt_TSS_candidate
+                                    )
+                                )
 
-                    
-                        
             if TSS_to_purge:
-                logger.debug("Purging TSSs due to max frac degradation requirements: {}".format(TSS_to_purge))
+                logger.debug(
+                    "Purging TSSs due to max frac degradation requirements: {}".format(
+                        TSS_to_purge
+                    )
+                )
                 for TSS_obj in TSS_to_purge:
                     self._TSS_objs.remove(TSS_obj)
                 self._splice_graph.remove_nodes_from(TSS_to_purge)
-        
-
 
         return
-    
-    
+
     def _eliminate_low_support_PolyA(self, node_list):
-        pass
-    
 
+        logger.debug("Eliminating low support PolyA")
 
+        PolyA_list = list()
 
+        for node in node_list:
+            if type(node) == PolyAsite:
+                PolyA_list.append(node)
 
+        if PolyA_list:
 
-    
+            sum_PolyA_read_support = 0
+            for PolyA_obj in PolyA_list:
+                sum_PolyA_read_support += PolyA_obj.get_read_support()
+
+            min_PolyA_iso_fraction = LRAA_Globals.config["min_PolyA_iso_fraction"]
+
+            PolyA_to_purge = list()
+
+            PolyA_list = sorted(
+                PolyA_list, key=lambda x: x.get_read_support(), reverse=True
+            )
+
+            for i, PolyA_obj in enumerate(PolyA_list):
+                frac_read_support = (
+                    PolyA_obj.get_read_support() / sum_PolyA_read_support
+                )
+                if frac_read_support < min_PolyA_iso_fraction:
+                    PolyA_to_purge = PolyA_list[i:]
+                    PolyA_list = PolyA_list[0:i]
+                    break
+
+            if PolyA_to_purge:
+                logger.debug(
+                    "Purging PolyAs due to min isoform fraction requirements: {}".format(
+                        PolyA_to_purge
+                    )
+                )
+                for PolyA_obj in PolyA_to_purge:
+                    self._PolyA_objs.remove(PolyA_obj)
+                self._splice_graph.remove_nodes_from(PolyA_to_purge)
+
+        return
+
 
 ## general utility functions used above.
 
 
-def filter_non_peaky_positions(grouped_position_counts, position_counter, contig_acc, contig_strand):
-
+def filter_non_peaky_positions(
+    grouped_position_counts, position_counter, contig_acc, contig_strand
+):
 
     grouped_position_counts_kept = list()
 
@@ -1776,121 +2206,151 @@ def filter_non_peaky_positions(grouped_position_counts, position_counter, contig
         ofh = open("__TSS_filter_non_peaky_positions.tsv", "at")
 
     pseudocount = 1
-    
-    window_len = LRAA_Globals.config['TSS_window_read_enrich_len']
-    window_enrichment_factor = LRAA_Globals.config['TSS_window_read_enrich_factor']
-    
+
+    window_len = LRAA_Globals.config["TSS_window_read_enrich_len"]
+    window_enrichment_factor = LRAA_Globals.config["TSS_window_read_enrich_factor"]
+
     for grouped_position in grouped_position_counts:
         position, count = grouped_position
         position_real_count = position_counter[position]
-        
-        adjacent_counts = [0,0]
+
+        adjacent_counts = [0, 0]
         for i in range(position - window_len, position + window_len):
             if i != position:
                 pos_count = position_counter[i]
                 if pos_count > 0:
                     adjacent_counts.append(pos_count)
-                
-        median_adjacent_count = statistics.median(adjacent_counts) if len(adjacent_counts) > 0 else 0  #adjacent_counts/(2*window_len)
-        pos_frac_counts = (position_real_count + pseudocount) / (median_adjacent_count + pseudocount)
-        
-        kept = (pos_frac_counts >= window_enrichment_factor)
+
+        median_adjacent_count = (
+            statistics.median(adjacent_counts) if len(adjacent_counts) > 0 else 0
+        )  # adjacent_counts/(2*window_len)
+        pos_frac_counts = (position_real_count + pseudocount) / (
+            median_adjacent_count + pseudocount
+        )
+
+        kept = pos_frac_counts >= window_enrichment_factor
 
         if LRAA_Globals.DEBUG:
-            print("\t".join([contig_acc, contig_strand, str(position), str(position_real_count), str(median_adjacent_count), str(pos_frac_counts), str(kept)]), file=ofh)
+            print(
+                "\t".join(
+                    [
+                        contig_acc,
+                        contig_strand,
+                        str(position),
+                        str(position_real_count),
+                        str(median_adjacent_count),
+                        str(pos_frac_counts),
+                        str(kept),
+                    ]
+                ),
+                file=ofh,
+            )
 
         if kept:
             grouped_position_counts_kept.append(grouped_position)
-        
+
     return grouped_position_counts_kept
 
 
-
-
-
-
-def aggregate_sites_within_window(pos_counter, max_distance_between_aggregated_sites, min_count_aggregated_site):
+def aggregate_sites_within_window(
+    pos_counter, max_distance_between_aggregated_sites, min_count_aggregated_site
+):
 
     position_count_structs = list()
 
     for position, count in pos_counter.items():
 
-        position_count_struct = {'position' : int(position),
-                                 'count' : count,
-                                 'selected' : False,
-                                 'aggregated_count' : count,
-                                 'index' : -1 # updated below after sorting
-                                 }
+        position_count_struct = {
+            "position": int(position),
+            "count": count,
+            "selected": False,
+            "aggregated_count": count,
+            "index": -1,  # updated below after sorting
+        }
 
         position_count_structs.append(position_count_struct)
 
     # first sort by position and identify max within window distance
-    position_count_structs = sorted(position_count_structs, key=lambda x: x['position'])
-        
+    position_count_structs = sorted(position_count_structs, key=lambda x: x["position"])
+
     # aggregate counts within distance from each candidate site
     num_structs = len(position_count_structs)
     for i, i_struct in enumerate(position_count_structs):
-        i_struct['index'] = i
-        
+        i_struct["index"] = i
+
         # look left in window
-        j = i-1
+        j = i - 1
         while j >= 0:
             j_struct = position_count_structs[j]
-            if i_struct['position'] - j_struct['position'] > max_distance_between_aggregated_sites:
+            if (
+                i_struct["position"] - j_struct["position"]
+                > max_distance_between_aggregated_sites
+            ):
                 break
-            i_struct['aggregated_count'] += j_struct['count']
+            i_struct["aggregated_count"] += j_struct["count"]
             j = j - 1
-            
+
         # look right in window
         k = i + 1
         while k < num_structs:
             k_struct = position_count_structs[k]
-            if k_struct['position'] - i_struct['position'] > max_distance_between_aggregated_sites:
+            if (
+                k_struct["position"] - i_struct["position"]
+                > max_distance_between_aggregated_sites
+            ):
                 break
-            i_struct['aggregated_count'] += k_struct['count']
+            i_struct["aggregated_count"] += k_struct["count"]
             k += 1
-
 
     # now capture the peaks
     peak_sites = list()
-    agg_count_sorted_position_count_structs = sorted(position_count_structs, key=lambda x: (x['count'], x['aggregated_count']), reverse=True)
-    
+    agg_count_sorted_position_count_structs = sorted(
+        position_count_structs,
+        key=lambda x: (x["count"], x["aggregated_count"]),
+        reverse=True,
+    )
+
     ## reset aggregated counts
     for i_struct in agg_count_sorted_position_count_structs:
-        if i_struct['selected']:
+        if i_struct["selected"]:
             # already part of another defined peak
             continue
-        
-        i_struct['aggregated_count'] = i_struct['count'] # reset
-        i = i_struct['index']
-        
+
+        i_struct["aggregated_count"] = i_struct["count"]  # reset
+        i = i_struct["index"]
+
         # look left in window
-        j = i-1
+        j = i - 1
         while j >= 0:
             j_struct = position_count_structs[j]
-            assert i_struct['position'] > j_struct['position']
-            if i_struct['position'] - j_struct['position'] > max_distance_between_aggregated_sites:
+            assert i_struct["position"] > j_struct["position"]
+            if (
+                i_struct["position"] - j_struct["position"]
+                > max_distance_between_aggregated_sites
+            ):
                 break
-            if not j_struct['selected']:
-                i_struct['aggregated_count'] += j_struct['count']
-                j_struct['selected'] = True
+            if not j_struct["selected"]:
+                i_struct["aggregated_count"] += j_struct["count"]
+                j_struct["selected"] = True
             j -= 1
-            
+
         # look right in window
         k = i + 1
         while k < num_structs:
             k_struct = position_count_structs[k]
-            assert k_struct['position'] > i_struct['position']
-            if k_struct['position'] - i_struct['position'] > max_distance_between_aggregated_sites:
+            assert k_struct["position"] > i_struct["position"]
+            if (
+                k_struct["position"] - i_struct["position"]
+                > max_distance_between_aggregated_sites
+            ):
                 break
-            if not k_struct['selected']:
-                i_struct['aggregated_count'] += k_struct['count']
-                k_struct['selected'] = True
+            if not k_struct["selected"]:
+                i_struct["aggregated_count"] += k_struct["count"]
+                k_struct["selected"] = True
             k += 1
-    
-        if i_struct['aggregated_count'] >= min_count_aggregated_site:
-            peak_sites.append( [i_struct['position'], i_struct['aggregated_count'] ] )
-            
+
+        if i_struct["aggregated_count"] >= min_count_aggregated_site:
+            peak_sites.append([i_struct["position"], i_struct["aggregated_count"]])
 
     return peak_sites
 
@@ -1902,9 +2362,6 @@ def append_log_file(filename, genome_features_list):
             print(feature.get_bed_row(), file=ofh)
 
 
-
-
-    
 def write_pos_counter_info(filename, position_counter, contig_acc, contig_strand):
 
     position_counts = list(position_counter.items())
@@ -1912,35 +2369,27 @@ def write_pos_counter_info(filename, position_counter, contig_acc, contig_strand
 
     with open(filename, "at") as ofh:
         for position, count in position_counts:
-            print("\t".join([contig_acc, str(position), contig_strand, str(count)]), file=ofh)
+            print(
+                "\t".join([contig_acc, str(position), contig_strand, str(count)]),
+                file=ofh,
+            )
 
     return
-            
-            
+
+
 #############
 ## unit tests
 #############
-    
+
+
 def test_aggregate_sites_within_window():
 
-    pos_counter = { 10 : 1,
-                   15 : 2,
-                   20 : 3,
-                   40 : 1,
-                   45 : 5,
-                   50 : 2,
-                   75 : 3 }
-
+    pos_counter = {10: 1, 15: 2, 20: 3, 40: 1, 45: 5, 50: 2, 75: 3}
 
     peaks = aggregate_sites_within_window(pos_counter, 5, 3)
 
     expected_peaks = [[45, 8], [15, 6], [75, 3]]
 
-    assert peaks == expected_peaks, "Error, peaks {} differs from expected peaks {}".format(peaks, expected_peaks)
-    
-    
-
-
-
-
-    
+    assert (
+        peaks == expected_peaks
+    ), "Error, peaks {} differs from expected peaks {}".format(peaks, expected_peaks)

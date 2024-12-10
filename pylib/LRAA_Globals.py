@@ -11,8 +11,8 @@ config = {
     "min_mapping_quality": 20,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
-    "min_frac_alignments_pass_per_id_check" : 0.9,
-    "min_total_alignments_engage_frac_per_id_check" : 1000,
+    "min_frac_alignments_pass_per_id_check": 0.9,
+    "min_total_alignments_engage_frac_per_id_check": 1000,
     #
     ####################################
     # splice graph construction criteria
@@ -44,7 +44,8 @@ config = {
     "max_dist_between_alt_polyA_sites": 50,
     "min_alignments_define_polyA_site": 3,
     "min_frac_alignments_define_polyA_site": 0.1,
-    "min_PolyA_ident_length": 7,  # examine softclipped ends of reads, if have polyA with at least this number of bases at terminus, strip it and extended match out.
+    "min_PolyA_ident_length": 7,  # examine softclipped ends of reads, if have polyA with at least this number of bases at terminus, strip it and extended match out
+    "min_PolyA_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of TSS-candidate gene reads assigned..
     "max_soft_clip_at_PolyA": 3,
     #
     ## read assignment to transcript criteria
