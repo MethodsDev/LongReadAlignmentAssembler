@@ -263,7 +263,7 @@ def main():
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
     run_EM = not args.no_EM
-    
+
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
 
@@ -390,7 +390,7 @@ def main():
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
         args.region = args.region.replace(",", "")
-        m = re.search("^(\\w+)([\\+\\-]?):(\\d+)-(\\d+)$", args.region)
+        m = re.search("^(\\S+[^\\+\\-])([\\+\\-]?):(\\d+)-(\\d+)$", args.region)
         if m is None:
             raise RuntimeError(
                 "Error, could not parse region range: {}".format(args.region)
@@ -634,7 +634,6 @@ def main():
 
                 lraa_obj = LRAA(sg, CPU)
 
-
                 if input_transcripts:
                     lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
                     if LRAA_Globals.DEBUG:
@@ -642,25 +641,24 @@ def main():
                             input_transcripts, "__input_transcripts_path_in_graph"
                         )
 
-                    
-                logger.info(f"-building multpath graph for {contig_acc} {contig_strand}")
+                logger.info(
+                    f"-building multpath graph for {contig_acc} {contig_strand}"
+                )
                 lraa_obj.build_multipath_graph(
                     contig_acc,
                     contig_strand,
                     contig_seq_str,
                     bam_file_for_sg,
                     allow_spacers,
-                    input_transcripts
+                    input_transcripts,
                 )
 
-                
-                
                 logger.info(f"-begin reconstructing isoforms for {contig_acc}")
                 transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
                 if input_transcripts is not None:
                     lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
-                
+
                 transcripts, frac_read_assignments = (
                     Quantify.prune_likely_degradation_products(transcripts, sg, run_EM)
                 )
