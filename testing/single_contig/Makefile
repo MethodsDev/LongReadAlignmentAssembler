@@ -39,13 +39,13 @@ test_wdl_Quant_only: clean_miniwdl
 
 ## Cleaning
 
-clean_miniwdl: clean_cromwell
+clean_miniwdl: 
 	rm -rf ./*CombinedWorkflow ./_LAST
 
-clean_cromwell:
+clean_cromwell: clean_miniwdl
 	sudo rm -rf ./cromwell-*
 
-clean: clean_miniwdl
+clean: clean_cromwell
 	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant ./LRAA*.lmdb ./LRAA.ref.tagged.bam
 
 

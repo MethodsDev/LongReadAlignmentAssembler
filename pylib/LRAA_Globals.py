@@ -72,4 +72,9 @@ config = {
     #######
     # quant
     "num_total_reads": None,  # for TPM and filtering
+    #
+    ######
+    # parallelization
+    #
+    "min_mpgn_component_size_for_spawn": 150,
 }

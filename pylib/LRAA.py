@@ -48,13 +48,20 @@ class LRAA:
 
         self._multipath_graph = None  # set under build_multipath_graph()
         self._contig_acc = None  # set under build_multipath_graph()
+        self._contig_strand = None  # set under build_multipath_graph()
 
         self._num_parallel_processes = num_parallel_processes
 
         return
 
     def build_multipath_graph(
-            self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers=False, input_transcripts=None
+        self,
+        contig_acc,
+        contig_strand,
+        contig_seq,
+        bam_file,
+        allow_spacers=False,
+        input_transcripts=None,
     ):
 
         logger.info(f"-building multipath graph for {contig_acc}")
@@ -66,8 +73,7 @@ class LRAA:
         if input_transcripts is not None:
             logger.info("-incorporating input transcripts into multpath graph")
             self._incorporate_transcripts_into_mp_counter(mp_counter, input_transcripts)
-        
-        
+
         multipath_graph = MultiPathGraph(
             mp_counter,
             self._splice_graph,
@@ -78,6 +84,7 @@ class LRAA:
         )
         self._multipath_graph = multipath_graph
         self._contig_acc = contig_acc
+        self._contig_strand = contig_strand
 
         if LRAA_Globals.DEBUG:
             ## debugging info
@@ -120,16 +127,14 @@ class LRAA:
 
         all_reconstructed_transcripts = list()
 
-        USE_MULTIPROCESSOR = True
+        USE_MULTIPROCESSOR = self._num_parallel_processes > 1
 
         q = None
-        if USE_MULTIPROCESSOR and self._num_parallel_processes > 1:
+        if USE_MULTIPROCESSOR:
             logger.info("-Running assembly jobs with multiprocessing")
             q = Queue()
             mpm = MultiProcessManager(self._num_parallel_processes, q)
         else:
-            USE_MULTIPROCESSOR = False
-
             logger.info(
                 "-Running using single thread, so multiprocessing disabled here."
             )  # easier for debugging sometimes
@@ -159,13 +164,21 @@ class LRAA:
         all_reconstructed_transcripts = list()
         component_counter = 0
         for mpg_component in mpg_components:
+
+            mpg_component_size = len(mpg_component)
+
             component_counter += 1
             coord_span = get_mpgn_list_coord_span(mpg_component)
             logger.info(
-                "LRAA - assembly of component {} region: {}:{}-{}".format(
-                    component_counter, self._contig_acc, coord_span[0], coord_span[1]
+                "LRAA - assembly of component {} size {} region: {}:{}-{}".format(
+                    component_counter,
+                    mpg_component_size,
+                    self._contig_acc,
+                    coord_span[0],
+                    coord_span[1],
                 )
             )
+
             mpg_token = "{}-{}-{}".format(
                 self._contig_acc, coord_span[0], coord_span[1]
             )
@@ -175,7 +188,11 @@ class LRAA:
                 )
                 write_mpg_component_debug_file(mpg_component, mpgn_description_filename)
 
-            if USE_MULTIPROCESSOR:
+            if (
+                USE_MULTIPROCESSOR
+                and mpg_component_size
+                >= LRAA_Globals.config["min_mpgn_component_size_for_spawn"]
+            ):
                 p = Process(
                     target=self._reconstruct_isoforms_single_component,
                     name=mpg_token,
@@ -191,12 +208,14 @@ class LRAA:
                 mpm.launch_process(p)
 
             else:
+                # run directly, not through multiprocessing
                 reconstructed_transcripts = self._reconstruct_isoforms_single_component(
-                    q, mpg_component, component_counter, mpg_token, single_best_only
+                    None, mpg_component, component_counter, mpg_token, single_best_only
                 )
                 all_reconstructed_transcripts.extend(reconstructed_transcripts)
 
         if USE_MULTIPROCESSOR:
+            logger.info("WAITING ON REMAINING MULTIPROCESSING JOBS")
             num_failures = mpm.wait_for_remaining_processes()
             logger.info(mpm.summarize_status())
             if num_failures:
@@ -208,15 +227,18 @@ class LRAA:
             for entry in queue_contents:
                 all_reconstructed_transcripts.extend(entry)
 
-        return all_reconstructed_transcripts
+        logger.info(
+            "Finished round of isoform reconstruction for {} {}".format(
+                self._contig_acc, self._contig_strand
+            )
+        )
 
+        return all_reconstructed_transcripts
 
     def prune_ref_transcripts_as_evidence(self, transcripts):
         for transcript in transcripts:
             transcript.prune_reftranscript_as_evidence()
 
-            
-    
     ##################
     ## Private methods
     ##################
@@ -224,6 +246,12 @@ class LRAA:
     def _reconstruct_isoforms_single_component(
         self, q, mpg_component, component_counter, mpg_token, single_best_only=False
     ):
+
+        using_multiprocessing = q is not None
+        component_size = len(mpg_component)
+        logger.info(
+            f"ISOFORM RECONSTRUCTION. multiprocessing[{using_multiprocessing}] {mpg_token} component_size: {component_size}"
+        )
 
         contig_acc = self._splice_graph.get_contig_acc()
         contig_strand = self._splice_graph.get_contig_strand()
@@ -1106,19 +1134,14 @@ class LRAA:
 
         return transcripts_ret
 
-
-
     def _incorporate_transcripts_into_mp_counter(self, mp_counter, input_transcripts):
 
         for input_transcript in input_transcripts:
             simple_path = input_transcript.get_simple_path()
-            mp = MultiPath(self._splice_graph,
-                           [ simple_path ],
-                           read_types={
-                               "reftranscript"
-                           },
-                           read_names = {
-                               "reftranscript:" + input_transcript.get_transcript_id()
-                           },
+            mp = MultiPath(
+                self._splice_graph,
+                [simple_path],
+                read_types={"reftranscript"},
+                read_names={"reftranscript:" + input_transcript.get_transcript_id()},
             )
             mp_counter.add(mp)
