@@ -988,11 +988,13 @@ class Splice_graph:
 
         idx = 0 if left_or_right == "left" else 1
 
+        other_idx = 0 if idx == 1 else 0  # the opposite
+
         introns_shared_coord = defaultdict(list)
 
         for intron in self._intron_objs.values():
-            intron_left = intron.get_coords()[idx]
-            introns_shared_coord[intron_left].append(intron)
+            intron_coord = intron.get_coords()[idx]
+            introns_shared_coord[intron_coord].append(intron)
 
         introns_to_delete = set()
 
@@ -1010,9 +1012,30 @@ class Splice_graph:
                 if alt_intron_relative_freq < Splice_graph._min_alt_splice_freq:
                     logger.debug(
                         "alt intron: {}".format(alt_intron)
-                        + " has rel freq: {}".format(alt_intron_relative_freq)
+                        + " has rel freq: {} and will be purged".format(
+                            alt_intron_relative_freq
+                        )
                     )
                     introns_to_delete.add(alt_intron)
+
+                # check for splice site aggregation if low per_id alignments allowed
+                elif (
+                    LRAA_Globals.config["min_per_id"]
+                    <= LRAA_Globals.config["max_aggregate_splice_boundary_per_id"]
+                ):
+                    if (
+                        abs(
+                            most_supported_intron.get_coords()[other_idx]
+                            - alt_intron.get_coords()[other_idx]
+                        )
+                        <= LRAA_Globals.config["aggregate_splice_boundary_dist"]
+                    ):
+                        logger.debug(
+                            "alt intron: {} is within aggregation distance of {} and will be purged".format(
+                                alt_intron, most_supported_intron
+                            )
+                        )
+                        introns_to_delete.add(alt_intron)
 
         logger.info(
             "removing {} low frequency introns with shared {} coord".format(
