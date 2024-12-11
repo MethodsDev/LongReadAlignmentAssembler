@@ -84,7 +84,7 @@ def filter_isoforms_by_min_isoform_fraction(
                 False  # update to True if we do filter an isoform out.
             )
 
-            frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+            frac_read_assignments = q._estimate_isoform_read_support(isoforms_of_gene)
             gene_id_to_read_count = Quantify.get_gene_read_counts(
                 frac_read_assignments, transcript_id_to_transcript_obj
             )
