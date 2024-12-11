@@ -1,11 +1,5 @@
 version: 1.2
 workflows:
-   - name: LRAA
-     subclass: WDL
-     primaryDescriptorPath: /WDL/LRAA.no_scatter.wdl
-     authors:
-         - name: Brian Haas
-           email: bhaas@broadinstitute.org
    - name: LRAA_scatter
      subclass: WDL
      primaryDescriptorPath: /WDL/LRAA.scatter.wdl
