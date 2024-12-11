@@ -609,6 +609,7 @@ def main():
                 ##---------------------
                 ## Assemble transcripts
 
+                ## Build Splice Graph
                 logger.info(f"-building splice graph for {contig_acc}")
                 sg.build_splice_graph_for_contig(
                     contig_acc,
@@ -635,6 +636,7 @@ def main():
                         pad=1,
                     )
 
+                # Incorporate reference transcripts if provided
                 lraa_obj = LRAA(sg, CPU)
 
                 if input_transcripts:
@@ -644,6 +646,7 @@ def main():
                             input_transcripts, "__input_transcripts_path_in_graph"
                         )
 
+                # build graph path nodes based on reads (and input transcripts) paths through graph.
                 logger.info(
                     f"-building multpath graph for {contig_acc} {contig_strand}"
                 )
@@ -656,49 +659,31 @@ def main():
                     input_transcripts,
                 )
 
+                # Define isoforms
                 logger.info(f"-begin reconstructing isoforms for {contig_acc}")
                 transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
                 if input_transcripts is not None:
                     lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
 
-                transcripts, frac_read_assignments = (
-                    TranscriptFiltering.prune_likely_degradation_products(
-                        transcripts,
-                        sg,
-                        run_EM,
-                        LRAA_Globals.config["max_EM_iterations_during_asm"],
-                    )
+                # Do an initial quant
+                q = Quantify(
+                    run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
                 )
+                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
-                if LRAA_Globals.DEBUG or args.include_asm_draft_quant:
-                    prefilter_transcripts_ofh = open(
-                        "__transcripts-prefilter.gtf", "at"
-                    )
-                    for transcript in transcripts:
-                        prefilter_transcripts_ofh.write(
-                            transcript.to_GTF_format() + "\n"
-                        )
-                    prefilter_transcripts_ofh.close()
+                ##########################################
+                ## Filtering of isoforms to remove 'noise'
+                #########################################
 
-                    debug_quant_ofh = open(
-                        "__transcripts-prefilter-quant_info.tsv", "at"
-                    )
-                    debug_quant_read_tracking_ofh = open(
-                        "__transcripts-prefilter-quant_info.reads_tracked.tsv", "at"
-                    )
-                    q = Quantify(
-                        run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
-                    )
-                    q.report_quant_results(
-                        transcripts,
-                        frac_read_assignments,
-                        debug_quant_ofh,
-                        debug_quant_read_tracking_ofh,
-                    )
-                    debug_quant_ofh.close()
-                    debug_quant_read_tracking_ofh.close()
+                # pruning likely degradation products
+                transcripts = TranscriptFiltering.prune_likely_degradation_products(
+                    transcripts, sg, frac_read_assignments
+                )
+                # rerun quant for post-filtering
+                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
+                # Filter isoforms according to minimum isoform fraction
                 if min_isoform_fraction > 0:
                     transcripts = (
                         TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
@@ -709,6 +694,7 @@ def main():
                         )
                     )
 
+                # Filter monoexonic transcripts according to expression thresholds
                 if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
                     transcripts = (
                         TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
@@ -716,12 +702,16 @@ def main():
                         )
                     )
 
+                # Filter isoforms apparently derived from internal priming artifacts
                 if LRAA_Globals.config["filter_internal_priming"]:
                     transcripts = (
                         TranscriptFiltering.filter_internally_primed_transcripts(
                             transcripts, contig_seq_str
                         )
                     )
+
+                #######################################
+                ## Done filtering, report final results
 
                 ## report transcripts in GTF format
                 logger.info(
@@ -759,8 +749,13 @@ def main():
                     debug_quant_read_tracking_ofh.close()
 
     ofh.close()
+
     if QUANT_ONLY:
         ofh_quant_read_tracker.close()
+
+        ##############################################################################
+        ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
+
         if TAG_BAM:
             # explicitly delete the writeable lmdb environment to close it since there is no .close()
             del ofh_quant_read_tracking_lmdb

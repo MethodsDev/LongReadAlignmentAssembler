@@ -58,89 +58,105 @@ def filter_isoforms_by_min_isoform_fraction(
 
         return num_unique_reads
 
-    isoforms_were_filtered = True  # init for loop
+    gene_id_to_transcripts = _get_gene_id_to_transcripts(transcripts)
 
-    q = Quantify(run_EM, max_EM_iterations)
+    all_transcripts_retained = list()
 
-    filtering_round = 0
+    # examine each gene separately:
 
-    frac_read_assignments = None
+    for gene_id, isoforms_of_gene in gene_id_to_transcripts.items():
 
-    while isoforms_were_filtered:
+        isoforms_were_filtered = True  # init for loop
 
-        filtering_round += 1
-        num_total_isoforms = 0
-        num_filtered_isoforms = 0
-        transcripts_retained = list()
-        isoforms_were_filtered = False  # update to True if we do filter an isoform out.
+        q = Quantify(run_EM, max_EM_iterations)
 
-        frac_read_assignments = q._estimate_isoform_read_support(transcripts)
-        gene_id_to_read_count = Quantify.get_gene_read_counts(
-            frac_read_assignments, transcript_id_to_transcript_obj
-        )
+        filtering_round = 0
 
-        genes_represented = set()
-        for transcript in transcripts:
-            num_total_isoforms += 1
-            transcript_id = transcript.get_transcript_id()
-            gene_id = transcript.get_gene_id()
-            genes_represented.add(gene_id)
+        frac_read_assignments = None
+
+        while isoforms_were_filtered:
+
+            filtering_round += 1
+            num_total_isoforms = 0
+            num_filtered_isoforms = 0
+            transcripts_retained = list()
+            isoforms_were_filtered = (
+                False  # update to True if we do filter an isoform out.
+            )
+
+            frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+            gene_id_to_read_count = Quantify.get_gene_read_counts(
+                frac_read_assignments, transcript_id_to_transcript_obj
+            )
+
             gene_read_count = gene_id_to_read_count[gene_id]
-            transcript_unique_read_count = get_idoform_unique_assigned_read_count(
-                transcript_id, frac_read_assignments
-            )
 
-            frac_gene_unique_reads = transcript_unique_read_count / gene_read_count
+            for transcript in isoforms_of_gene:
+                num_total_isoforms += 1
+                transcript_id = transcript.get_transcript_id()
 
-            logger.debug(
-                "Transcript_id: {} has unique read frac of gene total reads: {}".format(
-                    transcript_id, frac_gene_unique_reads
+                transcript_unique_read_count = get_idoform_unique_assigned_read_count(
+                    transcript_id, frac_read_assignments
                 )
-            )
 
-            if not isoforms_were_filtered and (
-                frac_gene_unique_reads < min_frac_gene_unique_reads
-                or transcript.get_isoform_fraction() < min_isoform_fraction
-            ):
-
-                isoforms_were_filtered = True
-                num_filtered_isoforms += 1
+                frac_gene_unique_reads = transcript_unique_read_count / gene_read_count
 
                 logger.debug(
-                    "Filtering out transcript_id {} as low fraction of unique reads: {}".format(
+                    "Transcript_id: {} has unique read frac of gene total reads: {}".format(
                         transcript_id, frac_gene_unique_reads
                     )
                 )
 
-            else:
-                transcripts_retained.append(transcript)
+                if not isoforms_were_filtered and (
+                    frac_gene_unique_reads < min_frac_gene_unique_reads
+                    or transcript.get_isoform_fraction() < min_isoform_fraction
+                ):
 
-        logger.debug(
-            "isoform filtering round {} involved filtering of {} isoforms / {} total isoforms of {} genes".format(
-                filtering_round,
-                num_filtered_isoforms,
-                num_total_isoforms,
-                len(genes_represented),
+                    isoforms_were_filtered = True
+                    num_filtered_isoforms += 1
+
+                    logger.debug(
+                        "Filtering out transcript_id {} as low fraction of unique reads: {}".format(
+                            transcript_id, frac_gene_unique_reads
+                        )
+                    )
+
+                else:
+                    transcripts_retained.append(transcript)
+
+            logger.debug(
+                "gene {} based isoform filtering round {} involved filtering of {} isoforms / {} total isoforms".format(
+                    gene_id,
+                    filtering_round,
+                    num_filtered_isoforms,
+                    num_total_isoforms,
+                )
             )
-        )
 
-        # reset list of transcripts
-        transcripts = transcripts_retained
+            # reset list of transcripts
+            isoforms_of_gene = transcripts_retained
 
-    return transcripts
+        # done with individual gene-based isoform filtering
+        all_transcripts_retained.extend(isoforms_of_gene)
+
+    return all_transcripts_retained
 
 
-def prune_likely_degradation_products(
-    transcripts, splice_graph, run_EM, max_EM_iterations
-):
+def _get_gene_id_to_transcripts(transcripts):
+
+    gene_id_to_transcripts = defaultdict(set)
+    for transcript in transcripts:
+        gene_id = transcript.get_gene_id()
+        gene_id_to_transcripts[gene_id].add(transcript)
+
+    return gene_id_to_transcripts
+
+
+def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assignments):
 
     logger.info("Pruning likely degradation products")
 
     sg = splice_graph
-
-    # run an initial quant.
-    q = Quantify(run_EM, max_EM_iterations)
-    frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
     transcript_id_to_transcript_obj = dict(
         [(x.get_transcript_id(), x) for x in transcripts]
@@ -152,10 +168,7 @@ def prune_likely_degradation_products(
     transcripts_ret = list()  # transcripts not pruned and returned.
 
     # first organize by gene_id
-    gene_id_to_transcripts = defaultdict(set)
-    for transcript in transcripts:
-        gene_id = transcript.get_gene_id()
-        gene_id_to_transcripts[gene_id].add(transcript)
+    gene_id_to_transcripts = _get_gene_id_to_transcripts(transcripts)
 
     for gene_id, transcript_set in gene_id_to_transcripts.items():
 
@@ -378,10 +391,7 @@ def prune_likely_degradation_products(
             if transcript not in transcript_prune_as_degradation:
                 transcripts_ret.append(transcript)
 
-    # after pruning transcripts, rerun quant
-    frac_read_assignments = q._estimate_isoform_read_support(transcripts_ret)
-
-    return (transcripts_ret, frac_read_assignments)
+    return transcripts_ret
 
 
 def filter_internally_primed_transcripts(
