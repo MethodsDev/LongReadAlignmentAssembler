@@ -281,6 +281,7 @@ def main():
     LRAA_Globals.config["infer_TSS"] = not args.no_infer_TSS
     LRAA_Globals.config["infer_PolyA"] = not args.no_infer_PolyA
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
+    LRAA_Globals.config["run_EM"] = run_EM
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -587,12 +588,14 @@ def main():
                     allow_spacers,
                 )
 
-                q = Quantify()
+                q = Quantify(
+                    run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
+                )
                 logger.debug(
                     "\n//SECTION QUANT: Quantifying transcripts according to read support."
                 )
                 read_name_to_fractional_transcript_assignment = q.quantify(
-                    sg, input_transcripts, mp_counter, run_EM
+                    sg, input_transcripts, mp_counter
                 )
                 q.report_quant_results(
                     input_transcripts,
@@ -660,7 +663,12 @@ def main():
                     lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
 
                 transcripts, frac_read_assignments = (
-                    Quantify.prune_likely_degradation_products(transcripts, sg, run_EM)
+                    Quantify.prune_likely_degradation_products(
+                        transcripts,
+                        sg,
+                        run_EM,
+                        LRAA_Globals.config["max_EM_iterations_during_asm"],
+                    )
                 )
 
                 if LRAA_Globals.DEBUG or args.include_asm_draft_quant:
@@ -679,7 +687,9 @@ def main():
                     debug_quant_read_tracking_ofh = open(
                         "__transcripts-prefilter-quant_info.reads_tracked.tsv", "at"
                     )
-                    q = Quantify()
+                    q = Quantify(
+                        run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
+                    )
                     q.report_quant_results(
                         transcripts,
                         frac_read_assignments,
@@ -691,7 +701,10 @@ def main():
 
                 if min_isoform_fraction > 0:
                     transcripts = Quantify.filter_isoforms_by_min_isoform_fraction(
-                        transcripts, min_isoform_fraction, run_EM
+                        transcripts,
+                        min_isoform_fraction,
+                        run_EM,
+                        LRAA_Globals.config["max_EM_iterations_during_asm"],
                     )
 
                 if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
@@ -724,9 +737,11 @@ def main():
                     debug_quant_read_tracking_ofh = open(
                         "__quant_info.reads_tracked.tsv", "at"
                     )
-                    q = Quantify()
+                    q = Quantify(
+                        run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
+                    )
                     frac_read_assignments = q._estimate_isoform_read_support(
-                        transcripts, run_EM
+                        transcripts
                     )
                     q.report_quant_results(
                         transcripts,

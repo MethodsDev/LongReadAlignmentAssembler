@@ -71,7 +71,10 @@ config = {
     #
     #######
     # quant
-    "num_total_reads": None,  # for TPM and filtering
+    "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records
+    "run_EM": True,
+    "max_EM_iterations_quant_only": 1000,
+    "max_EM_iterations_during_asm": 50,
     #
     ######
     # parallelization

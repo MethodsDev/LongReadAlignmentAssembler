@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 class Quantify:
 
-    def __init__(self):
+    def __init__(self, run_EM, max_EM_iterations):
+
+        self._run_EM = run_EM  # boolean
+        self._max_EM_iterations = max_EM_iterations
 
         self._path_node_id_to_gene_ids = defaultdict(set)
 
@@ -27,7 +30,7 @@ class Quantify:
 
         return
 
-    def quantify(self, splice_graph, transcripts, mp_counter, run_EM=True):
+    def quantify(self, splice_graph, transcripts, mp_counter):
 
         assert type(transcripts) == list
         assert type(transcripts[0]) == Transcript.Transcript
@@ -40,7 +43,7 @@ class Quantify:
         self._assign_reads_to_transcripts(splice_graph, mp_counter)
 
         transcript_to_fractional_read_assignment = self._estimate_isoform_read_support(
-            transcripts, run_EM
+            transcripts
         )
 
         # see documentation for _estimate_isoform_read_support() below
@@ -515,7 +518,7 @@ class Quantify:
         else:
             return None
 
-    def _estimate_isoform_read_support(self, transcripts, run_EM):
+    def _estimate_isoform_read_support(self, transcripts):
         """
 
         Given the reads assigned to the transcript (accessed with transcript.get_read_names() )
@@ -592,7 +595,7 @@ class Quantify:
                         )
                     )
 
-        if run_EM:
+        if self._run_EM:
 
             def compute_log_likelihood():
                 # compute log likelihood
@@ -617,7 +620,7 @@ class Quantify:
                 "Log likelihood before starting EM: {:.5E}".format(prev_log_likelihood)
             )
 
-            for EM_round in range(1, 1000):
+            for EM_round in range(1, self._max_EM_iterations):
 
                 logger.debug("EM round {}".format(EM_round))
 
@@ -856,7 +859,7 @@ class Quantify:
 
     @staticmethod
     def filter_isoforms_by_min_isoform_fraction(
-        transcripts, min_isoform_fraction, run_EM
+        transcripts, min_isoform_fraction, run_EM, max_EM_iterations
     ):
 
         min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
@@ -885,7 +888,7 @@ class Quantify:
 
         isoforms_were_filtered = True  # init for loop
 
-        q = Quantify()
+        q = Quantify(run_EM, max_EM_iterations)
 
         filtering_round = 0
 
@@ -901,9 +904,7 @@ class Quantify:
                 False  # update to True if we do filter an isoform out.
             )
 
-            frac_read_assignments = q._estimate_isoform_read_support(
-                transcripts, run_EM
-            )
+            frac_read_assignments = q._estimate_isoform_read_support(transcripts)
             gene_id_to_read_count = Quantify.get_gene_read_counts(
                 frac_read_assignments, transcript_id_to_transcript_obj
             )
@@ -959,15 +960,17 @@ class Quantify:
         return transcripts
 
     @staticmethod
-    def prune_likely_degradation_products(transcripts, splice_graph, run_EM):
+    def prune_likely_degradation_products(
+        transcripts, splice_graph, run_EM, max_EM_iterations
+    ):
 
         logger.info("Pruning likely degradation products")
 
         sg = splice_graph
 
         # run an initial quant.
-        q = Quantify()
-        frac_read_assignments = q._estimate_isoform_read_support(transcripts, run_EM)
+        q = Quantify(run_EM, max_EM_iterations)
+        frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
         transcript_id_to_transcript_obj = dict(
             [(x.get_transcript_id(), x) for x in transcripts]
@@ -1208,8 +1211,6 @@ class Quantify:
                     transcripts_ret.append(transcript)
 
         # after pruning transcripts, rerun quant
-        frac_read_assignments = q._estimate_isoform_read_support(
-            transcripts_ret, run_EM
-        )
+        frac_read_assignments = q._estimate_isoform_read_support(transcripts_ret)
 
         return (transcripts_ret, frac_read_assignments)
