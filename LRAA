@@ -14,7 +14,7 @@ from Splice_graph import Splice_graph
 from LRAA import LRAA
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
-import Internal_priming
+import TranscriptFiltering
 import Util_funcs
 import LRAA_Globals
 import MultiProcessManager as mpm
@@ -663,7 +663,7 @@ def main():
                     lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
 
                 transcripts, frac_read_assignments = (
-                    Quantify.prune_likely_degradation_products(
+                    TranscriptFiltering.prune_likely_degradation_products(
                         transcripts,
                         sg,
                         run_EM,
@@ -700,21 +700,27 @@ def main():
                     debug_quant_read_tracking_ofh.close()
 
                 if min_isoform_fraction > 0:
-                    transcripts = Quantify.filter_isoforms_by_min_isoform_fraction(
-                        transcripts,
-                        min_isoform_fraction,
-                        run_EM,
-                        LRAA_Globals.config["max_EM_iterations_during_asm"],
+                    transcripts = (
+                        TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
+                            transcripts,
+                            min_isoform_fraction,
+                            run_EM,
+                            LRAA_Globals.config["max_EM_iterations_during_asm"],
+                        )
                     )
 
                 if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
-                    transcripts = Quantify.filter_monoexonic_isoforms_by_TPM_threshold(
-                        transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
+                    transcripts = (
+                        TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
+                            transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
+                        )
                     )
 
                 if LRAA_Globals.config["filter_internal_priming"]:
-                    transcripts = Internal_priming.filter_internally_primed_transcripts(
-                        transcripts, contig_seq_str
+                    transcripts = (
+                        TranscriptFiltering.filter_internally_primed_transcripts(
+                            transcripts, contig_seq_str
+                        )
                     )
 
                 ## report transcripts in GTF format
