@@ -387,7 +387,7 @@ def main():
 
     if args.contig:
         restricted_contig = args.contig
-        m = re.search("^(\\S*[^\\+\\-])([\\+\\-]?)$", restricted_contig)
+        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
         if m is not None:
             restricted_contig = m.group(1)
             restrict_to_contig_orient = m.group(2)
@@ -399,7 +399,7 @@ def main():
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
         args.region = args.region.replace(",", "")
-        m = re.search("^(\\S*[^\\+\\-])([\\+\\-]?):(\\d+)-(\\d+)$", args.region)
+        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?:(\\d+)-(\\d+)$", args.region)
         if m is None:
             raise RuntimeError(
                 "Error, could not parse region range: {}".format(args.region)
