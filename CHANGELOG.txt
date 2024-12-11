@@ -1,3 +1,5 @@
+v0.2.7
+- pruning low supported introns within exon islands and aggregating for splice dist for low qual alignments
 
 v0.2.6
 - during assembly mode, including input transcripts as substrates for path nodes instead of just for the splice graph construction
