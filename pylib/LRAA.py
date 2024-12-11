@@ -108,7 +108,9 @@ class LRAA:
             mpg.define_disjoint_graph_components_via_shared_splice_graph_vertex()
         )
 
-        logger.info("{} connected components identified".format(len(mpg_components)))
+        num_mpg_components = len(mpg_components)
+
+        logger.info("{} connected components identified".format(num_mpg_components))
 
         if LRAA_Globals.DEBUG:
             mpg.write_mp_graph_nodes_to_gtf("__mpgns.pre.gtf")
@@ -208,11 +210,31 @@ class LRAA:
                 mpm.launch_process(p)
 
             else:
-                # run directly, not through multiprocessing
-                reconstructed_transcripts = self._reconstruct_isoforms_single_component(
-                    None, mpg_component, component_counter, mpg_token, single_best_only
+
+                try:
+
+                    # run directly, not through multiprocessing
+                    reconstructed_transcripts = (
+                        self._reconstruct_isoforms_single_component(
+                            None,
+                            mpg_component,
+                            component_counter,
+                            mpg_token,
+                            single_best_only,
+                        )
+                    )
+                    all_reconstructed_transcripts.extend(reconstructed_transcripts)
+
+                except Exception as e:
+                    mpm.terminate_all_processes()
+                    raise (e)
+
+            fraction_jobs_complete = component_counter / num_mpg_components
+            logger.info(
+                "progress monitor for {} {} : {:.2f}% of components processed.".format(
+                    self._contig_acc, self._contig_strand, fraction_jobs_complete * 100
                 )
-                all_reconstructed_transcripts.extend(reconstructed_transcripts)
+            )
 
         if USE_MULTIPROCESSOR:
             logger.info("WAITING ON REMAINING MULTIPROCESSING JOBS")

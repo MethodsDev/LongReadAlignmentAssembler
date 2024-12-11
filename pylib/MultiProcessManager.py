@@ -149,6 +149,11 @@ class MultiProcessManager:
     def retrieve_queue_contents(self):
         return self.captured_queue_contents
 
+    def terminate_all_processes(self):
+        for process in self.process_list:
+            process.terminate()
+        logger.info("-terminated all processes")
+
 
 def set_debug():
     logger.setLevel(logging.DEBUG)
