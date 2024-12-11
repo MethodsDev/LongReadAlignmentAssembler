@@ -206,6 +206,13 @@ def main():
         ),
     )
 
+    config_group.add_argument(
+        "--no_filter_internal_priming",
+        action="store_true",
+        default=False,
+        help="do not filter isoforms that appear to derive from internal priming events",
+    )
+
     ## alt splice settings
 
     config_group_altsplice = parser.add_argument_group("alt splice settings")
@@ -282,6 +289,7 @@ def main():
     LRAA_Globals.config["infer_PolyA"] = not args.no_infer_PolyA
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
     LRAA_Globals.config["run_EM"] = run_EM
+    LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
 
     if args.mpm_monitor:
         mpm.set_debug()
