@@ -82,6 +82,7 @@ task lraaPerChromosome {
         Int num_total_reads
         Float? min_per_id
         File referenceGenome
+        Boolean no_EM
         String OutDir
         String docker
         Int numThreads
@@ -93,6 +94,7 @@ task lraaPerChromosome {
 
 
     String min_mapping_quality_flag = "--min_mapping_quality=" + select_first([LRAA_min_mapping_quality, 0])
+    String no_EM_flag = if (no_EM) then "--no_EM" else ""
     
     command <<<
 
@@ -102,6 +104,7 @@ task lraaPerChromosome {
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{OutDir}/~{sample_id}.shardno-~{shardno}.LRAA \
                                  --quant_only \
+                                 ~{no_EM_flag} \
                                  --gtf ~{referenceAnnotation_full} \
                                  ~{"--min_per_id " + min_per_id } \
                                  ~{min_mapping_quality_flag} --CPU 1 \
@@ -175,6 +178,7 @@ workflow lraaWorkflow {
         Array[File]? referenceGenomeArray
         Int num_total_reads
         Float? min_per_id
+        Boolean no_EM
         Int? LRAA_min_mapping_quality
         Int numThreads = 4
         Int memoryGB = 32
@@ -211,6 +215,7 @@ workflow lraaWorkflow {
                     referenceGenome = splitBAMByChromosome.chromosomeFASTAs[i],
                     num_total_reads = num_total_reads,
                     min_per_id = min_per_id,
+                    no_EM = no_EM,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,
@@ -244,6 +249,7 @@ workflow lraaWorkflow {
                     referenceGenome = nonOptionalReferenceGenomeArray[j],
                     num_total_reads = num_total_reads,
                     min_per_id = min_per_id,
+                    no_EM = no_EM,
                     OutDir = OutDir,
                     docker = docker,
                     numThreads = numThreads,

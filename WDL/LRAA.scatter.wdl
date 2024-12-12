@@ -16,9 +16,14 @@ workflow CombinedWorkflow {
         Int memoryGB = 32
         String main_chromosomes = "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY"
         Boolean LRAA_no_norm = false
-        Int? LRAA_min_mapping_quality = 0
-        Float? min_per_id
-        Boolean no_EM = false 
+        Int LRAA_min_mapping_quality = 20
+        Float min_per_id = 98.0
+        Boolean no_EM = false
+        Float min_isoform_fraction = 0.01
+        Float min_monoexonic_TPM = 1.0
+        Boolean no_filter_internal_priming = false
+        Float min_alt_splice_freq = 0.01
+        Float min_alt_unspliced_freq = 0.01
     }
 
     Int diskSizeGB = 128
@@ -46,7 +51,13 @@ workflow CombinedWorkflow {
                 LRAA_no_norm = LRAA_no_norm,
                 num_total_reads = count_bam.count,
                 min_per_id = min_per_id,
-                no_EM = no_EM
+                no_EM = no_EM,
+                min_isoform_fraction = min_isoform_fraction,
+                min_monoexonic_TPM = min_monoexonic_TPM,
+                no_filter_internal_priming = no_filter_internal_priming,
+                min_alt_splice_freq = min_alt_splice_freq,
+                min_alt_unspliced_freq = min_alt_unspliced_freq
+          
         }
 
         call Quant.lraaWorkflow as QuantFree2Workflow {
@@ -85,7 +96,12 @@ workflow CombinedWorkflow {
                 LRAA_no_norm = LRAA_no_norm,
                 num_total_reads = count_bam.count,
                 min_per_id =  min_per_id,
-                no_EM = no_EM
+                no_EM = no_EM,
+                min_isoform_fraction = min_isoform_fraction,
+                min_monoexonic_TPM = min_monoexonic_TPM,
+                no_filter_internal_priming = no_filter_internal_priming,
+                min_alt_splice_freq = min_alt_splice_freq,
+                min_alt_unspliced_freq = min_alt_unspliced_freq
         }
         
         call Quant.lraaWorkflow as QuantGuided2Workflow {

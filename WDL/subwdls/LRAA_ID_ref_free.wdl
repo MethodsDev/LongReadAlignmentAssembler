@@ -51,11 +51,19 @@ task lraaPerChromosome {
         String docker
         Int numThreads
         Boolean LRAA_no_norm
+        Boolean no_EM
+        Float? min_isoform_fraction
+        Float? min_monoexonic_TPM
+        Boolean? no_filter_internal_priming
+        Float? min_alt_splice_freq
+        Float? min_alt_unspliced_freq
+    
         Int memoryGB
         Int diskSizeGB
     }
 
     String no_norm_flag = if (LRAA_no_norm) then "--no_norm" else ""
+    String no_EM_flag = if (no_EM) then "--no_EM" else ""
     
     command <<<
 
@@ -65,8 +73,14 @@ task lraaPerChromosome {
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{OutDir}/ID_reffree/~{sample_id}.shardno-~{shardno}.LRAA_ref-free \
                                  ~{"--min_per_id " + min_per_id} \
-                                 ~{no_norm_flag} --CPU 1 \
+                                 ~{no_norm_flag} ~{no_EM_flag} --CPU ~{numThreads} \
+                                 ~{"--min_isoform_fraction " + min_isoform_fraction} \
+                                 ~{"--min_monoexonic_TPM " + min_monoexonic_TPM} \
+                                 ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
+                                 ~{"--min_alt_splice_freq " + min_alt_splice_freq} \
+                                 ~{"--min_alt_unspliced_freq " + min_alt_unspliced_freq} \
                                  --num_total_reads ~{num_total_reads}
+      
     >>>
     
     output {
@@ -131,6 +145,12 @@ workflow lraaWorkflow {
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         String main_chromosomes = "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY"
         Boolean LRAA_no_norm
+        Boolean no_EM
+        Float? min_isoform_fraction
+        Float? min_monoexonic_TPM
+        Boolean? no_filter_internal_priming
+        Float? min_alt_splice_freq
+        Float? min_alt_unspliced_freq
     }
 
     String OutDir = "LRAA_out"
@@ -162,6 +182,12 @@ workflow lraaWorkflow {
                     docker = docker,
                     numThreads = numThreads,
                     LRAA_no_norm = LRAA_no_norm,
+                    no_EM = no_EM,
+                    min_isoform_fraction = min_isoform_fraction,
+                    min_monoexonic_TPM = min_monoexonic_TPM,
+                    no_filter_internal_priming = no_filter_internal_priming,
+                    min_alt_splice_freq = min_alt_splice_freq,
+                    min_alt_unspliced_freq = min_alt_unspliced_freq,
                     memoryGB = memoryGB,
                     diskSizeGB = diskSizeGB
             }
@@ -185,6 +211,12 @@ workflow lraaWorkflow {
                     docker = docker,
                     numThreads = numThreads,
                     LRAA_no_norm = LRAA_no_norm,
+                    no_EM = no_EM,
+                    min_isoform_fraction = min_isoform_fraction,
+                    min_monoexonic_TPM = min_monoexonic_TPM,
+                    no_filter_internal_priming = no_filter_internal_priming,
+                    min_alt_splice_freq = min_alt_splice_freq,
+                    min_alt_unspliced_freq = min_alt_unspliced_freq,
                     memoryGB = memoryGB,
                     diskSizeGB = diskSizeGB
             }
