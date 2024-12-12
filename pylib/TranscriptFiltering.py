@@ -172,6 +172,13 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
 
     for gene_id, transcript_set in gene_id_to_transcripts.items():
 
+        gene_read_count = gene_read_counts[gene_id]
+
+        if gene_read_count == 0:
+            # should explore why this is. ref-trans-only?
+            # gbye!
+            continue
+
         if len(transcript_set) == 1:
             transcripts_ret.extend(list(transcript_set))
             continue
@@ -204,8 +211,9 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
             transcript_i_id = transcript_i.get_transcript_id()
 
             gene_i_id = transcript_i.get_gene_id()
-
-            gene_read_count = gene_read_counts[gene_i_id]
+            assert gene_i_id == gene_id, "Error: gene_i_id {} != gene_id {} ".format(
+                gene_i_id, gene_id
+            )
 
             if transcript_i in transcript_prune_as_degradation:
                 continue
@@ -231,7 +239,7 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 transcript_j_id = transcript_j.get_transcript_id()
                 gene_j_id = transcript_j.get_gene_id()
 
-                assert gene_i_id == gene_j_id
+                assert gene_j_id == gene_id
 
                 transcript_j_simple_path = transcript_j.get_simple_path()
                 j_path_trimmed, j_TSS_id, j_polyA_id = SPU.trim_TSS_and_PolyA(
