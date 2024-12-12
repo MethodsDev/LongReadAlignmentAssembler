@@ -245,12 +245,6 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                     # no way can i subsume j
                     continue
 
-                # Simple_path_utils.simple_paths_overlap_and_compatible_spacefree_region_path_A(self.get_splice_graph(), my_path, other_path)
-                frac_expression_i = (
-                    transcript_j_read_counts_assigned
-                    / transcript_i_read_counts_assigned
-                )
-
                 frac_gene_expression_j = (
                     transcript_j_read_counts_assigned / gene_read_count
                 )
