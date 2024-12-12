@@ -1,3 +1,10 @@
+
+v0.2.8
+- split parallelization targeting larger components to separate threads while the main process quickly handles the smaller ones directly.
+- wdl updates exposing more input parameters
+- refactoring of Quant module, running EM on per-gene basis instead of per-contig, separate EM max iterations for quant vs. asm
+- refactoring of transcript isoform filtering methods into TranscriptFiltering module.
+
 v0.2.7
 - pruning low supported introns within exon islands and aggregating for splice dist for low qual alignments
 
