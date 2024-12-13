@@ -532,6 +532,11 @@ class Quantify:
 
         read_sp = mp.get_simple_path()
 
+        ## For majority voting, let's trim TSS and polyA so it doesn't contribute to the scoring.
+        # read_sp, read_TSS_id, read_polyA_id = SPU.trim_TSS_and_PolyA(
+        #    read_sp, contig_strand
+        # )
+
         # store read name to mp for later debugging.
         for read_name in mp.get_read_names():
             self._read_name_to_multipath[read_name] = mp

@@ -28,6 +28,7 @@ import traceback
 from MultiProcessManager import MultiProcessManager
 from collections import defaultdict
 import Util_funcs
+import Simple_path_utils as SPU
 
 logger = logging.getLogger(__name__)
 
@@ -567,9 +568,15 @@ class LRAA:
         for transcript in transcripts:
             logger.debug("-mapping transcript to graph: {}".format(transcript))
             segments = transcript.get_exon_segments()
-            path = self._map_read_to_graph(segments)
+            path = self._map_read_to_graph(
+                segments, refine_TSS_simple_path=False, refine_PolyA_simple_path=False
+            )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
             if path is not None:
+                # strip TSS and PolyA
+                # path, read_TSS_id, read_polyA_id = SPU.trim_TSS_and_PolyA(
+                #    path, self._splice_graph.get_contig_strand()
+                # )
                 transcript.set_simple_path(path)
 
         return
@@ -585,7 +592,12 @@ class LRAA:
 
         return grouped_alignments
 
-    def _map_read_to_graph(self, alignment_segments):
+    def _map_read_to_graph(
+        self,
+        alignment_segments,
+        refine_TSS_simple_path=True,
+        refine_PolyA_simple_path=True,
+    ):
 
         logger.debug("incoming segments: {}".format(alignment_segments))
 
@@ -642,9 +654,15 @@ class LRAA:
         if SPACER in path:
             path = Simple_path_utils.trim_terminal_spacers(path)
 
-        path = Simple_path_utils.refine_TSS_simple_path(self.get_splice_graph(), path)
+        if refine_TSS_simple_path:
+            path = Simple_path_utils.refine_TSS_simple_path(
+                self.get_splice_graph(), path
+            )
 
-        path = Simple_path_utils.refine_PolyA_simple_path(self.get_splice_graph(), path)
+        if refine_PolyA_simple_path:
+            path = Simple_path_utils.refine_PolyA_simple_path(
+                self.get_splice_graph(), path
+            )
 
         if Simple_path_utils.count_exons_in_simple_path(path) == 0:
             logger.debug("path {} has no exons. Ignoring path.".format(path))

@@ -263,6 +263,8 @@ class Splice_graph:
 
         self._prune_disconnected_introns()
 
+        self._merge_neighboring_proximal_unbranched_exon_segments()
+
         # populates self._itree_exon_segments for overlap queries
         self._finalize_splice_graph()
 
