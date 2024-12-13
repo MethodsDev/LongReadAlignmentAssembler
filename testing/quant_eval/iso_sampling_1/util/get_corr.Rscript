@@ -1,0 +1,38 @@
+#!/usr/bin/env Rscript
+
+
+args<-commandArgs(TRUE)
+    
+if (length(args) == 0) {
+        stop("require param: dat_filename")
+}
+    
+    
+dat_filename = args[1]
+
+library(tidyverse)
+
+data = read.csv(dat_filename, header=T, sep="\t")
+
+truth_data = read.csv("data/truth_quants.tsv", header=T, sep="\t")
+
+comparison_data = full_join(data %>% select (gene_id, transcript_id, all_reads),
+          truth_data %>% select(gene_id, transcript_id, num_reads) %>% rename(truth_read_count = num_reads),
+          by=c('gene_id', 'transcript_id') )
+
+
+pdf_filename = paste0(dat_filename, ".truth_compare.pdf")
+pdf(pdf_filename)
+
+comparison_data  %>% ggplot(aes(x=truth_read_count, y=all_reads)) + geom_point() + theme_bw()
+
+corr_val = cor(comparison_data$truth_read_count, comparison_data$all_reads, use='complete.obs')
+
+dev.off()
+
+cor_filename = paste0(dat_filename, ".corr_val")
+
+        
+write.csv(corr_val, file=cor_filename, quote=F, row.names=F)
+
+quit(save = "no", status = 0, runLast = FALSE)
