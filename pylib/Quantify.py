@@ -28,6 +28,8 @@ class Quantify:
 
         self._read_name_to_multipath = dict()
 
+        self._mp_to_transcripts = dict()
+
         return
 
     def quantify(self, splice_graph, transcripts, mp_counter):
@@ -99,8 +101,16 @@ class Quantify:
         num_paths_assigned = 0
         num_read_counts_assigned = 0
 
+        mp_seen = set()
+
         for mp_count_pair in mp_count_pairs:
             mp, count = mp_count_pair.get_multipath_and_count()
+
+            mp_id = mp.get_id()
+
+            if mp_id in mp_seen:
+                raise RuntimeError("multipath already evaluated - error. " + str(mp))
+            mp_seen.add(mp_id)
 
             num_paths_total += 1
             num_read_counts_total += count
@@ -225,6 +235,9 @@ class Quantify:
                         ),
                     )
                 )
+
+                self._mp_to_transcripts[mp] = transcripts_assigned
+
                 for transcript in transcripts_assigned:
                     transcript.add_read_names(mp.get_read_names())
 
@@ -323,6 +336,8 @@ class Quantify:
         contig_strand = splice_graph.get_contig_strand()
 
         read_sp = mp.get_simple_path()
+        mp_id = mp.get_id()
+
         if trim_TSS_polyA:
             read_sp, read_TSS_id, read_polyA_id = SPU.trim_TSS_and_PolyA(
                 read_sp, contig_strand
@@ -340,10 +355,19 @@ class Quantify:
 
         transcripts_compatible_with_read = list()
 
-        logger.debug("Assessing transcript compatibility for: {}".format(mp))
+        logger.debug("** Assessing transcript compatibility for: {}".format(mp))
 
         for i, transcript in enumerate(transcripts):
             transcript_sp = transcript._simplepath
+
+            transcript_id = transcript.get_transcript_id()
+            mp_descr = mp.toShortDescr()
+
+            logger.debug(
+                "* evaluating transcript {} compatibility with mp: {}".format(
+                    transcript_id, mp_descr
+                )
+            )
 
             assert transcript_sp is not None
 
@@ -360,31 +384,40 @@ class Quantify:
                     if is_PolyA_or_TSS(read_sp[0]) and not is_PolyA_or_TSS(
                         transcript_sp[0]
                     ):
-                        fail_msg = "read TSS or polyA pos[0] incosistent w/ transcript"
+                        fail_msg = "read TSS or polyA pos[0] of {} inconsistent w/ transcript {}".format(
+                            mp_descr, transcript_id
+                        )
 
                     elif (
                         is_PolyA_or_TSS(transcript_sp[0])
                         and is_PolyA_or_TSS(read_sp[0])
                         and transcript_sp[0] != read_sp[0]
                     ):
-                        fail_msg = "read TSS or polyA pos[0] incosistent w/ transcript"
+                        fail_msg = "read TSS or polyA pos[0] of {} inconsistent w/ transcript {}".format(
+                            mp_descr, transcript_id
+                        )
 
                     # test last position of read
                     elif is_PolyA_or_TSS(read_sp[-1]) and not is_PolyA_or_TSS(
                         transcript_sp[-1]
                     ):
-                        fail_msg = "read TSS or polyA pos[-1] incosistent w/ transcript"
+                        fail_msg = "read TSS or polyA pos[-1] of {} inconsistent w/ transcript {}".format(
+                            mp_descr, transcript_id
+                        )
 
                     elif (
                         is_PolyA_or_TSS(read_sp[-1])
                         and is_PolyA_or_TSS(transcript_sp[-1])
                         and transcript_sp[-1] != read_sp[-1]
                     ):
-                        fail_msg = "read TSS or polyA pos[-1] incosistent w/ transcript"
+                        fail_msg = "read TSS or polyA pos[-1] of {} incosistent w/ transcript {}".format(
+                            mp_descr, transcript_id
+                        )
 
                     if fail_msg is not None:
                         logger.debug(
-                            "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}, FAIL MSG: {}".format(
+                            "[{} trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}, FAIL MSG: {}".format(
+                                mp_descr,
                                 trim_TSS_polyA,
                                 test_exact,
                                 anchor_PolyA_TSS,
@@ -398,7 +431,8 @@ class Quantify:
                         continue
 
             logger.debug(
-                "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}".format(
+                "[{} trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}".format(
+                    mp_descr,
                     trim_TSS_polyA,
                     test_exact,
                     anchor_PolyA_TSS,
@@ -413,7 +447,8 @@ class Quantify:
 
                 if transcript_sp == read_sp:
                     logger.debug(
-                        "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} IDENTICAL with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} IDENTICAL with transcript {}".format(
+                            mp_descr,
                             trim_TSS_polyA,
                             test_exact,
                             anchor_PolyA_TSS,
@@ -424,7 +459,8 @@ class Quantify:
                     transcripts_compatible_with_read.append(transcript)
                 else:
                     logger.debug(
-                        "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_identical with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_identical with transcript {}".format(
+                            mp_descr,
                             trim_TSS_polyA,
                             test_exact,
                             anchor_PolyA_TSS,
@@ -444,7 +480,8 @@ class Quantify:
                 ):
 
                     logger.debug(
-                        "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE with transcript {}".format(
+                            mp_descr,
                             trim_TSS_polyA,
                             test_exact,
                             anchor_PolyA_TSS,
@@ -457,7 +494,8 @@ class Quantify:
 
                 else:
                     logger.debug(
-                        "[trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_compatible with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_compatible with transcript {}".format(
+                            mp_descr,
                             trim_TSS_polyA,
                             test_exact,
                             anchor_PolyA_TSS,
@@ -467,8 +505,17 @@ class Quantify:
                     )
 
         if len(transcripts_compatible_with_read) == 0:
+            logger.debug(
+                "{} NO TRANSCRIPTS FOUND COMPATIBLE WITH READ.".format(mp_descr)
+            )
             return None
         else:
+            logger.debug(
+                "{} FOUND COMPATIBLE WITH\n{}".format(
+                    mp_descr,
+                    "\n".join([str(x) for x in transcripts_compatible_with_read]),
+                )
+            )
             return transcripts_compatible_with_read
 
     def _assign_path_to_transcript_by_majority_voting(
@@ -505,6 +552,18 @@ class Quantify:
             scored_transcripts = sorted(
                 scored_transcripts, key=lambda x: x[0], reverse=True
             )
+            logger.debug(
+                "Majority Voting: Candidate order for {} is:\n{} ".format(
+                    mp.toShortDescr(),
+                    "\n".join(
+                        [
+                            "score:{}\t{}".format(str(x[0]), str(x[1]))
+                            for x in scored_transcripts
+                        ]
+                    ),
+                )
+            )
+
             top_transcript_score_pair = scored_transcripts.pop(0)
             top_transcript_score, top_transcript = top_transcript_score_pair
             top_transcripts = [top_transcript]
@@ -513,6 +572,11 @@ class Quantify:
                 if alt_top_transcript[0] == top_transcript_score:
                     top_transcripts.append(alt_top_transcript[1])
 
+            logger.debug(
+                "Majority Voting CHOOSING TOP CANDIDATE for {} as: {}".format(
+                    mp.toShortDescr(), str(top_transcripts)
+                )
+            )
             return top_transcripts
 
         else:
@@ -710,6 +774,54 @@ class Quantify:
                 transcript_of_gene.set_isoform_fraction(isoform_frac)
 
         return transcript_to_fractional_read_assignment
+
+    def get_mp_to_transcripts(self):
+        return self._mp_to_transcripts
+
+    def dump_mp_to_transcripts_to_file(self, output_filename, contig_acc, strand):
+
+        logger.debug(
+            "Writing mp to read and transcript assignment files for {} {}".format(
+                contig_acc, strand
+            )
+        )
+
+        with open(output_filename, "at") as ofh_mp:
+            with open(output_filename + ".abridged", "at") as ofh_mp_abridged:
+
+                mp_to_transcripts = self.get_mp_to_transcripts()
+                for mp, transcripts in mp_to_transcripts.items():
+                    read_names = mp.get_read_names()
+                    print(
+                        "\t".join(
+                            [
+                                contig_acc,
+                                strand,
+                                mp.get_id() + ":" + str(mp.get_simple_path()),
+                                str(len(transcripts)),
+                                ";".join([x.get_transcript_id() for x in transcripts]),
+                                str(len(read_names)),
+                            ]
+                        ),
+                        file=ofh_mp_abridged,
+                    )
+
+                    print(
+                        "\t".join(
+                            [
+                                contig_acc,
+                                strand,
+                                mp.get_id() + ":" + str(mp.get_simple_path()),
+                                str(len(transcripts)),
+                                ";".join([x.get_transcript_id() for x in transcripts]),
+                                str(len(read_names)),
+                                ";".join(list(read_names)),
+                            ]
+                        ),
+                        file=ofh_mp,
+                    )
+
+        return
 
     def report_quant_results(
         self,

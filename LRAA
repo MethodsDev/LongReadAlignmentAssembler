@@ -605,6 +605,14 @@ def main():
                 read_name_to_fractional_transcript_assignment = q.quantify(
                     sg, input_transcripts, mp_counter
                 )
+
+                if LRAA_Globals.DEBUG:
+                    q.dump_mp_to_transcripts_to_file(
+                        "__QUANTIFY_mp_to_transcripts_and_reads.tsv",
+                        contig_acc,
+                        contig_strand,
+                    )
+
                 q.report_quant_results(
                     input_transcripts,
                     read_name_to_fractional_transcript_assignment,
