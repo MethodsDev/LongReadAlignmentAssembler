@@ -76,6 +76,7 @@ config = {
     "max_EM_iterations_quant_only": 1000,
     "max_EM_iterations_during_asm": 50,
     "aggressively_assign_reads": False,
+    "use_weighted_read_assignments": True,
     #
     ######
     # parallelization

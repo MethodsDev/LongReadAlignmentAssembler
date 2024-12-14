@@ -728,10 +728,13 @@ class Quantify:
 
         transcript_to_expr_val = defaultdict(float)
 
+        transcript_id_to_transcript_obj = dict()
+
         ## first round of EM for now - split evenly across mapped transcripts.
         for transcript in transcripts:
 
             transcript_id = transcript.get_transcript_id()
+            transcript_id_to_transcript_obj[transcript_id] = transcript
 
             transcript_read_count_total = 0
             read_names = transcript.get_read_names()
@@ -816,8 +819,30 @@ class Quantify:
                         sum_expr = 0
                         for tran_with_read, read_weight in transcripts_with_read:
                             tran_with_read_id = tran_with_read.get_transcript_id()
-                            sum_expr += transcript_to_expr_val[tran_with_read_id]
-                        frac_read_assignment = transcript_expr / sum_expr
+                            other_trans_weight = 1.0
+                            if LRAA_Globals.config["use_weighted_read_assignments"]:
+                                other_trans_obj = transcript_id_to_transcript_obj[
+                                    tran_with_read_id
+                                ]
+                                other_trans_weight = other_trans_obj.get_read_weight(
+                                    read_name
+                                )
+
+                            sum_expr += (
+                                other_trans_weight
+                                * transcript_to_expr_val[tran_with_read_id]
+                            )
+
+                        # additionally weight read according to start/end agreement
+                        weighted_transcript_expr = transcript_expr
+                        if LRAA_Globals.config["use_weighted_read_assignments"]:
+                            weighted_transcript_expr = (
+                                transcript.get_read_weight(read_name) * transcript_expr
+                            )
+
+                        frac_read_assignment = (
+                            weighted_transcript_expr / sum_expr if sum_expr > 0 else 0.0
+                        )
                         transcript_to_read_count[transcript_id] += frac_read_assignment
                         transcript_to_fractional_read_assignment[transcript_id][
                             read_name
