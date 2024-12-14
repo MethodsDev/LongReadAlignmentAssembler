@@ -15,37 +15,38 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-
-
-    
 class MultiPathGraph:
 
-
-    def __init__(self, multiPathCounter, splice_graph, contig_acc, contig_strand, min_mpgn_read_count=1, allow_spacers=False):
-
+    def __init__(
+        self,
+        multiPathCounter,
+        splice_graph,
+        contig_acc,
+        contig_strand,
+        min_mpgn_read_count=1,
+        allow_spacers=False,
+    ):
 
         logger.info(f"START building MultiPathGraph for {contig_acc}")
-        
-        assert(type(multiPathCounter) == MultiPathCounter.MultiPathCounter)
-        assert(type(splice_graph) == Splice_graph.Splice_graph)
-        
+
+        assert type(multiPathCounter) == MultiPathCounter.MultiPathCounter
+        assert type(splice_graph) == Splice_graph.Splice_graph
+
         self._splice_graph = splice_graph
         self._contig_acc = contig_acc
         self._contig_strand = contig_strand
 
-        
         mp_graph = nx.DiGraph()
         self._mp_graph = mp_graph
 
         self._mp_graph_nodes_list = list()
 
-        self._incompatible_pairs = set() # store sets of pairs of incompatible nodes.
+        self._incompatible_pairs = set()  # store sets of pairs of incompatible nodes.
 
-        self._mp_id_to_node = dict() # mp_id -> mpg_node
-
+        self._mp_id_to_node = dict()  # mp_id -> mpg_node
 
         sg_component_to_mp_id = defaultdict(set)
-        
+
         multiPathCountPairs = multiPathCounter.get_all_MultiPathCountPairs()
         for mpCountPair in multiPathCountPairs:
             mp, count = mpCountPair.get_multipath_and_count()
@@ -53,7 +54,7 @@ class MultiPathGraph:
             if count < min_mpgn_read_count:
                 continue
 
-            #print("mp: {}, count {}".format(mp, count))
+            # print("mp: {}, count {}".format(mp, count))
 
             first_node_id = mp[0]
             last_node_id = mp[-1]
@@ -63,10 +64,10 @@ class MultiPathGraph:
 
             lend_coord = first_node_obj.get_coords()[0]
             rend_coord = last_node_obj.get_coords()[1]
-            
-            
 
-            mp_graph_node = MultiPathGraphNode(mp, count, lend_coord, rend_coord, mpg=self)
+            mp_graph_node = MultiPathGraphNode(
+                mp, count, lend_coord, rend_coord, mpg=self
+            )
             mp_graph.add_node(mp_graph_node)
 
             if type(first_node_obj) in (TSS, PolyAsite):
@@ -75,7 +76,6 @@ class MultiPathGraph:
             if type(last_node_obj) in (TSS, PolyAsite):
                 mp_graph_node._right_boundary = 1
 
-            
             self._mp_graph_nodes_list.append(mp_graph_node)
 
             # assign mp to splice graph component
@@ -83,51 +83,83 @@ class MultiPathGraph:
             self._mp_id_to_node[mp_graph_node_id] = mp_graph_node
 
             component_id = self._splice_graph._node_id_to_component[first_node_id]
-            #print(f"{mp_graph_node_id} first node is {first_node_id} and assigned to component_id {component_id}")   
+            # print(f"{mp_graph_node_id} first node is {first_node_id} and assigned to component_id {component_id}")
             sg_component_to_mp_id[component_id].add(mp_graph_node_id)
 
-
-
-                
         ## sort
-        self._mp_graph_nodes_list = sorted(self._mp_graph_nodes_list, key=lambda x: (x._lend, x._rend, x.get_left_boundary_sort_weight(), x.get_right_boundary_sort_weight()))
-        
-        
+        self._mp_graph_nodes_list = sorted(
+            self._mp_graph_nodes_list,
+            key=lambda x: (
+                x._lend,
+                x._rend,
+                x.get_left_boundary_sort_weight(),
+                x.get_right_boundary_sort_weight(),
+            ),
+        )
 
         if LRAA_Globals.DEBUG:
             mpg_build_dir = f"__mpg_building/{self._contig_acc}"
             if not os.path.exists(mpg_build_dir):
                 os.makedirs(mpg_build_dir)
-            #build_file = os.path.join(mpg_build_dir, "build-{}.txt".format(self._contig_acc))
-            #build_ofh = open(build_file, "wt")
+            # build_file = os.path.join(mpg_build_dir, "build-{}.txt".format(self._contig_acc))
+            # build_ofh = open(build_file, "wt")
 
         if LRAA_Globals.DEBUG:
             component_descr_file = "__MPGN_components_described.bed"
             component_descr_ofh = open(component_descr_file, "a")
 
-
-        sorted_component_ids = sorted(sg_component_to_mp_id.keys(), key=lambda x: len(sg_component_to_mp_id[x]), reverse=True)
+        sorted_component_ids = sorted(
+            sg_component_to_mp_id.keys(),
+            key=lambda x: len(sg_component_to_mp_id[x]),
+            reverse=True,
+        )
         for component_id in sorted_component_ids:
             mp_node_set = sg_component_to_mp_id[component_id]
-            #print(mp_node_set)
+            # print(mp_node_set)
             num_paths = len(mp_node_set)
             logger.info(f"Component {component_id} has {num_paths} paths assigned.")
             if LRAA_Globals.DEBUG:
-                component_description_file = os.path.join(mpg_build_dir, f"{component_id}.comp.descr.tsv")
-                mp_nodes = [self._mp_id_to_node[mp_node_id] for mp_node_id in mp_node_set]
+                component_description_file = os.path.join(
+                    mpg_build_dir, f"{component_id}.comp.descr.tsv"
+                )
+                mp_nodes = [
+                    self._mp_id_to_node[mp_node_id] for mp_node_id in mp_node_set
+                ]
                 mp_nodes = sorted(mp_nodes, key=lambda x: x._lend)
                 with open(component_description_file, "a") as ofh:
                     for mp_node in mp_nodes:
-                        print("\t".join([contig_acc, str(mp_node._lend), str(mp_node._rend),
-                                         str(component_id),
-                                         str(mp_node.get_count()), contig_strand,
-                                         str(mp_node.get_simple_path()), ",".join(mp_node.get_read_names())]), file=ofh)
-    
-                        print("\t".join([contig_acc, str(mp_node._lend), str(mp_node._rend),
-                                         "Comp:" + str(component_id) + ", count: " +  str(mp_node.get_count()), contig_strand,
-                                         str(mp_node.get_simple_path()) ]),
-                                        file=component_descr_ofh)
+                        print(
+                            "\t".join(
+                                [
+                                    contig_acc,
+                                    str(mp_node._lend),
+                                    str(mp_node._rend),
+                                    str(component_id),
+                                    str(mp_node.get_count()),
+                                    contig_strand,
+                                    str(mp_node.get_simple_path()),
+                                    ",".join(mp_node.get_read_names()),
+                                ]
+                            ),
+                            file=ofh,
+                        )
 
+                        print(
+                            "\t".join(
+                                [
+                                    contig_acc,
+                                    str(mp_node._lend),
+                                    str(mp_node._rend),
+                                    "Comp:"
+                                    + str(component_id)
+                                    + ", count: "
+                                    + str(mp_node.get_count()),
+                                    contig_strand,
+                                    str(mp_node.get_simple_path()),
+                                ]
+                            ),
+                            file=component_descr_ofh,
+                        )
 
         for component_id in sorted_component_ids:
             mp_node_set = sg_component_to_mp_id[component_id]
@@ -135,32 +167,47 @@ class MultiPathGraph:
             for mp_node_id in mp_node_set:
                 mp_node_obj = self._mp_id_to_node[mp_node_id]
                 ordered_nodes.append(mp_node_obj)
-                #print(f"component_id: {component_id}\tmp_node_obj: {mp_node_obj}")
+                # print(f"component_id: {component_id}\tmp_node_obj: {mp_node_obj}")
 
+            # ordered_nodes = sorted(ordered_nodes, key=lambda x: (x._lend, x._rend))
+            ordered_nodes = sorted(
+                ordered_nodes,
+                key=lambda x: (
+                    x._lend,
+                    x._rend,
+                    x.get_left_boundary_sort_weight(),
+                    x.get_right_boundary_sort_weight(),
+                ),
+            )
 
-            #ordered_nodes = sorted(ordered_nodes, key=lambda x: (x._lend, x._rend))  
-            ordered_nodes = sorted(ordered_nodes, key=lambda x: (x._lend, x._rend, x.get_left_boundary_sort_weight(), x.get_right_boundary_sort_weight()))
-                        
             num_ordered_nodes = len(ordered_nodes)
-            logger.info(f"Building MP Graph for component_id {component_id} with {num_ordered_nodes} multipaths")
+            logger.info(
+                f"Building MP Graph for component_id {component_id} with {num_ordered_nodes} multipaths"
+            )
 
             if LRAA_Globals.DEBUG:
-                component_build_file = os.path.join(mpg_build_dir, f"{component_id}.comp.buildgraph.tsv")
+                component_build_file = os.path.join(
+                    mpg_build_dir, f"{component_id}.comp.buildgraph.tsv"
+                )
                 build_ofh = open(component_build_file, "a")
 
-            
             ## define edges, containments, and incompatibilities
             for i in range(0, len(ordered_nodes)):
                 node_i = ordered_nodes[i]
 
-                for j in range(i-1, -1, -1):
+                for j in range(i - 1, -1, -1):
                     node_j = ordered_nodes[j]
 
                     if LRAA_Globals.DEBUG:
-                        print("\n\n# comparing prev_j\n{}\nto_i\n{}".format(node_j, node_i), file=build_ofh)
+                        print(
+                            "\n\n# comparing prev_j\n{}\nto_i\n{}".format(
+                                node_j, node_i
+                            ),
+                            file=build_ofh,
+                        )
 
                     # nope - need more clever logic tracking prev max rend in ordered list.
-                    #if node_j._rend < node_i._lend:
+                    # if node_j._rend < node_i._lend:
                     #    if LRAA_Globals.DEBUG:
                     #        print("-non-overlapping, short-circuiting", file=build_ofh)
                     #    break # all earlier node j's will also be non-overlapping
@@ -185,28 +232,27 @@ class MultiPathGraph:
                         # draw edge between overlapping and compatible nodes.
                         if LRAA_Globals.DEBUG:
                             print("i-COMPATIBLE-j", file=build_ofh)
-                            #logger.debug("adding edge: {},{}".format(node_j, node_i))
+                            # logger.debug("adding edge: {},{}".format(node_j, node_i))
 
-                        if not LRAA_Globals.config['restrict_asm_to_collapse']:
+                        if not LRAA_Globals.config["restrict_asm_to_collapse"]:
                             self._mp_graph.add_edge(node_j, node_i)
-
 
                     else:
                         # incompatible pairs
                         if LRAA_Globals.DEBUG:
                             print("i-NOTcompatible-j", file=build_ofh)
-                        incompatible_pair_token = MultiPathGraphNode.get_mpgn_pair_token(node_i, node_j)
+                        incompatible_pair_token = (
+                            MultiPathGraphNode.get_mpgn_pair_token(node_i, node_j)
+                        )
                         self._incompatible_pairs.add(incompatible_pair_token)
-                    
 
         if LRAA_Globals.DEBUG:
             component_descr_ofh.close()
-        
+
         logger.info(f"DONE building MultiPathGraph for {contig_acc}")
-            
+
         return
-    
-    
+
     def get_ordered_nodes(self):
         # these are sorted by rend
         return list(self._mp_graph_nodes_list)
@@ -216,11 +262,9 @@ class MultiPathGraph:
         for mpgn in mpgn_nodes:
             mpgn.set_reweighted_flag(False)
         return
-    
-    
+
     def has_edge(self, multiPath_before, multiPath_after):
         return self._mp_graph.has_edge(multiPath_before, multiPath_after)
-
 
     def successors(self, mpgn):
         return self._mp_graph.successors(mpgn)
@@ -228,7 +272,6 @@ class MultiPathGraph:
     def predecessors(self, mpgn):
         return self._mp_graph.predecessors(mpgn)
 
-    
     def incompatible_mpgn_pair(self, mpgn_A, mpgn_B):
         mpgn_pair_token = MultiPathGraphNode.get_mpgn_pair_token(mpgn_A, mpgn_B)
         if mpgn_pair_token in self._incompatible_pairs:
@@ -236,10 +279,8 @@ class MultiPathGraph:
         else:
             return False
 
-        
     def get_splice_graph(self):
         return self._splice_graph
-
 
     def define_disjoint_graph_components_via_graph_traversal(self):
 
@@ -247,7 +288,7 @@ class MultiPathGraph:
         mpgn_seen = set()
 
         component_list = list()
-        
+
         while len(mpgn_list) > 0:
 
             queue = list()
@@ -272,22 +313,23 @@ class MultiPathGraph:
                         queue.extend(node.get_successors())
                     if node.has_containments():
                         queue.extend(node.get_containments())
-            
+
             if len(component) > 0:
                 component_list.append(component)
 
-        logger.info("identified {} disjoint graph components".format(len(component_list)))
+        logger.info(
+            "identified {} disjoint graph components".format(len(component_list))
+        )
 
         ## assign the component ids
         component_counter = 0
         for component in component_list:
             component_counter += 1
-            #print("component: {}, counter: {}".format(component, component_counter))
+            # print("component: {}, counter: {}".format(component, component_counter))
             for mpgn in component:
                 mpgn.set_component_id(component_counter)
-        
-        return component_list
 
+        return component_list
 
     def define_disjoint_graph_components_via_shared_splice_graph_vertex(self):
 
@@ -302,12 +344,13 @@ class MultiPathGraph:
                 all_splice_graph_nodes.add(splice_graph_node)
                 splice_graph_node_to_mpgns[splice_graph_node].add(mpgn)
 
-
         # build disjoint components
         splice_graph_nodes_visited = set()
 
         component_list = list()
-        all_splice_graph_nodes = list(all_splice_graph_nodes) # convert earlier set to list
+        all_splice_graph_nodes = list(
+            all_splice_graph_nodes
+        )  # convert earlier set to list
         while len(all_splice_graph_nodes) > 0:
 
             queue = list()
@@ -327,68 +370,67 @@ class MultiPathGraph:
                 for mpgn in mpgns:
                     if mpgn not in component:
                         component.append(mpgn)
-                        
+
                     mpgn_splice_graph_nodes = mpgn.get_splice_graph_node_objs_for_path()
                     for splice_graph_node in mpgn_splice_graph_nodes:
-                        if ( (splice_graph_node not in splice_graph_nodes_visited)
-                            and
-                            (splice_graph_node not in queue) ):
+                        if (splice_graph_node not in splice_graph_nodes_visited) and (
+                            splice_graph_node not in queue
+                        ):
                             queue.append(splice_graph_node)
-
 
             component_list.append(component)
 
-        logger.info("identified {} disjoint graph components".format(len(component_list)))
+        logger.info(
+            "identified {} disjoint graph components".format(len(component_list))
+        )
 
         ## assign the component ids
         component_counter = 0
         for component in component_list:
             component_counter += 1
-            #print("component: {}, counter: {}".format(component, component_counter))
+            # print("component: {}, counter: {}".format(component, component_counter))
             for mpgn in component:
                 mpgn.set_component_id(component_counter)
 
-            
         return component_list
-                            
-    
-    
+
     def describe_graph(self, output_filename):
 
-        ofh = open(output_filename, 'a')
+        ofh = open(output_filename, "a")
 
-        ofh2 = open(output_filename + ".tsv", 'a') # tabulated output
-        
+        ofh2 = open(output_filename + ".tsv", "a")  # tabulated output
+
         mpgn_list = self.get_ordered_nodes()
         for mpgn in mpgn_list:
             ofh.write(str(mpgn) + "\n")
             all_mpgn_read_names = mpgn.get_read_names()
             all_contained_read_names = set()
-            
+
             for containment in mpgn.get_containments():
                 ofh.write("\t" + str(containment) + "\n")
                 containment_read_names = containment.get_read_names()
                 all_contained_read_names.update(containment_read_names)
             ofh.write("\n")
 
-            read_names_not_from_containments = all_mpgn_read_names - all_contained_read_names
+            read_names_not_from_containments = (
+                all_mpgn_read_names - all_contained_read_names
+            )
             mpgn_id = mpgn.get_id()
             for read_name in read_names_not_from_containments:
                 print("\t".join([mpgn_id, "primary", read_name]), file=ofh2)
             for read_name in all_contained_read_names:
                 print("\t".join([mpgn_id, "contained", read_name]), file=ofh2)
-            
+
         ofh.close()
         ofh2.close()
-        
+
         return
-    
 
     def write_mp_graph_nodes_to_gtf(self, gtf_output_filename):
 
         contig_acc = self._splice_graph.get_contig_acc()
-        
-        ofh = open(gtf_output_filename, 'a')
+
+        ofh = open(gtf_output_filename, "a")
 
         mpgn_list = self.get_ordered_nodes()
         for mpgn in mpgn_list:
@@ -396,40 +438,49 @@ class MultiPathGraph:
 
             mpgn_read_count = mpgn.get_count()
             mpgn_component_id = mpgn.get_component_id()
-            
+
             mpgn_id = mpgn.get_id()
-            trans_id = "t__count={}_Comp={}_.".format(mpgn_read_count, mpgn_component_id) + mpgn_id
-            gene_id = "g__count={}_Comp={}_".format(mpgn_read_count, mpgn_component_id) + mpgn_id
-            
+            trans_id = (
+                "t__count={}_Comp={}_.".format(mpgn_read_count, mpgn_component_id)
+                + mpgn_id
+            )
+            gene_id = (
+                "g__count={}_Comp={}_".format(mpgn_read_count, mpgn_component_id)
+                + mpgn_id
+            )
+
             for splice_graph_node in splice_graph_nodes:
                 if splice_graph_node is not None and type(splice_graph_node) == Exon:
 
                     coords = splice_graph_node.get_coords()
-                    
-                    ofh.write("\t".join([contig_acc,
-                                        "MPGN",
-                                        "exon",
-                                         str(coords[0]),
-                                         str(coords[1]),
-                                         ".",
-                                         "?",
-                                         ".",
-                                         "gene_id \"{}\"; transcript_id \"{}\";".format(gene_id, trans_id)]) + "\n")
-                
 
-        
+                    ofh.write(
+                        "\t".join(
+                            [
+                                contig_acc,
+                                "MPGN",
+                                "exon",
+                                str(coords[0]),
+                                str(coords[1]),
+                                ".",
+                                "?",
+                                ".",
+                                'gene_id "{}"; transcript_id "{}";'.format(
+                                    gene_id, trans_id
+                                ),
+                            ]
+                        )
+                        + "\n"
+                    )
 
         ofh.close()
-        
 
         return
 
-
     def remove_small_components(self, mpg_components, min_transcript_length):
 
-
         surviving_components = list()
-        
+
         for mpgn_list in mpg_components:
             max_seq_len = 0
             for mpgn in mpgn_list:
@@ -441,4 +492,3 @@ class MultiPathGraph:
                 surviving_components.append(mpgn_list)
 
         return surviving_components
-    
