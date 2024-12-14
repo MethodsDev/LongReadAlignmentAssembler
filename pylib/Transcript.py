@@ -51,6 +51,8 @@ class Transcript(GenomeFeature):
             list()
         )  # list of read names supporting the transcript structure.
 
+        self._read_weights = dict()
+
         self._multipath = None  # multipath obj
 
         self._simplepath = None
@@ -195,6 +197,9 @@ class Transcript(GenomeFeature):
             self.read_names.extend(list(read_names))
         else:
             self.read_names.append(read_names)
+
+    def set_read_weights(self, read_weights):
+        self._read_weights.update(read_weights)
 
     def prune_reftranscript_as_evidence(self):
         self.read_names = [

@@ -11,6 +11,7 @@ from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
 import lmdb
+from GenomeFeature import Exon
 
 logger = logging.getLogger(__name__)
 
@@ -241,8 +242,29 @@ class Quantify:
 
                 self._mp_to_transcripts[mp] = transcripts_assigned
 
+                transcript_read_weights = (
+                    self._assign_read_weights_based_on_read_end_agreement(
+                        splice_graph, mp, transcripts_assigned
+                    )
+                )
+
                 for transcript in transcripts_assigned:
-                    transcript.add_read_names(mp.get_read_names())
+                    transcript_id = transcript.get_transcript_id()
+                    mp_read_weight = transcript_read_weights[transcript_id]
+                    read_names = mp.get_read_names()
+                    logger.debug(
+                        "Assigning {} mp: {} read weights as: {}".format(
+                            transcript.get_transcript_id(),
+                            mp.toShortDescr(),
+                            mp_read_weight,
+                        )
+                    )
+                    transcript.add_read_names(read_names)
+
+                    read_names_with_weights = dict(
+                        [(read_name, mp_read_weight) for read_name in read_names]
+                    )
+                    transcript.set_read_weights(read_names_with_weights)
 
                 num_paths_assigned += 1
                 num_read_counts_assigned += count
@@ -589,6 +611,86 @@ class Quantify:
 
         else:
             return None
+
+    def _assign_read_weights_based_on_read_end_agreement(
+        self, splice_graph, mp, transcripts_assigned
+    ):
+
+        mp_sp = mp.get_simple_path()
+
+        transcript_id_to_sum_end_dists = dict()
+        sum_dists = 0
+        for transcript in transcripts_assigned:
+            transcript_id = transcript.get_transcript_id()
+            transcript_sp = transcript.get_simple_path()
+            dist_lend = self._get_simple_path_dist_to_termini(
+                splice_graph, mp_sp, transcript_sp, "lend"
+            )
+            dist_rend = self._get_simple_path_dist_to_termini(
+                splice_graph, mp_sp, transcript_sp, "rend"
+            )
+            sum_dist = dist_lend + dist_rend
+            transcript_id_to_sum_end_dists[transcript_id] = sum_dist
+            sum_dists += sum_dist
+
+        # determine relative weightings
+        transcript_id_to_mp_weights = dict()
+        sum_weights = 0.0
+        num_transcripts_assigned = len(transcripts_assigned)
+        for transcript in transcripts_assigned:
+            transcript_id = transcript.get_transcript_id()
+            dist = transcript_id_to_sum_end_dists[transcript_id]
+            logger.debug(
+                "transcript {} has sum_end_dist: {} and total_sum_dists_all_trans: {}".format(
+                    transcript_id, dist, sum_dists
+                )
+            )
+            weight = 1.0 - (dist / sum_dists) if sum_dists > 0 else 1.0
+            transcript_id_to_mp_weights[transcript_id] = weight
+            sum_weights += weight
+
+        # renormalize weights
+        for transcript, weight in transcript_id_to_mp_weights.items():
+            transcript_id_to_mp_weights[transcript] = (
+                weight / sum_weights
+                if sum_weights > 0
+                else 1 / num_transcripts_assigned
+            )
+
+        return transcript_id_to_mp_weights
+
+    def _get_simple_path_dist_to_termini(
+        self, splice_graph, source_sp, target_sp, from_which_end
+    ):
+
+        assert from_which_end in (
+            "lend",
+            "rend",
+        ), "from_which_end must be 'lend' or 'rend'"
+
+        if from_which_end == "rend":
+            # reverse it so we can walk from left instead of from right.
+            target_sp = list(reversed(target_sp))
+
+        matching_node_idx = None
+        for idx, node_id in enumerate(target_sp):
+            if node_id in source_sp:
+                matching_node_idx = idx
+                break
+
+        assert (
+            matching_node_idx is not None
+        ), "Error, cannot find matching node in target path {} from source path {}".format(
+            target_sp, source_sp
+        )
+
+        dist = 0
+        for node_id in target_sp[0:matching_node_idx]:
+            node = splice_graph.get_node_obj_via_id(node_id)
+            if type(node) == Exon:
+                dist += node.get_feature_length()
+
+        return dist
 
     def _estimate_isoform_read_support(self, transcripts):
         """
