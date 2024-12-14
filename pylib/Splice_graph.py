@@ -1025,12 +1025,13 @@ class Splice_graph:
                     LRAA_Globals.config["min_per_id"]
                     <= LRAA_Globals.config["max_aggregate_splice_boundary_per_id"]
                 ):
-                    if (
-                        abs(
-                            most_supported_intron.get_coords()[other_idx]
-                            - alt_intron.get_coords()[other_idx]
-                        )
-                        <= LRAA_Globals.config["aggregate_splice_boundary_dist"]
+                    if abs(
+                        most_supported_intron.get_coords()[other_idx]
+                        - alt_intron.get_coords()[other_idx]
+                    ) <= LRAA_Globals.config[
+                        "aggregate_splice_boundary_dist"
+                    ] and not alt_intron.has_read_type(
+                        "ref_transcript"
                     ):
                         logger.debug(
                             "alt intron: {} is within aggregation distance of {} and will be purged".format(
