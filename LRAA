@@ -692,7 +692,7 @@ def main():
                 )
 
                 if input_transcripts is not None:
-                    lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
+                    mp_counter.prune_ref_transcripts_as_evidence()
 
                 # Do an initial quant
                 q = Quantify(

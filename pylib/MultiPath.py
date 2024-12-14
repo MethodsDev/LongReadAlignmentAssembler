@@ -99,6 +99,19 @@ class MultiPath:
         else:
             self._read_names.add(read_name)
 
+    def remove_read_name(self, read_name):
+        self._read_names.discard(read_name)
+
+    def prune_reftranscript_as_evidence(self):
+        read_names_to_delete = list()
+        for read_name in self.get_read_names():
+            if "reftranscript:" in read_name:
+                read_names_to_delete.append(read_name)
+
+        if read_names_to_delete:
+            for read_name in read_names_to_delete:
+                self.remove_read_name(read_name)
+
     # splice graph operations
 
     def get_splice_graph(self):

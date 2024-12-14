@@ -35,6 +35,13 @@ class MultiPathCountPair:
         ret_text = "{}\t{}".format(str(self._multipath), self._count)
         return ret_text
 
+    def prune_reftranscript_as_evidence(self):
+        self._multipath.prune_reftranscript_as_evidence()
+        self.reset_count()
+
+    def get_count(self):
+        return self._count
+
 
 class MultiPathCounter:
 
@@ -134,5 +141,18 @@ class MultiPathCounter:
                     )
 
         logger.debug("MultPathCounter validates.")
+
+        return
+
+    def prune_ref_transcripts_as_evidence(self):
+        multipaths_to_purge = set()
+        for mp_key, mp_count_pair in self._multipath_counter.items():
+            mp_count_pair.prune_reftranscript_as_evidence()
+            if mp_count_pair.get_count() == 0:
+                multipaths_to_purge.add(mp_key)
+
+        if len(multipaths_to_purge) > 0:
+            for mp_key in multipaths_to_purge:
+                del self._multipath_counter[mp_key]
 
         return
