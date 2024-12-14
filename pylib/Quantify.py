@@ -209,7 +209,10 @@ class Quantify:
                     anchor_PolyA_TSS=False,
                 )
 
-            if transcripts_assigned is None:
+            if (
+                transcripts_assigned is None
+                and LRAA_Globals.config["aggressively_assign_reads"]
+            ):
                 # last resort, do majority voting
                 transcripts_assigned = (
                     self._assign_path_to_transcript_by_majority_voting(
