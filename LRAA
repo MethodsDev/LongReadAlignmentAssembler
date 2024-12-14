@@ -666,7 +666,7 @@ def main():
                 logger.info(
                     f"-building multpath graph for {contig_acc} {contig_strand}"
                 )
-                lraa_obj.build_multipath_graph(
+                mp_counter = lraa_obj.build_multipath_graph(
                     contig_acc,
                     contig_strand,
                     contig_seq_str,
@@ -679,6 +679,18 @@ def main():
                 logger.info(f"-begin reconstructing isoforms for {contig_acc}")
                 transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
+                if len(transcripts) == 0:
+                    logger.info(
+                        "no transcripts constructed on {} {}".format(
+                            contig_acc, contig_strand
+                        )
+                    )
+                    continue
+
+                logger.debug(
+                    "\n//SECTION QUANT for assembled isoforms: Assigning reads to paths in graph."
+                )
+
                 if input_transcripts is not None:
                     lraa_obj.prune_ref_transcripts_as_evidence(transcripts)
 
@@ -686,7 +698,7 @@ def main():
                 q = Quantify(
                     run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
                 )
-                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+                frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                 ##########################################
                 ## Filtering of isoforms to remove 'noise'
@@ -697,7 +709,7 @@ def main():
                     transcripts, sg, frac_read_assignments
                 )
                 # rerun quant for post-filtering
-                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+                frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                 # Filter isoforms according to minimum isoform fraction
                 if min_isoform_fraction > 0:

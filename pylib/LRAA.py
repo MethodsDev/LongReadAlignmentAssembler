@@ -48,6 +48,8 @@ class LRAA:
         self._splice_graph = splice_graph
 
         self._multipath_graph = None  # set under build_multipath_graph()
+        self._mp_counter = None  # set under build_multipath_graph()
+
         self._contig_acc = None  # set under build_multipath_graph()
         self._contig_strand = None  # set under build_multipath_graph()
 
@@ -70,6 +72,7 @@ class LRAA:
         mp_counter = self._populate_read_multi_paths(
             contig_acc, contig_strand, contig_seq, bam_file, allow_spacers
         )
+        self._mp_counter = mp_counter
 
         if input_transcripts is not None:
             logger.info("-incorporating input transcripts into multpath graph")
@@ -98,7 +101,7 @@ class LRAA:
         build_time = time.time() - start_time
         logger.info("-multipath graph building took {:.1f} seconds.".format(build_time))
 
-        return
+        return mp_counter
 
     def reconstruct_isoforms(self, single_best_only=False):
 

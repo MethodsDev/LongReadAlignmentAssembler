@@ -39,6 +39,10 @@ class Quantify:
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
 
+        # init transcript quant info
+        for transcript in transcripts:
+            transcript.init_quant_info()
+
         # assign path nodes to gene
         # also assign gene_id to transcript objs
         self._assign_path_nodes_to_gene(transcripts)
@@ -715,7 +719,8 @@ class Quantify:
         for transcript in transcripts:
             read_names = transcript.get_read_names()
             for read_name in read_names:
-                read_name_to_transcripts[read_name].add(transcript)
+                read_weight = transcript.get_read_weight(read_name)
+                read_name_to_transcripts[read_name].add((transcript, read_weight))
 
         num_mapped_reads = len(read_name_to_transcripts)
 
@@ -809,7 +814,7 @@ class Quantify:
                     for read_name in read_names:
                         transcripts_with_read = read_name_to_transcripts[read_name]
                         sum_expr = 0
-                        for tran_with_read in transcripts_with_read:
+                        for tran_with_read, read_weight in transcripts_with_read:
                             tran_with_read_id = tran_with_read.get_transcript_id()
                             sum_expr += transcript_to_expr_val[tran_with_read_id]
                         frac_read_assignment = transcript_expr / sum_expr

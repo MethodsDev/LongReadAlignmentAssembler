@@ -201,6 +201,14 @@ class Transcript(GenomeFeature):
     def set_read_weights(self, read_weights):
         self._read_weights.update(read_weights)
 
+    def get_read_weight(self, read_name):
+        assert (
+            read_name in self._read_weights
+        ), "Error, not finding read_name {} in read weights for transcript {}".format(
+            read_name, self.get_transcript_id()
+        )
+        return self._read_weights[read_name]
+
     def prune_reftranscript_as_evidence(self):
         self.read_names = [
             read_name
@@ -301,6 +309,14 @@ class Transcript(GenomeFeature):
             gtf_text += "\n"
 
         return gtf_text
+
+    def init_quant_info(self):
+        self._read_weights = dict()
+        self._read_counts_assigned = None
+        self._isoform_fraction = None
+        self.read_names = list()
+
+        return
 
 
 class GTF_contig_to_transcripts:
