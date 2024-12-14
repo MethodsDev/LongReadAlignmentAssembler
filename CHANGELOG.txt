@@ -1,3 +1,9 @@
+v0.2.10
+- dont aggregate small splice dist if alt intron is a ref intron
+- computing multipath transcript compatibility weights based on distance to termini
+- restructuring quant in assembly step to access mp_counter
+- included option --no_use_weighted_read_assignments to restore earlier behavior
+
 v0.2.9
 - made aggressive read assignment a configurable parameter
 - skip genes w/o read support
