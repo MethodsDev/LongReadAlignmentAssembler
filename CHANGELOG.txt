@@ -1,3 +1,9 @@
+v0.2.9
+- made aggressive read assignment a configurable parameter
+- skip genes w/o read support
+- adding test for expr corr w/ and w/o EM
+- blackened all pylib
+- adjusting TSS and PolyA for input_transcripts based on dist/2
 
 v0.2.8
 - split parallelization targeting larger components to separate threads while the main process quickly handles the smaller ones directly.
