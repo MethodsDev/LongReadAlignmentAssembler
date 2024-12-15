@@ -6,6 +6,7 @@ from collections import defaultdict
 import logging
 import MultiPath
 import LRAA_Globals
+from LRAA_Globals import SPACER
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ class MultiPathCounter:
             if LRAA_Globals.DEBUG:
                 # verify this multipath obj is not already stored.
                 logger.debug(
-                    "-verifying simple paths are unique in the multpath counter"
+                    "-verifying simple paths are unique in the multpath counter and lack spacers"
                 )
                 for mp_count_pair_obj in self._multipath_counter.values():
                     mp, count = mp_count_pair_obj.get_multipath_and_count()
@@ -85,13 +86,19 @@ class MultiPathCounter:
                                 str(multipath_obj), str(mp)
                             )
                         )
+                    if SPACER in mp.get_simple_path():
+                        raise RuntimeError(
+                            "Encountered unallowed SPACER in multipath: {}".format(
+                                mp.get_simple_path()
+                            )
+                        )
 
             self._multipath_counter[multipath_key] = MultiPathCountPair(multipath_obj)
 
             return self
 
     def get_all_MultiPathCountPairs(self):
-        self.validate_MultiPathCounter()
+        # self.validate_MultiPathCounter()
         return self._multipath_counter.values()
 
     def __repr__(self):

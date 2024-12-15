@@ -68,6 +68,7 @@ class Splice_graph:
 
         self._input_transcript_lend_boundaries = set()
         self._input_transcript_rend_boundaries = set()
+        self._input_transcript_exon_coords_itree = itree.IntervalTree()
 
         return
 
@@ -615,6 +616,7 @@ class Splice_graph:
 
         for transcript in transcripts:
             orient = transcript.get_orient()
+            transcript_id = transcript.get_transcript_id()
 
             if contig_strand is not None and orient != contig_strand:
                 continue
@@ -632,6 +634,9 @@ class Splice_graph:
             # add coverage for exonic region
             for exon_segment in exon_segments:
                 lend, rend = exon_segment
+                self._input_transcript_exon_coords_itree[lend : rend + 1] = (
+                    transcript_id
+                )
 
                 logger.debug("-ensuring coverage for exon: {}-{}".format(lend, rend))
                 for i in range(lend, rend + 1):
@@ -1301,6 +1306,21 @@ class Splice_graph:
                         )
                     )
                     exons_to_purge.add(overlapping_exon_seg)
+
+        # retain exons of input transcripts
+        exons_to_retain = set()
+        for exon in exons_to_purge:
+            lend, rend = exon.get_coords()
+            if len(self._input_transcript_exon_coords_itree[lend : rend + 1]) > 0:
+                logger.debug(
+                    "Retaining exon segment {}-{} due to overlap with input transcript exon segment".format(
+                        lend, rend
+                    )
+                )
+                exons_to_retain.add(exon)
+
+        if exons_to_retain:
+            exons_to_purge = exons_to_purge - exons_to_retain
 
         logger.info(
             "-removing {} lowly expressed exon segments based on intron overlap".format(

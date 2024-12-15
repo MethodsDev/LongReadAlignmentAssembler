@@ -575,12 +575,19 @@ class LRAA:
                 segments, refine_TSS_simple_path=True, refine_PolyA_simple_path=True
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
-            if path is not None:
-                # strip TSS and PolyA
-                # path, read_TSS_id, read_polyA_id = SPU.trim_TSS_and_PolyA(
-                #    path, self._splice_graph.get_contig_strand()
-                # )
-                transcript.set_simple_path(path)
+            assert (
+                path is not None
+            ), "Error, input transcript {} has no path in graph.".format(
+                transcript.get_transcript_id()
+            )
+
+            assert (
+                SPACER not in path
+            ), "Error, found SPACER in input transcript {} with path {}".format(
+                transcript.get_transcript_id(), str(path)
+            )
+
+            transcript.set_simple_path(path)
 
         return
 
