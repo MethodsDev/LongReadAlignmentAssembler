@@ -105,8 +105,8 @@ RUN R -e 'BiocManager::install("clustermole")'
 
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.10"
-ENV LRAA_CO="c47ea28c03a993e4f42ffffa987ca61b955d7b3a"
+ENV LRAA_VERSION="v0.2.11"
+ENV LRAA_CO="a7669a0299f21b1941a7bb83586a6996eb36fa45"
 # update VERSION and LRAA_CO files with version info and checkout
 
 RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembler.git LRAA && \
