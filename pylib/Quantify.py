@@ -742,7 +742,7 @@ class Quantify:
 
         transcript_id_to_transcript_obj = dict()
 
-        ## first round of EM for now - split evenly across mapped transcripts.
+        ## first round of EM for now - split across mapped transcripts according to normalized weights or equally if not using weights..
         for transcript in transcripts:
 
             transcript_id = transcript.get_transcript_id()
@@ -751,10 +751,32 @@ class Quantify:
             transcript_read_count_total = 0
             read_names = transcript.get_read_names()
             for read_name in read_names:
-                num_transcripts_with_assigned_read = len(
-                    read_name_to_transcripts[read_name]
-                )
-                frac_read_assignment = 1 / num_transcripts_with_assigned_read
+
+                frac_read_assignment = 0
+                all_transcripts_with_read = read_name_to_transcripts[read_name]
+
+                if LRAA_Globals.config["use_weighted_read_assignments"]:
+                    sum_weights = 0
+                    for each_transcript, read_weight in all_transcripts_with_read:
+                        sum_weights += read_weight
+
+                    frac_read_assignment = (
+                        transcript.get_read_weight(read_name) / sum_weights
+                        if sum_weights > 0
+                        else 0
+                    )
+
+                else:
+                    # split read equally across all copatible reads.
+                    num_transcripts_with_assigned_read = len(
+                        read_name_to_transcripts[read_name]
+                    )
+                    frac_read_assignment = (
+                        1 / num_transcripts_with_assigned_read
+                        if num_transcripts_with_assigned_read > 0
+                        else 0
+                    )
+
                 transcript_read_count_total += frac_read_assignment
                 transcript_to_fractional_read_assignment[transcript_id][
                     read_name
@@ -831,30 +853,14 @@ class Quantify:
                         sum_expr = 0
                         for tran_with_read, read_weight in transcripts_with_read:
                             tran_with_read_id = tran_with_read.get_transcript_id()
-                            other_trans_weight = 1.0
-                            if LRAA_Globals.config["use_weighted_read_assignments"]:
-                                other_trans_obj = transcript_id_to_transcript_obj[
-                                    tran_with_read_id
-                                ]
-                                other_trans_weight = other_trans_obj.get_read_weight(
-                                    read_name
-                                )
-
-                            sum_expr += (
-                                other_trans_weight
-                                * transcript_to_expr_val[tran_with_read_id]
-                            )
+                            sum_expr += transcript_to_expr_val[tran_with_read_id]
 
                         # additionally weight read according to start/end agreement
-                        weighted_transcript_expr = transcript_expr
-                        if LRAA_Globals.config["use_weighted_read_assignments"]:
-                            weighted_transcript_expr = (
-                                transcript.get_read_weight(read_name) * transcript_expr
-                            )
 
                         frac_read_assignment = (
-                            weighted_transcript_expr / sum_expr if sum_expr > 0 else 0.0
+                            transcript_expr / sum_expr if sum_expr > 0 else 0.0
                         )
+
                         transcript_to_read_count[transcript_id] += frac_read_assignment
                         transcript_to_fractional_read_assignment[transcript_id][
                             read_name
