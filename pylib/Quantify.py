@@ -922,6 +922,8 @@ class Quantify:
                         ][read_name]
                         transcript_to_fractional_read_assignment[t_id][read_name] = (
                             frac_assignment / sum_frac_read_assignments
+                            if sum_frac_read_assignments > 0
+                            else 0
                         )
 
                 ## M-step
