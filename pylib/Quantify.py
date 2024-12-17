@@ -633,6 +633,18 @@ class Quantify:
             dist_rend = self._get_simple_path_dist_to_termini(
                 splice_graph, mp_sp, transcript_sp, "rend"
             )
+            """
+            logger.debug(
+                "MP {} lend dist for {} = {}".format(
+                    mp.get_id(), transcript_id, dist_lend
+                )
+            )
+            logger.debug(
+                "MP {} rend dist for {} = {}".format(
+                    mp.get_id(), transcript_id, dist_rend
+                )
+            )
+            """
             sum_dist = dist_lend + dist_rend
             transcript_id_to_sum_end_dists[transcript_id] = sum_dist
             sum_dists += sum_dist
@@ -860,7 +872,7 @@ class Quantify:
                         else 0
                     )  # * 1e6
                     logger.debug(
-                        f"-assigning transcript {transcript_id} read count: {transcript_read_count_total} and expr val {transcript_read_count}/{num_mapped_reads} = {transcript_to_expr_val[transcript_id]}"
+                        f"-EM round {EM_round} assigning transcript {transcript_id} read count: {transcript_read_count} and expr val {transcript_read_count}/{num_mapped_reads} = {transcript_to_expr_val[transcript_id]}"
                     )
 
                 log_likelihood = compute_log_likelihood()
@@ -1016,6 +1028,7 @@ class Quantify:
                             transcript_id,
                             readname,
                             "{:.3f}".format(frac_read_assigned),
+                            "{:.3f}".format(transcript.get_read_weight(readname)),
                         ]
                     ),
                     file=ofh_read_tracking,
