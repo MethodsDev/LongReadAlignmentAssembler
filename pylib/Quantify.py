@@ -742,11 +742,29 @@ class Quantify:
 
         transcript_id_to_transcript_obj = dict()
 
+        transcript_to_mean_read_weight = dict()
+
+        def get_mean_read_weight(transcript):
+            read_names = transcript.get_read_names()
+            if len(read_names) == 0:
+                return 0
+            weight_sum = 0
+            for read_name in read_names:
+                weight = transcript.get_read_weight(read_name)
+                weight_sum += weight
+            mean_read_weight = weight_sum / len(read_names)
+            return mean_read_weight
+
         ## first round of EM for now - split across mapped transcripts according to normalized weights or equally if not using weights..
         for transcript in transcripts:
 
             transcript_id = transcript.get_transcript_id()
             transcript_id_to_transcript_obj[transcript_id] = transcript
+
+            if LRAA_Globals.config["use_weighted_read_assignments"]:
+                transcript_to_mean_read_weight[transcript] = get_mean_read_weight(
+                    transcript
+                )
 
             transcript_read_count_total = 0
             read_names = transcript.get_read_names()
@@ -843,22 +861,40 @@ class Quantify:
                 ## fractionally assign reads based on expr values
                 transcript_to_read_count.clear()
 
+                ## E-step
                 for transcript in transcripts:
                     transcript_id = transcript.get_transcript_id()
                     transcript_read_count_total = 0
                     read_names = transcript.get_read_names()
                     transcript_expr = transcript_to_expr_val[transcript_id]
+
                     for read_name in read_names:
                         transcripts_with_read = read_name_to_transcripts[read_name]
-                        sum_expr = 0
-                        for tran_with_read, read_weight in transcripts_with_read:
-                            tran_with_read_id = tran_with_read.get_transcript_id()
-                            sum_expr += transcript_to_expr_val[tran_with_read_id]
+                        sum_denom_expr = 0
+                        for (
+                            each_tran_with_read,
+                            each_tran_read_weight,
+                        ) in transcripts_with_read:
 
+                            if not LRAA_Globals.config["use_weighted_read_assignments"]:
+                                each_tran_read_weight = 1.0
+
+                            each_tran_id = each_tran_with_read.get_transcript_id()
+
+                            sum_denom_expr_contrib = transcript_to_expr_val[
+                                each_tran_id
+                            ]
+                            sum_denom_expr += sum_denom_expr_contrib
+
+                        read_weight = transcript.get_read_weight(read_name)
                         # additionally weight read according to start/end agreement
+                        if not LRAA_Globals.config["use_weighted_read_assignments"]:
+                            read_weight = 1
 
                         frac_read_assignment = (
-                            transcript_expr / sum_expr if sum_expr > 0 else 0.0
+                            read_weight * transcript_expr / sum_denom_expr
+                            if sum_denom_expr > 0
+                            else 0.0
                         )
 
                         transcript_to_read_count[transcript_id] += frac_read_assignment
@@ -866,19 +902,54 @@ class Quantify:
                             read_name
                         ] = frac_read_assignment
 
+                # renormalize read fractions so they sum to 1.
+                for read_name in read_name_to_transcripts:
+                    sum_frac_read_assignments = 0
+                    for transcripts_with_read in read_name_to_transcripts[read_name]:
+                        each_tran_with_read, read_weight = transcripts_with_read
+                        t_id = each_tran_with_read.get_transcript_id()
+                        frac_assignment = transcript_to_fractional_read_assignment[
+                            t_id
+                        ][read_name]
+                        sum_frac_read_assignments += frac_assignment
+
+                    # now normalize
+                    for transcripts_with_read in read_name_to_transcripts[read_name]:
+                        each_tran_with_read, read_weight = transcripts_with_read
+                        t_id = each_tran_with_read.get_transcript_id()
+                        frac_assignment = transcript_to_fractional_read_assignment[
+                            t_id
+                        ][read_name]
+                        transcript_to_fractional_read_assignment[t_id][read_name] = (
+                            frac_assignment / sum_frac_read_assignments
+                        )
+
+                ## M-step
                 ## recompute expr_vals
                 transcript_to_expr_val.clear()
 
+                sum_transcript_assigned_expr_vals = 0
                 for transcript in transcripts:
                     transcript_id = transcript.get_transcript_id()
                     transcript_read_count = transcript_to_read_count[transcript_id]
+
                     transcript_to_expr_val[transcript_id] = (
-                        transcript_read_count / num_mapped_reads
+                        (transcript_read_count / num_mapped_reads)
                         if num_mapped_reads > 0
                         else 0
                     )  # * 1e6
                     logger.debug(
                         f"-EM round {EM_round} assigning transcript {transcript_id} read count: {transcript_read_count} and expr val {transcript_read_count}/{num_mapped_reads} = {transcript_to_expr_val[transcript_id]}"
+                    )
+                    sum_transcript_assigned_expr_vals += transcript_to_expr_val[
+                        transcript_id
+                    ]
+
+                # renormalize fractional expression values
+                for transcript in transcripts:
+                    transcript_to_expr_val[transcript_id] = (
+                        transcript_to_expr_val[transcript_id]
+                        / sum_transcript_assigned_expr_vals
                     )
 
                 log_likelihood = compute_log_likelihood()
