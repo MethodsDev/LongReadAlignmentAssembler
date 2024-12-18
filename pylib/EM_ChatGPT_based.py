@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def run_EM(transcripts, max_EM_iterations=1000):
 
-    local_debug = False
+    local_debug = True
 
     num_transcripts = len(transcripts)
 
@@ -26,12 +26,18 @@ def run_EM(transcripts, max_EM_iterations=1000):
         print(
             "\n".join(
                 [
-                    "read name to transcripts and weights:",
-                    str(read_name_to_transcripts_and_weights),
-                    "transcript id to idx: ",
-                    str(transcript_id_to_idx),
+                    "read name to transcripts and weights:\n",
+                    "\n".join(
+                        [
+                            f"{x}:\t{y}"
+                            for (x, y) in read_name_to_transcripts_and_weights.items()
+                        ]
+                    ),
+                    "\ntranscript id to idx:",
+                    "\n".join(f"{x}\t{y}" for (x, y) in transcript_id_to_idx.items()),
                 ]
             )
+            + "\n\n"
         )
 
     read_names = sorted(list(read_name_to_transcripts_and_weights.keys()))
@@ -63,15 +69,32 @@ def run_EM(transcripts, max_EM_iterations=1000):
         read_weights.append(indiv_read_to_trans_weights)
 
     if local_debug:
+
+        read_weights_for_printing = list()
+        for _list in read_weights:
+            read_weights_for_printing.append([f"{x:.3f}" for x in _list])
+
+        trans_assignments_and_weights = zip(read_assignments, read_weights_for_printing)
+
         print(
             "\n".join(
                 [
                     "LRAA interface inputs:",
-                    "read_assignments: " + str(read_assignments),
-                    "read_weights: " + str(read_weights),
+                    "read_assignments and weights:\n"
+                    + "\n".join(
+                        [
+                            f"r[{x}]-Ts: {y}\nr[{x}]-ws {z}\n"
+                            for x, (y, z) in enumerate(trans_assignments_and_weights)
+                        ]
+                    )
+                    + "\n\n",
                 ]
             )
         )
+
+    #########
+    ## Run EM
+    #########
 
     (
         trans_expr_levels_array,
@@ -82,15 +105,27 @@ def run_EM(transcripts, max_EM_iterations=1000):
     )
 
     if local_debug:
+
+        fractional_read_assignments_array_for_printing = list()
+        for _list in fractional_read_assignments_array:
+            fractional_read_assignments_array_for_printing.append(
+                [f"{x:.4f}" for x in _list]
+            )
+
         print(
             "\n".join(
                 [
-                    "LRAA out from chatGPT method:",
-                    "trans_expr_levels_array: " + str(trans_expr_levels_array),
-                    "transcript_sum_fractional_assignments_array: "
-                    + str(transcript_sum_fractional_assignments_array),
-                    "fractional_read_assignments_array: "
-                    + str(fractional_read_assignments_array),
+                    "\n\n# LRAA out from chatGPT method:",
+                    "trans_expr_levels_array:\n"
+                    + "\n".join([f"{x:.3f}" for x in trans_expr_levels_array]),
+                    "\ntranscript_sum_fractional_assignments_array:\n"
+                    + "\n".join(
+                        [str(x) for x in transcript_sum_fractional_assignments_array]
+                    ),
+                    "\nfractional_read_assignments_array: "
+                    + "\n".join(
+                        [str(x) for x in fractional_read_assignments_array_for_printing]
+                    ),
                 ]
             )
         )
