@@ -737,7 +737,7 @@ class Quantify:
             if EM_method_use == "BJH":
                 EM_method = EM_bjh.run_EM
 
-            elif EM_method_use == "ChatGPT":
+            elif EM_method_use == "CGPT":
                 EM_method = EM_ChatGPT_based.run_EM
 
             else:

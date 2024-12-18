@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def run_EM(transcripts, max_EM_iterations=1000):
 
-    local_debug = True
+    local_debug = False
 
     num_transcripts = len(transcripts)
 

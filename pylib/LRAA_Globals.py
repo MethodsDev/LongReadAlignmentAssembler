@@ -77,7 +77,7 @@ config = {
     "max_EM_iterations_during_asm": 50,
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
-    "EM_implementation_use": "ChatGPT",  # choices: "BJH" or "ChatGPT"
+    "EM_implementation_use": "CGPT",  # choices: "BJH" or "CGPT"
     #
     ######
     # parallelization
