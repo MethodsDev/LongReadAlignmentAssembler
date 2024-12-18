@@ -98,7 +98,7 @@ def run_EM(transcripts, max_EM_iterations=1000):
 
     (
         trans_expr_levels_array,
-        transcript_sum_fractional_assignments_array,
+        transcript_sum_read_counts_array,
         fractional_read_assignments_array,
     ) = em_algorithm_with_weights(
         read_assignments, read_weights, num_transcripts, max_EM_iterations
@@ -118,10 +118,8 @@ def run_EM(transcripts, max_EM_iterations=1000):
                     "\n\n# LRAA out from chatGPT method:",
                     "trans_expr_levels_array:\n"
                     + "\n".join([f"{x:.3f}" for x in trans_expr_levels_array]),
-                    "\ntranscript_sum_fractional_assignments_array:\n"
-                    + "\n".join(
-                        [str(x) for x in transcript_sum_fractional_assignments_array]
-                    ),
+                    "\ntranscript_sum_read_counts_array:\n"
+                    + "\n".join([str(x) for x in transcript_sum_read_counts_array]),
                     "\nfractional_read_assignments_array: "
                     + "\n".join(
                         [str(x) for x in fractional_read_assignments_array_for_printing]
@@ -139,9 +137,7 @@ def run_EM(transcripts, max_EM_iterations=1000):
     for i, trans_expr_frac_val in enumerate(trans_expr_levels_array):
         transcript_id = transcripts[i].get_transcript_id()
         transcript_to_expr_val[transcript_id] = trans_expr_frac_val
-        transcript_to_read_count[transcript_id] = (
-            transcript_sum_fractional_assignments_array[i]
-        )
+        transcript_to_read_count[transcript_id] = transcript_sum_read_counts_array[i]
 
     # next, interface with fractional read assignment info
     transcript_to_fractional_read_assignment = defaultdict(dict)
@@ -157,9 +153,9 @@ def run_EM(transcripts, max_EM_iterations=1000):
             ] = frac_val
 
     return (
-        transcript_to_read_count,
-        transcript_to_fractional_read_assignment,
         transcript_to_expr_val,
+        transcript_to_fractional_read_assignment,
+        transcript_to_read_count,
     )
 
 
