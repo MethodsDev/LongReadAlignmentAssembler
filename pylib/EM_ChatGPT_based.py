@@ -218,7 +218,7 @@ def em_algorithm_with_weights(
     """
 
     # Initialize expression values uniformly
-    expression_levels = np.ones(num_transcripts) / num_transcripts
+    transcript_expression_levels = np.ones(num_transcripts) / num_transcripts
     prev_expression_levels = np.zeros(num_transcripts)
 
     # init fractional read assignments
@@ -230,15 +230,19 @@ def em_algorithm_with_weights(
         # E-step: Calculate fractional assignments
         transcript_sum_read_counts.clear()
         for read_i, read_mapped_transcripts in enumerate(read_assignments):
+
+            # denominator for fractional assignment is the read-weighted sum of expression for assigned transcripts
             total_weight = sum(
-                read_weights[read_i][j] * expression_levels[trans_id]
+                read_weights[read_i][j] * transcript_expression_levels[trans_id]
                 for j, trans_id in enumerate(read_mapped_transcripts)
             )
             for j, trans_id in enumerate(read_mapped_transcripts):
                 weight = read_weights[read_i][j]
 
+                # for each transcript this read is assigned,
+                # assign a proportion of this read according to its relative expression contribution.
                 frac_assignment = (
-                    weight * expression_levels[trans_id] / total_weight
+                    weight * transcript_expression_levels[trans_id] / total_weight
                     if total_weight > 0
                     else 0
                 )
@@ -248,7 +252,7 @@ def em_algorithm_with_weights(
                 fractional_read_assignments[read_i][j] = frac_assignment
 
         # M-step: Update expression levels
-        expression_levels = np.array(
+        transcript_expression_levels = np.array(
             [
                 transcript_sum_read_counts[trans_id]
                 for trans_id in range(num_transcripts)
@@ -256,17 +260,17 @@ def em_algorithm_with_weights(
         )
 
         # Normalize to ensure expression levels sum to 1
-        expression_levels /= expression_levels.sum()
+        transcript_expression_levels /= transcript_expression_levels.sum()
 
         # Check for convergence
-        if np.linalg.norm(expression_levels - prev_expression_levels) < tol:
+        if np.linalg.norm(transcript_expression_levels - prev_expression_levels) < tol:
             print(f"Converged after {iteration + 1} iterations.")
             break
 
-        prev_expression_levels = expression_levels.copy()
+        prev_expression_levels = transcript_expression_levels.copy()
 
     return (
-        expression_levels,
+        transcript_expression_levels,
         transcript_sum_read_counts,
         fractional_read_assignments,
     )
