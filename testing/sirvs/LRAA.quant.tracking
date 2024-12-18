@@ -1,4 +1,4 @@
-gene_id	transcript_id	read_name	frac_assigned
+gene_id	transcript_id	read_name	frac_assigned	read_weight
 SIRV1	SIRV109	0-SIRV109	1.000	1.000
 SIRV1	SIRV109	1-SIRV109	1.000	1.000
 SIRV1	SIRV109	2-SIRV109	1.000	1.000

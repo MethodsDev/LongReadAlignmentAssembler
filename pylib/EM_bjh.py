@@ -92,6 +92,8 @@ def E_step(
     EM_round,
 ):
 
+    local_debug = False  # for highly verbose logging
+
     ## E-step
     for transcript in transcripts:
         transcript_id = transcript.get_transcript_id()
@@ -117,9 +119,10 @@ def E_step(
                 )
                 sum_denom_expr += sum_denom_expr_contrib
 
-            print(
-                f"EM{EM_round} transcript {transcript_id} sum_denom_expr {sum_denom_expr}"
-            )
+            if local_debug:
+                print(
+                    f"EM{EM_round} transcript {transcript_id} sum_denom_expr {sum_denom_expr}"
+                )
 
             read_weight = transcript.get_read_weight(read_name)
             if not LRAA_Globals.config["use_weighted_read_assignments"]:
@@ -131,9 +134,10 @@ def E_step(
                 if sum_denom_expr > 0
                 else 0.0
             )
-            print(
-                f"EM{EM_round} transcript {transcript_id} sum_denom_expr {sum_denom_expr} frac_read {read_name} = {frac_read_assignment}"
-            )
+            if local_debug:
+                print(
+                    f"EM{EM_round} transcript {transcript_id} sum_denom_expr {sum_denom_expr} frac_read {read_name} = {frac_read_assignment}"
+                )
 
             # for tracking purposes
             transcript_to_fractional_read_assignment[transcript_id][
