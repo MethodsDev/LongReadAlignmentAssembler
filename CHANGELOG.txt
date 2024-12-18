@@ -1,3 +1,6 @@
+v0.2.13
+- major refactoring of the EM code
+
 v0.2.11
 - redo read weighting, restrict to initial M step.
 
