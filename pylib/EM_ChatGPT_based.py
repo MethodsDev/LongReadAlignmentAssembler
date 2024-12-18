@@ -224,31 +224,35 @@ def em_algorithm_with_weights(
     # init fractional read assignments
     fractional_read_assignments = init_fractional_read_assignments(read_assignments)
 
-    transcript_sum_fractional_assignments = defaultdict(float)
+    transcript_sum_read_counts = defaultdict(float)
 
     for iteration in range(max_iter):
         # E-step: Calculate fractional assignments
-        transcript_sum_fractional_assignments.clear()
-        for i, read in enumerate(read_assignments):
+        transcript_sum_read_counts.clear()
+        for read_i, read_mapped_transcripts in enumerate(read_assignments):
             total_weight = sum(
-                read_weights[i][j] * expression_levels[t] for j, t in enumerate(read)
+                read_weights[read_i][j] * expression_levels[trans_id]
+                for j, trans_id in enumerate(read_mapped_transcripts)
             )
-            for j, t in enumerate(read):
-                weight = read_weights[i][j]
+            for j, trans_id in enumerate(read_mapped_transcripts):
+                weight = read_weights[read_i][j]
 
                 frac_assignment = (
-                    weight * expression_levels[t] / total_weight
+                    weight * expression_levels[trans_id] / total_weight
                     if total_weight > 0
                     else 0
                 )
 
-                transcript_sum_fractional_assignments[t] += frac_assignment
+                transcript_sum_read_counts[trans_id] += frac_assignment
 
-                fractional_read_assignments[i][j] = frac_assignment
+                fractional_read_assignments[read_i][j] = frac_assignment
 
         # M-step: Update expression levels
         expression_levels = np.array(
-            [transcript_sum_fractional_assignments[t] for t in range(num_transcripts)]
+            [
+                transcript_sum_read_counts[trans_id]
+                for trans_id in range(num_transcripts)
+            ]
         )
 
         # Normalize to ensure expression levels sum to 1
@@ -263,7 +267,7 @@ def em_algorithm_with_weights(
 
     return (
         expression_levels,
-        transcript_sum_fractional_assignments,
+        transcript_sum_read_counts,
         fractional_read_assignments,
     )
 
