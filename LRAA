@@ -477,7 +477,15 @@ def main():
         ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
         # write header
         print(
-            "\t".join(["gene_id", "transcript_id", "read_name", "frac_assigned"]),
+            "\t".join(
+                [
+                    "gene_id",
+                    "transcript_id",
+                    "read_name",
+                    "frac_assigned",
+                    "read_weight",
+                ]
+            ),
             file=ofh_quant_read_tracker,
         )
 
