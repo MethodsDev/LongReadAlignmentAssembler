@@ -102,11 +102,12 @@ RUN R -e 'remotes::install_github("satijalab/seurat", "seurat5", quiet = FALSE)'
 
 RUN R -e 'BiocManager::install("clustermole")'
 
+RUN pip install numpy --break-system-packages
 
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.13"
-ENV LRAA_CO="3068c4b4b651b18d7ae62ca401aac51ed9b62d4b"
+ENV LRAA_VERSION="v0.2.14"
+ENV LRAA_CO="249dfdaffe57687c09d5bc4f2536ca02b55775f8"
 # update VERSION and LRAA_CO files with version info and checkout
 
 RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembler.git LRAA && \

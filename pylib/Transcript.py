@@ -469,7 +469,7 @@ class GTF_contig_to_transcripts:
         parts = info.split(";")
         for part in parts:
             part = part.strip()
-            m = re.match('^(\S+) \\"([^\\"]+)\\"', part)
+            m = re.match('^(\\S+) \\"([^\\"]+)\\"', part)
             if m:
                 token = m.group(1)
                 val = m.group(2)
