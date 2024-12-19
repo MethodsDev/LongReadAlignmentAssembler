@@ -186,8 +186,17 @@ class Transcript(GenomeFeature):
 
         return
 
-    def get_read_names(self):
-        return self.read_names.copy()
+    def get_read_names(self, exclude_refTranscripts=True):
+        if exclude_refTranscripts:
+            return [x for x in self.read_names.copy() if "reftranscript:" not in x]
+        else:
+            return self.read_names.copy()
+
+    def includes_reference_transcript(self):
+        return len(self.get_ref_trans_included()) > 0
+
+    def get_ref_trans_included(self):
+        return [x for x in self.read_names.copy() if "reftranscript:" in x]
 
     def add_read_names(self, read_names):
         if self.read_names == None:
@@ -226,12 +235,10 @@ class Transcript(GenomeFeature):
         return self._read_counts_assigned
 
     def get_TPM(self):
-        tpm = (
-            self.get_read_counts_assigned()
-            / LRAA_Globals.config["num_total_reads"]
-            * 1e6
-        )
-        return tpm
+        return self.get_expr_fraction() * 1e6
+
+    def get_expr_fraction(self):
+        return self.get_read_counts_assigned() / LRAA_Globals.config["num_total_reads"]
 
     def set_isoform_fraction(self, frac):
         self._isoform_fraction = frac

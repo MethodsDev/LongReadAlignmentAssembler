@@ -216,6 +216,8 @@ def M_step(
     for transcript in transcripts:
         transcript_to_expr_val[transcript_id] = (
             transcript_to_expr_val[transcript_id] / sum_transcript_assigned_expr_vals
+            if sum_transcript_assigned_expr_vals > 0
+            else 0
         )
 
     return transcript_to_expr_val

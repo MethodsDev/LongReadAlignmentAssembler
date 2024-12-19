@@ -33,7 +33,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 # VERSION="0.2.1"
-VERSION = "BLEEDING_EDGE-v0.2.14"
+VERSION = "BLEEDING_EDGE-v0.2.15"
 
 
 def main():
@@ -220,6 +220,13 @@ def main():
         help="do not weight reads according to agreement with start/end of reads",
     )
 
+    config_group.add_argument(
+        "--ref_trans_filter_mode",
+        default="retain_expressed",
+        choices=["retain_expressed", "retain_filtered"],
+        help="logic around retaining input reference transcripts in guided ID mode",
+    )
+
     ## EM settings
     config_group_EM = parser.add_argument_group("EM settings")
 
@@ -311,6 +318,7 @@ def main():
         not args.no_use_weighted_read_assignments
     )
     LRAA_Globals.config["EM_implementation_use"] = args.EM_implementation
+    LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -719,9 +727,6 @@ def main():
                 logger.debug(
                     "\n//SECTION QUANT for assembled isoforms: Assigning reads to paths in graph."
                 )
-
-                if input_transcripts is not None:
-                    mp_counter.prune_ref_transcripts_as_evidence()
 
                 # Do an initial quant
                 q = Quantify(

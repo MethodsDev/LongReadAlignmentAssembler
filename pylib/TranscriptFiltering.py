@@ -22,6 +22,17 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     for transcript in transcripts:
         tpm = transcript.get_TPM()
+
+        # reftrans logic:
+        if (
+            transcript.includes_reference_transcript()
+            and LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
+            and tpm > 0
+        ):
+            transcripts_retained.append(transcript)
+            continue
+
+        # regular filter logic
         if transcript.is_monoexonic() and tpm < min_TPM:
             # gbye
             pass
@@ -106,6 +117,16 @@ def filter_isoforms_by_min_isoform_fraction(
                         transcript_id, frac_gene_unique_reads
                     )
                 )
+
+                ## first check to see if we should retain a reftrans
+                if (
+                    transcript.includes_reference_transcript()
+                    and LRAA_Globals.config["ref_trans_filter_mode"]
+                    == "retain_expressed"
+                    and transcript.get_TPM() > 0
+                ):
+                    transcripts_retained.append(transcript)
+                    continue
 
                 if not isoforms_were_filtered and (
                     frac_gene_unique_reads < min_frac_gene_unique_reads

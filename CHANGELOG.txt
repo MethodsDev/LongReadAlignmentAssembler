@@ -1,3 +1,6 @@
+v0.2.15
+- altered handling of input ref trans in genome annot guided mode. Added CLI option: --ref_trans_filter_mode, default:  retain_expressed
+
 v0.2.14
 - incorporated CGPT implementation of EM as default and alternative to the BJH implementation. Can be set via CLI --EM_implementation
 
