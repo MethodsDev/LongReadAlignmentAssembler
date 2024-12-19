@@ -723,6 +723,14 @@ def main():
                 if input_transcripts is not None:
                     mp_counter.prune_ref_transcripts_as_evidence()
 
+                    if len(transcripts) == 0:
+                        logger.info(
+                            "no transcripts constructed on {} {}".format(
+                                contig_acc, contig_strand
+                            )
+                        )
+                        continue
+
                 # Do an initial quant
                 q = Quantify(
                     run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
@@ -737,6 +745,15 @@ def main():
                 transcripts = TranscriptFiltering.prune_likely_degradation_products(
                     transcripts, sg, frac_read_assignments
                 )
+
+                if len(transcripts) < 1:
+                    logger.info(
+                        "-no transcripts on contig {} {} survived pruning degradation products".format(
+                            contig_acc, contig_strand
+                        )
+                    )
+                    continue
+
                 # rerun quant for post-filtering
                 frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
@@ -751,6 +768,14 @@ def main():
                         )
                     )
 
+                    if len(transcripts) < 1:
+                        logger.info(
+                            "-no transcripts on contig {} {} survived isoform filtering".format(
+                                contig_acc, contig_strand
+                            )
+                        )
+                        continue
+
                 # Filter monoexonic transcripts according to expression thresholds
                 if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
                     transcripts = (
@@ -758,6 +783,13 @@ def main():
                             transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                         )
                     )
+                    if len(transcripts) < 1:
+                        logger.info(
+                            "-no transcripts on contig {} {} survived monoexonic filtering strategy".format(
+                                contig_acc, contig_strand
+                            )
+                        )
+                        continue
 
                 # Filter isoforms apparently derived from internal priming artifacts
                 if LRAA_Globals.config["filter_internal_priming"]:
@@ -766,6 +798,13 @@ def main():
                             transcripts, contig_seq_str
                         )
                     )
+                    if len(transcripts) < 1:
+                        logger.info(
+                            "-no transcripts on contig {} {} survived internal priming filtering".format(
+                                contig_acc, contig_strand
+                            )
+                        )
+                        continue
 
                 #######################################
                 ## Done filtering, report final results
