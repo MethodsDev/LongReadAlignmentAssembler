@@ -11,7 +11,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def run_EM(transcripts, max_EM_iterations=1000):
+def run_EM(transcripts: list, max_EM_iterations: int = 1000):
+
+    if type(transcripts) != list:
+        transcripts = list(transcripts)
 
     local_debug = False
 
