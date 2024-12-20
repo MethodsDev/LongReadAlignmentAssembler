@@ -25,15 +25,15 @@ test_quant:
 test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only
 
 test_wdl_ID_ref_free: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.ID_ref_free_Quant_mode.json
+	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json
 
 test_wdl_ID_ref_guided: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.ID_ref_guided_Quant_mode.json
+	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json
 
 test_wdl_Quant_only: clean_miniwdl
 #	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.Quant_only_mode.json
 # - note miniwdl errors out... but cromwell works fine
-	java -jar ~/BIN/cromwell-85.jar run ../../WDL/LRAA.scatter.wdl -i wdl.Quant_only_mode.json 
+	java -jar ~/BIN/cromwell-85.jar run ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json 
 
 
 

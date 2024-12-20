@@ -2,8 +2,8 @@ version 1.0
 
 task partition_by_chromosome_task {
     input {
-        File inputBAM
-        File genome_fasta
+        File? inputBAM
+        File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
@@ -18,23 +18,28 @@ task partition_by_chromosome_task {
 
         mkdir -p split_bams
         mkdir -p split_fastas
-
-        if [ -f "~{annot_gtf}" ]; then
-           mkdir -p split_gtfs
-        fi
+        mkdir -p split_gtfs
       
-        if [ ! -f "~{inputBAM}.bai" ]; then
+        if [ -f  "~{inputBAM}" ] && [ ! -f "~{inputBAM}.bai" ]; then
             samtools index ~{inputBAM}
         fi
         
         for chr in ~{chromosomes_want_partitioned}; do
-            samtools view -b ~{inputBAM} $chr > split_bams/$chr.bam
-            samtools faidx ~{genome_fasta} $chr > split_fastas/$chr.genome.fasta
-            
+
+            if [ -f "~{inputBAM}" ]; then
+                samtools view -b ~{inputBAM} $chr > split_bams/$chr.bam
+            fi
+
+            if [ -f "~{genome_fasta}" ]; then
+                samtools faidx ~{genome_fasta} $chr > split_fastas/$chr.genome.fasta
+            fi
+        
             if [ -f "~{annot_gtf}" ]; then
                 cat ~{annot_gtf} | perl -lane 'if ($F[0] eq "'$chr'") { print; }' > split_gtfs/$chr.annot.gtf
             fi
+        
         done
+        
     >>>
 
     output {
@@ -54,8 +59,8 @@ task partition_by_chromosome_task {
 
 workflow partition_by_chromosome {
   input {
-        File inputBAM
-        File genome_fasta
+        File? inputBAM
+        File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
@@ -66,14 +71,15 @@ workflow partition_by_chromosome {
     }
 
     call partition_by_chromosome_task {
-      input:
-        inputBAM=inputBAM,
-        genome_fasta=genome_fasta,
-        annot_gtf=annot_gtf,
-        chromosomes_want_partitioned=chromosomes_want_partitioned,
-        memoryGB = memoryGB,
-        diskSizeGB = diskSizeGB,
-        docker = docker
+        input:
+          inputBAM=inputBAM,
+          genome_fasta=genome_fasta,
+          annot_gtf=annot_gtf,
+          chromosomes_want_partitioned=chromosomes_want_partitioned,
+          memoryGB = memoryGB,
+          diskSizeGB = diskSizeGB,
+          docker = docker
+      
     }
 
     output {

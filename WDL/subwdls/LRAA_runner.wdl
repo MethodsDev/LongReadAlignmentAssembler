@@ -12,8 +12,8 @@ task LRAA_runner_task {
         Int? num_total_reads
         Float? min_per_id
         Boolean no_EM 
-        Boolean LRAA_no_norm 
-        Int? LRAA_min_mapping_quality
+        Boolean no_norm 
+        Int? min_mapping_quality
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
@@ -27,15 +27,17 @@ task LRAA_runner_task {
         Int diskSizeGB = 128
     }
 
-    String no_norm_flag = if LRAA_no_norm then "--no_norm" else ""
+    String no_norm_flag = if (no_norm && !quant_only) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
 
-    String output_prefix_use = if defined(shardno) then sample_id + ".shardno-" + shardno else sample_id
+    String output_prefix_use = if defined(shardno) then "${sample_id}.shardno-${shardno}" else sample_id
     
     String output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
     
     command <<<
 
+        set -ex
+        
         /usr/local/src/LRAA/LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
@@ -43,20 +45,30 @@ task LRAA_runner_task {
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
                                  --CPU ~{numThreads} \
+                                 ~{"--min_mapping_quality " + min_mapping_quality } \
                                  ~{"--min_isoform_fraction " + min_isoform_fraction} \
                                  ~{"--min_monoexonic_TPM " + min_monoexonic_TPM} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
                                  ~{"--min_alt_splice_freq " + min_alt_splice_freq} \
                                  ~{"--min_alt_unspliced_freq " + min_alt_unspliced_freq} \
                                  ~{"--gtf " + annot_gtf} \
-                                 --num_total_reads ~{num_total_reads} \
+                                 ~{"--num_total_reads " + num_total_reads} \
                                  ~{true="--quant_only" false='' quant_only}
+
+
+        # always ensure an output file exists for the wdl output capture.
+
+        touch ~{output_prefix_use}.~{output_suffix}.gtf
+        touch ~{output_prefix_use}.~{output_suffix}.quant.expr
+        touch ~{output_prefix_use}.~{output_suffix}.quant.tracking
+        
+        
     >>>
 
     output {
-        File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
-        File? LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
-        File? LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking"
+        File LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
+        File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
+        File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking"
     }
 
 
@@ -83,8 +95,8 @@ workflow LRAA_runner {
         Int? num_total_reads
         Float? min_per_id
         Boolean no_EM 
-        Boolean LRAA_no_norm 
-        Int? LRAA_min_mapping_quality
+        Boolean no_norm 
+        Int? min_mapping_quality
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
@@ -109,8 +121,8 @@ workflow LRAA_runner {
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
-            LRAA_no_norm=LRAA_no_norm,
-            LRAA_min_mapping_quality=LRAA_min_mapping_quality,
+            no_norm=no_norm,
+            min_mapping_quality=min_mapping_quality,
             min_isoform_fraction=min_isoform_fraction,
             min_monoexonic_TPM=min_monoexonic_TPM,
             no_filter_internal_priming=no_filter_internal_priming,
@@ -124,9 +136,9 @@ workflow LRAA_runner {
      }
 
      output {
-        File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
-        File? LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
-        File? LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
+        File LRAA_gtf = LRAA_runner_task.LRAA_gtf
+        File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
+        File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
     }
 
 }
