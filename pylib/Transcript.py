@@ -266,7 +266,7 @@ class Transcript(GenomeFeature):
         gtf_text += "\t".join(
             [
                 self._contig_acc,
-                "PASA-SALRAA",
+                "LRAA",
                 "transcript",
                 str(self._lend),
                 str(self._rend),
@@ -290,7 +290,7 @@ class Transcript(GenomeFeature):
                 "\t".join(
                     [
                         self._contig_acc,
-                        "PASA-SALRAA",
+                        "LRAA",
                         "exon",
                         str(segment[0]),
                         str(segment[1]),
