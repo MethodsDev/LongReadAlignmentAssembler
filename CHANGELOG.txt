@@ -1,3 +1,8 @@
+v0.2.16
+- wdls greatly simplified.
+- after initial asm, doing quant based on all reads not just the norm reads
+
+
 v0.2.15
 - altered handling of input ref trans in genome annot guided mode. Added CLI option: --ref_trans_filter_mode, default:  retain_expressed
 
