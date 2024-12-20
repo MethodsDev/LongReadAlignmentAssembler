@@ -36,6 +36,8 @@ task partition_by_chromosome_task {
         
             if [ -f "~{annot_gtf}" ]; then
                 cat ~{annot_gtf} | perl -lane 'if ($F[0] eq "'$chr'") { print; }' > split_gtfs/$chr.annot.gtf
+            else        
+                echo "# no gtf records" > split_gtfs/$chr.annot.gtf
             fi
         
         done
