@@ -73,26 +73,28 @@ def main():
     # assert num_records > 0, "No records read from input bam file: {}".format(input_bam_filename)
 
     if num_records == 0:
-        logger.warn("No aligned reads detected for {}".format(input_bam_filename))
-        sys.exit(0)
+        logger.warning("No aligned reads detected for {}".format(input_bam_filename))
 
-    report = "\n".join(
-        [
-            "Num input bam records: {}".format(num_records),
-            "Num top strand: {} = {:.1f}%".format(
-                num_forward, num_forward / num_records * 100
-            ),
-            "Num bottom strand: {} = {:.1f}%".format(
-                num_reverse, num_reverse / num_records * 100
-            ),
-            "Num neither strand and ignored: {} = {:.1f}%".format(
-                num_neither, num_neither / num_records
-            ),
-        ]
-    )
+    else:
 
-    logger.info(report)
+        report = "\n".join(
+            [
+                "Num input bam records: {}".format(num_records),
+                "Num top strand: {} = {:.1f}%".format(
+                    num_forward, num_forward / num_records * 100
+                ),
+                "Num bottom strand: {} = {:.1f}%".format(
+                    num_reverse, num_reverse / num_records * 100
+                ),
+                "Num neither strand and ignored: {} = {:.1f}%".format(
+                    num_neither, num_neither / num_records
+                ),
+            ]
+        )
 
+        logger.info(report)
+
+    # index the bams
     for output_bam_file in output_bam_files:
         subprocess.check_call("samtools index {}".format(output_bam_file), shell=True)
 
