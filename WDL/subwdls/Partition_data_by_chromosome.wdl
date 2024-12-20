@@ -24,7 +24,7 @@ task partition_by_chromosome_task {
         fi
       
         if [ ! -f "~{inputBAM}.bai" ]; then
-            samtools index -@ ~{numThreads} ~{inputBAM}
+            samtools index ~{inputBAM}
         fi
         
         for chr in ~{chromosomes_want_partitioned}; do
