@@ -25,27 +25,23 @@ test_quant:
 test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only
 
 test_wdl_ID_ref_free: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json
+	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json --verbose --no-cache
 
 test_wdl_ID_ref_guided: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json
+	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json --verbose --no-cache
 
 test_wdl_Quant_only: clean_miniwdl
-#	miniwdl run ../../WDL/LRAA.scatter.wdl -i wdl.Quant_only_mode.json
-# - note miniwdl errors out... but cromwell works fine
-	java -jar ~/BIN/cromwell-85.jar run ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json 
+	miniwdl run ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json --verbose --no-cache
 
 
 
 ## Cleaning
 
 clean_miniwdl: 
-	rm -rf ./*CombinedWorkflow ./_LAST
+	rm -rf ./_LAST ./*_LRAA_wf 
 
-clean_cromwell: clean_miniwdl
-	sudo rm -rf ./cromwell-*
 
-clean: clean_cromwell
+clean: clean_miniwdl
 	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant ./LRAA*.lmdb ./LRAA.ref.tagged.bam
 
 
