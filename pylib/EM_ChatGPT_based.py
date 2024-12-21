@@ -263,7 +263,7 @@ def em_algorithm_with_weights(
 
         # Check for convergence
         if np.linalg.norm(transcript_expression_levels - prev_expression_levels) < tol:
-            print(f"Converged after {iteration + 1} iterations.")
+            logger.info(f"Converged after {iteration + 1} iterations.")
             break
 
         prev_expression_levels = transcript_expression_levels.copy()

@@ -490,57 +490,57 @@ def main():
 
     ofh_quant_read_tracker = None
     ofh_quant_read_tracking_lmdb = None
-    if QUANT_ONLY:
-        output_filename = f"{output_prefix}.quant.expr"
-        ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
-        ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
-        # write header
-        print(
-            "\t".join(
-                [
-                    "gene_id",
-                    "transcript_id",
-                    "read_name",
-                    "frac_assigned",
-                    "read_weight",
-                ]
-            ),
-            file=ofh_quant_read_tracker,
+
+    ofh_quant_output_filename = f"{output_prefix}.quant.expr"
+    ofh_quant_output = open(ofh_quant_output_filename, "wt")
+
+    ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
+    ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
+    # write header
+    print(
+        "\t".join(
+            [
+                "gene_id",
+                "transcript_id",
+                "read_name",
+                "frac_assigned",
+                "read_weight",
+            ]
+        ),
+        file=ofh_quant_read_tracker,
+    )
+
+    if TAG_BAM:
+        ofh_quant_read_tracking_lmdb_filename = f"{output_prefix}.quant.tracking.lmdb"
+        # since the LMDB doesn't get reset automatically, make sure there isn't old data leftover
+        if os.path.exists(ofh_quant_read_tracking_lmdb_filename):
+            shutil.rmtree(ofh_quant_read_tracking_lmdb_filename)
+        ofh_quant_read_tracking_lmdb = lmdb.open(
+            ofh_quant_read_tracking_lmdb_filename,
+            map_size=int(1e11),
+            metasync=False,
+            sync=False,
         )
 
-        if TAG_BAM:
-            ofh_quant_read_tracking_lmdb_filename = (
-                f"{output_prefix}.quant.tracking.lmdb"
-            )
-            # since the LMDB doesn't get reset automatically, make sure there isn't old data leftover
-            if os.path.exists(ofh_quant_read_tracking_lmdb_filename):
-                shutil.rmtree(ofh_quant_read_tracking_lmdb_filename)
-            ofh_quant_read_tracking_lmdb = lmdb.open(
-                ofh_quant_read_tracking_lmdb_filename,
-                map_size=int(1e11),
-                metasync=False,
-                sync=False,
-            )
-    else:
-        output_filename = f"{output_prefix}.gtf"
+    gtf_output_filename = f"{output_prefix}.gtf"
 
-    ofh = open(output_filename, "wt")
-    if QUANT_ONLY:
-        # write header
-        print(
-            "\t".join(
-                [
-                    "gene_id",
-                    "transcript_id",
-                    "uniq_reads",
-                    "all_reads",
-                    "isoform_fraction",
-                    "unique_gene_read_fraction",
-                    "TPM",
-                ]
-            ),
-            file=ofh,
-        )
+    ofh_gtf = open(gtf_output_filename, "wt")
+
+    # write header
+    print(
+        "\t".join(
+            [
+                "gene_id",
+                "transcript_id",
+                "uniq_reads",
+                "all_reads",
+                "isoform_fraction",
+                "unique_gene_read_fraction",
+                "TPM",
+            ]
+        ),
+        file=ofh_quant_output,
+    )
 
     for contig_acc in genome_contigs_list:
 
@@ -653,7 +653,7 @@ def main():
                 q.report_quant_results(
                     input_transcripts,
                     read_name_to_fractional_transcript_assignment,
-                    ofh,
+                    ofh_quant_output,
                     ofh_quant_read_tracker,
                     ofh_quant_read_tracking_lmdb,
                 )
@@ -829,77 +829,63 @@ def main():
                     )
 
                 for transcript in transcripts:
-                    ofh.write(transcript.to_GTF_format() + "\n")
+                    ofh_gtf.write(transcript.to_GTF_format() + "\n")
 
-                if LRAA_Globals.DEBUG or args.include_asm_draft_quant:
-                    debug_quant_ofh = open("__quant_info.tsv", "at")
-                    debug_quant_read_tracking_ofh = open(
-                        "__quant_info.reads_tracked.tsv", "at"
-                    )
-                    q = Quantify(
-                        run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
-                    )
-                    frac_read_assignments = q._estimate_isoform_read_support(
-                        transcripts
-                    )
-                    q.report_quant_results(
-                        transcripts,
-                        frac_read_assignments,
-                        debug_quant_ofh,
-                        debug_quant_read_tracking_ofh,
-                    )
-                    debug_quant_ofh.close()
-                    debug_quant_read_tracking_ofh.close()
+                q = Quantify(
+                    run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
+                )
+                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+                q.report_quant_results(
+                    transcripts,
+                    frac_read_assignments,
+                    ofh_quant_output,
+                    ofh_quant_read_tracker,
+                )
 
-    ofh.close()
+    ofh_gtf.close()
+    ofh_quant_output.close()
+    ofh_quant_read_tracker.close()
 
-    if QUANT_ONLY:
-        ofh_quant_read_tracker.close()
+    ##############################################################################
+    ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
 
-        ##############################################################################
-        ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
+    if TAG_BAM:
+        # explicitly delete the writeable lmdb environment to close it since there is no .close()
+        del ofh_quant_read_tracking_lmdb
 
-        if TAG_BAM:
-            # explicitly delete the writeable lmdb environment to close it since there is no .close()
-            del ofh_quant_read_tracking_lmdb
+        # reopen in read-only mode
+        ofh_quant_read_tracking_lmdb = lmdb.open(
+            ofh_quant_read_tracking_lmdb_filename, readonly=True, lock=False
+        )
+        output_bam_filename = f"{output_prefix}.tagged.bam"
 
-            # reopen in read-only mode
-            ofh_quant_read_tracking_lmdb = lmdb.open(
-                ofh_quant_read_tracking_lmdb_filename, readonly=True, lock=False
-            )
-            output_bam_filename = f"{output_prefix}.tagged.bam"
-
-            with ofh_quant_read_tracking_lmdb.begin(
-                write=False
-            ) as txn, pysam.AlignmentFile(
-                bam_filename, "rb", threads=4
-            ) as bam_in, pysam.AlignmentFile(
-                output_bam_filename, "wb", template=bam_in, threads=4
-            ) as bam_out:
-                for read in bam_in.fetch(until_eof=True):
-                    data = txn.get(read.query_name.encode("utf-8"))
-                    if data:
-                        row = data.decode("utf-8").split(",")
-                        if read.has_tag("XG") or read.has_tag("XI"):
-                            raise ValueError(
-                                "Error, read already has XG or XI tag, so cannot set them without overwriting"
-                            )
-
-                        gene_ids = ",".join(row[i] for i in range(0, len(row), 3))
-                        transcript_ids = ",".join(
-                            row[i + 1] for i in range(0, len(row), 3)
-                        )
-                        frac_assigned = ",".join(
-                            row[i + 2] for i in range(0, len(row), 3)
+        with ofh_quant_read_tracking_lmdb.begin(
+            write=False
+        ) as txn, pysam.AlignmentFile(
+            bam_filename, "rb", threads=4
+        ) as bam_in, pysam.AlignmentFile(
+            output_bam_filename, "wb", template=bam_in, threads=4
+        ) as bam_out:
+            for read in bam_in.fetch(until_eof=True):
+                data = txn.get(read.query_name.encode("utf-8"))
+                if data:
+                    row = data.decode("utf-8").split(",")
+                    if read.has_tag("XG") or read.has_tag("XI"):
+                        raise ValueError(
+                            "Error, read already has XG or XI tag, so cannot set them without overwriting"
                         )
 
-                        read.set_tag("XG", gene_ids, "Z")
-                        read.set_tag("XI", transcript_ids, "Z")
-                        read.set_tag("XF", frac_assigned, "Z")
+                    gene_ids = ",".join(row[i] for i in range(0, len(row), 3))
+                    transcript_ids = ",".join(row[i + 1] for i in range(0, len(row), 3))
+                    frac_assigned = ",".join(row[i + 2] for i in range(0, len(row), 3))
 
-                    bam_out.write(read)
+                    read.set_tag("XG", gene_ids, "Z")
+                    read.set_tag("XI", transcript_ids, "Z")
+                    read.set_tag("XF", frac_assigned, "Z")
 
-            ofh_quant_read_tracking_lmdb.close()
+                bam_out.write(read)
+
+        ofh_quant_read_tracking_lmdb.close()
 
     return
 
