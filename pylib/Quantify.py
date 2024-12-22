@@ -172,12 +172,24 @@ class Quantify:
             )
 
             if transcripts_assigned is None:
+                # FSM required with read alignment coverage check
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
+                    test_type="FSM",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=False,
+                    anchor_PolyA_TSS=True,
+                )
+
+            if transcripts_assigned is None:
                 # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
                     mp,
                     gene_isoforms,
-                    test_type="exact",
+                    test_type="other",
                     fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=False,
                     anchor_PolyA_TSS=True,
@@ -205,6 +217,18 @@ class Quantify:
                     mp,
                     gene_isoforms,
                     test_type="exact",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=True,
+                    anchor_PolyA_TSS=False,
+                )
+
+            if transcripts_assigned is None:
+                # FSM required with read alignment coverage check
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
+                    test_type="FSM",
                     fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=True,
                     anchor_PolyA_TSS=False,
@@ -533,7 +557,26 @@ class Quantify:
 
             elif test_type == "FSM":
 
-                pass
+                if (
+                    SPU.simple_paths_have_identical_intron_representation(
+                        read_sp, transcript_sp
+                    )
+                    and SPU.fraction_read_overlap(splice_graph, read_sp, transcript_sp)
+                    >= fraction_read_align_overlap
+                ):
+
+                    logger.debug(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} FSM with transcript {}".format(
+                            mp_descr,
+                            trim_TSS_polyA,
+                            test_type,
+                            anchor_PolyA_TSS,
+                            read_sp,
+                            transcript_sp,
+                        )
+                    )
+                    # print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
+                    transcripts_compatible_with_read.append(transcript)
 
             else:  # test_type == "other"
 

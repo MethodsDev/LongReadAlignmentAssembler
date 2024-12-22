@@ -922,6 +922,19 @@ def add_spacers_between_disconnected_nodes(splice_graph, simple_path):
     return new_path
 
 
+def simple_paths_have_identical_intron_representation(simple_path_A, simple_path_B):
+
+    def get_introns(path):
+        introns = set()
+        for node in path:
+            if re.match("I:", node):
+                introns.add(node)
+
+        return introns
+
+    return get_introns(simple_path_A) == get_introns(simple_path_B)
+
+
 ###############
 # unit tests ##
 ###############
@@ -1292,3 +1305,15 @@ def test_split_path_at_spacers():
 
     p = [SPACER, "d", SPACER, "e", SPACER, "f", "g", SPACER]
     assert split_path_at_spacers(p) == [["d"], ["e"], ["f", "g"]]
+
+
+def test_simple_paths_have_identical_intron_representation():
+
+    a = ["E:1", "I:1", "E:2", "I:2", "E:3", "E:4"]
+    b = ["E:0", "E:1", "I:1", "E:2", "I:2", "E:3"]
+    assert simple_paths_have_identical_intron_representation(a, b) == True
+
+    assert simple_paths_have_identical_intron_representation([], []) == True
+
+    c = ["E:1", "I:1", "E:2", "I:6", "E:7"]
+    assert simple_paths_have_identical_intron_representation(a, c) == False
