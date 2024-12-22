@@ -160,59 +160,65 @@ class Quantify:
                 )
             )
 
+            # most stringent test - exact match including PolyA and TSS where present.
             transcripts_assigned = self._assign_path_to_transcript(
                 splice_graph,
                 mp,
                 gene_isoforms,
-                fraction_read_align_overlap,
+                test_type="exact",
+                fraction_read_align_overlap=fraction_read_align_overlap,
                 trim_TSS_polyA=False,
-                test_exact=True,
                 anchor_PolyA_TSS=True,
             )
 
             if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact
+                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
                     mp,
                     gene_isoforms,
-                    fraction_read_align_overlap,
+                    test_type="exact",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=False,
-                    test_exact=False,
                     anchor_PolyA_TSS=True,
                 )
             if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact
+                # keep TSS and PolyA features but disable required anchoring of TSS/PolyA, allow inexact but compatible
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
                     mp,
                     gene_isoforms,
-                    fraction_read_align_overlap,
+                    test_type="other",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=False,
-                    test_exact=False,
                     anchor_PolyA_TSS=False,
                 )
+
+            ##############################
+            ## With TSS and PolyA trimming
+            ##############################
+
             if transcripts_assigned is None:
-                # try again with TSS and polyA trimming
+                # TSS and polyA trimmed, and exact splice path matching required
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
                     mp,
                     gene_isoforms,
-                    fraction_read_align_overlap,
+                    test_type="exact",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=True,
-                    test_exact=True,
                     anchor_PolyA_TSS=False,
                 )
 
             if transcripts_assigned is None:
-                # try again with TSS and PolyA trimmed off
+                # compatibile allowed with read alignment coverage check
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
                     mp,
                     gene_isoforms,
-                    fraction_read_align_overlap,
+                    test_type="other",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=True,
-                    test_exact=False,
                     anchor_PolyA_TSS=False,
                 )
 
@@ -349,10 +355,10 @@ class Quantify:
         splice_graph,
         mp,
         transcripts,
+        test_type: str,  # choices: ["exact", "FSM", "other"]
         fraction_read_align_overlap,
-        trim_TSS_polyA=False,
-        test_exact=True,
-        anchor_PolyA_TSS=False,
+        trim_TSS_polyA: bool,
+        anchor_PolyA_TSS: bool,
     ):
 
         assert type(mp) == MultiPath.MultiPath
@@ -363,6 +369,12 @@ class Quantify:
         assert (
             fraction_read_align_overlap >= 0 and fraction_read_align_overlap <= 1.0
         ), "Error, fraction_read_align_overlap must be between 0 and 1.0"
+
+        test_type_choices = ["exact", "FSM", "other"]
+
+        assert (
+            test_type in test_type_choices
+        ), "Error, not recognizing test_type {}".format(test_type)
 
         contig_strand = splice_graph.get_contig_strand()
 
@@ -402,6 +414,19 @@ class Quantify:
 
             assert transcript_sp is not None
 
+            logger.debug(
+                "[{} trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}".format(
+                    mp_descr,
+                    trim_TSS_polyA,
+                    test_type,
+                    anchor_PolyA_TSS,
+                    i + 1,
+                    len(transcripts),
+                    transcript.get_transcript_id(),
+                    transcript_sp,
+                )
+            )
+
             if trim_TSS_polyA:
                 transcript_sp, transcript_TSS_id, transcript_polyA_id = (
                     SPU.trim_TSS_and_PolyA(transcript_sp, contig_strand)
@@ -409,9 +434,18 @@ class Quantify:
 
             else:
                 if anchor_PolyA_TSS:
-                    # test first position of read
+
+                    #######################################################################################
+                    ## Testing first and last positions of read and transcript, position matching required.
+                    #######################################################################################
 
                     fail_msg = None
+
+                    ##########################
+                    ## testing first positions
+                    ##########################
+
+                    # read first position is TSS or PolyA but transcript lacks it.
                     if is_PolyA_or_TSS(read_sp[0]) and not is_PolyA_or_TSS(
                         transcript_sp[0]
                     ):
@@ -419,6 +453,7 @@ class Quantify:
                             mp_descr, transcript_id
                         )
 
+                    # both read and isoform have TSS or PolyA at first position, but they don't match.
                     elif (
                         is_PolyA_or_TSS(transcript_sp[0])
                         and is_PolyA_or_TSS(read_sp[0])
@@ -428,7 +463,11 @@ class Quantify:
                             mp_descr, transcript_id
                         )
 
-                    # test last position of read
+                    ############################################
+                    ## test last position of read and transcript
+                    ############################################
+
+                    # read last position is TSS or PolyA, but transcript is not.
                     elif is_PolyA_or_TSS(read_sp[-1]) and not is_PolyA_or_TSS(
                         transcript_sp[-1]
                     ):
@@ -436,6 +475,7 @@ class Quantify:
                             mp_descr, transcript_id
                         )
 
+                    # both read and isoform last position is TSS or PolyA, but don't match up.
                     elif (
                         is_PolyA_or_TSS(read_sp[-1])
                         and is_PolyA_or_TSS(transcript_sp[-1])
@@ -447,10 +487,10 @@ class Quantify:
 
                     if fail_msg is not None:
                         logger.debug(
-                            "[{} trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}, FAIL MSG: {}".format(
+                            "[{} trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}, FAIL MSG: {}".format(
                                 mp_descr,
                                 trim_TSS_polyA,
-                                test_exact,
+                                test_type,
                                 anchor_PolyA_TSS,
                                 i + 1,
                                 len(transcripts),
@@ -461,27 +501,18 @@ class Quantify:
                         )
                         continue
 
-            logger.debug(
-                "[{} trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}] -evaluating [{}/{}] transcript: {} {}".format(
-                    mp_descr,
-                    trim_TSS_polyA,
-                    test_exact,
-                    anchor_PolyA_TSS,
-                    i + 1,
-                    len(transcripts),
-                    transcript.get_transcript_id(),
-                    transcript_sp,
-                )
-            )
+            if test_type == "exact":
 
-            if test_exact:
+                ##################################################
+                ## Test for exact match of splice paths end-to-end
+                ##################################################
 
                 if transcript_sp == read_sp:
                     logger.debug(
-                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} IDENTICAL with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} IDENTICAL with transcript {}".format(
                             mp_descr,
                             trim_TSS_polyA,
-                            test_exact,
+                            test_type,
                             anchor_PolyA_TSS,
                             read_sp,
                             transcript_sp,
@@ -490,17 +521,25 @@ class Quantify:
                     transcripts_compatible_with_read.append(transcript)
                 else:
                     logger.debug(
-                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_identical with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} NOT_identical with transcript {}".format(
                             mp_descr,
                             trim_TSS_polyA,
-                            test_exact,
+                            test_type,
                             anchor_PolyA_TSS,
                             read_sp,
                             transcript_sp,
                         )
                     )
 
-            else:
+            elif test_type == "FSM":
+
+                pass
+
+            else:  # test_type == "other"
+
+                ######################################################################################
+                # Test for compatibilty, no gaps within region of overlap, and sufficient read overlap
+                ######################################################################################
 
                 if (
                     SPU.are_overlapping_and_compatible_NO_gaps_in_overlap(
@@ -511,10 +550,10 @@ class Quantify:
                 ):
 
                     logger.debug(
-                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE with transcript {}".format(
                             mp_descr,
                             trim_TSS_polyA,
-                            test_exact,
+                            test_type,
                             anchor_PolyA_TSS,
                             read_sp,
                             transcript_sp,
@@ -525,10 +564,10 @@ class Quantify:
 
                 else:
                     logger.debug(
-                        "{} [trim_TSS_polyA={} test_exact={} anchor_PolyA_TSS={}]  Read {} NOT_compatible with transcript {}".format(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} NOT_compatible with transcript {}".format(
                             mp_descr,
                             trim_TSS_polyA,
-                            test_exact,
+                            test_type,
                             anchor_PolyA_TSS,
                             read_sp,
                             transcript_sp,
