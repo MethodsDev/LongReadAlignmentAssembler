@@ -25,8 +25,12 @@ class Bam_alignment_extractor:
         # ------------------
         # instance variables
 
-        self._read_aln_gap_merge_int = 10  ## internal alignment gap merging
-        self._min_terminal_splice_exon_anchor_length = 15
+        self._read_aln_gap_merge_int = LRAA_Globals.config[
+            "read_aln_gap_merge_int"
+        ]  ## internal alignment gap merging
+        self._min_terminal_splice_exon_anchor_length = LRAA_Globals.config[
+            "min_terminal_splice_exon_anchor_length"
+        ]
 
         self._alignments_bam_filename = alignments_bam_filename
 

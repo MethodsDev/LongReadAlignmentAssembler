@@ -13,6 +13,8 @@ config = {
     "max_softclip_realign_test": 20,
     "min_frac_alignments_pass_per_id_check": 0.9,
     "min_total_alignments_engage_frac_per_id_check": 1000,
+    "min_terminal_splice_exon_anchor_length": 15,
+    "read_aln_gap_merge_int": 10,
     #
     ####################################
     # splice graph construction criteria

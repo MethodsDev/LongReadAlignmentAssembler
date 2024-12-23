@@ -15,6 +15,9 @@ class Transcript(GenomeFeature):
     def __init__(self, contig_acc, segment_coordinates_list, orient):
 
         segment_coordinates_list = sorted(segment_coordinates_list, key=lambda x: x[0])
+        segment_coordinates_list = _merge_short_deletions(
+            segment_coordinates_list, LRAA_Globals.config["read_aln_gap_merge_int"]
+        )
 
         trans_lend = segment_coordinates_list[0][0]
         trans_rend = segment_coordinates_list[-1][1]
@@ -484,6 +487,27 @@ class GTF_contig_to_transcripts:
                 info_dict[token] = val
 
         return info_dict
+
+
+# utility functions
+
+
+def _merge_short_deletions(segments_list, merge_dist):
+
+    if len(segments_list) == 1:
+        return segments_list  # nothing to do here.
+
+    merged_segments_list = list()
+    merged_segments_list.append(segments_list[0].copy())
+
+    for segment in segments_list[1:]:
+        if segment[0] - merged_segments_list[-1][1] <= merge_dist:
+            # merge
+            merged_segments_list[-1][1] = segment[1]
+        else:
+            merged_segments_list.append(segment.copy())
+
+    return merged_segments_list
 
 
 if __name__ == "__main__":
