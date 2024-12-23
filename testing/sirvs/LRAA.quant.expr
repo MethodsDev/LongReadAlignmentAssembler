@@ -20,9 +20,9 @@ g:SIRV3:+:comp-1	t:SIRV3:+:comp-1:iso-3	10	10.0	0.154	0.154	18083.183
 g:SIRV3:+:comp-1	t:SIRV3:+:comp-1:iso-5	9	9.0	0.138	0.138	16274.864
 g:SIRV3:+:comp-1	t:SIRV3:+:comp-1:iso-6	6	6.0	0.092	0.092	10849.910
 g:SIRV3:+:comp-1	t:SIRV3:+:comp-1:iso-7	5	5.0	0.077	0.077	9041.591
-g:SIRV3:-:comp-2	t:SIRV3:-:comp-2:iso-1	15	15.0	0.517	0.517	27124.774
-g:SIRV3:-:comp-2	t:SIRV3:-:comp-2:iso-2	14	14.0	0.483	0.483	25316.456
-g:SIRV3:-:comp-1	t:SIRV3:-:comp-1:iso-1	11	11.0	1.000	1.000	19891.501
+g:SIRV3:-:comp-1	t:SIRV3:-:comp-1:iso-1	15	15.0	0.517	0.517	27124.774
+g:SIRV3:-:comp-1	t:SIRV3:-:comp-1:iso-2	14	14.0	0.483	0.483	25316.456
+g:SIRV3:-:comp-2	t:SIRV3:-:comp-2:iso-1	11	11.0	1.000	1.000	19891.501
 g:SIRV4:+:comp-1	t:SIRV4:+:comp-1:iso-1	4	4.0	0.571	0.571	7233.273
 g:SIRV4:+:comp-1	t:SIRV4:+:comp-1:iso-2	3	3.0	0.429	0.429	5424.955
 g:SIRV4:-:comp-1	t:SIRV4:-:comp-1:iso-1	13	13.0	0.371	0.371	23508.137
