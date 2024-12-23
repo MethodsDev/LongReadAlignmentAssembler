@@ -79,6 +79,7 @@ config = {
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
     "EM_implementation_use": "CGPT",  # choices: "BJH" or "CGPT"
+    "EM_alpha": 0.01,  # regularization
     #
     ######
     # parallelization

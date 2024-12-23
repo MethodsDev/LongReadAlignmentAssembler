@@ -230,11 +230,19 @@ def main():
     ## EM settings
     config_group_EM = parser.add_argument_group("EM settings")
 
+    # config_group_EM.add_argument(
+    #    "--EM_implementation",
+    #    default="CGPT",
+    #    choices=["CGPT", "BJH"],
+    #    help="implementation of the EM alg to use.",
+    # )
+
     config_group_EM.add_argument(
-        "--EM_implementation",
-        default="CGPT",
-        choices=["CGPT", "BJH"],
-        help="implementation of the EM alg to use.",
+        "--EM_alpha",
+        type=float,
+        default=0.01,
+        required=False,
+        help="regularization factor EM_alpha * num_ambigous_reads for each transcript",
     )
 
     ## alt splice settings
@@ -317,8 +325,9 @@ def main():
     LRAA_Globals.config["use_weighted_read_assignments"] = (
         not args.no_use_weighted_read_assignments
     )
-    LRAA_Globals.config["EM_implementation_use"] = args.EM_implementation
+    LRAA_Globals.config["EM_implementation_use"] = "CGPT"  # args.EM_implementation
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
+    LRAA_Globals.config["EM_alpha"] = args.EM_alpha
 
     if args.mpm_monitor:
         mpm.set_debug()

@@ -11,12 +11,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def run_EM(transcripts: list, max_EM_iterations: int = 1000):
+def run_EM(
+    transcripts: list,
+    max_EM_iterations: int = 1000,
+):
 
     if type(transcripts) != list:
         transcripts = list(transcripts)
 
     local_debug = False
+
+    alpha = LRAA_Globals.config["EM_alpha"]
 
     num_transcripts = len(transcripts)
 
@@ -104,7 +109,11 @@ def run_EM(transcripts: list, max_EM_iterations: int = 1000):
         transcript_sum_read_counts_array,
         fractional_read_assignments_array,
     ) = em_algorithm_with_weights(
-        read_assignments, read_weights, num_transcripts, max_EM_iterations
+        read_assignments,
+        read_weights,
+        num_transcripts,
+        max_iter=max_EM_iterations,
+        base_alpha=alpha,
     )
 
     if local_debug:
@@ -198,7 +207,12 @@ def get_read_to_transcripts_and_weights(transcripts):
 
 
 def em_algorithm_with_weights(
-    read_assignments, read_weights, num_transcripts, max_iter=100, tol=1e-6
+    read_assignments,
+    read_weights,
+    num_transcripts,
+    max_iter=100,
+    tol=1e-6,
+    base_alpha=0.1,
 ):
     """
     Perform the EM algorithm to estimate transcript expression levels with weighted reads.
@@ -211,6 +225,7 @@ def em_algorithm_with_weights(
         num_transcripts (int): Total number of transcripts.
         max_iter (int): Maximum number of iterations.
         tol (float): Convergence tolerance.
+        base_alpha (float): Base regularization parameter to scale for each transcript.
 
     Returns:
         np.ndarray: Estimated expression levels for each transcript.
@@ -222,6 +237,16 @@ def em_algorithm_with_weights(
 
     # init fractional read assignments
     fractional_read_assignments = init_fractional_read_assignments(read_assignments)
+
+    # Count ambiguous reads for each transcript
+    ambiguous_read_counts = np.zeros(num_transcripts)
+    for read in read_assignments:
+        if len(read) > 1:  # Ambiguous read
+            for trans_id in read:
+                ambiguous_read_counts[trans_id] += 1
+
+    # Calculate transcript-specific alpha values based on ambiguous reads
+    transcript_alphas = base_alpha * ambiguous_read_counts
 
     transcript_sum_read_counts = defaultdict(float)
 
@@ -253,7 +278,7 @@ def em_algorithm_with_weights(
         # M-step: Update expression levels
         transcript_expression_levels = np.array(
             [
-                transcript_sum_read_counts[trans_id]
+                transcript_sum_read_counts[trans_id] + transcript_alphas[trans_id]
                 for trans_id in range(num_transcripts)
             ]
         )
@@ -371,9 +396,10 @@ if __name__ == "__main__":
         [0.4, 0.6],  # read_4: Ambiguous read, weights for transcripts 1, 2
     ]
 
+    # run EM
     num_transcripts = 3
     expression, trans_read_counts, frac_read_assignments = em_algorithm_with_weights(
-        read_assignments, read_weights, num_transcripts
+        read_assignments, read_weights, num_transcripts, alpha=0
     )
 
     print("\n\n" + "##########################\n" + "# ChatGPT-direct interface:\n")
