@@ -1,3 +1,7 @@
+
+v0.2.20
+- merge short deletions in input transcripts
+
 v0.2.19
 - high EM max iter during asm
 - EM alpha set to zero during asm except for final quant
