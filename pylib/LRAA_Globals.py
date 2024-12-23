@@ -7,8 +7,8 @@ DEBUG = False
 config = {
     #########################
     # read alignment criteria
-    "min_per_id": 98,
-    "min_mapping_quality": 20,
+    "min_per_id": 80,
+    "min_mapping_quality": 0,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_frac_alignments_pass_per_id_check": 0.9,
@@ -74,7 +74,7 @@ config = {
     # quant
     "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records
     "run_EM": True,
-    "max_EM_iterations_quant_only": 1000,
+    "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 50,
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
