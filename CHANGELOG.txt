@@ -1,3 +1,7 @@
+v0.2.19
+- high EM max iter during asm
+- EM alpha set to zero during asm except for final quant
+
 v0.2.18
 - including EM regularization factor EM_alpha * num_ambigous_reads, used during quant but not asm step.
 - capping EM steps at 250 for quant

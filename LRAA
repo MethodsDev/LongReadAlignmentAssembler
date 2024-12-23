@@ -33,7 +33,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 # VERSION="0.2.1"
-VERSION = "BLEEDING_EDGE-v0.2.18"
+VERSION = "BLEEDING_EDGE-v0.2.19"
 
 
 def main():
@@ -746,10 +746,6 @@ def main():
                 # Do an initial quant
                 # Now use the original bam for quant (not depth normalized)
 
-                LRAA_Globals.config["EM_alpha"] = (
-                    quant_EM_alpha  # restore for quant step.
-                )
-
                 mp_counter = lraa_obj.build_multipath_graph(
                     contig_acc,
                     contig_strand,
@@ -850,6 +846,10 @@ def main():
 
                 for transcript in transcripts:
                     ofh_gtf.write(transcript.to_GTF_format() + "\n")
+
+                LRAA_Globals.config["EM_alpha"] = (
+                    quant_EM_alpha  # restore for final quant step.
+                )
 
                 q = Quantify(
                     run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]

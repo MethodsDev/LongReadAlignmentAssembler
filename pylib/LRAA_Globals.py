@@ -75,7 +75,7 @@ config = {
     "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records
     "run_EM": True,
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
-    "max_EM_iterations_during_asm": 50,
+    "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
     "EM_implementation_use": "CGPT",  # choices: "BJH" or "CGPT"
