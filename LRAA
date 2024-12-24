@@ -538,18 +538,21 @@ def main():
     ofh_gtf = open(gtf_output_filename, "wt")
 
     # write header
+    header = [
+        "gene_id",
+        "transcript_id",
+        "uniq_reads",
+        "all_reads",
+        "isoform_fraction",
+        "unique_gene_read_fraction",
+        "TPM",
+    ]
+
+    if not QUANT_ONLY:
+        header.append("splice_compatibiltiies")
+
     print(
-        "\t".join(
-            [
-                "gene_id",
-                "transcript_id",
-                "uniq_reads",
-                "all_reads",
-                "isoform_fraction",
-                "unique_gene_read_fraction",
-                "TPM",
-            ]
-        ),
+        "\t".join(header),
         file=ofh_quant_output,
     )
 
@@ -830,7 +833,11 @@ def main():
                         continue
 
                 # examine splice compatible isoform differences
-                TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
+                transcript_splice_compatibilities = (
+                    TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(
+                        transcripts
+                    )
+                )
 
                 #######################################
                 ## Done filtering, report final results
@@ -863,6 +870,7 @@ def main():
                     frac_read_assignments,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
+                    splice_compatibilities=transcript_splice_compatibilities,
                 )
 
     ofh_gtf.close()

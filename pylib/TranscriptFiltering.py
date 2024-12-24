@@ -480,6 +480,8 @@ def _looks_internally_primed(
 
 def evaluate_splice_compatible_alt_isoforms(transcripts):
 
+    transcript_id_to_splice_compatible_containments = defaultdict(set)
+
     logger.info("-evaluationg splice compatible alt isoforms:")
 
     if len(transcripts) < 2:
@@ -495,6 +497,7 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
         transcript_i = transcripts[i]
         transcript_i_sp = transcript_i.get_simple_path()
         transcript_i_introns = SPU.get_simple_path_introns(transcript_i_sp)
+        transcript_i_id = transcript_i.get_transcript_id()
 
         if len(transcript_i_introns) == 0:
             continue
@@ -503,13 +506,18 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
             transcript_j = transcripts[j]
             transcript_j_sp = transcript_j.get_simple_path()
             transcript_j_introns = SPU.get_simple_path_introns(transcript_j_sp)
+            transcript_j_id = transcript_j.get_transcript_id()
 
             if len(transcript_j_introns) == 0:
                 continue
 
             if len(transcript_j_introns - transcript_i_introns) == 0:
 
-                logger.info(
+                transcript_id_to_splice_compatible_containments[transcript_i_id].add(
+                    transcript_j_id
+                )
+
+                logger.debug(
                     "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
                         transcript_i,
                         transcript_i.get_TPM(),
@@ -518,4 +526,19 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                     )
                 )
 
-    return
+            if len(transcript_i_introns - transcript_j_introns) == 0:
+
+                transcript_id_to_splice_compatible_containments[transcript_j_id].add(
+                    transcript_i_id
+                )
+
+                logger.debug(
+                    "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
+                        transcript_j,
+                        transcript_j.get_TPM(),
+                        transcript_i,
+                        transcript_i.get_TPM(),
+                    )
+                )
+
+    return transcript_id_to_splice_compatible_containments

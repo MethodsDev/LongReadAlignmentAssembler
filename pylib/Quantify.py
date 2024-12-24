@@ -977,6 +977,7 @@ class Quantify:
         ofh_quant_vals,
         ofh_read_tracking,
         ofh_quant_read_tracking_lmdb=None,
+        splice_compatibilities=None,
     ):
 
         ## generate final report.
@@ -1059,17 +1060,25 @@ class Quantify:
                 else 0
             )
 
-            report_txt = "\t".join(
-                [
-                    gene_id,
-                    transcript_id,
-                    f"{num_uniquely_assigned_reads}",
-                    f"{counts:.1f}",
-                    f"{isoform_frac:.3f}",
-                    f"{unique_gene_read_fraction:0.3f}",
-                    f"{tpm:.3f}",
-                ]
-            )
+            report_vals = [
+                gene_id,
+                transcript_id,
+                f"{num_uniquely_assigned_reads}",
+                f"{counts:.1f}",
+                f"{isoform_frac:.3f}",
+                f"{unique_gene_read_fraction:0.3f}",
+                f"{tpm:.3f}",
+            ]
+
+            if splice_compatibilities is not None:
+                splice_compat_vals = (
+                    str(splice_compatibilities[transcript_id])
+                    if transcript_id in splice_compatibilities
+                    else ""
+                )
+                report_vals.append(splice_compat_vals)
+
+            report_txt = "\t".join(report_vals)
 
             logger.debug(report_txt)
             print(report_txt, file=ofh_quant_vals)
