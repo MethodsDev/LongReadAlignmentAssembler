@@ -59,7 +59,7 @@ def filter_isoforms_by_min_isoform_fraction(
         [(x.get_transcript_id(), x) for x in transcripts]
     )
 
-    def get_idoform_unique_assigned_read_count(transcript_id, frac_read_assignments):
+    def get_isoform_unique_assigned_read_count(transcript_id, frac_read_assignments):
         num_unique_reads = 0
         for read in frac_read_assignments[transcript_id]:
             if (
@@ -106,7 +106,7 @@ def filter_isoforms_by_min_isoform_fraction(
                 num_total_isoforms += 1
                 transcript_id = transcript.get_transcript_id()
 
-                transcript_unique_read_count = get_idoform_unique_assigned_read_count(
+                transcript_unique_read_count = get_isoform_unique_assigned_read_count(
                     transcript_id, frac_read_assignments
                 )
 
