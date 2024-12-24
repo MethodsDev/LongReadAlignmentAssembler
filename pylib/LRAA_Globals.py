@@ -40,16 +40,16 @@ config = {
     # during isoform resolution: comparing isoform i that contains j, j >= this frac of i TSS read support
     "max_frac_alt_TSS_from_degradation": 0.20,
     # to retain j TSS when comparing to i TSS, j TSS must have >= read support fraction of all gene reads
-    "min_frac_gene_alignments_define_TSS_site": 0.05,
+    "min_frac_gene_alignments_define_TSS_site": 0.1,
     #
     ####################
     ## polyA site config
     "infer_PolyA": True,  # include PolyA site feature in read path assignments
     "max_dist_between_alt_polyA_sites": 50,
-    "min_alignments_define_polyA_site": 3,
+    "min_alignments_define_polyA_site": 5,
     "min_frac_alignments_define_polyA_site": 0.1,
     "min_PolyA_ident_length": 7,  # examine softclipped ends of reads, if have polyA with at least this number of bases at terminus, strip it and extended match out
-    "min_PolyA_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of TSS-candidate gene reads assigned..
+    "min_PolyA_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of polyA-candidate gene reads assigned..
     "max_soft_clip_at_PolyA": 3,
     #
     ## read assignment to transcript criteria
