@@ -476,3 +476,46 @@ def _looks_internally_primed(
     )
 
     return has_flanking_polyA
+
+
+def evaluate_splice_compatible_alt_isoforms(transcripts):
+
+    logger.info("-evaluationg splice compatible alt isoforms:")
+
+    if len(transcripts) < 2:
+        return
+
+    if type(transcripts) == set:
+        transcripts = list(transcripts)
+
+    transcripts.sort(key=lambda x: x.get_TPM(), reverse=True)
+
+    for i in range(len(transcripts) - 1):
+
+        transcript_i = transcripts[i]
+        transcript_i_sp = transcript_i.get_simple_path()
+        transcript_i_introns = SPU.get_simple_path_introns(transcript_i_sp)
+
+        if len(transcript_i_introns) == 0:
+            continue
+
+        for j in range(i + 1, len(transcripts)):
+            transcript_j = transcripts[j]
+            transcript_j_sp = transcript_j.get_simple_path()
+            transcript_j_introns = SPU.get_simple_path_introns(transcript_j_sp)
+
+            if len(transcript_j_introns) == 0:
+                continue
+
+            if len(transcript_j_introns - transcript_i_introns) == 0:
+
+                logger.info(
+                    "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
+                        transcript_i,
+                        transcript_i.get_TPM(),
+                        transcript_j,
+                        transcript_j.get_TPM(),
+                    )
+                )
+
+    return

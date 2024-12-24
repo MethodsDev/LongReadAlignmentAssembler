@@ -922,17 +922,21 @@ def add_spacers_between_disconnected_nodes(splice_graph, simple_path):
     return new_path
 
 
-def simple_paths_have_identical_intron_representation(simple_path_A, simple_path_B):
+def simple_paths_have_identical_intron_representation(
+    simple_path_A: list, simple_path_B: list
+) -> bool:
+    return get_simple_path_introns(simple_path_A) == get_simple_path_introns(
+        simple_path_B
+    )
 
-    def get_introns(path):
-        introns = set()
-        for node in path:
-            if re.match("I:", node):
-                introns.add(node)
 
-        return introns
+def get_simple_path_introns(simple_path: list) -> set:
+    introns = set()
+    for node in simple_path:
+        if re.match("I:", node):
+            introns.add(node)
 
-    return get_introns(simple_path_A) == get_introns(simple_path_B)
+    return introns
 
 
 ###############

@@ -829,6 +829,9 @@ def main():
                         )
                         continue
 
+                # examine splice compatible isoform differences
+                TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
+
                 #######################################
                 ## Done filtering, report final results
 
