@@ -8,6 +8,7 @@ task LRAA_runner_task {
 
         File? annot_gtf
         Boolean quant_only
+        Boolean LowFi = false
         
         Int? num_total_reads
         Float? min_per_id
@@ -53,7 +54,8 @@ task LRAA_runner_task {
                                  ~{"--min_alt_unspliced_freq " + min_alt_unspliced_freq} \
                                  ~{"--gtf " + annot_gtf} \
                                  ~{"--num_total_reads " + num_total_reads} \
-                                 ~{true="--quant_only" false='' quant_only}
+                                 ~{true="--quant_only" false='' quant_only} \
+                                 ~{true="--LowFi" false='' LowFi}
 
 
         # always ensure an output file exists for the wdl output capture.

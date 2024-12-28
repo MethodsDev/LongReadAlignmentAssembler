@@ -106,10 +106,10 @@ def main():
     )
 
     parser.add_argument(
-        "--include_asm_draft_quant",
+        "--LowFi",
         action="store_true",
         default=False,
-        help="include the draft (not real... based on norm reads) quant values at assembly. Potentially useful for isoform fraction info only",
+        help="low fidelity mode: min_per_id: 80, no_infer_TSS, no_infer_PolyA, max_exon_spur_length: 20",
     )
 
     parser.add_argument(
@@ -330,6 +330,12 @@ def main():
 
     quant_EM_alpha = args.EM_alpha
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
+
+    if args.LowFi:
+        LRAA_Globals.config["infer_TSS"] = False
+        LRAA_Globals.config["infer_PolyA"] = False
+        LRAA_Globals.config["min_per_id"] = 80.0
+        LRAA_Globals.config["max_exon_spur_length"] = 20
 
     if args.mpm_monitor:
         mpm.set_debug()
