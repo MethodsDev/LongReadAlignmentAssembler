@@ -106,8 +106,8 @@ RUN pip install numpy --break-system-packages
 
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.21"
-ENV LRAA_CO="1459f93f1cd0740f4f1ec9ef587f1989b8632f6c"
+ENV LRAA_VERSION="v0.2.22"
+ENV LRAA_CO="a366ff9ed6f3ca884e91265098166eac029decb2"
 
 # update VERSION and LRAA_CO files with version info and checkout
 

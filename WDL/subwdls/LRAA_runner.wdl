@@ -93,6 +93,7 @@ workflow LRAA_runner {
 
         File? annot_gtf
         Boolean quant_only
+        Boolean LowFi = False
         
         Int? num_total_reads
         Float? min_per_id
@@ -120,6 +121,7 @@ workflow LRAA_runner {
             inputBAM=inputBAM,
             annot_gtf=annot_gtf,
             quant_only=quant_only,
+            LowFi = LowFi,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
