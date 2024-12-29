@@ -1,4 +1,8 @@
 
+
+v0.2.22
+- added option --LowFi 
+
 v0.2.21
 - under assembly mode, include alt isoform splice compatibilities in quant outputs.
 - adjusted default requirements for polyA and TSS definitions to slightly more stringent: min_alignments_define: 5, min_frac_gene_alignments_define: 0.1
