@@ -1,0 +1,8 @@
+{
+    "LRAA_wf.sample_id" : "test.Quant_only_mode",
+    "LRAA_wf.inputBAM" : "pacbio.PBLR.small.bam",
+    "LRAA_wf.referenceGenome" : "ref_genome.fa",
+    "LRAA_wf.annot_gtf" : "ref_annot.gtf",
+    "LRAA_wf.main_chromosomes" : "minigenome",
+    "LRAA_wf.quant_only" : true
+}
