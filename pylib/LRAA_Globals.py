@@ -56,7 +56,7 @@ config = {
     "fraction_read_align_overlap": 0.75,  # min fraction of read length that must overlap the compatible transcript isoform structure
     #
     # misc settings
-    "min_path_score": 2,  # min number of reads required for reporting isoform
+    "min_path_score": 1,  # min number of reads required for reporting isoform
     #
     # transcript filtering criteria
     "min_transcript_length": 200,
