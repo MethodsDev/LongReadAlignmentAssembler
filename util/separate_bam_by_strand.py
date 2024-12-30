@@ -30,10 +30,39 @@ def main():
         help="output prefix: files named ${output_prefix}.${strand}.bam",
     )
 
+    parser.add_argument(
+        "--infer_read_orient",
+        action="store_true",
+        default=False,
+        help="infer read orientation based on splicing evidence or overlapping reference annotations (in that order)",
+    )
+
+    parser.add_argument(
+        "--gtf",
+        type=str,
+        required=False,
+        help="reference annotation used for inferring transcribed orientation of read (required if --infer_read_orient",
+    )
+
+    parser.add_argument(
+        "--genome",
+        type - str,
+        required=False,
+        hep="genome fasta file, required if --infer_read_orient",
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.bam
     output_prefix = args.output_prefix
+
+    infer_read_orient_flag = args.infer_read_orient
+    genome_fasta = args.genome
+    gtf_file = args.gtf
+
+    if infer_read_orient_flag:
+        if genome_fasta is None or gtf_file is None:
+            sys.exit("Error - with --infer_read_orient need both --gtf and --genome")
 
     bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
 
@@ -55,6 +84,10 @@ def main():
     num_neither = 0
     for read in bamfile_reader:
         num_records += 1
+
+        if infer_read_orient:
+
+            pass
 
         if read.is_forward:
             top_strand_bamfile_writer.write(read)

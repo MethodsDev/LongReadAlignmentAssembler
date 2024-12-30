@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 class Pretty_alignment:
 
+    read_aln_gap_merge_int = LRAA_Globals.config["read_aln_gap_merge_int"]
+    min_terminal_splice_exon_anchor_length = LRAA_Globals.config[
+        "min_terminal_splice_exon_anchor_length"
+    ]
+
     def __init__(self, pysam_alignment, pretty_alignment_segments):
 
         self._pysam_alignment = pysam_alignment
@@ -337,3 +342,162 @@ class Pretty_alignment:
                             break
 
         return
+
+    @classmethod
+    def get_pretty_alignment(cls, pysam_read_alignment):
+
+        alignment_segments = cls.read_to_pretty_alignment_segments(pysam_read_alignment)
+        this_pretty_alignment = Pretty_alignment(
+            pysam_read_alignment, alignment_segments
+        )
+
+        return this_pretty_alignment
+
+    @classmethod
+    def get_pretty_alignments(cls, read_alignments_list):
+        """
+        stores the pysam alignment record along with inferred transcript exon segments,
+        where exon segments involve joining nearby alignment segments separated by short indels
+        """
+
+        pretty_alignments = [cls.get_pretty_alignment(x) for x in read_alignments_list]
+
+        return pretty_alignments
+
+    @classmethod
+    def read_to_pretty_alignment_segments(cls, pysam_read_alignment):
+
+        read_name = pysam_read_alignment.query_name
+
+        aligned_pairs = cls.get_genome_alignment_blocks(pysam_read_alignment)
+
+        # print(aligned_pairs)
+
+        ## merge adjacent blocks within range.
+        alignment_segments = list()
+        alignment_segments.append(list(aligned_pairs.pop(0)))
+        # block coordinates are zero-based, left inclusive, and right-end exclusive
+        alignment_segments[0][
+            0
+        ] += (
+            1  # adjust for zero-based.  note, end position doesn't need to be adjusted.
+        )
+
+        for aligned_pair in aligned_pairs:
+            aligned_pair = list(aligned_pair)
+            aligned_pair[0] += 1
+
+            # extend earlier stored segment or append new one
+            delta = aligned_pair[0] - alignment_segments[-1][1]
+            # logger.debug("comparing {} to {}, delta: {}".format(alignment_segments[-1], aligned_pair, delta))
+            if delta < Pretty_alignment.read_aln_gap_merge_int:
+                # extend rather than append
+                alignment_segments[-1][1] = aligned_pair[1]
+            else:
+                # append, as too far apart from prev
+                alignment_segments.append(list(aligned_pair))
+
+        ##//TODO: make below trimming of short terminal alignment segments an option and configurable
+        """
+
+        # trim short terminal segments from each end
+        while (len(alignment_segments) > 1 and
+            alignment_segments[0][1] - alignment_segments[0][0] + 1 < self._min_terminal_splice_exon_anchor_length):
+
+            alignment_segments.pop(0)
+
+        while (len(alignment_segments) > 1 and
+            alignment_segments[len(alignment_segments)-1][1] - alignment_segments[len(alignment_segments)-1][0] + 1 < self._min_terminal_splice_exon_anchor_length):
+
+            alignment_segments.pop()
+        """
+
+        logger.debug(
+            "read {} pretty alignment segments: {}".format(
+                read_name, alignment_segments
+            )
+        )
+
+        return alignment_segments
+
+    @classmethod
+    def get_genome_alignment_blocks(self, read):
+
+        cigartuples = read.cigartuples
+
+        """
+        M       BAM_CMATCH      0
+        I       BAM_CINS        1
+        D       BAM_CDEL        2
+        N       BAM_CREF_SKIP   3
+        S       BAM_CSOFT_CLIP  4
+        H       BAM_CHARD_CLIP  5
+        P       BAM_CPAD        6
+        =       BAM_CEQUAL      7
+        X       BAM_CDIFF       8
+        B       BAM_CBACK       9
+        """
+
+        read_name = read.query_name
+
+        ref_start = read.reference_start
+        read_start = 0
+
+        prev_ref_start = ref_start
+        prev_read_start = read_start
+
+        genome_segments = []
+
+        for cigartuple in cigartuples:
+            code, val = cigartuple
+
+            token = None
+
+            if code in (0, 7, 8):
+                token = "BAM_CMATCH"
+                ref_start += val
+                read_start += val
+                prev_ref_start += 1
+                prev_read_start += 1
+
+            elif code == 1:
+                token = "BAM_CINS"
+                read_start += val
+                prev_read_start += 1
+
+            elif code == 2:
+                token = "BAM_CDEL"
+                ref_start += val
+                prev_ref_start += 1
+
+            elif code == 3:
+                token = "BAM_CREF_SKIP"
+                ref_start += val
+                prev_ref_start += 1
+
+            elif code == 4:
+                token = "BAM_CSOFT_CLIP"
+                read_start += val
+                prev_read_start += 1
+
+            elif code == 5:
+                token = "BAM_CHARD_CLIP"
+                read_start += val
+                prev_read_start += 1
+
+            else:
+                raise RuntimeError("Not sure how to handle code {}".format(code))
+
+            if token in ["BAM_CMATCH", "BAM_CDEL"]:
+                genome_segments.append(
+                    [prev_ref_start - 1, ref_start]
+                )  # make zero-based left-inclusive right-exclusive for consistency w/ pysam blocks
+
+            prev_read_start = read_start
+            prev_ref_start = ref_start
+
+        logger.debug(
+            "genome segments from read: {}: {}".format(read_name, genome_segments)
+        )
+
+        return genome_segments
