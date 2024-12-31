@@ -628,8 +628,12 @@ class Splice_graph:
 
             trans_lend, trans_rend = transcript.get_coords()
 
-            self._input_transcript_lend_boundaries.add(trans_lend)
-            self._input_transcript_rend_boundaries.add(trans_rend)
+            if (
+                LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]
+                is True
+            ):
+                self._input_transcript_lend_boundaries.add(trans_lend)
+                self._input_transcript_rend_boundaries.add(trans_rend)
 
             # add coverage for exonic region
             for exon_segment in exon_segments:

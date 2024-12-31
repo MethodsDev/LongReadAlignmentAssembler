@@ -24,6 +24,7 @@ config = {
     "max_exon_spur_length": 5,  # exon spurs not tied to TSS or PolyA and at most this length get pruned
     "max_aggregate_splice_boundary_per_id": 90,  # if min_per_id <= this val, alt splice w/ shared bundary have the other boundary aggregated if within aggregate_splice_boundaary_dist
     "aggregate_splice_boundary_dist": 5,
+    "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
     #
     ############
     # TSS config
@@ -65,6 +66,7 @@ config = {
     "min_monoexonic_TPM": 1.0,
     "filter_internal_priming": True,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
+    "min_reads_novel_isoform": 2,
     #
     ##########
     # assembly

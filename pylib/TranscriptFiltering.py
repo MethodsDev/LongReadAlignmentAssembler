@@ -481,6 +481,7 @@ def _looks_internally_primed(
 def evaluate_splice_compatible_alt_isoforms(transcripts):
 
     transcript_id_to_splice_compatible_containments = defaultdict(set)
+    transcript_id_to_splice_compatible_contained_by = defaultdict(set)
 
     logger.info("-evaluationg splice compatible alt isoforms:")
 
@@ -516,6 +517,9 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                 transcript_id_to_splice_compatible_containments[transcript_i_id].add(
                     transcript_j_id
                 )
+                transcript_id_to_splice_compatible_contained_by[transcript_j_id].add(
+                    transcript_i_id
+                )
 
                 logger.debug(
                     "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
@@ -531,6 +535,9 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                 transcript_id_to_splice_compatible_containments[transcript_j_id].add(
                     transcript_i_id
                 )
+                transcript_id_to_splice_compatible_contained_by[transcript_i_id].add(
+                    transcript_j_id
+                )
 
                 logger.debug(
                     "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
@@ -541,4 +548,27 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                     )
                 )
 
-    return transcript_id_to_splice_compatible_containments
+    return (
+        transcript_id_to_splice_compatible_containments,
+        transcript_id_to_splice_compatible_contained_by,
+    )
+
+
+def filter_novel_isoforms_by_min_read_support(
+    transcripts, min_reads_novel_isoform: int
+):
+
+    retained_transcripts = list()
+
+    for transcript in transcripts:
+        if transcript.is_novel_isoform() is True:
+            if transcript.get_read_counts_assigned() >= min_reads_novel_isoform:
+                retained_transcripts.append(transcript)
+            else:
+                # novel transcript gets pruned as insufficient evidence.
+                pass
+        else:
+            # known transcript, retaining.
+            retained_transcripts.append(transcript)
+
+    return retained_transcripts

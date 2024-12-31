@@ -1195,3 +1195,11 @@ class LRAA:
                 read_names={"reftranscript:" + input_transcript.get_transcript_id()},
             )
             mp_counter.add(mp)
+
+    def differentiate_known_vs_novel_isoforms(self, transcripts):
+
+        for transcript in transcripts:
+            if len(transcript.get_ref_trans_included()) > 0:
+                transcript.set_is_novel_isoform(False)
+            else:
+                transcript.set_is_novel_isoform(True)

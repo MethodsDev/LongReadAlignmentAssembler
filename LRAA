@@ -336,6 +336,7 @@ def main():
         LRAA_Globals.config["infer_PolyA"] = False
         LRAA_Globals.config["min_per_id"] = 80.0
         LRAA_Globals.config["max_exon_spur_length"] = 20
+        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -555,7 +556,7 @@ def main():
     ]
 
     if not QUANT_ONLY:
-        header.append("splice_compatibiltiies")
+        header += ["splice_compat_contained", "splice_contained_by"]
 
     print(
         "\t".join(header),
@@ -748,12 +749,13 @@ def main():
                     )
                     continue
 
+                ###########################################################
+                # Do an initial quant
+                # Now use the original bam for quant (not depth normalized)
+
                 logger.debug(
                     "\n//SECTION QUANT for assembled isoforms: Assigning reads to paths in graph."
                 )
-
-                # Do an initial quant
-                # Now use the original bam for quant (not depth normalized)
 
                 mp_counter = lraa_obj.build_multipath_graph(
                     contig_acc,
@@ -773,6 +775,32 @@ def main():
                 ## Filtering of isoforms to remove 'noise'
                 #########################################
 
+                if input_transcripts is not None:
+                    lraa_obj.differentiate_known_vs_novel_isoforms(transcripts)
+
+                ##################################################################
+                ## initial filter of novel isoforms with insufficient read support
+                min_read_support_novel_isoforms = LRAA_Globals.config[
+                    "min_reads_novel_isoform"
+                ]
+                transcripts = (
+                    TranscriptFiltering.filter_novel_isoforms_by_min_read_support(
+                        transcripts, min_read_support_novel_isoforms
+                    )
+                )
+
+                if len(transcripts) < 1:
+                    logger.info(
+                        "-no transcripts on contig {} {} survived min novel isoform read threshold requirement".format(
+                            contig_acc, contig_strand
+                        )
+                    )
+                    continue
+
+                # rerun quant for post-filtering
+                frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
+
+                #####################################
                 # pruning likely degradation products
                 transcripts = TranscriptFiltering.prune_likely_degradation_products(
                     transcripts, sg, frac_read_assignments
@@ -789,6 +817,7 @@ def main():
                 # rerun quant for post-filtering
                 frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
+                #######################################################
                 # Filter isoforms according to minimum isoform fraction
                 if min_isoform_fraction > 0:
                     transcripts = (
@@ -808,6 +837,7 @@ def main():
                         )
                         continue
 
+                ##################################################################
                 # Filter monoexonic transcripts according to expression thresholds
                 if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
                     transcripts = (
@@ -823,6 +853,7 @@ def main():
                         )
                         continue
 
+                ####################################################################
                 # Filter isoforms apparently derived from internal priming artifacts
                 if LRAA_Globals.config["filter_internal_priming"]:
                     transcripts = (
@@ -838,11 +869,13 @@ def main():
                         )
                         continue
 
-                # examine splice compatible isoform differences
-                transcript_splice_compatibilities = (
-                    TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(
-                        transcripts
-                    )
+                ###############################################
+                # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
+                (
+                    transcript_splice_compatible_containments,
+                    transcript_splice_compatible_contained_by,
+                ) = TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(
+                    transcripts
                 )
 
                 #######################################
@@ -876,7 +909,8 @@ def main():
                     frac_read_assignments,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
-                    splice_compatibilities=transcript_splice_compatibilities,
+                    splice_compatible_containments=transcript_splice_compatible_containments,
+                    splice_compatible_contained_by=transcript_splice_compatible_contained_by,
                 )
 
     ofh_gtf.close()

@@ -110,9 +110,14 @@ def main():
     num_records_strand_uncertain = 0
 
     for read in bamfile_reader:
-        num_records += 1
 
         chrom = bamfile_reader.get_reference_name(read.reference_id)
+
+        if chrom is None:
+            continue
+            # raise RuntimeError("Error, read has no chromosome assignment: " + str(read))
+
+        num_records += 1
 
         strand = "+" if read.is_forward else "-"
         init_strand = strand

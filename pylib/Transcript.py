@@ -64,6 +64,8 @@ class Transcript(GenomeFeature):
 
         self._isoform_fraction = None  # set during expression quantification
 
+        self._is_novel_isoform_bool = True  # set to False if it's a known isoform.
+
         self._cdna_len = 0
         for exon_segment in segment_coordinates_list:
             self._cdna_len += exon_segment[1] - exon_segment[0] + 1
@@ -200,6 +202,12 @@ class Transcript(GenomeFeature):
 
     def get_ref_trans_included(self):
         return [x for x in self.read_names.copy() if "reftranscript:" in x]
+
+    def is_novel_isoform(self):
+        return self._is_novel_isoform_bool
+
+    def set_is_novel_isoform(self, boolean_val: bool):
+        self._is_novel_isoform_bool = boolean_val
 
     def add_read_names(self, read_names):
         if self.read_names == None:

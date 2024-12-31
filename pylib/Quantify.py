@@ -977,7 +977,8 @@ class Quantify:
         ofh_quant_vals,
         ofh_read_tracking,
         ofh_quant_read_tracking_lmdb=None,
-        splice_compatibilities=None,
+        splice_compatible_containments=None,
+        splice_compatible_contained_by=None,
     ):
 
         ## generate final report.
@@ -1070,13 +1071,20 @@ class Quantify:
                 f"{tpm:.3f}",
             ]
 
-            if splice_compatibilities is not None:
-                splice_compat_vals = (
-                    str(splice_compatibilities[transcript_id])
-                    if transcript_id in splice_compatibilities
+            if splice_compatible_containments is not None:
+                splice_compat_containment_vals = (
+                    str(splice_compatible_containments[transcript_id])
+                    if transcript_id in splice_compatible_containments
                     else ""
                 )
-                report_vals.append(splice_compat_vals)
+                report_vals.append(splice_compat_containment_vals)
+
+                splice_compat_contained_by_vals = (
+                    str(splice_compatible_contained_by[transcript_id])
+                    if transcript_id in splice_compatible_contained_by
+                    else ""
+                )
+                report_vals.append(splice_compat_contained_by_vals)
 
             report_txt = "\t".join(report_vals)
 
