@@ -553,6 +553,8 @@ def main():
         "isoform_fraction",
         "unique_gene_read_fraction",
         "TPM",
+        "exons",
+        "introns",
     ]
 
     if not QUANT_ONLY:

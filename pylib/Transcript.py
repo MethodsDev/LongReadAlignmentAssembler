@@ -95,6 +95,12 @@ class Transcript(GenomeFeature):
                 intron_coordsets.append((intron_lend, intron_rend))
         return intron_coordsets
 
+    def get_exons_string(self):
+        return "({}){}".format(self.get_strand(), self.get_exon_segments())
+
+    def get_introns_string(self):
+        return "({}){}".format(self.get_strand(), self.get_introns())
+
     def get_strand(self):
         return self._orient
 

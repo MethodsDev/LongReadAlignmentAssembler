@@ -1069,6 +1069,12 @@ class Quantify:
                 f"{isoform_frac:.3f}",
                 f"{unique_gene_read_fraction:0.3f}",
                 f"{tpm:.3f}",
+                transcript.get_exons_string(),
+                (
+                    transcript.get_introns_string()
+                    if transcript.get_num_exon_segments() > 1
+                    else ""
+                ),
             ]
 
             if splice_compatible_containments is not None:
