@@ -486,7 +486,10 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
     logger.info("-evaluationg splice compatible alt isoforms:")
 
     if len(transcripts) < 2:
-        return
+        return (
+            transcript_id_to_splice_compatible_containments,
+            transcript_id_to_splice_compatible_contained_by,
+        )
 
     if type(transcripts) == set:
         transcripts = list(transcripts)

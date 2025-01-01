@@ -416,7 +416,7 @@ def main():
         "min_alt_splice_freq": args.min_alt_splice_freq,
         "min_alt_unspliced_freq": args.min_alt_unspliced_freq,
         "max_intron_length_for_exon_segment_filtering": 10000,
-        "min_intron_support": 1,
+        "min_intron_support": 2,
         "min_terminal_splice_exon_anchor_length": 15,
         "remove_unspliced_introns": False,
     }

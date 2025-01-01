@@ -31,7 +31,7 @@ class Splice_graph:
     _min_alt_splice_freq = 0.01
     _min_alt_unspliced_freq = 0.20
     _max_intron_length_for_exon_segment_filtering = 10000
-    _min_intron_support = 1
+    _min_intron_support = 2
     _min_terminal_splice_exon_anchor_length = 15
 
     _remove_unspliced_introns = False  # True
