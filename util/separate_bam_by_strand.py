@@ -75,10 +75,11 @@ def main():
     chrom_to_itree = None
 
     if infer_read_orient_flag:
-        if genome_fasta is None or gtf_file is None:
-            sys.exit("Error - with --infer_read_orient need both --gtf and --genome")
+        if genome_fasta is None:
+            sys.exit("Error - with --infer_read_orient need --genome")
 
-        chrom_to_itree = build_chrom_itrees(gtf_file)
+        if gtf_file:
+            chrom_to_itree = build_chrom_itrees(gtf_file)
 
     bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
 
@@ -136,7 +137,7 @@ def main():
             strand = infer_spliced_orient(pretty_alignment, chrom_seq)
             if strand != "?":
                 num_inferred_by_splice_dinucs += 1
-            else:
+            elif chrom_to_itree is not None:
                 # try by annotation mapping
                 strand = infer_transcribed_orient_via_annotation_mapping(
                     pretty_alignment, chrom_to_itree[chrom]
