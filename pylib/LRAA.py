@@ -259,6 +259,11 @@ class LRAA:
             )
         )
 
+        if LRAA_Globals.DEBUG:
+            with open("__pre_tx_filtering.transcripts.gtf", "at") as ofh:
+                for transcript in all_reocnstructed_transcripts:
+                    ofh.write(transcript.to_GTF_format() + "\n")
+
         return all_reconstructed_transcripts
 
     def prune_ref_transcripts_as_evidence(self, transcripts):
