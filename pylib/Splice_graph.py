@@ -69,6 +69,7 @@ class Splice_graph:
         self._input_transcript_lend_boundaries = set()
         self._input_transcript_rend_boundaries = set()
         self._input_transcript_exon_coords_itree = itree.IntervalTree()
+        self._input_transcripts_introns = dict()  # "lend:rend" => intron_obj
 
         return
 
@@ -662,6 +663,7 @@ class Splice_graph:
                         intron_obj.add_read_types(["ref_transcript"])
                         self._intron_objs[intron_coords_key] = intron_obj
                         logger.debug("adding intron {}".format(intron_coords_key))
+                        self._input_transcripts_introns[intron_coords_key] = intron_obj
                     else:
                         logger.debug(
                             "intron {} already in splice graph".format(
@@ -669,9 +671,9 @@ class Splice_graph:
                             )
                         )
                         # ensure read type represented.
-                        self._intron_objs[intron_coords_key].add_read_types(
-                            ["ref_transcript"]
-                        )
+                        intron_obj = self._intron_objs[intron_coords_key]
+                        intron_obj.add_read_types(["ref_transcript"])
+                        self._input_transcripts_introns[intron_coords_key] = intron_obj
 
                 last_rend = rend
 
@@ -1015,6 +1017,10 @@ class Splice_graph:
             most_supported_intron = intron_list.pop()
             most_supported_intron_abundance = most_supported_intron.get_read_support()
             for alt_intron in intron_list:
+                if alt_intron.has_read_type("ref_transcript"):
+                    # retaining ref introns
+                    continue
+
                 alt_intron_abundance = alt_intron.get_read_support()
                 alt_intron_relative_freq = (
                     alt_intron_abundance / most_supported_intron_abundance
@@ -1031,23 +1037,19 @@ class Splice_graph:
 
                 # check for splice site aggregation if low per_id alignments allowed
                 elif (
-                    LRAA_Globals.config["min_per_id"]
-                    <= LRAA_Globals.config["max_aggregate_splice_boundary_per_id"]
-                ):
-                    if abs(
+                    LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] is True
+                    and abs(
                         most_supported_intron.get_coords()[other_idx]
                         - alt_intron.get_coords()[other_idx]
-                    ) <= LRAA_Globals.config[
-                        "aggregate_splice_boundary_dist"
-                    ] and not alt_intron.has_read_type(
-                        "ref_transcript"
-                    ):
-                        logger.debug(
-                            "alt intron: {} is within aggregation distance of {} and will be purged".format(
-                                alt_intron, most_supported_intron
-                            )
+                    )
+                    <= LRAA_Globals.config["aggregate_splice_boundary_dist"]
+                ):
+                    logger.debug(
+                        "alt intron: {} is within aggregation distance of {} and will be purged".format(
+                            alt_intron, most_supported_intron
                         )
-                        introns_to_delete.add(alt_intron)
+                    )
+                    introns_to_delete.add(alt_intron)
 
         logger.info(
             "removing {} low frequency introns with shared {} coord".format(

@@ -22,7 +22,7 @@ config = {
     "min_alt_unspliced_freq": 0.01,
     "min_feature_frac_overlap": 0.50,
     "max_exon_spur_length": 5,  # exon spurs not tied to TSS or PolyA and at most this length get pruned
-    "max_aggregate_splice_boundary_per_id": 90,  # if min_per_id <= this val, alt splice w/ shared bundary have the other boundary aggregated if within aggregate_splice_boundaary_dist
+    "aggregate_adjacent_splice_boundaries": True,
     "aggregate_splice_boundary_dist": 5,
     "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
     #
