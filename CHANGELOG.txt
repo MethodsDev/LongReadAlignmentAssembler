@@ -1,3 +1,14 @@
+v0.2.24
+- added code to infer transcriptional orientation of reads not provided as strand-specific. Not fully baked inot the LRAA pipeline yet though.
+- under LowFi mode, setting fracture_splice_graph_at_input_transcript_bounds to False, also added contaiment and contained-by info in the expr tsv
+- include exon and intron coords in the expr file
+- set min intron support to 2 - should except input guide transcripts though
+- no purging of input gtf introns
+- aggregate splice dist in LowFi mode
+- in debug mode, report prelim isoforms before filtering
+- added debug option to not filter isoforms, and also now only reporting read support in gtf file if debug set
+
+
 v0.2.23
 - set min path score default to 1 instead of 2
 
