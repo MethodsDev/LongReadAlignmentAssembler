@@ -135,6 +135,13 @@ def main():
         "--mpm_monitor", action="store_true", default=False
     )  # multiprocessing monitor
 
+    debug_group.add_argument(
+        "--no_filter_isoforms",
+        action="store_true",
+        default=False,
+        help="do not filter any initially resolved isoforms",
+    )
+
     ## config settings
 
     config_group = parser.add_argument_group("config settings")
@@ -302,6 +309,8 @@ def main():
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
     run_EM = not args.no_EM
+
+    NO_FILTER_ISOFORMS = args.no_filter_isoforms
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -781,96 +790,100 @@ def main():
                 if input_transcripts is not None:
                     lraa_obj.differentiate_known_vs_novel_isoforms(transcripts)
 
-                ##################################################################
-                ## initial filter of novel isoforms with insufficient read support
-                min_read_support_novel_isoforms = LRAA_Globals.config[
-                    "min_reads_novel_isoform"
-                ]
-                transcripts = (
-                    TranscriptFiltering.filter_novel_isoforms_by_min_read_support(
-                        transcripts, min_read_support_novel_isoforms
-                    )
-                )
+                if NO_FILTER_ISOFORMS:
 
-                if len(transcripts) < 1:
-                    logger.info(
-                        "-no transcripts on contig {} {} survived min novel isoform read threshold requirement".format(
-                            contig_acc, contig_strand
-                        )
-                    )
-                    continue
+                    logger.info("NOT FILTERING ISOFORMS.")
 
-                # rerun quant for post-filtering
-                frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
+                else:
 
-                #####################################
-                # pruning likely degradation products
-                transcripts = TranscriptFiltering.prune_likely_degradation_products(
-                    transcripts, sg, frac_read_assignments
-                )
-
-                if len(transcripts) < 1:
-                    logger.info(
-                        "-no transcripts on contig {} {} survived pruning degradation products".format(
-                            contig_acc, contig_strand
-                        )
-                    )
-                    continue
-
-                # rerun quant for post-filtering
-                frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
-
-                #######################################################
-                # Filter isoforms according to minimum isoform fraction
-                if min_isoform_fraction > 0:
+                    ##################################################################
+                    ## initial filter of novel isoforms with insufficient read support
+                    min_read_support_novel_isoforms = LRAA_Globals.config[
+                        "min_reads_novel_isoform"
+                    ]
                     transcripts = (
-                        TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
-                            transcripts,
-                            min_isoform_fraction,
-                            run_EM,
-                            LRAA_Globals.config["max_EM_iterations_during_asm"],
+                        TranscriptFiltering.filter_novel_isoforms_by_min_read_support(
+                            transcripts, min_read_support_novel_isoforms
                         )
                     )
 
                     if len(transcripts) < 1:
                         logger.info(
-                            "-no transcripts on contig {} {} survived isoform filtering".format(
+                            "-no transcripts on contig {} {} survived min novel isoform read threshold requirement".format(
                                 contig_acc, contig_strand
                             )
                         )
                         continue
 
-                ##################################################################
-                # Filter monoexonic transcripts according to expression thresholds
-                if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
-                    transcripts = (
-                        TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
+                    # rerun quant for post-filtering
+                    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
+
+                    #####################################
+                    # pruning likely degradation products
+                    transcripts = TranscriptFiltering.prune_likely_degradation_products(
+                        transcripts, sg, frac_read_assignments
+                    )
+
+                    if len(transcripts) < 1:
+                        logger.info(
+                            "-no transcripts on contig {} {} survived pruning degradation products".format(
+                                contig_acc, contig_strand
+                            )
+                        )
+                        continue
+
+                    # rerun quant for post-filtering
+                    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
+
+                    #######################################################
+                    # Filter isoforms according to minimum isoform fraction
+                    if min_isoform_fraction > 0:
+                        transcripts = (
+                            TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
+                                transcripts,
+                                min_isoform_fraction,
+                                run_EM,
+                                LRAA_Globals.config["max_EM_iterations_during_asm"],
+                            )
+                        )
+
+                        if len(transcripts) < 1:
+                            logger.info(
+                                "-no transcripts on contig {} {} survived isoform filtering".format(
+                                    contig_acc, contig_strand
+                                )
+                            )
+                            continue
+
+                    ##################################################################
+                    # Filter monoexonic transcripts according to expression thresholds
+                    if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
+                        transcripts = TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
                             transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                         )
-                    )
-                    if len(transcripts) < 1:
-                        logger.info(
-                            "-no transcripts on contig {} {} survived monoexonic filtering strategy".format(
-                                contig_acc, contig_strand
+                        if len(transcripts) < 1:
+                            logger.info(
+                                "-no transcripts on contig {} {} survived monoexonic filtering strategy".format(
+                                    contig_acc, contig_strand
+                                )
                             )
-                        )
-                        continue
+                            continue
 
-                ####################################################################
-                # Filter isoforms apparently derived from internal priming artifacts
-                if LRAA_Globals.config["filter_internal_priming"]:
-                    transcripts = (
-                        TranscriptFiltering.filter_internally_primed_transcripts(
-                            transcripts, contig_seq_str
-                        )
-                    )
-                    if len(transcripts) < 1:
-                        logger.info(
-                            "-no transcripts on contig {} {} survived internal priming filtering".format(
-                                contig_acc, contig_strand
+                    ####################################################################
+                    # Filter isoforms apparently derived from internal priming artifacts
+                    if LRAA_Globals.config["filter_internal_priming"]:
+                        transcripts = (
+                            TranscriptFiltering.filter_internally_primed_transcripts(
+                                transcripts, contig_seq_str
                             )
                         )
-                        continue
+                        if len(transcripts) < 1:
+                            logger.info(
+                                "-no transcripts on contig {} {} survived internal priming filtering".format(
+                                    contig_acc, contig_strand
+                                )
+                            )
+                            continue
 
                 ###############################################
                 # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)

@@ -277,8 +277,10 @@ class Transcript(GenomeFeature):
 
         gtf_text = ""
 
-        if self.read_names:
-            gtf_text = f"#{self._id}\t" + ",".join(self.read_names) + "\n"
+        if LRAA_Globals.DEBUG:
+            gtf_text = (
+                f"#{self.get_transcript_id()}\t" + ",".join(self.read_names) + "\n"
+            )
 
         gtf_text += "\t".join(
             [
