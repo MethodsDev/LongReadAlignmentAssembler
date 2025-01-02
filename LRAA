@@ -337,6 +337,7 @@ def main():
         LRAA_Globals.config["min_per_id"] = 80.0
         LRAA_Globals.config["max_exon_spur_length"] = 20
         LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
+        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
 
     if args.mpm_monitor:
         mpm.set_debug()
