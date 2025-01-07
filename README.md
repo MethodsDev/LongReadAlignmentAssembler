@@ -2,21 +2,38 @@
 
 ** Under Development **
 
-Utility for resolving and/or quantification of isoforms from aligned PacBio Iso-seq reads.
+Isoform discovery and quantification based on long read isoform sequence alignments (PacBio or ONT). 
+
+LRAA has three modes, described below:
+
+- De novo (reference annotation-free) isoform identification and quantification
+- Reference-guided isoform detection and quantification
+- Isoform expression quantification only
+
 
 
 ## Isoform Discovery
+
+### De novo Reference Annotation-free Isoform Discovery (and quantification)
 
 Given a bam file from aligned reads (using minimap2), perform isoform discovery like so:
 
     LRAA --genome genome.fasta --bam aligned_IsoSeq.mm2.bam
 
+>If using with reads that are not PacBio HiFi and have error rates that are > 2%, use the --LowFi parameter.  By default, any read alignments with <98% identity are ignored.
 
+### Reference Annotation-guided Isoform Discovery (and quantification)
 
-## Isoform Quantification
+    LRAA --genome genome.fasta --bam aligned_IsoSeq.mm2.bam --gtf reference_annotation.gtf
+
+>Note that input refernece annotations not found with evidence of expression are excluded from the output. Also, reference annotation structures may be extended if evidence supports alternative TSS or PolyA sites. Transcript identfiers will all be reassigned. Use GFFcompare to the reference to determine relationships to the input ref annotations.
+
+>If using with reads that are not PacBio HiFi and have error rates that are > 2%, use the --LowFi parameter.  By default, any read alignments with <98% identity are ignored.    
+
+## Isoform Quantification Only
 
     LRAA --genome genome.fasta --bam aligned_IsoSeq.mm2.bam --gtf target_isoforms.gtf --quant_only
 
-
+>No novel isoform detection is performed. All original gene_id and transcript_ids are retained in the final output, including those with no evidence of expression (0 reads and 0 TPM).
     
 >If using with reads that are not PacBio HiFi and have error rates that are > 2%, use the --LowFi parameter.  By default, any read alignments with <98% identity are ignored.
