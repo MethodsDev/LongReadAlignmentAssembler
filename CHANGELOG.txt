@@ -1,3 +1,6 @@
+v0.2.25
+- bugfix around LowFi aggregation of splices and intron pruning
+
 v0.2.24
 - added code to infer transcriptional orientation of reads not provided as strand-specific. Not fully baked inot the LRAA pipeline yet though.
 - under LowFi mode, setting fracture_splice_graph_at_input_transcript_bounds to False, also added contaiment and contained-by info in the expr tsv
