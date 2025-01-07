@@ -1001,7 +1001,7 @@ class Splice_graph:
 
         idx = 0 if left_or_right == "left" else 1
 
-        other_idx = 0 if idx == 1 else 0  # the opposite
+        other_idx = 1 if idx == 0 else 0  # the opposite
 
         introns_shared_coord = defaultdict(list)
 
@@ -1017,6 +1017,27 @@ class Splice_graph:
             most_supported_intron = intron_list.pop()
             most_supported_intron_abundance = most_supported_intron.get_read_support()
             for alt_intron in intron_list:
+
+                assert (
+                    alt_intron != most_supported_intron
+                    and alt_intron.get_coords() != most_supported_intron.get_coords()
+                )
+
+                assert (
+                    alt_intron.get_coords()[idx]
+                    == most_supported_intron.get_coords()[idx]
+                )
+
+                assert (
+                    alt_intron.get_coords()[other_idx]
+                    != most_supported_intron.get_coords()[other_idx]
+                )
+
+                assert (
+                    alt_intron.get_read_support()
+                    <= most_supported_intron.get_read_support()
+                )
+
                 if alt_intron.has_read_type("ref_transcript"):
                     # retaining ref introns
                     continue
@@ -1024,6 +1045,11 @@ class Splice_graph:
                 alt_intron_abundance = alt_intron.get_read_support()
                 alt_intron_relative_freq = (
                     alt_intron_abundance / most_supported_intron_abundance
+                )
+
+                delta_other_boundary = abs(
+                    most_supported_intron.get_coords()[other_idx]
+                    - alt_intron.get_coords()[other_idx]
                 )
 
                 if alt_intron_relative_freq < Splice_graph._min_alt_splice_freq:
@@ -1038,15 +1064,15 @@ class Splice_graph:
                 # check for splice site aggregation if low per_id alignments allowed
                 elif (
                     LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] is True
-                    and abs(
-                        most_supported_intron.get_coords()[other_idx]
-                        - alt_intron.get_coords()[other_idx]
-                    )
+                    and delta_other_boundary
                     <= LRAA_Globals.config["aggregate_splice_boundary_dist"]
                 ):
                     logger.debug(
-                        "alt intron: {} is within aggregation distance of {} and will be purged".format(
-                            alt_intron, most_supported_intron
+                        "alt intron: {} is within aggregation distance ({} < {})  of {} and will be purged".format(
+                            alt_intron,
+                            delta_other_boundary,
+                            LRAA_Globals.config["aggregate_splice_boundary_dist"],
+                            most_supported_intron,
                         )
                     )
                     introns_to_delete.add(alt_intron)
