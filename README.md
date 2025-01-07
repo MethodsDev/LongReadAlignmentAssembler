@@ -19,3 +19,4 @@ Given a bam file from aligned reads (using minimap2), perform isoform discovery 
 
 
     
+>If using with reads that are not PacBio HiFi and have error rates that are > 2%, use the --LowFi parameter.  By default, any read alignments with <98% identity are ignored.
