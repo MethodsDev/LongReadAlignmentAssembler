@@ -59,6 +59,10 @@ class Pretty_alignment:
     def get_pretty_alignment_segments(self):
         return self._pretty_alignment_segments
 
+    def set_pretty_alignment_segments(self, alignment_segments):
+        self._pretty_alignment_segments = alignment_segments
+        return
+
     def get_strand(self):
         if self._pysam_alignment.is_forward:
             return "+"
@@ -150,6 +154,49 @@ class Pretty_alignment:
             return True
         else:
             return False
+
+    @classmethod
+    def prune_long_terminal_introns(cls, pretty_alignments, splice_graph):
+
+        logger.info("Removing long terminal introns from pretty alignments.")
+
+        for pretty_alignment in pretty_alignments:
+
+            alignment_segments = pretty_alignment.get_pretty_alignment_segments()
+            intron_segments = pretty_alignment.get_introns()
+
+            trimmed = False
+
+            # examine left-most intron:
+            if len(intron_segments) > 0:
+                leftmost_intron = intron_segments.pop(0)
+                leftmost_intron_len = leftmost_intron[1] - leftmost_intron[0] + 1
+                if leftmost_intron_len > LRAA_Globals.config["max_intron_length"]:
+                    logger.info(
+                        "-pruning long intron {} from left of pretty alignment {}".format(
+                            leftmost_intron, pretty_alignment
+                        )
+                    )
+                    alignment_segments.pop(0)
+                    trimmed = True
+
+            # check right-most intron
+            if len(intron_segments) > 0:
+                rightmost_intron = intron_segments.pop()
+                rightmost_intron_len = rightmost_intron[1] - rightmost_intron[0] + 1
+                if rightmost_intron_len > LRAA_Globals.config["max_intron_length"]:
+                    logger.info(
+                        "-pruning long intron {} from left of pretty alignment {}".format(
+                            rightmost_intron, pretty_alignment
+                        )
+                    )
+                    alignment_segments.pop()
+                    trimmed = True
+
+            if trimmed is True:
+                pretty_alignment.set_pretty_alignment_segments(alignment_segments)
+
+        return
 
     @classmethod
     def try_correct_alignments(cls, pretty_alignments_list, splice_graph, contig_seq):

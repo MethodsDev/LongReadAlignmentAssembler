@@ -35,6 +35,8 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 # VERSION="0.2.1"
 VERSION = "BLEEDING_EDGE-v0.2.25"
 
+num_threads = 4
+
 
 def main():
 
@@ -65,7 +67,10 @@ def main():
     )
 
     parser.add_argument(
-        "--CPU", type=int, default=1, help="number of cores for multithreading"
+        "--CPU",
+        type=int,
+        default=num_threads,
+        help="number of cores for multithreading (default: {})".format(num_threads),
     )
 
     parser.add_argument(
@@ -172,6 +177,15 @@ def main():
         default=LRAA_Globals.config["min_per_id"],
         help="min per_id for pacbio read alignments. default: ({})".format(
             LRAA_Globals.config["min_per_id"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+        help="maximum allowable intron length. default: ({})".format(
+            LRAA_Globals.config["max_intron_length"]
         ),
     )
 
@@ -324,6 +338,7 @@ def main():
     # update config
     LRAA_Globals.config["min_path_score"] = args.min_path_score
     LRAA_Globals.config["min_per_id"] = args.min_per_id
+    LRAA_Globals.config["max_intron_length"] = args.max_intron_length
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["infer_TSS"] = not args.no_infer_TSS
