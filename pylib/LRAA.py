@@ -462,6 +462,10 @@ class LRAA:
                 pretty_alignments, self._splice_graph, contig_seq
             )
 
+        Pretty_alignment.prune_long_terminal_introns(
+            pretty_alignments, self._splice_graph
+        )
+
         # grouping read alignments according to read pairings (for illumina PE data):
         # group alignments:  grouped_alignments['read_name'] = list(read1_pretty_alignment, read2_pretty_alignment, ...)
         grouped_alignments = self._group_alignments_by_read_name(pretty_alignments)

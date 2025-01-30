@@ -490,6 +490,7 @@ class Splice_graph:
                 introns_list = self._get_introns_matching_splicing_consensus(
                     alignment_segments
                 )
+
                 # print("introns list: " + str(introns_list))
                 logger.debug(
                     "\tread {} : introns found: {}".format(read_name, str(introns_list))
@@ -994,8 +995,29 @@ class Splice_graph:
 
     def _prune_likely_false_introns(self):
 
+        self._prune_introns_too_long()
         self._prune_spurious_introns_shared_boundary("left")
         self._prune_spurious_introns_shared_boundary("right")
+
+    def _prune_introns_too_long(self):
+
+        introns_too_long = list()
+
+        for intron in self._intron_objs.values():
+            intron_lend, intron_rend = intron.get_coords()
+            intron_len = abs(intron_rend - intron_lend) + 1
+            if intron_len > LRAA_Globals.config["max_intron_length"]:
+                logger.info(
+                    "intron {} exceeds max intron len: {}, targeting removal from splice graph".format(
+                        str(intron), LRAA_Globals.config["max_intron_length"]
+                    )
+                )
+                introns_too_long.append(intron)
+
+        if len(introns_too_long) > 0:
+            self.purge_introns_from_splice_graph(introns_too_long)
+
+        return
 
     def _prune_spurious_introns_shared_boundary(self, left_or_right):
 

@@ -15,6 +15,7 @@ config = {
     "min_total_alignments_engage_frac_per_id_check": 1000,
     "min_terminal_splice_exon_anchor_length": 15,
     "read_aln_gap_merge_int": 10,
+    "max_intron_length": 100000,
     #
     ####################################
     # splice graph construction criteria
@@ -70,7 +71,7 @@ config = {
     #
     ##########
     # assembly
-    "normalize_max_cov_level": 10000,
+    "normalize_max_cov_level": 1000,
     "restrict_asm_to_collapse": True,  # if True, no chaining of overlapping/extended paths
     "collapse_alt_TSS_and_PolyA": False,  # if True, collapses paths that are overlapping and contained but differ in TSS or PolyA
     #
