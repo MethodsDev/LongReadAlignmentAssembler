@@ -1,3 +1,8 @@
+v0.2.26
+- pruning introns > 100kb
+- default threads=4
+- norm default now 1k
+
 v0.2.25
 - bugfix around LowFi aggregation of splices and intron pruning
 
