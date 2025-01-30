@@ -83,7 +83,7 @@ workflow LRAA_wf {
                 quantExprFiles = LRAA_scatter.LRAA_quant_expr,
                 quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
                 gtfFiles = LRAA_scatter.LRAA_gtf,
-                outputFilePrefix = sample_id,
+                outputFilePrefix = sample_id + ".LRAA",
                 docker = docker,
                 memoryGB = memoryGB,
                 diskSizeGB = diskSizeGB
