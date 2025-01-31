@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+
+import sys, os, re
+import logging
+import argparse
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s : %(levelname)s : %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="incorporate gene symbols into single cell feature names as gene_name^identifier",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--LRAA_gtf",
+        type=str,
+        required=True,
+        help="LRAA gtf file",
+    )
+
+    parser.add_argument(
+        "--ref_gtf", type=str, required=True, help="reference annotation GTF file"
+    )
+
+    parser.add_argument(
+        "--gffcompare_tracking",
+        type=str,
+        required=True,
+        help="provide the tracking file from running: gffcompare -r ref_gtf LRAA_gtf",
+    )
+
+    parser.add_argument(
+        "--sparseM_dirs",
+        type=str,
+        required=True,
+        help="sparse matrix directory",
+        nargs="+",
+    )
+
+    args = parser.parse_args()
+
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+
+    ref_gtf_filename = args.ref_gtf
+    LRAA_gtf_filename = args.LRAA_gtf
+    sparseM_dirnames = args.sparseM_dir
+    gffcompare_tracking_filename = args.gffcompare_tracking
+
+    # begin
+
+    ref_id_to_gene_name = get_ref_gene_names(ref_gtf_filename)
+
+    gff_compare_LRAA_id_to_REF_id_mapping = parse_GFFcompare_mappings(
+        gffcompare_tracking_filename
+    )
+
+    feature_ids_updated = dict()
+
+    for sparseM_dirname in sparseM_dirnames:
+        update_sparseM_feature_names(
+            sparseM_dirname,
+            gff_compare_LRAA_id_to_REF_id_mapping,
+            ref_id_to_gene_name,
+            feature_ids_updated,
+        )
+
+    update_LRAA_gff_feature_ids(
+        LRAA_gtf_filename, LRAA_gtf_filename + ".updated.gtf", feature_ids_updated
+    )
+
+    sys.exit(0)
+
+
+def update_LRAA_gff_feature_ids(
+    LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_udpated
+):
+
+    num_fields_updated = 0
+
+    with open(LRAA_gtf_filename, "rt") as fh:
+        with open(new_LRAA_gtf_filename, "wt") as ofh:
+
+            for line in fh:
+                vals = line.split("\t")
+                if len(vals) < 8:
+                    continue
+                info = vals[8]
+                m = re.search(
+                    'gene_id \\"([^\\"]+)\\"; transcript_id \\"([^\\"]+)\\";', info
+                )
+                if m:
+                    gene_id = m.group(1)
+                    transcript_id = m.group(2)
+
+                    if gene_id in feature_ids_updated:
+                        new_gene_id = feature_ids_updated[gene_id]
+                        line = line.replace(gene_id, new_gene_id)
+                        num_fields_updated += 1
+
+                    if transcript_id in feature_ids_updated:
+                        new_transcript_id = feature_ids_updated[transcript_id]
+                        line = line.replace(transcript_id, new_transcript_id)
+                        num_fields_updated += 1
+
+                print(line, file=ofh)
+
+    if num_fields_updated > 0:
+        logger.info(
+            "-updated {} feature ids in gtf file {}, generated output file {}".format(
+                num_fields_updated, LRAA_gtf_filename, new_LRAA_gtf_filename
+            )
+        )
+
+    else:
+        logger.error(
+            "-no feature ids were updated from gtf file {}  - something wrong here...".format(
+                LRAA_gtf_filename
+            )
+        )
+        sys.exit(1)
+
+    return
+
+
+def update_sparseM_feature_names(
+    sparseM_dirname,
+    gff_compare_LRAA_id_to_REF_id_mapping,
+    ref_id_to_gene_name,
+    feature_ids_updated,
+):
+
+    features_file = os.path.join(sparseM_dirname, "features.tsv.gz")
+
+    revised_features_file = features_file + ".revised.gz"
+
+    num_gene_names_added = 0
+
+    feature_ids_udpated = dict()
+
+    with gzip.open(features_file, "rt") as fh:
+        with gzip.open(revised_features_file, "wt") as ofh:
+            for feature_id in features_file:
+                features_id = features_id.rstrip()
+                gene_name = None
+                if features_id in gff_compare_LRAA_id_to_REF_id_mapping:
+                    ensg_id, enst_id = gff_compare_LRAA_id_to_REF_id_mapping[
+                        features_id
+                    ]
+
+                    if ensg_id in ref_id_to_gene_name:
+                        gene_name = ref_id_to_gene_name[ensg_id]
+                    elif enst_id in ref_id_to_gene_name:
+                        gene_name = ref_id_to_gene_name[enst_id]
+
+                if gene_name is not None:
+                    new_feature_id = "^".join([gene_name, features_id])
+                    print(new_feature_id, file=ofh)
+                    num_gen_names_added += 1
+                    feature_ids_updated[feature_id] = new_feature_id
+                else:
+                    print(features_id, file=ofh)  # no change
+
+    if num_genes_added > 0:
+        logger.info("- added {} gene names to feature ids".format(num_genes_added))
+    else:
+        logger.error(
+            "-no gene names were assigned to feature ids... suggests a problem"
+        )
+        sys.exit(1)
+
+    rename(features_file, "orig." + features_file)
+    rename(revised_features_file, features_file)
+
+    return
+
+
+def parse_GFFcompare_mappings(gffcompare_tracking_filename):
+
+    logger.info("-parsing gffcompare output: {}".format(gffcompare_tracking_filename))
+
+    gff_compare_mappings = dict()
+
+    with open(gffcompare_tracking_filename, "rt") as fh:
+        for line in fh:
+            line = line.rstrip()
+            tcons, xloc, ref_info, compare_code, lraa_info = line.split("\t")
+
+            ensg_id, enst_id = ref_info.split("|")
+
+            lraa_info = "".join(lraa_info.split(":")[1:])  # get rid of first q1 token
+
+            lraa_vals = lraa_info.split("|")
+            lraa_gene_id = lraa_vals[0]
+            lraa_trans_id = lraa_vals[1]
+
+            gff_compare_mappings[lraa_gene_id] = [ensg_id, enst_id]
+            gff_compare_mappings[lraa_trans_id] = [ensg_id, enst_id]
+
+    return gff_compare_mappings
+
+
+def get_ref_gene_names(ref_gtf):
+
+    logger.info(
+        "-extracting gene_names and identifiers from reference gtf: {}".format(ref_gtf)
+    )
+
+    ref_id_to_gene_name = dict()
+
+    with open(gtf_file, "rt") as fh:
+        for line in fh:
+            vals = line.split("\t")
+            if len(vals) < 8:
+                continue
+            info = vals[8]
+
+            if vals[2] != "transcript":
+                continue
+
+            m = re.search(
+                'gene_id \\"([^\\"]+)\\"; transcript_id \\"([^\\"]+)\\";', info
+            )
+            if m:
+                gene_id = m.group(1)
+                transcript_id = m.group(2)
+                gene_name = gene_id
+
+                m2 = re.search(' gene_name "([^\\"]+)\\";', info)
+                if m2:
+                    gene_name = m2.group(1)
+
+                    ref_id_to_gene_name[transcript_id] = gene_name
+                    ref_id_to_gene_name[gene_id] = gene_name
+
+    return ref_id_to_gene_name
+
+
+if __name__ == "__main__":
+    main()
