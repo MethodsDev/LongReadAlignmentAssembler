@@ -3,7 +3,8 @@
 import sys, os, re
 import logging
 import argparse
-
+import gzip
+import subprocess
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,21 +49,22 @@ def main():
 
     args = parser.parse_args()
 
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-
     ref_gtf_filename = args.ref_gtf
     LRAA_gtf_filename = args.LRAA_gtf
-    sparseM_dirnames = args.sparseM_dir
+    sparseM_dirnames = args.sparseM_dirs
     gffcompare_tracking_filename = args.gffcompare_tracking
 
     # begin
 
     ref_id_to_gene_name = get_ref_gene_names(ref_gtf_filename)
 
+    # print(str(ref_id_to_gene_name))
+
     gff_compare_LRAA_id_to_REF_id_mapping = parse_GFFcompare_mappings(
         gffcompare_tracking_filename
     )
+
+    # print(str(gff_compare_LRAA_id_to_REF_id_mapping))
 
     feature_ids_updated = dict()
 
@@ -82,7 +84,7 @@ def main():
 
 
 def update_LRAA_gff_feature_ids(
-    LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_udpated
+    LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_updated
 ):
 
     num_fields_updated = 0
@@ -112,7 +114,7 @@ def update_LRAA_gff_feature_ids(
                         line = line.replace(transcript_id, new_transcript_id)
                         num_fields_updated += 1
 
-                print(line, file=ofh)
+                print(line, file=ofh, end="")
 
     if num_fields_updated > 0:
         logger.info(
@@ -141,15 +143,17 @@ def update_sparseM_feature_names(
 
     features_file = os.path.join(sparseM_dirname, "features.tsv.gz")
 
-    revised_features_file = features_file + ".revised.gz"
+    logger.info("-reassigning feature ids  {}".format(features_file))
+
+    revised_features_file = features_file + ".revised"
 
     num_gene_names_added = 0
 
     feature_ids_udpated = dict()
 
     with gzip.open(features_file, "rt") as fh:
-        with gzip.open(revised_features_file, "wt") as ofh:
-            for feature_id in features_file:
+        with open(revised_features_file, "wt") as ofh:
+            for features_id in fh:
                 features_id = features_id.rstrip()
                 gene_name = None
                 if features_id in gff_compare_LRAA_id_to_REF_id_mapping:
@@ -165,21 +169,26 @@ def update_sparseM_feature_names(
                 if gene_name is not None:
                     new_feature_id = "^".join([gene_name, features_id])
                     print(new_feature_id, file=ofh)
-                    num_gen_names_added += 1
-                    feature_ids_updated[feature_id] = new_feature_id
+                    num_gene_names_added += 1
+                    feature_ids_updated[features_id] = new_feature_id
                 else:
                     print(features_id, file=ofh)  # no change
 
-    if num_genes_added > 0:
-        logger.info("- added {} gene names to feature ids".format(num_genes_added))
+    if num_gene_names_added > 0:
+        logger.info("- added {} gene names to feature ids".format(num_gene_names_added))
     else:
         logger.error(
             "-no gene names were assigned to feature ids... suggests a problem"
         )
         sys.exit(1)
 
-    rename(features_file, "orig." + features_file)
-    rename(revised_features_file, features_file)
+    logger.info("-gzipping new features file: {}".format(revised_features_file))
+    # gzip new features file.
+    subprocess.check_call("gzip -f {}".format(revised_features_file), shell=True)
+    revised_features_file += ".gz"
+
+    os.rename(features_file, features_file + ".orig")
+    os.rename(revised_features_file, features_file)
 
     return
 
@@ -195,9 +204,12 @@ def parse_GFFcompare_mappings(gffcompare_tracking_filename):
             line = line.rstrip()
             tcons, xloc, ref_info, compare_code, lraa_info = line.split("\t")
 
+            if ref_info == "-":
+                continue
+
             ensg_id, enst_id = ref_info.split("|")
 
-            lraa_info = "".join(lraa_info.split(":")[1:])  # get rid of first q1 token
+            lraa_info = ":".join(lraa_info.split(":")[1:])  # get rid of first q1 token
 
             lraa_vals = lraa_info.split("|")
             lraa_gene_id = lraa_vals[0]
@@ -217,7 +229,7 @@ def get_ref_gene_names(ref_gtf):
 
     ref_id_to_gene_name = dict()
 
-    with open(gtf_file, "rt") as fh:
+    with open(ref_gtf, "rt") as fh:
         for line in fh:
             vals = line.split("\t")
             if len(vals) < 8:
