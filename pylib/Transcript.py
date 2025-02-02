@@ -4,6 +4,7 @@ from GenomeFeature import GenomeFeature
 import Scored_path
 import LRAA_Globals
 import logging
+import gzip
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +364,9 @@ class GTF_contig_to_transcripts:
 
         local_debug = False
 
-        with open(gtf_filename, "rt") as fh:
+        opener = gzip.open if re.search("\\.gz$", gtf_filename) is not None else open
+
+        with opener(gtf_filename, "rt") as fh:
             for line in fh:
                 if line[0] == "#":
                     continue
