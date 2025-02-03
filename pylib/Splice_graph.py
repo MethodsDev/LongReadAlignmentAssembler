@@ -1944,6 +1944,28 @@ class Splice_graph:
             if is_L_spur(exon) or is_R_spur(exon):
                 exons_to_prune.append(exon)
 
+        # no pruning if overlaps an input reference transcript
+        if len(exons_to_prune) > 0 and len(self._input_transcript_lend_boundaries) > 0:
+            exons_no_overlap_with_ref = list()
+            num_retained = 0
+            for exon in exons_to_prune:
+                exon_lend, exon_rend = exon.get_coords()
+                if (
+                    self._input_transcript_exon_coords_itree[exon_lend : exon_rend + 1]
+                    is None
+                ):
+                    exons_no_overlap_with_ref.append(exon)
+                else:
+                    num_retained += 1
+                    logger.debug(
+                        f"-retaining exon spur {exon_lend}-{exon_rend} due to overlap with ref transcript exon"
+                    )
+
+            logger.info(
+                f"-retaining {num_retained} exon spurs due to overlap with input transcripts"
+            )
+            exons_to_prune = exons_no_overlap_with_ref
+
         if exons_to_prune:
             logger.info("-removing {} exon spurs".format(len(exons_to_prune)))
 
