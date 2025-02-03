@@ -1,3 +1,11 @@
+v0.2.27
+- incorporate_gene_symbols_in_sc_features.py for sc matrices
+- support gzipped gtf files as input
+- address inefficiency in resetting read count
+- no pruning of exon coverge segments that overlap exons of input reference transcript
+
+
+
 v0.2.26
 - pruning introns > 100kb
 - default threads=4
