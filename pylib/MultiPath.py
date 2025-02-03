@@ -92,6 +92,9 @@ class MultiPath:
     def get_read_names(self):
         return self._read_names.copy()
 
+    def get_read_names_count(self):
+        return len(self._read_names)
+
     def include_read_name(self, read_name):
         if type(read_name) in [list, set]:
             for r in read_name:

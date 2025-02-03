@@ -485,10 +485,17 @@ class LRAA:
 
         logger.info("-start: mapping read alignments to the graph")
         num_alignments = len(grouped_alignments)
+        prev_time = time.time()
         for i, read_name in enumerate(grouped_alignments):
-            if i % 100 == 0:
+            if i % 10000 == 0:
                 frac_done = i / num_alignments * 100
-                sys.stderr.write(f"\r[{i} / {num_alignments} =  {frac_done:.2f}   ")
+                curr_time = time.time()
+                time_delta = curr_time - prev_time
+                mapping_rate = 10000 / time_delta
+                sys.stderr.write(
+                    f"\r[{i} / {num_alignments} =  {frac_done:.2f} rate={mapping_rate:.3e} reads/sec    "
+                )
+                prev_time = curr_time
 
             # print("{}\t{}".format(read_name, len(grouped_alignments[read_name])))
             paths_list = list()
@@ -549,16 +556,8 @@ class LRAA:
                         )
                         continue
 
-                    """
-                    mp_list = mp.split_multipath_at_spacers()
-                    if len(mp_list) > 1:
-                        logger.debug("-SKIPPING read path that contains a SPACER: {}".format(mp))
-                        if LRAA_Globals.DEBUG:
-                            read_graph_mappings_ofh.write("\t".join([read_name, str(grouped_alignments[read_name]), str(mp_list), "DISCARDED"]) + "\n")
-                        continue
-                    """
-
                 logger.debug("paths_list: {} -> mp: {}".format(paths_list, mp_list))
+
                 for mp in mp_list:
                     mp_counter.add(mp)
 
@@ -569,7 +568,6 @@ class LRAA:
 
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh.close()
-        # print(mp_counter)
 
         logger.info("-done: mapping read alignments to the graph")
 

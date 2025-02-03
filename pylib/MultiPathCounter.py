@@ -30,7 +30,7 @@ class MultiPathCountPair:
         self._multipath.include_read_name(read_name)
 
     def reset_count(self):
-        self._count = len(self._multipath.get_read_names())
+        self._count = self._multipath.get_read_names_count()
 
     def __repr__(self):
         ret_text = "{}\t{}".format(str(self._multipath), self._count)
