@@ -1004,6 +1004,10 @@ class Splice_graph:
         introns_too_long = list()
 
         for intron in self._intron_objs.values():
+            if intron.has_read_type("ref_transcript"):
+                # retain ref introns
+                continue
+
             intron_lend, intron_rend = intron.get_coords()
             intron_len = abs(intron_rend - intron_lend) + 1
             if intron_len > LRAA_Globals.config["max_intron_length"]:
@@ -1945,7 +1949,7 @@ class Splice_graph:
                 exons_to_prune.append(exon)
 
         # no pruning if overlaps an input reference transcript
-        if len(exons_to_prune) > 0 and len(self._input_transcript_lend_boundaries) > 0:
+        if len(exons_to_prune) > 0:
             exons_no_overlap_with_ref = list()
             num_retained = 0
             for exon in exons_to_prune:
@@ -2050,6 +2054,15 @@ class Splice_graph:
 
     def _is_unspliced_exon_segment_artifact(self, exon, intron):
 
+        # ensure not overlapping with a reference exon
+        exon_lend, exon_rend = exon.get_coords()
+        if (
+            self._input_transcript_exon_coords_itree[exon_lend : exon_rend + 1]
+            is not None
+        ):
+            # must retain it if it overlaps with a ref exon segment
+            return False
+
         if (
             exon.get_read_support()
             < Splice_graph._min_alt_unspliced_freq * intron.get_read_support()
@@ -2057,7 +2070,6 @@ class Splice_graph:
             return True
 
         intron_lend, intron_rend = intron.get_coords()
-        exon_lend, exon_rend = exon.get_coords()
 
         # prune singleton exon segments falling in sufficiently expressed introns:
         if (not self._node_has_predecessors(exon)) and (
