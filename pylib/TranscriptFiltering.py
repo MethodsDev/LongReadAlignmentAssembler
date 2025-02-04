@@ -110,7 +110,11 @@ def filter_isoforms_by_min_isoform_fraction(
                     transcript_id, frac_read_assignments
                 )
 
-                frac_gene_unique_reads = transcript_unique_read_count / gene_read_count
+                frac_gene_unique_reads = (
+                    transcript_unique_read_count / gene_read_count
+                    if gene_read_count > 0
+                    else 0
+                )
 
                 logger.debug(
                     "Transcript_id: {} has unique read frac of gene total reads: {}".format(
