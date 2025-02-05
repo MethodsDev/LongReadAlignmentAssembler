@@ -97,6 +97,9 @@ class Quantify:
 
         mp_count_pairs = mp_counter.get_all_MultiPathCountPairs()
 
+        num_mp_count_pairs = len(mp_count_pairs)
+        logger.info("- have {} mp_count_pairs".format(num_mp_count_pairs))
+
         gene_unanchored_mp_count_pairs = list()
 
         num_paths_total = 0
@@ -110,7 +113,21 @@ class Quantify:
 
         mp_seen = set()
 
+        num_mp_count_pairs_processed = 0
+
         for mp_count_pair in mp_count_pairs:
+
+            num_mp_count_pairs_processed += 1
+            if num_mp_count_pairs_processed % 100 == 0:
+                print(
+                    "\r{}/{} = {} mp_count_pairs processed   ".format(
+                        num_mp_count_pairs_processed,
+                        num_mp_count_pairs,
+                        num_mp_count_pairs_processed / num_mp_count_pairs,
+                    ),
+                    end="",
+                )
+
             mp, count = mp_count_pair.get_multipath_and_count()
 
             mp_id = mp.get_id()
