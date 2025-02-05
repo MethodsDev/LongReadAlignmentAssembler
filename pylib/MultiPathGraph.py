@@ -163,11 +163,33 @@ class MultiPathGraph:
 
         for component_id in sorted_component_ids:
             mp_node_set = sg_component_to_mp_id[component_id]
+
             ordered_nodes = list()
             for mp_node_id in mp_node_set:
                 mp_node_obj = self._mp_id_to_node[mp_node_id]
                 ordered_nodes.append(mp_node_obj)
                 # print(f"component_id: {component_id}\tmp_node_obj: {mp_node_obj}")
+
+            max_nodes = LRAA_Globals.config["max_path_nodes_per_component"]
+            if len(ordered_nodes) > max_nodes:
+                logger.info(
+                    "Size of component node set is too large... shrinking to {}".format(
+                        max_nodes
+                    )
+                )
+                ordered_nodes = sorted(
+                    ordered_nodes,
+                    key=lambda x: (x.get_count(), x._seq_length),
+                    reverse=True,
+                )
+
+                # prune the excess:
+                nodes_to_prune = ordered_nodes[max_nodes:]
+                # retain max nodes
+                ordered_nodes = ordered_nodes[0:max_nodes]
+
+                self._prune_nodes(nodes_to_prune)
+                sg_component_to_mp_id[component_id] = ordered_nodes
 
             # ordered_nodes = sorted(ordered_nodes, key=lambda x: (x._lend, x._rend))
             ordered_nodes = sorted(
@@ -492,3 +514,15 @@ class MultiPathGraph:
                 surviving_components.append(mpgn_list)
 
         return surviving_components
+
+    def _prune_nodes(self, nodes_to_prune):
+
+        logger.info(
+            "-pruning {} nodes to reduce component size".format(len(nodes_to_prune))
+        )
+        for node in nodes_to_prune:
+            del self._mp_id_to_node[node.get_id()]
+            self._mp_graph.remove_node(node)
+            self._mp_graph_nodes_list.remove(node)
+
+        return

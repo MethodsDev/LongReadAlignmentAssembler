@@ -491,7 +491,7 @@ class LRAA:
                 frac_done = i / num_alignments * 100
                 curr_time = time.time()
                 time_delta = curr_time - prev_time
-                mapping_rate = 10000 / time_delta
+                mapping_rate = 10000 / time_delta if time_delta > 0 else 1e-6
                 sys.stderr.write(
                     f"\r[{i} / {num_alignments} =  {frac_done:.2f} rate={mapping_rate:.3e} reads/sec    "
                 )

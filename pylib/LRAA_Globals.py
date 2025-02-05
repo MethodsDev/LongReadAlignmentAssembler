@@ -26,6 +26,7 @@ config = {
     "aggregate_adjacent_splice_boundaries": False,
     "aggregate_splice_boundary_dist": 5,
     "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
+    "max_path_nodes_per_component": 1000,  # max number of path graph nodes per connected component
     #
     ############
     # TSS config
