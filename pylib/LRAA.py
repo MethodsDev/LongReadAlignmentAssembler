@@ -424,7 +424,7 @@ class LRAA:
 
         logger.info(
             "-reconstructed {} transcripts from component {}".format(
-                len(transcripts), transcript_counter
+                len(transcripts), component_counter
             )
         )
 
