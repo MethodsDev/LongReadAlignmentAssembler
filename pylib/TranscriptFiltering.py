@@ -143,7 +143,10 @@ def filter_isoforms_by_min_isoform_fraction(
 
                 ## if tons of isoforms, allow pruning of multiple in a single round
                 if (
-                    num_isoforms_of_gene - num_isoforms_of_gene_filtered > 10
+                    num_isoforms_of_gene - num_isoforms_of_gene_filtered
+                    > LRAA_Globals.config[
+                        "min_isoform_count_aggressive_filtering_iso_fraction"
+                    ]
                     and frac_gene_unique_reads < min_frac_gene_unique_reads
                     and transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
