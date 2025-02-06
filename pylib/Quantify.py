@@ -92,6 +92,14 @@ class Quantify:
 
         logger.info("# Assigning reads to transcripts")
 
+        local_debug = False
+
+        if local_debug is True:
+            LRAA_orig_setting = LRAA_Globals.DEBUG
+            logging_orig_setting = logging.DEBUG if LRAA_Globals.DEBUG else logging.INFO
+            LRAA_Globals.DEBUG = True
+            logging.getLogger().setLevel(logging.DEBUG)
+
         # assign to gene based on majority voting of nodes.
         # TODO:// might want or need this to involve length and/or feature type weighted shared node voting
 
@@ -120,7 +128,7 @@ class Quantify:
             num_mp_count_pairs_processed += 1
             if num_mp_count_pairs_processed % 100 == 0:
                 print(
-                    "\r{}/{} = {} mp_count_pairs processed   ".format(
+                    "\r{}/{} = {:.3f} mp_count_pairs processed   ".format(
                         num_mp_count_pairs_processed,
                         num_mp_count_pairs,
                         num_mp_count_pairs_processed / num_mp_count_pairs,
@@ -350,6 +358,11 @@ class Quantify:
         )
 
         logger.debug(audit_txt)
+        logger.info(audit_txt)
+
+        if local_debug is True:
+            LRAA_Globals.DEBUG = LRAA_orig_setting
+            logging.getLogger().setLevel(logging_orig_setting)
 
         return
 
@@ -824,6 +837,8 @@ class Quantify:
              with structure [transcript_id][read_name] = frac_read_assigned
 
         """
+
+        logger.info("-estimating isoform read support.")
 
         transcript_to_expr_val = defaultdict(float)
         transcript_to_fractional_read_assignment = defaultdict(dict)

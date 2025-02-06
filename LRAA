@@ -662,7 +662,7 @@ def main():
                     )
 
                 lraa_obj = LRAA(sg, CPU)
-                logger.debug(
+                logger.info(
                     "\n//SECTION QUANT: Assigning input transcript paths in graph"
                 )
                 lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
@@ -672,7 +672,7 @@ def main():
                         input_transcripts, "__input_transcripts_path_in_graph"
                     )
 
-                logger.debug("\n//SECTION QUANT: Assigning reads to paths in graph.")
+                logger.info("\n//SECTION QUANT: Assigning reads to paths in graph.")
                 mp_counter = lraa_obj._populate_read_multi_paths(
                     contig_acc,
                     contig_strand,
@@ -684,7 +684,7 @@ def main():
                 q = Quantify(
                     run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
                 )
-                logger.debug(
+                logger.info(
                     "\n//SECTION QUANT: Quantifying transcripts according to read support."
                 )
                 read_name_to_fractional_transcript_assignment = q.quantify(
@@ -715,7 +715,7 @@ def main():
                 )
 
                 ## Build Splice Graph
-                logger.info(f"-building splice graph for {contig_acc}")
+                logger.info(f"\n// -building splice graph for {contig_acc}")
                 sg.build_splice_graph_for_contig(
                     contig_acc,
                     contig_strand,
@@ -753,7 +753,7 @@ def main():
 
                 # build graph path nodes based on reads (and input transcripts) paths through graph.
                 logger.info(
-                    f"-building multpath graph for {contig_acc} {contig_strand}"
+                    f"\n// -building multpath graph for {contig_acc} {contig_strand}"
                 )
                 mp_counter = lraa_obj.build_multipath_graph(
                     contig_acc,
@@ -765,7 +765,7 @@ def main():
                 )
 
                 # Define isoforms
-                logger.info(f"-begin reconstructing isoforms for {contig_acc}")
+                logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
                 transcripts = lraa_obj.reconstruct_isoforms(single_best_only)
 
                 if len(transcripts) == 0:
@@ -780,8 +780,8 @@ def main():
                 # Do an initial quant
                 # Now use the original bam for quant (not depth normalized)
 
-                logger.debug(
-                    "\n//SECTION QUANT for assembled isoforms: Assigning reads to paths in graph."
+                logger.info(
+                    "\n//SECTION QUANT using all reads for assembled isoforms: Assigning reads to paths in graph."
                 )
 
                 mp_counter = lraa_obj.build_multipath_graph(
@@ -813,6 +813,8 @@ def main():
 
                     ##################################################################
                     ## initial filter of novel isoforms with insufficient read support
+
+                    logger.info("\n// Filtering novel isoforms by min read support")
                     min_read_support_novel_isoforms = LRAA_Globals.config[
                         "min_reads_novel_isoform"
                     ]
@@ -831,10 +833,16 @@ def main():
                         continue
 
                     # rerun quant for post-filtering
+                    logger.info(
+                        "\n// -rerunning quant post filtering novel isoforms via read thresholds"
+                    )
                     frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                     #####################################
                     # pruning likely degradation products
+
+                    logger.info("\n// -pruning likely degradation products")
+
                     transcripts = TranscriptFiltering.prune_likely_degradation_products(
                         transcripts, sg, frac_read_assignments
                     )
@@ -848,10 +856,17 @@ def main():
                         continue
 
                     # rerun quant for post-filtering
+                    logger.info(
+                        "\n// -rerunning quant post-filtering of degradation products"
+                    )
                     frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                     #######################################################
                     # Filter isoforms according to minimum isoform fraction
+
+                    logger.info(
+                        "\n// -filtering isoforms according to minimum isoform fraction"
+                    )
                     if min_isoform_fraction > 0:
                         transcripts = (
                             TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
@@ -873,6 +888,9 @@ def main():
                     ##################################################################
                     # Filter monoexonic transcripts according to expression thresholds
                     if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
+                        logger.info(
+                            "\n// -filtering monoexonic transcripts based on min TPM"
+                        )
                         transcripts = TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
                             transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                         )
@@ -887,6 +905,7 @@ def main():
                     ####################################################################
                     # Filter isoforms apparently derived from internal priming artifacts
                     if LRAA_Globals.config["filter_internal_priming"]:
+                        logger.info("\n// -filtering out internal priming")
                         transcripts = (
                             TranscriptFiltering.filter_internally_primed_transcripts(
                                 transcripts, contig_seq_str

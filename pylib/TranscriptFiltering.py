@@ -96,13 +96,22 @@ def filter_isoforms_by_min_isoform_fraction(
             )
 
             frac_read_assignments = q._estimate_isoform_read_support(isoforms_of_gene)
+
             gene_id_to_read_count = Quantify.get_gene_read_counts(
                 frac_read_assignments, transcript_id_to_transcript_obj
             )
 
             gene_read_count = gene_id_to_read_count[gene_id]
 
+            num_isoforms_of_gene_filtered = 0
+
+            isoforms_of_gene = sorted(
+                isoforms_of_gene, key=lambda x: x.get_isoform_fraction()
+            )
+            num_isoforms_of_gene = len(isoforms_of_gene)
+
             for transcript in isoforms_of_gene:
+
                 num_total_isoforms += 1
                 transcript_id = transcript.get_transcript_id()
 
@@ -132,13 +141,25 @@ def filter_isoforms_by_min_isoform_fraction(
                     transcripts_retained.append(transcript)
                     continue
 
-                if not isoforms_were_filtered and (
+                ## if tons of isoforms, allow pruning of multiple in a single round
+                if (
+                    num_isoforms_of_gene - num_isoforms_of_gene_filtered > 10
+                    and frac_gene_unique_reads < min_frac_gene_unique_reads
+                    and transcript.get_isoform_fraction() < min_isoform_fraction
+                ):
+                    isoforms_were_filtered = True
+                    num_filtered_isoforms += 1
+                    num_isoforms_of_gene_filtered += 1
+
+                # standard isoform fraction based filtering
+                elif not isoforms_were_filtered and (
                     frac_gene_unique_reads < min_frac_gene_unique_reads
                     or transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
 
                     isoforms_were_filtered = True
                     num_filtered_isoforms += 1
+                    num_isoforms_of_gene_filtered += 1
 
                     logger.debug(
                         "Filtering out transcript_id {} as low fraction of unique reads: {}".format(

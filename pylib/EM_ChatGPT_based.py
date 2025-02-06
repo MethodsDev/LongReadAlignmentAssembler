@@ -7,6 +7,7 @@ from Transcript import Transcript
 from collections import defaultdict
 import LRAA_Globals
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,8 @@ def em_algorithm_with_weights(
         np.ndarray: Estimated expression levels for each transcript.
     """
 
+    time_start = time.time()
+
     # Initialize expression values uniformly
     transcript_expression_levels = np.ones(num_transcripts) / num_transcripts
     prev_expression_levels = np.zeros(num_transcripts)
@@ -288,7 +291,10 @@ def em_algorithm_with_weights(
 
         # Check for convergence
         if np.linalg.norm(transcript_expression_levels - prev_expression_levels) < tol:
-            logger.info(f"Converged after {iteration + 1} iterations.")
+            runtime = time.time() - time_start
+            logger.info(
+                f"Converged after {iteration + 1} iterations. (time={runtime:.3f} sec. for {num_transcripts} transcripts)"
+            )
             break
 
         prev_expression_levels = transcript_expression_levels.copy()
