@@ -68,7 +68,7 @@ def main():
                 transcript_id = row["transcript_id"]
                 read_count = float(row["all_reads"])
 
-                transcript_id = gene_id + "^" + transcript_id
+                # transcript_id = gene_id + "^" + transcript_id
 
                 gene_ids.add(gene_id)
                 transcript_ids.add(transcript_id)
