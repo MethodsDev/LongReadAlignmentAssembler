@@ -33,7 +33,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 # VERSION=""
-VERSION = "BLEEDING_EDGE-v0.2.27"
+VERSION = "BLEEDING_EDGE-v0.2.28"
 
 num_threads = 4
 
