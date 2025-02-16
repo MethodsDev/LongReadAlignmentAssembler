@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class Quantify:
 
-    def __init__(self, run_EM, max_EM_iterations):
+    def __init__(self, run_EM, max_EM_iterations, quant_mode="final"):
 
         self._run_EM = run_EM  # boolean
         self._max_EM_iterations = max_EM_iterations
@@ -32,6 +32,8 @@ class Quantify:
         self._read_name_to_multipath = dict()
 
         self._mp_to_transcripts = dict()
+
+        self._quant_mode = quant_mode
 
         return
 
@@ -196,7 +198,7 @@ class Quantify:
                 anchor_PolyA_TSS=True,
             )
 
-            if transcripts_assigned is None:
+            if transcripts_assigned is None and self._quant_mode == "final":
                 # FSM required with read alignment coverage check
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,
@@ -247,7 +249,7 @@ class Quantify:
                     anchor_PolyA_TSS=False,
                 )
 
-            if transcripts_assigned is None:
+            if transcripts_assigned is None and self._quant_mode == "final":
                 # FSM required with read alignment coverage check
                 transcripts_assigned = self._assign_path_to_transcript(
                     splice_graph,

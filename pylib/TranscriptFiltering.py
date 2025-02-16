@@ -79,7 +79,7 @@ def filter_isoforms_by_min_isoform_fraction(
 
         isoforms_were_filtered = True  # init for loop
 
-        q = Quantify(run_EM, max_EM_iterations)
+        q = Quantify(run_EM, max_EM_iterations, quant_mode="draft")
 
         filtering_round = 0
 

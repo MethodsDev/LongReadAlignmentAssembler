@@ -794,7 +794,9 @@ def main():
                 )
 
                 q = Quantify(
-                    run_EM, LRAA_Globals.config["max_EM_iterations_during_asm"]
+                    run_EM,
+                    LRAA_Globals.config["max_EM_iterations_during_asm"],
+                    quant_mode="draft",
                 )
                 frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
@@ -884,6 +886,14 @@ def main():
                                 )
                             )
                             continue
+
+                    # do another quant post isoform filtering in 'final' mode.
+                    q = Quantify(
+                        run_EM,
+                        LRAA_Globals.config["max_EM_iterations_during_asm"],
+                        quant_mode="final",
+                    )
+                    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                     ##################################################################
                     # Filter monoexonic transcripts according to expression thresholds
