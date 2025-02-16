@@ -5,6 +5,7 @@ import pysam
 from collections import defaultdict
 import csv
 import logging
+import argparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +29,7 @@ def main():
     )
 
     parser.add_argument(
-        "--tracking", type=str, rqeuired=True, help="LRAA read tracking file"
+        "--tracking", type=str, required=True, help="LRAA read tracking file"
     )
 
     args = parser.parse_args()
@@ -44,9 +45,9 @@ def main():
     unique_read_names_to_transcripts = dict()
     # get unique read names to transcript ids
     with open(tracking_file, "rt") as fh:
-        reader = csv.DictReader(fh, "\t")
+        reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
-            if row["frac_assigned"] == 1.0:
+            if float(row["frac_assigned"]) == 1.0:
                 read_name = row["read_name"]
                 transcript_id = row["transcript_id"]
                 unique_read_names_to_transcripts[read_name] = transcript_id
@@ -64,7 +65,7 @@ def main():
         read_name = read.query_name
         if read_name in unique_read_names_to_transcripts:
             transcript_id = unique_read_names_to_transcripts[read_name]
-            transcripts_to_unique_read_alignments[transcript_id].add(read)
+            transcripts_to_unique_read_alignments[transcript_id].append(read)
 
     # write transcript-specific unique read bam files.
     logger.info("-writing transcript-specific unique bam read alignment files.")
