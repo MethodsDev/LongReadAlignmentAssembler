@@ -1,10 +1,14 @@
+v0.2.28
+- running most of assembly mode in draft quant mode then employing the final quant mode - difference is how they priority FSM assignments of reads.
+-  if more than 10 isoforms for a given gene, then be a bit more aggressive in filtering based on isoform fractional expression to reduce runtimes
+- set max number of graph path nodes per component
+
+
 v0.2.27
 - incorporate_gene_symbols_in_sc_features.py for sc matrices
 - support gzipped gtf files as input
 - address inefficiency in resetting read count
 - no pruning of exon coverge segments that overlap exons of input reference transcript
-
-
 
 v0.2.26
 - pruning introns > 100kb
