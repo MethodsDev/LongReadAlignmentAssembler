@@ -1941,6 +1941,13 @@ class Splice_graph:
                 exon.get_feature_length()
                 >= Splice_graph._min_terminal_splice_exon_anchor_length
             ):
+                logger.debug(
+                    "Retaining {} as spur since feature length {} exceeds min_terminal_splice_exon_anchor_length {}".format(
+                        exon,
+                        exon.get_feature_length(),
+                        Splice_graph._min_terminal_splice_exon_anchor_length,
+                    )
+                )
                 # long enough, we'll keep it for now.
                 continue
 
@@ -1955,14 +1962,18 @@ class Splice_graph:
             for exon in exons_to_prune:
                 exon_lend, exon_rend = exon.get_coords()
                 if (
-                    self._input_transcript_exon_coords_itree[exon_lend : exon_rend + 1]
-                    is None
+                    len(
+                        self._input_transcript_exon_coords_itree[
+                            exon_lend : exon_rend + 1
+                        ]
+                    )
+                    == 0
                 ):
                     exons_no_overlap_with_ref.append(exon)
                 else:
                     num_retained += 1
                     logger.debug(
-                        f"-retaining exon spur {exon_lend}-{exon_rend} due to overlap with ref transcript exon"
+                        f"-retaining exon spur {exon} {exon_lend}-{exon_rend} due to overlap with ref transcript exon"
                     )
 
             logger.info(
@@ -1979,6 +1990,8 @@ class Splice_graph:
                         print(exon.get_id(), file=ofh)
 
             self._splice_graph.remove_nodes_from(exons_to_prune)
+        else:
+            logger.debug("-no spurs to prune.")
 
         return
 

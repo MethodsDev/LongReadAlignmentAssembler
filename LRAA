@@ -887,14 +887,6 @@ def main():
                             )
                             continue
 
-                    # do another quant post isoform filtering in 'final' mode.
-                    q = Quantify(
-                        run_EM,
-                        LRAA_Globals.config["max_EM_iterations_during_asm"],
-                        quant_mode="final",
-                    )
-                    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
-
                     ##################################################################
                     # Filter monoexonic transcripts according to expression thresholds
                     if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
@@ -956,14 +948,26 @@ def main():
                 for transcript in transcripts:
                     ofh_gtf.write(transcript.to_GTF_format() + "\n")
 
-                LRAA_Globals.config["EM_alpha"] = (
-                    quant_EM_alpha  # restore for final quant step.
-                )
+                ###################
+                ## Final quant step
+                ###################
 
-                q = Quantify(
-                    run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
-                )
-                frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+                do_final_quant = True
+
+                if do_final_quant:
+                    LRAA_Globals.config["EM_alpha"] = (
+                        quant_EM_alpha  # restore for final quant step.
+                    )
+
+                    q = Quantify(
+                        run_EM,
+                        LRAA_Globals.config["max_EM_iterations_quant_only"],
+                        quant_mode="final",
+                    )
+                    frac_read_assignments = q._estimate_isoform_read_support(
+                        transcripts
+                    )
+
                 q.report_quant_results(
                     transcripts,
                     frac_read_assignments,
