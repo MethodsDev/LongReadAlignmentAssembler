@@ -1,4 +1,4 @@
-DIRS = sirvs quant_eval single_contig sep_contigs 
+DIRS = sirvs quant_eval single_contig sep_contigs ont_sep_contigs
 
 test:
 	@for i in $(DIRS); do \
