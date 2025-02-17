@@ -23,6 +23,12 @@ import lmdb
 import shutil
 
 
+####################################
+# VERSION=""
+VERSION = "BLEEDING_EDGE-v0.2.29"
+####################################
+
+
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -31,9 +37,6 @@ FORMAT = (
 logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
-
-# VERSION=""
-VERSION = "BLEEDING_EDGE-v0.2.28"
 
 num_threads = 4
 

@@ -1,3 +1,7 @@
+v0.2.29
+- bugfix around retaining spurs matching to input transcripts
+- added another ONT test
+
 v0.2.28
 - running most of assembly mode in draft quant mode then employing the final quant mode - difference is how they priority FSM assignments of reads.
 -  if more than 10 isoforms for a given gene, then be a bit more aggressive in filtering based on isoform fractional expression to reduce runtimes
