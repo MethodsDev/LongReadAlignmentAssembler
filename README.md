@@ -47,6 +47,20 @@ To construct a cell-by-transcript expression matrix, run the included script:
 
     util/sc/singlecell_tracking_to_sparse_matrix.R --tracking LRAA.tracking --output_prefix sample_name
 
+Optionally - to incorporate reference annotation gene symbols into the gene and isoform feature names, run the following:
+
+     # use gffcompare to map LRAA isoform structures to GENCODE reference annotation structures
+     gffcompare -r GENCODE_ref_annot.gtf LRAA.gtf 
+
+     # update the LRAA gene symbols
+     util/sc/incorporate_gene_symbols_in_sc_features.py \
+           --LRAA_gtf LRAA.gtf  --ref_gtf GENCODE_ref_annot.gtf \
+        --gffcompare_tracking gffcmp.tracking \
+        --sparseM_dirs 'sample_name^gene-sparseM' 'sample_name^isoform-sparseM'
+
+     # Note, the above will also generate a new GTF file "*.updated.gtf" that will include the revised gene and transcript identifiers.
+
+
 The resulting sparse matrix can be used with tools such as [Seurat](https://satijalab.org/seurat/) for single cell analyses.
 
 
