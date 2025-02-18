@@ -49,3 +49,7 @@ To construct a cell-by-transcript expression matrix, run the included script:
 
 The resulting sparse matrix can be used with tools such as [Seurat](https://satijalab.org/seurat/) for single cell analyses.
 
+
+## LRAA is available on Dockstore
+
+Find LRAA on Dockstore [here](https://dockstore.org/workflows/github.com/MethodsDev/LongReadAlignmentAssembler/LRAA:main?tab=info).
