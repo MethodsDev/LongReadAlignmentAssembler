@@ -1,7 +1,5 @@
 # LRAA - Long Read Alignment Assembler
 
-** Under Development **
-
 Isoform discovery and quantification based on long read isoform sequence alignments (PacBio or ONT). 
 
 LRAA has three modes, described below:
