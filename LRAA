@@ -967,9 +967,7 @@ def main():
                         LRAA_Globals.config["max_EM_iterations_quant_only"],
                         quant_mode="final",
                     )
-                    frac_read_assignments = q._estimate_isoform_read_support(
-                        transcripts
-                    )
+                    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
                 q.report_quant_results(
                     transcripts,
