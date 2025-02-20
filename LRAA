@@ -1074,8 +1074,8 @@ def run_transcript_assembly(
 
     if len(transcripts_removed) > 0:
         transcripts = transcripts_kept
-        ## final adjustment post final isoform filtering
-        frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+
+    frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
