@@ -39,6 +39,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
 num_threads = 4
+allow_spacers = False
 
 
 def main():
@@ -627,86 +628,22 @@ def main():
 
             if QUANT_ONLY:
 
-                # get path assignments for the input transcripts
-                # get the path assignments for the reads.
-                # compare read mappings, assign categories
-
-                # if no transcripts for this contig/strand, nothing to quant on
-                if input_transcripts is None:
-                    logger.info(
-                        f"-no isoforms to quant on {contig_acc} [{contig_strand}]"
-                    )
-                    continue
-
-                # for quant only, build sg only based on the input gtf and not the alignments in the bam
-                sg.build_splice_graph_for_contig(
+                run_quant_only(
+                    sg,
                     contig_acc,
                     contig_strand,
                     contig_seq_str,
                     bam_file_for_sg,
+                    bam_file_for_quant,
                     restrict_region_lend,
                     restrict_region_rend,
                     input_transcripts,
                     QUANT_ONLY,
-                )
-
-                if sg.is_empty():
-                    logger.info(
-                        f"-no splice graph created for contig: {contig_acc}.... skipping."
-                    )
-                    continue
-
-                if LRAA_Globals.DEBUG:
-                    sg.write_intron_exon_splice_graph_bed_files(
-                        "{}/__prereconstruct.{}.{}.pad1".format(
-                            prereconstruct_info_dir, contig_acc, contig_strand
-                        ),
-                        pad=1,
-                    )
-
-                lraa_obj = LRAA(sg, CPU)
-                logger.info(
-                    "\n//SECTION QUANT: Assigning input transcript paths in graph"
-                )
-                lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
-
-                if LRAA_Globals.DEBUG:
-                    report_transcript_paths_in_graph(
-                        input_transcripts, "__input_transcripts_path_in_graph"
-                    )
-
-                logger.info("\n//SECTION QUANT: Assigning reads to paths in graph.")
-                mp_counter = lraa_obj._populate_read_multi_paths(
-                    contig_acc,
-                    contig_strand,
-                    contig_seq_str,
-                    bam_file_for_quant,
-                    allow_spacers,
-                )
-
-                q = Quantify(
-                    run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"]
-                )
-                logger.info(
-                    "\n//SECTION QUANT: Quantifying transcripts according to read support."
-                )
-                read_name_to_fractional_transcript_assignment = q.quantify(
-                    sg, input_transcripts, mp_counter
-                )
-
-                if LRAA_Globals.DEBUG:
-                    q.dump_mp_to_transcripts_to_file(
-                        "__QUANTIFY_mp_to_transcripts_and_reads.tsv",
-                        contig_acc,
-                        contig_strand,
-                    )
-
-                q.report_quant_results(
-                    input_transcripts,
-                    read_name_to_fractional_transcript_assignment,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
                     ofh_quant_read_tracking_lmdb,
+                    CPU,
+                    run_EM,
                 )
 
             else:
@@ -1022,6 +959,101 @@ def main():
                 bam_out.write(read)
 
         ofh_quant_read_tracking_lmdb.close()
+
+    return
+
+
+def run_quant_only(
+    sg,
+    contig_acc,
+    contig_strand,
+    contig_seq_str,
+    bam_file_for_sg,
+    bam_file_for_quant,
+    restrict_region_lend,
+    restrict_region_rend,
+    input_transcripts,
+    QUANT_ONLY,
+    ofh_quant_output,
+    ofh_quant_read_tracker,
+    ofh_quant_read_tracking_lmdb,
+    CPU,
+    run_EM,
+):
+
+    # get path assignments for the input transcripts
+    # get the path assignments for the reads.
+    # compare read mappings, assign categories
+
+    # if no transcripts for this contig/strand, nothing to quant on
+    if input_transcripts is None:
+        logger.info(f"-no isoforms to quant on {contig_acc} [{contig_strand}]")
+        # continue
+        return
+
+    # for quant only, build sg only based on the input gtf and not the alignments in the bam
+    sg.build_splice_graph_for_contig(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        restrict_region_lend,
+        restrict_region_rend,
+        input_transcripts,
+        QUANT_ONLY,
+    )
+
+    if sg.is_empty():
+        logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
+        # continue
+        return
+
+    if LRAA_Globals.DEBUG:
+        sg.write_intron_exon_splice_graph_bed_files(
+            "{}/__prereconstruct.{}.{}.pad1".format(
+                prereconstruct_info_dir, contig_acc, contig_strand
+            ),
+            pad=1,
+        )
+
+    lraa_obj = LRAA(sg, CPU)
+    logger.info("\n//SECTION QUANT: Assigning input transcript paths in graph")
+    lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+
+    if LRAA_Globals.DEBUG:
+        report_transcript_paths_in_graph(
+            input_transcripts, "__input_transcripts_path_in_graph"
+        )
+
+    logger.info("\n//SECTION QUANT: Assigning reads to paths in graph.")
+    mp_counter = lraa_obj._populate_read_multi_paths(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_quant,
+        allow_spacers,
+    )
+
+    q = Quantify(run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"])
+    logger.info("\n//SECTION QUANT: Quantifying transcripts according to read support.")
+    read_name_to_fractional_transcript_assignment = q.quantify(
+        sg, input_transcripts, mp_counter
+    )
+
+    if LRAA_Globals.DEBUG:
+        q.dump_mp_to_transcripts_to_file(
+            "__QUANTIFY_mp_to_transcripts_and_reads.tsv",
+            contig_acc,
+            contig_strand,
+        )
+
+    q.report_quant_results(
+        input_transcripts,
+        read_name_to_fractional_transcript_assignment,
+        ofh_quant_output,
+        ofh_quant_read_tracker,
+        ofh_quant_read_tracking_lmdb,
+    )
 
     return
 
