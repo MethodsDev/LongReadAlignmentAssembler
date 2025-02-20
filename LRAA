@@ -1066,10 +1066,16 @@ def run_transcript_assembly(
 
     ## one last filtering based on min isoform fraction
 
-    ## //TODO
+    transcripts_kept, transcripts_removed = (
+        remove_low_isoform_fraction_transcripts_final_attempt(
+            transcripts, min_isoform_fraction
+        )
+    )
 
-    ## final adjustment post final isoform filtering
-    frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+    if len(transcripts_removed) > 0:
+        transcripts = transcripts_kept
+        ## final adjustment post final isoform filtering
+        frac_read_assignments = q._estimate_isoform_read_support(transcripts)
 
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
@@ -1106,6 +1112,22 @@ def run_transcript_assembly(
         ofh_gtf.write(transcript.to_GTF_format() + "\n")
 
     return
+
+
+def remove_low_isoform_fraction_transcripts_final_attempt(
+    transcripts, min_isoform_fraction
+):
+
+    transcripts_kept = list()
+    transcripts_removed = list()
+
+    for transcript in transcripts:
+        if transcript.get_isoform_fraction() < min_isoform_fraction:
+            transcripts_removed.append(transcript)
+        else:
+            transcripts_kept.append(transcript)
+
+    return transcripts_kept, transcripts_removed
 
 
 def get_genome_contigs_listing(genome_fasta_filename):
