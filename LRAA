@@ -638,7 +638,6 @@ def main():
                     restrict_region_lend,
                     restrict_region_rend,
                     input_transcripts,
-                    QUANT_ONLY,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
                     ofh_quant_read_tracking_lmdb,
@@ -657,7 +656,6 @@ def main():
                     restrict_region_lend,
                     restrict_region_rend,
                     input_transcripts,
-                    QUANT_ONLY,
                     ofh_gtf,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
@@ -727,7 +725,6 @@ def run_quant_only(
     restrict_region_lend,
     restrict_region_rend,
     input_transcripts,
-    QUANT_ONLY,
     ofh_quant_output,
     ofh_quant_read_tracker,
     ofh_quant_read_tracking_lmdb,
@@ -754,7 +751,7 @@ def run_quant_only(
         restrict_region_lend,
         restrict_region_rend,
         input_transcripts,
-        QUANT_ONLY,
+        quant_mode=True,
     )
 
     if sg.is_empty():
@@ -822,7 +819,6 @@ def run_transcript_assembly(
     restrict_region_lend,
     restrict_region_rend,
     input_transcripts,
-    QUANT_ONLY,
     ofh_gtf,
     ofh_quant_output,
     ofh_quant_read_tracker,
@@ -849,7 +845,7 @@ def run_transcript_assembly(
         restrict_region_lend,
         restrict_region_rend,
         input_transcripts,
-        QUANT_ONLY,
+        quant_mode=False,
     )
 
     if sg.is_empty():
