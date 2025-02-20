@@ -1,3 +1,9 @@
+
+
+v0.2.30
+- major refactoring of the LRAA driver
+- doing a full quant post asm including a final round of min isoform fraction based filtering
+
 v0.2.29
 - bugfix around retaining spurs matching to input transcripts
 - added another ONT test
