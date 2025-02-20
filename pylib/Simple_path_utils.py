@@ -858,6 +858,8 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
 
 def trim_TSS_and_PolyA(simple_path, strand):
 
+    simple_path = simple_path.copy()  # dont modify incoming path!
+
     assert strand in ("+", "-")
 
     TSS_id = None
