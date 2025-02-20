@@ -613,8 +613,6 @@ def main():
             ##-------------------
             ## build splice graph
 
-            sg = Splice_graph()
-
             contig_strand_token = "{}^{}".format(contig_acc, contig_strand)
             input_transcripts = contig_strand_to_input_transcripts[contig_strand_token]
             logger.info(
@@ -629,7 +627,6 @@ def main():
             if QUANT_ONLY:
 
                 run_quant_only(
-                    sg,
                     contig_acc,
                     contig_strand,
                     contig_seq_str,
@@ -643,11 +640,11 @@ def main():
                     ofh_quant_read_tracking_lmdb,
                     CPU,
                     run_EM,
+                    prereconstruct_info_dir,
                 )
 
             else:
                 run_transcript_assembly(
-                    sg,
                     contig_acc,
                     contig_strand,
                     contig_seq_str,
@@ -659,12 +656,14 @@ def main():
                     ofh_gtf,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
+                    ofh_quant_read_tracking_lmdb,
                     CPU,
                     run_EM,
                     single_best_only,
                     NO_FILTER_ISOFORMS,
                     min_isoform_fraction,
                     quant_EM_alpha,
+                    prereconstruct_info_dir,
                 )
 
     ofh_gtf.close()
@@ -716,7 +715,6 @@ def main():
 
 
 def run_quant_only(
-    sg,
     contig_acc,
     contig_strand,
     contig_seq_str,
@@ -730,6 +728,7 @@ def run_quant_only(
     ofh_quant_read_tracking_lmdb,
     CPU,
     run_EM,
+    prereconstruct_info_dir,
 ):
 
     # get path assignments for the input transcripts
@@ -741,6 +740,8 @@ def run_quant_only(
         logger.info(f"-no isoforms to quant on {contig_acc} [{contig_strand}]")
         # continue
         return
+
+    sg = Splice_graph()
 
     # for quant only, build sg only based on the input gtf and not the alignments in the bam
     sg.build_splice_graph_for_contig(
@@ -785,7 +786,9 @@ def run_quant_only(
         allow_spacers,
     )
 
-    q = Quantify(run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"])
+    q = Quantify(
+        run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"
+    )
     logger.info("\n//SECTION QUANT: Quantifying transcripts according to read support.")
     read_name_to_fractional_transcript_assignment = q.quantify(
         sg, input_transcripts, mp_counter
@@ -810,7 +813,6 @@ def run_quant_only(
 
 
 def run_transcript_assembly(
-    sg,
     contig_acc,
     contig_strand,
     contig_seq_str,
@@ -822,18 +824,22 @@ def run_transcript_assembly(
     ofh_gtf,
     ofh_quant_output,
     ofh_quant_read_tracker,
+    ofh_quant_read_tracking_lmdb,
     CPU,
     run_EM,
     single_best_only,
     NO_FILTER_ISOFORMS,
     min_isoform_fraction,
     quant_EM_alpha,
+    prereconstruct_info_dir,
 ):
 
     ##---------------------
     ## Assemble transcripts
 
     LRAA_Globals.config["EM_alpha"] = 0.0  # disable during initial asm step.
+
+    sg = Splice_graph()
 
     ## Build Splice Graph
     logger.info(f"\n// -building splice graph for {contig_acc}")
@@ -1060,19 +1066,32 @@ def run_transcript_assembly(
     ## Final quant step
     ###################
 
-    do_final_quant = True
+    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
 
-    if do_final_quant:
-        LRAA_Globals.config["EM_alpha"] = (
-            quant_EM_alpha  # restore for final quant step.
-        )
+    run_quant_only(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        bam_file_for_quant,
+        restrict_region_lend,
+        restrict_region_rend,
+        transcripts,
+        ofh_quant_output,
+        ofh_quant_read_tracker,
+        ofh_quant_read_tracking_lmdb,
+        CPU,
+        run_EM,
+        prereconstruct_info_dir,
+    )
 
-        q = Quantify(
-            run_EM,
-            LRAA_Globals.config["max_EM_iterations_quant_only"],
-            quant_mode="final",
-        )
-        frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
+    """
+    q = Quantify(
+        run_EM,
+        LRAA_Globals.config["max_EM_iterations_quant_only"],
+        quant_mode="final",
+    )
+    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
 
     q.report_quant_results(
         transcripts,
@@ -1082,6 +1101,7 @@ def run_transcript_assembly(
         splice_compatible_containments=transcript_splice_compatible_containments,
         splice_compatible_contained_by=transcript_splice_compatible_contained_by,
     )
+    """
 
     return
 
