@@ -1075,7 +1075,9 @@ def run_transcript_assembly(
     if len(transcripts_removed) > 0:
         transcripts = transcripts_kept
 
-    frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+    frac_read_assignments = q._estimate_isoform_read_support(
+        transcripts
+    )  ##//TODO: make frac read assignments a member of the quantifier obj. Shouldn't need to run it again here unless transcripts got filtered above.
 
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
