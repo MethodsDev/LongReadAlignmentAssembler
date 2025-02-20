@@ -641,6 +641,7 @@ def main():
                     CPU,
                     run_EM,
                     prereconstruct_info_dir,
+                    report_quants=True,
                 )
 
             else:
@@ -729,6 +730,7 @@ def run_quant_only(
     CPU,
     run_EM,
     prereconstruct_info_dir,
+    report_quants=True,
 ):
 
     # get path assignments for the input transcripts
@@ -801,15 +803,16 @@ def run_quant_only(
             contig_strand,
         )
 
-    q.report_quant_results(
-        input_transcripts,
-        read_name_to_fractional_transcript_assignment,
-        ofh_quant_output,
-        ofh_quant_read_tracker,
-        ofh_quant_read_tracking_lmdb,
-    )
+    if report_quants:
+        q.report_quant_results(
+            input_transcripts,
+            read_name_to_fractional_transcript_assignment,
+            ofh_quant_output,
+            ofh_quant_read_tracker,
+            ofh_quant_read_tracking_lmdb,
+        )
 
-    return
+    return q
 
 
 def run_transcript_assembly(
@@ -1037,12 +1040,52 @@ def run_transcript_assembly(
                 # continue
                 return
 
+    ###################
+    ## Final quant step
+    ###################
+
+    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
+
+    q = run_quant_only(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        bam_file_for_quant,
+        restrict_region_lend,
+        restrict_region_rend,
+        transcripts,
+        ofh_quant_output,
+        ofh_quant_read_tracker,
+        ofh_quant_read_tracking_lmdb,
+        CPU,
+        run_EM,
+        prereconstruct_info_dir,
+        report_quants=False,
+    )
+
+    ## one last filtering based on min isoform fraction
+
+    ## //TODO
+
+    ## final adjustment post final isoform filtering
+    frac_read_assignments = q._estimate_isoform_read_support(transcripts)
+
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
     (
         transcript_splice_compatible_containments,
         transcript_splice_compatible_contained_by,
     ) = TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
+
+    q.report_quant_results(
+        transcripts,
+        frac_read_assignments,
+        ofh_quant_output,
+        ofh_quant_read_tracker,
+        splice_compatible_containments=transcript_splice_compatible_containments,
+        splice_compatible_contained_by=transcript_splice_compatible_contained_by,
+    )
 
     #######################################
     ## Done filtering, report final results
@@ -1061,47 +1104,6 @@ def run_transcript_assembly(
 
     for transcript in transcripts:
         ofh_gtf.write(transcript.to_GTF_format() + "\n")
-
-    ###################
-    ## Final quant step
-    ###################
-
-    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
-
-    run_quant_only(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        bam_file_for_quant,
-        restrict_region_lend,
-        restrict_region_rend,
-        transcripts,
-        ofh_quant_output,
-        ofh_quant_read_tracker,
-        ofh_quant_read_tracking_lmdb,
-        CPU,
-        run_EM,
-        prereconstruct_info_dir,
-    )
-
-    """
-    q = Quantify(
-        run_EM,
-        LRAA_Globals.config["max_EM_iterations_quant_only"],
-        quant_mode="final",
-    )
-    frac_read_assignments = q.quantify(sg, transcripts, mp_counter)
-
-    q.report_quant_results(
-        transcripts,
-        frac_read_assignments,
-        ofh_quant_output,
-        ofh_quant_read_tracker,
-        splice_compatible_containments=transcript_splice_compatible_containments,
-        splice_compatible_contained_by=transcript_splice_compatible_contained_by,
-    )
-    """
 
     return
 
