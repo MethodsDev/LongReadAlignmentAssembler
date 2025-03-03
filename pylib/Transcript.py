@@ -47,6 +47,9 @@ class Transcript(GenomeFeature):
 
         self._meta = dict()
 
+        self._imported_has_TSS = None  # if parsed info from gtf, set True/False
+        self._imported_has_POLYA = None
+
         self._scored_path_obj = (
             None  # optional - useful if transcript obj was built based on a scored path
         )
@@ -153,6 +156,32 @@ class Transcript(GenomeFeature):
             return 1
         else:
             return 0
+
+    def has_PolyA(self):
+
+        if self._imported_has_POLYA is not None:
+            return self._imported_has_POLYA
+
+        assert self._simplepath is not None
+        if re.match("POLYA:", self._simplepath[0]) or re.match(
+            "POLYA:", self._simplepath[-1]
+        ):
+            return True
+        else:
+            return False
+
+    def has_TSS(self):
+
+        if self._imported_has_TSS is not None:
+            return self._imported_has_TSS
+
+        assert self._simplepath is not None
+        if re.match("TSS:", self._simplepath[0]) or re.match(
+            "TSS:", self._simplepath[-1]
+        ):
+            return True
+        else:
+            return False
 
     def __repr__(self):
 
@@ -302,6 +331,15 @@ class Transcript(GenomeFeature):
         if self._meta:
             for meta_key in sorted(self._meta.keys()):
                 gtf_text += ' {} "{}";'.format(meta_key, self._meta[meta_key])
+
+        # include other transcript features
+        misc_transcript_features = dict()
+        misc_transcript_features["TPM"] = "{:.3f}".format(self.get_TPM())
+        misc_transcript_features["PolyA"] = str(self.has_PolyA())
+        misc_transcript_features["TSS"] = str(self.has_TSS())
+
+        for misc_feature, misc_val in misc_transcript_features.items():
+            gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
 
         gtf_text += "\n"
 
