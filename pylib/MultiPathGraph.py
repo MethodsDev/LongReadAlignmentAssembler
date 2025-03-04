@@ -203,8 +203,14 @@ class MultiPathGraph:
             )
 
             num_ordered_nodes = len(ordered_nodes)
+            region = "{}{}:{}-{}".format(
+                contig_acc,
+                contig_strand,
+                ordered_nodes[0]._lend,
+                ordered_nodes[-1]._rend,
+            )
             logger.info(
-                f"Building MP Graph for component_id {component_id} with {num_ordered_nodes} multipaths"
+                f"Building MP Graph for component_id {component_id} spanning {region} with {num_ordered_nodes} multipaths"
             )
 
             if LRAA_Globals.DEBUG:

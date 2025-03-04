@@ -524,51 +524,47 @@ class LRAA:
                     paths_list.append(path)
 
             ## not allowing spacers in paths
-            if paths_list and SPACER in paths_list[0]:
-                if LRAA_Globals.DEBUG:
-                    read_graph_mappings_ofh.write(
-                        "\t".join(
-                            [
-                                read_name,
-                                str(grouped_alignments[read_name]),
-                                str(paths_list),
-                                "DISCARDED-SPACER",
-                            ]
+            paths_list_no_spacers = list()
+            for path in paths_list:
+                if SPACER not in path:
+                    paths_list_no_spacers.append(path)
+                else:
+                    if LRAA_Globals.DEBUG:
+                        read_graph_mappings_ofh.write(
+                            "\t".join(
+                                [
+                                    read_name,
+                                    str(grouped_alignments[read_name]),
+                                    str(paths_list),
+                                    "DISCARDED-SPACER",
+                                ]
+                            )
+                            + "\n"
                         )
-                        + "\n"
-                    )
+
+            if paths_list_no_spacers:
+                paths_list = [paths_list_no_spacers[0]]  # take first one.
+            else:
                 continue
 
-            mp_list = None
-            if paths_list:
-                mp = MultiPath(
-                    self._splice_graph,
-                    paths_list,
-                    read_types={
-                        read_type,
-                    },
-                    read_names={
-                        read_name,
-                    },
-                )
+            mp = MultiPath(
+                self._splice_graph,
+                paths_list,
+                read_types={
+                    read_type,
+                },
+                read_names={
+                    read_name,
+                },
+            )
 
-                mp_list = [mp]
-                if not allow_spacers:
-                    sp = mp.get_simple_path()
-                    if SPACER in sp:
-                        logger.debug(
-                            "-SKIPPING read path that contains a SPACER: {}".format(mp)
-                        )
-                        continue
+            logger.debug("paths_list: {} -> mp: {}".format(paths_list, mp))
 
-                logger.debug("paths_list: {} -> mp: {}".format(paths_list, mp_list))
-
-                for mp in mp_list:
-                    mp_counter.add(mp)
+            mp_counter.add(mp)
 
             if LRAA_Globals.DEBUG:
                 read_graph_mappings_ofh.write(
-                    "\t".join([read_name, str(pretty_alignment), str(mp_list)]) + "\n"
+                    "\t".join([read_name, str(pretty_alignment), str(mp)]) + "\n"
                 )
 
         if LRAA_Globals.DEBUG:
