@@ -233,8 +233,8 @@ class Splice_graph:
         # incorporate guide structures if provided
         if input_transcripts:
             self._integrate_input_transcript_structures(
-                input_transcripts, contig_strand
-            )  # should already be limited to contig_acc
+                input_transcripts, contig_acc, contig_strand
+            )
 
         ##--------------------------------------------------------------------------------
         # initializes self._splice_graph
@@ -549,70 +549,92 @@ class Splice_graph:
 
         # Define TSS and PolyA sites
         if LRAA_Globals.config["infer_TSS"]:
-
-            if LRAA_Globals.DEBUG:
-                write_pos_counter_info(
-                    "__prelim_TSS_raw_counts.tsv",
-                    TSS_position_counter,
-                    contig_acc,
-                    contig_strand,
-                )
-
-            TSS_grouped_positions = aggregate_sites_within_window(
-                TSS_position_counter,
-                LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
-                LRAA_Globals.config["min_alignments_define_TSS_site"],
+            self._incorporate_TSS_objects(
+                contig_acc, contig_strand, TSS_position_counter
             )
-
-            TSS_grouped_positions = filter_non_peaky_positions(
-                TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
-            )
-
-            for TSS_peak in TSS_grouped_positions:
-                position, count = TSS_peak
-                self._TSS_objs.append(
-                    TSS(contig_acc, position, position, contig_strand, count)
-                )
-
-            if LRAA_Globals.DEBUG:
-                append_log_file("__prefilter_TSS_info.bed", self._TSS_objs)
 
         if LRAA_Globals.config["infer_PolyA"]:
-
-            if LRAA_Globals.DEBUG:
-                write_pos_counter_info(
-                    "__prelim_polyA_raw_counts.tsv",
-                    polyA_position_counter,
-                    contig_acc,
-                    contig_strand,
-                )
-
-            PolyA_grouped_positions = aggregate_sites_within_window(
-                polyA_position_counter,
-                LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
-                LRAA_Globals.config["min_alignments_define_polyA_site"],
+            self._incorporate_PolyA_objects(
+                contig_acc, contig_strand, polyA_position_counter
             )
-
-            for polyA_site_grouping in PolyA_grouped_positions:
-                position, count = polyA_site_grouping
-                self._PolyA_objs.append(
-                    PolyAsite(contig_acc, position, position, contig_strand, count)
-                )
-
-            if LRAA_Globals.DEBUG:
-                append_log_file("__prefilter_PolyAsite_info.bed", self._PolyA_objs)
 
         return
 
-    def _integrate_input_transcript_structures(self, transcripts, contig_strand):
+    def _incorporate_TSS_objects(self, contig_acc, contig_strand, TSS_position_counter):
+
+        if LRAA_Globals.DEBUG:
+            write_pos_counter_info(
+                "__prelim_TSS_raw_counts.tsv",
+                TSS_position_counter,
+                contig_acc,
+                contig_strand,
+            )
+
+        TSS_grouped_positions = aggregate_sites_within_window(
+            TSS_position_counter,
+            LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
+            LRAA_Globals.config["min_alignments_define_TSS_site"],
+        )
+
+        TSS_grouped_positions = filter_non_peaky_positions(
+            TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
+        )
+
+        for TSS_peak in TSS_grouped_positions:
+            position, count = TSS_peak
+            self._TSS_objs.append(
+                TSS(contig_acc, position, position, contig_strand, count)
+            )
+
+        if LRAA_Globals.DEBUG:
+            append_log_file("__prefilter_TSS_info.bed", self._TSS_objs)
+
+        return
+
+    def _incorporate_PolyA_objects(
+        self, contig_acc, contig_strand, polyA_position_counter
+    ):
+
+        if LRAA_Globals.DEBUG:
+            write_pos_counter_info(
+                "__prelim_polyA_raw_counts.tsv",
+                polyA_position_counter,
+                contig_acc,
+                contig_strand,
+            )
+
+        PolyA_grouped_positions = aggregate_sites_within_window(
+            polyA_position_counter,
+            LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
+            LRAA_Globals.config["min_alignments_define_polyA_site"],
+        )
+
+        for polyA_site_grouping in PolyA_grouped_positions:
+            position, count = polyA_site_grouping
+            self._PolyA_objs.append(
+                PolyAsite(contig_acc, position, position, contig_strand, count)
+            )
+
+        if LRAA_Globals.DEBUG:
+            append_log_file("__prefilter_PolyAsite_info.bed", self._PolyA_objs)
+
+        return
+
+    def _integrate_input_transcript_structures(
+        self, transcripts, contig_acc, contig_strand
+    ):
         """
         Fold in the reference annotations:
         - add introns where they're missing
         - add base coverage where it's missing.
+        - if has TSS or PolyA info in the meta, then incorporate with evidence according to TPM val.
 
         """
 
         logger.info("Integrating input transcript structures.")
+
+        TSS_evidence_counter = defaultdict(int)
+        PolyA_evidence_counter = defaultdict(int)
 
         ## Exon Coverage and Intron Capture
 
@@ -629,6 +651,14 @@ class Splice_graph:
             logger.debug("Integrating transcript: {}".format(transcript))
 
             trans_lend, trans_rend = transcript.get_coords()
+
+            if transcript.has_annotated_TSS():
+                TSS_coord = trans_lend if orient == "+" else trans_rend
+                TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+
+            if transcript.has_annotated_PolyA():
+                polyA_coord = trans_rend if orient == "+" else trans_lend
+                PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
 
             if (
                 LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]
@@ -677,6 +707,16 @@ class Splice_graph:
                         self._input_transcripts_introns[intron_coords_key] = intron_obj
 
                 last_rend = rend
+
+        if len(TSS_evidence_counter) > 0:
+            self._incorporate_TSS_objects(
+                contig_acc, contig_strand, TSS_evidence_counter
+            )
+
+        if len(PolyA_evidence_counter) > 0:
+            self._incorporate_PolyA_objects(
+                contig_acc, contig_strand, PolyA_evidence_counter
+            )
 
         return
 
