@@ -255,7 +255,9 @@ class MultiPathGraphNode:
             self.get_splice_graph(), self_path, other_path
         ):
             # logger.debug("Path {}\ncontains Path {}".format(self.get_simple_path(), other_node.get_simple_path()))
-            assert len(self_path) >= len(other_path)
+            assert len(self_path) >= len(
+                other_path
+            ), "Error, len({}) not >= len({})".format(self_path, other_path)
             return True
         else:
             return False
