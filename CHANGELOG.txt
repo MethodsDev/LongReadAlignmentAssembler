@@ -1,4 +1,5 @@
-
+v0.2.31
+- rare edgecase bugfix around multipaths that should have been single paths
 
 v0.2.30
 - major refactoring of the LRAA driver

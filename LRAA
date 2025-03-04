@@ -25,7 +25,7 @@ import shutil
 
 ####################################
 # VERSION=""
-VERSION = "BLEEDING_EDGE-v0.2.30"
+VERSION = "BLEEDING_EDGE-v0.2.31"
 ####################################
 
 
