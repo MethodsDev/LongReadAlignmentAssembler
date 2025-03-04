@@ -46,7 +46,7 @@ def main():
     #########
     ### begin
 
-    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
+    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb", check_sq=False)
 
     # get cell cluster info
     cell_barcode_to_cluster = dict()
