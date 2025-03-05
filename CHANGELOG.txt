@@ -1,3 +1,6 @@
+v0.2.32
+- incorporating single cell cluster-based assembly workflow
+
 v0.2.31
 - rare edgecase bugfix around multipaths that should have been single paths
 

@@ -117,3 +117,4 @@ RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembl
 
 
 
+ENV PATH="$SRC/LongReadAlignmentAssembler/:$SRC/LongReadAlignmentAssembler/util/:$SRC/LongReadAlignmentAssembler/util/sc/:${PATH}"
