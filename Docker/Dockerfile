@@ -106,8 +106,8 @@ RUN pip install numpy --break-system-packages
 
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.31"
-ENV LRAA_CO=751f5d6c45c9079ac4bd0d503b887e4b4cf4a2c7
+ENV LRAA_VERSION="v0.2.32"
+ENV LRAA_CO=62b7fbfa41c16b27d72ba9ccc3f5328d979799ea
 
 # update VERSION and LRAA_CO files with version info and checkout
 
@@ -117,4 +117,4 @@ RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembl
 
 
 
-ENV PATH="$SRC/LongReadAlignmentAssembler/:$SRC/LongReadAlignmentAssembler/util/:$SRC/LongReadAlignmentAssembler/util/sc/:${PATH}"
+ENV PATH="$SRC/LRAA/:$SRC/LRAA/util/:$SRC/LRAA/util/sc/:${PATH}"

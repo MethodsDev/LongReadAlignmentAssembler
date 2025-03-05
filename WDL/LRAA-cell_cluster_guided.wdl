@@ -116,7 +116,7 @@ workflow LRAA_cell_cluster_guided {
                sample_id = sample_id,
                referenceGenome = referenceGenome,
                annot_gtf = annot_gtf,
-               inputBAM = inputBAM,
+               inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
                annot_gtf = annot_gtf,
                LowFi = LowFi,
                main_chromosomes = main_chromosomes,

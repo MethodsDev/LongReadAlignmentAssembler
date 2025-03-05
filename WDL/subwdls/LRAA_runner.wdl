@@ -39,7 +39,7 @@ task LRAA_runner_task {
 
         set -ex
         
-        /usr/local/src/LRAA/LRAA --genome ~{genome_fasta} \
+        LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
                                  ~{"--min_per_id " + min_per_id} \
