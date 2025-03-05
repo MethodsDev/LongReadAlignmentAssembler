@@ -56,6 +56,9 @@ task partition_bam_by_cell_cluster {
                                           --cell_clusters ~{cell_clusters_info} \
                                           --output_prefix ~{sample_id}
 
+
+        ls -1 *.bam
+        
          
     >>>
      
