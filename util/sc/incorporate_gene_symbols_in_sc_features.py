@@ -17,26 +17,37 @@ logger = logging.getLogger(__name__)
 def main():
 
     parser = argparse.ArgumentParser(
-        description="incorporate gene symbols into single cell feature names as gene_name^identifier",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="""
+        
+        #############################################################################################################
+        #
+        # Incorporate gene symbols into single cell feature names as gene_name^identifier"
+        # 
+        # If LRAA was run in quant-only mode, then add gene symbols like so:
+        # 
+        #   incorporate_gene_symbols_in_sc_features.py --ref_gtf GRCh38.gencode.annotation.gtf \\
+        #                                              --sparseM_dirs dataset^gene-sparseM dataset^isoform-sparseM
+        #
+        # If LRAA was run in isoform-discovery mode, then first use gffcompare to assign LRAA isoforms to reference annotation isoforms like so:
+        #
+        #     gffcompare -r  GRCh38.gencode.annotation.gtf  LRAA_gtf
+        #
+        #  then incorporate gene names like so:
+        #
+        #     incorporate_gene_symbols_in_sc_features.py --ref_gtf GRCh38.gencode.annotation.gtf \\
+        #                                                --sparseM_dirs dataset^gene-sparseM dataset^isoform-sparseM \\
+        #                                                --LRAA_gtf LRAA.gtf \\
+        #                                                --gffcompare_tracking gffcmp.tracking 
+        #
+        ##############################################################################################################
+
+        """,
+        formatter_class=argparse.RawTextHelpFormatter,
     )
 
-    parser.add_argument(
-        "--LRAA_gtf",
-        type=str,
-        required=True,
-        help="LRAA gtf file",
-    )
-
+    # required - for ref-quant-only or invovling novel isoform ID discovery (ref-guided or de novo LRAA)
     parser.add_argument(
         "--ref_gtf", type=str, required=True, help="reference annotation GTF file"
-    )
-
-    parser.add_argument(
-        "--gffcompare_tracking",
-        type=str,
-        required=True,
-        help="provide the tracking file from running: gffcompare -r ref_gtf LRAA_gtf",
     )
 
     parser.add_argument(
@@ -45,6 +56,23 @@ def main():
         required=True,
         help="sparse matrix directory",
         nargs="+",
+    )
+
+    # optional - for ref-guided
+    parser.add_argument(
+        "--LRAA_gtf",
+        type=str,
+        required=False,
+        default=None,
+        help="LRAA gtf file",
+    )
+
+    parser.add_argument(
+        "--gffcompare_tracking",
+        type=str,
+        required=False,
+        default=None,
+        help="provide the tracking file from running: gffcompare -r ref_gtf LRAA_gtf",
     )
 
     args = parser.parse_args()
@@ -60,15 +88,19 @@ def main():
 
     # print(str(ref_id_to_gene_name))
 
-    gff_compare_LRAA_id_to_REF_id_mapping = parse_GFFcompare_mappings(
-        gffcompare_tracking_filename
-    )
+    gff_compare_LRAA_id_to_REF_id_mapping = None
+
+    if gffcompare_tracking_filename is not None:
+        gff_compare_LRAA_id_to_REF_id_mapping = parse_GFFcompare_mappings(
+            gffcompare_tracking_filename
+        )
 
     # print(str(gff_compare_LRAA_id_to_REF_id_mapping))
 
     feature_ids_updated = dict()
 
     for sparseM_dirname in sparseM_dirnames:
+        logger.info("-updating {}".format(sparseM_dirname))
         update_sparseM_feature_names(
             sparseM_dirname,
             gff_compare_LRAA_id_to_REF_id_mapping,
@@ -76,9 +108,13 @@ def main():
             feature_ids_updated,
         )
 
-    update_LRAA_gff_feature_ids(
-        LRAA_gtf_filename, LRAA_gtf_filename + ".updated.gtf", feature_ids_updated
-    )
+    if LRAA_gtf_filename is not None:
+        logger.info(
+            "-writing " + LRAA_gtf_filename + ".updated.gtf including gene names"
+        )
+        update_LRAA_gff_feature_ids(
+            LRAA_gtf_filename, LRAA_gtf_filename + ".updated.gtf", feature_ids_updated
+        )
 
     sys.exit(0)
 
@@ -153,13 +189,18 @@ def update_sparseM_feature_names(
 
     with gzip.open(features_file, "rt") as fh:
         with open(revised_features_file, "wt") as ofh:
-            for features_id in fh:
-                features_id = features_id.rstrip()
+            for feature_id in fh:
+                feature_id = feature_id.rstrip()
                 gene_name = None
-                if features_id in gff_compare_LRAA_id_to_REF_id_mapping:
-                    ensg_id, enst_id = gff_compare_LRAA_id_to_REF_id_mapping[
-                        features_id
-                    ]
+
+                if feature_id in ref_id_to_gene_name:
+                    gene_name = ref_id_to_gene_name[feature_id]
+
+                elif (
+                    gff_compare_LRAA_id_to_REF_id_mapping is not None
+                    and feature_id in gff_compare_LRAA_id_to_REF_id_mapping
+                ):
+                    ensg_id, enst_id = gff_compare_LRAA_id_to_REF_id_mapping[feature_id]
 
                     if ensg_id in ref_id_to_gene_name:
                         gene_name = ref_id_to_gene_name[ensg_id]
@@ -167,12 +208,12 @@ def update_sparseM_feature_names(
                         gene_name = ref_id_to_gene_name[enst_id]
 
                 if gene_name is not None:
-                    new_feature_id = "^".join([gene_name, features_id])
+                    new_feature_id = "^".join([gene_name, feature_id])
                     print(new_feature_id, file=ofh)
                     num_gene_names_added += 1
-                    feature_ids_updated[features_id] = new_feature_id
+                    feature_ids_updated[feature_id] = new_feature_id
                 else:
-                    print(features_id, file=ofh)  # no change
+                    print(feature_id, file=ofh)  # no change
 
     if num_gene_names_added > 0:
         logger.info("- added {} gene names to feature ids".format(num_gene_names_added))
