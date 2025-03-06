@@ -6,3 +6,10 @@ workflows:
      authors:
          - name: Brian Haas
            email: bhaas@broadinstitute.org
+   -name: LRAA-cell_cluster_guided
+     subclass: WDL
+     primaryDescriptorPath: /WDL/LRAA-cell_cluster_guided.wdl
+     authors:
+         - name: Brian Haas
+           email: bhaas@broadinstitute.org
+     
