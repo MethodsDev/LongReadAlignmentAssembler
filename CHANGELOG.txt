@@ -1,3 +1,8 @@
+v0.2.33
+- make clear in sc wdl that expr is pseudobulk
+- enable gene symbol incorporation into single cell data when using ref-quant only mod
+- in quant-only w/ LRAA input gtf having TSS and PolyA annotations, only integrate those TSS and PolyA features instead of trying to de novo discover from read alignments
+
 v0.2.32
 - incorporating single cell cluster-based assembly workflow
 
