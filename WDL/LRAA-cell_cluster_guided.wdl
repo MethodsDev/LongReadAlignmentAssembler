@@ -114,9 +114,12 @@ workflow LRAA_cell_cluster_guided {
 
      scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
 
+         String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
+         
+         
          call LRAA.LRAA_wf as LRAA_by_cluster {
              input:
-               sample_id = sample_id,
+               sample_id = cluster_sample_id,
                referenceGenome = referenceGenome,
                annot_gtf = annot_gtf,
                inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
