@@ -227,7 +227,7 @@ class Splice_graph:
 
         if alignments_bam_file is not None:
             self._populate_exon_coverage_and_extract_introns(
-                alignments_bam_file, contig_acc, contig_strand
+                alignments_bam_file, contig_acc, contig_strand, quant_mode
             )
 
         # incorporate guide structures if provided
@@ -390,7 +390,7 @@ class Splice_graph:
         return
 
     def _populate_exon_coverage_and_extract_introns(
-        self, bam_filename, contig_acc, contig_strand
+        self, bam_filename, contig_acc, contig_strand, quant_mode
     ):
 
         ## Intron Capture
@@ -548,15 +548,18 @@ class Splice_graph:
                 #    logger.debug("Excluding intron {} with insufficient frac_intron_support {} (below threshold Splice_graph._min_alt_splice_freq {})".format(intron_coords_key, frac_intron_support, Splice_graph._min_alt_splice_freq))
 
         # Define TSS and PolyA sites
-        if LRAA_Globals.config["infer_TSS"]:
-            self._incorporate_TSS_objects(
-                contig_acc, contig_strand, TSS_position_counter
-            )
+        #    unless it's derived from the input annotation in quant-only mode, in which case we'll limit ourselves to that.
+        if not (quant_mode and (len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0)):
 
-        if LRAA_Globals.config["infer_PolyA"]:
-            self._incorporate_PolyA_objects(
-                contig_acc, contig_strand, polyA_position_counter
-            )
+            if LRAA_Globals.config["infer_TSS"]:
+                self._incorporate_TSS_objects(
+                    contig_acc, contig_strand, TSS_position_counter
+                )
+
+            if LRAA_Globals.config["infer_PolyA"]:
+                self._incorporate_PolyA_objects(
+                    contig_acc, contig_strand, polyA_position_counter
+                )
 
         return
 
@@ -654,11 +657,17 @@ class Splice_graph:
 
             if transcript.has_annotated_TSS():
                 TSS_coord = trans_lend if orient == "+" else trans_rend
-                TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+                if transcript.has_annotated_TPM():
+                    TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+                else:
+                    TSS_evidence_counter[TSS_coord] = 1
 
             if transcript.has_annotated_PolyA():
                 polyA_coord = trans_rend if orient == "+" else trans_lend
-                PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                if transcript.has_annotated_TPM():
+                    PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                else:
+                    PolyA_evidence_counter[polyA_coord] = 1
 
             if (
                 LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]

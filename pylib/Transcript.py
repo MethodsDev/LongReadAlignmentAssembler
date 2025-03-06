@@ -301,6 +301,12 @@ class Transcript(GenomeFeature):
         ), "Error, read counts assigned is None - maybe quant not run yet? " + str(self)
         return self._read_counts_assigned
 
+    def has_annotated_TPM(self):
+        if self._imported_TPM_val is not None:
+            return True
+        else:
+            return False
+
     def get_TPM(self):
         if self._imported_TPM_val is not None:
             return self._imported_TPM_val

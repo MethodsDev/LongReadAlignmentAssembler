@@ -80,7 +80,7 @@ workflow LRAA_cell_cluster_guided {
 
      output {
          File LRAA_gtf = lraa_merge_task.mergedGTF
-         File LRAA_expr = LRAA_quant.mergedQuantExpr
+         File LRAA_pseudobulk_expr = LRAA_quant.mergedQuantExpr
          File LRAA_tracking = LRAA_quant.mergedQuantTracking
      }
      
