@@ -64,6 +64,7 @@ workflow LRAA_cell_cluster_guided {
             LRAA_cell_cluster_gtfs = LRAA_by_cluster.mergedGTF,
             referenceGenome = referenceGenome,
             docker=docker,
+            memoryGB  = memoryGBperLRAA,
      }
      
      # run final quant
@@ -96,6 +97,7 @@ task lraa_merge_task {
         Array[File] LRAA_cell_cluster_gtfs
         File referenceGenome
         String docker
+        Int memoryGB
     }
 
     command <<<
@@ -115,8 +117,8 @@ task lraa_merge_task {
     runtime {
         docker: docker
         cpu: 1
-        memory: "8 GiB"
-        disks: "local-disk 100 HDD"
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk 200 HDD"
     }
 
 }
