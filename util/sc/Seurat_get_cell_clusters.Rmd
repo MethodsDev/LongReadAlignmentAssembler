@@ -1,0 +1,389 @@
+---
+title: "Seurat - get cell clusters"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Seurat)
+```
+
+```{r}
+
+sample_name = "PBMCs"
+
+data_dir = paste0(sample_name, "^gene-sparseM/")
+output_prefix = paste0(sample_name, ".genes")
+
+```
+
+
+```{r}
+
+data = Read10X(data.dir=data_dir,
+               gene.column = 1,
+               cell.column = 2,
+               unique.features = TRUE,
+               strip.suffix = FALSE)
+
+```
+
+
+```{r}
+
+umi_counts_per_cell = colSums(data)
+
+```
+
+```{r}
+
+umi_counts_per_cell = sort(umi_counts_per_cell, decreasing = T)
+
+
+```
+
+```{r}
+
+plot(umi_counts_per_cell, log='xy')
+
+
+```
+
+
+
+```{r}
+
+seurat_obj <- CreateSeuratObject(counts = data, project = "project", min.cells = 3, min.features = 300)
+
+```
+
+
+```{r}
+
+seurat_obj
+
+```
+
+
+
+```{r}
+# before filtering
+seurat_obj@meta.data %>% summarize(median(nCount_RNA), median(nFeature_RNA))
+
+```
+
+
+
+```{r}
+
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+
+seurat_obj
+```
+
+
+```{r}
+
+seurat_obj@meta.data %>% head()
+
+
+```
+
+```{r}
+seurat_obj@meta.data %>% dplyr::select(nCount_RNA) %>% arrange(desc(nCount_RNA)) %>% mutate(i=row_number()) %>%
+  ggplot(aes(x=i, y=nCount_RNA)) + geom_point() + theme_bw() + 
+  scale_y_continuous(trans='log10') +
+  scale_x_continuous(trans='log10') +
+  
+  ggtitle("nCount_RNA: UMI counts per cell")
+
+```
+
+
+```{r}
+
+
+
+seurat_obj@meta.data %>% dplyr::select(nFeature_RNA) %>% arrange(desc(nFeature_RNA)) %>% mutate(i=row_number()) %>%
+  ggplot(aes(x=i, y=nFeature_RNA)) + geom_point() + theme_bw() + scale_y_continuous(trans='log10') +
+  ggtitle("nFeature_RNA: gene count per cell") 
+
+
+
+```
+
+
+```{r}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+
+```
+
+```{r}
+
+plot1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+
+```
+
+
+```{r}
+
+# save before filtering
+
+saveRDS(seurat_obj, file = paste0(output_prefix, "-seurat_obj-preCellFiltering.rds"))
+
+```
+
+
+```{r}
+
+# filter cells
+
+seurat_obj <- subset(seurat_obj, 
+                     percent.mt < 20)
+
+seurat_obj
+
+
+```
+
+
+```{r}
+# after filtering
+seurat_obj@meta.data %>% summarize(median(nCount_RNA), median(nFeature_RNA))
+
+```
+
+```{r}
+
+seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+
+
+
+```
+
+```{r}
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat_obj), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat_obj)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+```
+
+```{r}
+
+
+all.features <- rownames(seurat_obj)
+seurat_obj <- ScaleData(seurat_obj, features = all.features)
+
+```
+
+
+
+```{r}
+
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))
+
+```
+
+
+```{r}
+
+VizDimLoadings(seurat_obj, dims = 1:2, reduction = "pca")
+
+```
+
+```{r}
+
+DimPlot(seurat_obj, reduction = "pca") + NoLegend()
+
+```
+
+
+
+```{r}
+
+ElbowPlot(seurat_obj)
+
+```
+
+
+```{r}
+
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:12)
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.6)
+
+```
+
+
+```{r}
+
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:12)
+
+
+```
+
+
+```{r}
+
+DimPlot(seurat_obj, reduction = "umap", label=T )
+
+```
+
+
+
+
+```{r}
+FeaturePlot(seurat_obj, features = c("nFeature_RNA"))
+
+FeaturePlot(seurat_obj, features = c("nCount_RNA"))
+
+```
+
+```{r}
+
+FeaturePlot(seurat_obj, features = c("percent.mt"))
+
+```
+
+
+
+```{r}
+
+saveRDS(seurat_obj, file = paste0(output_prefix, "-seurat_obj.rds"))
+
+```
+
+# DE, find markers
+
+```{r}
+
+# find markers for every cluster compared to all remaining cells, report only the positive
+# ones
+seurat_obj.markers <- FindAllMarkers(seurat_obj, only.pos = TRUE)
+seurat_obj.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+
+```
+
+
+```{r}
+
+write.table(seurat_obj.markers, file="seurat.markers.tsv", quote=F, sep="\t")
+
+
+```
+
+
+
+```{r}
+
+top_20_markers = seurat_obj.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>% slice_head(n=20) %>% ungroup()
+
+
+top_20_markers
+```
+
+```{r}
+
+
+
+max_cluster <- max(as.numeric(top_20_markers$cluster)) - 1
+
+for (clnum in 0:max_cluster) {
+  cluster = top_20_markers %>% filter(cluster == clnum)
+  
+  gene.symbols = sapply(cluster$gene, function(x) { str_split(x, "\\^")[[1]][1] })
+  
+  gene.symbols = grep("ENSG|ENST|novel", gene.symbols, value=T, invert=T)
+  
+  cat(paste0(clnum,":"))
+  cat(gene.symbols, sep=",")
+  cat("\n")
+}
+
+```
+
+Run above list through: http://xteam.xbio.top/ACT
+to get cell type predictions.
+
+
+```{r}
+library(clustermole)
+
+clustermole_results = NULL
+
+for (clnum in 0:max_cluster) {
+  cluster = top_20_markers %>% filter(cluster == clnum)
+  
+  gene.symbols = sapply(cluster$gene, function(x) { str_split(x, "\\^")[[1]][1] })
+  
+  gene.symbols = grep("ENSG|ENST|novel", gene.symbols, value=T, invert=T)
+  
+  
+  tryCatch(
+    expr = {
+      
+      cat(paste0(clnum,":"))
+    cat(gene.symbols, sep=",")
+    cat("\n")
+  
+    my_overlaps <- clustermole_overlaps(genes = gene.symbols, species = "hs")
+  
+    clustermole_results = bind_rows(clustermole_results,
+                                  my_overlaps %>% mutate(clnum = clnum))
+    },
+    error = function(e){ 
+       message("Error: ", e)
+    },
+    warning = function(w){
+      message("Warning: ", w)
+    }
+  )
+}
+
+```
+
+```{r}
+
+clustermole_summary = clustermole_results  %>% filter(db == "PanglaoDB") %>%
+  group_by(clnum) %>% arrange(p_value) %>% filter(row_number() == 1) %>% arrange(clnum) %>%
+  ungroup() %>%
+  dplyr::select(clnum, organ, celltype, fdr)
+
+clustermole_summary
+
+```
+
+```{r}
+write.table(clustermole_summary, file = paste0(output_prefix, "-clustermole.tsv"), quote=F, row.names=F, sep="\t")
+
+```
+
+
+```{r}
+# save files for later read/cell tracking
+
+write.table( Idents(seurat_obj), paste0(output_prefix, "-cell_cluster_assignments.tsv"), quote=F, row.names=T, sep="\t")
+
+
+```
+
+
+
+
+

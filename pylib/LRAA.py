@@ -29,6 +29,7 @@ from MultiProcessManager import MultiProcessManager
 from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,9 @@ class LRAA:
 
         if input_transcripts is not None:
             logger.info("-incorporating input transcripts into multpath graph")
-            self._incorporate_transcripts_into_mp_counter(mp_counter, input_transcripts)
+            self._incorporate_transcripts_into_mp_counter(
+                mp_counter, input_transcripts, bam_file
+            )
 
         multipath_graph = MultiPathGraph(
             mp_counter,
@@ -136,6 +139,7 @@ class LRAA:
         USE_MULTIPROCESSOR = self._num_parallel_processes > 1
 
         q = None
+        mpm = None
         if USE_MULTIPROCESSOR:
             logger.info("-Running assembly jobs with multiprocessing")
             q = Queue()
@@ -230,7 +234,8 @@ class LRAA:
                     all_reconstructed_transcripts.extend(reconstructed_transcripts)
 
                 except Exception as e:
-                    mpm.terminate_all_processes()
+                    if mpm is not None:
+                        mpm.terminate_all_processes()
                     raise (e)
 
             fraction_jobs_complete = component_counter / num_mpg_components
@@ -262,7 +267,7 @@ class LRAA:
         if LRAA_Globals.DEBUG:
             with open("__pre_tx_filtering.transcripts.gtf", "at") as ofh:
                 for transcript in all_reconstructed_transcripts:
-                    ofh.write(transcript.to_GTF_format() + "\n")
+                    ofh.write(transcript.to_GTF_format(include_TPM=False) + "\n")
 
         return all_reconstructed_transcripts
 
@@ -447,6 +452,12 @@ class LRAA:
         The path is stored as a multipath object with a count associated with the number of reads assigned to it.
         """
 
+        # distill read alignments into unique multipaths (so if 10k alignments yield the same structure, there's one multipath with 10k count associated)
+        mp_counter = MultiPathCounter()
+
+        if bam_file is None:
+            return mp_counter  # nothing to do here.
+
         bam_extractor = Bam_alignment_extractor(bam_file)
         pretty_alignments = bam_extractor.get_read_alignments(
             contig_acc,
@@ -475,9 +486,6 @@ class LRAA:
                 len(pretty_alignments), len(grouped_alignments)
             )
         )
-
-        # distill read alignments into unique multipaths (so if 10k alignments yield the same structure, there's one multipath with 10k count associated)
-        mp_counter = MultiPathCounter()
 
         # capture the read->path assignments:
         if LRAA_Globals.DEBUG:
@@ -1052,7 +1060,7 @@ class LRAA:
             for from_path in from_paths:
                 trans_obj = from_path.toTranscript()
                 trans_obj.add_meta("score", from_path.get_score())
-                gtf = trans_obj.to_GTF_format()
+                gtf = trans_obj.to_GTF_format(include_TPM=False)
                 ofh.write(gtf + "\n")
             print("", file=ofh)  # spacer"
 
@@ -1187,17 +1195,44 @@ class LRAA:
 
         return transcripts_ret
 
-    def _incorporate_transcripts_into_mp_counter(self, mp_counter, input_transcripts):
+    def _incorporate_transcripts_into_mp_counter(
+        self, mp_counter, input_transcripts, bam_file
+    ):
+
+        ## if bam_file is None, then working in LRAA transcript merge-only mode.
+        ## and should treat each input transcript like it's supported by reads in par with TPM value.
 
         for input_transcript in input_transcripts:
             simple_path = input_transcript.get_simple_path()
-            mp = MultiPath(
-                self._splice_graph,
-                [simple_path],
-                read_types={"reftranscript"},
-                read_names={"reftranscript:" + input_transcript.get_transcript_id()},
-            )
+            if bam_file is not None:
+                mp = MultiPath(
+                    self._splice_graph,
+                    [simple_path],
+                    read_types={"reftranscript"},
+                    read_names={
+                        "reftranscript:" + input_transcript.get_transcript_id()
+                    },
+                )
+            else:
+                # fake read, transcript-merge mode.
+                fake_read_prefix = (
+                    input_transcript.get_transcript_id() + "-" + str(time.time())
+                )
+                num_fake_reads = math.ceil(input_transcript.get_TPM())
+                fake_read_names = set(
+                    [f"{fake_read_prefix}.{i}" for i in range(num_fake_reads)]
+                )
+
+                mp = MultiPath(
+                    self._splice_graph,
+                    [simple_path],
+                    read_types={"fake_for_merge"},
+                    read_names=fake_read_names,
+                )
+
             mp_counter.add(mp)
+
+        return
 
     def differentiate_known_vs_novel_isoforms(self, transcripts):
 
