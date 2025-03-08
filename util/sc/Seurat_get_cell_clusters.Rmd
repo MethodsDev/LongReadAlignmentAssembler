@@ -54,7 +54,7 @@ plot(umi_counts_per_cell, log='xy')
 
 ```{r}
 
-seurat_obj <- CreateSeuratObject(counts = data, project = "project", min.cells = 3, min.features = 300)
+seurat_obj <- CreateSeuratObject(counts = data, project = "project", min.cells = 10, min.features = 1000)
 
 ```
 
