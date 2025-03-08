@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys, os, re
 from collections import defaultdict
 from GenomeFeature import GenomeFeature
@@ -46,6 +48,11 @@ class Transcript(GenomeFeature):
         self._gene_id = "g.{}".format(self._id)  # ditto above
 
         self._meta = dict()
+
+        # can import features from GTF feature attributes
+        self._imported_TPM_val = None
+        self._imported_has_TSS = None  # if parsed info from gtf, set True/False
+        self._imported_has_POLYA = None
 
         self._scored_path_obj = (
             None  # optional - useful if transcript obj was built based on a scored path
@@ -154,6 +161,44 @@ class Transcript(GenomeFeature):
         else:
             return 0
 
+    def has_annotated_PolyA(self):
+        if self._imported_has_POLYA is not None:
+            return self._imported_has_POLYA
+        else:
+            return False
+
+    def has_PolyA(self):
+
+        if self._imported_has_POLYA is not None:
+            return self._imported_has_POLYA
+
+        assert self._simplepath is not None
+        if re.match("POLYA:", self._simplepath[0]) or re.match(
+            "POLYA:", self._simplepath[-1]
+        ):
+            return True
+        else:
+            return False
+
+    def has_annotated_TSS(self):
+        if self._imported_has_TSS is not None:
+            return self._imported_has_TSS
+        else:
+            return False
+
+    def has_TSS(self):
+
+        if self._imported_has_TSS is not None:
+            return self._imported_has_TSS
+
+        assert self._simplepath is not None
+        if re.match("TSS:", self._simplepath[0]) or re.match(
+            "TSS:", self._simplepath[-1]
+        ):
+            return True
+        else:
+            return False
+
     def __repr__(self):
 
         text = "Transcript: {} {}-{} [{}] {} {} segs: {}".format(
@@ -247,13 +292,26 @@ class Transcript(GenomeFeature):
         self._read_counts_assigned = read_counts
 
     def get_read_counts_assigned(self):
+
+        if self._imported_TPM_val is not None:
+            return self._imported_TPM_val
+
         assert (
             self._read_counts_assigned is not None
-        ), "Error, read counts assigned is None - maybe quant not run yet?"
+        ), "Error, read counts assigned is None - maybe quant not run yet? " + str(self)
         return self._read_counts_assigned
 
+    def has_annotated_TPM(self):
+        if self._imported_TPM_val is not None:
+            return True
+        else:
+            return False
+
     def get_TPM(self):
-        return self.get_expr_fraction() * 1e6
+        if self._imported_TPM_val is not None:
+            return self._imported_TPM_val
+        else:
+            return self.get_expr_fraction() * 1e6
 
     def get_expr_fraction(self):
         return self.get_read_counts_assigned() / LRAA_Globals.config["num_total_reads"]
@@ -272,7 +330,7 @@ class Transcript(GenomeFeature):
         self._scored_path_obj = None
         self._multipath = None
 
-    def to_GTF_format(self):
+    def to_GTF_format(self, include_TPM=True):
 
         ## transcript line:
 
@@ -302,6 +360,17 @@ class Transcript(GenomeFeature):
         if self._meta:
             for meta_key in sorted(self._meta.keys()):
                 gtf_text += ' {} "{}";'.format(meta_key, self._meta[meta_key])
+
+        # include other transcript features
+        misc_transcript_features = dict()
+        if include_TPM:
+            misc_transcript_features["TPM"] = "{:.3f}".format(self.get_TPM())
+
+        misc_transcript_features["PolyA"] = str(self.has_PolyA())
+        misc_transcript_features["TSS"] = str(self.has_TSS())
+
+        for misc_feature, misc_val in misc_transcript_features.items():
+            gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
 
         gtf_text += "\n"
 
@@ -426,9 +495,6 @@ class GTF_contig_to_transcripts:
                     gene_id = info_dict["gene_id"]
                     gene_id_to_meta[gene_id] = info_dict
 
-                if feature_type != "exon":
-                    continue
-
                 if "transcript_id" not in info_dict:
                     if local_debug:
                         logger.debug(
@@ -437,7 +503,14 @@ class GTF_contig_to_transcripts:
                     continue
 
                 transcript_id = info_dict["transcript_id"]
-                transcript_id_to_meta[transcript_id] = info_dict
+
+                if transcript_id not in transcript_id_to_meta:
+                    transcript_id_to_meta[transcript_id] = info_dict
+                else:
+                    transcript_id_to_meta[transcript_id].update(info_dict)
+
+                if feature_type != "exon":
+                    continue
 
                 transcript_id_to_genome_info[transcript_id]["contig"] = contig
                 transcript_id_to_genome_info[transcript_id]["strand"] = strand
@@ -468,11 +541,26 @@ class GTF_contig_to_transcripts:
             gene_meta = gene_id_to_meta[gene_id]
             transcript_meta.update(gene_meta)
 
+            print("Transcript meta: {}".format(str(transcript_meta)))
+
             transcript_obj = Transcript(contig, coords_list, strand)
             transcript_obj.add_meta(transcript_meta)
 
             transcript_obj.set_gene_id(gene_id)
             transcript_obj.set_transcript_id(transcript_id)
+
+            if "PolyA" in transcript_meta:
+                transcript_obj._imported_has_POLYA = (
+                    True if transcript_meta["PolyA"] == "True" else False
+                )
+
+            if "TSS" in transcript_meta:
+                transcript_obj._imported_has_TSS = (
+                    True if transcript_meta["TSS"] == "True" else False
+                )
+
+            if "TPM" in transcript_meta:
+                transcript_obj._imported_TPM_val = float(transcript_meta["TPM"])
 
             contig_to_transcripts[contig].append(transcript_obj)
 
@@ -499,7 +587,7 @@ class GTF_contig_to_transcripts:
         for part in parts:
             part = part.strip()
             m = re.match('^(\\S+) \\"([^\\"]+)\\"', part)
-            if m:
+            if m is not None:
                 token = m.group(1)
                 val = m.group(2)
 
