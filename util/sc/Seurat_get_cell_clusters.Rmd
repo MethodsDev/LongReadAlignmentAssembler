@@ -385,5 +385,28 @@ write.table( Idents(seurat_obj), paste0(output_prefix, "-cell_cluster_assignment
 
 
 
+```{r}
+# get cell clustering info
+cell_clustering_info = data.frame(seurat_obj@meta.data)
+cell_clustering_info$cell_barcode = rownames(cell_clustering_info)
+cell_clustering_info = tibble(cell_clustering_info) %>% dplyr::select(cell_barcode, seurat_clusters)
+
+cell_clustering_info %>% head()
+```
+
+
+```{r}
+# get umap info
+umap_df  = as.data.frame(seurat_obj[["umap"]]@cell.embeddings)
+ 
+umap_df$cell_barcode = rownames(umap_df)
+
+umap_df = tibble(umap_df)
+
+umap_df = left_join(umap_df, cell_clustering_info, by='cell_barcode')
+
+umap_df %>% head()
+
+```
 
 
