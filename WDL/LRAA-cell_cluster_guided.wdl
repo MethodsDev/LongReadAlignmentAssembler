@@ -127,7 +127,7 @@ task LRAA_tar_exprs {
 
         mkdir ~{sample_id}.cluster_pseudobulk.EXPRs
 
-        for file in "${sep=' ' input_files}"; do
+        for file in "~{sep=' ' expr_files}"; do
            mv $file ~{sample_id}.cluster_pseudobulk.EXPRs/
         done
         
@@ -165,7 +165,11 @@ task LRAA_merge_trackings {
         set -ex
 
         python <<CODE
-        tracking_files_list = ~{sep=", " tracking_files}
+        import json
+
+
+        tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
+        tracking_files = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
 
         with open("~{outputfile}", "wt") as ofh:
             for i, tracking_file in enumerate(tracking_files_list):
