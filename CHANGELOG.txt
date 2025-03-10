@@ -1,6 +1,6 @@
 v0.2.34
 - refined sc gtf merge and expr quant merging: performing per-cluster quant and merging tracking files plus providing cluster-based pseudo-bulk expr files.
-
+- only report read weighting and zero-frac-assigned compat reads under debug mode instead of by default
 
 v0.2.33
 - make clear in sc wdl that expr is pseudobulk
