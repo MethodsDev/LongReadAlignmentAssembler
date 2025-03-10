@@ -127,8 +127,10 @@ task LRAA_tar_exprs {
 
         mkdir ~{sample_id}.cluster_pseudobulk.EXPRs
 
-        mv *quant.expr ~{sample_id}.cluster_pseudobulk.EXPRs/
-
+        for file in "${sep=' ' input_files}"; do
+           mv $file ~{sample_id}.cluster_pseudobulk.EXPRs/
+        done
+        
         tar -zcvf ~{sample_id}.cluster_pseudobulk.EXPRs.tar.gz ~{sample_id}.cluster_pseudobulk.EXPRs/
 
     >>>
@@ -174,6 +176,9 @@ task LRAA_merge_trackings {
                         for line in fh:
                              print(line, file=ofh, end='')
 
+
+        CODE
+        
      >>>
 
      output {
