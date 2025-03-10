@@ -330,7 +330,7 @@ class Transcript(GenomeFeature):
         self._scored_path_obj = None
         self._multipath = None
 
-    def to_GTF_format(self, include_TPM=True):
+    def to_GTF_format(self, include_TPM=False):
 
         ## transcript line:
 

@@ -58,7 +58,7 @@ workflow LRAA_cell_cluster_guided {
      }
 
      # merge gtfs from the per-cluster runs.
-     call lraa_merge_task {
+     call lraa_merge_gtf_task {
          input:
             sample_id = sample_id,
             LRAA_cell_cluster_gtfs = LRAA_by_cluster.mergedGTF,
@@ -67,31 +67,131 @@ workflow LRAA_cell_cluster_guided {
             memoryGB  = memoryGBperLRAA,
      }
      
-     # run final quant
-     call LRAA.LRAA_wf as LRAA_quant {
-         input:
-            sample_id = sample_id, 
+     # run final quants
+     scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
+
+         String cluster_sample_id_again = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
+              
+         call LRAA.LRAA_wf as LRAA_quant_final {
+             input:
+               sample_id = cluster_sample_id_again, 
                referenceGenome = referenceGenome,
-               annot_gtf = lraa_merge_task.mergedGTF,
-               inputBAM = inputBAM,
+               annot_gtf = lraa_merge_gtf_task.mergedGTF,
+               inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
                LowFi = LowFi,
                main_chromosomes = main_chromosomes,
                quant_only = true,
                numThreads = numThreadsPerLRAA,
                memoryGB = memoryGBperLRAA,
                docker = docker
+         }
      }
 
 
+     call LRAA_tar_exprs {
+         input:
+             sample_id = sample_id,
+             expr_files = LRAA_quant_final.mergedQuantExpr,
+             docker = docker
+     }
+
+     call LRAA_merge_trackings {
+         input:
+             sample_id = sample_id,
+             tracking_files = LRAA_quant_final.mergedQuantTracking,
+             docker = docker
+     }
+     
      output {
-         File LRAA_gtf = lraa_merge_task.mergedGTF
-         File LRAA_pseudobulk_expr = LRAA_quant.mergedQuantExpr
-         File LRAA_tracking = LRAA_quant.mergedQuantTracking
+         File LRAA_gtf = lraa_merge_gtf_task.mergedGTF
+         File LRAA_cluster_pseudobulk_exprs = LRAA_tar_exprs.LRAA_cluster_pseudobulk_exprs_tar_gz
+         File LRAA_merged_tracking = LRAA_merge_trackings.merged_tracking
      }
      
 }
 
-task lraa_merge_task {
+
+task LRAA_tar_exprs {
+    input {
+        String sample_id
+        Array[File] expr_files
+        String docker
+    }
+
+    Int memoryGB = 8
+    Int disksize = 20 + ceil(10 * length(expr_files))
+    
+    command <<<
+
+        set -ex
+
+        mkdir ~{sample_id}.cluster_pseudobulk.EXPRs
+
+        mv *quant.expr ~{sample_id}.cluster_pseudobulk.EXPRs/
+
+        tar -zcvf ~{sample_id}.cluster_pseudobulk.EXPRs.tar.gz ~{sample_id}.cluster_pseudobulk.EXPRs/
+
+    >>>
+
+
+    output {
+        File LRAA_cluster_pseudobulk_exprs_tar_gz = "~{sample_id}.cluster_pseudobulk.EXPRs.tar.gz"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk ~{disksize} HDD"
+    }
+}
+
+
+task LRAA_merge_trackings {
+    input {
+        String sample_id
+        Array[File] tracking_files
+        String docker
+    }
+
+    Int memoryGB = 8
+    Int disksize = 20 + ceil(10 * length(tracking_files))
+        
+    String outputfile = "~{sample_id}.cluster_merged.quant.tracking"
+    
+    command <<<
+        set -ex
+
+        python <<CODE
+        tracking_files_list = ~{sep=", " tracking_files}
+
+        with open("~{outputfile}", "wt") as ofh:
+            for i, tracking_file in enumerate(tracking_files_list):
+                with open(tracking_file, "rt") as fh:
+                    header = next(fh)
+                        if i == 0:
+                             print(header, file=ofh, end='')
+                        for line in fh:
+                             print(line, file=ofh, end='')
+
+     >>>
+
+     output {
+         File merged_tracking = "~{outputfile}"
+     }
+    
+     runtime {
+        docker: docker
+        cpu: 1
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk ~{disksize} HDD"
+     }
+} 
+
+
+
+
+task lraa_merge_gtf_task {
     input {
         String sample_id
         Array[File] LRAA_cell_cluster_gtfs
