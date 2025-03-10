@@ -175,10 +175,10 @@ task LRAA_merge_trackings {
             for i, tracking_file in enumerate(tracking_files_list):
                 with open(tracking_file, "rt") as fh:
                     header = next(fh)
-                        if i == 0:
-                             print(header, file=ofh, end='')
-                        for line in fh:
-                             print(line, file=ofh, end='')
+                    if i == 0:
+                         print(header, file=ofh, end='')
+                    for line in fh:
+                         print(line, file=ofh, end='')
 
 
         CODE
