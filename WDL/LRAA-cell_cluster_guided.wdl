@@ -169,7 +169,7 @@ task LRAA_merge_trackings {
 
 
         tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
-        tracking_files = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
+        tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
 
         with open("~{outputfile}", "wt") as ofh:
             for i, tracking_file in enumerate(tracking_files_list):
