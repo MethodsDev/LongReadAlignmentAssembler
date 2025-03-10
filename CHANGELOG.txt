@@ -1,3 +1,7 @@
+v0.2.34
+- refined sc gtf merge and expr quant merging: performing per-cluster quant and merging tracking files plus providing cluster-based pseudo-bulk expr files.
+
+
 v0.2.33
 - make clear in sc wdl that expr is pseudobulk
 - enable gene symbol incorporation into single cell data when using ref-quant only mod
