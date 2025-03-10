@@ -1052,18 +1052,21 @@ class Quantify:
                 frac_read_assigned = transcript_to_fractional_read_assignment[
                     transcript_id
                 ][readname]
-                print(
-                    "\t".join(
-                        [
-                            gene_id,
-                            transcript_id,
-                            readname,
-                            "{:.3f}".format(frac_read_assigned),
-                            "{:.3f}".format(transcript.get_read_weight(readname)),
-                        ]
-                    ),
-                    file=ofh_read_tracking,
-                )
+
+                tracking_report_info = [
+                    gene_id,
+                    transcript_id,
+                    readname,
+                    "{:.3f}".format(frac_read_assigned),
+                ]
+
+                if LRAA_Globals.DEBUG:
+                    tracking_report_info.append(
+                        "{:.3f}".format(transcript.get_read_weight(readname))
+                    )
+
+                if frac_read_assigned > 1e-3 or LRAA_Globals.DEBUG:
+                    print("\t".join(tracking_report_info), file=ofh_read_tracking)
 
                 # add to LMDB
                 if txn is not None:
