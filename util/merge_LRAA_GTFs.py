@@ -62,7 +62,7 @@ def main():
     genome_fasta_file = args.genome
     output_gtf = args.output_gtf
 
-    if len(gtf_list) < 2:
+    if len(gtf_list) < 2 and not LRAA_Globals.DEBUG:
         exit("Error, need at least two gtf files to merge")
 
     ofh = open(output_gtf, "wt")
