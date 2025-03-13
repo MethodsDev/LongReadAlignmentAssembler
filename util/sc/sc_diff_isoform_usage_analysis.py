@@ -32,6 +32,13 @@ def main():
     )
 
     parser.add_argument(
+        "--top_isoforms_each",
+        type=int,
+        default=5,
+        help="max number of top-expressed isoforms from each cluster to compare",
+    )
+
+    parser.add_argument(
         "--min_reads_per_gene",
         type=int,
         default=25,
@@ -70,12 +77,20 @@ def main():
         help="run functional test using random data",
     )
 
+    parser.add_argument(
+        "--summary_matrices_only",
+        action="store_true",
+        default=False,
+        help="just generate count and TPM matrices and then stop - no iso diff usage stats performed",
+    )
+
     args = parser.parse_args()
 
     if args.run_demo_test:
         run_test()
         sys.exit(0)
 
+    top_isoforms_each = args.top_isoforms_each
     min_reads_per_gene = args.min_reads_per_gene
     min_delta_pi = args.min_delta_pi
     sc_cluster_expr_dir = args.sc_cluster_expr_dir
@@ -101,7 +116,13 @@ def main():
     counts_big_df.to_csv(f"{counts_big_df_fname_prefix}.tsv", sep="\t", index=False)
     TPM_big_df.to_csv(f"{TPM_big_df_fname_prefix}.tsv", sep="\t", index=False)
 
-    ## pairwise compare clusters.
+    if args.summary_matrices_only:
+        logger.info("-only summary matrices being generated. Stopping now.")
+        sys.exit(0)
+
+    ############################################################
+    ## pairwise compare clusters for diff isoform usage analysis
+    ############################################################
 
     # all_test_results = None
     for i in range(len(cluster_names)):
@@ -122,7 +143,7 @@ def main():
             print(test_df)
 
             test_df_results = differential_isoform_tests(
-                test_df, min_reads_per_gene, min_delta_pi
+                test_df, min_reads_per_gene, min_delta_pi, top_isoforms_each
             )
 
             if test_df_results is not None:
@@ -141,12 +162,15 @@ def main():
     sys.exit(0)
 
 
-def differential_isoform_tests(df, min_reads_per_gene=25, min_delta_pi=0.1):
+def differential_isoform_tests(
+    df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5
+):
 
     ## method initially written by chatgpt based on methods description in:
     ## https://www.nature.com/articles/s41467-020-20343-5
     ## A spatially resolved brain region- and cell type-specific isoform atlas of the postnatal mouse brain
     ## Jogelkar et al., Nature Communications volume 12, Article number: 463 (2021)
+    ## modified by bhaas
 
     results = []
     grouped = df.groupby("gene_id")
@@ -164,6 +188,12 @@ def differential_isoform_tests(df, min_reads_per_gene=25, min_delta_pi=0.1):
 
         # print(group)
 
+        top_countA = group.nlargest(top_isoforms_each, "count_A")
+
+        top_countB = group.nlargest(top_isoforms_each, "count_B")
+
+        group = pd.concat([top_countA, top_countB]).drop_duplicates()
+
         # Sort isoforms by abundance
         group = group.sort_values(by=["count_A", "count_B"], ascending=False)
 
@@ -177,11 +207,11 @@ def differential_isoform_tests(df, min_reads_per_gene=25, min_delta_pi=0.1):
         # Construct isoform × category matrix (max 11 × 2)
         matrix = group.iloc[:10][["count_A", "count_B"]].values
 
-        if len(group) > 10:
-            other_counts = (
-                group.iloc[10:][["count_A", "count_B"]].sum().values.reshape(1, -1)
-            )
-            matrix = np.vstack([matrix, other_counts])
+        # if len(group) > 10:
+        #    other_counts = (
+        #        group.iloc[10:][["count_A", "count_B"]].sum().values.reshape(1, -1)
+        #    )
+        #    matrix = np.vstack([matrix, other_counts])
 
         # print(matrix)
 
