@@ -245,6 +245,9 @@ def parse_GFFcompare_mappings(gffcompare_tracking_filename):
 
     gff_compare_mappings = dict()
 
+    LRAA_gene_id_eq_assigned = set()
+    LRAA_trans_id_eq_assigned = set()
+
     with open(gffcompare_tracking_filename, "rt") as fh:
         for line in fh:
             line = line.rstrip()
@@ -261,8 +264,15 @@ def parse_GFFcompare_mappings(gffcompare_tracking_filename):
             lraa_gene_id = lraa_vals[0]
             lraa_trans_id = lraa_vals[1]
 
-            gff_compare_mappings[lraa_gene_id] = [ensg_id, enst_id]
-            gff_compare_mappings[lraa_trans_id] = [ensg_id, enst_id]
+            if lraa_gene_id not in LRAA_gene_id_eq_assigned:
+                gff_compare_mappings[lraa_gene_id] = [ensg_id, enst_id]
+
+            if lraa_trans_id not in LRAA_trans_id_eq_assigned:
+                gff_compare_mappings[lraa_trans_id] = [ensg_id, enst_id]
+
+            if compare_code == "=":
+                LRAA_gene_id_eq_assigned.add(lraa_gene_id)
+                LRAA_trans_id_eq_assigned.add(lraa_trans_id)
 
     return gff_compare_mappings
 
