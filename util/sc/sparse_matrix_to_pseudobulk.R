@@ -31,5 +31,6 @@ seurat_obj = seurat_obj <- CreateSeuratObject(counts = data)
 pseudobulk = AggregateExpression(seurat_obj, normalization.method = "RC")
 
 message("-writing ", output_matrix_filename)
-write.table(pseudobulk, file="test.tsv", sep="\t", quote=F, col.names=F)
+write.table(pseudobulk, file=output_matrix, sep="\t", quote=F, col.names=F)
 
+quit(save = "no", status = 0, runLast = FALSE)
