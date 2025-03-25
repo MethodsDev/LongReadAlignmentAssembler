@@ -104,10 +104,14 @@ class Transcript(GenomeFeature):
         return intron_coordsets
 
     def get_exons_string(self):
-        return "({}){}".format(self.get_strand(), self.get_exon_segments())
+        return "{}:({}){}".format(
+            self.get_contig_acc(), self.get_strand(), self.get_exon_segments()
+        )
 
     def get_introns_string(self):
-        return "({}){}".format(self.get_strand(), self.get_introns())
+        return "{}:({}){}".format(
+            self.get_contig_acc(), self.get_strand(), self.get_introns()
+        )
 
     def get_strand(self):
         return self._orient
@@ -127,6 +131,12 @@ class Transcript(GenomeFeature):
 
         else:
             return self._id
+
+    def get_gene_name(self):
+        if "gene_name" in self._meta:
+            return self._meta["gene_name"]
+        else:
+            return None
 
     def get_gene_id(self):
         if self._gene_id is not None:

@@ -78,6 +78,12 @@ class GenomeFeature:
     def get_orient(self):
         return self._orient
 
+    def get_coord_string(self):
+        lend, rend = self.get_coords()
+        return "{}:({})[({}, {}]".format(
+            self.get_contig_acc(), self.get_strand(), lend, rend
+        )
+
 
 class Intron(GenomeFeature):
 
