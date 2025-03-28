@@ -1218,7 +1218,10 @@ class LRAA:
                 fake_read_prefix = (
                     input_transcript.get_transcript_id() + "-" + str(time.time())
                 )
-                if input_transcript.has_annotated_TPM():
+                if (
+                    input_transcript.has_annotated_TPM()
+                    and LRAA_Globals.LRAA_MODE is not "MERGE"
+                ):
                     num_fake_reads = math.ceil(input_transcript.get_TPM())
                 else:
                     num_fake_reads = LRAA_Globals.config["min_reads_novel_isoform"]

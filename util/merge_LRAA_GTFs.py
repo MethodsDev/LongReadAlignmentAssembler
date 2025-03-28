@@ -58,6 +58,8 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
         LRAA_Globals.DEBUG = True
 
+    LRAA_Globals.LRAA_MODE = "MERGE"
+
     gtf_list = args.gtf
     genome_fasta_file = args.genome
     output_gtf = args.output_gtf

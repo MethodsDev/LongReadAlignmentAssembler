@@ -4,6 +4,8 @@ SPACER = "???"
 
 DEBUG = False
 
+LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
+
 config = {
     #########################
     # read alignment criteria
