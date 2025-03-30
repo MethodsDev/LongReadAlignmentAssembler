@@ -5,9 +5,10 @@ import logging
 import argparse
 import pandas as pd
 import numpy as np
-from scipy.stats import chi2_contingency
+from scipy.stats import chi2_contingency, fisher_exact, MonteCarloMethod
 from statsmodels.stats.multitest import multipletests
 import glob
+import statsmodels.api as stats
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,17 +19,24 @@ logger = logging.getLogger(__name__)
 
 
 def differential_isoform_tests(
-    df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5
+    df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5, test="chi2"
 ):
 
     ## Requirements:
     ## df had columns 'gene_id', 'count_A', and 'count_B' with transcripts as separate rows.
+
+    ## test can be 'chi2' or 'fisher'
 
     ## method initially written by chatgpt based on methods description in:
     ## https://www.nature.com/articles/s41467-020-20343-5
     ## A spatially resolved brain region- and cell type-specific isoform atlas of the postnatal mouse brain
     ## Jogelkar et al., Nature Communications volume 12, Article number: 463 (2021)
     ## modified by bhaas
+
+    assert test in (
+        "chi2",
+        "fisher",
+    ), "Error, not recognizing test type: {}, must be chi2 or fisher".format(test)
 
     results = []
     grouped = df.groupby("gene_id")
@@ -93,8 +101,16 @@ def differential_isoform_tests(
         else:
             dominant_delta_pi = negative_changes
 
-        # Perform chi-squared test
-        chi2, pvalue, _, _ = chi2_contingency(matrix)
+        logger.info("testing matrix:\n" + str(matrix))
+
+        if test == "chi2":
+            # Perform chi-squared test
+            chi2, pvalue, _, _ = chi2_contingency(matrix)
+        elif test == "fisher":
+            rng = np.random.default_rng()
+            method = MonteCarloMethod(rng=rng)
+            res = fisher_exact(matrix, method=method)
+            pvalue = res.pvalue
 
         results.append([gene_id, pvalue, dominant_delta_pi])
 
@@ -104,6 +120,8 @@ def differential_isoform_tests(
         results_df["adj_pvalue"] = multipletests(results_df["pvalue"], method="fdr_bh")[
             1
         ]
+
+        results_df["test"] = test
 
         # Identify significant differential splicing events
         results_df["significant"] = (results_df["adj_pvalue"] <= 0.001) & (
