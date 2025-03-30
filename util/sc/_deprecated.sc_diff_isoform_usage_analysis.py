@@ -14,7 +14,7 @@ sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../../pylib"])
 )
 
-from DiffIsoformChiSquare import *
+from DiffIsoformStatTest import *
 
 logging.basicConfig(
     level=logging.INFO,
