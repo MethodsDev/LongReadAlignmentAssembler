@@ -21,6 +21,9 @@ def differential_isoform_tests(
     df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5
 ):
 
+    ## Requirements:
+    ## df had columns 'gene_id', 'count_A', and 'count_B' with transcripts as separate rows.
+
     ## method initially written by chatgpt based on methods description in:
     ## https://www.nature.com/articles/s41467-020-20343-5
     ## A spatially resolved brain region- and cell type-specific isoform atlas of the postnatal mouse brain
