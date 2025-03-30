@@ -10,17 +10,19 @@ from statsmodels.stats.multitest import multipletests
 import glob
 import statsmodels.api as stats
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s : %(levelname)s : %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+# logging.basicConfig(
+#    level=logging.INFO,
+#    format="%(asctime)s : %(levelname)s : %(message)s",
+#    datefmt="%H:%M:%S",
+# )
 
 
 def differential_isoform_tests(
     df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5, test="chi2"
 ):
+
+    logger = logging.getLogger(__name__)
+    logger.debug("Running differential_isoform_tests()")
 
     ## Requirements:
     ## df had columns 'gene_id', 'count_A', and 'count_B' with transcripts as separate rows.
@@ -42,6 +44,8 @@ def differential_isoform_tests(
     grouped = df.groupby("gene_id")
 
     for gene_id, group in grouped:
+
+        logger.debug(str(group))
 
         if len(group) < 2:
             continue
@@ -93,6 +97,12 @@ def differential_isoform_tests(
         if not (
             abs(positive_changes) > min_delta_pi or abs(negative_changes) > min_delta_pi
         ):
+            logger.debug("matrix:\n" + str(matrix))
+            logger.debug(
+                "skipping due to insuficcient min_delta_pi: {} or {}".format(
+                    abs(positive_changes), abs(negative_changes)
+                )
+            )
             continue
 
         # Determine the dominant direction
@@ -101,7 +111,7 @@ def differential_isoform_tests(
         else:
             dominant_delta_pi = negative_changes
 
-        logger.info("testing matrix:\n" + str(matrix))
+        logger.debug("testing matrix:\n" + str(matrix))
 
         if test == "chi2":
             # Perform chi-squared test
