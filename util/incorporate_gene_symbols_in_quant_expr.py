@@ -78,12 +78,20 @@ def main():
         help="provide the tracking file from running: gffcompare -r ref_gtf LRAA_gtf",
     )
 
+    parser.add_argument(
+        "--no_update_gtf",
+        action="store_true",
+        default=False,
+        help="do not update the LRAA gtf file to include gene symbol info",
+    )
+
     args = parser.parse_args()
 
     ref_gtf_filename = args.ref_gtf
     LRAA_gtf_filename = args.LRAA_gtf
     quant_expr_filenames = args.quant_expr
     gffcompare_tracking_filename = args.gffcompare_tracking
+    NO_UPDATE_GTF = args.no_update_gtf
 
     # begin
 
@@ -111,7 +119,7 @@ def main():
             feature_ids_updated,
         )
 
-    if LRAA_gtf_filename is not None:
+    if LRAA_gtf_filename is not None and not NO_UPDATE_GTF:
         logger.info(
             "-writing " + LRAA_gtf_filename + ".updated.gtf including gene names"
         )
