@@ -12,7 +12,12 @@ import statsmodels.api as stats
 
 
 def differential_isoform_tests(
-    df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5, test="chi2"
+    df,
+    min_reads_per_gene=25,
+    min_delta_pi=0.1,
+    top_isoforms_each=5,
+    test="chi2",
+    show_progress_monitor=True,
 ):
 
     logger = logging.getLogger(__name__)
@@ -39,9 +44,24 @@ def differential_isoform_tests(
 
     debug_mode = logger.level == logging.DEBUG
 
+    num_groups = len(grouped)
+
+    # progress monitor.
+    group_counter = 0
+
     for gene_id, group in grouped:
 
-        logger.debug(str(group))
+        group_counter += 1
+        if show_progress_monitor and group_counter % 1000 == 0:
+            frac_done = "{:.2f}% done".format(group_counter / num_groups * 100)
+            print(
+                f"\r[{group_counter}/{num_groups}] = {frac_done}   ",
+                file=sys.stderr,
+                end="",
+            )
+
+        if debug_mode:
+            logger.debug(str(group))
 
         if len(group) < 2:
             continue
