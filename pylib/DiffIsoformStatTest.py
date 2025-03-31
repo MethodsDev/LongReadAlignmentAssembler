@@ -37,6 +37,8 @@ def differential_isoform_tests(
     results = []
     grouped = df.groupby("gene_id")
 
+    debug_mode = logger.level == logging.DEBUG
+
     for gene_id, group in grouped:
 
         logger.debug(str(group))
@@ -91,12 +93,13 @@ def differential_isoform_tests(
         if not (
             abs(positive_changes) > min_delta_pi or abs(negative_changes) > min_delta_pi
         ):
-            logger.debug("matrix:\n" + str(matrix))
-            logger.debug(
-                "skipping due to insuficcient min_delta_pi: {} or {}".format(
-                    abs(positive_changes), abs(negative_changes)
+            if debug_mode:
+                logger.debug("matrix:\n" + str(matrix))
+                logger.debug(
+                    "skipping due to insuficcient min_delta_pi: {} or {}".format(
+                        abs(positive_changes), abs(negative_changes)
+                    )
                 )
-            )
             continue
 
         # Determine the dominant direction
@@ -105,7 +108,8 @@ def differential_isoform_tests(
         else:
             dominant_delta_pi = negative_changes
 
-        logger.debug("testing matrix:\n" + str(matrix))
+        if debug_mode:
+            logger.debug("testing matrix:\n" + str(matrix))
 
         if test == "chi2":
             # Perform chi-squared test
@@ -123,7 +127,8 @@ def differential_isoform_tests(
         results_df = pd.DataFrame(results, columns=["gene_id", "pvalue", "delta_pi"])
         results_df["test"] = test
 
-        logger.debug("result:\n" + str(results_df))
+        if debug_mode:
+            logger.debug("result:\n" + str(results_df))
 
         return results_df
 
@@ -176,10 +181,12 @@ def run_test():
 
     logger.info("** Test results (chi2):\n")
     DE_results = differential_isoform_tests(df, test="chi2")
+    DE_results = FDR_mult_tests_adjustment(DE_results)
     print(DE_results)
 
     logger.info("** Test results (fisher):\n")
     DE_results = differential_isoform_tests(df, test="fisher")
+    DE_results = FDR_mult_tests_adjustment(DE_results)
     print(DE_results)
 
     return
