@@ -70,6 +70,28 @@ def main():
         help="prefix for output files",
     )
 
+    parser.add_argument(
+        "--stat_test",
+        default="chi2",
+        required=False,
+        choices=["chi2", "fisher"],
+        help="test to use: chi-squared or Fishers exact test (default: chi2)",
+    )
+
+    parser.add_argument(
+        "--signif_threshold",
+        default=0.001,
+        help="significance threshold for stat test to mark as signfiicantly DE",
+    )
+
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        default=False,
+        help="debug mode - more verbose",
+    )
+
     args = parser.parse_args()
 
     top_isoforms_each = args.top_isoforms_each
@@ -77,6 +99,13 @@ def main():
     min_delta_pi = args.min_delta_pi
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
     output_prefix = args.output_prefix
+    stat_test = args.stat_test
+    signif_threshold = args.signif_threshold
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, force=True)
+
+    ## begin
 
     counts_big_df = pd.read_csv(sc_cluster_counts_matrix, sep="\t")
 
@@ -91,7 +120,7 @@ def main():
     ## pairwise compare clusters for diff isoform usage analysis
     ############################################################
 
-    # all_test_results = None
+    all_test_results = None
     for i in range(len(cluster_names)):
         cluster_i = cluster_names[i]
         for j in range(i + 1, len(cluster_names)):
@@ -107,22 +136,36 @@ def main():
 
             test_df = test_df.loc[((test_df["count_A"] > 0) | (test_df["count_B"] > 0))]
 
-            print(test_df)
+            # print(test_df)
 
             test_df_results = differential_isoform_tests(
-                test_df, min_reads_per_gene, min_delta_pi, top_isoforms_each
+                test_df, min_reads_per_gene, min_delta_pi, top_isoforms_each, stat_test
             )
 
             if test_df_results is not None:
                 test_df_results["cluster_A"] = cluster_i
                 test_df_results["cluster_B"] = cluster_j
 
-                # all_test_results = pd.concat([all_test_results, test_df_results])
-                test_df_results.to_csv(
-                    f"{output_prefix}.{cluster_i}-vs-{cluster_j}.diff_iso.tsv",
-                    sep="\t",
-                    index=False,
-                )
+                if all_test_results is None:
+                    all_test_results = test_df_results
+                else:
+                    all_test_results = pd.concat([all_test_results, test_df_results])
+
+    if all_test_results is not None:
+        # all_test_results = pd.concat([all_test_results, test_df_results])
+
+        # perform mult test pvalue adjustment
+        all_test_results = FDR_mult_tests_adjustment(
+            all_test_results, min_delta_pi, signif_threshold
+        )
+
+        all_test_results.to_csv(
+            f"{output_prefix}.diff_iso.{stat_test}.tsv",
+            sep="\t",
+            index=False,
+        )
+    else:
+        logger.info("No results to report")
 
     sys.exit(0)
 

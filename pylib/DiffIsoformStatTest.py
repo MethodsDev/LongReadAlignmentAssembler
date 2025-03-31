@@ -10,12 +10,6 @@ from statsmodels.stats.multitest import multipletests
 import glob
 import statsmodels.api as stats
 
-# logging.basicConfig(
-#    level=logging.INFO,
-#    format="%(asctime)s : %(levelname)s : %(message)s",
-#    datefmt="%H:%M:%S",
-# )
-
 
 def differential_isoform_tests(
     df, min_reads_per_gene=25, min_delta_pi=0.1, top_isoforms_each=5, test="chi2"
@@ -127,22 +121,30 @@ def differential_isoform_tests(
     # Multiple testing correction
     if results:
         results_df = pd.DataFrame(results, columns=["gene_id", "pvalue", "delta_pi"])
-        results_df["adj_pvalue"] = multipletests(results_df["pvalue"], method="fdr_bh")[
-            1
-        ]
-
         results_df["test"] = test
 
-        # Identify significant differential splicing events
-        results_df["significant"] = (results_df["adj_pvalue"] <= 0.001) & (
-            results_df["delta_pi"].abs() > 0.1
-        )
+        logger.debug("result:\n" + str(results_df))
+
         return results_df
 
+    logger.debug("-didnt meet requirements to test.")
+
     return None
-    # return pd.DataFrame(
-    #    columns=["gene_id", "pvalue", "delta_pi", "adjusted_pvalue", "significant"]
-    # )
+
+
+def FDR_mult_tests_adjustment(df, signif_threshold=0.001, min_abs_delta_pi=0.1):
+
+    assert "pvalue" in df.columns
+    assert "delta_pi" in df.columns
+
+    df["adj_pvalue"] = multipletests(df["pvalue"], method="fdr_bh")[1]
+
+    # Identify significant differential splicing events
+    df["significant"] = (df["adj_pvalue"] <= signif_threshold) & (
+        df["delta_pi"].abs() >= min_abs_delta_pi
+    )
+
+    return df
 
 
 def generate_test_data(num_genes=20):
@@ -160,12 +162,24 @@ def generate_test_data(num_genes=20):
 
 def run_test():
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s : %(levelname)s : %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    logger = logging.getLogger(__name__)
+
     logger.info("** Test data:\n")
     df = generate_test_data()
     print(df)
 
-    logger.info("** Test results:\n")
-    DE_results = differential_isoform_tests(df)
+    logger.info("** Test results (chi2):\n")
+    DE_results = differential_isoform_tests(df, test="chi2")
+    print(DE_results)
+
+    logger.info("** Test results (fisher):\n")
+    DE_results = differential_isoform_tests(df, test="fisher")
     print(DE_results)
 
     return
