@@ -150,7 +150,9 @@ def annotate_bam_with_read_tracking_info(
             bam_out.write(read)
 
         logger.info(
-            "Number of reads assigned transcript info: {}".format(num_reads_annotated)
+            "Number of reads assigned transcript info: {} = {:.1f}%".format(
+                num_reads_annotated, num_reads_annotated / read_counter * 100
+            )
         )
 
         if num_reads_annotated == 0:
