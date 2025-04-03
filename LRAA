@@ -670,8 +670,8 @@ def main():
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
 
     if TAG_BAM:
-        # explicitly delete the writeable lmdb environment to close it since there is no .close()
-        del ofh_quant_read_tracking_lmdb
+        # close the earlier lmdb writer before reopening it in read-only mode
+        ofh_quant_read_tracking_lmdb.close()
 
         # reopen in read-only mode
         ofh_quant_read_tracking_lmdb = lmdb.open(
