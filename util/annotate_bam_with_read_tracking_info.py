@@ -31,9 +31,9 @@ def main():
     bam_file = args.bam
     tracking_file = args.tracking
 
-    quant_read_tracking_lmdb_filename = os.path.join(tracking_file, ".lmdb")
+    quant_read_tracking_lmdb_filename = tracking_file + ".lmdb"
 
-    build_read_tracking_lmdb(tracking_file)
+    build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename)
 
     output_bam_file = bam_file + ".tagged.bam"
     annotate_bam_with_read_tracking_info(
@@ -45,6 +45,8 @@ def main():
 
 def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
 
+    logger.info("Building and populating read tracking db")
+
     ofh_quant_read_tracking_lmdb = lmdb.open(
         quant_read_tracking_lmdb_filename,
         map_size=int(1e11),
@@ -54,20 +56,26 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
 
     txn = ofh_quant_read_tracking_lmdb.begin(write=True)
 
+    record_counter = 0
     with open(tracking_file, "rt") as fh:
 
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
+
+            record_counter += 1
+            if record_counter % 1000 == 0:
+                print(f"\r[{record_counter}] ", file=sys.stderr, end="")
+
             gene_id = row["gene_id"]
             transcript_id = row["transcript_id"]
             read_name = row["read_name"]
-            frac_assigned = row["frac_assigned"]
-            key = readname.encode("utf-8")
+            frac_read_assigned = row["frac_assigned"]
+            key = read_name.encode("utf-8")
             existing_data = txn.get(key)
             lmdb_data = [
                 gene_id,
                 transcript_id,
-                "{:.3f}".format(frac_read_assigned),
+                frac_read_assigned,
             ]
             if existing_data:
                 # Append new data as comma-separated string
@@ -78,7 +86,8 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
 
             txn.put(key, combined_data.encode("utf-8"))
 
-    del ofh_quant_read_tracking_lmdb  #  explicitly delete the writeable lmdb environment to close it since there is no .close()
+    ofh_quant_read_tracking_lmdb.close()
+    logger.info("done building read tracker db.")
 
     return
 
@@ -87,18 +96,27 @@ def annotate_bam_with_read_tracking_info(
     bam_file, quant_read_tracking_lmdb_filename, output_bam_file
 ):
 
+    logger.info("-writing bam file with read tracking annotations.")
+
     # open in read-only mode
     ofh_quant_read_tracking_lmdb = lmdb.open(
         quant_read_tracking_lmdb_filename, readonly=True, lock=False
     )
 
     with ofh_quant_read_tracking_lmdb.begin(write=False) as txn, pysam.AlignmentFile(
-        bam_filename, "rb", threads=4
+        bam_file, "rb", threads=4
     ) as bam_in, pysam.AlignmentFile(
-        output_bam_filename, "wb", template=bam_in, threads=4
+        output_bam_file, "wb", template=bam_in, threads=4
     ) as bam_out:
 
+        read_counter = 0
+
         for read in bam_in.fetch(until_eof=True):
+
+            read_counter += 1
+            if read_counter % 1000 == 0:
+                print(f"\r[{read_counter}] ", file=sys.stderr, end="")
+
             data = txn.get(read.query_name.encode("utf-8"))
             if data:
                 row = data.decode("utf-8").split(",")
