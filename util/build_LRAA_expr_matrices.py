@@ -5,7 +5,7 @@ import csv
 from collections import defaultdict
 import argparse
 import logging
-
+import hashlib
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,10 +37,27 @@ def main():
         help="space-delimited list of ${sample_name}.LRAA.quant.expr files to build into matrices (need at least 2)",
     )
 
+    parser.add_argument(
+        "--iso_by_unique_SP",
+        action="store_true",
+        default=False,
+        help="aggregate spliced isoform info by splice pattern",
+    )
+
+    parser.add_argument(
+        "--iso_unique_read_counts_only",
+        action="store_true",
+        default=False,
+        help="restrict isoform count matrix to unique read assignments",
+    )
+
     args = parser.parse_args()
 
     output_prefix = args.output_prefix
     quant_files = args.quant_files
+
+    iso_by_unique_SP_flag = args.iso_by_unique_SP
+    iso_unique_read_counts_only_flag = args.iso_unique_read_counts_only
 
     if len(quant_files) < 2:
         print(
@@ -56,6 +73,20 @@ def main():
     gene_ids = set()
     transcript_ids = set()
 
+    splice_pattern_to_hash_code = dict()
+    transcript_id_to_splice_pattern = dict()
+
+    def get_splice_pattern_hash_code(splice_pattern):
+        if splice_pattern in splice_pattern_to_hash_code:
+            return splice_pattern_to_hash_code[splice_pattern]
+        else:
+            hash_object = hashlib.sha256()
+            hash_object.update(splice_pattern.encode("utf-8"))
+            hex_digest = hash_object.hexdigest()
+            hex_digest = str(hex_digest)
+            splice_pattern_to_hash_code[splice_pattern] = hex_digest
+            return hex_digest
+
     for quant_file in quant_files:
         sample_name = os.path.basename(quant_file)
         sample_name = sample_name.replace(".LRAA.quant.expr", "")
@@ -65,17 +96,33 @@ def main():
             reader = csv.DictReader(fh, delimiter="\t")
             for row in reader:
                 gene_id = row["gene_id"]
-                transcript_id = row["transcript_id"]
-                read_count = float(row["all_reads"])
+
+                if iso_by_unique_SP_flag and row["introns"] != "":
+                    transcript_id = get_splice_pattern_hash_code(row["introns"])
+                    transcript_id = gene_id + "^" + transcript_id
+                    transcript_id_to_splice_pattern[transcript_id] = "\t".join(
+                        [gene_id, row["transcript_id"], row["introns"]]
+                    )
+                else:
+                    transcript_id = row["transcript_id"]
+
+                read_count_for_gene = float(row["all_reads"])
+
+                if iso_unique_read_counts_only_flag:
+                    read_count_for_transcript = float(row["uniq_reads"])
+                else:
+                    read_count_for_transcript = float(row["all_reads"])
 
                 # transcript_id = gene_id + "^" + transcript_id
 
                 gene_ids.add(gene_id)
                 transcript_ids.add(transcript_id)
 
-                sample_to_sum_counts[sample_name] += read_count
-                gene_matrix_data[sample_name][gene_id] += read_count
-                transcript_matrix_data[sample_name][transcript_id] += read_count
+                sample_to_sum_counts[sample_name] += read_count_for_gene
+                gene_matrix_data[sample_name][gene_id] += read_count_for_gene
+                transcript_matrix_data[sample_name][
+                    transcript_id
+                ] += read_count_for_transcript
 
     # write gene count and expr matrices
     gene_count_matrix_filename = output_prefix + ".gene.counts.matrix"
@@ -95,6 +142,13 @@ def main():
     )
 
     # write isoform count and expr matrices
+
+    isoform_output_prefix = output_prefix
+    if iso_by_unique_SP_flag:
+        isoform_output_prefix += ".uniqueSP"
+    if iso_unique_read_counts_only_flag:
+        isoform_output_prefix += ".uniqReadsOnly"
+
     isoform_count_matrix_filename = output_prefix + ".isoform.counts.matrix"
     isoform_TPM_matrix_filename = output_prefix + ".isoform.TPM.matrix"
 
@@ -110,6 +164,12 @@ def main():
         isoform_TPM_matrix_filename,
         sample_to_sum_counts,
     )
+
+    if iso_by_unique_SP_flag:
+        # write gene/iso/SP mapping.
+        with open(output_prefix + ".isoform_SP_mapping", "wt") as ofh:
+            for transcript_id, SP_info in transcript_id_to_splice_pattern.items():
+                print("\t".join([transcript_id, SP_info]), file=ofh)
 
     logger.info("-done")
 
