@@ -149,8 +149,8 @@ def main():
     if iso_unique_read_counts_only_flag:
         isoform_output_prefix += ".uniqReadsOnly"
 
-    isoform_count_matrix_filename = output_prefix + ".isoform.counts.matrix"
-    isoform_TPM_matrix_filename = output_prefix + ".isoform.TPM.matrix"
+    isoform_count_matrix_filename = isoform_output_prefix + ".isoform.counts.matrix"
+    isoform_TPM_matrix_filename = isoform_output_prefix + ".isoform.TPM.matrix"
 
     logger.info(
         "-writing isoform matrices: {} and {}".format(
