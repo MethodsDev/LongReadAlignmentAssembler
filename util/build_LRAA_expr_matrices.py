@@ -5,7 +5,7 @@ import csv
 from collections import defaultdict
 import argparse
 import logging
-import hashlib
+from hashlib import blake2s
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,7 +80,7 @@ def main():
         if splice_pattern in splice_pattern_to_hash_code:
             return splice_pattern_to_hash_code[splice_pattern]
         else:
-            hash_object = hashlib.sha256()
+            hash_object = blake2s(digest_size=11)
             hash_object.update(splice_pattern.encode("utf-8"))
             hex_digest = hash_object.hexdigest()
             hex_digest = str(hex_digest)
@@ -104,7 +104,7 @@ def main():
                         [gene_id, row["transcript_id"], row["introns"]]
                     )
                 else:
-                    transcript_id = row["transcript_id"]
+                    transcript_id = gene_id + "^" + row["transcript_id"]
 
                 read_count_for_gene = float(row["all_reads"])
 
