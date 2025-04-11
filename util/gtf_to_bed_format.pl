@@ -7,7 +7,7 @@ use FindBin;
 use lib ("$FindBin::Bin/../PerlLib");
 use Gene_obj;
 
-my $usage = "usage: $0 cufflinks.gtf\n\n";
+my $usage = "usage: $0 LRAA.gtf\n\n";
 
 my $gtf_file = $ARGV[0] or die $usage;
 
