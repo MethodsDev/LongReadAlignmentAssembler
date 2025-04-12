@@ -1,3 +1,11 @@
+v0.2.35
+- for alignment correction, set "min_softclip_realign_test": 5
+- including exon spur removal during quant-only splice graph building
+- added gtf-to-bed converter for improved IGV and ITV usage
+- can build count and expr matrices for splice patterns
+- adding stand-alone annotate_bam_with_read_tracking_info.py
+
+
 v0.2.34
 - refined sc gtf merge and expr quant merging: performing per-cluster quant and merging tracking files plus providing cluster-based pseudo-bulk expr files.
 - only report read weighting and zero-frac-assigned compat reads under debug mode instead of by default
