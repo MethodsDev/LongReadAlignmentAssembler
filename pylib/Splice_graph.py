@@ -303,8 +303,8 @@ class Splice_graph:
                 self.write_intron_exon_splice_graph_bed_files("__prefilter_r3", pad=0)
                 self.describe_graph("__prefilter_r3.graph")
 
-            if not quant_mode:
-                self._prune_exon_spurs_at_introns()
+            # if not quant_mode:
+            self._prune_exon_spurs_at_introns()
 
             self._finalize_splice_graph()  # do again after TSS and PolyA integration
             connected_components = list(
@@ -312,9 +312,9 @@ class Splice_graph:
             )
 
         else:
-            if not quant_mode:
-                self._prune_exon_spurs_at_introns()
-                self._finalize_splice_graph()
+            # if not quant_mode:
+            self._prune_exon_spurs_at_introns()
+            self._finalize_splice_graph()
 
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__final_graph", pad=0)
