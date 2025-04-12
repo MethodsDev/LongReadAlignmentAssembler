@@ -1220,7 +1220,7 @@ class LRAA:
                 )
                 if (
                     input_transcript.has_annotated_TPM()
-                    and LRAA_Globals.LRAA_MODE is not "MERGE"
+                    and LRAA_Globals.LRAA_MODE != "MERGE"
                 ):
                     num_fake_reads = math.ceil(input_transcript.get_TPM())
                 else:
