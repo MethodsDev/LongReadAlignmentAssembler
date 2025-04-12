@@ -204,6 +204,7 @@ class Pretty_alignment:
         logger.info("Attempting to correct alignments at soft-clips")
 
         max_softclip_realign_test = LRAA_Globals.config["max_softclip_realign_test"]
+        min_softclip_realign_test = LRAA_Globals.config["min_softclip_realign_test"]
 
         ##################
         # - more extreme verbose setting for debugging this method
@@ -252,6 +253,7 @@ class Pretty_alignment:
             if (
                 left_soft_clipping > 0
                 and left_soft_clipping <= max_softclip_realign_test
+                and left_soft_clipping >= min_softclip_realign_test
             ):
 
                 if local_debug:
@@ -328,6 +330,7 @@ class Pretty_alignment:
             if (
                 right_soft_clipping > 0
                 and right_soft_clipping <= max_softclip_realign_test
+                and right_soft_clipping >= min_softclip_realign_test
             ):
 
                 if local_debug:
