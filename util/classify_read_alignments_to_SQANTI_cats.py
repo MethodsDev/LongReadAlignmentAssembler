@@ -102,6 +102,7 @@ def main():
     tsv_writer.writeheader()
 
     read_counter = 0
+    read_category_counter = defaultdict(int)
     for read in bamfile_reader:
 
         read_counter += 1
@@ -127,7 +128,18 @@ def main():
 
             tsv_writer.writerow(read_class_info)
 
+            read_category_counter[read_class_info["sqanti_cat"]] += 1
+
         bamwriter.write(read)
+
+    tsv_ofh.close()
+
+    # write summary counts
+    summary_counts_tsv = output_prefix + ".LRAA_iso_cats.summary_counts.tsv"
+    with open(summary_counts_tsv, "wt") as ofh:
+        print("\t".join(["Category", "Count"]), file=ofh)
+        for read_category, count in read_category_counter.items():
+            print("\t".join([read_category, str(count)]), file=ofh)
 
     logger.info("\nDone. See files: {}.*".format(output_prefix))
 
