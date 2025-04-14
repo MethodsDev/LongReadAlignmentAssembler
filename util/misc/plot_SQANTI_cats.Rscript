@@ -1,0 +1,27 @@
+#!/usr/bin/env Rscript
+
+args<-commandArgs(TRUE)
+    
+if (length(args) != 2) {
+	stop("usage: sqanti_cats.summary.tsv output_plot_name.pdf\n\n")
+}
+
+library(tidyverse)
+
+input_table = args[1]
+plot_filename = args[2]
+    
+df = read.csv(input_table, header=T, sep="\t")
+df = df %>% mutate(multi_exon = (!grepl("^se_", Category)))
+df$classification = str_replace(df$Category, "^se_", "")
+df = df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
+cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+df$classification = factor(df$classification, levels=cat_levels)
+
+p = df %>% ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
+    theme_bw() + facet_wrap(~multi_exon, ncol=1) +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggsave(p, filename=plot_filename, width=6, height=6)
+
+quit(save = "no", status = 0, runLast = FALSE)
