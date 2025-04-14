@@ -66,6 +66,7 @@ def main():
     splice_patterns_to_isoforms = defaultdict(set)
     intron_to_isoforms = defaultdict(set)
     transcript_id_to_obj = dict()
+    stranded_splice_sites = set()
 
     build_isoform_data_structures(
         contig_to_input_transcripts,
@@ -73,6 +74,7 @@ def main():
         stranded_chrom_intron_itrees,
         splice_patterns_to_isoforms,
         intron_to_isoforms,
+        stranded_splice_sites,
         transcript_id_to_obj,
     )
 
@@ -100,10 +102,14 @@ def main():
             "read_name": read_name,
             "alignment": pretty_alignment.get_pretty_alignment_string(chrom),
             "num_alignment_segments": num_alignment_segments,
+            "matching_isoforms": "",
         }
 
         read_classified = False
-        if pretty_alignment.has_introns():
+
+        multi_exon_alignment_flag = pretty_alignment.has_introns()
+
+        if multi_exon_alignment_flag:
             pretty_alignment_intron_string = pretty_alignment.get_introns_string(chrom)
 
             # check FSM
@@ -124,8 +130,19 @@ def main():
                 introns_all = None
                 introns_any = set()
                 introns_none = set()
+                found_ref_shared_splice = False
                 for intron in pretty_alignment.get_introns():
+                    intron_lend, intron_rend = intron
+                    if (
+                        make_intron_token(chrom, read_strand, intron_lend)
+                        in stranded_splice_sites
+                        or make_intron_token(chrom, read_strand, intron_rend)
+                        in stranded_splice_sites
+                    ):
+                        found_ref_shared_splice = True
+
                     intron_tok = make_intron_token(chrom, read_strand, intron)
+
                     if intron_tok in intron_to_isoforms:
                         isoforms_with_intron = intron_to_isoforms[intron_tok]
                         if introns_all is None:
@@ -137,19 +154,32 @@ def main():
                         introns_any.update(isoforms_with_intron)
                     else:
                         introns_none.update(intron_tok)
+                        if introns_all is not None:
+                            introns_all = introns_all.clear()  # ISMs not possible.
 
-                if introns_all is not None and len(introns_all) > 0:
+                if (
+                    introns_all is not None
+                    and len(introns_all) > 0
+                    and len(introns_none) == 0
+                ):
                     read_class_info["sqanti_cat"] = "ISM"
+                    read_class_info["matching_isoforms"] = ";".join(
+                        sorted(list(introns_all))
+                    )
                     read_classified = True
                 elif len(introns_any) > 0 and len(introns_none) == 0:
                     read_class_info["sqanti_cat"] = "NIC"
                     read_classified = True
-                elif len(introns_any) > 0 and len(introns_none) > 0:
+                elif (len(introns_any) > 0 or found_ref_shared_splice) and len(
+                    introns_none
+                ) > 0:
                     read_class_info["sqanti_cat"] = "NNIC"
                     read_classified = True
 
         else:
             # single exon mode.
+            FSM_candidates = set()
+            ISM_candidates = set()
             for stranded_chrom_exon_interval in stranded_chrom_exon_itrees[
                 stranded_chrom
             ][align_span_lend : align_span_rend + 1]:
@@ -160,13 +190,28 @@ def main():
                 transcript_obj = transcript_id_to_obj[transcript_id]
                 transcript_lend, transcript_rend = transcript_obj.get_coords()
                 if (
-                    transcript_obj.get_num_exon_segments() == 1
-                    and overlapping_exon_lend >= transcript_lend
+                    overlapping_exon_lend >= transcript_lend
                     and overlapping_exon_rend <= transcript_rend
                 ):
-                    read_class_info["sqanti_cat"] = "seFSM"
-                    read_classified = True
-                    break
+
+                    transcript_id = transcript_obj.get_transcript_id()
+                    if transcript_obj.get_num_exon_segments() == 1:
+                        FSM_candidates.add(transcript_id)
+                    else:
+                        ISM_candidates.add(transcript_id)
+
+            if len(FSM_candidates) > 0:
+                read_class_info["sqanti_cat"] = "se_FSM"
+                read_class_info["matching_isoforms"] = ";".join(
+                    sorted(list(FSM_candidates))
+                )
+                read_classified = True
+            elif len(ISM_candidates) > 0:
+                read_class_info["sqanti_cat"] = "se_ISM"
+                read_class_info["matching_isoforms"] = ";".join(
+                    sorted(list(ISM_candidates))
+                )
+                read_classified = True
 
         #
         # check genic
@@ -180,7 +225,9 @@ def main():
                     align_seg_lend : align_seg_rend + 1
                 ]
                 if len(overlapping_exon_intervals) > 0:
-                    read_class_info["sqanti_cat"] = "genic"
+                    read_class_info["sqanti_cat"] = (
+                        "genic" if multi_exon_alignment_flag else "se_genic"
+                    )
                     read_classified = True
                     break
         #
@@ -195,13 +242,16 @@ def main():
                     stranded_chrom
                 ][align_seg_lend : align_seg_rend + 1]
                 if len(overlapping_intron_intervals) > 0:
-                    read_class_info["sqanti_cat"] = "intronic"
+                    read_class_info["sqanti_cat"] = (
+                        "intronic" if multi_exon_alignment_flag else "se_intronic"
+                    )
                     read_classified = True
                     break
 
         #
         # check antisense
         #
+
         if not read_classified:
             # see if overlaps exon from opposite strand
             antisense_strand = "+" if read_strand == "-" else "-"
@@ -212,7 +262,9 @@ def main():
                     antisense_stranded_chrom
                 ][align_seg_lend : align_seg_rend + 1]
                 if len(overlapping_exon_intervals) > 0:
-                    read_class_info["sqanti_cat"] = "antisense"
+                    read_class_info["sqanti_cat"] = (
+                        "antisense" if multi_exon_alignment_flag else "se_antisense"
+                    )
                     read_classified = True
                     break
 
@@ -221,7 +273,9 @@ def main():
         #
         if not read_classified:
             # only thing left is to call it intergenic.
-            read_class_info["sqanti_cat"] = "intergenic"
+            read_class_info["sqanti_cat"] = (
+                "intergenic" if multi_exon_alignment_flag else "se_intergenic"
+            )
             read_classified = True
 
         print(
@@ -231,6 +285,7 @@ def main():
                     read_class_info["sqanti_cat"],
                     str(read_class_info["num_alignment_segments"]),
                     read_class_info["alignment"],
+                    read_class_info["matching_isoforms"],
                 ]
             )
         )
@@ -248,6 +303,7 @@ def build_isoform_data_structures(
     stranded_chrom_intron_itrees,
     splice_patterns_to_isoforms,
     intron_to_isoforms,
+    stranded_splice_sites,
     transcript_id_to_obj,
 ):
 
@@ -268,6 +324,16 @@ def build_isoform_data_structures(
                 splice_patterns_to_isoforms[intron_str].add(transcript_id)
 
                 for intron in transcript_obj.get_introns():
+                    intron_lend, intron_rend = intron
+                    stranded_intron_lend_splice = make_intron_token(
+                        contig, strand, intron_lend
+                    )
+                    stranded_intron_rend_splice = make_intron_token(
+                        contig, strand, intron_rend
+                    )
+                    stranded_splice_sites.add(stranded_intron_lend_splice)
+                    stranded_splice_sites.add(stranded_intron_rend_splice)
+
                     intron_token = make_intron_token(contig, strand, intron)
                     intron_to_isoforms[intron_token].add(transcript_id)
                     intron_lend, intron_rend = intron
