@@ -101,7 +101,12 @@ def main():
     )
     tsv_writer.writeheader()
 
+    read_counter = 0
     for read in bamfile_reader:
+
+        read_counter += 1
+        if read_counter % 1000 == 0:
+            print("\r[{}]  ".format(read_counter), file=sys.stderr, end="")
 
         if read.is_mapped:
 
@@ -122,21 +127,9 @@ def main():
 
             tsv_writer.writerow(read_class_info)
 
-        """
-        print(
-            "\t".join(
-                [
-                    read_class_info["read_name"],
-                    read_class_info["sqanti_cat"],
-                    str(read_class_info["num_alignment_segments"]),
-                    read_class_info["alignment"],
-                    read_class_info["matching_isoforms"],
-                ]
-            )
-        )
-       """
-
         bamwriter.write(read)
+
+    logger.info("\nDone. See files: {}.*".format(output_prefix))
 
     sys.exit(0)
 
@@ -185,7 +178,7 @@ def classify_read(
 
         # check FSM
         if pretty_alignment_intron_string in splice_patterns_to_isoforms:
-            matching_isoforms = ";".join(
+            matching_isoforms = ",".join(
                 sorted(
                     list(splice_patterns_to_isoforms[pretty_alignment_intron_string])
                 )
@@ -232,7 +225,7 @@ def classify_read(
                 and len(introns_none) == 0
             ):
                 read_class_info["sqanti_cat"] = "ISM"
-                read_class_info["matching_isoforms"] = ";".join(
+                read_class_info["matching_isoforms"] = ",".join(
                     sorted(list(introns_all))
                 )
                 read_classified = True
@@ -271,13 +264,13 @@ def classify_read(
 
         if len(FSM_candidates) > 0:
             read_class_info["sqanti_cat"] = "se_FSM"
-            read_class_info["matching_isoforms"] = ";".join(
+            read_class_info["matching_isoforms"] = ",".join(
                 sorted(list(FSM_candidates))
             )
             read_classified = True
         elif len(ISM_candidates) > 0:
             read_class_info["sqanti_cat"] = "se_ISM"
-            read_class_info["matching_isoforms"] = ";".join(
+            read_class_info["matching_isoforms"] = ",".join(
                 sorted(list(ISM_candidates))
             )
             read_classified = True
