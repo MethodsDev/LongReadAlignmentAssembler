@@ -91,6 +91,9 @@ class Transcript(GenomeFeature):
     def is_monoexonic(self):
         return self.get_num_exon_segments() == 1
 
+    def has_introns(self):
+        return len(self.get_exon_segments()) > 1
+
     def get_introns(self):
         intron_coordsets = list()
         exon_segments = self.get_exon_segments()
@@ -551,7 +554,7 @@ class GTF_contig_to_transcripts:
             gene_meta = gene_id_to_meta[gene_id]
             transcript_meta.update(gene_meta)
 
-            print("Transcript meta: {}".format(str(transcript_meta)))
+            # print("Transcript meta: {}".format(str(transcript_meta)))
 
             transcript_obj = Transcript(contig, coords_list, strand)
             transcript_obj.add_meta(transcript_meta)

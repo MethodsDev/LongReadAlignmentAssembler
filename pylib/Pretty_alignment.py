@@ -1,4 +1,4 @@
-#!/usr/bin/env pythonOA
+#!/usr/bin/env python3
 # encoding: utf-8
 
 import sys, os, re
@@ -71,6 +71,9 @@ class Pretty_alignment:
         else:
             return "?"
 
+    def has_introns(self):
+        return len(self.get_pretty_alignment_segments()) > 1
+
     def get_introns(self):
         intron_coordsets = list()
         exon_segments = self.get_pretty_alignment_segments()
@@ -82,6 +85,14 @@ class Pretty_alignment:
                 assert intron_lend < intron_rend
                 intron_coordsets.append((intron_lend, intron_rend))
         return intron_coordsets
+
+    def get_introns_string(self, contig_acc):
+        return "{}:({}){}".format(contig_acc, self.get_strand(), self.get_introns())
+
+    def get_pretty_alignment_string(self, contig_acc):
+        return "{}:({}){}".format(
+            contig_acc, self.get_strand(), self.get_pretty_alignment_segments()
+        )
 
     def get_alignment_span(self):
         lend = self._pretty_alignment_segments[0][0]
