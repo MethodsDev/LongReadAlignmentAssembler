@@ -7,6 +7,7 @@ from collections import defaultdict
 import intervaltree as itree
 import pysam
 import csv
+import subprocess
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"])
@@ -140,6 +141,17 @@ def main():
         print("\t".join(["Category", "Count"]), file=ofh)
         for read_category, count in read_category_counter.items():
             print("\t".join([read_category, str(count)]), file=ofh)
+
+    # make barplot of cat counts.
+    summary_counts_plot_name = output_prefix + ".LRAA_iso_cats.summary_counts.pdf"
+    cmd = " ".join(
+        [
+            os.path.join(os.path.dirname(__file__), "misc/plot_SQANTI_cats.Rscript"),
+            summary_counts_tsv,
+            summary_counts_plot_name,
+        ]
+    )
+    subprocess.check_call(cmd, shell=True)
 
     logger.info("\nDone. See files: {}.*".format(output_prefix))
 
