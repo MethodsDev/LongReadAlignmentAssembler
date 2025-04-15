@@ -1,0 +1,482 @@
+SIRV1	LRAA	transcript	10712	11643	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	10712	10791	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-1";
+SIRV1	LRAA	exon	10883	11057	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-1";
+SIRV1	LRAA	exon	11435	11643	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-1";
+
+SIRV1	LRAA	transcript	10583	11606	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-2"; PolyA "False"; TSS "False";
+SIRV1	LRAA	exon	10583	10791	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-2";
+SIRV1	LRAA	exon	10898	11187	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-2";
+SIRV1	LRAA	exon	11404	11606	.	+	.	gene_id "g:SIRV1:+:comp-1"; transcript_id "t:SIRV1:+:comp-1:iso-2";
+
+SIRV1	LRAA	transcript	1001	10791	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	1001	1484	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+SIRV1	LRAA	exon	6338	6473	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+SIRV1	LRAA	exon	6561	6813	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+SIRV1	LRAA	exon	7553	7814	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+SIRV1	LRAA	exon	10283	10366	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+SIRV1	LRAA	exon	10648	10791	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-2";
+
+SIRV1	LRAA	transcript	6450	10640	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	6450	6473	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1";
+SIRV1	LRAA	exon	6561	6813	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1";
+SIRV1	LRAA	exon	7553	7814	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1";
+SIRV1	LRAA	exon	10283	10366	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1";
+SIRV1	LRAA	exon	10594	10640	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-1";
+
+SIRV1	LRAA	transcript	10648	11643	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-3"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	10648	10791	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-3";
+SIRV1	LRAA	exon	10883	11242	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-3";
+SIRV1	LRAA	exon	11404	11643	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-3";
+
+SIRV1	LRAA	transcript	1001	10366	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-4"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	1001	1484	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-4";
+SIRV1	LRAA	exon	6338	6813	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-4";
+SIRV1	LRAA	exon	7553	7814	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-4";
+SIRV1	LRAA	exon	10283	10366	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-4";
+
+SIRV1	LRAA	transcript	1001	10786	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	1001	1484	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+SIRV1	LRAA	exon	6338	6473	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+SIRV1	LRAA	exon	6561	6813	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+SIRV1	LRAA	exon	7553	7814	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+SIRV1	LRAA	exon	10283	10366	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+SIRV1	LRAA	exon	10445	10786	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-6";
+
+SIRV1	LRAA	transcript	1001	10786	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-5"; PolyA "True"; TSS "True";
+SIRV1	LRAA	exon	1001	1484	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-5";
+SIRV1	LRAA	exon	7553	7808	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-5";
+SIRV1	LRAA	exon	10554	10786	.	-	.	gene_id "g:SIRV1:-:comp-1"; transcript_id "t:SIRV1:-:comp-1:iso-5";
+
+SIRV2	LRAA	transcript	1109	1631	.	+	.	gene_id "g:SIRV2:+:comp-1"; transcript_id "t:SIRV2:+:comp-1:iso-1"; PolyA "False"; TSS "False";
+SIRV2	LRAA	exon	1109	1631	.	+	.	gene_id "g:SIRV2:+:comp-1"; transcript_id "t:SIRV2:+:comp-1:iso-1";
+
+SIRV2	LRAA	transcript	4034	4457	.	+	.	gene_id "g:SIRV2:+:comp-2"; transcript_id "t:SIRV2:+:comp-2:iso-1"; PolyA "False"; TSS "False";
+SIRV2	LRAA	exon	4034	4457	.	+	.	gene_id "g:SIRV2:+:comp-2"; transcript_id "t:SIRV2:+:comp-2:iso-1";
+
+SIRV2	LRAA	transcript	1001	5911	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2"; PolyA "True"; TSS "False";
+SIRV2	LRAA	exon	1001	1661	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	1742	1853	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	1974	2064	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	2675	2802	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	2882	3010	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	3106	3325	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	3666	3825	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	3967	4094	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	4339	4479	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	4688	4800	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+SIRV2	LRAA	exon	5789	5911	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-2";
+
+SIRV2	LRAA	transcript	1001	5911	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1"; PolyA "True"; TSS "False";
+SIRV2	LRAA	exon	1001	1661	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	1742	1853	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	1974	2064	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	2675	2802	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	2882	3010	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	3106	3374	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	3666	3825	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	3967	4094	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	4339	4479	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	4688	4800	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+SIRV2	LRAA	exon	5789	5911	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-1";
+
+SIRV2	LRAA	transcript	3666	5895	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3"; PolyA "True"; TSS "False";
+SIRV2	LRAA	exon	3666	3825	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3";
+SIRV2	LRAA	exon	3967	4094	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3";
+SIRV2	LRAA	exon	4339	4479	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3";
+SIRV2	LRAA	exon	4688	4800	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3";
+SIRV2	LRAA	exon	5752	5895	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-3";
+
+SIRV2	LRAA	transcript	3666	4732	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-4"; PolyA "True"; TSS "False";
+SIRV2	LRAA	exon	3666	3825	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-4";
+SIRV2	LRAA	exon	3967	4479	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-4";
+SIRV2	LRAA	exon	4688	4732	.	-	.	gene_id "g:SIRV2:-:comp-1"; transcript_id "t:SIRV2:-:comp-1:iso-4";
+
+SIRV3	LRAA	transcript	1964	7822	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1964	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-1";
+SIRV3	LRAA	exon	4569	4779	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-1";
+SIRV3	LRAA	exon	6058	7822	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-1";
+
+SIRV3	LRAA	transcript	1964	8937	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2"; PolyA "False"; TSS "True";
+SIRV3	LRAA	exon	1964	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	4004	4080	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	4569	4779	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	6058	6333	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	7271	7366	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	7873	7988	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	8125	8207	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+SIRV3	LRAA	exon	8756	8937	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-2";
+
+SIRV3	LRAA	transcript	4004	6718	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-3"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	4004	4080	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-3";
+SIRV3	LRAA	exon	4569	4779	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-3";
+SIRV3	LRAA	exon	6571	6718	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-3";
+
+SIRV3	LRAA	transcript	1964	7822	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-4"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1964	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-4";
+SIRV3	LRAA	exon	6058	7822	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-4";
+
+SIRV3	LRAA	transcript	1945	8939	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1945	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5";
+SIRV3	LRAA	exon	4569	4779	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5";
+SIRV3	LRAA	exon	6058	7988	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5";
+SIRV3	LRAA	exon	8128	8207	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5";
+SIRV3	LRAA	exon	8756	8939	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-5";
+
+SIRV3	LRAA	transcript	1945	8292	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-6"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1945	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-6";
+SIRV3	LRAA	exon	4004	4080	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-6";
+SIRV3	LRAA	exon	6058	8292	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-6";
+
+SIRV3	LRAA	transcript	1964	8939	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1964	2005	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7";
+SIRV3	LRAA	exon	4004	4080	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7";
+SIRV3	LRAA	exon	4575	4774	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7";
+SIRV3	LRAA	exon	6058	6333	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7";
+SIRV3	LRAA	exon	8756	8939	.	+	.	gene_id "g:SIRV3:+:comp-1"; transcript_id "t:SIRV3:+:comp-1:iso-7";
+
+SIRV3	LRAA	transcript	8798	9943	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	8798	8975	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-1";
+SIRV3	LRAA	exon	9190	9298	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-1";
+SIRV3	LRAA	exon	9435	9943	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-1";
+
+SIRV3	LRAA	transcript	8760	9914	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-2"; PolyA "False"; TSS "True";
+SIRV3	LRAA	exon	8760	8966	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-2";
+SIRV3	LRAA	exon	9190	9324	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-2";
+SIRV3	LRAA	exon	9668	9914	.	-	.	gene_id "g:SIRV3:-:comp-1"; transcript_id "t:SIRV3:-:comp-1:iso-2";
+
+SIRV3	LRAA	transcript	1001	1982	.	-	.	gene_id "g:SIRV3:-:comp-2"; transcript_id "t:SIRV3:-:comp-2:iso-1"; PolyA "True"; TSS "True";
+SIRV3	LRAA	exon	1001	1167	.	-	.	gene_id "g:SIRV3:-:comp-2"; transcript_id "t:SIRV3:-:comp-2:iso-1";
+SIRV3	LRAA	exon	1533	1764	.	-	.	gene_id "g:SIRV3:-:comp-2"; transcript_id "t:SIRV3:-:comp-2:iso-1";
+SIRV3	LRAA	exon	1903	1982	.	-	.	gene_id "g:SIRV3:-:comp-2"; transcript_id "t:SIRV3:-:comp-2:iso-1";
+
+SIRV4	LRAA	transcript	1001	3403	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-1"; PolyA "False"; TSS "False";
+SIRV4	LRAA	exon	1001	1346	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-1";
+SIRV4	LRAA	exon	1679	1885	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-1";
+SIRV4	LRAA	exon	2390	3403	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-1";
+
+SIRV4	LRAA	transcript	1456	2771	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-2"; PolyA "False"; TSS "False";
+SIRV4	LRAA	exon	1456	1885	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-2";
+SIRV4	LRAA	exon	2252	2771	.	+	.	gene_id "g:SIRV4:+:comp-1"; transcript_id "t:SIRV4:+:comp-1:iso-2";
+
+SIRV4	LRAA	transcript	8324	15122	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1"; PolyA "False"; TSS "True";
+SIRV4	LRAA	exon	8324	8372	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1";
+SIRV4	LRAA	exon	8630	8747	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1";
+SIRV4	LRAA	exon	8847	8990	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1";
+SIRV4	LRAA	exon	13673	13828	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1";
+SIRV4	LRAA	exon	15020	15122	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-1";
+
+SIRV4	LRAA	transcript	8323	15122	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-2"; PolyA "True"; TSS "True";
+SIRV4	LRAA	exon	8323	8372	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-2";
+SIRV4	LRAA	exon	8630	8990	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-2";
+SIRV4	LRAA	exon	13673	13828	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-2";
+SIRV4	LRAA	exon	15020	15122	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-2";
+
+SIRV4	LRAA	transcript	8630	13937	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-3"; PolyA "True"; TSS "True";
+SIRV4	LRAA	exon	8630	8990	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-3";
+SIRV4	LRAA	exon	13673	13937	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-3";
+
+SIRV4	LRAA	transcript	8323	14623	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-4"; PolyA "True"; TSS "False";
+SIRV4	LRAA	exon	8323	8372	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-4";
+SIRV4	LRAA	exon	8630	8990	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-4";
+SIRV4	LRAA	exon	13673	13822	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-4";
+SIRV4	LRAA	exon	14593	14623	.	-	.	gene_id "g:SIRV4:-:comp-1"; transcript_id "t:SIRV4:-:comp-1:iso-4";
+
+SIRV4	LRAA	transcript	3638	5158	.	-	.	gene_id "g:SIRV4:-:comp-2"; transcript_id "t:SIRV4:-:comp-2:iso-1"; PolyA "False"; TSS "False";
+SIRV4	LRAA	exon	3638	4103	.	-	.	gene_id "g:SIRV4:-:comp-2"; transcript_id "t:SIRV4:-:comp-2:iso-1";
+SIRV4	LRAA	exon	5008	5158	.	-	.	gene_id "g:SIRV4:-:comp-2"; transcript_id "t:SIRV4:-:comp-2:iso-1";
+
+SIRV5	LRAA	transcript	8316	11866	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	8316	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-1";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-1";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-1";
+SIRV5	LRAA	exon	11312	11866	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-1";
+
+SIRV5	LRAA	transcript	1009	2398	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-2"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	1009	1143	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-2";
+SIRV5	LRAA	exon	1988	2398	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-2";
+
+SIRV5	LRAA	transcript	1009	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	1009	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	1988	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	2120	2156	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	2271	2315	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	3484	3643	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	5381	5450	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	5544	5626	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	6112	6169	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	6328	6452	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	6659	6722	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	6827	6957	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	7145	7307	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	7682	7762	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	7871	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-3";
+
+SIRV5	LRAA	transcript	1001	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4"; PolyA "True"; TSS "False";
+SIRV5	LRAA	exon	1001	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	1988	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	2120	2156	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	2271	2315	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	3484	3643	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	5381	5450	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	5544	5626	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	6112	6169	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	6328	6452	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	6827	6957	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	7145	7307	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	7682	7762	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	7871	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-4";
+
+SIRV5	LRAA	transcript	1028	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7"; PolyA "True"; TSS "False";
+SIRV5	LRAA	exon	1028	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	1988	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	2120	2156	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	2271	2488	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	3484	3643	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	5381	5450	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	5544	5626	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	6112	6169	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	6328	6452	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	6659	6722	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	6827	6957	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	7145	7307	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	7682	7762	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	7871	8016	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	8278	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-7";
+
+SIRV5	LRAA	transcript	11134	13606	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-5"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	11134	13606	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-5";
+
+SIRV5	LRAA	transcript	1028	3598	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6"; PolyA "True"; TSS "False";
+SIRV5	LRAA	exon	1028	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+SIRV5	LRAA	exon	1926	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+SIRV5	LRAA	exon	2120	2156	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+SIRV5	LRAA	exon	2271	2315	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+SIRV5	LRAA	exon	3484	3598	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-6";
+
+SIRV5	LRAA	transcript	1009	2398	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-8"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	1009	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-8";
+SIRV5	LRAA	exon	1988	2398	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-8";
+
+SIRV5	LRAA	transcript	8202	11142	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-9"; PolyA "False"; TSS "True";
+SIRV5	LRAA	exon	8202	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-9";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-9";
+SIRV5	LRAA	exon	11134	11142	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-9";
+
+SIRV5	LRAA	transcript	1029	11866	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10"; PolyA "True"; TSS "False";
+SIRV5	LRAA	exon	1029	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	1988	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	2120	2156	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	2271	2315	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	3484	3643	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	5381	5450	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	5544	5626	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	6112	6169	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	6328	6452	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	6827	6957	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	7145	7307	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	7682	7762	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	7871	8016	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	8278	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+SIRV5	LRAA	exon	11134	11866	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-10";
+
+SIRV5	LRAA	transcript	1029	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11"; PolyA "True"; TSS "False";
+SIRV5	LRAA	exon	1029	1149	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	1988	2033	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	2120	2315	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	3299	3404	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	3484	3643	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	5381	5450	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	5544	5626	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	6112	6169	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	6328	6452	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	6659	6722	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	6827	6957	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	7145	7307	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	7682	7762	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	7871	8016	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	8278	8381	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	8455	8585	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+SIRV5	LRAA	exon	10859	10991	.	+	.	gene_id "g:SIRV5:+:comp-1"; transcript_id "t:SIRV5:+:comp-1:iso-11";
+
+SIRV5	LRAA	transcript	2178	2406	.	-	.	gene_id "g:SIRV5:-:comp-1"; transcript_id "t:SIRV5:-:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV5	LRAA	exon	2178	2406	.	-	.	gene_id "g:SIRV5:-:comp-1"; transcript_id "t:SIRV5:-:comp-1:iso-1";
+
+SIRV6	LRAA	transcript	2517	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	2517	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	LRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+SIRV6	LRAA	exon	10725	10815	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-1";
+
+SIRV6	LRAA	transcript	3106	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	3106	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	LRAA	exon	7105	7448	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	LRAA	exon	7806	7923	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+SIRV6	LRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-2";
+
+SIRV6	LRAA	transcript	1088	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1088	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	11035	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+SIRV6	LRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-3";
+
+SIRV6	LRAA	transcript	1304	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1304	1381	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+SIRV6	LRAA	exon	1641	1950	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-4";
+
+SIRV6	LRAA	transcript	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	9000	10968	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-5";
+
+SIRV6	LRAA	transcript	1131	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1131	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+SIRV6	LRAA	exon	11032	11331	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-6";
+
+SIRV6	LRAA	transcript	1131	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1131	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	LRAA	exon	1469	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	LRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+SIRV6	LRAA	exon	2471	2540	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-7";
+
+SIRV6	LRAA	transcript	10238	11330	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8"; PolyA "False"; TSS "True";
+SIRV6	LRAA	exon	10238	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+SIRV6	LRAA	exon	11206	11330	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-8";
+
+SIRV6	LRAA	transcript	1138	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11"; PolyA "False"; TSS "False";
+SIRV6	LRAA	exon	1138	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+SIRV6	LRAA	exon	1846	2120	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-11";
+
+SIRV6	LRAA	transcript	3024	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	3024	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+SIRV6	LRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-9";
+
+SIRV6	LRAA	transcript	2286	10788	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10"; PolyA "False"; TSS "True";
+SIRV6	LRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	LRAA	exon	2741	2814	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+SIRV6	LRAA	exon	10725	10788	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-10";
+
+SIRV6	LRAA	transcript	2473	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12"; PolyA "False"; TSS "False";
+SIRV6	LRAA	exon	2473	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	LRAA	exon	10725	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+SIRV6	LRAA	exon	11206	11690	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-12";
+
+SIRV6	LRAA	transcript	1088	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1088	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	1846	2026	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+SIRV6	LRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-13";
+
+SIRV6	LRAA	transcript	1001	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15"; PolyA "True"; TSS "False";
+SIRV6	LRAA	exon	1001	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	2471	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+SIRV6	LRAA	exon	11206	11824	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-15";
+
+SIRV6	LRAA	transcript	1131	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1131	1186	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	1469	1534	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	1641	1735	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	2781	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	10725	10818	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	11032	11108	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+SIRV6	LRAA	exon	11206	11270	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-16";
+
+SIRV6	LRAA	transcript	2286	10788	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14"; PolyA "False"; TSS "True";
+SIRV6	LRAA	exon	2286	2620	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	LRAA	exon	2741	2828	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	LRAA	exon	3107	3164	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+SIRV6	LRAA	exon	10725	10788	.	+	.	gene_id "g:SIRV6:+:comp-1"; transcript_id "t:SIRV6:+:comp-1:iso-14";
+
+SIRV6	LRAA	transcript	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV6	LRAA	exon	1545	1820	.	-	.	gene_id "g:SIRV6:-:comp-1"; transcript_id "t:SIRV6:-:comp-1:iso-1";
+
+SIRV7	LRAA	transcript	1001	114916	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1"; PolyA "True"; TSS "True";
+SIRV7	LRAA	exon	1001	2675	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+SIRV7	LRAA	exon	2994	3111	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+SIRV7	LRAA	exon	4096	4179	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+SIRV7	LRAA	exon	4726	4810	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+SIRV7	LRAA	exon	43029	43077	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+SIRV7	LRAA	exon	114681	114916	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-1";
+
+SIRV7	LRAA	transcript	55850	114738	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-2"; PolyA "True"; TSS "True";
+SIRV7	LRAA	exon	55850	56097	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-2";
+SIRV7	LRAA	exon	78842	78963	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-2";
+SIRV7	LRAA	exon	114681	114738	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-2";
+
+SIRV7	LRAA	transcript	56032	147957	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3"; PolyA "True"; TSS "False";
+SIRV7	LRAA	exon	56032	56097	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3";
+SIRV7	LRAA	exon	70884	70987	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3";
+SIRV7	LRAA	exon	78842	78963	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3";
+SIRV7	LRAA	exon	114681	114988	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3";
+SIRV7	LRAA	exon	147609	147957	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-3";
+
+SIRV7	LRAA	transcript	1006	147925	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4"; PolyA "False"; TSS "False";
+SIRV7	LRAA	exon	1006	2675	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4";
+SIRV7	LRAA	exon	2994	3111	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4";
+SIRV7	LRAA	exon	43029	43077	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4";
+SIRV7	LRAA	exon	114681	114988	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4";
+SIRV7	LRAA	exon	147609	147925	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-4";
+
+SIRV7	LRAA	transcript	56038	147957	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5"; PolyA "False"; TSS "False";
+SIRV7	LRAA	exon	56038	56097	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+SIRV7	LRAA	exon	70884	70987	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+SIRV7	LRAA	exon	78842	78908	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+SIRV7	LRAA	exon	78929	78963	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+SIRV7	LRAA	exon	114687	114960	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+SIRV7	LRAA	exon	147609	147957	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-5";
+
+SIRV7	LRAA	transcript	1001	147918	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6"; PolyA "True"; TSS "False";
+SIRV7	LRAA	exon	1001	2675	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6";
+SIRV7	LRAA	exon	2994	3111	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6";
+SIRV7	LRAA	exon	3810	3896	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6";
+SIRV7	LRAA	exon	114681	114988	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6";
+SIRV7	LRAA	exon	147609	147918	.	-	.	gene_id "g:SIRV7:-:comp-1"; transcript_id "t:SIRV7:-:comp-1:iso-6";
+
