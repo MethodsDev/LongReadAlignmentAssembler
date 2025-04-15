@@ -1,4 +1,4 @@
-DIRS = sirvs quant_eval single_contig sep_contigs ont_sep_contigs
+DIRS = sirvs quant_eval single_contig sep_contigs ont_sep_contigs read_to_isoform_class_assignments
 
 test:
 	@for i in $(DIRS); do \

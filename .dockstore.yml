@@ -12,4 +12,10 @@ workflows:
      authors:
          - name: Brian Haas
            email: bhaas@broadinstitute.org
+   - name: LRAA-sqanti-like-reads-eval
+     subclass: WDL
+     primaryDescriptorPath: /WDL/LRAA-sqanti-like-reads-eval.wdl
+     authors:
+         - name: Brian Haas
+           email: bhaas@broadinstitute.org
      

@@ -83,10 +83,10 @@ def main():
     logger.info("Classifying reads from bam: {}".format(bam_file))
     bamfile_reader = pysam.AlignmentFile(bam_file, "rb")
 
-    bam_output_filename = output_prefix + ".LRAA_iso_cats.bam"
+    bam_output_filename = output_prefix + ".iso_cats.bam"
     bamwriter = pysam.AlignmentFile(bam_output_filename, "wb", template=bamfile_reader)
 
-    tsv_output_filename = output_prefix + ".LRAA_iso_cats.tsv"
+    tsv_output_filename = output_prefix + ".iso_cats.tsv"
     tsv_ofh = open(tsv_output_filename, "wt")
     tsv_writer = csv.DictWriter(
         tsv_ofh,
@@ -136,14 +136,14 @@ def main():
     tsv_ofh.close()
 
     # write summary counts
-    summary_counts_tsv = output_prefix + ".LRAA_iso_cats.summary_counts.tsv"
+    summary_counts_tsv = output_prefix + ".iso_cats.summary_counts.tsv"
     with open(summary_counts_tsv, "wt") as ofh:
         print("\t".join(["Category", "Count"]), file=ofh)
         for read_category, count in read_category_counter.items():
             print("\t".join([read_category, str(count)]), file=ofh)
 
     # make barplot of cat counts.
-    summary_counts_plot_name = output_prefix + ".LRAA_iso_cats.summary_counts.pdf"
+    summary_counts_plot_name = output_prefix + ".iso_cats.summary_counts.pdf"
     cmd = " ".join(
         [
             os.path.join(os.path.dirname(__file__), "misc/plot_SQANTI_cats.Rscript"),
