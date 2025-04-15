@@ -88,7 +88,11 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
 RUN apt-get install -y r-base r-base-dev
 
 RUN R -e 'install.packages("BiocManager", repos="http://cran.us.r-project.org")'
+
+RUN apt-get install -y libharfbuzz-dev libfribidi-dev libtiff5-dev 
+
 RUN R -e 'BiocManager::install("tidyverse")'
+RUN R -e 'BiocManager::install("cowplot")'
 RUN R -e 'BiocManager::install("argparse")'
 RUN R -e 'BiocManager::install("devtools")'
 RUN R -e 'BiocManager::install("Matrix")'
