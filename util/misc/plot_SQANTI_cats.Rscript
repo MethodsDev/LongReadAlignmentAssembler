@@ -7,7 +7,8 @@ if (length(args) != 2) {
 }
 
 library(tidyverse)
-
+library(cowplot)
+    
 input_table = args[1]
 plot_filename = args[2]
     
@@ -17,11 +18,52 @@ df$classification = str_replace(df$Category, "^se_", "")
 df = df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
 cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
 df$classification = factor(df$classification, levels=cat_levels)
+total_reads = sum(df$Count)
+df = df %>% mutate(pct = sprintf("%.1f", Count/total_reads*100))
+    
 
-p = df %>% ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
+read_counts_plot = df %>% group_by(multi_exon) %>% 
+    summarize(sum_reads = sum(Count)) %>% mutate(pct = sprintf("%.1f", sum_reads/sum(sum_reads)*100)) %>% 
+    ggplot(aes(x=multi_exon, y=sum_reads)) + geom_col(aes(fill=multi_exon)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    geom_text(position=position_dodge(width=0.9), aes(label=pct)) +
+    ggtitle("Counts of multi-exon and single-exon alignments")
+
+    
+
+counts_by_annot_class_plot = df %>% ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
     theme_bw() + facet_wrap(~multi_exon, ncol=1) +
-     theme(axis.text.x = element_text(angle = 90, hjust = 1))
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    geom_text(position=position_dodge(width=0.9), aes(label=pct)) +
+    ggtitle("Counts of reads by annotation-match classification")
 
-ggsave(p, filename=plot_filename, width=6, height=6)
+    
+
+multi_exon_class_count_plot = df %>% filter(multi_exon == "multi_exon") %>% mutate(pct = sprintf("%.1f", Count/sum(Count) * 100)) %>%
+     ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
+    theme_bw() +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    geom_text(position=position_dodge(width=0.9), aes(label=pct)) +
+    ggtitle("Counts of multi-exon reads by annotation-match classification")
+    
+
+single_exon_class_count_plot = df %>% filter(multi_exon == "single_exon") %>% mutate(pct = sprintf("%.1f", Count/sum(Count) * 100)) %>%
+     ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
+    theme_bw() +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    geom_text(position=position_dodge(width=0.9), aes(label=pct)) +
+    ggtitle("Counts of single-exon reads by annotation-match classification")
+
+
+p = plot_grid(read_counts_plot, 
+          counts_by_annot_class_plot,
+          multi_exon_class_count_plot,
+          single_exon_class_count_plot,
+          ncol=2,
+          rel_heights=c(1.6,1)
+          )
+
+ggsave(p, filename=plot_filename, width=10, height=10)
 
 quit(save = "no", status = 0, runLast = FALSE)
