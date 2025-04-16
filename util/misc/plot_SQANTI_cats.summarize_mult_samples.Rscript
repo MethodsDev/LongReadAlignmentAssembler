@@ -1,0 +1,30 @@
+#!/usr/bin/env Rscript
+
+main = function () {
+    
+    suppressPackageStartupMessages(library("argparse"))
+    
+    parser = ArgumentParser()
+    parser$add_argument("--output_pdf", help="output pdf filename", required=TRUE, nargs=1)
+
+        
+    args = parser$parse_args()
+    
+    dat_filename = args$dat
+    
+    
+    write(cat("message about varname: ", varname), stderr())
+    or
+    message("message about varname: ", varname)
+    
+    
+    
+    quit(save = "no", status = 0, runLast = FALSE)
+
+}
+
+
+if (length(sys.calls())==0) {
+    main()
+}
+
