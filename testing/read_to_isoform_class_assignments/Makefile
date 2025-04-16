@@ -6,4 +6,5 @@ test_wdl:
 	miniwdl run ../../WDL/LRAA-sqanti-like-reads-eval.wdl -i data/inputs.json --no-cache --verbose
 
 clean:
-	rm -f ./test.*
+	rm -f ./test.* ./_LAST
+	rm -rf ./*sqanti_like_reads_eval_wf
