@@ -23,6 +23,8 @@ FORMAT = (
 logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
+MIN_FSM_SE_FRAC_OVERLAP = 0.9
+
 
 def main():
 
@@ -275,13 +277,21 @@ def classify_read(
 
             transcript_obj = transcript_id_to_obj[transcript_id]
             transcript_lend, transcript_rend = transcript_obj.get_coords()
-            if (
-                overlapping_exon_lend >= transcript_lend
-                and overlapping_exon_rend <= transcript_rend
-            ):
 
-                transcript_id = transcript_obj.get_transcript_id()
-                if transcript_obj.get_num_exon_segments() == 1:
+            #
+            # Only single-exon target transcripts can get FSM or ISM categories with single-exon alignments
+            #
+
+            # check amount of overlap
+
+            if transcript_obj.get_num_exon_segments() == 1:
+
+                frac_transcript_overlap = eval_frac_transcript_overlap(
+                    [transcript_lend, transcript_rend],
+                    [align_span_lend, align_span_rend],
+                )
+
+                if frac_transcript_overlap >= MIN_FSM_SE_FRAC_OVERLAP:
                     FSM_candidates.add(transcript_id)
                 else:
                     ISM_candidates.add(transcript_id)
@@ -369,6 +379,22 @@ def classify_read(
 
 def make_intron_token(chrom, strand, coord_pair):
     return "{}:{}:{}".format(chrom, strand, coord_pair)
+
+
+def eval_frac_transcript_overlap(trans_coords, align_coords):
+    trans_lend, trans_rend = trans_coords
+    align_lend, align_rend = align_coords
+
+    assert (
+        trans_lend <= align_rend and trans_rend >= align_lend
+    ), "Error, no overlap in coords!"
+
+    overlapping_coords = sorted([trans_lend, trans_rend, align_lend, align_rend])[1:3]
+    overlap_len = overlapping_coords[1] - overlapping_coords[0] + 1
+    trans_len = trans_rend - trans_lend + 1
+    frac_overlap = overlap_len / trans_len
+
+    return frac_overlap
 
 
 def build_isoform_data_structures(
