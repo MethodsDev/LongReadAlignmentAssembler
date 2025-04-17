@@ -49,7 +49,7 @@ task LRAA_sqanti_like_multi_sample_summary_task {
 
       plot_SQANTI_cats.summarize_mult_samples.Rscript \
           --output_prefix ~{output_prefix} \
-          --sample_stats '~{sep="," iso_cats_summary_counts_tsv_files}' \
+          --sample_stats ~{sep=" " iso_cats_summary_counts_tsv_files} \
           --width ~{width} \
           --height ~{height}
 
