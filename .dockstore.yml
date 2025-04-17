@@ -18,4 +18,10 @@ workflows:
      authors:
          - name: Brian Haas
            email: bhaas@broadinstitute.org
-     
+   - name: LRAA-sqanti-like-multi-sample-summary
+     subclass: WDL
+     primaryDescriptorPath: /WDL/LRAA-sqanti-like-reads-eval.summarize_mult_samples.wdl
+     authors:
+         - name: Brian Haas
+           email: bhaas@broadinstitute.org
+
