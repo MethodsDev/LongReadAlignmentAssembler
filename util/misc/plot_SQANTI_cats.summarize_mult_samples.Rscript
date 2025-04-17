@@ -5,18 +5,106 @@ main = function () {
     suppressPackageStartupMessages(library("argparse"))
     
     parser = ArgumentParser()
-    parser$add_argument("--output_pdf", help="output pdf filename", required=TRUE, nargs=1)
-
-        
+    parser$add_argument("--output_prefix", help="output pdf and tsv file prefix", required=TRUE, nargs=1)
+    parser$add_argument("--sample_stats", help="output pdf filename", required=TRUE, nargs='+')
+	parser$add_argument("--width", default=12, required=FALSE, help="pdf page width (default: 12)")
+    parser$add_argument("--height", default=12, required=FALSE, help="pdf page height (default: 12)")
+    
     args = parser$parse_args()
+
+	sample_stats_files = args$sample_stats
+	output_prefix = args$output_prefix
+	page_width = args$width
+    page_height = args$height
     
-    dat_filename = args$dat
+	library(tidyverse)
+    library(cowplot)
+
     
+	all_stats_df = NULL
+
+	for (tsv_file in sample_stats_files) {
+    	df = read.csv(tsv_file, header=T, sep="\t")
     
-    write(cat("message about varname: ", varname), stderr())
-    or
-    message("message about varname: ", varname)
+    	sample_name = str_split(basename(tsv_file), "\\.")[[1]][1]
     
+    	df$sample_name = sample_name
+    
+    	all_stats_df = bind_rows(all_stats_df, df)
+	}
+
+    
+	all_stats_df = all_stats_df %>% mutate(multi_exon = (!grepl("^se_", Category)))
+	all_stats_df$classification = str_replace(all_stats_df$Category, "^se_", "")
+	all_stats_df = all_stats_df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
+	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+	all_stats_df$classification = factor(all_stats_df$classification, levels=cat_levels)
+    
+    write.table(all_stats_df, file=paste0(output_prefix, ".tsv"), sep="\t", quote=F, row.names=F)
+
+    pdf(paste0(output_prefix, ".pdf"), width=page_width, height=page_height)
+
+    # counts of reads by multi vs. single exon.
+
+	p_counts_per_sample = all_stats_df %>% group_by(sample_name, multi_exon) %>% summarize(sum_reads = sum(Count)) %>%
+    	ggplot(aes(x=sample_name, y=sum_reads)) + geom_col(aes(fill=multi_exon)) +
+    	theme_bw() + 
+     	theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+      	ggtitle("Counts of reads per sample")
+
+	p_percent_reads_per_sample = all_stats_df %>% group_by(sample_name, multi_exon) %>% summarize(sum_reads = sum(Count)) %>%
+     mutate(pct_reads = sum_reads/sum(sum_reads)*100) %>%
+    ggplot(aes(x=sample_name, y=pct_reads)) + geom_col(aes(fill=multi_exon)) +
+    theme_bw() + 
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+      ggtitle("Counts of reads per sample")
+	
+	p_read_count_summary_plot = plot_grid(p_counts_per_sample, p_percent_reads_per_sample, ncol=1)
+    
+	plot(p_read_count_summary_plot)
+
+	############
+    
+    p_counts_by_category = all_stats_df %>% ggplot(aes(x=sample_name, y=Count)) + geom_col(aes(fill=multi_exon)) +
+    theme_bw() +
+    facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    ggtitle("Counts of reads by mapping category")
+
+	plot(p_counts_by_category)
+
+    ##############
+
+    pct_reads_by_category = all_stats_df %>% group_by(sample_name) %>% mutate(pct_reads_all = Count/sum(Count) * 100) 
+
+	p_pct_reads_by_cat = pct_reads_by_category %>%
+    ggplot(aes(x=sample_name, y=pct_reads_all)) + geom_col(aes(fill=pct_reads_all)) +
+    theme_bw() +
+    facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+     geom_text(position=position_dodge(width=0.9), aes(label=sprintf("%.1f", pct_reads_all)), size=2, vjust=0)
+    ggtitle("Pct of reads by mapping category")
+
+   	plot(p_pct_reads_by_cat )
+
+
+
+    #############
+
+    pct_reads_by_category_stratified = all_stats_df %>% group_by(sample_name, multi_exon) %>% mutate(pct_reads_strat = Count/sum(Count) * 100) 
+
+	p_pct_reads_by_category_stratified = pct_reads_by_category_stratified%>%
+    	ggplot(aes(x=sample_name, y=pct_reads_strat)) + geom_col(aes(fill=pct_reads_strat)) +
+    	theme_bw() +
+    	facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+     	theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    	 geom_text(position=position_dodge(width=0.9), aes(label=sprintf("%.1f", pct_reads_strat)), size=2, vjust=0) +
+   		 ggtitle("Pct of reads by mapping category, stratified mutli-vs-single")
+
+	plot(p_pct_reads_by_category_stratified)
+
+    
+	dev.off()
     
     
     quit(save = "no", status = 0, runLast = FALSE)
