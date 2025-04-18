@@ -35,7 +35,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
 
 task LRAA_sqanti_like_reads_eval_task {
     input {
-         String sample_id
+        String sample_id
       
         File? input_BAM
         File? input_BAI
