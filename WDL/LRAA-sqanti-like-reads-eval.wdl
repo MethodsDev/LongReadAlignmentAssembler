@@ -47,14 +47,21 @@ task LRAA_sqanti_like_reads_eval_task {
         String docker
     }
 
-    String inputs_string = if defined(input_BAM) then "--input_bam ~{input_BAM}" else if defined(input_GTF) then "--input_GTF ~{input_GTF}"  else ""
-
     
     command <<<
         set -ex
+	
+	if [[ "~{input_BAM}" != "" ]]; then
 
-        SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} ~{inputs_string}
-      
+	    SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam ~{input_BAM}
+
+	elif [[ "~{input_GTF}" != "" ]]; then
+	
+            SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF}
+
+	fi
+
+
     >>>
 
     output {
