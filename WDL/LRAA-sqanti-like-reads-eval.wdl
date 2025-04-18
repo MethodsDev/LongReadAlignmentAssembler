@@ -60,7 +60,7 @@ task LRAA_sqanti_like_reads_eval_task {
   runtime {
     docker: docker
     disks: "local-disk " + ceil(4 * size(input_BAM, "GB") + 4 * size(input_GTF, "GB") ) + " HDD"
-    memory: "8G"
+    memory: "32G"
   }
 
 
