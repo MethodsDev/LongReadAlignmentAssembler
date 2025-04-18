@@ -50,16 +50,16 @@ task LRAA_sqanti_like_reads_eval_task {
     
     command <<<
         set -ex
-	
-	if [[ "~{input_BAM}" != "" ]]; then
+ 
+ if [[ "~{input_BAM}" != "" ]]; then
 
-	    SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam ~{input_BAM}
+     SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam ~{input_BAM}
 
-	elif [[ "~{input_GTF}" != "" ]]; then
-	
+ elif [[ "~{input_GTF}" != "" ]]; then
+ 
             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF}
 
-	fi
+ fi
 
 
     >>>
