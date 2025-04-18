@@ -2,7 +2,8 @@ test: test_single test_multi
 
 
 test_single:
-	../../util/classify_read_alignments_to_SQANTI_cats.py  --gtf data/LRAA.gtf --bam data/sim.fasta.mm2.bam --output_prefix test
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py  --ref_gtf data/LRAA.gtf --input_bam data/sim.fasta.mm2.bam --output_prefix test.bam
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py  --ref_gtf data/SIRVs1-7.annot.gtf --input_gtf data/LRAA.gtf --output_prefix test.gtf
 
 
 test_multi:

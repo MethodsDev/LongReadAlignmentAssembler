@@ -26,7 +26,7 @@ class SQANTI_like_annotator:
         logger.info("-parsing gtf_file: {}".format(ref_annot_gtf))
 
         self.contig_to_input_transcripts = (
-            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(gtf_file)
+            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(ref_annot_gtf)
         )
 
         self.stranded_chrom_exon_itrees = defaultdict(lambda: itree.IntervalTree())
@@ -43,21 +43,23 @@ class SQANTI_like_annotator:
     ):
 
         assert type(transcribed_feature_obj) in (
-            "Transcript",
-            "Pretty_alignment",
-        ), "Error, cannot process transcribed_feature: {}".format(transcribed_feature)
+            Transcript,
+            Pretty_alignment,
+        ), "Error, cannot process transcribed_feature: {}, type {}".format(
+            transcribed_feature_obj, type(transcribed_feature_obj)
+        )
 
         stranded_chrom = "{}:{}".format(feature_chrom, feature_strand)
         feature_span_lend, feature_span_rend = (
             transcribed_feature_obj.get_alignment_span()
-            if type(transcribed_feature_obj) == "Pretty_alignment"
-            else transcribed_feature.get_coords()
+            if type(transcribed_feature_obj) == Pretty_alignment
+            else transcribed_feature_obj.get_coords()
         )
 
         exon_segments = (
             transcribed_feature_obj.get_pretty_alignment_segments()
-            if type(transcribed_feature_obj) == "Pretty_alignment"
-            else transcribed_feature.get_exon_segments()
+            if type(transcribed_feature_obj) == Pretty_alignment
+            else transcribed_feature_obj.get_exon_segments()
         )
         num_exon_segments = len(exon_segments)
 
@@ -65,8 +67,8 @@ class SQANTI_like_annotator:
         feature_class_info = {
             "feature_name": feature_name,
             "structure": (
-                transcribed_feature_obj.get_pretty_alignment_string(chrom)
-                if type(transcribed_feature_obj) == "Pretty_alignment"
+                transcribed_feature_obj.get_pretty_alignment_string(feature_chrom)
+                if type(transcribed_feature_obj) == Pretty_alignment
                 else transcribed_feature_obj.get_exons_string()
             ),
             "num_exon_segments": num_exon_segments,
@@ -78,7 +80,11 @@ class SQANTI_like_annotator:
         multi_exon_alignment_flag = transcribed_feature_obj.has_introns()
 
         if multi_exon_alignment_flag:
-            feature_intron_string = transcribed_feature_obj.get_introns_string(chrom)
+            feature_intron_string = (
+                transcribed_feature_obj.get_introns_string(feature_chrom)
+                if type(transcribed_feature_obj) == Pretty_alignment
+                else transcribed_feature_obj.get_introns_string()
+            )
 
             # check FSM
             if feature_intron_string in self.splice_patterns_to_isoforms:
@@ -100,14 +106,16 @@ class SQANTI_like_annotator:
                 for intron in transcribed_feature_obj.get_introns():
                     intron_lend, intron_rend = intron
                     if (
-                        make_intron_token(chrom, feature_strand, intron_lend)
+                        make_intron_token(feature_chrom, feature_strand, intron_lend)
                         in self.stranded_splice_sites
                         or make_intron_token(chrom, feature_strand, intron_rend)
                         in self.stranded_splice_sites
                     ):
                         found_ref_shared_splice = True
 
-                    intron_tok = make_intron_token(chrom, feature_strand, intron)
+                    intron_tok = make_intron_token(
+                        feature_chrom, feature_strand, intron
+                    )
 
                     if intron_tok in self.intron_to_isoforms:
                         isoforms_with_intron = self.intron_to_isoforms[intron_tok]
@@ -148,7 +156,7 @@ class SQANTI_like_annotator:
             ISM_candidates = set()
             for stranded_chrom_exon_interval in self.stranded_chrom_exon_itrees[
                 stranded_chrom
-            ][align_span_lend : align_span_rend + 1]:
+            ][feature_span_lend : feature_span_rend + 1]:
                 overlapping_exon_lend = stranded_chrom_exon_interval.begin
                 overlapping_exon_rend = stranded_chrom_exon_interval.end
                 transcript_id = stranded_chrom_exon_interval.data
@@ -166,10 +174,13 @@ class SQANTI_like_annotator:
 
                     frac_transcript_overlap = eval_frac_transcript_overlap(
                         [transcript_lend, transcript_rend],
-                        [align_span_lend, align_span_rend],
+                        [feature_span_lend, feature_span_rend],
                     )
 
-                    if frac_transcript_overlap >= MIN_FSM_SE_FRAC_OVERLAP:
+                    if (
+                        frac_transcript_overlap
+                        >= SQANTI_like_annotator.MIN_FSM_SE_FRAC_OVERLAP
+                    ):
                         FSM_candidates.add(transcript_id)
                     else:
                         ISM_candidates.add(transcript_id)
@@ -193,11 +204,11 @@ class SQANTI_like_annotator:
 
         if not feature_classified:
             # check for genic - any overlap with exons
-            for alignment_segment in alignment_segments:
-                align_seg_lend, align_seg_rend = alignment_segment
+            for exon_segment in exon_segments:
+                exon_seg_lend, exon_seg_rend = exon_segment
                 overlapping_exon_intervals = self.stranded_chrom_exon_itrees[
                     stranded_chrom
-                ][align_seg_lend : align_seg_rend + 1]
+                ][exon_seg_lend : exon_seg_rend + 1]
                 if len(overlapping_exon_intervals) > 0:
                     feature_class_info["sqanti_cat"] = (
                         "genic" if multi_exon_alignment_flag else "se_genic"
@@ -210,11 +221,11 @@ class SQANTI_like_annotator:
 
         if not feature_classified:
             # check for intronic.
-            for alignment_segment in alignment_segments:
-                align_seg_lend, align_seg_rend = alignment_segment
+            for exon_segment in exon_segments:
+                exon_seg_lend, exon_seg_rend = exon_segment
                 overlapping_intron_intervals = self.stranded_chrom_intron_itrees[
                     stranded_chrom
-                ][align_seg_lend : align_seg_rend + 1]
+                ][exon_seg_lend : exon_seg_rend + 1]
                 if len(overlapping_intron_intervals) > 0:
                     feature_class_info["sqanti_cat"] = (
                         "intronic" if multi_exon_alignment_flag else "se_intronic"
@@ -229,12 +240,12 @@ class SQANTI_like_annotator:
         if not feature_classified:
             # see if overlaps exon from opposite strand
             antisense_strand = "+" if feature_strand == "-" else "-"
-            antisense_stranded_chrom = "{}:{}".format(chrom, antisense_strand)
-            for alignment_segment in alignment_segments:
-                align_seg_lend, align_seg_rend = alignment_segment
+            antisense_stranded_chrom = "{}:{}".format(feature_chrom, antisense_strand)
+            for exon_segment in exon_segments:
+                exon_seg_lend, exon_seg_rend = exon_segment
                 overlapping_exon_intervals = self.stranded_chrom_intron_itrees[
                     antisense_stranded_chrom
-                ][align_seg_lend : align_seg_rend + 1]
+                ][exon_seg_lend : exon_seg_rend + 1]
                 if len(overlapping_exon_intervals) > 0:
                     feature_class_info["sqanti_cat"] = (
                         "antisense" if multi_exon_alignment_flag else "se_antisense"
@@ -284,7 +295,7 @@ class SQANTI_like_annotator:
                         self.stranded_splice_sites.add(stranded_intron_rend_splice)
 
                         intron_token = make_intron_token(contig, strand, intron)
-                        intron_to_isoforms[intron_token].add(transcript_id)
+                        self.intron_to_isoforms[intron_token].add(transcript_id)
                         intron_lend, intron_rend = intron
                         self.stranded_chrom_intron_itrees[stranded_chrom][
                             intron_lend : intron_rend + 1
