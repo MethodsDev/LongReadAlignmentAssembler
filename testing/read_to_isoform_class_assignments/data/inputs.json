@@ -2,5 +2,5 @@
     "LRAA_sqanti_like_reads_eval_wf.sample_id" : "test_wdl",
     "LRAA_sqanti_like_reads_eval_wf.input_BAM" : "data/sim.fasta.mm2.bam",
     "LRAA_sqanti_like_reads_eval_wf.input_BAI" : "data/sim.fasta.mm2.bam.bai",
-    "LRAA_sqanti_like_reads_eval_wf.input_GTF" : "data/LRAA.gtf"
+    "LRAA_sqanti_like_reads_eval_wf.ref_annot_GTF" : "data/LRAA.gtf"
 }
