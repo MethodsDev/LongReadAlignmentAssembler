@@ -3,9 +3,11 @@ version 1.0
 workflow LRAA_sqanti_like_reads_eval_wf {
     input {
         String sample_id
-        File input_BAM
-        File input_BAI
-        File input_GTF
+        File ref_annot_GTF
+      
+        File? input_BAM
+        File? input_BAI
+        File? input_GTF
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
     }
@@ -14,6 +16,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
     call LRAA_sqanti_like_reads_eval_task {
         input:
           sample_id = sample_id,
+          ref_annot_GTF = ref_annot_GTF,
           input_BAM = input_BAM,
           input_BAI = input_BAI,
           input_GTF = input_GTF,
@@ -32,20 +35,26 @@ workflow LRAA_sqanti_like_reads_eval_wf {
 
 task LRAA_sqanti_like_reads_eval_task {
     input {
-        String sample_id
-        File input_BAM
-        File input_BAI
-        File input_GTF
+         String sample_id
+      
+        File? input_BAM
+        File? input_BAI
+
+        File? input_GTF
+
+        File ref_annot_GTF
+      
         String docker
     }
 
+    String inputs_string = if defined(input_BAM) then "--input_bam ~{input_BAM}" else if defined(input_GTF) then "--input_GTF ~{input_GTF}"  else ""
 
+    
     command <<<
         set -ex
 
-        classify_read_alignments_to_SQANTI_cats.py  --gtf ~{input_GTF} --bam ~{input_BAM} --output_prefix ~{sample_id}
-
-
+        SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} ~{inputs_string}
+      
     >>>
 
     output {
