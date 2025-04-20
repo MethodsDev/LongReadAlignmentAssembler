@@ -108,7 +108,7 @@ class SQANTI_like_annotator:
                     if (
                         make_intron_token(feature_chrom, feature_strand, intron_lend)
                         in self.stranded_splice_sites
-                        or make_intron_token(chrom, feature_strand, intron_rend)
+                        or make_intron_token(feature_chrom, feature_strand, intron_rend)
                         in self.stranded_splice_sites
                     ):
                         found_ref_shared_splice = True
