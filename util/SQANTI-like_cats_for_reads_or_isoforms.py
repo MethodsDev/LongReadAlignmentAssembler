@@ -82,6 +82,7 @@ def main():
         fieldnames=[
             "feature_name",
             "sqanti_cat",
+            "feature_length",
             "num_exon_segments",
             "structure",
             "matching_isoforms",
@@ -112,9 +113,14 @@ def main():
             if feature_counter % 1000 == 0:
                 print("\r[{}]  ".format(feature_counter), file=sys.stderr, end="")
 
-            if read.is_mapped:
+            if (
+                read.is_mapped
+                and (not read.is_secondary)
+                and (not read.is_supplementary)
+            ):
 
                 read_class_info = classify_read(read, bamfile_reader, sqanti_classifier)
+                read_class_info["feature_length"] = len(read.query_sequence)
 
                 read.set_tag("CL", read_class_info["sqanti_cat"], "Z")
                 read.set_tag("CI", read_class_info["matching_isoforms"], "Z")
@@ -143,6 +149,7 @@ def main():
                 read_class_info = sqanti_classifier.classify_alignment_or_isoform(
                     contig, transcript_strand, transcript_id, transcript_obj
                 )
+                read_class_info["feature_length"] = transcript_obj.get_cdna_len()
 
                 tsv_writer.writerow(read_class_info)
                 feature_category_counter[read_class_info["sqanti_cat"]] += 1
