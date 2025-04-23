@@ -6,7 +6,7 @@ main = function () {
     
     parser = ArgumentParser()
     parser$add_argument("--output_prefix", help="output pdf and tsv file prefix", required=TRUE, nargs=1)
-    parser$add_argument("--sample_stats", help="output pdf filename", required=TRUE, nargs='+')
+    parser$add_argument("--sample_stats", help="samples summary stats files", required=TRUE, nargs='+')
 	parser$add_argument("--width", default=12, required=FALSE, help="pdf page width (default: 12)")
     parser$add_argument("--height", default=12, required=FALSE, help="pdf page height (default: 12)")
     

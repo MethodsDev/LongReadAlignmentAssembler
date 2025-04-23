@@ -1,0 +1,80 @@
+#!/usr/bin/env Rscript
+
+main = function () {
+    
+    suppressPackageStartupMessages(library("argparse"))
+    
+    parser = ArgumentParser()
+    parser$add_argument("--output_prefix", help="output pdf and tsv file prefix", required=TRUE, nargs=1)
+    parser$add_argument("--sample_iso_cats", help="iso_cats.tsv files for all samples", required=TRUE, nargs='+')
+	parser$add_argument("--width", default=12, required=FALSE, help="pdf page width (default: 12)")
+    parser$add_argument("--height", default=12, required=FALSE, help="pdf page height (default: 12)")
+	parser$add_argument("--sample_n", default=1e5, required=FALSE, help="number of features to sample from each sample")
+    
+    args = parser$parse_args()
+
+	sample_iso_cats_files = args$sample_iso_cats
+	output_prefix = args$output_prefix
+	page_width = args$width
+    page_height = args$height
+    sample_num = args$sample_n
+    
+	library(tidyverse)
+    library(cowplot)
+
+    
+	all_stats_df = NULL
+
+	for (tsv_file in sample_iso_cats_files) {
+    	df = read.csv(tsv_file, header=T, sep="\t")
+    
+    	sample_name = str_split(basename(tsv_file), "\\.")[[1]][1]
+    
+    	df$sample_name = sample_name
+
+		df = df %>% select(sample_name, sqanti_cat, num_exon_segments, feature_length) %>%
+    			rename(Category = sqanti_cat)
+
+		if (nrow(df) > sample_num) {
+           df = df %>% sample_n(sample_num)
+        }
+    
+    	all_stats_df = bind_rows(all_stats_df, df)
+	}
+
+
+
+	all_stats_df = all_stats_df %>% mutate(multi_exon = (!grepl("^se_", Category)))
+	all_stats_df$classification = str_replace(all_stats_df$Category, "^se_", "")
+	all_stats_df = all_stats_df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
+	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+	all_stats_df$classification = factor(all_stats_df$classification, levels=cat_levels)
+    
+    write.table(all_stats_df, file=paste0(output_prefix, ".tsv"), sep="\t", quote=F, row.names=F)
+
+    pdf(paste0(output_prefix, ".pdf"), width=page_width, height=page_height)
+
+    # counts of reads by multi vs. single exon.
+
+    p = all_stats_df %>%
+	 ggplot(aes(x=sample_name, y=feature_length)) + 
+    geom_violin(fill='blue', alpha=0.3) +
+    geom_boxplot(outlier.size=-1, width=0.1, alpha=0.2, fill='orange') +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    ylim(0, 3000)
+
+    plot(p)
+    
+	dev.off()
+    
+    
+    quit(save = "no", status = 0, runLast = FALSE)
+
+}
+
+
+if (length(sys.calls())==0) {
+    main()
+}
+
