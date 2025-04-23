@@ -66,7 +66,7 @@ task LRAA_sqanti_like_multi_sample_CATS_summary_task {
       set -ex
 
       plot_SQANTI_cats.summarize_mult_samples.Rscript \
-          --output_prefix ~{output_prefix} \
+          --output_prefix ~{output_prefix}.CATS \
           --sample_stats ~{sep=" " iso_cats_summary_counts_tsv_files} \
           --width ~{width} \
           --height ~{height}
@@ -114,7 +114,7 @@ task LRAA_sqanti_like_multi_sample_LENGTHS_summary_task {
       set -ex
 
       plot_feature_lengths.summarize_mult_samples.Rscript \
-          --output_prefix ~{output_prefix} \
+          --output_prefix ~{output_prefix}.LENGTHS \
           --sample_iso_cats ~{sep=" " iso_cats_raw_counts_tsv_files} \
           --sample_n ~{lengths_sample_n} \
           --width ~{width} \
