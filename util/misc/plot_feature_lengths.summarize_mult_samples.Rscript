@@ -9,7 +9,7 @@ main = function () {
     parser$add_argument("--sample_iso_cats", help="iso_cats.tsv files for all samples", required=TRUE, nargs='+')
 	parser$add_argument("--width", default=12, required=FALSE, help="pdf page width (default: 12)")
     parser$add_argument("--height", default=12, required=FALSE, help="pdf page height (default: 12)")
-	parser$add_argument("--sample_n", default=1e5, required=FALSE, help="number of features to sample from each sample")
+	parser$add_argument("--sample_n", type='integer', default=100000, required=FALSE, help="number of features to sample from each sample")
     
     args = parser$parse_args()
 
@@ -38,7 +38,7 @@ main = function () {
         num_rows = nrow(df)
         message(tsv_file, " has ", num_rows, " rows.")
     
-		if (nrow(df) > sample_num) {
+		if (num_rows > sample_num) {
            df = df %>% sample_n(sample_num)
         }
     
