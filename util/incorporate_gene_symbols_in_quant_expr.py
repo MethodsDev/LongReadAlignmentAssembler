@@ -145,7 +145,7 @@ def update_LRAA_gff_feature_ids(
                     continue
                 info = vals[8]
                 m = re.search(
-                    'gene_id \\"([^\\"]+)\\"; transcript_id \\"([^\\"]+)\\";', info
+                    'gene_id \\"([^\\"]+)\\";.* transcript_id \\"([^\\"]+)\\";', info
                 )
                 if m:
                     gene_id = m.group(1)
@@ -304,7 +304,7 @@ def get_ref_gene_names(ref_gtf):
                 continue
 
             m = re.search(
-                'gene_id \\"([^\\"]+)\\"; transcript_id \\"([^\\"]+)\\";', info
+                'gene_id \\"([^\\"]+)\\";.* transcript_id \\"([^\\"]+)\\";', info
             )
             if m:
                 gene_id = m.group(1)
