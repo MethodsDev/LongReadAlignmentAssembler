@@ -35,6 +35,9 @@ main = function () {
 		df = df %>% select(sample_name, sqanti_cat, num_exon_segments, feature_length) %>%
     			rename(Category = sqanti_cat)
 
+        num_rows = nrow(df)
+        messsage(tsv_file, " has ", num_rows, " rows.")
+    
 		if (nrow(df) > sample_num) {
            df = df %>% sample_n(sample_num)
         }

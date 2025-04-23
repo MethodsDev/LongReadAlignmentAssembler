@@ -13,6 +13,15 @@
         "data/example_summaries/SM-OCW8X.iso_cats.summary_counts.tsv",
         "data/example_summaries/SM-ODCV8.iso_cats.summary_counts.tsv",
         "data/example_summaries/SM-OF5TA.iso_cats.summary_counts.tsv"
+    ],
+    "LRAA_sqanti_like_multi_sample_summary_wf.iso_cats_raw_counts_tsv_files" : [
+        "data/example_iso_cats/SIRV1.iso_cats.tsv",
+        "data/example_iso_cats/SIRV2.iso_cats.tsv",
+        "data/example_iso_cats/SIRV3.iso_cats.tsv",
+        "data/example_iso_cats/SIRV4.iso_cats.tsv",
+        "data/example_iso_cats/SIRV5.iso_cats.tsv",
+        "data/example_iso_cats/SIRV6.iso_cats.tsv",
+        "data/example_iso_cats/SIRV7.iso_cats.tsv"
     ]
 }
 

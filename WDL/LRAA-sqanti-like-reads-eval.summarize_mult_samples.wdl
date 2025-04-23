@@ -115,7 +115,7 @@ task LRAA_sqanti_like_multi_sample_LENGTHS_summary_task {
 
       plot_feature_lengths.summarize_mult_samples.Rscript \
           --output_prefix ~{output_prefix} \
-          --sample_stats ~{sep=" " iso_cats_raw_counts_tsv_files} \
+          --sample_iso_cats ~{sep=" " iso_cats_raw_counts_tsv_files} \
           --sample_n ~{lengths_sample_n} \
           --width ~{width} \
           --height ~{height}
