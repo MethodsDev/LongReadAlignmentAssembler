@@ -62,12 +62,14 @@ task LRAA_sqanti_like_reads_eval_task {
        fi
 
 
+       gzip *.tsv
+
     >>>
 
     output {
 
-        File iso_cats_tsv = "~{sample_id}.iso_cats.tsv"
-        File iso_cats_summary_counts_tsv = "~{sample_id}.iso_cats.summary_counts.tsv"
+        File iso_cats_tsv = "~{sample_id}.iso_cats.tsv.gz"
+        File iso_cats_summary_counts_tsv = "~{sample_id}.iso_cats.summary_counts.tsv.gz"
         File iso_cats_summary_counts_pdf = "~{sample_id}.iso_cats.summary_counts.pdf"
         File iso_cats_bam = "~{sample_id}.iso_cats.bam"
     }
