@@ -137,7 +137,7 @@ task LRAA_sqanti_like_multi_sample_LENGTHS_summary_task {
         bootDiskSizeGb: 30
         disks: "local-disk " + total_file_size + " HDD"
         cpu: 1
-        memory: "4 GiB"
+        memory: "32 GiB"
     }
     
 }
