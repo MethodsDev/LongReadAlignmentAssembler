@@ -1,0 +1,8 @@
+version: 1.2
+workflows:
+   - name: crypticSpliceFinder
+     subclass: WDL
+     primaryDescriptorPath: /WDL/crypticSpliceFinder.wdl
+     authors:
+         - name: Brian Haas
+           email: bhaas@broadinstitute.org
