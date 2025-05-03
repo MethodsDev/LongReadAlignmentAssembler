@@ -897,13 +897,21 @@ class Splice_graph:
                     break_lend, break_rend = polyA_coord - 1, polyA_coord
 
                 new_split_exon_left = Exon(
-                    contig_acc, exon_lend, break_lend, contig_strand, exon_coverage
+                    contig_acc,
+                    exon_lend,
+                    break_lend,
+                    contig_strand,
+                    self._get_mean_coverage(exon_lend, break_lend),
                 )
                 for exon_predecessor in exon_predecessors:
                     sg.add_edge(exon_predecessor, new_split_exon_left)
 
                 new_split_exon_right = Exon(
-                    contig_acc, break_rend, exon_rend, contig_strand, exon_coverage
+                    contig_acc,
+                    break_rend,
+                    exon_rend,
+                    contig_strand,
+                    self._get_mean_coverage(break_rend, exon_rend),
                 )
                 for exon_successor in exon_successors:
                     sg.add_edge(new_split_exon_right, exon_successor)
