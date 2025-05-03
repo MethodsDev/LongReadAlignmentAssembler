@@ -273,6 +273,8 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
             )
             transcript_i_read_counts_assigned = transcript_i.get_read_counts_assigned()
 
+            frac_gene_expression_i = transcript_i_read_counts_assigned / gene_read_count
+
             # for j in range(i+1, len(transcript_list)):
 
             for j in range(len(transcript_list)):
@@ -307,8 +309,11 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 )
 
                 logger.debug(
-                    "Exploring path: {} as subsuming {}".format(
-                        transcript_i_simple_path, transcript_j_simple_path
+                    "Exploring path_i: {} {} as subsuming path_j {} {}".format(
+                        transcript_i_id,
+                        transcript_i_simple_path,
+                        transcript_j_id,
+                        transcript_j_simple_path,
                     )
                 )
 
@@ -338,9 +343,10 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
 
                         frac_gene_express_j_TSS = j_TSS_read_count / gene_read_count
                         logger.debug(
-                            "frac_gene_express_j_TSS {} {} : {:.3f}".format(
+                            "frac_gene_express_j_TSS {} {} : num_j_TSS: {}  frac_TSS_gene_expr {:.3f}".format(
                                 transcript_j_id,
                                 transcript_j_simple_path,
+                                j_TSS_read_count,
                                 frac_gene_express_j_TSS,
                             )
                         )
@@ -350,6 +356,7 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                             < LRAA_Globals.config[
                                 "min_frac_gene_alignments_define_TSS_site"
                             ]
+                            and frac_gene_expression_i > frac_gene_expression_j
                         ):
                             logger.debug(
                                 "based on j_TSS count frac_gene_expression: {:.3f}, path_i: {} is subsuming path_j: {}".format(
@@ -366,24 +373,26 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                                 i_TSS_id
                             ).get_read_support()
 
-                            frac_i_TSS = j_TSS_read_count / i_TSS_read_count
+                            frac_j_TSS = j_TSS_read_count / i_TSS_read_count
                             logger.debug(
-                                "frac_i_TSS: {:.3f} of path_j: {} to path_i{}".format(
-                                    frac_i_TSS,
+                                "frac_j_TSS: path_j: {}  j_TSS_read_count {} = {:.3f} of path_i: {}  i_TSS_read_count {}".format(
                                     transcript_j_simple_path,
+                                    j_TSS_read_count,
+                                    frac_j_TSS,
                                     transcript_i_simple_path,
+                                    i_TSS_read_count,
                                 )
                             )
 
                             if (
-                                frac_i_TSS
+                                frac_j_TSS
                                 < LRAA_Globals.config[
                                     "max_frac_alt_TSS_from_degradation"
                                 ]
                             ):
                                 logger.debug(
-                                    "based on frac_i_TSS: {:.3f}, path_i: {} is subsuming path_j: {}".format(
-                                        frac_i_TSS,
+                                    "based on frac_j_TSS: {:.3f}, path_i: {} is subsuming path_j: {}".format(
+                                        frac_j_TSS,
                                         transcript_i_simple_path,
                                         transcript_j_simple_path,
                                     )
@@ -441,6 +450,13 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
         for transcript in transcript_set:
             if transcript not in transcript_prune_as_degradation:
                 transcripts_ret.append(transcript)
+            else:
+                if LRAA_Globals.DEBUG:
+                    logger.debug(
+                        "FILTERING transcript {} as a likely degradation product".format(
+                            transcript
+                        )
+                    )
 
     return transcripts_ret
 
@@ -597,6 +613,14 @@ def filter_novel_isoforms_by_min_read_support(
                 retained_transcripts.append(transcript)
             else:
                 # novel transcript gets pruned as insufficient evidence.
+                if LRAA_Globals.DEBUG:
+                    logger.debug(
+                        "FILTERING {} as insufficient evidence: read_support {} vs. min required {}".format(
+                            transcript,
+                            transcript.get_read_counts_assigned(),
+                            min_reads_novel_isoform,
+                        )
+                    )
                 pass
         else:
             # known transcript, retaining.

@@ -666,6 +666,23 @@ def main():
     ofh_quant_output.close()
     ofh_quant_read_tracker.close()
 
+    # make bed file for convenience
+    if not QUANT_ONLY:
+        bed_output_file = f"{output_prefix}.bed"
+        cmd = " ".join(
+            [
+                os.path.join(
+                    os.path.dirname(os.path.realpath(__file__)),
+                    "util/gtf_to_bed_format.pl",
+                ),
+                gtf_output_filename,
+                ">",
+                bed_output_file,
+            ]
+        )
+        logger.info("-making bed output file: {}".format(bed_output_file))
+        subprocess.check_call(cmd, shell=True)
+
     ##############################################################################
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
 
@@ -1040,6 +1057,10 @@ def run_transcript_assembly(
     ## Final quant step
     ###################
 
+    debug_mode_setting = LRAA_Globals.DEBUG
+    if debug_mode_setting is True:
+        LRAA_Globals.DEBUG = False
+
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
 
     q = run_quant_only(
@@ -1059,6 +1080,9 @@ def run_transcript_assembly(
         prereconstruct_info_dir,
         report_quants=False,
     )
+
+    # reset
+    LRAA_Globals.DEBUG = debug_mode_setting
 
     ## one last filtering based on min isoform fraction
 

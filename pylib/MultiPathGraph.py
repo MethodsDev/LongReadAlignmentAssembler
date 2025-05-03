@@ -14,6 +14,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+ITER = 0
+
 
 class MultiPathGraph:
 
@@ -105,7 +107,11 @@ class MultiPathGraph:
             # build_ofh = open(build_file, "wt")
 
         if LRAA_Globals.DEBUG:
-            component_descr_file = "__MPGN_components_described.bed"
+            global ITER
+            ITER += 1
+            component_descr_file = f"__MPGN_components_described.{ITER}.bed"
+            if os.path.exists(component_descr_file):
+                raise RuntimeError("Error!")
             component_descr_ofh = open(component_descr_file, "a")
 
         sorted_component_ids = sorted(
