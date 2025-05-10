@@ -63,3 +63,18 @@ def get_read_name_include_sc_encoding(pysam_read_alignment):
         return read_name
     else:
         return read.query_name
+
+
+def frac_base_composition(nuc_seq, nuc_base):
+
+    assert len(nuc_seq) > 0, "Error, nuc_seq is empty"
+
+    counter = 0
+
+    for char in nuc_seq:
+        if char.upper() == nuc_base.upper():
+            counter += 1
+
+    frac_base = counter / len(nuc_seq)
+
+    return frac_base
