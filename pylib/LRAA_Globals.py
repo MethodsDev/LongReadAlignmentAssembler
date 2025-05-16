@@ -57,7 +57,7 @@ config = {
     "min_PolyA_ident_length": 7,  # examine softclipped ends of reads, if have polyA with at least this number of bases at terminus, strip it and extended match out
     "min_PolyA_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of polyA-candidate gene reads assigned..
     "max_soft_clip_at_PolyA": 3,  # max amount of softclipping allowed at the end of an alignment to mark it as a candidate boundary
-    "min_soft_clip_PolyA_base_frac_for_converion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
+    "min_soft_clip_PolyA_base_frac_for_conversion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
     #
     #
     #

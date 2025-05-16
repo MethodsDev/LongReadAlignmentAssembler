@@ -140,7 +140,7 @@ class Pretty_alignment:
             pysam_alignment.is_forward
             and right_soft_clipping >= min_PolyA_ident_length
             and Util_funcs.frac_base_composition(right_soft_clipped_seq, "A")
-            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_converion"]
+            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
         ):
             right_soft_clipping = 0
             logger.debug("Stripped polyA from end of read {}".format(read_name))
@@ -149,7 +149,7 @@ class Pretty_alignment:
             pysam_alignment.is_reverse
             and left_soft_clipping >= min_PolyA_ident_length
             and Util_funcs.frac_base_composition(left_soft_clipped_seq, "T")
-            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_converion"]
+            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
         ):
             left_soft_clipping = 0
             logger.debug("Stripped polyT from beginning of read {}".format(read_name))
