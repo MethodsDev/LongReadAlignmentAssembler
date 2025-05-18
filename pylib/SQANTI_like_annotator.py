@@ -186,13 +186,13 @@ class SQANTI_like_annotator:
                         ISM_candidates.add(transcript_id)
 
             if len(FSM_candidates) > 0:
-                feature_class_info["sqanti_cat"] = "se_FSM"
+                feature_class_info["sqanti_cat"] = "se_FM"
                 feature_class_info["matching_isoforms"] = ",".join(
                     sorted(list(FSM_candidates))
                 )
                 feature_classified = True
             elif len(ISM_candidates) > 0:
-                feature_class_info["sqanti_cat"] = "se_ISM"
+                feature_class_info["sqanti_cat"] = "se_IM"
                 feature_class_info["matching_isoforms"] = ",".join(
                     sorted(list(ISM_candidates))
                 )
@@ -214,6 +214,14 @@ class SQANTI_like_annotator:
                         "genic" if multi_exon_alignment_flag else "se_genic"
                     )
                     feature_classified = True
+                elif (
+                    len(overlapping_exon_intervals) == 1
+                    and not multi_exon_alignment_flag
+                ):
+                    feature_class_info["sqanti_cat"] = "se_exonic"
+                    feature_classified = True
+
+                if feature_classified:
                     break
         #
         # check intronic

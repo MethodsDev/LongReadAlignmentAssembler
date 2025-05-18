@@ -35,9 +35,10 @@ main = function () {
 
     
 	all_stats_df = all_stats_df %>% mutate(multi_exon = (!grepl("^se_", Category)))
-	all_stats_df$classification = str_replace(all_stats_df$Category, "^se_", "")
-	all_stats_df = all_stats_df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
-	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+	#all_stats_df$classification = str_replace(all_stats_df$Category, "^se_", "")
+	all_stats_df$classification = all_stats_df$Category
+    all_stats_df = all_stats_df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
+	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic", "se_FM", "se_IM", "se_exonic", "se_genic", "se_intronic", "se_antisense", "se_intergenic")
 	all_stats_df$classification = factor(all_stats_df$classification, levels=cat_levels)
     
     write.table(all_stats_df, file=paste0(output_prefix, ".tsv"), sep="\t", quote=F, row.names=F)
@@ -65,9 +66,9 @@ main = function () {
 
 	############
     
-    p_counts_by_category = all_stats_df %>% ggplot(aes(x=sample_name, y=Count)) + geom_col(aes(fill=multi_exon)) +
+    p_counts_by_category = all_stats_df %>% ggplot(aes(x=sample_name, y=Count)) + geom_col(aes(fill=classification)) +
     theme_bw() +
-    facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+    facet_wrap(~classification, nrow=1) +
      theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
     ggtitle("Counts of reads by mapping category")
 
@@ -80,7 +81,7 @@ main = function () {
 	p_pct_reads_by_cat = pct_reads_by_category %>%
     ggplot(aes(x=sample_name, y=pct_reads_all)) + geom_col(aes(fill=pct_reads_all)) +
     theme_bw() +
-    facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+    facet_wrap(~classification, nrow=1) +
      theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
      geom_text(position=position_dodge(width=0.9), aes(label=sprintf("%.1f", pct_reads_all)), size=2, vjust=0)
     ggtitle("Pct of reads by mapping category")
@@ -96,7 +97,7 @@ main = function () {
 	p_pct_reads_by_category_stratified = pct_reads_by_category_stratified%>%
     	ggplot(aes(x=sample_name, y=pct_reads_strat)) + geom_col(aes(fill=pct_reads_strat)) +
     	theme_bw() +
-    	facet_grid(rows=vars(multi_exon), cols=vars(classification)) +
+        facet_wrap(~classification, nrow=1) +
      	theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
     	 geom_text(position=position_dodge(width=0.9), aes(label=sprintf("%.1f", pct_reads_strat)), size=2, vjust=0) +
    		 ggtitle("Pct of reads by mapping category, stratified mutli-vs-single")

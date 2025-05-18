@@ -14,9 +14,10 @@ plot_filename = args[2]
     
 df = read.csv(input_table, header=T, sep="\t")
 df = df %>% mutate(multi_exon = (!grepl("^se_", Category)))
-df$classification = str_replace(df$Category, "^se_", "")
+#df$classification = str_replace(df$Category, "^se_", "")
+df$classification = df$Category
 df = df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
-cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic", "se_FM", "se_IM", "se_genic", "se_exonic", "se_intronic", "se_antisense")
 df$classification = factor(df$classification, levels=cat_levels)
 total_reads = sum(df$Count)
 df = df %>% mutate(pct = sprintf("%.1f", Count/total_reads*100))
@@ -33,8 +34,9 @@ read_counts_plot = df %>% group_by(multi_exon) %>%
     
 
 counts_by_annot_class_plot = df %>% ggplot(aes(x=classification, y=Count, fill=classification)) + geom_col() + 
-    theme_bw() + facet_wrap(~multi_exon, ncol=1) +
-     theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme_bw() +
+    facet_wrap(~multi_exon, ncol=1, scale='free_x') +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
     geom_text(position=position_dodge(width=0.9), aes(label=pct)) +
     ggtitle("Counts of reads by annotation-match classification")
 
