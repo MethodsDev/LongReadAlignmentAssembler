@@ -1,3 +1,14 @@
+v0.2.36
+- new sqanti-like classes updated w/ tests and better resolved SE categories
+- for polyA soft-clipping, use "min_soft_clip_PolyA_base_frac_for_converion": 0.8
+- adding extract_reads_from_bam.py util
+- transcript_i cannot subsume contained/compatible transcript_j if transcript_i has expression < transcript_j.  Also recomputing exon coverage stats after TSS splits
+- similarly reassign coverage for polyA-split exon segments after splitting
+- including length dist plotter in sqanti-like
+- new classify_read_alignments_to_SQANTI_cats.py that works with both bams and gtfs as input
+- in quant-only mode, return the original annot_gtf provided
+
+
 v0.2.35
 - for alignment correction, set "min_softclip_realign_test": 5
 - including exon spur removal during quant-only splice graph building
