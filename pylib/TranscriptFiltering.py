@@ -170,6 +170,21 @@ def filter_isoforms_by_min_isoform_fraction(
                         )
                     )
 
+                elif not isoforms_were_filtered and (
+                    transcript.is_novel_isoform() is True
+                    and transcript_unique_read_count
+                    < LRAA_Globals.config["min_unique_reads_novel_isoform"]
+                ):
+                    isoforms_were_filtered = True
+                    num_filtered_isoforms += 1
+                    num_isoforms_of_gene_filtered += 1
+
+                    logger.debug(
+                        "Filtering out transcript_id {} as novel isoform with too few unique reads: {}".format(
+                            transcript_id, transcript_unique_read_count
+                        )
+                    )
+
                 else:
                     transcripts_retained.append(transcript)
 

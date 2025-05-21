@@ -75,6 +75,7 @@ config = {
     "filter_internal_priming": True,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
+    "min_unique_reads_novel_isoform": 2,
     "min_isoform_count_aggressive_filtering_iso_fraction": 10,  # allow for filtering mult isoforms in a single round if more than this number of isoform candidates.
     #
     ##########
