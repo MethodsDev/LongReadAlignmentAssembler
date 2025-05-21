@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 ## BIG TODO:// move functionality related to mapping features to the splicegraph to the actual splicegraph class instead of using all the wrapper functions herein.
 
+ITER = 0
+
 
 class LRAA:
 
@@ -452,6 +454,9 @@ class LRAA:
         The path is stored as a multipath object with a count associated with the number of reads assigned to it.
         """
 
+        global ITER
+        ITER += 1
+
         # distill read alignments into unique multipaths (so if 10k alignments yield the same structure, there's one multipath with 10k count associated)
         mp_counter = MultiPathCounter()
 
@@ -489,7 +494,7 @@ class LRAA:
 
         # capture the read->path assignments:
         if LRAA_Globals.DEBUG:
-            read_graph_mappings_ofh = open("__read_graph_mappings.dat", "a")
+            read_graph_mappings_ofh = open(f"__read_graph_mappings.dat.{ITER}", "a")
 
         logger.info("-start: mapping read alignments to the graph")
         num_alignments = len(grouped_alignments)
@@ -572,6 +577,9 @@ class LRAA:
 
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh.close()
+
+            with open(f"__mp_counter.{ITER}", "a") as mp_counter_ofh:
+                print(str(mp_counter), file=mp_counter_ofh)
 
         logger.info("-done: mapping read alignments to the graph")
 

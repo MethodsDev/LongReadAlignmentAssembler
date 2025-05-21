@@ -1053,6 +1053,11 @@ def run_transcript_assembly(
                 # continue
                 return
 
+    if LRAA_Globals.DEBUG:
+        report_transcript_paths_in_graph(
+            transcripts, "__output_transcripts_path_in_graph"
+        )
+
     ###################
     ## Final quant step
     ###################
@@ -1124,11 +1129,6 @@ def run_transcript_assembly(
             contig_acc, contig_strand, len(transcripts)
         )
     )
-
-    if LRAA_Globals.DEBUG:
-        report_transcript_paths_in_graph(
-            transcripts, "__output_transcripts_path_in_graph"
-        )
 
     for transcript in transcripts:
         ofh_gtf.write(transcript.to_GTF_format() + "\n")

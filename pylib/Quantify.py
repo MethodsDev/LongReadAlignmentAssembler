@@ -198,6 +198,7 @@ class Quantify:
                 anchor_PolyA_TSS=True,
             )
 
+            """
             if transcripts_assigned is None and self._quant_mode == "final":
                 # FSM required with read alignment coverage check
                 transcripts_assigned = self._assign_path_to_transcript(
@@ -209,6 +210,8 @@ class Quantify:
                     trim_TSS_polyA=False,
                     anchor_PolyA_TSS=True,
                 )
+
+            """
 
             if transcripts_assigned is None:
                 # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
@@ -249,6 +252,7 @@ class Quantify:
                     anchor_PolyA_TSS=False,
                 )
 
+            """
             if transcripts_assigned is None and self._quant_mode == "final":
                 # FSM required with read alignment coverage check
                 transcripts_assigned = self._assign_path_to_transcript(
@@ -260,6 +264,7 @@ class Quantify:
                     trim_TSS_polyA=True,
                     anchor_PolyA_TSS=False,
                 )
+            """
 
             if transcripts_assigned is None:
                 # compatibile allowed with read alignment coverage check

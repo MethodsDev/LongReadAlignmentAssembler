@@ -103,12 +103,7 @@ class MultiPathCounter:
 
     def __repr__(self):
 
-        ret_text = "\t"
-
-        for multipath_count_pair in self._multipath_counter.values():
-            ret_text += str(multipath_count_pair) + "\n"
-
-        return ret_text
+        return "\n".join([str(x) for x in self._multipath_counter.values()])
 
     def validate_MultiPathCounter(self):
 
