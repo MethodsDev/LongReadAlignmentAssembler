@@ -3,8 +3,10 @@
 VERSION=`cat VERSION.txt`
 
 docker push us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:${VERSION}
-docker push us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest
+#verify
+docker run --rm -it us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:${VERSION} /usr/local/src/LRAA/LRAA --version
 
+docker push us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest
 # verify
 docker run --rm -it us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest /usr/local/src/LRAA/LRAA --version
 
