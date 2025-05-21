@@ -45,11 +45,13 @@ main: {
 			my ($att, $val) = split(/\s+/, $part);
 			
 			if (exists $atts{$att}) {
-				die "Error, already defined attribute $att in $_";
-			}
-			
-			$atts{$att} = $val;
-		}
+				#die "Error, already defined attribute $att in $_";
+                $atts{$att} .= "^" . $val;
+            }
+			else {
+                $atts{$att} = $val;
+            }
+        }
 
 		my $gene_id = $atts{gene_id} or die "Error, no gene_id at $_";
 		my $trans_id = $atts{transcript_id} or die "Error, no trans_id at $_";
