@@ -76,8 +76,8 @@ def main():
 
     for read in bamreader.fetch(chrom, lend, rend):
         if strand != "":
-            if (strand == "+" and not read.is_forward()) or (
-                strand == "-" and not read.is_reverse()
+            if (strand == "+" and not read.is_forward) or (
+                strand == "-" and not read.is_reverse
             ):
                 continue
 
@@ -111,8 +111,8 @@ def main():
                     continue
 
                 if gtf_lend >= lend and gtf_rend <= gtf_rend:
-                    gtf_lend -= lend
-                    gtf_rend -= rend
+                    gtf_lend -= lend - 1
+                    gtf_rend -= lend - 1
                     vals[3] = str(gtf_lend)
                     vals[4] = str(gtf_rend)
                     print("\t".join(vals), file=ofh, end="")
