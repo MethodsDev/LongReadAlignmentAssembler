@@ -10,7 +10,7 @@ config = {
     #########################
     # read alignment criteria
     "min_per_id": 98,
-    "min_mapping_quality": 0,
+    "min_mapping_quality": 1,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_softclip_realign_test": 5,
