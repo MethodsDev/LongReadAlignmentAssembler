@@ -459,21 +459,48 @@ class Splice_graph:
                 else pretty_alignment.left_soft_clipping
             )
 
+            ######################
+            ## Capture TSS support
+
             if TSS_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]:
                 TSS_position_counter[TSS_pos] += 1
+                if LRAA_Globals.DEBUG:
+                    print(
+                        "\t".join(
+                            [
+                                contig_acc,
+                                contig_strand,
+                                str(TSS_pos),
+                                read_name,
+                                pretty_alignment.get_pretty_alignment_string(
+                                    contig_acc
+                                ),
+                            ]
+                        ),
+                        file=TSS_reads_ofh,
+                    )
+
+            ########################
+            ## Capture PolyA support
 
             if polyA_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]:
                 polyA_position_counter[polyA_pos] += 1
-
-            if LRAA_Globals.DEBUG:
-                print(
-                    "\t".join([contig_acc, contig_strand, str(TSS_pos), read_name]),
-                    file=TSS_reads_ofh,
-                )
-                print(
-                    "\t".join([contig_acc, contig_strand, str(polyA_pos), read_name]),
-                    file=POLYA_reads_ofh,
-                )
+                if LRAA_Globals.DEBUG:
+                    print(
+                        "\t".join(
+                            [
+                                contig_acc,
+                                contig_strand,
+                                str(polyA_pos),
+                                read_name,
+                                f"polyA_sc:{polyA_pos_soft_clipping}",
+                                pretty_alignment.get_pretty_alignment_string(
+                                    contig_acc
+                                ),
+                            ]
+                        ),
+                        file=POLYA_reads_ofh,
+                    )
 
             alignment_segments = pretty_alignment.get_pretty_alignment_segments()
             # print("Pretty alignment segments: " + str(alignment_segments))
