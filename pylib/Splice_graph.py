@@ -2402,6 +2402,32 @@ class Splice_graph:
 
         return
 
+    def reset_exon_coverage_via_pretty_alignments(self, pretty_alignments):
+        self._initialize_contig_coverage()
+
+        # recompute base coverage
+        for pretty_alignment in pretty_alignments:
+            for pretty_segment in pretty_alignment.get_pretty_alignment_segments():
+                lend, rend = pretty_segment
+                for i in range(lend, rend + 1):
+                    if i < self._contig_seq_len:
+                        self._contig_base_cov[i] += 1
+                    else:
+                        break
+
+        # reassign exon coverage values.
+        exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
+        for exon_seg in exon_segment_objs:
+            exon_lend, exon_rend = exon_seg.get_coords()
+            exon_seg._mean_coverage = self._get_mean_coverage(exon_lend, exon_rend)
+
+        if LRAA_Globals.DEBUG:
+            self.write_intron_exon_splice_graph_bed_files(
+                "__final_graph.pretty." + LRAA_Globals.LRAA_MODE, pad=0
+            )
+
+        return
+
 
 ## general utility functions used above.
 

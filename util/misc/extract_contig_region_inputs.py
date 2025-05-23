@@ -110,7 +110,7 @@ def main():
                 if strand != "" and strand != gtf_strand:
                     continue
 
-                if gtf_lend >= lend and gtf_rend <= gtf_rend:
+                if gtf_lend >= lend and gtf_rend <= rend:
                     gtf_lend -= lend - 1
                     gtf_rend -= lend - 1
                     vals[3] = str(gtf_lend)

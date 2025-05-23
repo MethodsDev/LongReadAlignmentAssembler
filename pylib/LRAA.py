@@ -477,6 +477,10 @@ class LRAA:
             Pretty_alignment.try_correct_alignments(
                 pretty_alignments, self._splice_graph, contig_seq
             )
+            # must redo base coverage and exon coverage assignments
+            self._splice_graph.reset_exon_coverage_via_pretty_alignments(
+                pretty_alignments
+            )
 
         Pretty_alignment.prune_long_terminal_introns(
             pretty_alignments, self._splice_graph

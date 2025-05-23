@@ -855,6 +855,8 @@ def run_transcript_assembly(
 
     LRAA_Globals.config["EM_alpha"] = 0.0  # disable during initial asm step.
 
+    LRAA_Globals.LRAA_MODE = "ID-init_norm_reads"
+
     sg = Splice_graph()
 
     ## Build Splice Graph
@@ -918,6 +920,7 @@ def run_transcript_assembly(
     ###########################################################
     # Do an initial quant
     # Now use the original bam for quant (not depth normalized)
+    LRAA_Globals.LRAA_MODE = "ID-full_reads"
 
     logger.info(
         "\n//SECTION QUANT using all reads for assembled isoforms: Assigning reads to paths in graph."
