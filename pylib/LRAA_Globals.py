@@ -46,7 +46,7 @@ config = {
     # during isoform resolution: comparing isoform i that contains j, j >= this frac of i TSS read support
     "max_frac_alt_TSS_from_degradation": 0.20,
     # to retain j TSS when comparing to i TSS, j TSS must have >= read support fraction of all gene reads
-    "min_frac_gene_alignments_define_TSS_site": 0.1,
+    # "min_frac_gene_alignments_define_TSS_site": 0.1, (deprecated)
     #
     ####################
     ## polyA site config
@@ -59,7 +59,8 @@ config = {
     "max_soft_clip_at_PolyA": 3,  # max amount of softclipping allowed at the end of an alignment to mark it as a candidate boundary
     "min_soft_clip_PolyA_base_frac_for_conversion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
     #
-    #
+    # compatible and contained isoform filtering
+    "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
     #
     ## read assignment to transcript criteria
     "fraction_read_align_overlap": 0.75,  # min fraction of read length that must overlap the compatible transcript isoform structure

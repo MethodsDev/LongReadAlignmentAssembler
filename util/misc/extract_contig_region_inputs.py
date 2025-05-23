@@ -44,6 +44,8 @@ def main():
     region = args.region
     output_prefix = args.output_prefix
 
+    region = region.replace(",", "")
+
     if output_prefix is None:
         output_prefix = region
 

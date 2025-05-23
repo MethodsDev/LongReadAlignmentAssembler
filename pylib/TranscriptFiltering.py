@@ -332,6 +332,22 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                     )
                 )
 
+                frac_gene_expression_j_of_i_and_j = frac_gene_expression_j / (
+                    frac_gene_expression_j + frac_gene_expression_i
+                )
+
+                ##
+                ## Evaluate containments
+                ##
+                ##
+                ## variables of interest: (in LRAA_Globals.config[]
+                #    - "collapse_alt_TSS_and_PolyA"
+                #  TSS:
+                #    - "max_frac_alt_TSS_from_degradation"
+                #    - "min_frac_gene_alignments_define_TSS_site"
+                #  PolyA:
+                #    - "min_frac_alignments_define_polyA_site"
+
                 if SPU.path_A_contains_path_B(i_path_trimmed, j_path_trimmed):
 
                     logger.debug(
@@ -340,7 +356,7 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         )
                     )
 
-                    subsume_J = False
+                    subsume_J = False  # init
 
                     if LRAA_Globals.config["collapse_alt_TSS_and_PolyA"]:
                         logger.debug(
@@ -350,7 +366,66 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         )
                         subsume_J = True
 
-                    elif j_TSS_id is not None:
+                    else:
+
+                        # no TSS or PolyA on j - prune.
+                        if j_TSS_id is None and j_polyA_id is None:
+                            logger.debug(
+                                "compatible/contained {} being pruned as lacking TSS or polyA annots.".format(
+                                    transcript_j_id
+                                )
+                            )
+                            subsume_J = True
+
+                        elif (
+                            frac_gene_expression_j_of_i_and_j
+                            < LRAA_Globals.config[
+                                "max_rel_frac_expr_alt_compat_contained"
+                            ]
+                        ):
+                            # if relative fraction of support for both is below threshold, then prune.
+                            logger.debug(
+                                "compatible/contained {} being pruned as insufficiently relatively expressed.".format(
+                                    transcript_j_id
+                                )
+                            )
+                            subsume_J = True
+
+                    if subsume_J:
+                        logger.debug(
+                            "Pruning {} as likely degradation product of {}".format(
+                                transcript_j, transcript_i
+                            )
+                        )
+                        transcript_prune_as_degradation.add(transcript_j)
+                        transcript_i.add_read_names(transcript_j.get_read_names())
+
+                """
+                # old logic
+
+                if SPU.path_A_contains_path_B(i_path_trimmed, j_path_trimmed):
+
+                    logger.debug(
+                        "splice compatible & contained transcript_j_id {} has frac gene expression: {}".format(
+                            transcript_j_id, frac_gene_expression_j
+                        )
+                    )
+
+                    subsume_J = False  # init
+
+                    if LRAA_Globals.config["collapse_alt_TSS_and_PolyA"]:
+                        logger.debug(
+                            "Collapsing compatible path: {} into {}".format(
+                                transcript_j, transcript_i
+                            )
+                        )
+                        subsume_J = True
+
+                    if not subsume_J and j_TSS_id is not None:
+
+                        ######################################
+                        ## contained path j has a TSS defined.
+                        ######################################
 
                         j_TSS_read_count = sg.get_node_obj_via_id(
                             j_TSS_id
@@ -380,9 +455,17 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                                     transcript_j_simple_path,
                                 )
                             )
+                            ##############################################################
+                            ## discarding j as having insuffiicent gene-level TSS support.
+                            ##############################################################
+
                             subsume_J = True
 
                         elif i_TSS_id is not None:
+
+                            #################################
+                            ## Both i and j have TSSs defined
+                            #################################
 
                             i_TSS_read_count = sg.get_node_obj_via_id(
                                 i_TSS_id
@@ -412,9 +495,15 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                                         transcript_j_simple_path,
                                     )
                                 )
+
+                                ##################################################################
+                                ## Discarding j as having (compared to i) insufficient TSS support
+                                ##################################################################
+                                
                                 subsume_J = True
 
                         elif i_TSS_id is None:
+                            # retain j due to TSS support.
                             subsume_J = False
 
                     elif i_TSS_id is not None and j_TSS_id is None:
@@ -460,6 +549,8 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         )
                         transcript_prune_as_degradation.add(transcript_j)
                         transcript_i.add_read_names(transcript_j.get_read_names())
+
+                """
 
         # retain the ones not pruned
         for transcript in transcript_set:
