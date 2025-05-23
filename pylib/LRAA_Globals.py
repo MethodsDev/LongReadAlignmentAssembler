@@ -46,7 +46,6 @@ config = {
     # during isoform resolution: comparing isoform i that contains j, j >= this frac of i TSS read support
     "max_frac_alt_TSS_from_degradation": 0.20,
     # to retain j TSS when comparing to i TSS, j TSS must have >= read support fraction of all gene reads
-    # "min_frac_gene_alignments_define_TSS_site": 0.1, (deprecated)
     #
     ####################
     ## polyA site config
