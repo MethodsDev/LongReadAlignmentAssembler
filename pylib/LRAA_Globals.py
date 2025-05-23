@@ -25,7 +25,7 @@ config = {
     "min_alt_splice_freq": 0.01,
     "min_alt_unspliced_freq": 0.01,
     "min_feature_frac_overlap": 0.50,
-    "max_exon_spur_length": 5,  # exon spurs not tied to TSS or PolyA and at most this length get pruned
+    "max_exon_spur_length": 13,  # exon spurs not tied to TSS or PolyA and at most this length get pruned
     "aggregate_adjacent_splice_boundaries": False,
     "aggregate_splice_boundary_dist": 5,
     "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
