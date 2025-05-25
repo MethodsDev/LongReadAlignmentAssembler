@@ -182,17 +182,18 @@ class LRAA:
             component_counter += 1
             coord_span = get_mpgn_list_coord_span(mpg_component)
             logger.info(
-                "LRAA - assembly of component {} size {} region: {}:{}-{}".format(
+                "LRAA - assembly of component {} size {} region: {}{}:{}-{}".format(
                     component_counter,
                     mpg_component_size,
                     self._contig_acc,
+                    self._contig_strand,
                     coord_span[0],
                     coord_span[1],
                 )
             )
 
-            mpg_token = "{}-{}-{}".format(
-                self._contig_acc, coord_span[0], coord_span[1]
+            mpg_token = "{}{}:{}-{}".format(
+                self._contig_acc, self._contig_strand, coord_span[0], coord_span[1]
             )
             if LRAA_Globals.DEBUG:
                 mpgn_description_filename = "{}/{}.mpgns.txt".format(
@@ -284,6 +285,8 @@ class LRAA:
     def _reconstruct_isoforms_single_component(
         self, q, mpg_component, component_counter, mpg_token, single_best_only=False
     ):
+
+        start_time = time.time()
 
         using_multiprocessing = q is not None
         component_size = len(mpg_component)
@@ -438,6 +441,11 @@ class LRAA:
         # lighten the transcripts before returning them
         for transcript in transcripts:
             transcript.lighten()
+
+        end_time = time.time()
+        asm_time_min = (end_time - start_time) / 60
+
+        logger.info(f"Assembly time for {mpg_token} is {asm_time_min:.2f} min.")
 
         if q is not None:
             # using MultiProcessing Queue
