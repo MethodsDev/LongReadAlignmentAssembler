@@ -24,7 +24,7 @@ import shutil
 
 
 # VERSION = "v0.2.36"
-VERSION = "BLEEDING_EDGE-v0.2.36-postdev2"
+VERSION = "BLEEDING_EDGE-v0.2.36-postdev3"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
