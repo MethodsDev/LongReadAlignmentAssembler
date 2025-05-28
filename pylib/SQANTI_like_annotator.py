@@ -17,6 +17,16 @@ logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
+######################################################
+#
+#  SQANTI-like categories assigned
+#
+#  Spliced features:
+#
+#      FSM: contains full set of spliced-out introns as a reference isoform
+#      ISM:
+
+
 class SQANTI_like_annotator:
 
     MIN_FSM_SE_FRAC_OVERLAP = 0.9
@@ -99,8 +109,8 @@ class SQANTI_like_annotator:
 
             # check ISM, NIC, NNIC
             if not feature_classified:
-                introns_all = None
-                introns_any = set()
+                introns_all = None  # isoforms all contain introns
+                introns_any = set()  # any isoform that contains the intron
                 introns_none = set()
                 found_ref_shared_splice = False
                 for intron in transcribed_feature_obj.get_introns():
@@ -120,6 +130,7 @@ class SQANTI_like_annotator:
                     if intron_tok in self.intron_to_isoforms:
                         isoforms_with_intron = self.intron_to_isoforms[intron_tok]
                         if introns_all is None:
+                            # init
                             introns_all = set()
                             introns_all.update(isoforms_with_intron)
                         else:
@@ -127,6 +138,7 @@ class SQANTI_like_annotator:
 
                         introns_any.update(isoforms_with_intron)
                     else:
+                        # novel intron splice pattern
                         introns_none.update(intron_tok)
                         if introns_all is not None:
                             introns_all = introns_all.clear()  # ISMs not possible.
@@ -136,12 +148,25 @@ class SQANTI_like_annotator:
                     and len(introns_all) > 0
                     and len(introns_none) == 0
                 ):
-                    feature_class_info["sqanti_cat"] = "ISM"
-                    feature_class_info["matching_isoforms"] = ",".join(
-                        sorted(list(introns_all))
+
+                    ordered_splice_matched_isoforms = (
+                        self.restrict_splice_matched_isoforms(
+                            introns_all, transcribed_feature_obj
+                        )
                     )
-                    feature_classified = True
-                elif len(introns_any) > 0 and len(introns_none) == 0:
+
+                    if len(ordered_splice_matched_isoforms) > 0:
+                        feature_class_info["sqanti_cat"] = "ISM"
+                        feature_class_info["matching_isoforms"] = ",".join(
+                            sorted(list(ordered_splice_matched_isoforms))
+                        )
+                        feature_classified = True
+
+                if (
+                    (not feature_classified)
+                    and len(introns_any) > 0
+                    and len(introns_none) == 0
+                ):
                     feature_class_info["sqanti_cat"] = "NIC"
                     feature_classified = True
                 elif (len(introns_any) > 0 or found_ref_shared_splice) and len(
@@ -317,6 +342,28 @@ class SQANTI_like_annotator:
                     ] = transcript_id
 
         return
+
+    def restrict_splice_matched_isoforms(
+        self, isoforms_with_matching_introns, transcribed_feature_obj
+    ):
+
+        feature_introns = transcribed_feature_obj.get_introns()
+
+        locally_matching_isoforms = set()
+
+        for isoform_id in isoforms_with_matching_introns:
+            isoform_introns = self.transcript_id_to_obj[isoform_id].get_introns()
+
+            idx_start = isoform_introns.index(feature_introns[0])
+            isoform_introns = isoform_introns[idx_start:]
+
+            idx_end = isoform_introns.index(feature_introns[-1])
+            isoform_introns = isoform_introns[: idx_end + 1]
+
+            if isoform_introns == feature_introns:
+                locally_matching_isoforms.add(isoform_id)
+
+        return isoform_id
 
 
 def make_intron_token(chrom, strand, coord_pair):
