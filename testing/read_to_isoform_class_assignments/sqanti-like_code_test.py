@@ -206,8 +206,17 @@ def test_se_antisense(annotator):
 
 def test_se_genic(annotator):
     # Single-exon, does not overlap any exon or intron
+    ref = MockTranscript("T10", "chr1", "+", [(100, 200), (350, 500)])
+    add_ref_transcript(annotator, ref)
+    feature = MockTranscript("F10", "chr1", "+", [(300, 500)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F10", feature)
+    assert res["sqanti_cat"] == "se_genic"
+
+
+def test_se_exonic(annotator):
+    # Single-exon, does not overlap any exon or intron
     ref = MockTranscript("T10", "chr1", "+", [(100, 200), (250, 500)])
     add_ref_transcript(annotator, ref)
     feature = MockTranscript("F10", "chr1", "+", [(300, 350)])
     res = annotator.classify_alignment_or_isoform("chr1", "+", "F10", feature)
-    assert res["sqanti_cat"] == "se_genic"
+    assert res["sqanti_cat"] == "se_exonic"
