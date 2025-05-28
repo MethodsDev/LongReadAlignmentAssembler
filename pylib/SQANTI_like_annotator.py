@@ -257,9 +257,10 @@ class SQANTI_like_annotator:
                 elif (
                     len(overlapping_exon_intervals) == 1
                     and len(overlapping_intron_intervals) == 0
-                    and not multi_exon_alignment_flag
                 ):
-                    feature_class_info["sqanti_cat"] = "se_exonic"
+                    feature_class_info["sqanti_cat"] = (
+                        "se_exonic" if not multi_exon_alignment_flag else "genic"
+                    )
                     feature_classified = True
 
                 if feature_classified:
@@ -295,7 +296,14 @@ class SQANTI_like_annotator:
                 overlapping_exon_intervals = self.stranded_chrom_exon_itrees[
                     antisense_stranded_chrom
                 ][exon_seg_lend : exon_seg_rend + 1]
-                if len(overlapping_exon_intervals) > 0:
+                overlapping_intron_intervals = self.stranded_chrom_intron_itrees[
+                    antisense_stranded_chrom
+                ][exon_seg_lend : exon_seg_rend + 1]
+
+                if (
+                    len(overlapping_exon_intervals) > 0
+                    or len(overlapping_intron_intervals) > 0
+                ):
                     feature_class_info["sqanti_cat"] = (
                         "antisense" if multi_exon_alignment_flag else "se_antisense"
                     )

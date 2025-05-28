@@ -106,7 +106,7 @@ def test_NNIC(annotator):
 
 
 def test_genic(annotator):
-    # NNIC: novel splice sites
+    # pverlaps introns and exons, no sharing of ref splice
     ref = MockTranscript(
         "T6", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
     )
@@ -117,8 +117,18 @@ def test_genic(annotator):
     assert res["sqanti_cat"] == "genic"
 
 
+def test_genic2(annotator):
+    # single exon ref gene with mutli-segment feature aligned
+    ref = MockTranscript("T6", "chr1", "+", [(100, 700)])
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(200, 300), (550, 650)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "genic"
+
+
 def test_intronic(annotator):
-    # NNIC: novel splice sites
+    # found within an intron and no exon overlap
     ref = MockTranscript("T6", "chr1", "+", [(100, 150), (600, 700)])
     add_ref_transcript(annotator, ref)
     # Feature with at least one novel intron
@@ -128,7 +138,7 @@ def test_intronic(annotator):
 
 
 def test_antisense(annotator):
-    # NNIC: novel splice sites
+    # muti-exon reftrans aligned to by multi-seg feature
     ref = MockTranscript("T6", "chr1", "+", [(100, 150), (600, 700)])
     add_ref_transcript(annotator, ref)
     # Feature with at least one novel intron
@@ -137,13 +147,54 @@ def test_antisense(annotator):
     assert res["sqanti_cat"] == "antisense"
 
 
+def test_antisense2(annotator):
+    # multi-exon reftrans has multi-exon feature within intron on opposite strand
+    ref = MockTranscript("T6", "chr1", "+", [(100, 150), (600, 700)])
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "-", [(200, 250), (450, 500)])
+    res = annotator.classify_alignment_or_isoform("chr1", "-", "F6", feature)
+    assert res["sqanti_cat"] == "antisense"
+
+
 def test_intergenic(annotator):
-    # NNIC: novel splice sites
+    # found between two ref genes
     ref = MockTranscript("T6", "chr1", "+", [(100, 150), (300, 400)])
     add_ref_transcript(annotator, ref)
 
     ref2 = MockTranscript("T6b", "chr1", "+", [(600, 700), (800, 900)])
     add_ref_transcript(annotator, ref2)
+
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(450, 475), (500, 550)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "intergenic"
+
+
+def test_intergenic2(annotator):
+    # no gene on reference contig
+
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(450, 475), (500, 550)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "intergenic"
+
+
+def test_intergenic3(annotator):
+    # single gene on same strand as feature
+    ref = MockTranscript("T6", "chr1", "+", [(100, 150), (300, 400)])
+    add_ref_transcript(annotator, ref)
+
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(450, 475), (500, 550)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "intergenic"
+
+
+def test_intergenic4(annotator):
+    # single gene on opposite strand as feature
+    ref = MockTranscript("T6", "chr1", "-", [(100, 150), (300, 400)])
+    add_ref_transcript(annotator, ref)
 
     # Feature with at least one novel intron
     feature = MockTranscript("F6", "chr1", "+", [(450, 475), (500, 550)])
@@ -200,6 +251,15 @@ def test_se_antisense(annotator):
     ref = MockTranscript("T9", "chr1", "-", [(100, 200)])
     add_ref_transcript(annotator, ref)
     feature = MockTranscript("F9", "chr1", "+", [(100, 200)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F9", feature)
+    assert res["sqanti_cat"] == "se_antisense"
+
+
+def test_se_antisense2(annotator):
+    # single exon feature aligns to intron on opposite strand
+    ref = MockTranscript("T9", "chr1", "-", [(100, 200), (500, 600)])
+    add_ref_transcript(annotator, ref)
+    feature = MockTranscript("F9", "chr1", "+", [(300, 400)])
     res = annotator.classify_alignment_or_isoform("chr1", "+", "F9", feature)
     assert res["sqanti_cat"] == "se_antisense"
 
