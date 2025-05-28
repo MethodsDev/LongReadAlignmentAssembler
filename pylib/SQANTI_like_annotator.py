@@ -283,7 +283,7 @@ class SQANTI_like_annotator:
             antisense_stranded_chrom = "{}:{}".format(feature_chrom, antisense_strand)
             for exon_segment in exon_segments:
                 exon_seg_lend, exon_seg_rend = exon_segment
-                overlapping_exon_intervals = self.stranded_chrom_intron_itrees[
+                overlapping_exon_intervals = self.stranded_chrom_exon_itrees[
                     antisense_stranded_chrom
                 ][exon_seg_lend : exon_seg_rend + 1]
                 if len(overlapping_exon_intervals) > 0:
