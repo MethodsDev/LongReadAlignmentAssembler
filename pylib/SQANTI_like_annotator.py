@@ -4,7 +4,10 @@ import sys, os, re
 import logging
 from collections import defaultdict
 import intervaltree as itree
-
+import pytest
+import unittest
+from unittest.mock import MagicMock
+from MockTranscript import MockTranscript
 
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Pretty_alignment import Pretty_alignment
@@ -52,11 +55,8 @@ class SQANTI_like_annotator:
         self, feature_chrom, feature_strand, feature_name, transcribed_feature_obj
     ):
 
-        assert type(transcribed_feature_obj) in (
-            Transcript,
-            Pretty_alignment,
-        ), "Error, cannot process transcribed_feature: {}, type {}".format(
-            transcribed_feature_obj, type(transcribed_feature_obj)
+        assert isinstance(
+            transcribed_feature_obj, (Transcript, Pretty_alignment, MockTranscript)
         )
 
         stranded_chrom = "{}:{}".format(feature_chrom, feature_strand)
@@ -113,15 +113,24 @@ class SQANTI_like_annotator:
                 introns_any = set()  # any isoform that contains the intron
                 introns_none = set()
                 found_ref_shared_splice = False
+                found_nonref_splice = False
                 for intron in transcribed_feature_obj.get_introns():
                     intron_lend, intron_rend = intron
                     if (
                         make_intron_token(feature_chrom, feature_strand, intron_lend)
                         in self.stranded_splice_sites
-                        or make_intron_token(feature_chrom, feature_strand, intron_rend)
+                    ):
+                        found_ref_shared_splice = True
+                    else:
+                        found_nonref_splice = True
+
+                    if (
+                        make_intron_token(feature_chrom, feature_strand, intron_rend)
                         in self.stranded_splice_sites
                     ):
                         found_ref_shared_splice = True
+                    else:
+                        found_nonref_shared_splice = True
 
                     intron_tok = make_intron_token(
                         feature_chrom, feature_strand, intron
@@ -164,14 +173,12 @@ class SQANTI_like_annotator:
 
                 if (
                     (not feature_classified)
-                    and len(introns_any) > 0
-                    and len(introns_none) == 0
+                    and found_ref_shared_splice
+                    and (not found_nonref_splice)
                 ):
                     feature_class_info["sqanti_cat"] = "NIC"
                     feature_classified = True
-                elif (len(introns_any) > 0 or found_ref_shared_splice) and len(
-                    introns_none
-                ) > 0:
+                elif found_ref_shared_splice and found_nonref_splice:
                     feature_class_info["sqanti_cat"] = "NNIC"
                     feature_classified = True
 
