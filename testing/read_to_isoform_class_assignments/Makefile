@@ -1,4 +1,4 @@
-test: test_single test_multi
+test: test_single test_multi test_code
 
 
 test_single:
@@ -9,6 +9,9 @@ test_single:
 test_multi:
 	../../util/misc/plot_SQANTI_cats.summarize_mult_samples.Rscript --output_prefix test.multi --sample_stats data/example_summaries/*tsv.gz
 	../../util/misc/plot_feature_lengths.summarize_mult_samples.Rscript --sample_iso_cats data/example_summaries/indiv_cats/*tsv.gz --output_prefix test.lengths
+
+test_code:
+	pytest ./sqanti-like_code_test.py 
 
 test_wdl: test_wdl_single test_wdl_multi
 

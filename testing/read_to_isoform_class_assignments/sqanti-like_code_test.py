@@ -52,25 +52,8 @@ def add_ref_transcript(annotator, t):
 
 # --- Now, the actual tests --- #
 
-
-def test_se_FM(annotator):
-    # Single-exon FSM
-    ref = MockTranscript("T1", "chr1", "+", [(100, 200)])
-    add_ref_transcript(annotator, ref)
-    feature = MockTranscript("F1", "chr1", "+", [(100, 200)])
-    res = annotator.classify_alignment_or_isoform("chr1", "+", "F1", feature)
-    assert res["sqanti_cat"] == "se_FM"
-    assert "T1" in res["matching_isoforms"]
-
-
-def test_se_IM(annotator):
-    # Single-exon, partial overlap (should be se_IM)
-    ref = MockTranscript("T2", "chr1", "+", [(100, 200)])
-    add_ref_transcript(annotator, ref)
-    feature = MockTranscript("F2", "chr1", "+", [(150, 200)])
-    res = annotator.classify_alignment_or_isoform("chr1", "+", "F2", feature)
-    assert res["sqanti_cat"] == "se_IM"
-    assert "T2" in res["matching_isoforms"]
+###########################
+## multi-exon feature tests
 
 
 def test_FSM(annotator):
@@ -122,6 +105,76 @@ def test_NNIC(annotator):
     assert res["sqanti_cat"] == "NNIC"
 
 
+def test_genic(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript(
+        "T6", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(200, 300), (550, 650)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "genic"
+
+
+def test_intronic(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript("T6", "chr1", "+", [(100, 150), (600, 700)])
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(200, 300), (400, 500)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "intronic"
+
+
+def test_antisense(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript("T6", "chr1", "+", [(100, 150), (600, 700)])
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "-", [(100, 200), (400, 650)])
+    res = annotator.classify_alignment_or_isoform("chr1", "-", "F6", feature)
+    assert res["sqanti_cat"] == "antisense"
+
+
+def test_intergenic(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript("T6", "chr1", "+", [(100, 150), (300, 400)])
+    add_ref_transcript(annotator, ref)
+
+    ref2 = MockTranscript("T6b", "chr1", "+", [(600, 700), (800, 900)])
+    add_ref_transcript(annotator, ref2)
+
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(450, 475), (500, 550)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "intergenic"
+
+
+###########################
+# single-exon feature tests
+
+
+def test_se_FM(annotator):
+    # Single-exon FSM
+    ref = MockTranscript("T1", "chr1", "+", [(100, 200)])
+    add_ref_transcript(annotator, ref)
+    feature = MockTranscript("F1", "chr1", "+", [(100, 200)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F1", feature)
+    assert res["sqanti_cat"] == "se_FM"
+    assert "T1" in res["matching_isoforms"]
+
+
+def test_se_IM(annotator):
+    # Single-exon, partial overlap (should be se_IM)
+    ref = MockTranscript("T2", "chr1", "+", [(100, 200)])
+    add_ref_transcript(annotator, ref)
+    feature = MockTranscript("F2", "chr1", "+", [(150, 200)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F2", feature)
+    assert res["sqanti_cat"] == "se_IM"
+    assert "T2" in res["matching_isoforms"]
+
+
 def test_se_intergenic(annotator):
     # Single-exon, overlaps an exon but not enough for se_FM/se_IM
     ref1 = MockTranscript("T7", "chr1", "+", [(100, 200)])
@@ -158,15 +211,3 @@ def test_se_genic(annotator):
     feature = MockTranscript("F10", "chr1", "+", [(300, 350)])
     res = annotator.classify_alignment_or_isoform("chr1", "+", "F10", feature)
     assert res["sqanti_cat"] == "se_genic"
-
-
-def test_se_IM(annotator):
-    # Single-exon, does not overlap any exon or intron
-    ref = MockTranscript("T10", "chr1", "+", [(100, 700)])
-    add_ref_transcript(annotator, ref)
-    feature = MockTranscript("F10", "chr1", "+", [(300, 350)])
-    res = annotator.classify_alignment_or_isoform("chr1", "+", "F10", feature)
-    assert res["sqanti_cat"] == "se_IM"
-
-
-# Add similar logic for multi-exon genic, intronic, antisense, and intergenic if desired
