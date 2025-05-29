@@ -92,7 +92,6 @@ config = {
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
-    "EM_implementation_use": "CGPT",  # choices: "BJH" or "CGPT"
     "EM_alpha": 0.01,  # regularization
     #
     ######

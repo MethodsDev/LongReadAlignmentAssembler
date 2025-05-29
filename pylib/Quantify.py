@@ -12,8 +12,8 @@ import logging
 from math import log
 import lmdb
 from GenomeFeature import Exon
-import EM_bjh
-import EM_ChatGPT_based
+import EM
+
 
 logger = logging.getLogger(__name__)
 
@@ -853,26 +853,11 @@ class Quantify:
 
         if self._run_EM:
 
-            EM_method_use = LRAA_Globals.config["EM_implementation_use"]
-
-            if EM_method_use == "BJH":
-                EM_method = EM_bjh.run_EM
-
-            elif EM_method_use == "CGPT":
-                EM_method = EM_ChatGPT_based.run_EM
-
-            else:
-                raise RuntimeError(
-                    "LRAA config EM_implementation_use val {} is not recognized.".format(
-                        EM_method_use
-                    )
-                )
-
             (
                 transcript_to_expr_val,
                 transcript_to_fractional_read_assignment,
                 transcript_to_read_count,
-            ) = EM_method(transcripts, self._max_EM_iterations)
+            ) = EM.run_EM(transcripts, self._max_EM_iterations)
 
         else:
             # simple equal fractional assignment of reads to compatible transcripts

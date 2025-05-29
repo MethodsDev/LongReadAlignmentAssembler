@@ -128,7 +128,7 @@ def run_EM(
         print(
             "\n".join(
                 [
-                    "\n\n# LRAA out from chatGPT method:",
+                    "\n\n# LRAA out from EM method:",
                     "trans_expr_levels_array:\n"
                     + "\n".join([f"{x:.3f}" for x in trans_expr_levels_array]),
                     "\ntranscript_sum_read_counts_array:\n"
@@ -381,8 +381,6 @@ if __name__ == "__main__":
             "\n".join([f"\t{x}: {y:.4f}" for (x, y) in frac_read_assignments.items()])
         )
 
-    # now, via the ChatGPT-based direct interface
-
     # Simulated read assignments
     # Each sublist contains the indices of transcripts a read is assigned to
     read_assignments = [
@@ -405,10 +403,10 @@ if __name__ == "__main__":
     # run EM
     num_transcripts = 3
     expression, trans_read_counts, frac_read_assignments = em_algorithm_with_weights(
-        read_assignments, read_weights, num_transcripts, alpha=0
+        read_assignments, read_weights, num_transcripts, base_alpha=0
     )
 
-    print("\n\n" + "##########################\n" + "# ChatGPT-direct interface:\n")
+    print("\n\n" + "##########################\n" + "#:\n")
 
     print(
         "Estimated expression levels:\n\t"
@@ -424,95 +422,3 @@ if __name__ == "__main__":
 
     for _list in frac_read_assignments:
         print("\t" + "\t".join([f"{x:.4f}" for x in _list]))
-
-
-"""
-
-# original from ChatGPT
-
-import numpy as np
-from collections import defaultdict
-
-
-def em_algorithm_with_weights(
-    read_assignments, read_weights, num_transcripts, max_iter=100, tol=1e-6
-):
-    \"""
-    Perform the EM algorithm to estimate transcript expression levels with weighted reads.
-
-    Parameters:
-        read_assignments (list of lists): Each element is a list of transcript indices (0-based)
-                                          to which the read is assigned (unique or ambiguous).
-        read_weights (list of lists): A matrix of weights where each sublist corresponds to
-                                       the weights of a read for the assigned transcripts.
-        num_transcripts (int): Total number of transcripts.
-        max_iter (int): Maximum number of iterations.
-        tol (float): Convergence tolerance.
-
-    Returns:
-        np.ndarray: Estimated expression levels for each transcript.
-    \"""
-    # Initialize expression values uniformly
-    expression_levels = np.ones(num_transcripts) / num_transcripts
-    prev_expression_levels = np.zeros(num_transcripts)
-
-    for iteration in range(max_iter):
-        # E-step: Calculate fractional assignments
-        fractional_assignments = defaultdict(float)
-        for i, read in enumerate(read_assignments):
-            total_weight = sum(
-                read_weights[i][j] * expression_levels[t] for j, t in enumerate(read)
-            )
-            for j, t in enumerate(read):
-                weight = read_weights[i][j]
-                fractional_assignments[t] += (
-                    weight * expression_levels[t] / total_weight
-                    if total_weight > 0
-                    else 0
-                )
-
-        # M-step: Update expression levels
-        expression_levels = np.array(
-            [fractional_assignments[t] for t in range(num_transcripts)]
-        )
-
-        # Normalize to ensure expression levels sum to 1
-        expression_levels /= expression_levels.sum()
-
-        # Check for convergence
-        if np.linalg.norm(expression_levels - prev_expression_levels) < tol:
-            print(f"Converged after {iteration + 1} iterations.")
-            break
-
-        prev_expression_levels = expression_levels.copy()
-
-    return expression_levels
-
-
-# Example usage:
-if __name__ == "__main__":
-    # Simulated read assignments
-    # Each sublist contains the indices of transcripts a read is assigned to
-    read_assignments = [
-        [0],  # Unique assignment to transcript 0
-        [1],  # Unique assignment to transcript 1
-        [0, 1, 2],  # Ambiguous assignment to transcripts 0, 1, 2
-        [2],  # Unique assignment to transcript 2
-        [1, 2],  # Ambiguous assignment to transcripts 1 and 2
-    ]
-
-    # Simulated weights for each read (rows correspond to reads, columns to assigned transcripts)
-    read_weights = [
-        [1.0],  # Unique read, full weight to transcript 0
-        [1.0],  # Unique read, full weight to transcript 1
-        [0.5, 0.3, 0.2],  # Ambiguous read, weights for transcripts 0, 1, 2
-        [1.0],  # Unique read, full weight to transcript 2
-        [0.4, 0.6],  # Ambiguous read, weights for transcripts 1, 2
-    ]
-
-    num_transcripts = 3
-    expression = em_algorithm_with_weights(
-        read_assignments, read_weights, num_transcripts
-    )
-    print("Estimated expression levels:", expression)
-"""
