@@ -142,6 +142,32 @@ def test_NNIC(annotator):
     assert res["sqanti_cat"] == "NNIC"
 
 
+def test_NNIC2(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript(
+        "T6", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript(
+        "F6", "chr1", "+", [(100, 150), (200, 250), (350, 450), (600, 700)]
+    )
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "NNIC"
+
+
+def test_NNIC3(annotator):
+    # NNIC: novel splice sites
+    ref = MockTranscript(
+        "T6", "chr1", "+", [(100, 150), (200, 250), (425, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref)
+    # Feature with at least one novel intron
+    feature = MockTranscript("F6", "chr1", "+", [(200, 300), (600, 650)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F6", feature)
+    assert res["sqanti_cat"] == "NNIC"
+
+
 def test_genic(annotator):
     # pverlaps introns and exons, no sharing of ref splice
     ref = MockTranscript(
