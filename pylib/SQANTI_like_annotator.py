@@ -130,7 +130,7 @@ class SQANTI_like_annotator:
                     ):
                         found_ref_shared_splice = True
                     else:
-                        found_nonref_shared_splice = True
+                        found_nonref_splice = True
 
                     intron_tok = make_intron_token(
                         feature_chrom, feature_strand, intron
