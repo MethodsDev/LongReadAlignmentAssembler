@@ -1,3 +1,14 @@
+v0.2.37
+- refined SQANTI-like categories, including code-level tests and documentation
+- refactored EM code
+- stricter rules around polyA site identification
+- simplified partial isoform filtering logic
+- setting max spur length to 13 instead of 5
+- reset exon coverage vals post pretty alignment corrected alignments stag
+- added region extractor utility for troubleshooting individual regions or genes in minigenome-style
+- disabling MAPQ=0 by default
+- incorporating a unique read support rule for novel isoforms
+
 v0.2.36
 - new sqanti-like classes updated w/ tests and better resolved SE categories
 - for polyA soft-clipping, use "min_soft_clip_PolyA_base_frac_for_converion": 0.8
