@@ -79,16 +79,53 @@ def test_ISM(annotator):
 
 
 def test_NIC(annotator):
-    # NIC: known splice sites, new combination not in reference
-    ref1 = MockTranscript("T5a", "chr1", "+", [(100, 150), (200, 450), (600, 700)])
-    add_ref_transcript(annotator, ref1)
-    # Feature: combines introns from both refs (which isn't a reference pattern)
-    feature = MockTranscript(
-        "F5", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    # NIC: known splice sites, new combination not in reference, skipped exon
+    ref1 = MockTranscript(
+        "T5a", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
     )
-    # Add all possible known splice sites
-    for pos in [150 + 1, 200 - 1, 250 + 1, 300 - 1, 350 + 1, 400 - 1, 450 + 1, 600 - 1]:
-        annotator.stranded_splice_sites.add(f"chr1:+:{pos}")
+    add_ref_transcript(annotator, ref1)
+
+    # Feature: combines introns from both refs (which isn't a reference pattern)
+    feature = MockTranscript("F5", "chr1", "+", [(100, 150), (200, 250), (600, 700)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F5", feature)
+    assert res["sqanti_cat"] == "NIC"
+
+
+def test_NIC2(annotator):
+    # NIC: known splice sites, new combination not in reference, skipped exon
+    ref1 = MockTranscript(
+        "T5a", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref1)
+
+    # Feature: combines introns from both refs (which isn't a reference pattern)
+    feature = MockTranscript("F5", "chr1", "+", [(100, 150), (400, 450), (600, 700)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F5", feature)
+    assert res["sqanti_cat"] == "NIC"
+
+
+def test_NIC3(annotator):
+    # NIC: known splice sites, new combination not in reference, skipped 2 exons
+    ref1 = MockTranscript(
+        "T5a", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref1)
+
+    # Feature: combines introns from both refs (which isn't a reference pattern)
+    feature = MockTranscript("F5", "chr1", "+", [(100, 150), (600, 700)])
+    res = annotator.classify_alignment_or_isoform("chr1", "+", "F5", feature)
+    assert res["sqanti_cat"] == "NIC"
+
+
+def test_NIC4(annotator):
+    # NIC: known splice sites, new combination not in reference (retained intron)
+    ref1 = MockTranscript(
+        "T5a", "chr1", "+", [(100, 150), (200, 250), (400, 450), (600, 700)]
+    )
+    add_ref_transcript(annotator, ref1)
+
+    # Feature: combines introns from both refs (which isn't a reference pattern)
+    feature = MockTranscript("F5", "chr1", "+", [(100, 150), (200, 450), (600, 700)])
     res = annotator.classify_alignment_or_isoform("chr1", "+", "F5", feature)
     assert res["sqanti_cat"] == "NIC"
 
