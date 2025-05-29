@@ -373,14 +373,14 @@ class SQANTI_like_annotator:
 
         feature_introns = transcribed_feature_obj.get_introns()
 
-        print("Feature introns: {}".format(feature_introns))
+        # print("Feature introns: {}".format(feature_introns))
 
         locally_matching_isoforms = set()
 
         for isoform_id in isoforms_with_matching_introns:
 
             isoform_introns = self.transcript_id_to_obj[isoform_id].get_introns()
-            print("Isoform {} has introns {}".format(isoform_id, isoform_introns))
+            # print("Isoform {} has introns {}".format(isoform_id, isoform_introns))
 
             idx_start = isoform_introns.index(feature_introns[0])
             isoform_introns = isoform_introns[idx_start:]
