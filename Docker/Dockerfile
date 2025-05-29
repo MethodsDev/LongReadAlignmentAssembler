@@ -108,10 +108,12 @@ RUN R -e 'BiocManager::install("clustermole")'
 
 RUN pip install numpy --break-system-packages
 
+RUN pip install pytest --break-system-packages
+    
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.2.37"
-ENV LRAA_CO=1eab7ed9f175430d95623771d23d74c878542646
+ENV LRAA_VERSION="v0.2.37-postdev2"
+ENV LRAA_CO=6c25a713485e8628a2fd502b3aa3a4aa213a0a3d
 
 
 # update VERSION and LRAA_CO files with version info and checkout
@@ -124,4 +126,4 @@ RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembl
 
 ENV PATH="$SRC/LRAA/:$SRC/LRAA/util/:$SRC/LRAA/util/sc/:$SRC/LRAA/util/misc:${PATH}"
 
-RUN pip install pytest --break-system-packages
+
