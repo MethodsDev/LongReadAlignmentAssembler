@@ -17,7 +17,7 @@ df = df %>% mutate(multi_exon = (!grepl("^se_", Category)))
 #df$classification = str_replace(df$Category, "^se_", "")
 df$classification = df$Category
 df = df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
-cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic", "se_FM", "se_IM", "se_genic", "se_exonic", "se_intronic", "se_antisense")
+cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic", "se_FM", "se_IM", "se_genic", "se_exonic", "se_intronic", "se_antisense", "se_intergenic")
 df$classification = factor(df$classification, levels=cat_levels)
 total_reads = sum(df$Count)
 df = df %>% mutate(pct = sprintf("%.1f", Count/total_reads*100))

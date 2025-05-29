@@ -123,3 +123,5 @@ RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembl
 
 
 ENV PATH="$SRC/LRAA/:$SRC/LRAA/util/:$SRC/LRAA/util/sc/:$SRC/LRAA/util/misc:${PATH}"
+
+RUN pip install pytest --break-system-packages
