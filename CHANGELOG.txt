@@ -1,3 +1,7 @@
+v0.3.0
+- public release after testing
+
+
 v0.2.37
 - refined SQANTI-like categories, including code-level tests and documentation
 - refactored EM code
