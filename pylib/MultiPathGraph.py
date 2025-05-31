@@ -29,6 +29,8 @@ class MultiPathGraph:
         allow_spacers=False,
     ):
 
+        local_debug = False
+
         logger.info(f"START building MultiPathGraph for {contig_acc}")
 
         assert type(multiPathCounter) == MultiPathCounter.MultiPathCounter
@@ -219,7 +221,7 @@ class MultiPathGraph:
                 f"Building MP Graph for component_id {component_id} spanning {region} with {num_ordered_nodes} multipaths"
             )
 
-            if LRAA_Globals.DEBUG:
+            if LRAA_Globals.DEBUG and local_debug:
                 component_build_file = os.path.join(
                     mpg_build_dir, f"{component_id}.comp.buildgraph.tsv"
                 )
@@ -232,7 +234,7 @@ class MultiPathGraph:
                 for j in range(i - 1, -1, -1):
                     node_j = ordered_nodes[j]
 
-                    if LRAA_Globals.DEBUG:
+                    if LRAA_Globals.DEBUG and local_debug:
                         print(
                             "\n\n# comparing prev_j\n{}\nto_i\n{}".format(
                                 node_j, node_i
@@ -252,19 +254,19 @@ class MultiPathGraph:
 
                     if node_i.contains_other_node(node_j):
                         # i contains j
-                        if LRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG and local_debug:
                             print("i-contains-j", file=build_ofh)
                         node_i.add_containment(node_j)
 
                     elif node_j.contains_other_node(node_i):
                         # j contains i
-                        if LRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG and local_debug:
                             print("j-contains-i", file=build_ofh)
                         node_j.add_containment(node_i)
 
                     elif node_i.compatible(node_j):
                         # draw edge between overlapping and compatible nodes.
-                        if LRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG and local_debug:
                             print("i-COMPATIBLE-j", file=build_ofh)
                             # logger.debug("adding edge: {},{}".format(node_j, node_i))
 
@@ -273,7 +275,7 @@ class MultiPathGraph:
 
                     else:
                         # incompatible pairs
-                        if LRAA_Globals.DEBUG:
+                        if LRAA_Globals.DEBUG and local_debug:
                             print("i-NOTcompatible-j", file=build_ofh)
                         incompatible_pair_token = (
                             MultiPathGraphNode.get_mpgn_pair_token(node_i, node_j)
