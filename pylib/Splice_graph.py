@@ -1692,6 +1692,9 @@ class Splice_graph:
 
     def describe_graph(self, outputfilename):
 
+        if True:
+            return  # disabling for now - files can be too big
+
         ofh = open(outputfilename, "a")
 
         nodes = list(self._splice_graph.nodes)
