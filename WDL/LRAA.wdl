@@ -187,7 +187,7 @@ task count_bam {
 
   >>>
   runtime {
-    docker: "quay.io/ucsc_cgl/samtools"
+    docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
     disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " HDD"
     memory: "4G"
   }
