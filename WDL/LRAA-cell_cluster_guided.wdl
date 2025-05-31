@@ -203,7 +203,7 @@ task LRAA_merge_trackings {
 task lraa_merge_gtf_task {
     input {
         String sample_id
-        Array[File] LRAA_cell_cluster_gtfs
+        Array[File?] LRAA_cell_cluster_gtfs
         File referenceGenome
         String docker
         Int memoryGB
