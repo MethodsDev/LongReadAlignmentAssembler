@@ -13,7 +13,7 @@ from math import log
 import lmdb
 from GenomeFeature import Exon
 import EM
-
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -845,7 +845,13 @@ class Quantify:
 
         """
 
-        logger.info("-estimating isoform read support.")
+        logger.info(
+            "-estimating isoform read support for {} transcripts.".format(
+                len(transcripts)
+            )
+        )
+
+        start_time = time.time()
 
         transcript_to_expr_val = defaultdict(float)
         transcript_to_fractional_read_assignment = defaultdict(dict)
@@ -943,6 +949,14 @@ class Quantify:
                     )
                 )
                 transcript_of_gene.set_isoform_fraction(isoform_frac)
+
+        end_time = time.time()
+
+        logger.info(
+            "Time for quant of {} transcripts = {:.2f} minutes".format(
+                len(transcripts), (end_time - start_time) / 60
+            )
+        )
 
         return transcript_to_fractional_read_assignment
 
