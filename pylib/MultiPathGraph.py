@@ -432,6 +432,9 @@ class MultiPathGraph:
 
     def describe_graph(self, output_filename):
 
+        if True:
+            return  # files can be too large, disabling for now
+
         ofh = open(output_filename, "a")
 
         ofh2 = open(output_filename + ".tsv", "a")  # tabulated output

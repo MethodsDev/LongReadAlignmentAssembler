@@ -51,6 +51,12 @@ def run_EM(
 
     read_names = sorted(list(read_name_to_transcripts_and_weights.keys()))
 
+    num_reads_mapped = len(read_names)
+
+    logger.info(
+        f"Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
+    )
+
     # inputs to EM
     read_assignments = list()
     read_weights = list()
