@@ -47,7 +47,7 @@ class Pretty_alignment:
         self._set_read_soft_clipping_info(pysam_alignment)  # sets above
 
     def __repr__(self):
-        return str(self._pretty_alignment_segments)
+        return "({})".format(self.get_strand()) + str(self._pretty_alignment_segments)
 
     def get_read_name(self):
         read = self._pysam_alignment
