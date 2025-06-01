@@ -32,6 +32,7 @@ class Quantify:
         self._read_name_to_multipath = dict()
 
         self._mp_to_transcripts = dict()
+        self._mp_to_read_count = dict()
 
         self._quant_mode = quant_mode
 
@@ -171,6 +172,8 @@ class Quantify:
                 )
 
             mp, count = mp_count_pair.get_multipath_and_count()
+
+            self._mp_to_read_count[mp] = count
 
             mp_id = mp.get_id()
 
@@ -351,7 +354,7 @@ class Quantify:
                 for transcript in transcripts_assigned:
                     transcript_id = transcript.get_transcript_id()
                     mp_read_weight = transcript_read_weights[transcript_id]
-                    read_names = mp.get_read_names()
+                    # read_names = mp.get_read_names()
                     logger.debug(
                         "Assigning {} mp: {} read weights as: {}".format(
                             transcript.get_transcript_id(),
@@ -359,12 +362,10 @@ class Quantify:
                             mp_read_weight,
                         )
                     )
-                    transcript.add_read_names(read_names)
 
-                    read_names_with_weights = dict(
-                        [(read_name, mp_read_weight) for read_name in read_names]
-                    )
-                    transcript.set_read_weights(read_names_with_weights)
+                    # assign mp and weight to transcript
+                    transcript.add_multipaths_evidence_assigned(mp)
+                    transcript.set_multipaths_evidence_weights({mp: mp_read_weight})
 
                 num_paths_assigned += 1
                 num_read_counts_assigned += count
@@ -895,7 +896,7 @@ class Quantify:
                 transcript_to_expr_val,
                 transcript_to_fractional_read_assignment,
                 transcript_to_read_count,
-            ) = EM.run_EM(transcripts, self._max_EM_iterations)
+            ) = EM.run_EM(transcripts, self._mp_to_read_count, self._max_EM_iterations)
 
         else:
             # simple equal fractional assignment of reads to compatible transcripts
@@ -1043,7 +1044,7 @@ class Quantify:
     def report_quant_results(
         self,
         transcripts,
-        transcript_to_fractional_read_assignment,
+        transcript_to_fractional_mp_assignment,
         ofh_quant_vals,
         ofh_read_tracking,
         ofh_quant_read_tracking_lmdb=None,
@@ -1073,8 +1074,7 @@ class Quantify:
             counts = transcript.get_read_counts_assigned()
             isoform_frac = transcript.get_isoform_fraction()
 
-            readnames = transcript.get_read_names()
-            readnames = sorted(readnames)
+            multipaths = transcript.get_multipaths_evidence_assigned()
 
             tpm = transcript.get_TPM()
 
@@ -1084,45 +1084,47 @@ class Quantify:
             if ofh_quant_read_tracking_lmdb is not None:
                 txn = ofh_quant_read_tracking_lmdb.begin(write=True)
 
-            for readname in readnames:
-                frac_read_assigned = transcript_to_fractional_read_assignment[
+            for mp in multipaths:
+                frac_read_assigned = transcript_to_fractional_mp_assignment[
                     transcript_id
-                ][readname]
+                ][mp]
 
-                tracking_report_info = [
-                    gene_id,
-                    transcript_id,
-                    readname,
-                    "{:.3f}".format(frac_read_assigned),
-                ]
+                for readname in mp.get_read_names():
 
-                if LRAA_Globals.DEBUG:
-                    tracking_report_info.append(
-                        "{:.3f}".format(transcript.get_read_weight(readname))
-                    )
-
-                if frac_read_assigned > 1e-3 or LRAA_Globals.DEBUG:
-                    print("\t".join(tracking_report_info), file=ofh_read_tracking)
-
-                # add to LMDB
-                if txn is not None:
-                    key = readname.encode("utf-8")
-                    existing_data = txn.get(key)
-                    lmdb_data = [
+                    tracking_report_info = [
                         gene_id,
                         transcript_id,
+                        readname,
                         "{:.3f}".format(frac_read_assigned),
                     ]
-                    if existing_data:
-                        # Append new data as comma-separated string
-                        existing_data = existing_data.decode("utf-8")
-                        combined_data = f"{existing_data},{','.join(lmdb_data)}"
-                    else:
-                        combined_data = ",".join(lmdb_data)
-                    txn.put(key, combined_data.encode("utf-8"))
 
-                if frac_read_assigned == 1:
-                    num_uniquely_assigned_reads += 1
+                    if LRAA_Globals.DEBUG:
+                        tracking_report_info.append(
+                            "{:.3f}".format(transcript.get_read_weight(readname))
+                        )
+
+                    if frac_read_assigned > 1e-3 or LRAA_Globals.DEBUG:
+                        print("\t".join(tracking_report_info), file=ofh_read_tracking)
+
+                    # add to LMDB
+                    if txn is not None:
+                        key = readname.encode("utf-8")
+                        existing_data = txn.get(key)
+                        lmdb_data = [
+                            gene_id,
+                            transcript_id,
+                            "{:.3f}".format(frac_read_assigned),
+                        ]
+                        if existing_data:
+                            # Append new data as comma-separated string
+                            existing_data = existing_data.decode("utf-8")
+                            combined_data = f"{existing_data},{','.join(lmdb_data)}"
+                        else:
+                            combined_data = ",".join(lmdb_data)
+                        txn.put(key, combined_data.encode("utf-8"))
+
+                    if frac_read_assigned == 1:
+                        num_uniquely_assigned_reads += 1
 
             if txn is not None:
                 txn.commit()
@@ -1196,3 +1198,6 @@ class Quantify:
                 gene_id_to_read_count[gene_id] += frac_assigned
 
         return gene_id_to_read_count
+
+    def get_mp_read_count(self, mp):
+        return self._mp_to_read_count[mp]

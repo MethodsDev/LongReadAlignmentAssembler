@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 def run_EM(
     transcripts: list,
+    mp_to_read_count: dict,
     max_EM_iterations: int = 1000,
 ):
 
@@ -27,19 +28,19 @@ def run_EM(
     num_transcripts = len(transcripts)
 
     ## assign reads and transcripts to indices
-    read_name_to_transcripts_and_weights, transcript_id_to_idx = (
-        get_read_to_transcripts_and_weights(transcripts)
+    multipath_to_transcripts_and_weights, transcript_id_to_idx = (
+        get_multipath_to_transcripts_and_weights(transcripts)
     )
 
     if local_debug:
         print(
             "\n".join(
                 [
-                    "read name to transcripts and weights:\n",
+                    "mp to transcripts and weights:\n",
                     "\n".join(
                         [
                             f"{x}:\t{y}"
-                            for (x, y) in read_name_to_transcripts_and_weights.items()
+                            for (x, y) in multipath_to_transcripts_and_weights.items()
                         ]
                     ),
                     "\ntranscript id to idx:",
@@ -49,40 +50,49 @@ def run_EM(
             + "\n\n"
         )
 
-    read_names = sorted(list(read_name_to_transcripts_and_weights.keys()))
-
-    num_reads_mapped = len(read_names)
+    multipaths = list(multipath_to_transcripts_and_weights.keys())
+    num_reads_mapped = 0
+    for mp in multipaths:
+        num_reads_mapped += mp.get_read_count()
 
     logger.info(
         f"Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
     )
 
     # inputs to EM
-    read_assignments = list()
-    read_weights = list()
+    mp_assignments = (
+        list()
+    )  # (list of lists): Each element is a list of transcript indices (0-based) to which the read is assigned (unique or ambiguous).
+    mp_weights = (
+        list()
+    )  # (list of lists): A matrix of weights where each sublist corresponds to the weights of a read for the assigned transcripts.
+    mp_read_counts = list()  # number of reads assigned to mp
 
     # populate inputs to EM
     start_prep_time = time.time()
-    for i, read_name in enumerate(read_names):
+    for i, mp in enumerate(multipaths):
 
-        indiv_read_to_trans_assignments = list()
-        indiv_read_to_trans_weights = list()
+        indiv_mp_to_trans_assignments = list()
+        indiv_mp_to_trans_weights = list()
+
+        num_reads_in_mp = mp_to_read_count[mp]
+        mp_read_counts.append(num_reads_in_mp)
 
         for (
-            read_mapped_transcript,
-            read_trans_weight_val,
-        ) in read_name_to_transcripts_and_weights[read_name]:
-            read_mapped_transcript_idx = transcript_id_to_idx[read_mapped_transcript]
+            mp_mapped_transcript,
+            mp_trans_weight_val,
+        ) in multipath_to_transcripts_and_weights[mp]:
+            mp_mapped_transcript_idx = transcript_id_to_idx[mp_mapped_transcript]
 
-            indiv_read_to_trans_assignments.append(read_mapped_transcript_idx)
+            indiv_mp_to_trans_assignments.append(mp_mapped_transcript_idx)
 
             if not LRAA_Globals.config["use_weighted_read_assignments"]:
-                read_trans_weight_val = 1.0
+                mp_trans_weight_val = 1.0
 
-            indiv_read_to_trans_weights.append(read_trans_weight_val)
+            indiv_mp_to_trans_weights.append(mp_trans_weight_val)
 
-        read_assignments.append(indiv_read_to_trans_assignments)
-        read_weights.append(indiv_read_to_trans_weights)
+        mp_assignments.append(indiv_mp_to_trans_assignments)
+        mp_weights.append(indiv_mp_to_trans_weights)
 
     end_prep_time = time.time()
 
@@ -91,11 +101,11 @@ def run_EM(
 
     if local_debug:
 
-        read_weights_for_printing = list()
-        for _list in read_weights:
-            read_weights_for_printing.append([f"{x:.3f}" for x in _list])
+        mp_weights_for_printing = list()
+        for _list in mp_weights:
+            mp_weights_for_printing.append([f"{x:.3f}" for x in _list])
 
-        trans_assignments_and_weights = zip(read_assignments, read_weights_for_printing)
+        trans_assignments_and_weights = zip(mp_assignments, mp_weights_for_printing)
 
         print(
             "\n".join(
@@ -120,10 +130,11 @@ def run_EM(
     (
         trans_expr_levels_array,
         transcript_sum_read_counts_array,
-        fractional_read_assignments_array,
+        fractional_mp_assignments_array,
     ) = em_algorithm_with_weights(
-        read_assignments,
-        read_weights,
+        mp_assignments,
+        mp_weights,
+        mp_read_counts,
         num_transcripts,
         max_iter=max_EM_iterations,
         base_alpha=alpha,
@@ -131,8 +142,8 @@ def run_EM(
 
     if local_debug:
 
-        fractional_read_assignments_array_for_printing = list()
-        for _list in fractional_read_assignments_array:
+        fractional_mp_assignments_array_for_printing = list()
+        for _list in fractional_mp_assignments_array:
             fractional_read_assignments_array_for_printing.append(
                 [f"{x:.4f}" for x in _list]
             )
@@ -147,7 +158,7 @@ def run_EM(
                     + "\n".join([str(x) for x in transcript_sum_read_counts_array]),
                     "\nfractional_read_assignments_array: "
                     + "\n".join(
-                        [str(x) for x in fractional_read_assignments_array_for_printing]
+                        [str(x) for x in fractional_mp_assignments_array_for_printing]
                     ),
                 ]
             )
@@ -165,76 +176,74 @@ def run_EM(
         transcript_to_read_count[transcript_id] = transcript_sum_read_counts_array[i]
 
     # next, interface with fractional read assignment info
-    transcript_to_fractional_read_assignment = defaultdict(dict)
-    for read_idx, trans_frac_assignments_array in enumerate(
-        fractional_read_assignments_array
+    transcript_to_fractional_mp_assignment = defaultdict(dict)
+    for mp_idx, trans_frac_assignments_array in enumerate(
+        fractional_mp_assignments_array
     ):
-        read_name = read_names[read_idx]
+        mp = multipaths[mp_idx]
         for j, frac_val in enumerate(trans_frac_assignments_array):
-            transcript_idx = read_assignments[read_idx][j]
+            transcript_idx = mp_assignments[mp_idx][j]
             transcript_id = transcripts[transcript_idx].get_transcript_id()
-            transcript_to_fractional_read_assignment[transcript_id][
-                read_name
-            ] = frac_val
+            transcript_to_fractional_mp_assignment[transcript_id][mp] = frac_val
 
     return (
         transcript_to_expr_val,
-        transcript_to_fractional_read_assignment,
+        transcript_to_fractional_mp_assignment,
         transcript_to_read_count,
     )
 
 
-def get_read_to_transcripts_and_weights(transcripts):
+def get_multipath_to_transcripts_and_weights(transcripts):
 
-    read_name_to_transcripts_and_weights = dict()
+    multipath_to_transcripts_and_weights = dict()
     transcript_id_to_idx = dict()
-    all_read_names = set()
+    all_multipaths = set()
 
     for i, transcript in enumerate(transcripts):
         transcript_id = transcript.get_transcript_id()
         transcript_id_to_idx[transcript_id] = i
 
-        read_names = transcript.get_read_names()
-        for read_name in read_names:
+        multipaths = transcript.get_multipaths_evidence_assigned()
+        for mp in multipaths:
 
-            read_weight = transcript.get_read_weight(read_name)
+            mp_weight = transcript.get_multipath_weight(mp)
             if not LRAA_Globals.config["use_weighted_read_assignments"]:
                 # not using the read weights.
-                read_weight = 1.0
+                mp_weight = 1.0
 
-            if read_name not in read_name_to_transcripts_and_weights:
-                read_name_to_transcripts_and_weights[read_name] = list()
+            if mp not in multipath_to_transcripts_and_weights:
+                multipath_to_transcripts_and_weights[mp] = list()
 
-            read_name_to_transcripts_and_weights[read_name].append(
-                (transcript_id, read_weight)
-            )
+            multipath_to_transcripts_and_weights[mp].append((transcript_id, mp_weight))
 
     # order transcripts according to their indices
     for (
-        read_name,
+        mp,
         transcript_assigned_list,
-    ) in read_name_to_transcripts_and_weights.items():
+    ) in multipath_to_transcripts_and_weights.items():
         transcript_assigned_list.sort(key=lambda x: transcript_id_to_idx[x[0]])
 
-    return read_name_to_transcripts_and_weights, transcript_id_to_idx
+    return multipath_to_transcripts_and_weights, transcript_id_to_idx
 
 
 def em_algorithm_with_weights(
-    read_assignments,
-    read_weights,
+    mp_assignments,
+    mp_weights,
+    mp_read_counts,
     num_transcripts,
     max_iter=100,
     tol=1e-6,
     base_alpha=0.1,
 ):
     """
-    Perform the EM algorithm to estimate transcript expression levels with weighted reads.
+    Perform the EM algorithm to estimate transcript expression levels with weighted multipaths.
 
     Parameters:
-        read_assignments (list of lists): Each element is a list of transcript indices (0-based)
-                                          to which the read is assigned (unique or ambiguous).
-        read_weights (list of lists): A matrix of weights where each sublist corresponds to
-                                       the weights of a read for the assigned transcripts.
+        mp_assignments (list of lists): Each element is a list of transcript indices (0-based)
+                                          to which the mp is assigned (unique or ambiguous).
+        mp_weights (list of lists): A matrix of weights where each sublist corresponds to
+                                       the weights of a mp for the assigned transcripts.
+        mp_read_counts (list of ints): each element is the number of reads corresponding to that multipath.
         num_transcripts (int): Total number of transcripts.
         max_iter (int): Maximum number of iterations.
         tol (float): Convergence tolerance.
@@ -250,17 +259,17 @@ def em_algorithm_with_weights(
     transcript_expression_levels = np.ones(num_transcripts) / num_transcripts
     prev_expression_levels = np.zeros(num_transcripts)
 
-    # init fractional read assignments
-    fractional_read_assignments = init_fractional_read_assignments(read_assignments)
+    # init fractional mp assignments
+    fractional_mp_assignments = init_fractional_mp_assignments(mp_assignments)
 
-    # Count ambiguous reads for each transcript
+    # Count ambiguous mps for each transcript
     ambiguous_read_counts = np.zeros(num_transcripts)
-    for read in read_assignments:
-        if len(read) > 1:  # Ambiguous read
-            for trans_id in read:
-                ambiguous_read_counts[trans_id] += 1
+    for i, mp in enumerate(mp_assignments):
+        if len(mp) > 1:  # Ambiguous mp
+            for trans_id in mp:
+                ambiguous_read_counts[trans_id] += mp_read_counts[i]
 
-    # Calculate transcript-specific alpha values based on ambiguous reads
+    # Calculate transcript-specific alpha values based on ambiguous mps
     transcript_alphas = base_alpha * ambiguous_read_counts
 
     transcript_sum_read_counts = defaultdict(float)
@@ -268,27 +277,29 @@ def em_algorithm_with_weights(
     for iteration in range(max_iter):
         # E-step: Calculate fractional assignments
         transcript_sum_read_counts.clear()
-        for read_i, read_mapped_transcripts in enumerate(read_assignments):
+        for mp_i, mp_mapped_transcripts in enumerate(mp_assignments):
 
-            # denominator for fractional assignment is the read-weighted sum of expression for assigned transcripts
+            # denominator for fractional assignment is the mp-weighted sum of expression for assigned transcripts
             total_weight = sum(
-                read_weights[read_i][j] * transcript_expression_levels[trans_id]
-                for j, trans_id in enumerate(read_mapped_transcripts)
+                mp_weights[mp_i][j] * transcript_expression_levels[trans_id]
+                for j, trans_id in enumerate(mp_mapped_transcripts)
             )
-            for j, trans_id in enumerate(read_mapped_transcripts):
-                weight = read_weights[read_i][j]
+            for j, trans_id in enumerate(mp_mapped_transcripts):
+                weight = mp_weights[mp_i][j]
 
-                # for each transcript this read is assigned,
-                # assign a proportion of this read according to its relative expression contribution.
+                # for each transcript this mp is assigned,
+                # assign a proportion of this mp according to its relative expression contribution.
                 frac_assignment = (
                     weight * transcript_expression_levels[trans_id] / total_weight
                     if total_weight > 0
                     else 0
                 )
 
-                transcript_sum_read_counts[trans_id] += frac_assignment
+                transcript_sum_read_counts[trans_id] += (
+                    frac_assignment * mp_read_counts[mp_i]
+                )
 
-                fractional_read_assignments[read_i][j] = frac_assignment
+                fractional_mp_assignments[mp_i][j] = frac_assignment
 
         # M-step: Update expression levels
         transcript_expression_levels = np.array(
@@ -314,25 +325,24 @@ def em_algorithm_with_weights(
     return (
         transcript_expression_levels,
         transcript_sum_read_counts,
-        fractional_read_assignments,
+        fractional_mp_assignments,
     )
 
 
-def init_fractional_read_assignments(template_list_of_lists):
+def init_fractional_mp_assignments(template_list_of_lists):
 
-    init_frac_read_assignments = list()
+    init_frac_mp_assignments = list()
     for _list in template_list_of_lists:
         zeroed_list = np.zeros(len(_list))
-        init_frac_read_assignments.append(zeroed_list)
+        init_frac_mp_assignments.append(zeroed_list)
 
-    return init_frac_read_assignments
+    return init_frac_mp_assignments
 
 
-# Example usage:
-if __name__ == "__main__":
+def test_run_EM():
 
     ######################################################################################################
-    # example has 3 transcripts and 5 reads. Some reads map ambiguously and others are unique to isoforms.
+    # example has 3 transcripts and 5 mps. Some mps map ambiguously and others are unique to isoforms.
     ######################################################################################################
 
     contig_acc = "fake_contig"
@@ -347,29 +357,29 @@ if __name__ == "__main__":
     transcript_2_coords = [[100, 200], [500, 900]]
     transcript_2 = Transcript(contig_acc, transcript_2_coords, contig_strand)
 
-    # 5 reads
-    read_0 = "read_0"
-    read_1 = "read_1"
-    read_2 = "read_2"
-    read_3 = "read_3"
-    read_4 = "read_4"
+    # 5 mps
+    mp_0 = "mp_0"
+    mp_1 = "mp_1"
+    mp_2 = "mp_2"
+    mp_3 = "mp_3"
+    mp_4 = "mp_4"
 
-    transcript_0.add_read_names([read_0, read_2])
-    transcript_0.set_read_weights({read_0: 1.0, read_2: 0.5})
+    transcript_0.add_mp_names([mp_0, mp_2])
+    transcript_0.set_mp_weights({mp_0: 1.0, mp_2: 0.5})
 
-    transcript_1.add_read_names([read_1, read_2, read_4])
-    transcript_1.set_read_weights({read_1: 1.0, read_2: 0.3, read_4: 0.4})
+    transcript_1.add_mp_names([mp_1, mp_2, mp_4])
+    transcript_1.set_mp_weights({mp_1: 1.0, mp_2: 0.3, mp_4: 0.4})
 
-    transcript_2.add_read_names([read_2, read_3, read_4])
-    transcript_2.set_read_weights({read_2: 0.2, read_3: 1.0, read_4: 0.6})
+    transcript_2.add_mp_names([mp_2, mp_3, mp_4])
+    transcript_2.set_mp_weights({mp_2: 0.2, mp_3: 1.0, mp_4: 0.6})
 
     transcripts = [transcript_0, transcript_1, transcript_2]
 
     (
-        transcript_to_read_count,
-        transcript_to_fractional_read_assignment,
+        transcript_to_mp_count,
+        transcript_to_fractional_mp_assignment,
         transcript_to_expr_val,
-    ) = run_EM(transcripts)
+    ) = run_EM(transcripts, mp_to_read_count)
 
     print("#LRAA-interfaced results:\n\n")
     print(
@@ -378,44 +388,47 @@ if __name__ == "__main__":
         "\n\n",
     )
     print(
-        "Transcript read counts:\n",
-        "\n".join([f"\t{x}: {y:.1f}" for (x, y) in transcript_to_read_count.items()]),
+        "Transcript mp counts:\n",
+        "\n".join([f"\t{x}: {y:.1f}" for (x, y) in transcript_to_mp_count.items()]),
         "\n\n",
     )
-    print("Fractional read assignments:\n")
+    print("Fractional mp assignments:\n")
 
     for (
         transcript,
-        frac_read_assignments,
-    ) in transcript_to_fractional_read_assignment.items():
+        frac_mp_assignments,
+    ) in transcript_to_fractional_mp_assignment.items():
         print(transcript),
-        print(
-            "\n".join([f"\t{x}: {y:.4f}" for (x, y) in frac_read_assignments.items()])
-        )
+        print("\n".join([f"\t{x}: {y:.4f}" for (x, y) in frac_mp_assignments.items()]))
 
-    # Simulated read assignments
-    # Each sublist contains the indices of transcripts a read is assigned to
-    read_assignments = [
-        [0],  # read_0: Unique assignment to transcript 0
-        [1],  # read_1: Unique assignment to transcript 1
-        [0, 1, 2],  # read_2:  Ambiguous assignment to transcripts 0, 1, 2
-        [2],  # read_3: Unique assignment to transcript 2
-        [1, 2],  # read_4: Ambiguous assignment to transcripts 1 and 2
+
+def test_em_algorithm_with_weights():
+
+    # Simulated mp assignments
+    # Each sublist contains the indices of transcripts a mp is assigned to
+    mp_assignments = [
+        [0],  # mp_0: Unique assignment to transcript 0
+        [1],  # mp_1: Unique assignment to transcript 1
+        [0, 1, 2],  # mp_2:  Ambiguous assignment to transcripts 0, 1, 2
+        [2],  # mp_3: Unique assignment to transcript 2
+        [1, 2],  # mp_4: Ambiguous assignment to transcripts 1 and 2
     ]
 
-    # Simulated weights for each read (rows correspond to reads, columns to assigned transcripts)
-    read_weights = [
-        [1.0],  # read_0: Unique read, full weight to transcript 0
-        [1.0],  # read_1: Unique read, full weight to transcript 1
-        [0.5, 0.3, 0.2],  # read_2: Ambiguous read, weights for transcripts 0, 1, 2
-        [1.0],  # read_3: Unique read, full weight to transcript 2
-        [0.4, 0.6],  # read_4: Ambiguous read, weights for transcripts 1, 2
+    # Simulated weights for each mp (rows correspond to mps, columns to assigned transcripts)
+    mp_weights = [
+        [1.0],  # mp_0: Unique mp, full weight to transcript 0
+        [1.0],  # mp_1: Unique mp, full weight to transcript 1
+        [0.5, 0.3, 0.2],  # mp_2: Ambiguous mp, weights for transcripts 0, 1, 2
+        [1.0],  # mp_3: Unique mp, full weight to transcript 2
+        [0.4, 0.6],  # mp_4: Ambiguous mp, weights for transcripts 1, 2
     ]
+
+    mp_read_counts = [1, 2, 3, 4, 5]
 
     # run EM
     num_transcripts = 3
-    expression, trans_read_counts, frac_read_assignments = em_algorithm_with_weights(
-        read_assignments, read_weights, num_transcripts, base_alpha=0
+    expression, trans_read_counts, frac_mp_assignments = em_algorithm_with_weights(
+        mp_assignments, mp_weights, mp_read_counts, num_transcripts, base_alpha=0
     )
 
     print("\n\n" + "##########################\n" + "#:\n")
@@ -426,11 +439,17 @@ if __name__ == "__main__":
     )
 
     print(
-        "\nTrans read counts:\n"
+        "\nTrans mp counts:\n"
         + "\n".join([f"\t{x}: {y:.1f}" for (x, y) in trans_read_counts.items()]),
     )
 
-    print("\nFrac read assignments:")
+    print("\nFrac mp assignments:")
 
-    for _list in frac_read_assignments:
+    for _list in frac_mp_assignments:
         print("\t" + "\t".join([f"{x:.4f}" for x in _list]))
+
+
+# Example usage:
+if __name__ == "__main__":
+    # test_run_EM()
+    test_em_algorithm_with_weights()

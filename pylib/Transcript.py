@@ -58,11 +58,11 @@ class Transcript(GenomeFeature):
             None  # optional - useful if transcript obj was built based on a scored path
         )
 
-        self.read_names = (
+        self.multipaths_evidence_assigned = (
             list()
-        )  # list of read names supporting the transcript structure.
+        )  # list of multipaths supporting the transcript structure.
 
-        self._read_weights = dict()
+        self._multipaths_evidence_weights = dict()
 
         self._multipath = None  # multipath obj
 
@@ -256,11 +256,15 @@ class Transcript(GenomeFeature):
 
         return
 
-    def get_read_names(self, exclude_refTranscripts=True):
-        if exclude_refTranscripts:
-            return [x for x in self.read_names.copy() if "reftranscript:" not in x]
-        else:
-            return self.read_names.copy()
+    def get_multipaths_evidence_assigned(self, exclude_refTranscripts=True):
+        # todo: deal w/ refTranscripts
+
+        # if exclude_refTranscripts:
+        #    return [x for x in self.read_names.copy() if "reftranscript:" not in x]
+        # else:
+        #    return self.read_names.copy()
+
+        return self.multipaths_evidence_assigned.copy()
 
     def includes_reference_transcript(self):
         return len(self.get_ref_trans_included()) > 0
@@ -274,27 +278,30 @@ class Transcript(GenomeFeature):
     def set_is_novel_isoform(self, boolean_val: bool):
         self._is_novel_isoform_bool = boolean_val
 
-    def add_read_names(self, read_names):
-        if self.read_names == None:
-            self.read_names = list()
+    def add_multipaths_evidence_assigned(self, multipaths):
+        if self.multipaths_evidence_assigned == None:
+            self.multipaths_evidence_assigned = list()
 
-        if type(read_names) in (list, set):
-            self.read_names.extend(list(read_names))
+        if type(multipaths) in (list, set):
+            self.multipaths_evidence_assigned.extend(list(multipaths))
         else:
-            self.read_names.append(read_names)
+            self.multipaths_evidence_assigned.append(multipaths)
 
-    def set_read_weights(self, read_weights):
-        self._read_weights.update(read_weights)
+    def set_multipaths_evidence_weights(self, mp_weights: dict):
+        for mp, weight in mp_weights.items():
+            self._multipaths_evidence_weights[mp] = weight
 
-    def get_read_weight(self, read_name):
+    def get_multipath_weight(self, multipath):
         assert (
-            read_name in self._read_weights
-        ), "Error, not finding read_name {} in read weights for transcript {}".format(
-            read_name, self.get_transcript_id()
+            multipath in self._multipaths_evidence_weights
+        ), "Error, not finding multipath {} in mp weights for transcript {}".format(
+            multipath, self.get_transcript_id()
         )
-        return self._read_weights[read_name]
+        return self._multipaths_evidence_weights[multipath]
 
     def prune_reftranscript_as_evidence(self):
+
+        ## todo - adjust to mp framework
         self.read_names = [
             read_name
             for read_name in self.read_names
@@ -420,10 +427,9 @@ class Transcript(GenomeFeature):
         return gtf_text
 
     def init_quant_info(self):
-        self._read_weights = dict()
+        self._multipaths_evidence_weights = dict()
         self._read_counts_assigned = None
         self._isoform_fraction = None
-        self.read_names = list()
 
         return
 
