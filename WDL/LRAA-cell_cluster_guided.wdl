@@ -209,11 +209,14 @@ task lraa_merge_gtf_task {
         Int memoryGB
     }
 
+
+    Array[File] gtf_files = select_all(LRAA_cell_cluster_gtfs)
+    
     command <<<
         set -ex
         
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
-                           --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
+                           --gtf ~{sep=' ' gtf_files } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf
 
     >>>

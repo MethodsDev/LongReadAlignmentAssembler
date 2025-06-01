@@ -62,6 +62,7 @@ def run_EM(
     read_weights = list()
 
     # populate inputs to EM
+    start_prep_time = time.time()
     for i, read_name in enumerate(read_names):
 
         indiv_read_to_trans_assignments = list()
@@ -82,6 +83,11 @@ def run_EM(
 
         read_assignments.append(indiv_read_to_trans_assignments)
         read_weights.append(indiv_read_to_trans_weights)
+
+    end_prep_time = time.time()
+
+    EM_prep_time = end_prep_time - start_prep_time
+    logger.info("EM_prep_time: {:.2f} minutes".format(EM_prep_time / 60))
 
     if local_debug:
 

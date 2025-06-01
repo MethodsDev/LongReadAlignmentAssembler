@@ -43,9 +43,21 @@ class Quantify:
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
 
+        contig_acc = splice_graph.get_contig_acc()
+        contig_strand = splice_graph.get_contig_strand()
+
         # init transcript quant info
+        gene_to_transcripts = defaultdict(list)
         for transcript in transcripts:
             transcript.init_quant_info()
+            gene_id = transcript.get_gene_id()
+            gene_to_transcripts[gene_id].append(transcript)
+
+        logger.info(
+            "have {} genes and {} isoforms to quantify.".format(
+                len(gene_to_transcripts), len(transcripts)
+            )
+        )
 
         # assign path nodes to gene
         # also assign gene_id to transcript objs
@@ -53,9 +65,29 @@ class Quantify:
 
         self._assign_reads_to_transcripts(splice_graph, mp_counter)
 
-        transcript_to_fractional_read_assignment = self._estimate_isoform_read_support(
-            transcripts
-        )
+        transcript_to_fractional_read_assignment = dict()
+
+        for gene_id, transcripts_list in gene_to_transcripts.items():
+
+            trans_coords = list()
+            for transcript in transcripts_list:
+                trans_coords.extend(transcript.get_coords())
+
+            trans_coords = sorted(trans_coords)
+            gene_lend = trans_coords[0]
+            gene_rend = trans_coords[-1]
+            logger.info(
+                f"quant estimates for isoforms of {gene_id} {contig_acc}{contig_strand}:{gene_lend}-{gene_rend}"
+            )
+
+            gene_transcript_to_fractional_read_assignment = (
+                self._estimate_isoform_read_support(transcripts_list)
+            )
+            # copy over to the full data structure
+            for transcript_id in gene_transcript_to_fractional_read_assignment:
+                transcript_to_fractional_read_assignment[transcript_id] = (
+                    gene_transcript_to_fractional_read_assignment[transcript_id]
+                )
 
         # see documentation for _estimate_isoform_read_support() below
 
