@@ -92,6 +92,9 @@ class MultiPath:
     def get_read_names(self):
         return self._read_names.copy()
 
+    def get_read_count(self):
+        return self.get_read_names_count()
+
     def get_read_names_count(self):
         return len(self._read_names)
 
