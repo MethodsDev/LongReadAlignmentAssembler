@@ -291,6 +291,23 @@ def main():
         ),
     )
 
+    ## single cell settings
+    config_group_single_cell = parser.add_argument_group("Single cell settings")
+
+    config_group_single_cell.add_argument(
+        "--cell_barcode_tag",
+        type=str,
+        default=LRAA_Globals.config["cell_barcode_tag"],
+        help="bam tag for cell barcode",
+    )
+
+    config_group_single_cell.add_argument(
+        "--read_umi_tag",
+        type=str,
+        default=LRAA_Globals.config["read_umi_tag"],
+        help="bam tag for read umi",
+    )
+
     ## restrict to contig and optionally region of contig
 
     contig_group_setting = parser.add_argument_group(
@@ -356,6 +373,9 @@ def main():
 
     quant_EM_alpha = args.EM_alpha
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
+
+    LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
+    LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
 
     if args.LowFi:
         LRAA_Globals.config["infer_TSS"] = False

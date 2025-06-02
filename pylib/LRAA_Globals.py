@@ -95,6 +95,10 @@ config = {
     "EM_alpha": 0.01,  # regularization
     #
     ######
+    # single cell
+    "cell_barcode_tag": "CB",
+    "read_umi_tag": "XM",
+    ######
     # parallelization
     #
     "min_mpgn_component_size_for_spawn": 150,
