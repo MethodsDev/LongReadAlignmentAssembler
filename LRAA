@@ -542,7 +542,13 @@ def main():
     ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
     ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
     # write header
-    tracking_file_header = ["gene_id", "transcript_id", "read_name", "frac_assigned"]
+    tracking_file_header = [
+        "gene_id",
+        "transcript_id",
+        "mp_id",
+        "read_name",
+        "frac_assigned",
+    ]
 
     if LRAA_Globals.DEBUG:
         tracking_file_header.append("read_weight")

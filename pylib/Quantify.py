@@ -32,7 +32,6 @@ class Quantify:
         self._read_name_to_multipath = dict()
 
         self._mp_to_transcripts = dict()
-        self._mp_to_read_count = dict()
 
         self._quant_mode = quant_mode
 
@@ -172,8 +171,6 @@ class Quantify:
                 )
 
             mp, count = mp_count_pair.get_multipath_and_count()
-
-            self._mp_to_read_count[mp] = count
 
             mp_id = mp.get_id()
 
@@ -896,7 +893,7 @@ class Quantify:
                 transcript_to_expr_val,
                 transcript_to_fractional_mp_assignment,
                 transcript_to_read_count,
-            ) = EM.run_EM(transcripts, self._mp_to_read_count, self._max_EM_iterations)
+            ) = EM.run_EM(transcripts, self._max_EM_iterations)
 
         else:
             # simple equal fractional assignment of reads to compatible transcripts
@@ -1085,54 +1082,33 @@ class Quantify:
 
             num_uniquely_assigned_reads = 0
 
-            txn = None
-            if ofh_quant_read_tracking_lmdb is not None:
-                txn = ofh_quant_read_tracking_lmdb.begin(write=True)
-
             for mp in multipaths:
                 frac_read_assigned = transcript_to_fractional_mp_assignment[
                     transcript_id
                 ][mp]
+
+                mp_id = mp.get_id()
 
                 for readname in mp.get_read_names():
 
                     tracking_report_info = [
                         gene_id,
                         transcript_id,
+                        mp_id,
                         readname,
                         "{:.3f}".format(frac_read_assigned),
                     ]
 
                     if LRAA_Globals.DEBUG:
                         tracking_report_info.append(
-                            "{:.3f}".format(transcript.get_read_weight(readname))
+                            "{:.3f}".format(transcript.get_multipath_weight(mp))
                         )
 
                     if frac_read_assigned > 1e-3 or LRAA_Globals.DEBUG:
                         print("\t".join(tracking_report_info), file=ofh_read_tracking)
 
-                    # add to LMDB
-                    if txn is not None:
-                        key = readname.encode("utf-8")
-                        existing_data = txn.get(key)
-                        lmdb_data = [
-                            gene_id,
-                            transcript_id,
-                            "{:.3f}".format(frac_read_assigned),
-                        ]
-                        if existing_data:
-                            # Append new data as comma-separated string
-                            existing_data = existing_data.decode("utf-8")
-                            combined_data = f"{existing_data},{','.join(lmdb_data)}"
-                        else:
-                            combined_data = ",".join(lmdb_data)
-                        txn.put(key, combined_data.encode("utf-8"))
-
                     if frac_read_assigned == 1:
                         num_uniquely_assigned_reads += 1
-
-            if txn is not None:
-                txn.commit()
 
             gene_read_count = gene_to_read_count[gene_id]
             unique_gene_read_fraction = (
@@ -1199,10 +1175,10 @@ class Quantify:
             transcript_read_frac_assignments,
         ) in frac_read_assignments.items():
             gene_id = transcript_id_to_transcript_obj[transcript_id].get_gene_id()
-            for read, frac_assigned in transcript_read_frac_assignments.items():
-                gene_id_to_read_count[gene_id] += frac_assigned
+            for mp, frac_assigned in transcript_read_frac_assignments.items():
+                gene_id_to_read_count[gene_id] += frac_assigned * mp.get_read_count()
 
         return gene_id_to_read_count
 
     def get_mp_read_count(self, mp):
-        return self._mp_to_read_count[mp]
+        return mp.get_read_count()
