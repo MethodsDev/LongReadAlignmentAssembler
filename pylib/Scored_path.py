@@ -168,53 +168,6 @@ class Scored_path:
 
         transcript_obj = transcript_mp.toTranscript()
 
-        # exons_and_introns = transcript_mp.get_ordered_exons_and_introns()
-
-        # print("exons and introns: ")
-        # for exon_or_intron in exons_and_introns:
-        #    print("\t" + str(exon_or_intron))
-
-        # transcript_exon_segments = list()
-
-        # contig_acc = exons_and_introns[0].get_contig_acc()
-        # contig_acc = splice_graph.get_contig_acc()
-
-        """
-        for feature in exons_and_introns:
-            if type(feature) == GenomeFeature.Exon:
-                transcript_exon_segments.append(feature.get_coords())
-                exon_orient = feature.get_orient()
-                if exon_orient != orient:
-                    logger.warn("Error, exon orient not matching up with contig strand")
-            elif type(feature) == GenomeFeature.Intron:
-                intron_orient = feature.get_orient()
-                if intron_orient != orient:
-                    logger.warn("Error, intron orient not matching up with contig strand")
-
-        
-
-        
-        transcript_exon_segments = transcript_mp.get_exon_segments()
-                
-        if len(transcript_exon_segments) == 0:
-            logger.warning("bug - shouldn't have exonless transcript features: {}".format(transcript_path)) # //FIXME: bug
-            return None
-
-
-
-        #print("merged segments: " + str(transcript_exon_segments))
-
-        transcript_obj = Transcript.Transcript(contig_acc, transcript_exon_segments, orient)
-
-        #transcript_obj.set_scored_path_obj(self)  # commenting out / lightening up object
-
-        # decorate transcript obj
-        transcript_obj.add_read_names(read_names)
-        transcript_obj._multipath = transcript_mp
-        transcript_obj._simplepath = transcript_mp.get_simple_path()
-        
-        """
-
         return transcript_obj
 
     def get_all_represented_read_names(self):
@@ -232,41 +185,6 @@ class Scored_path:
         for read_name in self._all_represented_read_names:
             if read_name not in exclude_read_names:
                 score += 1
-
-        # mpgn_list = self.get_all_represented_mpgns()
-        #
-        # sum up weights
-        # for mpgn in mpgn_list:
-        #    score += mpgn.get_weight() * mpgn.get_count()
-
-        """
-
-
-        audit_txt = ""
-        
-        if LRAA_Globals.DEBUG:
-            audit_txt = "Computing path score for: {}\n".format(self._multiPath_obj)
-        
-        for mpgn in mpgn_list:
-            if mpgn not in seen:
-                score_increment = mpgn.get_score_INCLUDE_containments(use_prev_weight=False, mpgn_ignore=seen)
-                score += score_increment
-
-                if LRAA_Globals.DEBUG:
-                    audit_txt += "\tscore subtotal: {:.5f}, increment {:.5f}, mpgn: {}\n".format(score, score_increment, mpgn)
-                
-            seen.add(mpgn)
-            for containment in mpgn.get_containments():
-                if containment not in seen:
-                    seen.add(containment)
-                    if LRAA_Globals.DEBUG:
-                        audit_txt += "\t\tcontainment: {}\n".format(containment)
-
-
-        if LRAA_Globals.DEBUG:
-            logger.debug(audit_txt)
-           
-        """
 
         logger.debug(
             str(self.get_simple_path()) + "\n^^^ computed with score = {}".format(score)
