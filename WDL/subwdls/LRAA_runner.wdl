@@ -20,7 +20,10 @@ task LRAA_runner_task {
         Boolean? no_filter_internal_priming
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
-                
+
+        String cell_barcode_tag = "CB"
+        String read_umi_tag = "XM"
+
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Int numThreads
@@ -55,7 +58,8 @@ task LRAA_runner_task {
                                  ~{"--gtf " + annot_gtf} \
                                  ~{"--num_total_reads " + num_total_reads} \
                                  ~{true="--quant_only" false='' quant_only} \
-                                 ~{true="--LowFi" false='' LowFi}
+                                 ~{true="--LowFi" false='' LowFi} \
+                                 ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag}
 
 
         # always ensure an output file exists for the wdl output capture.
@@ -105,7 +109,10 @@ workflow LRAA_runner {
         Boolean? no_filter_internal_priming
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
-                
+
+        String cell_barcode_tag = "CB"
+        String read_umi_tag = "XM"
+                    
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Int numThreads
@@ -132,6 +139,8 @@ workflow LRAA_runner {
             no_filter_internal_priming=no_filter_internal_priming,
             min_alt_splice_freq=min_alt_splice_freq,
             min_alt_unspliced_freq=min_alt_unspliced_freq,
+            cell_barcode_tag = cell_barcode_tag,
+            read_umi_tag = read_umi_tag,
             shardno=shardno,
             docker=docker,
             numThreads=numThreads,

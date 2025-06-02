@@ -21,7 +21,8 @@ workflow LRAA_wf {
         Boolean no_norm = false
         Int? min_mapping_quality
 
-
+        String cell_barcode_tag = "CB"
+        String read_umi_tag = "XM"
 
         Int numThreads = 4
         Int memoryGB = 32
@@ -70,6 +71,8 @@ workflow LRAA_wf {
                     LowFi = LowFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
+                    cell_barcode_tag = cell_barcode_tag,
+                    read_umi_tag = read_umi_tag,
                     numThreads = numThreads,
                     min_mapping_quality = min_mapping_quality,
                     docker = docker,
@@ -103,6 +106,8 @@ workflow LRAA_wf {
                 LowFi = LowFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
+                cell_barcode_tag = cell_barcode_tag,
+                read_umi_tag = read_umi_tag,
                 numThreads = numThreads,
                 min_mapping_quality = min_mapping_quality,
                 docker = docker,
