@@ -63,8 +63,8 @@ RUN cpanm install URI::Escape
 
 ## set up tool config and deployment area:
 
-ENV SRC /usr/local/src
-ENV BIN /usr/local/bin
+ENV SRC=/usr/local/src
+ENV BIN=/usr/local/bin
 
 ## Python 3 stuff
 RUN ln -sf /usr/bin/python3 /usr/bin/python
@@ -76,7 +76,7 @@ WORKDIR $SRC
 RUN pip install intervaltree --break-system-packages
 
 ## Samtools
-ENV SAMTOOLS_VERSION 1.13
+ENV SAMTOOLS_VERSION=1.13
 RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     tar xvf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     cd samtools-${SAMTOOLS_VERSION} && \
@@ -112,8 +112,8 @@ RUN pip install pytest --break-system-packages
     
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.3.0-postdev2"
-ENV LRAA_CO=4d53f3edc3965dec556cace2a73629ac9934db7b
+ENV LRAA_VERSION="v0.4.0"
+ENV LRAA_CO=e3bca1ab4438d123b36e7b48e48eb2a509c83a17
 
 
 # update VERSION and LRAA_CO files with version info and checkout
