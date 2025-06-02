@@ -55,10 +55,13 @@ def get_num_overlapping_bases(coordset_A, coordset_B):
 
 def get_read_name_include_sc_encoding(pysam_read_alignment):
 
+    cell_barcode_tag = LRAA_Globals.config["cell_barcode_tag"]
+    read_umi_tag = LRAA_Globals.config["read_umi_tag"]
+
     read = pysam_read_alignment
-    if read.has_tag("CB") and read.has_tag("XM"):
-        cell_barcode = read.get_tag("CB")
-        umi = read.get_tag("XM")
+    if read.has_tag(cell_barcode_tag) and read.has_tag(read_umi_tag):
+        cell_barcode = read.get_tag(cell_barcode_tag)
+        umi = read.get_tag(read_umi_tag)
         read_name = "^".join([cell_barcode, umi, read.query_name])
         return read_name
     else:
