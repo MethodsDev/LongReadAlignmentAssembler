@@ -201,7 +201,6 @@ class MultiPathGraph:
                 self._prune_nodes(nodes_to_prune)
                 sg_component_to_mp_id[component_id] = ordered_nodes
 
-            # ordered_nodes = sorted(ordered_nodes, key=lambda x: (x._lend, x._rend))
             ordered_nodes = sorted(
                 ordered_nodes,
                 key=lambda x: (
