@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 def run_EM(
     transcripts: list,
-    mp_to_read_count: dict,
     max_EM_iterations: int = 1000,
 ):
 
@@ -75,7 +74,7 @@ def run_EM(
         indiv_mp_to_trans_assignments = list()
         indiv_mp_to_trans_weights = list()
 
-        num_reads_in_mp = mp_to_read_count[mp]
+        num_reads_in_mp = mp.get_read_count()
         mp_read_counts.append(num_reads_in_mp)
 
         for (

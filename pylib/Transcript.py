@@ -59,14 +59,17 @@ class Transcript(GenomeFeature):
         )
 
         self.multipaths_evidence_assigned = (
-            list()
-        )  # list of multipaths supporting the transcript structure.
+            set()
+        )  # multipaths supporting the transcript structure.
 
         self._multipaths_evidence_weights = dict()
 
-        self._multipath = None  # multipath obj
-
-        self._simplepath = None
+        self._multipath = (
+            None  # multipath obj (when transcript is constructed based on a multipath)
+        )
+        self._simplepath = (
+            None  # multipath obj (when transcript is constructed based on a multipath)
+        )
 
         self._read_counts_assigned = None  # set during expression quantification
 
@@ -256,21 +259,19 @@ class Transcript(GenomeFeature):
 
         return
 
-    def get_multipaths_evidence_assigned(self, exclude_refTranscripts=True):
-        # todo: deal w/ refTranscripts
-
-        # if exclude_refTranscripts:
-        #    return [x for x in self.read_names.copy() if "reftranscript:" not in x]
-        # else:
-        #    return self.read_names.copy()
-
+    def get_multipaths_evidence_assigned(self):
         return self.multipaths_evidence_assigned.copy()
 
     def includes_reference_transcript(self):
         return len(self.get_ref_trans_included()) > 0
 
     def get_ref_trans_included(self):
-        return [x for x in self.read_names.copy() if "reftranscript:" in x]
+        ref_trans_included = set()
+        for mp in self.get_multipaths_evidence_assigned():
+            for read_name in mp.get_read_names():
+                if "reftranscript:" in read_name:
+                    ref_trans_included.add(read_name)
+        return ref_trans_included
 
     def is_novel_isoform(self):
         return self._is_novel_isoform_bool
@@ -280,16 +281,24 @@ class Transcript(GenomeFeature):
 
     def add_multipaths_evidence_assigned(self, multipaths):
         if self.multipaths_evidence_assigned == None:
-            self.multipaths_evidence_assigned = list()
+            self.multipaths_evidence_assigned = set()
 
         if type(multipaths) in (list, set):
-            self.multipaths_evidence_assigned.extend(list(multipaths))
+            self.multipaths_evidence_assigned.update(multipaths)
+
         else:
-            self.multipaths_evidence_assigned.append(multipaths)
+            self.multipaths_evidence_assigned.add(multipaths)
+
+        self._ensure_multipaths_have_weights()
 
     def set_multipaths_evidence_weights(self, mp_weights: dict):
         for mp, weight in mp_weights.items():
             self._multipaths_evidence_weights[mp] = weight
+
+    def _ensure_multipaths_have_weights(self):
+        for mp in self.multipaths_evidence_assigned:
+            if mp not in self._multipaths_evidence_weights:
+                self._multipaths_evidence_weights[mp] = 1.0
 
     def get_multipath_weight(self, multipath):
         assert (
@@ -301,12 +310,9 @@ class Transcript(GenomeFeature):
 
     def prune_reftranscript_as_evidence(self):
 
-        ## todo - adjust to mp framework
-        self.read_names = [
-            read_name
-            for read_name in self.read_names
-            if "reftranscript:" not in read_name
-        ]
+        mps = self.get_multipaths_evidence_assigned()
+        for mp in mps:
+            mp.prune_reftranscript_as_evidence()
 
     def set_read_counts_assigned(self, read_counts):
         self._read_counts_assigned = read_counts
@@ -355,11 +361,6 @@ class Transcript(GenomeFeature):
         ## transcript line:
 
         gtf_text = ""
-
-        if LRAA_Globals.DEBUG:
-            gtf_text = (
-                f"#{self.get_transcript_id()}\t" + ",".join(self.read_names) + "\n"
-            )
 
         gtf_text += "\t".join(
             [
@@ -427,6 +428,7 @@ class Transcript(GenomeFeature):
         return gtf_text
 
     def init_quant_info(self):
+        self.multipaths_evidence_assigned = set()
         self._multipaths_evidence_weights = dict()
         self._read_counts_assigned = None
         self._isoform_fraction = None

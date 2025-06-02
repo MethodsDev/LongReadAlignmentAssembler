@@ -1,8 +1,0 @@
-Transcript path: PASA_scored_path: ['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] rtypes:set() rnames: set() (Score=15.00000, InitScore=15.00000)
-mpgns:
-<mp11x:['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] 8798-9943 Count:15 W:1.00000000 Containments:0, ScoreExcCont:15.0000 ScoreInclCon:15.0000 len:796 read_names:{'13-SIRV309', '3-SIRV309', '4-SIRV309', '5-SIRV309', '6-SIRV309', '0-SIRV309', '10-SIRV309', '1-SIRV309', '7-SIRV309', '11-SIRV309', '14-SIRV309', '12-SIRV309', '8-SIRV309', '2-SIRV309', '9-SIRV309'}>
-
-Transcript path: PASA_scored_path: ['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] rtypes:set() rnames: set() (Score=15.00000, InitScore=15.00000)
-mpgns:
-<mp11x:['POLYA:5', 'E:36', 'E:28', 'I:20', 'E:29', 'I:21', 'E:31', 'E:33', 'E:34', 'TSS:4'] 8798-9943 Count:15 W:1.00000000 Containments:0, ScoreExcCont:15.0000 ScoreInclCon:15.0000 len:796 read_names:{'3-SIRV309', '2-SIRV309', '6-SIRV309', '4-SIRV309', '9-SIRV309', '10-SIRV309', '13-SIRV309', '7-SIRV309', '11-SIRV309', '12-SIRV309', '0-SIRV309', '14-SIRV309', '8-SIRV309', '1-SIRV309', '5-SIRV309'}>
-
