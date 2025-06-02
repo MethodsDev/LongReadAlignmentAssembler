@@ -887,14 +887,14 @@ class Quantify:
         start_time = time.time()
 
         transcript_to_expr_val = defaultdict(float)
-        transcript_to_fractional_read_assignment = defaultdict(dict)
+        transcript_to_fractional_mp_assignment = defaultdict(dict)
         transcript_to_read_count = defaultdict(float)
 
         if self._run_EM:
 
             (
                 transcript_to_expr_val,
-                transcript_to_fractional_read_assignment,
+                transcript_to_fractional_mp_assignment,
                 transcript_to_read_count,
             ) = EM.run_EM(transcripts, self._mp_to_read_count, self._max_EM_iterations)
 
@@ -902,49 +902,54 @@ class Quantify:
             # simple equal fractional assignment of reads to compatible transcripts
 
             # first populate read_name to list of transcripts compatible with read
-            read_name_to_transcripts = defaultdict(set)
+            all_mps = set()
+            mp_to_transcripts = defaultdict(set)
             for transcript in transcripts:
-                read_names = transcript.get_read_names()
-                for read_name in read_names:
-                    read_name_to_transcripts[read_name].add((transcript))
+                mps = transcript.get_multipaths_evidence_assigned()
+                for mp in mps:
+                    mp_to_transcripts[mp].add((transcript))
+                    all_mps.add(mp)
 
-            num_mapped_reads = len(read_name_to_transcripts)
+            # get total read count
+            total_mapped_reads = 0
+            for mp in all_mps:
+                total_mapped_reads += mp.get_read_count()
 
             for transcript in transcripts:
                 transcript_read_count_total = 0
                 transcript_id = transcript.get_transcript_id()
 
-                read_names = transcript.get_read_names()
-                for read_name in read_names:
+                mps = transcript.get_multipaths_evidence_assigned()
+                for mp in mps:
 
-                    frac_read_assignment = 0
-                    all_transcripts_with_read = read_name_to_transcripts[read_name]
+                    frac_mp_assignment = 0
+                    all_transcripts_with_mp = mp_to_transcripts[mp]
 
-                    num_transcripts_with_read = len(all_transcripts_with_read)
+                    num_transcripts_with_mp = len(all_transcripts_with_mp)
 
                     # split read equally across all copatible reads.
-                    num_transcripts_with_assigned_read = len(
-                        read_name_to_transcripts[read_name]
-                    )
-                    frac_read_assignment = (
-                        1 / num_transcripts_with_assigned_read
-                        if num_transcripts_with_assigned_read > 0
+
+                    frac_mp_assignment = (
+                        1 / num_transcripts_with_mp
+                        if num_transcripts_with_mp > 0
                         else 0
                     )
 
-                    transcript_read_count_total += frac_read_assignment
-                    transcript_to_fractional_read_assignment[transcript_id][
-                        read_name
-                    ] = frac_read_assignment
+                    num_reads_in_mp = mp.get_read_count()
+
+                    transcript_read_count_total += frac_mp_assignment * num_reads_in_mp
+                    transcript_to_fractional_mp_assignment[transcript_id][
+                        mp
+                    ] = frac_mp_assignment
 
                 transcript_to_read_count[transcript_id] = transcript_read_count_total
                 transcript_to_expr_val[transcript_id] = (
-                    transcript_read_count_total / num_mapped_reads
-                    if num_mapped_reads > 0
+                    transcript_read_count_total / total_mapped_reads
+                    if total_mapped_reads > 0
                     else 0
-                )  # * 1e6
+                )
                 logger.debug(
-                    f"-assigning transcript {transcript_id} read count: {transcript_read_count_total} and expr val {transcript_read_count_total}/{num_mapped_reads} = {transcript_to_expr_val[transcript_id]}"
+                    f"-assigning transcript {transcript_id} read count: {transcript_read_count_total} and expr val {transcript_read_count_total}/{total_mapped_reads} = {transcript_to_expr_val[transcript_id]}"
                 )
 
         ## assign final read counts to each transcript object.
@@ -991,7 +996,7 @@ class Quantify:
             )
         )
 
-        return transcript_to_fractional_read_assignment
+        return transcript_to_fractional_mp_assignment
 
     def get_mp_to_transcripts(self):
         return self._mp_to_transcripts
