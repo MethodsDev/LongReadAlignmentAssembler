@@ -201,8 +201,8 @@ class Splice_graph:
     ):
 
         logger.info(
-            "creating splice graph for {} leveraging bam {}".format(
-                contig_acc, alignments_bam_file
+            "creating splice graph for {} leveraging bam {}, strand {}".format(
+                contig_acc, alignments_bam_file, contig_strand
             )
         )
 
