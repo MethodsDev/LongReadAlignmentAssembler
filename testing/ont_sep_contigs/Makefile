@@ -7,7 +7,6 @@ test:
 	(echo "Output does not match any expected result" && exit 1)
 
 
-
 clean:
 	rm -rf ./__*
 	rm -f ./LRAA.* ./gffcmp.* ./ONT_sim_alignments.mm2.bam.count ./ONT_sim_alignments.mm2.bam.SS* ./ONT_sim_alignments.mm2.bam.norm* ./run.log
