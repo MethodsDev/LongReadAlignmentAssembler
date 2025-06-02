@@ -144,8 +144,8 @@ class Bam_alignment_extractor:
             read_alignments.append(read)
 
         logger.info(
-            "reads kept: {} and discarded: {}".format(
-                len(read_alignments), discarded_read_counter
+            "reads kept for {} {}: {} and discarded: {}".format(
+                contig_acc, contig_strand, len(read_alignments), discarded_read_counter
             )
         )
 
