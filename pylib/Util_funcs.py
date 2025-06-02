@@ -6,6 +6,7 @@ import subprocess
 import logging
 import string
 import pysam
+import LRAA_Globals
 
 from collections import defaultdict
 
