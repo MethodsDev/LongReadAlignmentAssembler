@@ -61,11 +61,11 @@ def filter_isoforms_by_min_isoform_fraction(
 
     def get_isoform_unique_assigned_read_count(transcript_id, frac_read_assignments):
         num_unique_reads = 0
-        for read in frac_read_assignments[transcript_id]:
+        for mp in frac_read_assignments[transcript_id]:
             if (
-                frac_read_assignments[transcript_id][read] >= 0.9999
+                frac_read_assignments[transcript_id][mp] >= 0.9999
             ):  # close enough to 1.0
-                num_unique_reads += 1
+                num_unique_reads += mp.get_read_count()
 
         return num_unique_reads
 

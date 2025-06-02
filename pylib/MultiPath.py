@@ -332,8 +332,10 @@ class MultiPath:
 
         transcript_obj = Transcript.Transcript(contig_acc, exon_segments, contig_strand)
         transcript_obj._multipath = self
-        transcript_obj.add_read_names(self.get_read_names())
         transcript_obj._simplepath = self.get_simple_path()
+
+        transcript_obj.add_multipaths_evidence_assigned(self)
+        transcript_obj.set_multipaths_evidence_weights({self: 1.0})
 
         return transcript_obj
 

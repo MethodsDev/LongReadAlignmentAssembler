@@ -113,7 +113,9 @@ class MultiPathGraph:
             ITER += 1
             component_descr_file = f"__MPGN_components_described.{ITER}.bed"
             if os.path.exists(component_descr_file):
-                raise RuntimeError("Error!")
+                raise RuntimeError(
+                    "Error! - delete existing file {}".format(component_descr_file)
+                )
             component_descr_ofh = open(component_descr_file, "a")
 
         sorted_component_ids = sorted(
