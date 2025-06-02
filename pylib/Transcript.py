@@ -355,6 +355,7 @@ class Transcript(GenomeFeature):
         # lighten transcript by removing nonessential memory allocs
         self._scored_path_obj = None
         self._multipath = None
+        self.init_quant_info()
 
     def to_GTF_format(self, include_TPM=False):
 
