@@ -398,7 +398,7 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                             )
                         )
                         transcript_prune_as_degradation.add(transcript_j)
-                        transcript_i.add_read_names(transcript_j.get_read_names())
+                        transcript_i.absorb_other_transcript_multipaths(transcript_j)
 
         # retain the ones not pruned
         for transcript in transcript_set:

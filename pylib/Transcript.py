@@ -308,6 +308,27 @@ class Transcript(GenomeFeature):
         )
         return self._multipaths_evidence_weights[multipath]
 
+    def has_multipath_as_evidence(self, multipath):
+        return multipath in self.multipaths_evidence_assigned
+
+    def absorb_other_transcript_multipaths(self, other_transcript):
+
+        assert isinstance(other_transcript, Transcript)
+
+        other_transcript_mps = other_transcript.get_multipaths_evidence_assigned()
+        for other_mp in other_transcript_mps:
+            other_mp_weight = other_transcript.get_multipath_weight(other_mp)
+
+            if self.has_multipath_as_evidence(other_mp):
+                this_mp_weight = self.get_multipath_weight(other_mp)
+                if this_mp_weight < other_mp_weight:
+                    # use higher weight
+                    self.set_multipaths_evidence_weights({other_mp: other_mp_weight})
+            else:
+                # add as new evidence
+                self.set_multipaths_evidence_weights({other_mp: other_mp_weight})
+                self.add_multipaths_evidence_assigned(other_mp)
+
     def prune_reftranscript_as_evidence(self):
 
         mps = self.get_multipaths_evidence_assigned()
