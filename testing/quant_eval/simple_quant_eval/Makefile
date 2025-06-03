@@ -4,4 +4,4 @@ test:
 
 
 clean:
-	rm -rf ./LRAA.quant.* LRAA.tagged.bam
+	rm -rf ./LRAA.quant.* ./LRAA.tagged.bam ./__alignment_cache

@@ -30,6 +30,7 @@ from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
 import math
+import pickle
 
 logger = logging.getLogger(__name__)
 
@@ -471,28 +472,58 @@ class LRAA:
         if bam_file is None:
             return mp_counter  # nothing to do here.
 
-        bam_extractor = Bam_alignment_extractor(bam_file)
-        pretty_alignments = bam_extractor.get_read_alignments(
-            contig_acc,
-            contig_strand,
-            region_lend=self._splice_graph._region_lend,
-            region_rend=self._splice_graph._region_rend,
-            pretty=True,
+        alignment_cache_dir = "__alignment_cache"
+        if not os.path.exists(alignment_cache_dir):
+            os.makedirs(alignment_cache_dir)
+
+        alignment_cache_file = os.path.join(
+            alignment_cache_dir, f"{contig_acc}^{contig_strand}.pretty_alignments.pkl"
         )
 
-        ## correct alignments containing soft-clips
-        if LRAA_Globals.config["try_correct_alignments"]:
-            Pretty_alignment.try_correct_alignments(
-                pretty_alignments, self._splice_graph, contig_seq
+        if os.path.exists(alignment_cache_file):
+            logger.info(
+                "reusing earlier-generated pretty alignments for {}{}".format(
+                    contig_acc, contig_strand
+                )
             )
-            # must redo base coverage and exon coverage assignments
-            self._splice_graph.reset_exon_coverage_via_pretty_alignments(
-                pretty_alignments
+            with open(alignment_cache_file, "rb") as f:
+                pretty_alignments = pickle.load(f)
+
+        else:
+
+            bam_extractor = Bam_alignment_extractor(bam_file)
+            pretty_alignments = bam_extractor.get_read_alignments(
+                contig_acc,
+                contig_strand,
+                region_lend=self._splice_graph._region_lend,
+                region_rend=self._splice_graph._region_rend,
+                pretty=True,
             )
 
-        Pretty_alignment.prune_long_terminal_introns(
-            pretty_alignments, self._splice_graph
-        )
+            ## correct alignments containing soft-clips
+            if LRAA_Globals.config["try_correct_alignments"]:
+
+                Pretty_alignment.try_correct_alignments(
+                    pretty_alignments, self._splice_graph, contig_seq
+                )
+                # must redo base coverage and exon coverage assignments
+                self._splice_graph.reset_exon_coverage_via_pretty_alignments(
+                    pretty_alignments
+                )
+
+            Pretty_alignment.prune_long_terminal_introns(
+                pretty_alignments, self._splice_graph
+            )
+
+            # store for reuse
+            pretty_alignments = [
+                x.lighten() for x in pretty_alignments
+            ]  # remove pysam record before storing
+            with open(alignment_cache_file, "wb") as f:
+                pickle.dump(pretty_alignments, f)
+                logger.info(
+                    f"Saved corrected alignments to cache: {alignment_cache_file}"
+                )
 
         # grouping read alignments according to read pairings (for illumina PE data):
         # group alignments:  grouped_alignments['read_name'] = list(read1_pretty_alignment, read2_pretty_alignment, ...)
@@ -627,8 +658,7 @@ class LRAA:
         grouped_alignments = defaultdict(list)
 
         for pretty_alignment in pretty_alignments:
-            pysam_alignment = pretty_alignment.get_pysam_alignment()
-            read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
+            read_name = pretty_alignment.get_read_name()
             grouped_alignments[read_name].append(pretty_alignment)
 
         return grouped_alignments

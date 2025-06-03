@@ -16,4 +16,4 @@ with_EM_no_read_weighting:
 	./util/get_corr.Rscript LRAA.with_EM.quant.expr 
 	./util/validate_min_corr.py LRAA.with_EM.quant.expr.corr_val 0.977
 clean:
-	rm -rf ./LRAA.*
+	rm -rf ./LRAA.* ./__alignment_cache

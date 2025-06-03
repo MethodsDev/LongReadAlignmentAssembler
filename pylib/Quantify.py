@@ -10,7 +10,6 @@ import LRAA_Globals
 from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
-import lmdb
 from GenomeFeature import Exon
 import EM
 import time
@@ -1020,7 +1019,6 @@ class Quantify:
         transcript_to_fractional_mp_assignment,
         ofh_quant_vals,
         ofh_read_tracking,
-        ofh_quant_read_tracking_lmdb=None,
         splice_compatible_containments=None,
         splice_compatible_contained_by=None,
     ):

@@ -44,17 +44,20 @@ class Pretty_alignment:
         self.left_soft_clipped_seq = None
         self.right_soft_clipped_seq = None
 
+        self.read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
+        self.strand = self.get_strand(pysam_alignment)
+
         self._set_read_soft_clipping_info(pysam_alignment)  # sets above
 
     def __repr__(self):
         return "({})".format(self.get_strand()) + str(self._pretty_alignment_segments)
 
-    def get_read_name(self):
-        read = self._pysam_alignment
-        return Util_funcs.get_read_name_include_sc_encoding(read)
+    def lighten(self):
+        self._pysam_alignment = None
+        return self
 
-    def get_pysam_alignment(self):
-        return self._pysam_alignment
+    def get_read_name(self):
+        return self.read_name
 
     def get_pretty_alignment_segments(self):
         return self._pretty_alignment_segments
@@ -63,13 +66,19 @@ class Pretty_alignment:
         self._pretty_alignment_segments = alignment_segments
         return
 
-    def get_strand(self):
-        if self._pysam_alignment.is_forward:
-            return "+"
-        elif self._pysam_alignment.is_reverse:
-            return "-"
-        else:
-            return "?"
+    def get_strand(self, pysam_alignment=None):
+
+        if pysam_alignment is not None:
+
+            if pysam_alignment.is_forward:
+                return "+"
+            elif pysam_alignment.is_reverse:
+                return "-"
+            else:
+                return "?"
+
+        assert self.strand is not None
+        return self.strand
 
     def has_introns(self):
         return len(self.get_pretty_alignment_segments()) > 1

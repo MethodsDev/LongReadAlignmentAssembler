@@ -19,7 +19,6 @@ import Util_funcs
 import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
-import lmdb
 import shutil
 
 
@@ -35,6 +34,8 @@ FORMAT = (
 logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
+
+UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
 num_threads = 4
 allow_spacers = False
@@ -425,8 +426,8 @@ def main():
 
         SS_bamsifter_prog = os.path.sep.join(
             [
-                os.path.dirname(os.path.realpath(__file__)),
-                "util/normalize_bam_by_strand.py",
+                UTILDIR,
+                "normalize_bam_by_strand.py",
             ]
         )
 
@@ -554,7 +555,6 @@ def main():
     ## Begin, target each contig separately
 
     ofh_quant_read_tracker = None
-    ofh_quant_read_tracking_lmdb = None
 
     ofh_quant_output_filename = f"{output_prefix}.quant.expr"
     ofh_quant_output = open(ofh_quant_output_filename, "wt")
@@ -577,18 +577,6 @@ def main():
         "\t".join(tracking_file_header),
         file=ofh_quant_read_tracker,
     )
-
-    if TAG_BAM:
-        ofh_quant_read_tracking_lmdb_filename = f"{output_prefix}.quant.tracking.lmdb"
-        # since the LMDB doesn't get reset automatically, make sure there isn't old data leftover
-        if os.path.exists(ofh_quant_read_tracking_lmdb_filename):
-            shutil.rmtree(ofh_quant_read_tracking_lmdb_filename)
-        ofh_quant_read_tracking_lmdb = lmdb.open(
-            ofh_quant_read_tracking_lmdb_filename,
-            map_size=int(1e11),
-            metasync=False,
-            sync=False,
-        )
 
     gtf_output_filename = f"{output_prefix}.gtf"
 
@@ -658,7 +646,6 @@ def main():
                     input_transcripts,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
-                    ofh_quant_read_tracking_lmdb,
                     CPU,
                     run_EM,
                     prereconstruct_info_dir,
@@ -678,7 +665,6 @@ def main():
                     ofh_gtf,
                     ofh_quant_output,
                     ofh_quant_read_tracker,
-                    ofh_quant_read_tracking_lmdb,
                     CPU,
                     run_EM,
                     single_best_only,
@@ -698,8 +684,8 @@ def main():
         cmd = " ".join(
             [
                 os.path.join(
-                    os.path.dirname(os.path.realpath(__file__)),
-                    "util/gtf_to_bed_format.pl",
+                    UTILDIR,
+                    "gtf_to_bed_format.pl",
                 ),
                 gtf_output_filename,
                 ">",
@@ -713,43 +699,17 @@ def main():
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
 
     if TAG_BAM:
-
-        # explicitly delete the writeable lmdb environment
-        del ofh_quant_read_tracking_lmdb
-
-        # reopen in read-only mode
-        ofh_quant_read_tracking_lmdb = lmdb.open(
-            ofh_quant_read_tracking_lmdb_filename, readonly=True, lock=False
+        cmd = " ".join(
+            [
+                os.path.join(UTILDIR, "annotate_bam_with_read_tracking_info.py"),
+                "--bam",
+                bam_file_for_quant,
+                "--tracking",
+                ofh_quant_read_tracking_filename,
+            ]
         )
-        output_bam_filename = f"{output_prefix}.tagged.bam"
-
-        with ofh_quant_read_tracking_lmdb.begin(
-            write=False
-        ) as txn, pysam.AlignmentFile(
-            bam_filename, "rb", threads=4
-        ) as bam_in, pysam.AlignmentFile(
-            output_bam_filename, "wb", template=bam_in, threads=4
-        ) as bam_out:
-            for read in bam_in.fetch(until_eof=True):
-                data = txn.get(read.query_name.encode("utf-8"))
-                if data:
-                    row = data.decode("utf-8").split(",")
-                    if read.has_tag("XG") or read.has_tag("XI"):
-                        raise ValueError(
-                            "Error, read already has XG or XI tag, so cannot set them without overwriting"
-                        )
-
-                    gene_ids = ",".join(row[i] for i in range(0, len(row), 3))
-                    transcript_ids = ",".join(row[i + 1] for i in range(0, len(row), 3))
-                    frac_assigned = ",".join(row[i + 2] for i in range(0, len(row), 3))
-
-                    read.set_tag("XG", gene_ids, "Z")
-                    read.set_tag("XI", transcript_ids, "Z")
-                    read.set_tag("XF", frac_assigned, "Z")
-
-                bam_out.write(read)
-
-        ofh_quant_read_tracking_lmdb.close()
+        logger.info("tagginb bam file with transcripts assigned to each read")
+        subprocess.check_call(cmd, shell=True)
 
     return
 
@@ -765,7 +725,6 @@ def run_quant_only(
     input_transcripts,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    ofh_quant_read_tracking_lmdb,
     CPU,
     run_EM,
     prereconstruct_info_dir,
@@ -848,7 +807,6 @@ def run_quant_only(
             read_name_to_fractional_transcript_assignment,
             ofh_quant_output,
             ofh_quant_read_tracker,
-            ofh_quant_read_tracking_lmdb,
         )
 
     return q
@@ -866,7 +824,6 @@ def run_transcript_assembly(
     ofh_gtf,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    ofh_quant_read_tracking_lmdb,
     CPU,
     run_EM,
     single_best_only,
@@ -1108,7 +1065,6 @@ def run_transcript_assembly(
         transcripts,
         ofh_quant_output,
         ofh_quant_read_tracker,
-        ofh_quant_read_tracking_lmdb,
         CPU,
         run_EM,
         prereconstruct_info_dir,
