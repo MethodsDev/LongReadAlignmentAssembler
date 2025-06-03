@@ -5,4 +5,4 @@ test:
 
 clean:
 	rm -f ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
-	rm -rf ./test* ./__chckpts
+	rm -rf ./test* ./__chckpts ./__alignment_cache
