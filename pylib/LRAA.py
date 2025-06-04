@@ -472,12 +472,15 @@ class LRAA:
         if bam_file is None:
             return mp_counter  # nothing to do here.
 
+        bam_file_basename = os.path.basename(bam_file)
+
         alignment_cache_dir = "__alignment_cache"
         if not os.path.exists(alignment_cache_dir):
             os.makedirs(alignment_cache_dir)
 
         alignment_cache_file = os.path.join(
-            alignment_cache_dir, f"{contig_acc}^{contig_strand}.pretty_alignments.pkl"
+            alignment_cache_dir,
+            f"{contig_acc}^{contig_strand}.{bam_file_basename}.pretty_alignments.pkl",
         )
 
         if os.path.exists(alignment_cache_file):

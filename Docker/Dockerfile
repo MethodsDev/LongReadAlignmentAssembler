@@ -112,8 +112,8 @@ RUN pip install pytest --break-system-packages
     
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.4.0"
-ENV LRAA_CO=e3bca1ab4438d123b36e7b48e48eb2a509c83a17
+ENV LRAA_VERSION="v0.5.0"
+ENV LRAA_CO=b7508fa78e9ca225c74257de4f95338cf2d9b8ec
 
 
 # update VERSION and LRAA_CO files with version info and checkout
