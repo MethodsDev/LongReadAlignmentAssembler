@@ -1,3 +1,6 @@
+v0.5.0
+- cache pretty alignments for reuse
+
 v0.4.0
 - overhaul to leverage the multipaths during quant instead of the individual read assignments.
 - expose options for how single cell data are tagged in bam files. Default are CB,XM tags for cell barcodes and umis.
