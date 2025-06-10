@@ -43,7 +43,7 @@ main: {
 			$part =~ s/^\s+|\s+$//;
 			$part =~ s/\"//g;
 			my ($att, $val) = split(/\s+/, $part);
-			
+			if (! defined($att)) { next; }
 			if (exists $atts{$att}) {
 				#die "Error, already defined attribute $att in $_";
                 $atts{$att} .= "^" . $val;
