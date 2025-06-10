@@ -410,3 +410,9 @@ umap_df %>% head()
 ```
 
 
+```{r}
+
+write.table(umap_df, paste0(output_prefix, "-cell_cluster_assignments.wUMAP.tsv"), quote=F, row.names=T, sep="\t") 
+
+```
+
