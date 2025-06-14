@@ -41,7 +41,10 @@ def main():
     parser.add_argument("--genome", type=str, required=True, help="target genome file")
 
     parser.add_argument(
-        "--output_gtf", type=str, default="LRAA", help="prefix for output filenames"
+        "--output_gtf",
+        type=str,
+        default="LRAA.merged.gtf",
+        help="prefix for output filenames",
     )
 
     parser.add_argument(

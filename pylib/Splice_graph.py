@@ -682,19 +682,32 @@ class Splice_graph:
 
             trans_lend, trans_rend = transcript.get_coords()
 
+            # Note: under LRAA MERGE mode, the mp_counter is separately updated for read counts to match min novel count setting.
+            #       The polyA and TSS are reconfigured here according to their min settings under MERGE mode.
+
             if transcript.has_annotated_TSS():
                 TSS_coord = trans_lend if orient == "+" else trans_rend
                 if transcript.has_annotated_TPM():
                     TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
                 else:
-                    TSS_evidence_counter[TSS_coord] = 1
+                    if LRAA_Globals.LRAA_MODE == "MERGE":
+                        TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
+                            "min_alignments_define_TSS_site"
+                        ]
+                    else:
+                        TSS_evidence_counter[TSS_coord] = 1
 
             if transcript.has_annotated_PolyA():
                 polyA_coord = trans_rend if orient == "+" else trans_lend
                 if transcript.has_annotated_TPM():
                     PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
                 else:
-                    PolyA_evidence_counter[polyA_coord] = 1
+                    if LRAA_Globals.LRAA_MODE == "MERGE":
+                        PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
+                            "min_alignments_define_polyA_site"
+                        ]
+                    else:
+                        PolyA_evidence_counter[polyA_coord] = 1
 
             if (
                 LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]
