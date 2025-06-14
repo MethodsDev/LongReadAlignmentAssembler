@@ -16,6 +16,7 @@ workflow LRAA_cell_cluster_guided {
         File? annot_gtf
         
         Boolean LowFi = false
+        Boolean quant_only = false
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
@@ -34,14 +35,16 @@ workflow LRAA_cell_cluster_guided {
             inputBAM = inputBAM,
             docker = docker,
      }
-      
 
-     scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
 
-         String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
+     if (! quant_only) {  
+
+        scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
+
+           String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
          
          
-         call LRAA.LRAA_wf as LRAA_by_cluster {
+           call LRAA.LRAA_wf as LRAA_by_cluster {
              input:
                sample_id = cluster_sample_id,
                referenceGenome = referenceGenome,
@@ -53,19 +56,31 @@ workflow LRAA_cell_cluster_guided {
                numThreads = numThreadsPerLRAA,
                memoryGB  = memoryGBperLRAA,
                docker = docker
-         }
+           }
 
-     }
+       }
 
-     # merge gtfs from the per-cluster runs.
-     call lraa_merge_gtf_task {
+       # package them up
+       call LRAA_tar_outputs as tar_gtf_files {
+          input:
+             tar_directory_name = sample_id + ".LRAA.cluster_gtfs",
+             input_files = select_all(LRAA_by_cluster.mergedGTF),
+             docker = docker
+        }
+    
+        # merge gtfs from the per-cluster runs into a single final gtf.
+         call lraa_merge_gtf_task {
          input:
             sample_id = sample_id,
-            LRAA_cell_cluster_gtfs = LRAA_by_cluster.mergedGTF,
+            LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
             referenceGenome = referenceGenome,
             docker=docker,
             memoryGB  = memoryGBperLRAA,
+        }
      }
+
+
+     File gtf_to_quant = if (quant_only) then select_first([annot_gtf]) else select_first([lraa_merge_gtf_task.mergedGTF])
      
      # run final quants
      scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
@@ -76,7 +91,7 @@ workflow LRAA_cell_cluster_guided {
              input:
                sample_id = cluster_sample_id_again, 
                referenceGenome = referenceGenome,
-               annot_gtf = lraa_merge_gtf_task.mergedGTF,
+               annot_gtf = gtf_to_quant,
                inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
                LowFi = LowFi,
                main_chromosomes = main_chromosomes,
@@ -88,14 +103,23 @@ workflow LRAA_cell_cluster_guided {
      }
 
 
-     call LRAA_tar_exprs {
+     call LRAA_tar_outputs as tar_expr_files {
          input:
-             sample_id = sample_id,
-             expr_files = LRAA_quant_final.mergedQuantExpr,
+             tar_directory_name = sample_id + ".LRAA.cluster_pseudobulk.EXPRs",
+             input_files = LRAA_quant_final.mergedQuantExpr,
              docker = docker
      }
 
-     call LRAA_merge_trackings {
+
+     call LRAA_tar_outputs as tar_tracking_files {
+          input:
+             tar_directory_name = sample_id + ".LRAA.cluster_read_trackings",
+             input_files = LRAA_quant_final.mergedQuantTracking,
+             docker = docker
+    }
+
+        
+    call LRAA_merge_trackings {
          input:
              sample_id = sample_id,
              tracking_files = LRAA_quant_final.mergedQuantTracking,
@@ -103,41 +127,43 @@ workflow LRAA_cell_cluster_guided {
      }
      
      output {
-         File LRAA_gtf = lraa_merge_gtf_task.mergedGTF
-         File LRAA_cluster_pseudobulk_exprs = LRAA_tar_exprs.LRAA_cluster_pseudobulk_exprs_tar_gz
+         File? LRAA_gtf = lraa_merge_gtf_task.mergedGTF
          File LRAA_merged_tracking = LRAA_merge_trackings.merged_tracking
+         File LRAA_cluster_pseudobulk_exprs = tar_expr_files.tar_gz
+         File? LRAA_cluster_pseudobulk_gtfs = tar_gtf_files.tar_gz
+         File LRAA_cluster_read_trackings = tar_tracking_files.tar_gz
      }
      
 }
 
 
-task LRAA_tar_exprs {
+task LRAA_tar_outputs {
     input {
-        String sample_id
-        Array[File] expr_files
+        String tar_directory_name
+        Array[File] input_files
         String docker
     }
 
     Int memoryGB = 8
-    Int disksize = 20 + ceil(10 * length(expr_files))
+    Int disksize = 20 + ceil(10 * length(input_files))
     
     command <<<
 
         set -ex
 
-        mkdir ~{sample_id}.cluster_pseudobulk.EXPRs
+        mkdir ~{tar_directory_name}
 
-        for file in "~{sep=' ' expr_files}"; do
-           mv $file ~{sample_id}.cluster_pseudobulk.EXPRs/
+        for file in "~{sep=' ' input_files}"; do
+           mv $file ~{tar_directory_name}/
         done
         
-        tar -zcvf ~{sample_id}.cluster_pseudobulk.EXPRs.tar.gz ~{sample_id}.cluster_pseudobulk.EXPRs/
+        tar -zcvf ~{tar_directory_name}.tar.gz ~{tar_directory_name}/
 
     >>>
 
 
     output {
-        File LRAA_cluster_pseudobulk_exprs_tar_gz = "~{sample_id}.cluster_pseudobulk.EXPRs.tar.gz"
+        File tar_gz = "~{tar_directory_name}.tar.gz"
     }
 
     runtime {
@@ -159,21 +185,22 @@ task LRAA_merge_trackings {
     Int memoryGB = 8
     Int disksize = 20 + ceil(10 * length(tracking_files))
         
-    String outputfile = "~{sample_id}.cluster_merged.quant.tracking"
+    String outputfile = "~{sample_id}.cluster_merged.quant.tracking.gz"
     
     command <<<
         set -ex
 
         python <<CODE
         import json
-
+        import gzip
 
         tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
         tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
 
-        with open("~{outputfile}", "wt") as ofh:
+        with gzip.open("~{outputfile}", "wt") as ofh:
             for i, tracking_file in enumerate(tracking_files_list):
-                with open(tracking_file, "rt") as fh:
+                openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+                with openf(tracking_file, "rt") as fh:
                     header = next(fh)
                     if i == 0:
                          print(header, file=ofh, end='')
@@ -182,7 +209,9 @@ task LRAA_merge_trackings {
 
 
         CODE
-        
+
+       
+    
      >>>
 
      output {
@@ -203,20 +232,18 @@ task LRAA_merge_trackings {
 task lraa_merge_gtf_task {
     input {
         String sample_id
-        Array[File?] LRAA_cell_cluster_gtfs
+        Array[File] LRAA_cell_cluster_gtfs
         File referenceGenome
         String docker
         Int memoryGB
     }
 
-
-    Array[File] gtf_files = select_all(LRAA_cell_cluster_gtfs)
     
     command <<<
         set -ex
         
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
-                           --gtf ~{sep=' ' gtf_files } \
+                           --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf
 
     >>>

@@ -62,19 +62,25 @@ task LRAA_runner_task {
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag}
 
 
+        if [[ -f ~{output_prefix_use}.~{output_suffix}.quant.tracking ]]; then
+            gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
+        fi
+    
         # always ensure an output file exists for the wdl output capture.
-
         touch ~{output_prefix_use}.~{output_suffix}.gtf
-        touch ~{output_prefix_use}.~{output_suffix}.quant.expr
-        touch ~{output_prefix_use}.~{output_suffix}.quant.tracking
-        
+
+    
+        #touch ~{output_prefix_use}.~{output_suffix}.quant.expr
+        #touch ~{output_prefix_use}.~{output_suffix}.quant.tracking.gz
+
+                
         
     >>>
 
     output {
         File LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
-        File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking"
+        File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
     }
 
 
