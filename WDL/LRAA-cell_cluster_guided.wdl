@@ -145,7 +145,7 @@ task LRAA_tar_outputs {
     }
 
     Int memoryGB = 8
-    Int disksize = 20 + ceil(10 * length(input_files))
+    Int disksize = 20 + ceil(5 * size(input_files, "GiB"))
     
     command <<<
 
@@ -154,7 +154,7 @@ task LRAA_tar_outputs {
         mkdir ~{tar_directory_name}
 
         for file in "~{sep=' ' input_files}"; do
-           mv $file ~{tar_directory_name}/
+           cp $file ~{tar_directory_name}/
         done
         
         tar -zcvf ~{tar_directory_name}.tar.gz ~{tar_directory_name}/
