@@ -153,8 +153,8 @@ def collapse_splice_identical_isoforms(df):
         return first_row[["gene_id", "transcript_id", "all_reads", "TPM"]]
 
     result_df = (
-        df.groupby("group_key", include_groups=False)
-        .apply(process_group)
+        df.groupby("group_key")
+        .apply(process_group, include_groups=False)
         .reset_index(drop=True)
     )
 
