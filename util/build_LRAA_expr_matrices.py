@@ -76,6 +76,8 @@ def main():
     splice_pattern_to_hash_code = dict()
     transcript_id_to_splice_pattern = dict()
 
+    transcript_id_to_gene_id = dict()
+
     def get_splice_pattern_hash_code(splice_pattern):
         if splice_pattern in splice_pattern_to_hash_code:
             return splice_pattern_to_hash_code[splice_pattern]
@@ -124,6 +126,8 @@ def main():
                     transcript_id
                 ] += read_count_for_transcript
 
+                transcript_id_to_gene_id[transcript_id] = gene_id
+
     # write gene count and expr matrices
     gene_count_matrix_filename = output_prefix + ".gene.counts.matrix"
     gene_TPM_matrix_filename = output_prefix + ".gene.TPM.matrix"
@@ -163,6 +167,7 @@ def main():
         isoform_count_matrix_filename,
         isoform_TPM_matrix_filename,
         sample_to_sum_counts,
+        transcript_id_to_gene_id,
     )
 
     if iso_by_unique_SP_flag:
@@ -177,16 +182,33 @@ def main():
 
 
 def write_matrices(
-    matrix_data, ids, counts_matrix_filename, TPM_matrix_filename, sample_to_sum_counts
+    matrix_data,
+    ids,
+    counts_matrix_filename,
+    TPM_matrix_filename,
+    sample_to_sum_counts,
+    transcript_id_to_gene_id=None,
 ):
+
+    # if transcript_id_to_gene_id is set, then make a matrix formatted for diff isoform usage testing.
+
+    if transcript_id_to_gene_id is not None:
+        file_for_diff_iso_usage_analysis = counts_matrix_filename + ".forDiffIsoUsage"
+        diff_iso_usage_ofh = open(file_for_diff_iso_usage_analysis, "wt")
 
     with open(counts_matrix_filename, "wt") as counts_ofh:
         with open(TPM_matrix_filename, "wt") as TPM_ofh:
 
-            sample_names = matrix_data.keys()
+            sample_names = list(matrix_data.keys())
 
             print("\t" + "\t".join(sample_names), file=counts_ofh)
             print("\t" + "\t".join(sample_names), file=TPM_ofh)
+
+            if transcript_id_to_gene_id is not None:
+                print(
+                    "\t".join(["gene_id", "transcript_id"] + sample_names),
+                    file=diff_iso_usage_ofh,
+                )
 
             for id in ids:
                 count_vals = [id]
@@ -202,6 +224,12 @@ def write_matrices(
 
                 print("\t".join(count_vals), file=counts_ofh)
                 print("\t".join(TPM_vals), file=TPM_ofh)
+
+                if transcript_id_to_gene_id is not None:
+                    print(
+                        "\t".join([transcript_id_to_gene_id[id]] + count_vals),
+                        file=diff_iso_usage_ofh,
+                    )
 
     return
 
