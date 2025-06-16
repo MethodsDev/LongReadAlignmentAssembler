@@ -21,7 +21,7 @@ workflow LRAA_cell_cluster_guided {
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
         Int numThreadsPerLRAA = 4
-        Int memoryGBperLRAA = 32
+        Int memoryGBperLRAA = 8
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -42,8 +42,7 @@ workflow LRAA_cell_cluster_guided {
         scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
 
            String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
-         
-         
+                  
            call LRAA.LRAA_wf as LRAA_by_cluster {
              input:
                sample_id = cluster_sample_id,
@@ -61,16 +60,31 @@ workflow LRAA_cell_cluster_guided {
        }
 
        # package them up
-       call LRAA_tar_outputs as tar_gtf_files {
+       call LRAA_tar_outputs as tar_cluster_prelim_gtf_files {
           input:
-             tar_directory_name = sample_id + ".LRAA.cluster_gtfs",
+             tar_directory_name = sample_id + ".LRAA.prelim.cluster_gtfs",
              input_files = select_all(LRAA_by_cluster.mergedGTF),
              docker = docker
-        }
-    
+       }
+
+       call LRAA_tar_outputs as tar_cluster_prelim_tracking_files {
+          input:
+             tar_directory_name = sample_id + ".LRAA.prelim.cluster_read_trackings",
+             input_files = LRAA_by_cluster.mergedQuantTracking,
+             docker = docker
+       }
+
+        
+       call LRAA_tar_outputs as tar_cluster_prelim_pseudobulk_expr_files {
+          input:
+             tar_directory_name = sample_id + ".LRAA.prelim.cluster_pseudobulk.EXPRs",
+             input_files = LRAA_by_cluster.mergedQuantExpr,
+             docker = docker
+       }
+        
         # merge gtfs from the per-cluster runs into a single final gtf.
-         call lraa_merge_gtf_task {
-         input:
+        call lraa_merge_gtf_task {
+          input:
             sample_id = sample_id,
             LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
             referenceGenome = referenceGenome,
@@ -103,22 +117,14 @@ workflow LRAA_cell_cluster_guided {
      }
 
 
-     call LRAA_tar_outputs as tar_expr_files {
+     call LRAA_tar_outputs as tar_final_quant_cluster_pseudobulk_expr_files {
          input:
-             tar_directory_name = sample_id + ".LRAA.cluster_pseudobulk.EXPRs",
+             tar_directory_name = sample_id + ".LRAA.final_quant.cluster_pseudobulk.EXPRs",
              input_files = LRAA_quant_final.mergedQuantExpr,
              docker = docker
      }
 
 
-     call LRAA_tar_outputs as tar_tracking_files {
-          input:
-             tar_directory_name = sample_id + ".LRAA.cluster_read_trackings",
-             input_files = LRAA_quant_final.mergedQuantTracking,
-             docker = docker
-    }
-
-        
     call LRAA_merge_trackings {
          input:
              sample_id = sample_id,
@@ -127,11 +133,16 @@ workflow LRAA_cell_cluster_guided {
      }
      
      output {
-         File? LRAA_gtf = lraa_merge_gtf_task.mergedGTF
-         File LRAA_merged_tracking = LRAA_merge_trackings.merged_tracking
-         File LRAA_cluster_pseudobulk_exprs = tar_expr_files.tar_gz
-         File? LRAA_cluster_pseudobulk_gtfs = tar_gtf_files.tar_gz
-         File LRAA_cluster_read_trackings = tar_tracking_files.tar_gz
+         # final outputs
+         File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
+         File  LRAA_final_tracking = LRAA_merge_trackings.merged_tracking
+         File  LRAA_final_cluster_pseudobulk_exprs = tar_final_quant_cluster_pseudobulk_expr_files.tar_gz
+
+         # preliminary intermediate outputs.
+         File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
+         File? LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
+         File? LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
+    
      }
      
 }
