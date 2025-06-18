@@ -76,6 +76,9 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
                 gene_id = row["gene_id"]
                 transcript_id = row["transcript_id"]
                 read_name = row["read_name"]
+                read_name = read_name.split("^")[
+                    -1
+                ]  # in case single cell w/ barcode and umi
                 frac_read_assigned = row["frac_assigned"]
                 key = read_name.encode("utf-8")
                 existing_data = txn.get(key)
