@@ -565,6 +565,7 @@ def main():
     tracking_file_header = [
         "gene_id",
         "transcript_id",
+        "transcript_splice_hash_code",
         "mp_id",
         "read_name",
         "frac_assigned",
