@@ -7,6 +7,7 @@ import logging
 import string
 import pysam
 import LRAA_Globals
+from hashlib import blake2s
 
 from collections import defaultdict
 
@@ -82,3 +83,12 @@ def frac_base_composition(nuc_seq, nuc_base):
     frac_base = counter / len(nuc_seq)
 
     return frac_base
+
+
+def get_hash_code(input_string):
+    hash_object = blake2s(digest_size=11)
+    hash_object.update(input_string.encode("utf-8"))
+    hex_digest = hash_object.hexdigest()
+    hex_digest = str(hex_digest)
+
+    return hex_digest

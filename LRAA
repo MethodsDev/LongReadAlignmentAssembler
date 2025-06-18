@@ -593,6 +593,7 @@ def main():
         "TPM",
         "exons",
         "introns",
+        "splice_hash_code",
     ]
 
     if not QUANT_ONLY:

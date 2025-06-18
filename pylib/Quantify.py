@@ -11,6 +11,7 @@ from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
 from GenomeFeature import Exon
+import Util_funcs
 import EM
 import time
 
@@ -1099,6 +1100,11 @@ class Quantify:
                     transcript.get_introns_string()
                     if transcript.get_num_exon_segments() > 1
                     else ""
+                ),
+                (
+                    Util_funcs.get_hash_code(transcript.get_introns_string())
+                    if transcript.get_num_exon_segments() > 1
+                    else transcript_id
                 ),
             ]
 
