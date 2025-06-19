@@ -166,7 +166,7 @@ task mergeResults {
         done
 
 
-       python <<CODE
+        python <<CODE
         import json
         import gzip
 
