@@ -35,6 +35,13 @@ isoform_cell_counts_tsv = paste0(output_prefix, ".isoform_cell_counts.tsv")
 write.table(isoform_cell_counts, file=isoform_cell_counts_tsv, sep="\t", row.names=F, quote=F)
 
 
+# get splice pattern counts.
+splice_pattern_cell_counts = data %>% group_by(transcript_splice_hash_code, cell_barcode) %>% summarize(sum_UMIs = sum(frac_assigned)) %>% ungroup()
+message("-writing splice pattern cell counts table")
+splice_pattern_cell_counts_tsv = paste0(output_prefix, ".splice_pattern_cell_counts.tsv")
+write.table(splice_pattern_cell_counts, file=splice_pattern_cell_counts_tsv, sep="\t", row.names=F, quote=F)
+
+    
 make_sparse_matrix_outputs = function(counts_data, outdirname) {
    message("-making sparse matrix outputs for: ", outdirname)
 
@@ -69,6 +76,8 @@ make_sparse_matrix_outputs = function(counts_data, outdirname) {
 make_sparse_matrix_outputs(gene_cell_counts, paste0(output_prefix, "^gene-sparseM") )
 
 make_sparse_matrix_outputs(isoform_cell_counts, paste0(output_prefix, "^isoform-sparseM") )
+
+make_sparse_matrix_outputs(splice_pattern_cell_counts, paste0(output_prefix, "^splice_pattern-sparseM") )
 
 
 message("all done.")
