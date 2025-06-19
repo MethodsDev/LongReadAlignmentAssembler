@@ -1,3 +1,12 @@
+v0.6.0
+- incorporate splice pattern codes into expr.quant and tracking files
+- include splice pattern based sparse matrix
+- update annotated features in sparse matrices including splice patterns and include separate id mapping file with new vs. old ids.
+- WDL update for sc-cluster-guided to separately tar tracking and gtfs for init vs. final
+- sc-cluster-guided gtf merging improvements for handling alt TSS and polyA
+- including quant-only option for single cell cluster-guided pipe
+
+
 v0.5.0
 - cache pretty alignments for reuse
 
