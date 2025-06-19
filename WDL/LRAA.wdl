@@ -149,14 +149,14 @@ task mergeResults {
             fi
         done
 
-        quant_tracking_output="~{outputFilePrefix}.quant.tracking"
-        for file in ~{sep=' ' quantTrackingFiles}; do
-            if [[ ! -f "$quant_tracking_output" ]]; then
-                cp "$file" "$quant_tracking_output"
-            else
-                tail -n +2 "$file" >> "$quant_tracking_output"
-            fi
-        done
+        #quant_tracking_output="~{outputFilePrefix}.quant.tracking"
+        #for file in ~{sep=' ' quantTrackingFiles}; do
+        #    if [[ ! -f "$quant_tracking_output" ]]; then
+        #        cp "$file" "$quant_tracking_output"
+        #    else
+        #        tail -n +2 "$file" >> "$quant_tracking_output"
+        #    fi
+        #done
 
         gtf_output="~{outputFilePrefix}.gtf"
         touch "$gtf_output"
@@ -164,12 +164,35 @@ task mergeResults {
         for file in $gtf_files_str; do
            cat "$file" >> "$gtf_output"
         done
-        
+
+
+       python <<CODE
+        import json
+        import gzip
+
+        tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
+        tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
+
+        with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
+            for i, tracking_file in enumerate(tracking_files_list):
+                openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+                with openf(tracking_file, "rt") as fh:
+                    header = next(fh)
+                    if i == 0:
+                         print(header, file=ofh, end='')
+                    for line in fh:
+                         print(line, file=ofh, end='')
+
+
+        CODE
+
+
+      
     >>>
 
     output {
         File mergedQuantExprFile = "~{outputFilePrefix}.quant.expr"
-        File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking"
+        File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking.gz"
         File mergedGtfFile = "~{outputFilePrefix}.gtf"
     }
     
