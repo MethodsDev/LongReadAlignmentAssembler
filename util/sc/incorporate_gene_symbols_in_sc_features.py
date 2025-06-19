@@ -5,6 +5,8 @@ import logging
 import argparse
 import gzip
 import subprocess
+import csv
+from collections import defaultdict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +53,13 @@ def main():
     )
 
     parser.add_argument(
+        "--id_mappings",
+        type=str,
+        required=True,
+        help="id mappings file: *.gene_transcript_splicehashcode.tsv file",
+    )
+
+    parser.add_argument(
         "--sparseM_dirs",
         type=str,
         required=True,
@@ -78,6 +87,7 @@ def main():
     args = parser.parse_args()
 
     ref_gtf_filename = args.ref_gtf
+    id_mappings_file = args.id_mappings
     LRAA_gtf_filename = args.LRAA_gtf
     sparseM_dirnames = args.sparseM_dirs
     gffcompare_tracking_filename = args.gffcompare_tracking
@@ -97,6 +107,8 @@ def main():
 
     # print(str(gff_compare_LRAA_id_to_REF_id_mapping))
 
+    id_mappings = parse_id_mappings(id_mappings_file)
+
     feature_ids_updated = dict()
 
     for sparseM_dirname in sparseM_dirnames:
@@ -105,22 +117,86 @@ def main():
             sparseM_dirname,
             gff_compare_LRAA_id_to_REF_id_mapping,
             ref_id_to_gene_name,
+            id_mappings,
             feature_ids_updated,
         )
+
+    revised_id_mappings = write_annotated_id_mappings_file(
+        id_mappings_file, feature_ids_updated, ref_id_to_gene_name
+    )
 
     if LRAA_gtf_filename is not None:
         logger.info(
             "-writing " + LRAA_gtf_filename + ".updated.gtf including gene names"
         )
         update_LRAA_gff_feature_ids(
-            LRAA_gtf_filename, LRAA_gtf_filename + ".updated.gtf", feature_ids_updated
+            LRAA_gtf_filename,
+            LRAA_gtf_filename + ".updated.gtf",
+            feature_ids_updated,
+            revised_id_mappings,
         )
 
     sys.exit(0)
 
 
+def write_annotated_id_mappings_file(
+    id_mappings_file, feature_ids_updated, ref_id_to_gene_name
+):
+
+    revised_id_mappings = dict()
+
+    with open(id_mappings_file, "rt") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        fieldnames = [
+            "gene_id",
+            "transcript_id",
+            "transcript_splice_hash_code",
+            "new_gene_id",
+            "new_transcript_id",
+            "new_transcript_splice_hash_code",
+        ]
+        new_id_mappings_file = id_mappings_file + ".wAnnotIDs"
+        with open(new_id_mappings_file, "wt") as ofh:
+            writer = csv.DictWriter(
+                ofh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n"
+            )
+            writer.writeheader()
+
+            for row in reader:
+                row["new_gene_id"] = feature_ids_updated.get(
+                    row["gene_id"], row["gene_id"]
+                )
+                row["new_transcript_id"] = feature_ids_updated.get(
+                    row["transcript_id"], row["transcript_id"]
+                )
+                row["new_transcript_splice_hash_code"] = feature_ids_updated.get(
+                    row["transcript_splice_hash_code"],
+                    row["transcript_splice_hash_code"],
+                )
+                writer.writerow(row)
+
+                revised_id_mappings[row["transcript_id"]] = row
+
+    return revised_id_mappings
+
+
+def parse_id_mappings(id_mappings_file):
+
+    id_mappings = dict()
+
+    with open(id_mappings_file, "rt") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            transcript_id = row["transcript_id"]
+            transcript_splice_hash_code = row["transcript_splice_hash_code"]
+            id_mappings[transcript_id] = row
+            id_mappings[transcript_splice_hash_code] = row
+
+    return id_mappings
+
+
 def update_LRAA_gff_feature_ids(
-    LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_updated
+    LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_updated, revised_id_mappings
 ):
 
     num_fields_updated = 0
@@ -129,6 +205,7 @@ def update_LRAA_gff_feature_ids(
         with open(new_LRAA_gtf_filename, "wt") as ofh:
 
             for line in fh:
+                line = line.rstrip()
                 vals = line.split("\t")
                 if len(vals) < 8:
                     continue
@@ -150,7 +227,13 @@ def update_LRAA_gff_feature_ids(
                         line = line.replace(transcript_id, new_transcript_id)
                         num_fields_updated += 1
 
-                print(line, file=ofh, end="")
+                    if transcript_id in revised_id_mappings:
+                        new_transcript_splice_hash_code = revised_id_mappings[
+                            transcript_id
+                        ]["new_transcript_splice_hash_code"]
+                        line += f' splice_pattern "{new_transcript_splice_hash_code}";'
+
+                print(line, file=ofh)
 
     if num_fields_updated > 0:
         logger.info(
@@ -174,6 +257,7 @@ def update_sparseM_feature_names(
     sparseM_dirname,
     gff_compare_LRAA_id_to_REF_id_mapping,
     ref_id_to_gene_name,
+    id_mappings,
     feature_ids_updated,
 ):
 
@@ -185,17 +269,26 @@ def update_sparseM_feature_names(
 
     num_gene_names_added = 0
 
-    feature_ids_udpated = dict()
-
     with gzip.open(features_file, "rt") as fh:
         with open(revised_features_file, "wt") as ofh:
             for feature_id in fh:
                 feature_id = feature_id.rstrip()
                 gene_name = None
 
+                # check for splice hash code
+                transcript_splice_hash_code = None
+                if (
+                    feature_id in id_mappings
+                    and feature_id
+                    == id_mappings[feature_id]["transcript_splice_hash_code"]
+                ):
+                    transcript_splice_hash_code = feature_id
+                    feature_id = id_mappings[feature_id]["transcript_id"]
+
                 if feature_id in ref_id_to_gene_name:
                     gene_name = ref_id_to_gene_name[feature_id]
 
+                # check gffcompare results
                 elif (
                     gff_compare_LRAA_id_to_REF_id_mapping is not None
                     and feature_id in gff_compare_LRAA_id_to_REF_id_mapping
@@ -208,6 +301,10 @@ def update_sparseM_feature_names(
                         gene_name = ref_id_to_gene_name[enst_id]
 
                 if gene_name is not None:
+                    if transcript_splice_hash_code is not None:
+                        # restore splice hash code
+                        feature_id = transcript_splice_hash_code
+
                     new_feature_id = "^".join([gene_name, feature_id])
                     print(new_feature_id, file=ofh)
                     num_gene_names_added += 1
