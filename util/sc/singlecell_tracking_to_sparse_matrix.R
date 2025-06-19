@@ -41,7 +41,13 @@ message("-writing splice pattern cell counts table")
 splice_pattern_cell_counts_tsv = paste0(output_prefix, ".splice_pattern_cell_counts.tsv")
 write.table(splice_pattern_cell_counts, file=splice_pattern_cell_counts_tsv, sep="\t", row.names=F, quote=F)
 
-    
+# summarize ids
+ids = data %>% select(gene_id, transcript_id, transcript_splice_hash_code) %>% unique()
+message("-writing gene_id, transcript_id, transcript_splice_hash_code mappings file")
+ids_tsv = paste0(output_prefix, ".gene_transcript_splicehashcode.tsv")
+write.table(ids, file=ids_tsv, sep="\t", row.names=F, quote=F)
+
+
 make_sparse_matrix_outputs = function(counts_data, outdirname) {
    message("-making sparse matrix outputs for: ", outdirname)
 
