@@ -1,6 +1,6 @@
 {
 
-    "LRAA_cell_cluster_guided.sample_id" : "pbmc_test_sc",
+    "LRAA_cell_cluster_guided.sample_id" : "pbmc_sc_ref-guided",
 
     "LRAA_cell_cluster_guided.cell_clusters_info" : "data/cell_clusters.txt",
 
