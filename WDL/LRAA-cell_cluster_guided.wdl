@@ -16,7 +16,6 @@ workflow LRAA_cell_cluster_guided {
         File? annot_gtf
         
         Boolean LowFi = false
-        Boolean quant_only = false
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
@@ -37,9 +36,7 @@ workflow LRAA_cell_cluster_guided {
      }
 
 
-     if (! quant_only) {  
-
-        scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
+     scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
 
            String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
                   
@@ -55,93 +52,70 @@ workflow LRAA_cell_cluster_guided {
                numThreads = numThreadsPerLRAA,
                memoryGB  = memoryGBperLRAA,
                docker = docker
-           }
+     
 
-       }
-
-       # package them up
-       call LRAA_tar_outputs as tar_cluster_prelim_gtf_files {
+         }
+    }
+    
+    # package them up
+    call LRAA_tar_outputs as tar_cluster_prelim_gtf_files {
           input:
              tar_directory_name = sample_id + ".LRAA.prelim.cluster_gtfs",
              input_files = select_all(LRAA_by_cluster.mergedGTF),
              docker = docker
-       }
+    }
 
-       call LRAA_tar_outputs as tar_cluster_prelim_tracking_files {
+    call LRAA_tar_outputs as tar_cluster_prelim_tracking_files {
           input:
              tar_directory_name = sample_id + ".LRAA.prelim.cluster_read_trackings",
              input_files = LRAA_by_cluster.mergedQuantTracking,
              docker = docker
-       }
+    }
 
         
-       call LRAA_tar_outputs as tar_cluster_prelim_pseudobulk_expr_files {
+    call LRAA_tar_outputs as tar_cluster_prelim_pseudobulk_expr_files {
           input:
              tar_directory_name = sample_id + ".LRAA.prelim.cluster_pseudobulk.EXPRs",
              input_files = LRAA_by_cluster.mergedQuantExpr,
              docker = docker
-       }
+    }
         
-        # merge gtfs from the per-cluster runs into a single final gtf.
-        call lraa_merge_gtf_task {
+    # merge gtfs from the per-cluster runs into a single final gtf.
+    call lraa_merge_gtf_task {
           input:
             sample_id = sample_id,
             LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
             referenceGenome = referenceGenome,
             docker=docker,
             memoryGB  = memoryGBperLRAA,
-        }
+    
      }
 
-
-     File gtf_to_quant = if (quant_only) then select_first([annot_gtf]) else select_first([lraa_merge_gtf_task.mergedGTF])
      
-     # run final quants
-     scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
-
-         String cluster_sample_id_again = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
-              
-         call LRAA.LRAA_wf as LRAA_quant_final {
+     call LRAA.LRAA_wf as LRAA_quant_final {
              input:
-               sample_id = cluster_sample_id_again, 
+               sample_id = sample_id, 
                referenceGenome = referenceGenome,
-               annot_gtf = gtf_to_quant,
-               inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
+               annot_gtf = lraa_merge_gtf_task.mergedGTF,
+               inputBAM = inputBAM,
                LowFi = LowFi,
                main_chromosomes = main_chromosomes,
                quant_only = true,
                numThreads = numThreadsPerLRAA,
                memoryGB = memoryGBperLRAA,
                docker = docker
-         }
      }
 
-
-     call LRAA_tar_outputs as tar_final_quant_cluster_pseudobulk_expr_files {
-         input:
-             tar_directory_name = sample_id + ".LRAA.final_quant.cluster_pseudobulk.EXPRs",
-             input_files = LRAA_quant_final.mergedQuantExpr,
-             docker = docker
-     }
-
-
-    call LRAA_merge_trackings {
-         input:
-             sample_id = sample_id,
-             tracking_files = LRAA_quant_final.mergedQuantTracking,
-             docker = docker
-     }
-     
      output {
          # final outputs
-         File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
-         File  LRAA_final_tracking = LRAA_merge_trackings.merged_tracking
-         File  LRAA_final_cluster_pseudobulk_exprs = tar_final_quant_cluster_pseudobulk_expr_files.tar_gz
+         File LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
+         File LRAA_final_expr = LRAA_quant_final.mergedQuantExpr
+         File LRAA_final_tracking = LRAA_quant_final.mergedQuantTracking
 
          # preliminary intermediate outputs.
-         File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
-         File? LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
-         File? LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
+         File LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
+         File LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
+         File LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
     
      }
      
