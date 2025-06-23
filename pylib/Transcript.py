@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class Transcript(GenomeFeature):
 
     trans_id_counter = 0
+    meta_ignore = ["gene_id", "transcript_id", "TSS", "PolyA"]
 
     def __init__(self, contig_acc, segment_coordinates_list, orient):
 
@@ -402,7 +403,8 @@ class Transcript(GenomeFeature):
 
         if self._meta:
             for meta_key in sorted(self._meta.keys()):
-                gtf_text += ' {} "{}";'.format(meta_key, self._meta[meta_key])
+                if meta_key not in Transcript.meta_ignore:
+                    gtf_text += ' {} "{}";'.format(meta_key, self._meta[meta_key])
 
         # include other transcript features
         misc_transcript_features = dict()

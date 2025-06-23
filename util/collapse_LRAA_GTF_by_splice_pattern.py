@@ -131,6 +131,25 @@ def merge_isoforms(transcript_obj_list):
     has_TSS = first_transcript_obj.has_TSS()
     has_PolyA = first_transcript_obj.has_PolyA()
 
+    merged_isoform_ids = [first_transcript_obj.get_transcript_id()]
+
+    candidate_TSS_sites = set()
+    candidate_PolyA_sites = set()
+
+    if has_TSS:
+        (
+            candidate_TSS_sites.add(min_lend)
+            if contig_strand == "+"
+            else candidate_TSS_sites.add(max_rend)
+        )
+
+    if has_PolyA:
+        (
+            candidate_PolyA_sites.add(max_rend)
+            if contig_strand == "+"
+            else candidate_PolyA_sites.add(min_lend)
+        )
+
     for transcript_obj in transcript_obj_list[1:]:
         exon_coords = transcript_obj.get_exon_segments()
         lend = exon_coords[0][0]
@@ -151,6 +170,22 @@ def merge_isoforms(transcript_obj_list):
             else:
                 has_TSS = transcript_obj.has_TSS()
 
+        if transcript_obj.has_TSS():
+            (
+                candidate_TSS_sites.add(lend)
+                if contig_strand == "+"
+                else candidate_TSS_sites.add(rend)
+            )
+
+        if transcript_obj.has_PolyA():
+            (
+                candidate_PolyA_sites.add(rend)
+                if contig_strand == "+"
+                else candidate_PolyA_sites.add(lend)
+            )
+
+        merged_isoform_ids.append(transcript_obj.get_transcript_id())
+
     template_exon_coords[0][0] = min_lend
     template_exon_coords[-1][1] = max_rend
 
@@ -159,6 +194,21 @@ def merge_isoforms(transcript_obj_list):
 
     merged_transcript._imported_has_TSS = has_TSS
     merged_transcript._imported_has_POLYA = has_PolyA
+
+    merged_transcript.add_meta(
+        "merged_isoforms_shared_splice_pattern", ",".join(sorted(merged_isoform_ids))
+    )
+
+    if len(candidate_TSS_sites) > 0:
+        merged_transcript.add_meta(
+            "TSS_sites", ",".join([str(x) for x in sorted(list(candidate_TSS_sites))])
+        )
+
+    if len(candidate_PolyA_sites) > 0:
+        merged_transcript.add_meta(
+            "PolyA_sites",
+            ",".join([str(x) for x in sorted(list(candidate_PolyA_sites))]),
+        )
 
     return merged_transcript
 
