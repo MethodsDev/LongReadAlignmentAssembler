@@ -41,7 +41,8 @@ task LRAA_runner_task {
     command <<<
 
         set -ex
-        
+
+        (        
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
@@ -59,8 +60,14 @@ task LRAA_runner_task {
                                  ~{"--num_total_reads " + num_total_reads} \
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--LowFi" false='' LowFi} \
-                                 ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag}
-
+                                 ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
+                  > command_output.log 2>&1
+        ) || {
+             echo "Command failed with exit code $?" >&2
+             echo "Last 100 lines of output:" >&2
+             tail -n 100 command_output.log >&2
+             exit 1
+        }
 
         if [[ -f ~{output_prefix_use}.~{output_suffix}.quant.tracking ]]; then
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
@@ -69,11 +76,6 @@ task LRAA_runner_task {
         # always ensure an output file exists for the wdl output capture.
         touch ~{output_prefix_use}.~{output_suffix}.gtf
 
-    
-        #touch ~{output_prefix_use}.~{output_suffix}.quant.expr
-        #touch ~{output_prefix_use}.~{output_suffix}.quant.tracking.gz
-
-                
         
     >>>
 
