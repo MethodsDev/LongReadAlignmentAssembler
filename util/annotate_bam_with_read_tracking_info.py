@@ -7,6 +7,7 @@ import argparse
 import csv
 import logging
 import shutil
+import gzip
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -64,7 +65,8 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
     with env.begin(write=True) as txn:
 
         record_counter = 0
-        with open(tracking_file, "rt") as fh:
+        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+        with openf(tracking_file, "rt") as fh:
 
             reader = csv.DictReader(fh, delimiter="\t")
             for row in reader:
