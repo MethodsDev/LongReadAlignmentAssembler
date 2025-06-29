@@ -65,6 +65,15 @@ cluster_counts_matrix %>% head()
 ```
 
 ```{r}
+
+cluster_CPM_matrix = sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
+
+head(cluster_CPM_matrix)
+```
+
+
+
+```{r}
 # Read the GTF file
 gtf_parsed <- read_tsv( gtf_filename,
                 comment = "#", 
@@ -105,9 +114,16 @@ gtf_parsed <- gtf_parsed %>% unnest_wider(attr_list)
 ## UMAP display
 ################
 
-get_isoform_umap = function(gene_of_interest) {
+get_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
   
-   transcript_expr_data = data.frame(isoform_expr_data[grepl(gene_of_interest, rownames(isoform_expr_data)),])
+  
+  if (! is.null(restrict_to_transcript_ids)) {
+     transcript_expr_data = data.frame(isoform_expr_data[
+       rownames(isoform_expr_data) %in% restrict_to_transcript_ids,])
+  } else {
+  
+    transcript_expr_data = data.frame(isoform_expr_data[grepl(gene_of_interest, rownames(isoform_expr_data)),])
+  }
   
    transcript_expr_data$transcript_id = rownames(transcript_expr_data)
    transcript_expr_data = transcript_expr_data %>% gather(key=cell_barcode, value=read_count, -transcript_id) %>%
@@ -122,9 +138,9 @@ get_isoform_umap = function(gene_of_interest) {
 
 base_umap = umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='black', alpha=0.1)
 
-plot_isoform_umap = function(gene_of_interest) {
+plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
   
-  isoform_umap = get_isoform_umap(gene_of_interest)
+  isoform_umap = get_isoform_umap(gene_of_interest, restrict_to_transcript_ids)
   
   base_umap + geom_point(data=isoform_umap, aes(color=transcript_id), alpha=0.5) +
     facet_wrap(~transcript_id) +
@@ -219,7 +235,7 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
   transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
     filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
   
-  isoform_expr = cluster_counts_matrix[rownames(cluster_counts_matrix) %in% transcript_ids,]
+  isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
   
   # Load expression matrix
   expr_mat <- as.matrix(isoform_expr)
@@ -312,7 +328,9 @@ get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
 
 ```{r}
 
-get_expression_ggplot2_heatmap_w_exon_structures = function(gene_of_interest) {
+get_expression_ggplot2_heatmap_w_exon_structures = function(
+    gene_of_interest, 
+    min_isoform_frac_expr_any_cluster = 0) {
 
   library(patchwork)
   library(ggdendro)
@@ -321,9 +339,23 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(gene_of_interest) {
   transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
     filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
   
-  isoform_expr = cluster_counts_matrix[rownames(cluster_counts_matrix) %in% transcript_ids,]
+  isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
   
   isoform_frac_expr <- sweep(isoform_expr, 2, colSums(isoform_expr), "/")
+  
+  if (min_isoform_frac_expr_any_cluster > 0) {
+    
+    transcript_ids = names(which(rowSums(isoform_frac_expr >= min_isoform_frac_expr_any_cluster) > 0))
+     
+    if (length(transcript_ids) < 2) {
+       stop("Too few isoforms left after filtering based on min isoform fraction") 
+    }
+    
+    isoform_expr = isoform_expr[rownames(isoform_expr) %in% transcript_ids,]
+    
+    isoform_frac_expr = isoform_frac_expr[rownames(isoform_frac_expr) %in% transcript_ids,]
+    
+  }
   
   
   # Load expression matrix
@@ -360,6 +392,8 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(gene_of_interest) {
   
   
   exon_binary_df = get_gene_structure_matrix(gene_of_interest)
+  
+  exon_binary_df = exon_binary_df %>% filter(transcript_id %in% transcript_ids)
   
   # Create exon structure annotation matrix (transcripts x exon_coords)
   exon_mat <- exon_binary_df %>%
@@ -483,7 +517,10 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(gene_of_interest) {
     wrap_elements(g_frac_expr) +
     plot_layout(ncol = 4, widths = c(0.5, 1.2, 0.5, 0.5))
   
-  return(combined_plot)
+  return(list(
+    plot = combined_plot, 
+    transcript_ids = transcript_ids)
+    )
   
 }
 
@@ -492,7 +529,10 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(gene_of_interest) {
 
 ```{r}
 
-p_exon_expr = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest)
+gene_exon_heatmap_plot = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest, 
+                                                                0.1)
+
+p_exon_expr = gene_exon_heatmap_plot$plot
 
 p_exon_expr
 ```
@@ -500,7 +540,7 @@ p_exon_expr
 
 ```{r}
 
-p_umap = plot_isoform_umap(my_gene_of_interest)
+p_umap = plot_isoform_umap(my_gene_of_interest, gene_exon_heatmap_plot$transcript_ids)
 
 p_umap
 
@@ -525,11 +565,13 @@ ggsave(p_both,
 
 library(cowplot)
 
-make_diff_iso_usage_compound_plot = function(gene_of_interest) {
+make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0) {
   
-  p_exon_expr = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest)
+  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction)
   
-  p_umap = plot_isoform_umap(my_gene_of_interest)
+  p_exon_expr = p_exon_expr_info$plot
+  
+  p_umap = plot_isoform_umap(gene_of_interest, p_exon_expr_info$transcript_ids)
   
   p_both = plot_grid(p_exon_expr, p_umap, ncol=1)
   
@@ -537,7 +579,7 @@ make_diff_iso_usage_compound_plot = function(gene_of_interest) {
   
 }
 
-p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest)
+p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest, 0.1)
 
 ggsave(p_my_gene_of_interest, 
        file=paste0(my_gene_of_interest, ".pdf"),
@@ -549,11 +591,15 @@ p_my_gene_of_interest
 
 ```
 
+#############################
+# Make plots for top examples
+
+
 ```{r}
 
 # Specify the path for the directory you want to create
 num_top_diff_iso_usage_plots = 100
-top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots")
+top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots_minIsoF0.1")
 
 # Check if the directory already exists
 if (!dir.exists(top_diff_iso_usage_plots_dir)) {
@@ -606,15 +652,20 @@ for(gene_sym_value in top_diff_iso_usage_genes) {
     #   next;
     #}
     
-    pdf(filename)
-    
     gene_sym_value_regex = paste0("^", gene_sym_value, "\\^")
+    
+    tryCatch({
+      
+        pdf(filename)
+    
+        p = make_diff_iso_usage_compound_plot(gene_sym_value_regex, 0.1)
+        plot(p)
+        dev.off()
+      
+     }, error = function(e) {
+      message("Caught error: ", e$message)
   
-    
-    
-    p = make_diff_iso_usage_compound_plot(gene_sym_value_regex)
-    plot(p)
-    dev.off()
+    })
 }  
 
 
