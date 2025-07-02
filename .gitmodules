@@ -1,0 +1,3 @@
+[submodule "LongReadAlignmentAssembler.wiki"]
+	path = LongReadAlignmentAssembler.wiki
+	url = https://github.com/MethodsDev/LongReadAlignmentAssembler.wiki.git
