@@ -1,3 +1,12 @@
+v0.7.0
+- rework single cell ref-guided and denovo pipes so isoform ID happens at the cluster-level, but quant is more simply performed post gtf-merge step in pseudobulk-all mode
+- updating the LRAA_globals to "max_dist_between_alt_TSS_sites": 50 from earlier zero setting
+- adding wiki as submodule
+- adding splice pattern eval support: splice_patterns_tsv_to_bed.py, segment_LRAA_GTF_by_shared_exon_intervals.py
+- adding diff iso usage analysis notebook template including isoform structure, expression, and umap expr
+- making LRAA runner less verbose in WDL for Terra batch API compatibility
+
+
 v0.6.0
 - incorporate splice pattern codes into expr.quant and tracking files
 - include splice pattern based sparse matrix
