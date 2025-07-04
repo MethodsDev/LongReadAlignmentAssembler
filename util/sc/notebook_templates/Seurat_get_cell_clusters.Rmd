@@ -33,23 +33,18 @@ data = Read10X(data.dir=data_dir,
 ```{r}
 
 umi_counts_per_cell = colSums(data)
-
-```
-
-```{r}
-
 umi_counts_per_cell = sort(umi_counts_per_cell, decreasing = T)
-
-
-```
-
-```{r}
-
 plot(umi_counts_per_cell, log='xy')
 
-
 ```
 
+
+```{r}
+features_per_cell = colSums(data >0)
+features_per_cell = sort(features_per_cell, decreasing = T)
+plot(features_per_cell, log='xy')
+```
+    
 
 
 ```{r}
