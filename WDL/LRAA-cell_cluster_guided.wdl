@@ -226,10 +226,19 @@ task lraa_merge_gtf_task {
     
     command <<<
         set -ex
-        
+
+
+      (
+      
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
-                           --output_gtf ~{sample_id}.LRAA.sc_merged.gtf
+                           --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
+      ) || {
+             echo "Command failed with exit code $?" >&2
+             echo "Last 100 lines of output:" >&2
+             tail -n 100 command_output.log >&2
+             exit 1
+      }
 
     >>>
 
