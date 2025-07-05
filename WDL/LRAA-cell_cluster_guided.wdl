@@ -22,6 +22,7 @@ workflow LRAA_cell_cluster_guided {
         Int numThreadsPerLRAA = 4
         Int memoryGBperLRAA = 16
         Int memoryGBmergeGTFs = 32
+        Int memoryGBquantFinal = 32
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -103,7 +104,7 @@ workflow LRAA_cell_cluster_guided {
                main_chromosomes = main_chromosomes,
                quant_only = true,
                numThreads = numThreadsPerLRAA,
-               memoryGB = memoryGBperLRAA,
+               memoryGB = memoryGBquantFinal,
                docker = docker
      }
 
