@@ -286,7 +286,7 @@ task partition_bam_by_cell_cluster {
           echo "Last 100 lines of output:" >&2
           tail -n 100 command_output.log >&2
           exit 1
-        )
+        }
       
         ls -1 *.bam
         
