@@ -277,11 +277,17 @@ task partition_bam_by_cell_cluster {
          mkdir partitioned_bams
          cd partitioned_bams/
 
+        (
          partition_bam_by_cell_cluster.py --bam ~{inputBAM} \
                                           --cell_clusters ~{cell_clusters_info} \
-                                          --output_prefix ~{sample_id}
-
-
+                                          --output_prefix ~{sample_id} > command_output.log 2>&1
+        ) || {
+          echo "Command failed with exit code $?" >&2
+          echo "Last 100 lines of output:" >&2
+          tail -n 100 command_output.log >&2
+          exit 1
+        )
+      
         ls -1 *.bam
         
          
