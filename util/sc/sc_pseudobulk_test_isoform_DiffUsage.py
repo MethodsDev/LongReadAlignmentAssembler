@@ -60,7 +60,7 @@ def main():
         "--ignore_unspliced",
         action="store_true",
         default=False,
-        help="exclude unspliced isoforms",
+        help="exclude unspliced isoforms (only works when used with splice pattern collapsed isoforms)",
     )
 
     parser.add_argument(
@@ -115,6 +115,15 @@ def main():
     assert column_names[1] == "transcript_id"
 
     cluster_names = column_names[2:]
+
+    if args.ignore_unspliced:
+        logger.info("-pruning unspliced isoforms")
+        logger.info("before pruning, have {} rows".format(counts_big_df.shape[0]))
+        mask_to_exclude = (
+            counts_big_df["transcript_id"].astype(str).str.contains(":iso-", na=False)
+        )
+        counts_big_df = counts_big_df[~mask_to_exclude]
+        logger.info("after pruning, have {} rows".format(counts_big_df.shape[0]))
 
     ############################################################
     ## pairwise compare clusters for diff isoform usage analysis
