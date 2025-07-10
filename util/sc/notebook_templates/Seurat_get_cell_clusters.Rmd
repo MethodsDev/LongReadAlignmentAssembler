@@ -178,10 +178,16 @@ plot1 + plot2
 
 ```{r}
 
+#all.features <- rownames(seurat_obj)
+#seurat_obj <- ScaleData(seurat_obj, features = all.features)
 
-all.features <- rownames(seurat_obj)
-seurat_obj <- ScaleData(seurat_obj, features = all.features)
+library(future)
+# Set the plan for parallelization
+plan(multisession)
+options(future.globals.maxSize = 10000 * 1024^2) # Set to 10B (10000 MB)
+seurat_obj = ScaleData(seurat_obj, vars.to.regress = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
 
+    
 ```
 
 
