@@ -25,6 +25,7 @@ def differential_isoform_tests(
 
     ## Requirements:
     ## df had columns 'gene_id', 'count_A', and 'count_B' with transcripts as separate rows.
+    ## Also expects 'transcript_id' column
 
     ## test can be 'chi2' or 'fisher'
 
@@ -107,26 +108,39 @@ def differential_isoform_tests(
         delta_pi = pi_B - pi_A
 
         # Separate positive and negative changes
-        positive_changes = delta_pi[delta_pi > 0].nlargest(2).sum()
-        negative_changes = delta_pi[delta_pi < 0].nsmallest(2).sum()
+        positive_changes = delta_pi[delta_pi > 0].nlargest(2)
+        negative_changes = delta_pi[delta_pi < 0].nsmallest(2)
+
+        positive_changes_sum = positive_changes.sum()
+        negative_changes_sum = negative_changes.sum()
 
         if not (
-            abs(positive_changes) > min_delta_pi or abs(negative_changes) > min_delta_pi
+            abs(positive_changes_sum) > min_delta_pi
+            or abs(negative_changes_sum) > min_delta_pi
         ):
             if debug_mode:
                 logger.debug("matrix:\n" + str(matrix))
                 logger.debug(
                     "skipping due to insuficcient min_delta_pi: {} or {}".format(
-                        abs(positive_changes), abs(negative_changes)
+                        abs(positive_changes_sum), abs(negative_changes_sum)
                     )
                 )
             continue
 
-        # Determine the dominant direction
-        if abs(positive_changes) > abs(negative_changes):
-            dominant_delta_pi = positive_changes
+        # Determine the dominant direction and get corresponding transcript IDs
+        if abs(positive_changes_sum) > abs(negative_changes_sum):
+            dominant_delta_pi = positive_changes_sum
+            dominant_transcript_ids = group.loc[
+                positive_changes.index, "transcript_id"
+            ].tolist()
         else:
-            dominant_delta_pi = negative_changes
+            dominant_delta_pi = negative_changes_sum
+            dominant_transcript_ids = group.loc[
+                negative_changes.index, "transcript_id"
+            ].tolist()
+
+        # Convert list to comma-separated string for easier storage
+        dominant_transcript_ids_str = ",".join(dominant_transcript_ids)
 
         if debug_mode:
             logger.debug("testing matrix:\n" + str(matrix))
@@ -140,11 +154,16 @@ def differential_isoform_tests(
             res = fisher_exact(matrix, method=method)
             pvalue = res.pvalue
 
-        results.append([gene_id, pvalue, dominant_delta_pi])
+        results.append(
+            [gene_id, pvalue, dominant_delta_pi, dominant_transcript_ids_str]
+        )
 
     # Multiple testing correction
     if results:
-        results_df = pd.DataFrame(results, columns=["gene_id", "pvalue", "delta_pi"])
+        results_df = pd.DataFrame(
+            results,
+            columns=["gene_id", "pvalue", "delta_pi", "dominant_transcript_ids"],
+        )
         results_df["test"] = test
 
         if debug_mode:
@@ -180,9 +199,19 @@ def generate_test_data(num_genes=20):
         for isoform_id in range(1, num_isoforms + 1):
             count_A = np.random.randint(0, 100)
             count_B = np.random.randint(0, 100)
-            data.append([f"gene{gene_id}", f"isoform{isoform_id}", count_A, count_B])
+            data.append(
+                [
+                    f"gene{gene_id}",
+                    f"isoform{isoform_id}",
+                    f"transcript{gene_id}_{isoform_id}",
+                    count_A,
+                    count_B,
+                ]
+            )
 
-    return pd.DataFrame(data, columns=["gene_id", "isoform_id", "count_A", "count_B"])
+    return pd.DataFrame(
+        data, columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"]
+    )
 
 
 def run_test():
