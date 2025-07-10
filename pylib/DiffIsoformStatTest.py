@@ -133,14 +133,24 @@ def differential_isoform_tests(
             dominant_transcript_ids = group.loc[
                 positive_changes.index, "transcript_id"
             ].tolist()
+            dominant_indices = positive_changes.index
         else:
             dominant_delta_pi = negative_changes_sum
             dominant_transcript_ids = group.loc[
                 negative_changes.index, "transcript_id"
             ].tolist()
+            dominant_indices = negative_changes.index
 
         # Convert list to comma-separated string for easier storage
         dominant_transcript_ids_str = ",".join(dominant_transcript_ids)
+
+        # Get read counts for the dominant transcripts
+        dominant_counts_A = group.loc[dominant_indices, "count_A"].sum()
+        dominant_counts_B = group.loc[dominant_indices, "count_B"].sum()
+
+        # Get total read counts for the gene
+        total_counts_A = group["count_A"].sum()
+        total_counts_B = group["count_B"].sum()
 
         if debug_mode:
             logger.debug("testing matrix:\n" + str(matrix))
@@ -155,14 +165,32 @@ def differential_isoform_tests(
             pvalue = res.pvalue
 
         results.append(
-            [gene_id, pvalue, dominant_delta_pi, dominant_transcript_ids_str]
+            [
+                gene_id,
+                pvalue,
+                dominant_delta_pi,
+                dominant_transcript_ids_str,
+                total_counts_A,
+                total_counts_B,
+                dominant_counts_A,
+                dominant_counts_B,
+            ]
         )
 
     # Multiple testing correction
     if results:
         results_df = pd.DataFrame(
             results,
-            columns=["gene_id", "pvalue", "delta_pi", "dominant_transcript_ids"],
+            columns=[
+                "gene_id",
+                "pvalue",
+                "delta_pi",
+                "dominant_transcript_ids",
+                "total_counts_A",
+                "total_counts_B",
+                "dominant_counts_A",
+                "dominant_counts_B",
+            ],
         )
         results_df["test"] = test
 
