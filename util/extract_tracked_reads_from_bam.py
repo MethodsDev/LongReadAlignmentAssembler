@@ -53,6 +53,8 @@ def main():
     with open(tracking_filename, "rt") as fh:
         for line in fh:
             read_name = line.split("\t")[4]
+            # in case single cell data
+            read_name = read_name.split("^")[-1]
             reads_want.add(read_name)
 
     for read in bamfile_reader:
