@@ -7,21 +7,19 @@ from collections import defaultdict
 
 def main():
 
-
     samplename_to_intron_to_counts = dict()
 
     samplenames = list()
-    
+
     for file in glob.glob("*.introns"):
 
         sample_name = file
         sample_name = sample_name.replace(".aligned.sorted.bam.introns", "")
 
         samplenames.append(sample_name)
-        
+
         intron_counts = parse_intron_counts(file)
         samplename_to_intron_to_counts[sample_name] = intron_counts
-
 
     print("\t" + "\t".join(samplenames))
 
@@ -30,7 +28,7 @@ def main():
         intron_toks = intron_counts.keys()
         all_introns.update(intron_toks)
 
-    for intron in intron_toks:
+    for intron in all_introns:
         vals = list()
         vals.append(intron)
         for sample_name in samplenames:
@@ -38,17 +36,14 @@ def main():
             vals.append(count)
 
         print("\t".join(vals))
-        
+
     sys.exit(0)
 
-        
 
 def parse_intron_counts(introns_filename):
 
-
-
     intron_counts = defaultdict(int)
-    
+
     with open(introns_filename) as fh:
 
         for line in fh:
@@ -63,7 +58,7 @@ def parse_intron_counts(introns_filename):
             """
 
             line = line.rstrip()
-            
+
             vals = line.split("\t")
             count = vals.pop(5)
             tok = "^".join(vals)
@@ -72,9 +67,5 @@ def parse_intron_counts(introns_filename):
     return intron_counts
 
 
-
-
-
-
-if __name__=='__main__':
+if __name__ == "__main__":
     main()
