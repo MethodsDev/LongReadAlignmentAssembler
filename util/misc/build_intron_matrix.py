@@ -5,16 +5,18 @@ import glob
 from collections import defaultdict
 
 
-def main():
+def main(intron_files_list):
 
     samplename_to_intron_to_counts = dict()
 
     samplenames = list()
 
-    for file in glob.glob("*.introns"):
+    for file in intron_files_list:
 
         sample_name = file
-        sample_name = sample_name.replace(".aligned.sorted.bam.introns", "")
+        sample_name = os.path.basename(sample_name).split(".")[0]
+
+        print("-processing: {} -> sample {}".format(file, sample_name), file=sys.stderr)
 
         samplenames.append(sample_name)
 
@@ -68,4 +70,9 @@ def parse_intron_counts(introns_filename):
 
 
 if __name__ == "__main__":
-    main()
+
+    usage = "usage: build_intron_matrix.py A.introns B.introns ... > introns.matrix"
+    if len(sys.argv) < 3:
+        exit(usage)
+
+    main(sys.argv[1:])
