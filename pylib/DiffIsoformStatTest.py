@@ -7,6 +7,13 @@ from scipy.stats import chi2_contingency
 from statsmodels.stats.multitest import multipletests
 
 
+def round_to_significant_figures(x, sig_figs=3):
+    """Round a number to specified significant figures"""
+    if x == 0:
+        return 0
+    return round(x, -int(np.floor(np.log10(abs(x)))) + (sig_figs - 1))
+
+
 def differential_isoform_tests(
     df,
     min_reads_per_gene=25,
@@ -15,6 +22,7 @@ def differential_isoform_tests(
     top_isoforms_each=5,
     min_reads_DTU_isoform=25,
     show_progress_monitor=True,
+    delta_pi_precision=3,  # New parameter for controlling precision
 ):
 
     logger = logging.getLogger(__name__)
@@ -156,17 +164,27 @@ def differential_isoform_tests(
             logger.debug(f"Chi2 failed for gene {gene_id}: {e}")
             status = "failed"
 
+        # Round delta_pi values to specified precision
+        dominant_delta_pi_rounded = round_to_significant_figures(
+            dominant_delta_pi, delta_pi_precision
+        )
+        alternate_delta_pi_rounded = (
+            round_to_significant_figures(alternate_delta_pi, delta_pi_precision)
+            if reciprocal_delta_pi
+            else None
+        )
+
         results.append(
             [
                 gene_id,
                 pvalue,
-                dominant_delta_pi,
+                dominant_delta_pi_rounded,
                 dominant_transcript_ids_str,
                 original_total_counts_A,  # Use original totals
                 original_total_counts_B,  # Use original totals
                 dominant_counts_A,
                 dominant_counts_B,
-                alternate_delta_pi if reciprocal_delta_pi else None,
+                alternate_delta_pi_rounded if reciprocal_delta_pi else None,
                 alternate_transcript_ids_str if reciprocal_delta_pi else None,
                 alternate_counts_A if reciprocal_delta_pi else None,
                 alternate_counts_B if reciprocal_delta_pi else None,
