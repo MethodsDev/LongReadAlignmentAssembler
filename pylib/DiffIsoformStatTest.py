@@ -54,27 +54,41 @@ def differential_isoform_tests(
             )
             continue
 
-        top_countA = group.nlargest(top_isoforms_each, "count_A")
-        top_countB = group.nlargest(top_isoforms_each, "count_B")
-        group = pd.concat([top_countA, top_countB]).drop_duplicates()
+        # Calculate pi_A and pi_B on the original unfiltered group data
+        original_total_counts_A = group["count_A"].sum()
+        original_total_counts_B = group["count_B"].sum()
 
-        group["total"] = group["count_A"] + group["count_B"]
-        group = group.sort_values(by="total", ascending=False).head(10)
-
-        total_counts_A = group["count_A"].sum()
-        total_counts_B = group["count_B"].sum()
-        if total_counts_A == 0 or total_counts_B == 0:
+        if original_total_counts_A == 0 or original_total_counts_B == 0:
             logger.debug(
                 f"Total counts in condition A or B is zero for gene {gene_id}, skipping."
             )
             continue
 
-        matrix = group[["count_A", "count_B"]].values
-
-        pi_A = group["count_A"] / total_counts_A
-        pi_B = group["count_B"] / total_counts_B
+        # Calculate proportions on original data
+        pi_A = group["count_A"] / original_total_counts_A
+        pi_B = group["count_B"] / original_total_counts_B
         delta_pi = pi_B - pi_A
 
+        # Add these calculations to the original group for later reference
+        group = group.copy()
+        group["pi_A"] = pi_A
+        group["pi_B"] = pi_B
+        group["delta_pi"] = delta_pi
+
+        # Now filter to top isoforms for statistical testing
+        top_countA = group.nlargest(top_isoforms_each, "count_A")
+        top_countB = group.nlargest(top_isoforms_each, "count_B")
+        filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
+
+        filtered_group["total"] = filtered_group["count_A"] + filtered_group["count_B"]
+        filtered_group = filtered_group.sort_values(by="total", ascending=False).head(
+            10
+        )
+
+        # Use filtered group for chi-squared test matrix
+        matrix = filtered_group[["count_A", "count_B"]].values
+
+        # But use delta_pi from original calculations for significance testing
         positive_indices = delta_pi[delta_pi > 0].sort_values(ascending=False).index[:2]
         negative_indices = delta_pi[delta_pi < 0].sort_values().index[:2]
 
@@ -106,6 +120,7 @@ def differential_isoform_tests(
             alternate_delta_pi = positive_sum
             alternate_indices = positive_indices
 
+        # Use original group data for transcript information and counts
         dominant_transcript_ids_str = ",".join(
             group.loc[dominant_indices, "transcript_id"].tolist()
         )
@@ -147,8 +162,8 @@ def differential_isoform_tests(
                 pvalue,
                 dominant_delta_pi,
                 dominant_transcript_ids_str,
-                total_counts_A,
-                total_counts_B,
+                original_total_counts_A,  # Use original totals
+                original_total_counts_B,  # Use original totals
                 dominant_counts_A,
                 dominant_counts_B,
                 alternate_delta_pi if reciprocal_delta_pi else None,
