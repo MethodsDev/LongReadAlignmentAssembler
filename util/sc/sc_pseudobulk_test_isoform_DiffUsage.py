@@ -53,7 +53,21 @@ def main():
     )
 
     parser.add_argument(
+        "--min_reads_DTU_isoform",
+        type=int,
+        default=25,
+        help="min reads per DTU isoform",
+    )
+
+    parser.add_argument(
         "--min_delta_pi", type=float, default=0.1, help="min delta pi (default: 0.1)"
+    )
+
+    parser.add_argument(
+        "--reciprocal_delta_pi",
+        action="store_true",
+        default=False,
+        help="require the alt direction isoform to have at least --min_delta_pi and --min_reqds_DTU_isoform too",
     )
 
     parser.add_argument(
@@ -68,14 +82,6 @@ def main():
         type=str,
         required=True,
         help="prefix for output files",
-    )
-
-    parser.add_argument(
-        "--stat_test",
-        default="chi2",
-        required=False,
-        choices=["chi2", "fisher"],
-        help="test to use: chi-squared or Fishers exact test (default: chi2)",
     )
 
     parser.add_argument(
@@ -99,7 +105,6 @@ def main():
     min_delta_pi = args.min_delta_pi
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
     output_prefix = args.output_prefix
-    stat_test = args.stat_test
     signif_threshold = args.signif_threshold
 
     if args.debug:
@@ -148,7 +153,12 @@ def main():
             # print(test_df)
 
             test_df_results = differential_isoform_tests(
-                test_df, min_reads_per_gene, min_delta_pi, top_isoforms_each, stat_test
+                df=test_df,
+                min_reads_per_gene=min_reads_per_gene,
+                min_delta_pi=min_delta_pi,
+                top_isoforms_each=top_isoforms_each,
+                reciprocal_delta_pi=args.reciprocal_delta_pi,
+                min_reads_DTU_isoform=args.min_reads_DTU_isoform,
             )
 
             if test_df_results is not None:
@@ -163,13 +173,13 @@ def main():
     if all_test_results is not None:
         # all_test_results = pd.concat([all_test_results, test_df_results])
 
-        # perform mult test pvalue adjustment
+        # perform mult test pvalue adjustment and set significance status
         all_test_results = FDR_mult_tests_adjustment(
             all_test_results, min_delta_pi, signif_threshold
         )
 
         all_test_results.to_csv(
-            f"{output_prefix}.diff_iso.{stat_test}.tsv",
+            f"{output_prefix}.diff_iso..tsv",
             sep="\t",
             index=False,
         )
