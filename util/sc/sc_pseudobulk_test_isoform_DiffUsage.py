@@ -179,7 +179,7 @@ def main():
         )
 
         all_test_results.to_csv(
-            f"{output_prefix}.diff_iso..tsv",
+            f"{output_prefix}.diff_iso.tsv",
             sep="\t",
             index=False,
         )
