@@ -17,17 +17,23 @@ library(pheatmap)
 ```{r}
 
 
-sample_name = "cordblood_lraa_sc"
+sample_name = "LP00714_by_SP"
 
-sparse_matrix_data_dir = "cordblood_lraa_sc^splice_pattern-sparseM"
+sparse_matrix_data_dir = "../../LP00714-sc-guided^splice_pattern-sparseM/"
 
-umap_cluster_file = "../sc_cluster-guided_LRAA_v0.5.0/cordblood.LRAA.sc_clust_guided.genes-cell_cluster_assignments.wUMAP.tsv.gz"
+umap_cluster_file = "../LP00714-sc-guided-MtFiltNregressed.genes-cell_cluster_assignments.wSTMN2info.wMeta.tsv"
 
-cluster_pseudobulk_matrix_filename = "cordblood_lraa_sc^splice_pattern-sparseM.cluster_pseudobulk.matrix"
+cluster_pseudobulk_matrix_filename = "../LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix"
 
-gtf_filename = "cordblood.LRAA_merged.new.gtf.updated.splice_pattern_collapsed.segmented.gtf"
+gtf_filename = "../../LP00714.LRAA.sc_merged.gtf.updated.SP_collapsed.segmented.gtf"
 
-diff_iso_usage_stats_filename = "diff_splice_pattern_usage/diff_splice_pattern_usage.diff_iso.chi2.tsv"
+#diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_for_diff_iso_usage.diff_iso.chi2.signif.tsv"
+
+
+#diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_TOP_ISO_EACH_for_diff_iso_usage.diff_iso.chi2.tsv"
+
+
+diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_TOP_ISO_EACH_RECIP_REQ_for_diff_iso_usage.diff_iso.tsv"
 
 ```
 
@@ -74,30 +80,42 @@ head(cluster_CPM_matrix)
 
 
 ```{r}
-# Read the GTF file
-gtf_parsed <- read_tsv( gtf_filename,
-                comment = "#", 
-                col_names = FALSE, 
-                col_types = cols(.default = "c"))
 
-# Assign standard GTF column names
-colnames(gtf_parsed)[1:9] <- c("seqname", "source", "feature", "start", "end", 
-                        "score", "strand", "frame", "attribute")
+gtf_parsed_file = "gtf_parsed.rds"
 
-# Function to parse attributes into a named list
-parse_attributes <- function(attr_str) {
-  attrs <- str_split(attr_str, ";\\s*")[[1]]
-  kv_pairs <- str_match(attrs, '^(\\S+)\\s+"([^"]+)"')
-  kv_pairs <- kv_pairs[!is.na(kv_pairs[, 1]), , drop = FALSE]
-  if (nrow(kv_pairs) == 0) return(named(list()))
-  set_names(kv_pairs[, 3], kv_pairs[, 2])
+if (file.exists(gtf_parsed_file)) {
+  
+  gtf_parsed = readRDS(gtf_parsed_file)
+  
+} else {
+
+  # Read the GTF file
+  gtf_parsed <- read_tsv( gtf_filename,
+                          comment = "#", 
+                          col_names = FALSE, 
+                          col_types = cols(.default = "c"))
+  
+  # Assign standard GTF column names
+  colnames(gtf_parsed)[1:9] <- c("seqname", "source", "feature", "start", "end", 
+                                 "score", "strand", "frame", "attribute")
+  
+  # Function to parse attributes into a named list
+  parse_attributes <- function(attr_str) {
+    attrs <- str_split(attr_str, ";\\s*")[[1]]
+    kv_pairs <- str_match(attrs, '^(\\S+)\\s+"([^"]+)"')
+    kv_pairs <- kv_pairs[!is.na(kv_pairs[, 1]), , drop = FALSE]
+    if (nrow(kv_pairs) == 0) return(named(list()))
+    set_names(kv_pairs[, 3], kv_pairs[, 2])
+  }
+  
+  # Safely parse attributes
+  gtf_parsed$attr_list <- map(gtf_parsed$attribute, parse_attributes)
+  
+  # Turn the named list column into separate columns
+  gtf_parsed <- gtf_parsed %>% unnest_wider(attr_list)
+  saveRDS(object = gtf_parsed, file="gtf_parsed.rds")
+  
 }
-
-# Safely parse attributes
-gtf_parsed$attr_list <- map(gtf_parsed$attribute, parse_attributes)
-
-# Turn the named list column into separate columns
-gtf_parsed <- gtf_parsed %>% unnest_wider(attr_list)
 
 ```
 
@@ -142,11 +160,19 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
   
   isoform_umap = get_isoform_umap(gene_of_interest, restrict_to_transcript_ids)
   
-  base_umap + geom_point(data=isoform_umap, aes(color=transcript_id), alpha=0.5) +
+  base_umap + geom_point(data=isoform_umap, aes(color=transcript_id), alpha=0.9) +
     facet_wrap(~transcript_id) +
     theme_bw() +
     ggtitle(gene_of_interest)  +
-     theme(legend.position="none")
+     theme(legend.position="none") +
+    geom_text(data = umap_df %>% 
+              group_by(seurat_clusters) %>% 
+              summarise(umap_1 = mean(umap_1), 
+                       umap_2 = mean(umap_2)), 
+            aes(label = seurat_clusters), 
+            size = 5,
+            color = 'darkturquoise',
+            fontface = "bold") 
   
 }
 
@@ -164,7 +190,7 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
 get_gene_structure_matrix = function(gene_of_interest) {
  # Filter to exons only
   exon_df <- gtf_parsed %>%
-    filter(grepl(gene_of_interest, gene_id)) %>%
+    filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>%
     filter(feature == "exon") %>%
     mutate(
       start = as.integer(start),
@@ -316,7 +342,7 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
 
 ```{r}
 
-my_gene_of_interest = "EGFL7"
+my_gene_of_interest = "STMN2"
 
 
 get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
@@ -330,18 +356,24 @@ get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
 
 get_expression_ggplot2_heatmap_w_exon_structures = function(
     gene_of_interest, 
-    min_isoform_frac_expr_any_cluster = 0) {
+    min_isoform_frac_expr_any_cluster = 0,
+    ignore_unspliced = FALSE) {
 
   library(patchwork)
   library(ggdendro)
   
   
-  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
     filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+  
+  if (ignore_unspliced) {
+    transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
+  }
   
   isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
   
   isoform_frac_expr <- sweep(isoform_expr, 2, colSums(isoform_expr), "/")
+  isoform_frac_expr[is.na(isoform_frac_expr)] = 0
   
   if (min_isoform_frac_expr_any_cluster > 0) {
     
@@ -530,7 +562,7 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
 ```{r}
 
 gene_exon_heatmap_plot = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest, 
-                                                                0.1)
+                                                                0.01, ignore_unspliced=T)
 
 p_exon_expr = gene_exon_heatmap_plot$plot
 
@@ -565,9 +597,9 @@ ggsave(p_both,
 
 library(cowplot)
 
-make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0) {
+make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0, ignore_unspliced=FALSE) {
   
-  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction)
+  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction, ignore_unspliced)
   
   p_exon_expr = p_exon_expr_info$plot
   
@@ -579,7 +611,7 @@ make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction 
   
 }
 
-p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest, 0.1)
+p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest, 0.1, TRUE)
 
 ggsave(p_my_gene_of_interest, 
        file=paste0(my_gene_of_interest, ".pdf"),
@@ -598,8 +630,8 @@ p_my_gene_of_interest
 ```{r}
 
 # Specify the path for the directory you want to create
-num_top_diff_iso_usage_plots = 100
-top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots_minIsoF0.1")
+num_top_diff_iso_usage_plots = 300
+top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots_minIsoF0.1.TOP_ISO_RECIP")
 
 # Check if the directory already exists
 if (!dir.exists(top_diff_iso_usage_plots_dir)) {
@@ -619,10 +651,142 @@ diff_iso_usage_stats %>% head()
 
 ```
 
+
+```{r}
+
+diff_iso_usage_cluster_count_pairs = diff_iso_usage_stats %>% 
+                                      dplyr::filter(significant == "True") %>% 
+                                      dplyr::select(gene_id, cluster_A, cluster_B) %>%
+                                      unique() %>%
+                                      group_by(cluster_A, cluster_B) %>%
+                                      tally()
+
+diff_iso_usage_cluster_count_pairs
+
+```
+
+
+```{r}
+
+diff_iso_usage_cluster_count_pairs$cluster_A = str_replace(diff_iso_usage_cluster_count_pairs$cluster_A, "Cluster_", "")
+
+diff_iso_usage_cluster_count_pairs$cluster_B = str_replace(diff_iso_usage_cluster_count_pairs$cluster_B, "Cluster_", "")
+
+diff_iso_usage_cluster_count_pairs$cluster_A = as.integer(diff_iso_usage_cluster_count_pairs$cluster_A)
+diff_iso_usage_cluster_count_pairs$cluster_B = as.integer(diff_iso_usage_cluster_count_pairs$cluster_B)
+
+```
+
+
+```{r}
+
+diff_iso_usage_cluster_count_pairs %>% 
+  ggplot(aes(x=factor(cluster_A), y=factor(cluster_B), fill=n)) + 
+  geom_tile() +
+  geom_text(aes(label = n), color = "white", size = 4) +
+  theme_bw() +   
+  ggtitle("Counts of genes with isoform switching events detected")
+
+
+```
+
+```{r}
+dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
+  # Create a complete matrix (assuming it's symmetric)
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  # Remove duplicates if any
+  distinct() %>%
+  # Pivot to wide format
+  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
+  # Convert to matrix
+  column_to_rownames("cluster_A") %>%
+  as.matrix()
+
+
+
+# Convert to distance object (you might want to transform the values)
+# Since higher 'n' values likely mean closer clusters, you might want to invert:
+dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
+
+# Create dendrogram
+hc <- hclust(dist_obj)
+plot(hc, main = "Dendrogram based on counts of Iso-switching genes", xlab = "Clusters", ylab = "Distance")
+
+
+```
+
+
+
+```{r}
+
+# order clusters by dendrogram
+
+library(dplyr)
+library(ggplot2)
+
+# First, create the distance matrix and dendrogram (as before)
+dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  distinct() %>%
+  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
+  column_to_rownames("cluster_A") %>%
+  as.matrix()
+
+# Convert to distance object and create dendrogram
+dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
+hc <- hclust(dist_obj)
+cluster_order <- rownames(dist_matrix)[hc$order]
+
+# Make the data symmetrical and filter for triangle
+symmetric_data <- diff_iso_usage_cluster_count_pairs %>%
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  distinct() %>%
+  # Convert to factors with dendrogram order
+  mutate(
+    cluster_A = factor(cluster_A, levels = cluster_order),
+    cluster_B = factor(cluster_B, levels = cluster_order)
+  ) %>%
+  # Keep only upper triangle (where numeric cluster_A <= cluster_B)
+  filter(as.numeric(cluster_A) <= as.numeric(cluster_B))
+
+```
+
+
+```{r}
+
+# Create the triangular plot
+symmetric_data %>%
+  ggplot(aes(x = cluster_A, y = cluster_B, fill = n)) + 
+  geom_tile() +
+  geom_text(aes(label = n), color = "white", size = 4) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cluster A", y = "Cluster B") +
+  ggtitle("Counts of genes with isoform switching events detected - dendro ordered") + 
+  scale_fill_distiller(palette = "RdYlBu")
+
+```
+
+
+
+
+
+
 ```{r}
 # get top candidates.
 
-top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True") %>% 
+MIN_DELTA_PI = 0.3
+
+top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True" & abs(delta_pi) >= MIN_DELTA_PI) %>% 
   group_by(gene_id) %>% 
       # get top entruy per gene
       arrange(adj_pvalue, desc(abs(delta_pi))) %>% filter(row_number() == 1) %>% ungroup() %>%
@@ -633,6 +797,35 @@ top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True"
 top_diff_iso_usage_genes
 
 ```
+
+```{r}
+
+test_gene = top_diff_iso_usage_genes[1]
+
+test_gene = "GOPC^g:chr6:-:comp-229"
+
+test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.5, ignore_unspliced=T)
+test_plot_info$plot
+
+```
+
+```{r}
+
+p = plot_isoform_umap(test_gene, test_plot_info$transcript_ids)
+
+plot(p)
+
+```
+
+```{r}
+
+p = make_diff_iso_usage_compound_plot(test_gene, MIN_DELTA_PI, ignore_unspliced = TRUE)
+
+plot(p)
+```
+
+
+
 
 ```{r}
 
@@ -652,15 +845,14 @@ for(gene_sym_value in top_diff_iso_usage_genes) {
     #   next;
     #}
     
-    gene_sym_value_regex = paste0("^", gene_sym_value, "\\^")
+    #gene_sym_value = paste0("^", gene_sym_value, "\\^")
     
     tryCatch({
-      
-        pdf(filename)
     
-        p = make_diff_iso_usage_compound_plot(gene_sym_value_regex, 0.1)
-        plot(p)
-        dev.off()
+        p = make_diff_iso_usage_compound_plot(gene_sym_value, MIN_DELTA_PI, ignore_unspliced = TRUE)
+        ggsave(p, file=filename, width=12, 
+       height=12)
+      
       
      }, error = function(e) {
       message("Caught error: ", e$message)
