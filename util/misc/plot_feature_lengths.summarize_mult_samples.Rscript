@@ -32,6 +32,13 @@ main = function () {
     
     	df$sample_name = sample_name
 
+        if ("cDNA_length" %in% colnames(df)) {
+            df = df %>% rename(feature_length = cDNA_length)
+        } else if ("alignment_length" %in% colnames(df)) {
+            df = df %>% rename(feature_length = alignment_length) 
+        }
+
+    
 		df = df %>% select(sample_name, sqanti_cat, num_exon_segments, feature_length) %>%
     			rename(Category = sqanti_cat)
 

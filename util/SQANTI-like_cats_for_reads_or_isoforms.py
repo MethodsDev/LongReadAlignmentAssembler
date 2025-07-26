@@ -77,27 +77,27 @@ def main():
 
     tsv_output_filename = output_prefix + ".iso_cats.tsv"
     tsv_ofh = open(tsv_output_filename, "wt")
-    tsv_writer = csv.DictWriter(
-        tsv_ofh,
-        fieldnames=[
-            "feature_name",
-            "sqanti_cat",
-            "feature_length",
-            "num_exon_segments",
-            "structure",
-            "matching_isoforms",
-        ],
-        delimiter="\t",
-        lineterminator="\n",
-    )
-    tsv_writer.writeheader()
 
     feature_counter = 0
     feature_category_counter = defaultdict(int)
 
     if input_bam is not None:
-
         ## Examine aligned reads
+        tsv_writer = csv.DictWriter(
+            tsv_ofh,
+            fieldnames=[
+                "feature_name",
+                "sqanti_cat",
+                "read_length",
+                "alignment_length",
+                "num_exon_segments",
+                "structure",
+                "matching_isoforms",
+            ],
+            delimiter="\t",
+            lineterminator="\n",
+        )
+        tsv_writer.writeheader()
 
         logger.info("Classifying reads from bam: {}".format(input_bam))
         bamfile_reader = pysam.AlignmentFile(input_bam, "rb")
@@ -106,6 +106,13 @@ def main():
         bamwriter = pysam.AlignmentFile(
             bam_output_filename, "wb", template=bamfile_reader
         )
+
+        def get_aligned_length(read):
+            aligned_length = 0
+            for operation, length in read.cigartuples:
+                if operation in [0, 7, 8]:  # M, =, or X
+                    aligned_length += length
+            return aligned_length
 
         for read in bamfile_reader:
 
@@ -120,7 +127,8 @@ def main():
             ):
 
                 read_class_info = classify_read(read, bamfile_reader, sqanti_classifier)
-                read_class_info["feature_length"] = len(read.query_sequence)
+                read_class_info["read_length"] = len(read.query_sequence)
+                read_class_info["alignment_length"] = get_aligned_length(read)
 
                 read.set_tag("CL", read_class_info["sqanti_cat"], "Z")
                 read.set_tag("CI", read_class_info["matching_isoforms"], "Z")
@@ -134,6 +142,22 @@ def main():
 
     else:
         ## Examine isoforms
+
+        tsv_writer = csv.DictWriter(
+            tsv_ofh,
+            fieldnames=[
+                "feature_name",
+                "sqanti_cat",
+                "cDNA_length",
+                "num_exon_segments",
+                "structure",
+                "matching_isoforms",
+            ],
+            delimiter="\t",
+            lineterminator="\n",
+        )
+        tsv_writer.writeheader()
+
         contig_to_transcripts = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
             input_gtf
         )
@@ -149,7 +173,7 @@ def main():
                 read_class_info = sqanti_classifier.classify_alignment_or_isoform(
                     contig, transcript_strand, transcript_id, transcript_obj
                 )
-                read_class_info["feature_length"] = transcript_obj.get_cdna_len()
+                read_class_info["cDNA_length"] = transcript_obj.get_cdna_len()
 
                 tsv_writer.writerow(read_class_info)
                 feature_category_counter[read_class_info["sqanti_cat"]] += 1
