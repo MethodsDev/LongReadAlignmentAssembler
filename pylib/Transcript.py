@@ -598,11 +598,15 @@ class GTF_contig_to_transcripts:
                 transcript_obj._imported_has_POLYA = (
                     True if transcript_meta["PolyA"] == "True" else False
                 )
+            else:
+                transcript_obj._imported_has_POLYA = False
 
             if "TSS" in transcript_meta:
                 transcript_obj._imported_has_TSS = (
                     True if transcript_meta["TSS"] == "True" else False
                 )
+            else:
+                transcript_obj._imported_has_TSS = False
 
             if "TPM" in transcript_meta:
                 transcript_obj._imported_TPM_val = float(transcript_meta["TPM"])
