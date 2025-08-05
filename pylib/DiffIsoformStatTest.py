@@ -22,7 +22,7 @@ def differential_isoform_tests(
     top_isoforms_each=5,
     min_reads_DTU_isoform=25,
     show_progress_monitor=True,
-    delta_pi_precision=3,  # New parameter for controlling precision
+    delta_pi_precision=3,
 ):
 
     logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def differential_isoform_tests(
             )
             continue
 
-        # Calculate pi_A and pi_B on the original unfiltered group data
+        # Store original total counts for reporting
         original_total_counts_A = group["count_A"].sum()
         original_total_counts_B = group["count_B"].sum()
 
@@ -72,18 +72,7 @@ def differential_isoform_tests(
             )
             continue
 
-        # Calculate proportions on original data
-        pi_A = group["count_A"] / original_total_counts_A
-        pi_B = group["count_B"] / original_total_counts_B
-        delta_pi = pi_B - pi_A
-
-        # Add these calculations to the original group for later reference
-        group = group.copy()
-        group["pi_A"] = pi_A
-        group["pi_B"] = pi_B
-        group["delta_pi"] = delta_pi
-
-        # Now filter to top isoforms for statistical testing
+        # Filter to top isoforms for ALL downstream analysis
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
@@ -93,10 +82,28 @@ def differential_isoform_tests(
             10
         )
 
-        # Use filtered group for chi-squared test matrix
-        matrix = filtered_group[["count_A", "count_B"]].values
+        # Calculate pi_A and pi_B on the FILTERED group data
+        filtered_total_counts_A = filtered_group["count_A"].sum()
+        filtered_total_counts_B = filtered_group["count_B"].sum()
 
-        # But use delta_pi from original calculations for significance testing
+        if filtered_total_counts_A == 0 or filtered_total_counts_B == 0:
+            logger.debug(
+                f"Filtered total counts in condition A or B is zero for gene {gene_id}, skipping."
+            )
+            continue
+
+        # Calculate proportions on filtered data
+        pi_A = filtered_group["count_A"] / filtered_total_counts_A
+        pi_B = filtered_group["count_B"] / filtered_total_counts_B
+        delta_pi = pi_B - pi_A
+
+        # Add these calculations to the filtered group
+        filtered_group = filtered_group.copy()
+        filtered_group["pi_A"] = pi_A
+        filtered_group["pi_B"] = pi_B
+        filtered_group["delta_pi"] = delta_pi
+
+        # Now work with delta_pi from filtered data
         positive_indices = delta_pi[delta_pi > 0].sort_values(ascending=False).index[:2]
         negative_indices = delta_pi[delta_pi < 0].sort_values().index[:2]
 
@@ -128,19 +135,19 @@ def differential_isoform_tests(
             alternate_delta_pi = positive_sum
             alternate_indices = positive_indices
 
-        # Use original group data for transcript information and counts
+        # Use FILTERED group data for transcript information and counts
         dominant_transcript_ids_str = ",".join(
-            group.loc[dominant_indices, "transcript_id"].tolist()
+            filtered_group.loc[dominant_indices, "transcript_id"].tolist()
         )
-        dominant_counts_A = group.loc[dominant_indices, "count_A"].sum()
-        dominant_counts_B = group.loc[dominant_indices, "count_B"].sum()
+        dominant_counts_A = filtered_group.loc[dominant_indices, "count_A"].sum()
+        dominant_counts_B = filtered_group.loc[dominant_indices, "count_B"].sum()
         dominant_total_reads = dominant_counts_A + dominant_counts_B
 
         alternate_transcript_ids_str = ",".join(
-            group.loc[alternate_indices, "transcript_id"].tolist()
+            filtered_group.loc[alternate_indices, "transcript_id"].tolist()
         )
-        alternate_counts_A = group.loc[alternate_indices, "count_A"].sum()
-        alternate_counts_B = group.loc[alternate_indices, "count_B"].sum()
+        alternate_counts_A = filtered_group.loc[alternate_indices, "count_A"].sum()
+        alternate_counts_B = filtered_group.loc[alternate_indices, "count_B"].sum()
         alternate_total_reads = alternate_counts_A + alternate_counts_B
 
         # Check minimum read count requirements for DTU isoforms
@@ -155,6 +162,9 @@ def differential_isoform_tests(
                 f"Gene {gene_id} alternate isoforms have insufficient reads ({alternate_total_reads}), skipping."
             )
             continue
+
+        # Use filtered group for chi-squared test matrix
+        matrix = filtered_group[["count_A", "count_B"]].values
 
         pvalue = None
         status = "OK"
@@ -180,8 +190,8 @@ def differential_isoform_tests(
                 pvalue,
                 dominant_delta_pi_rounded,
                 dominant_transcript_ids_str,
-                original_total_counts_A,  # Use original totals
-                original_total_counts_B,  # Use original totals
+                original_total_counts_A,  # Keep original totals for reference
+                original_total_counts_B,  # Keep original totals for reference
                 dominant_counts_A,
                 dominant_counts_B,
                 alternate_delta_pi_rounded if reciprocal_delta_pi else None,
@@ -263,7 +273,9 @@ def run_test():
     print(df)
 
     logger.info("** Test results (chi2):\n")
-    DE_results = differential_isoform_tests(df, reciprocal_delta_pi=True)
+    DE_results = differential_isoform_tests(
+        df, reciprocal_delta_pi=True, top_isoforms_each=1
+    )
     DE_results = FDR_mult_tests_adjustment(DE_results)
     print(DE_results)
 
