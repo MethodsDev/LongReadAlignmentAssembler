@@ -17,23 +17,17 @@ library(pheatmap)
 ```{r}
 
 
-sample_name = "LP00714_by_SP"
+sample_name = "cordblood_LRAA"
 
-sparse_matrix_data_dir = "../../LP00714-sc-guided^splice_pattern-sparseM/"
+sparse_matrix_data_dir = "../Cordblood-sc-guided^splice_pattern-sparseM/"
 
-umap_cluster_file = "../LP00714-sc-guided-MtFiltNregressed.genes-cell_cluster_assignments.wSTMN2info.wMeta.tsv"
+umap_cluster_file = "../DE_gene_analysis_using_Illumina_clusters/Cordblood-sc-guided.genes-Illum-cell_cluster_assignments.wUMAP.tsv"
 
-cluster_pseudobulk_matrix_filename = "../LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix"
+cluster_pseudobulk_matrix_filename = "LRAA.illum_clusters.pseudobulked.matrix"
 
-gtf_filename = "../../LP00714.LRAA.sc_merged.gtf.updated.SP_collapsed.segmented.gtf"
+gtf_filename = "../cordblood.LRAA.sc_merged.gtf.updated.sp_collapsed.segmented.gtf"
 
-#diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_for_diff_iso_usage.diff_iso.chi2.signif.tsv"
-
-
-#diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_TOP_ISO_EACH_for_diff_iso_usage.diff_iso.chi2.tsv"
-
-
-diff_iso_usage_stats_filename = "LP00714-sc-guided-MtFiltNregressed.cluster_pseudobulk.matrix.cluster_pseudobulk.matrix.IGNORE_UNSPLICED_TOP_ISO_EACH_RECIP_REQ_for_diff_iso_usage.diff_iso.tsv"
+diff_iso_usage_stats_filename = "LRAA.Cordblood-sc-guided^splice_pattern.top_only_w_recip_delta_pi.diff_iso.tsv.signif_only"
 
 ```
 
@@ -258,7 +252,7 @@ gene_structure_heatmap = function(gene_of_interest) {
 
 get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
 
-  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest)  %>% 
     filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
   
   isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
@@ -342,7 +336,7 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
 
 ```{r}
 
-my_gene_of_interest = "STMN2"
+my_gene_of_interest = "ANXA3^g:chr4:+:comp-458"
 
 
 get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
@@ -567,6 +561,13 @@ gene_exon_heatmap_plot = get_expression_ggplot2_heatmap_w_exon_structures(my_gen
 p_exon_expr = gene_exon_heatmap_plot$plot
 
 p_exon_expr
+```
+
+
+```{r}
+
+umap_df = umap_df %>% rename(seurat_clusters = custom_clusters)
+
 ```
 
 
@@ -800,11 +801,12 @@ top_diff_iso_usage_genes
 
 ```{r}
 
-test_gene = top_diff_iso_usage_genes[1]
+#test_gene = top_diff_iso_usage_genes[1]
 
-test_gene = "GOPC^g:chr6:-:comp-229"
+#test_gene = "GOPC^g:chr6:-:comp-229"
+test_gene = "ANXA3^g:chr4:+:comp-458"
 
-test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.5, ignore_unspliced=T)
+test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.2, ignore_unspliced=T)
 test_plot_info$plot
 
 ```
@@ -859,8 +861,6 @@ for(gene_sym_value in top_diff_iso_usage_genes) {
   
     })
 }  
-
-
 
 
 ```
