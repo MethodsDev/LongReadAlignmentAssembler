@@ -72,7 +72,18 @@ def differential_isoform_tests(
             )
             continue
 
-        # Filter to top isoforms for ALL downstream analysis
+        # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
+        pi_A = group["count_A"] / original_total_counts_A
+        pi_B = group["count_B"] / original_total_counts_B
+        delta_pi = pi_B - pi_A
+
+        # Add these calculations to the original group
+        group = group.copy()
+        group["pi_A"] = pi_A
+        group["pi_B"] = pi_B
+        group["delta_pi"] = delta_pi
+
+        # Now filter to top isoforms for downstream analysis
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
@@ -82,33 +93,21 @@ def differential_isoform_tests(
             10
         )
 
-        # Calculate pi_A and pi_B on the FILTERED group data
-        filtered_total_counts_A = filtered_group["count_A"].sum()
-        filtered_total_counts_B = filtered_group["count_B"].sum()
+        # Extract delta_pi values for the filtered isoforms only
+        filtered_delta_pi = filtered_group["delta_pi"]
 
-        if filtered_total_counts_A == 0 or filtered_total_counts_B == 0:
-            logger.debug(
-                f"Filtered total counts in condition A or B is zero for gene {gene_id}, skipping."
-            )
-            continue
+        # Now work with delta_pi from filtered isoforms (but calculated on original proportions)
+        positive_indices = (
+            filtered_delta_pi[filtered_delta_pi > 0]
+            .sort_values(ascending=False)
+            .index[:2]
+        )
+        negative_indices = (
+            filtered_delta_pi[filtered_delta_pi < 0].sort_values().index[:2]
+        )
 
-        # Calculate proportions on filtered data
-        pi_A = filtered_group["count_A"] / filtered_total_counts_A
-        pi_B = filtered_group["count_B"] / filtered_total_counts_B
-        delta_pi = pi_B - pi_A
-
-        # Add these calculations to the filtered group
-        filtered_group = filtered_group.copy()
-        filtered_group["pi_A"] = pi_A
-        filtered_group["pi_B"] = pi_B
-        filtered_group["delta_pi"] = delta_pi
-
-        # Now work with delta_pi from filtered data
-        positive_indices = delta_pi[delta_pi > 0].sort_values(ascending=False).index[:2]
-        negative_indices = delta_pi[delta_pi < 0].sort_values().index[:2]
-
-        positive_sum = delta_pi.loc[positive_indices].sum()
-        negative_sum = delta_pi.loc[negative_indices].sum()
+        positive_sum = filtered_delta_pi.loc[positive_indices].sum()
+        negative_sum = filtered_delta_pi.loc[negative_indices].sum()
 
         pass_delta_pi = False
         if reciprocal_delta_pi:
