@@ -55,13 +55,6 @@ def differential_isoform_tests(
             )
             continue
 
-        gene_reads_sum = group[["count_A", "count_B"]].sum().sum()
-        if gene_reads_sum < min_reads_per_gene:
-            logger.debug(
-                f"Gene {gene_id} has insufficient reads ({gene_reads_sum}), skipping."
-            )
-            continue
-
         # Store original total counts for reporting
         original_total_counts_A = group["count_A"].sum()
         original_total_counts_B = group["count_B"].sum()
@@ -69,6 +62,15 @@ def differential_isoform_tests(
         if original_total_counts_A == 0 or original_total_counts_B == 0:
             logger.debug(
                 f"Total counts in condition A or B is zero for gene {gene_id}, skipping."
+            )
+            continue
+
+        if (
+            original_total_counts_A < min_reads_per_gene
+            or original_total_counts_B < min_reads_per_gene
+        ):
+            logger.debug(
+                f"Gene {gene_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
             )
             continue
 
@@ -142,12 +144,32 @@ def differential_isoform_tests(
         dominant_counts_B = filtered_group.loc[dominant_indices, "count_B"].sum()
         dominant_total_reads = dominant_counts_A + dominant_counts_B
 
+        # Get pi values for dominant transcripts
+        dominant_pi_A_values = filtered_group.loc[dominant_indices, "pi_A"].tolist()
+        dominant_pi_B_values = filtered_group.loc[dominant_indices, "pi_B"].tolist()
+        dominant_pi_A_str = ",".join(
+            [f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_A_values]
+        )
+        dominant_pi_B_str = ",".join(
+            [f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_B_values]
+        )
+
         alternate_transcript_ids_str = ",".join(
             filtered_group.loc[alternate_indices, "transcript_id"].tolist()
         )
         alternate_counts_A = filtered_group.loc[alternate_indices, "count_A"].sum()
         alternate_counts_B = filtered_group.loc[alternate_indices, "count_B"].sum()
         alternate_total_reads = alternate_counts_A + alternate_counts_B
+
+        # Get pi values for alternate transcripts
+        alternate_pi_A_values = filtered_group.loc[alternate_indices, "pi_A"].tolist()
+        alternate_pi_B_values = filtered_group.loc[alternate_indices, "pi_B"].tolist()
+        alternate_pi_A_str = ",".join(
+            [f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_A_values]
+        )
+        alternate_pi_B_str = ",".join(
+            [f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_B_values]
+        )
 
         # Check minimum read count requirements for DTU isoforms
         if dominant_total_reads < min_reads_DTU_isoform:
@@ -189,12 +211,16 @@ def differential_isoform_tests(
                 pvalue,
                 dominant_delta_pi_rounded,
                 dominant_transcript_ids_str,
+                dominant_pi_A_str,
+                dominant_pi_B_str,
                 original_total_counts_A,  # Keep original totals for reference
                 original_total_counts_B,  # Keep original totals for reference
                 dominant_counts_A,
                 dominant_counts_B,
                 alternate_delta_pi_rounded if reciprocal_delta_pi else None,
                 alternate_transcript_ids_str if reciprocal_delta_pi else None,
+                alternate_pi_A_str if reciprocal_delta_pi else None,
+                alternate_pi_B_str if reciprocal_delta_pi else None,
                 alternate_counts_A if reciprocal_delta_pi else None,
                 alternate_counts_B if reciprocal_delta_pi else None,
                 status,
@@ -207,6 +233,8 @@ def differential_isoform_tests(
             "pvalue",
             "delta_pi",
             "dominant_transcript_ids",
+            "dominant_pi_A",
+            "dominant_pi_B",
             "total_counts_A",
             "total_counts_B",
             "dominant_counts_A",
@@ -216,6 +244,8 @@ def differential_isoform_tests(
             columns += [
                 "alternate_delta_pi",
                 "alternate_transcript_ids",
+                "alternate_pi_A",
+                "alternate_pi_B",
                 "alternate_counts_A",
                 "alternate_counts_B",
             ]
