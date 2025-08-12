@@ -17,17 +17,17 @@ library(pheatmap)
 ```{r}
 
 
-sample_name = "cordblood_LRAA"
+sample_name = "PBMCs_LRAA"
 
-sparse_matrix_data_dir = "../Cordblood-sc-guided^splice_pattern-sparseM/"
+sparse_matrix_data_dir = "../LRAA_sc_PBMCs^splice_pattern-sparseM/"
 
-umap_cluster_file = "../DE_gene_analysis_using_Illumina_clusters/Cordblood-sc-guided.genes-Illum-cell_cluster_assignments.wUMAP.tsv"
+umap_cluster_file = "../LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
 
-cluster_pseudobulk_matrix_filename = "LRAA.illum_clusters.pseudobulked.matrix"
+cluster_pseudobulk_matrix_filename = "LRAA.pbmc.splicepatterns.cluster_pseudobulks.matrix"
 
-gtf_filename = "../cordblood.LRAA.sc_merged.gtf.updated.sp_collapsed.segmented.gtf"
+gtf_filename = "../PBMCs_pbio.LRAA.sc_merged.gtf.updated.splice_collapsed.segmented.gtf"
 
-diff_iso_usage_stats_filename = "LRAA.Cordblood-sc-guided^splice_pattern.top_only_w_recip_delta_pi.diff_iso.tsv.signif_only"
+diff_iso_usage_stats_filename = "LRAA.pbmc.splicepatterns.top_only_w_recip_delta_pi.diff_iso.tsv.signif_only"
 
 ```
 
@@ -165,7 +165,7 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
                        umap_2 = mean(umap_2)), 
             aes(label = seurat_clusters), 
             size = 5,
-            color = 'darkturquoise',
+            color = 'purple',
             fontface = "bold") 
   
 }
@@ -333,10 +333,152 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
 ```
 
 
+```{r}
+
+diff_iso_usage_stats = read.csv(diff_iso_usage_stats_filename, sep="\t", header=T)
+
+diff_iso_usage_stats %>% head()
+
+
+```
+
 
 ```{r}
 
-my_gene_of_interest = "ANXA3^g:chr4:+:comp-458"
+diff_iso_usage_cluster_count_pairs = diff_iso_usage_stats %>% 
+                                      dplyr::filter(significant == "True") %>% 
+                                      dplyr::select(gene_id, cluster_A, cluster_B) %>%
+                                      unique() %>%
+                                      group_by(cluster_A, cluster_B) %>%
+                                      tally()
+
+diff_iso_usage_cluster_count_pairs
+
+```
+
+
+```{r}
+
+diff_iso_usage_cluster_count_pairs$cluster_A = str_replace(diff_iso_usage_cluster_count_pairs$cluster_A, "Cluster_", "")
+
+diff_iso_usage_cluster_count_pairs$cluster_B = str_replace(diff_iso_usage_cluster_count_pairs$cluster_B, "Cluster_", "")
+
+diff_iso_usage_cluster_count_pairs$cluster_A = as.integer(diff_iso_usage_cluster_count_pairs$cluster_A)
+diff_iso_usage_cluster_count_pairs$cluster_B = as.integer(diff_iso_usage_cluster_count_pairs$cluster_B)
+
+```
+
+
+```{r}
+
+diff_iso_usage_cluster_count_pairs %>% 
+  ggplot(aes(x=factor(cluster_A), y=factor(cluster_B), fill=n)) + 
+  geom_tile() +
+  geom_text(aes(label = n), color = "white", size = 4) +
+  theme_bw() +   
+  ggtitle("Counts of genes with isoform switching events detected")
+
+
+```
+
+```{r}
+dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
+  # Create a complete matrix (assuming it's symmetric)
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  # Remove duplicates if any
+  distinct() %>%
+  # Pivot to wide format
+  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
+  # Convert to matrix
+  column_to_rownames("cluster_A") %>%
+  as.matrix()
+
+
+
+# Convert to distance object (you might want to transform the values)
+# Since higher 'n' values likely mean closer clusters, you might want to invert:
+dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
+
+# Create dendrogram
+hc <- hclust(dist_obj)
+plot(hc, main = "Dendrogram based on counts of Iso-switching genes", xlab = "Clusters", ylab = "Distance")
+
+
+```
+
+
+
+```{r}
+
+# order clusters by dendrogram
+
+library(dplyr)
+library(ggplot2)
+
+# First, create the distance matrix and dendrogram (as before)
+dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  distinct() %>%
+  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
+  column_to_rownames("cluster_A") %>%
+  as.matrix()
+
+# Convert to distance object and create dendrogram
+dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
+hc <- hclust(dist_obj)
+cluster_order <- rownames(dist_matrix)[hc$order]
+
+# Make the data symmetrical and filter for triangle
+symmetric_data <- diff_iso_usage_cluster_count_pairs %>%
+  bind_rows(
+    .,
+    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
+  ) %>%
+  distinct() %>%
+  # Convert to factors with dendrogram order
+  mutate(
+    cluster_A = factor(cluster_A, levels = cluster_order),
+    cluster_B = factor(cluster_B, levels = cluster_order)
+  ) %>%
+  # Keep only upper triangle (where numeric cluster_A <= cluster_B)
+  filter(as.numeric(cluster_A) <= as.numeric(cluster_B))
+
+```
+
+
+```{r}
+
+# Create the triangular plot
+symmetric_data %>%
+  ggplot(aes(x = cluster_A, y = cluster_B, fill = n)) + 
+  geom_tile() +
+  geom_text(aes(label = n), color = "white", size = 4) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Cluster A", y = "Cluster B") +
+  ggtitle("Counts of genes with isoform switching events detected - dendro ordered") + 
+  scale_fill_distiller(palette = "RdYlBu")
+
+```
+
+
+
+```{r}
+
+# pick an example gene to explore
+
+diff_iso_usage_stats %>% head()
+```
+
+```{r}
+
+my_gene_of_interest = "ADCY9^g:chr16:-:comp-633"
 
 
 get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
@@ -566,13 +708,6 @@ p_exon_expr
 
 ```{r}
 
-umap_df = umap_df %>% rename(seurat_clusters = custom_clusters)
-
-```
-
-
-```{r}
-
 p_umap = plot_isoform_umap(my_gene_of_interest, gene_exon_heatmap_plot$transcript_ids)
 
 p_umap
@@ -629,162 +764,9 @@ p_my_gene_of_interest
 
 
 ```{r}
-
-# Specify the path for the directory you want to create
-num_top_diff_iso_usage_plots = 300
-top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots_minIsoF0.1.TOP_ISO_RECIP")
-
-# Check if the directory already exists
-if (!dir.exists(top_diff_iso_usage_plots_dir)) {
-  # If the directory doesn't exist, create it
-  dir.create(top_diff_iso_usage_plots_dir)
-}
-
-
-```
-
-```{r}
-
-diff_iso_usage_stats = read.csv(diff_iso_usage_stats_filename, sep="\t", header=T)
-
-diff_iso_usage_stats %>% head()
-
-
-```
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs = diff_iso_usage_stats %>% 
-                                      dplyr::filter(significant == "True") %>% 
-                                      dplyr::select(gene_id, cluster_A, cluster_B) %>%
-                                      unique() %>%
-                                      group_by(cluster_A, cluster_B) %>%
-                                      tally()
-
-diff_iso_usage_cluster_count_pairs
-
-```
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs$cluster_A = str_replace(diff_iso_usage_cluster_count_pairs$cluster_A, "Cluster_", "")
-
-diff_iso_usage_cluster_count_pairs$cluster_B = str_replace(diff_iso_usage_cluster_count_pairs$cluster_B, "Cluster_", "")
-
-diff_iso_usage_cluster_count_pairs$cluster_A = as.integer(diff_iso_usage_cluster_count_pairs$cluster_A)
-diff_iso_usage_cluster_count_pairs$cluster_B = as.integer(diff_iso_usage_cluster_count_pairs$cluster_B)
-
-```
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs %>% 
-  ggplot(aes(x=factor(cluster_A), y=factor(cluster_B), fill=n)) + 
-  geom_tile() +
-  geom_text(aes(label = n), color = "white", size = 4) +
-  theme_bw() +   
-  ggtitle("Counts of genes with isoform switching events detected")
-
-
-```
-
-```{r}
-dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
-  # Create a complete matrix (assuming it's symmetric)
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  # Remove duplicates if any
-  distinct() %>%
-  # Pivot to wide format
-  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
-  # Convert to matrix
-  column_to_rownames("cluster_A") %>%
-  as.matrix()
-
-
-
-# Convert to distance object (you might want to transform the values)
-# Since higher 'n' values likely mean closer clusters, you might want to invert:
-dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
-
-# Create dendrogram
-hc <- hclust(dist_obj)
-plot(hc, main = "Dendrogram based on counts of Iso-switching genes", xlab = "Clusters", ylab = "Distance")
-
-
-```
-
-
-
-```{r}
-
-# order clusters by dendrogram
-
-library(dplyr)
-library(ggplot2)
-
-# First, create the distance matrix and dendrogram (as before)
-dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  distinct() %>%
-  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
-  column_to_rownames("cluster_A") %>%
-  as.matrix()
-
-# Convert to distance object and create dendrogram
-dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
-hc <- hclust(dist_obj)
-cluster_order <- rownames(dist_matrix)[hc$order]
-
-# Make the data symmetrical and filter for triangle
-symmetric_data <- diff_iso_usage_cluster_count_pairs %>%
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  distinct() %>%
-  # Convert to factors with dendrogram order
-  mutate(
-    cluster_A = factor(cluster_A, levels = cluster_order),
-    cluster_B = factor(cluster_B, levels = cluster_order)
-  ) %>%
-  # Keep only upper triangle (where numeric cluster_A <= cluster_B)
-  filter(as.numeric(cluster_A) <= as.numeric(cluster_B))
-
-```
-
-
-```{r}
-
-# Create the triangular plot
-symmetric_data %>%
-  ggplot(aes(x = cluster_A, y = cluster_B, fill = n)) + 
-  geom_tile() +
-  geom_text(aes(label = n), color = "white", size = 4) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(x = "Cluster A", y = "Cluster B") +
-  ggtitle("Counts of genes with isoform switching events detected - dendro ordered") + 
-  scale_fill_distiller(palette = "RdYlBu")
-
-```
-
-
-
-
-
-
-```{r}
 # get top candidates.
 
+num_top_diff_iso_usage_plots = 100
 MIN_DELTA_PI = 0.3
 
 top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True" & abs(delta_pi) >= MIN_DELTA_PI) %>% 
@@ -792,8 +774,7 @@ top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True"
       # get top entruy per gene
       arrange(adj_pvalue, desc(abs(delta_pi))) %>% filter(row_number() == 1) %>% ungroup() %>%
   arrange(adj_pvalue, desc(abs(delta_pi))) %>%
-  head(num_top_diff_iso_usage_plots) %>%
-  pull(gene_id) 
+  head(num_top_diff_iso_usage_plots)
 
 top_diff_iso_usage_genes
 
@@ -801,10 +782,9 @@ top_diff_iso_usage_genes
 
 ```{r}
 
-#test_gene = top_diff_iso_usage_genes[1]
+test_gene = top_diff_iso_usage_genes$gene_id[1]
 
-#test_gene = "GOPC^g:chr6:-:comp-229"
-test_gene = "ANXA3^g:chr4:+:comp-458"
+
 
 test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.2, ignore_unspliced=T)
 test_plot_info$plot
@@ -831,9 +811,19 @@ plot(p)
 
 ```{r}
 
+# Specify the path for the directory you want to create
+top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage_plots_minIsoF0.1.TOP_ISO_RECIP")
+
+# Check if the directory already exists
+if (!dir.exists(top_diff_iso_usage_plots_dir)) {
+  # If the directory doesn't exist, create it
+  dir.create(top_diff_iso_usage_plots_dir)
+}
+
+
 
 counter = 0
-for(gene_sym_value in top_diff_iso_usage_genes) {
+for(gene_sym_value in top_diff_iso_usage_genes$gene_id) {
   
     message("plotting ", counter, " gene: ", gene_sym_value)
   
