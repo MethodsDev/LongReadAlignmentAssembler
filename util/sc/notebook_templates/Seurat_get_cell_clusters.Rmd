@@ -417,3 +417,82 @@ write.table(umap_df, paste0(output_prefix, "-cell_cluster_assignments.wUMAP.tsv"
 
 ```
 
+
+
+
+# Examine all pairwise cluster DE 
+
+
+```{r}
+
+# Function to perform all pairwise comparisons
+perform_pairwise_de <- function(seurat_obj, group_by = "custom_clusters", 
+                               test_use = "wilcox", min_pct = 0.1, 
+                               logfc_threshold = 0.25, only_pos = TRUE) {
+  
+  # Set identity
+  Idents(seurat_obj) <- group_by
+  clusters <- levels(Idents(seurat_obj))
+  
+  # Initialize results list
+  all_results <- list()
+  
+  # Perform pairwise comparisons
+  for(i in 1:length(clusters)) {
+    for(j in 1:length(clusters)) {
+      
+      if (i == j) { next }
+      
+      cluster1 <- clusters[i]
+      cluster2 <- clusters[j]
+      
+      cat("Comparing", cluster1, "vs", cluster2, "\n")
+      
+      de_genes <- FindMarkers(
+        seurat_obj,
+        ident.1 = cluster1,
+        ident.2 = cluster2,
+        test.use = test_use,
+        min.pct = min_pct,
+        logfc.threshold = logfc_threshold,
+        only.pos = only_pos
+      )
+      
+      # Add cluster information
+      de_genes$cluster1 <- cluster1
+      de_genes$cluster2 <- cluster2
+      de_genes$gene <- rownames(de_genes)
+      
+      # Store results
+      comparison_name <- paste0(cluster1, "_vs_", cluster2)
+      all_results[[comparison_name]] <- de_genes
+    }
+  }
+  
+  return(all_results)
+}
+
+# Run the analysis
+pairwise_de_results <- perform_pairwise_de(seurat_obj)
+
+
+```
+
+```{r}
+
+combined_results <- do.call(rbind, lapply(names(pairwise_de_results), function(x) {
+  df <- pairwise_de_results[[x]]
+  df$comparison <- x
+  return(df)
+}))
+
+
+combined_results %>% head()
+```
+
+```{r}
+
+write.table(combined_results %>% filter(p_val_adj <= 0.05), file=paste0(output_prefix, ".cluster_pairwise_DE_results.tsv"), sep="\t", quote=F)
+
+```
+
