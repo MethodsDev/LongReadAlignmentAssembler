@@ -426,7 +426,7 @@ write.table(umap_df, paste0(output_prefix, "-cell_cluster_assignments.wUMAP.tsv"
 ```{r}
 
 # Function to perform all pairwise comparisons
-perform_pairwise_de <- function(seurat_obj, group_by = "custom_clusters", 
+perform_pairwise_de <- function(seurat_obj, group_by = "seurat_clusters", 
                                test_use = "wilcox", min_pct = 0.1, 
                                logfc_threshold = 0.25, only_pos = TRUE) {
   
