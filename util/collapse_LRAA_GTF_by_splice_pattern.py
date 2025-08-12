@@ -40,7 +40,7 @@ def main():
     parser.add_argument(
         "--output_gtf",
         type=str,
-        default="LRAA.merged.gtf",
+        required=True,
         help="prefix for output filenames",
     )
 
