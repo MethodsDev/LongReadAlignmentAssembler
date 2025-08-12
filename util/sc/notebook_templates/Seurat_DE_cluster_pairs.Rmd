@@ -1,0 +1,249 @@
+---
+title: "Seurat - get cell clusters"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Seurat)
+```
+
+```{r}
+
+sample_name = "Cordblood-sc-guided"
+
+output_prefix = paste0(sample_name, ".genes")
+
+```
+
+
+```{r}
+
+seurat_obj = readRDS("../LRAA_sc_PBMCs.genes-seurat_obj.rds")
+
+seurat_obj
+
+```
+
+```{r}
+
+seurat_obj@meta.data %>% head()
+
+
+```
+
+
+```{r}
+
+seurat_obj@meta.data %>% summarize(median(nCount_RNA), median(nFeature_RNA))
+
+```
+
+
+
+```{r}
+
+DimPlot(seurat_obj, reduction = "umap", label=T )
+
+```
+
+
+```{r}
+
+## In case we want to use other custom cluster assignments
+
+clusters_use = 'seurat_clusters'
+
+if (FALSE) {
+
+  # Method 1: If your data is in a CSV/TSV file
+  custom_clusters_df = read.csv("custom_clusters.tsv", header=T, sep="\t")
+  
+  # Load your cluster labels
+  cluster_data <- custom_clusters_df
+  
+  # Set row names to cell barcodes for easier matching
+  rownames(cluster_data) <- cluster_data$cell_barcode_MAS
+  
+  # Check which cells from your cluster data are present in your Seurat object
+  common_cells <- intersect(rownames(cluster_data), colnames(seurat_obj))
+  print(paste("Found", length(common_cells), "matching cells"))
+  
+  # Create a named vector for cluster assignments
+  cluster_vector <- cluster_data$seurat_clusters
+  names(cluster_vector) <- cluster_data$cell_barcode_MAS
+  
+  seurat_obj@meta.data$custom_clusters <- cluster_vector[colnames(seurat_obj)]
+  
+  # Set the custom clusters as active identity
+  Idents(seurat_obj) <- "custom_clusters"
+  
+  clusters_use = "custom_clusters"
+  
+  # Verify the clusters were added correctly
+  print("Cluster distribution:")
+  table(Idents(seurat_obj))
+  
+  # Check metadata
+  head(seurat_obj@meta.data)
+  
+  DimPlot(seurat_obj, reduction = "umap", label=T )
+  
+  saveRDS(seurat_obj, file = paste0(output_prefix, "-seurat_obj-wCustomClusters.rds"))
+
+}
+
+```
+
+
+# Extract and save the umap info for convenience
+
+```{r}
+# get cell clustering info
+cell_clustering_info = data.frame(seurat_obj@meta.data)
+cell_clustering_info$cell_barcode = rownames(cell_clustering_info)
+
+cell_clustering_info %>% head()
+
+```
+
+
+```{r}
+# get umap info
+umap_df  = as.data.frame(seurat_obj[["umap"]]@cell.embeddings)
+ 
+umap_df$cell_barcode = rownames(umap_df)
+
+umap_df = tibble(umap_df)
+
+umap_df = left_join(umap_df, cell_clustering_info, by='cell_barcode')
+
+umap_df %>% head()
+
+```
+
+```{r}
+
+write.table(umap_df, paste0(output_prefix, "-cell_cluster_assignments.wUMAP.tsv"), quote=F, row.names=T, sep="\t") 
+
+```
+
+
+```{r}
+
+umap_df %>% 
+  ggplot(aes(x=umap_1, y=umap_2)) + geom_point(aes(color=factor(!!sym(clusters_use) ))) + 
+  theme_bw()   +         
+geom_text(data = umap_df %>% 
+group_by( !!sym(clusters_use) ) %>% 
+              summarise(umap_1 = mean(umap_1), 
+                       umap_2 = mean(umap_2)), 
+            aes(label = !!sym(clusters_use)), 
+            size = 5,
+            color = 'purple',
+            fontface = "bold")
+
+
+```
+
+
+# Examine all pairwise cluster DE 
+
+
+```{r}
+
+# Function to perform all pairwise comparisons
+perform_pairwise_de <- function(seurat_obj, group_by, 
+                               test_use = "wilcox", min_pct = 0.1, 
+                               logfc_threshold = 0.25, only_pos = TRUE) {
+  
+  # Set identity
+  Idents(seurat_obj) <- group_by
+  clusters <- levels(Idents(seurat_obj))
+  
+  # Initialize results list
+  all_results <- list()
+  
+  # Perform pairwise comparisons
+  for(i in 1:length(clusters)) {
+    for(j in 1:length(clusters)) {
+      
+      if (i == j) { next }
+      
+      cluster1 <- clusters[i]
+      cluster2 <- clusters[j]
+      
+      cat("Comparing", cluster1, "vs", cluster2, "\n")
+      
+      de_genes <- FindMarkers(
+        seurat_obj,
+        ident.1 = cluster1,
+        ident.2 = cluster2,
+        test.use = test_use,
+        min.pct = min_pct,
+        logfc.threshold = logfc_threshold,
+        only.pos = only_pos
+      )
+      
+      # Add cluster information
+      de_genes$cluster1 <- cluster1
+      de_genes$cluster2 <- cluster2
+      de_genes$gene <- rownames(de_genes)
+      
+      # Store results
+      comparison_name <- paste0(cluster1, "_vs_", cluster2)
+      all_results[[comparison_name]] <- de_genes
+    }
+  }
+  
+  return(all_results)
+}
+
+# Run the analysis
+pairwise_de_results <- perform_pairwise_de(seurat_obj, group_by = clusters_use)
+
+
+```
+
+
+
+```{r}
+
+combined_results <- do.call(rbind, lapply(names(pairwise_de_results), function(x) {
+  df <- pairwise_de_results[[x]]
+  df$comparison <- x
+  return(df)
+}))
+
+
+combined_results %>% head()
+```
+
+```{r}
+
+write.table(combined_results %>% filter(p_val_adj <= 0.05), file=paste0(output_prefix, ".cluster_pairwise_DE_results.tsv"), sep="\t", quote=F)
+
+```
+
+
+
+
+```{r}
+
+
+DE_df_counts = combined_results%>% select(cluster1, cluster2, gene) %>% unique() %>%
+  group_by(cluster1, cluster2) %>% tally()
+
+DE_df_counts
+
+```
+
+
+```{r}
+DE_df_counts %>% ggplot(aes(x=factor(cluster1), y=factor(cluster2), fill=n)) + geom_tile() +
+  theme_bw() +
+  ggtitle("DE cluster gene counts - up-cluster1-compared-to-cluster2")
+
+```
+
