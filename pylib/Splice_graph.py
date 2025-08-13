@@ -1645,8 +1645,11 @@ class Splice_graph:
                         intron_i_read_support = incidental_introns[i].get_read_support()
                         frac_i_read_support = intron_i_read_support / top_support
                         logger.debug(
-                            "-island neighboring incidental intron[{}] has {} read support = {} frac of dominant".format(
-                                i, intron_i_read_support, frac_i_read_support
+                            "-island neighboring incidental intron[{}]={} has {} read support = {} frac of dominant".format(
+                                i,
+                                incidental_introns[i],
+                                intron_i_read_support,
+                                frac_i_read_support,
                             )
                         )
                         if (
@@ -1655,6 +1658,9 @@ class Splice_graph:
                         ):
                             # insufficient support, prune all introns with that or lower support.
                             for intron in incidental_introns[i:]:
+                                logger.debug(
+                                    "-pruning lowly supported intron: {}".format(intron)
+                                )
                                 introns_to_prune.add(intron)
                             break
 
