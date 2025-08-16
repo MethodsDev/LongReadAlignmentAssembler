@@ -16,6 +16,7 @@ def round_to_significant_figures(x, sig_figs=3):
 
 def differential_isoform_tests(
     df,
+    group_by_token="gene_id",
     min_reads_per_gene=25,
     min_delta_pi=0.1,
     reciprocal_delta_pi=False,
@@ -29,11 +30,11 @@ def differential_isoform_tests(
     logger.debug("Running differential_isoform_tests()")
 
     results = []
-    grouped = df.groupby("gene_id")
+    grouped = df.groupby(group_by_token)
     debug_mode = logger.getEffectiveLevel() == logging.DEBUG
     num_groups = len(grouped)
 
-    for group_counter, (gene_id, group) in enumerate(grouped, 1):
+    for group_counter, (group_by_id, group) in enumerate(grouped, 1):
 
         if show_progress_monitor and group_counter % 1000 == 0:
             frac_done = f"{group_counter / num_groups * 100:.2f}% done"
@@ -51,7 +52,7 @@ def differential_isoform_tests(
 
         if group[["count_A", "count_B"]].sum().min() == 0:
             logger.debug(
-                f"Either count_A or count_B is zero for gene {gene_id}, skipping."
+                f"Either count_A or count_B is zero for {group_by_token} {group_by_id}, skipping."
             )
             continue
 
@@ -61,7 +62,7 @@ def differential_isoform_tests(
 
         if original_total_counts_A == 0 or original_total_counts_B == 0:
             logger.debug(
-                f"Total counts in condition A or B is zero for gene {gene_id}, skipping."
+                f"Total counts in condition A or B is zero for {group_by_token} {group_by_id}, skipping."
             )
             continue
 
@@ -70,7 +71,7 @@ def differential_isoform_tests(
             or original_total_counts_B < min_reads_per_gene
         ):
             logger.debug(
-                f"Gene {gene_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
+                f"{group_by_token} {group_by_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
             )
             continue
 
@@ -122,7 +123,7 @@ def differential_isoform_tests(
             )
 
         if not pass_delta_pi:
-            logger.debug(f"Gene {gene_id} failed delta_pi threshold.")
+            logger.debug(f"{group_by_token} {group_by_id} failed delta_pi threshold.")
             continue
 
         if abs(positive_sum) > abs(negative_sum):
@@ -174,13 +175,13 @@ def differential_isoform_tests(
         # Check minimum read count requirements for DTU isoforms
         if dominant_total_reads < min_reads_DTU_isoform:
             logger.debug(
-                f"Gene {gene_id} dominant isoforms have insufficient reads ({dominant_total_reads}), skipping."
+                f"{group_by_token} {group_by_id} dominant isoforms have insufficient reads ({dominant_total_reads}), skipping."
             )
             continue
 
         if reciprocal_delta_pi and alternate_total_reads < min_reads_DTU_isoform:
             logger.debug(
-                f"Gene {gene_id} alternate isoforms have insufficient reads ({alternate_total_reads}), skipping."
+                f"{group_by_token} {group_by_id} alternate isoforms have insufficient reads ({alternate_total_reads}), skipping."
             )
             continue
 
@@ -192,7 +193,7 @@ def differential_isoform_tests(
         try:
             chi2, pvalue, _, _ = chi2_contingency(matrix)
         except Exception as e:
-            logger.debug(f"Chi2 failed for gene {gene_id}: {e}")
+            logger.debug(f"Chi2 failed for {group_by_token} {group_by_id}: {e}")
             status = "failed"
 
         # Round delta_pi values to specified precision
@@ -207,7 +208,7 @@ def differential_isoform_tests(
 
         results.append(
             [
-                gene_id,
+                group_by_id,
                 pvalue,
                 dominant_delta_pi_rounded,
                 dominant_transcript_ids_str,
@@ -229,7 +230,7 @@ def differential_isoform_tests(
 
     if results:
         columns = [
-            "gene_id",
+            group_by_token,
             "pvalue",
             "delta_pi",
             "dominant_transcript_ids",
