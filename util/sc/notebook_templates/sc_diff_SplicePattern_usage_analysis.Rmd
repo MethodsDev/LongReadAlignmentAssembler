@@ -26,7 +26,7 @@ cluster_pseudobulk_matrix_filename = "LRAA_sc_PBMCs^isoform-sparseM.clusters_pse
 
 gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.gtf.segmented.gtf"
 
-diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.minCF0.25.diff_iso.tsv.signif_only"
+diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.minCF0.20.diff_iso.tsv"
 
 ```
 
@@ -135,8 +135,7 @@ get_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL)
   }
   
    transcript_expr_data$transcript_id = rownames(transcript_expr_data)
-   transcript_expr_data = transcript_expr_data %>% gather(key=cell_barcode, value=read_count, -transcript_id) #%>%
-     #filter(read_count >= 1)
+   transcript_expr_data = transcript_expr_data %>% gather(key=cell_barcode, value=read_count, -transcript_id)
   
    umap_df_w_expr_data = right_join(umap_df, transcript_expr_data,
                                    by='cell_barcode')
@@ -343,6 +342,16 @@ diff_iso_usage_stats %>% head()
 
 ```
 
+```{r}
+
+# how many genes identified with DTU?
+
+diff_iso_usage_stats %>% select(gene_id) %>% unique() %>% nrow()
+
+
+```
+
+
 
 ```{r}
 
@@ -479,7 +488,7 @@ diff_iso_usage_stats %>% head()
 
 ```{r}
 
-my_gene_of_interest = "EMP3^g:chr19:+:comp-658"
+my_gene_of_interest = diff_iso_usage_stats$gene_id[1]
 
 
 get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
@@ -699,7 +708,7 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
 ```{r}
 
 gene_exon_heatmap_plot = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest, 
-                                                                0.01, ignore_unspliced=F)
+                                                                0.1, ignore_unspliced=F)
 
 p_exon_expr = gene_exon_heatmap_plot$plot
 
@@ -772,7 +781,7 @@ MIN_DELTA_PI = 0.3
 
 top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True" & abs(delta_pi) >= MIN_DELTA_PI) %>% 
   group_by(gene_id) %>% 
-      # get top entruy per gene
+      # get top entry per gene
       arrange(adj_pvalue, desc(abs(delta_pi))) %>% filter(row_number() == 1) %>% ungroup() %>%
   arrange(adj_pvalue, desc(abs(delta_pi))) %>%
   head(num_top_diff_iso_usage_plots)
@@ -813,7 +822,7 @@ plot(p)
 
 ```{r}
 
-DTU_results_w_splicehash = read.csv("DTU_results_with_hash_codes.tsv", header=T, sep="\t")
+DTU_results_w_splicehash = diff_iso_usage_stats
 
 DTU_results_w_splicehash %>% head()
 
@@ -822,17 +831,31 @@ DTU_results_w_splicehash %>% head()
 
 ```{r}
 
-DTU_results_w_splicehash = DTU_results_w_splicehash %>% mutate(same_splice_pattern = (dominant_transcript_hash_codes == alternate_transcript_hash_codes))
+DTU_results_w_splicehash = DTU_results_w_splicehash %>% mutate(same_splice_pattern = (dominant_splice_hashcodes == alternate_splice_hashcodes)) %>% arrange(pvalue, desc(abs(delta_pi)))
 
-DTU_results_w_splicehash %>% head()
+DTU_results_w_splicehash 
 
 ```
 
 ```{r}
 
+# counts of examples according to the different genes and clusters.
 DTU_results_w_splicehash %>% group_by(same_splice_pattern) %>% tally()
 
 ```
+
+```{r}
+
+# counts according to unique genes and splice pattern agreement or not.
+
+DTU_results_w_splicehash %>% select(gene_id, same_splice_pattern) %>% unique() %>%
+  group_by(gene_id) %>%
+    mutate(same_splice_patterns_types = paste0(collapse=',', same_splice_pattern)) %>% ungroup() %>%
+  select(gene_id, same_splice_patterns_types) %>% unique() %>%
+  group_by(same_splice_patterns_types) %>% tally()
+
+```
+
 
 ## top with same splicing pattern
 
@@ -841,7 +864,7 @@ DTU_results_w_splicehash %>% group_by(same_splice_pattern) %>% tally()
 top_DTU_results_w_same_splicehash = DTU_results_w_splicehash %>% filter(same_splice_pattern) %>% 
   filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
   filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
-  arrange(pvalue)
+  arrange(pvalue, desc(abs(delta_pi)))
 
 top_DTU_results_w_same_splicehash
 
