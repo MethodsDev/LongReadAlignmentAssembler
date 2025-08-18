@@ -1,10 +1,13 @@
 
-teset: basic ignore_unspliced recip_delta_pi recip_top1ea recip_top1ea_ignore_unspliced 
+teset: basic cell_fraction_filter ignore_unspliced recip_delta_pi recip_top1ea recip_top1ea_ignore_unspliced 
 
 
 basic:
 	../../util/sc/sc_pseudobulk_test_isoform_DiffUsage.py  --sc_cluster_counts_matrix testdata/cluster_pseudobulk_read_counts.matrix_for_DTU.tsv --splice_hashcode_id_mappings testdata/gene_transcript_splicehashcode.tsv.wAnnotIDs --output_prefix test.dtu
 
+
+cell_fraction_filter:
+	../../util/sc/sc_pseudobulk_test_isoform_DiffUsage.py  --sc_cluster_counts_matrix testdata/cluster_pseudobulk_read_counts.matrix_for_DTU.tsv --splice_hashcode_id_mappings testdata/gene_transcript_splicehashcode.tsv.wAnnotIDs --output_prefix test.dtu.min_cell_frac --sc_cluster_fraction_matrix testdata/cluster_pseudobulk.cell_fractions.matrix  --min_cell_fraction 0.1
 
 ignore_unspliced:
 	../../util/sc/sc_pseudobulk_test_isoform_DiffUsage.py  --sc_cluster_counts_matrix testdata/cluster_pseudobulk_read_counts.matrix_for_DTU.tsv --splice_hashcode_id_mappings testdata/gene_transcript_splicehashcode.tsv.wAnnotIDs --output_prefix test.dtu.ignore_unspliced --ignore_unspliced

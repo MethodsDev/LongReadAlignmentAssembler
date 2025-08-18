@@ -14,7 +14,10 @@ sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../../pylib"])
 )
 
-from DiffIsoformStatTest import *
+from DiffIsoformStatTest import (
+    differential_isoform_tests,
+    FDR_mult_tests_adjustment,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +39,28 @@ def main():
         type=str,
         required=True,
         help="sc cluster counts matrix. First two columns should be gene_id and transcript_id",
+    )
+
+    parser.add_argument(
+        "--sc_cluster_fraction_matrix",
+        type=str,
+        required=False,
+        default=None,
+        help=(
+            "Optional matrix of fraction of cells expressing each feature (0..1). "
+            "Format should mirror counts matrix: first two columns gene_id and transcript_id, "
+            "remaining columns are cluster names."
+        ),
+    )
+
+    parser.add_argument(
+        "--min_cell_fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum fraction of cells that must express a feature in each cluster being compared. "
+            "Used only if --sc_cluster_fraction_matrix is provided. Range: 0..1 (default: 0.0 disables filtering)."
+        ),
     )
 
     parser.add_argument(
@@ -100,6 +125,7 @@ def main():
 
     parser.add_argument(
         "--signif_threshold",
+    type=float,
         default=0.001,
         help="significance threshold for stat test to mark as signfiicantly DE",
     )
@@ -118,6 +144,8 @@ def main():
     min_reads_per_gene = args.min_reads_per_gene
     min_delta_pi = args.min_delta_pi
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
+    sc_cluster_fraction_matrix = args.sc_cluster_fraction_matrix
+    min_cell_fraction = args.min_cell_fraction
     output_prefix = args.output_prefix
     signif_threshold = args.signif_threshold
     splice_hashcode_id_mappings_file = args.splice_hashcode_id_mappings
@@ -136,6 +164,42 @@ def main():
     assert column_names[1] == "transcript_id"
 
     cluster_names = column_names[2:]
+
+    # If using fraction filtering, load and validate the fraction matrix
+    fraction_big_df = None
+    if sc_cluster_fraction_matrix:
+        if not (0.0 <= float(min_cell_fraction) <= 1.0):
+            raise ValueError(
+                f"--min_cell_fraction must be within [0,1], got: {min_cell_fraction}"
+            )
+        logger.info(
+            f"-loading fraction-expression matrix: {sc_cluster_fraction_matrix} (min_cell_fraction={min_cell_fraction})"
+        )
+        fraction_big_df = pd.read_csv(sc_cluster_fraction_matrix, sep="\t")
+
+        frac_cols = list(fraction_big_df.columns)
+        assert frac_cols[0] == "gene_id"
+        assert frac_cols[1] == "transcript_id"
+
+        # Keep only overlapping clusters between counts and fraction matrices
+        fraction_cluster_names = frac_cols[2:]
+        overlapping_clusters = sorted(
+            list(set(cluster_names).intersection(set(fraction_cluster_names)))
+        )
+        if not overlapping_clusters:
+            logger.warning(
+                "No overlapping cluster columns between counts and fraction matrices; disabling fraction filtering."
+            )
+            fraction_big_df = None
+        else:
+            if set(cluster_names) - set(overlapping_clusters):
+                missing = sorted(list(set(cluster_names) - set(overlapping_clusters)))
+                logger.warning(
+                    "Fraction matrix missing some clusters present in counts: {}. "
+                    "Filtering will only apply to pairs where both clusters are present.".format(
+                        ",".join(missing)
+                    )
+                )
 
     ################################
     ## Incorporate splice hash codes
@@ -196,6 +260,37 @@ def main():
 
             test_df = test_df.loc[((test_df["count_A"] > 0) | (test_df["count_B"] > 0))]
 
+            # Optionally filter by cell-fraction expression per cluster
+            if (
+                fraction_big_df is not None
+                and min_cell_fraction > 0.0
+                and cluster_i in fraction_big_df.columns
+                and cluster_j in fraction_big_df.columns
+            ):
+                frac_subset = fraction_big_df[["gene_id", "transcript_id", cluster_i, cluster_j]].copy()
+                frac_subset.rename(
+                    columns={cluster_i: "frac_A", cluster_j: "frac_B"}, inplace=True
+                )
+                before_n = test_df.shape[0]
+                test_df = test_df.merge(
+                    frac_subset, on=["gene_id", "transcript_id"], how="left"
+                )
+                # Keep rows with sufficient fraction in both clusters
+                test_df = test_df.loc[
+                    (test_df["frac_A"].fillna(0.0) >= min_cell_fraction)
+                    & (test_df["frac_B"].fillna(0.0) >= min_cell_fraction)
+                ].copy()
+                after_n = test_df.shape[0]
+                # Drop helper columns
+                test_df.drop(columns=["frac_A", "frac_B"], inplace=True)
+                logger.info(
+                    f"Applied fraction filter ({cluster_i} vs {cluster_j}): {before_n} -> {after_n} features"
+                )
+            elif sc_cluster_fraction_matrix and min_cell_fraction > 0.0:
+                logger.warning(
+                    f"Skipping fraction filter for pair {cluster_i} vs {cluster_j} (missing columns in fraction matrix)."
+                )
+
             # print(test_df)
 
             test_df_results = differential_isoform_tests(
@@ -212,6 +307,62 @@ def main():
                 test_df_results["cluster_A"] = cluster_i
                 test_df_results["cluster_B"] = cluster_j
 
+                # If fraction data is available for both clusters, add fraction columns
+                if (
+                    fraction_big_df is not None
+                    and cluster_i in fraction_big_df.columns
+                    and cluster_j in fraction_big_df.columns
+                ):
+                    # Build quick lookup dicts for transcript -> fraction per cluster
+                    frac_lookup_A = dict(
+                        zip(
+                            fraction_big_df["transcript_id"],
+                            fraction_big_df[cluster_i],
+                        )
+                    )
+                    frac_lookup_B = dict(
+                        zip(
+                            fraction_big_df["transcript_id"],
+                            fraction_big_df[cluster_j],
+                        )
+                    )
+
+                    def _format_frac_list(transcript_ids_str, lookup):
+                        if pd.isna(transcript_ids_str) or transcript_ids_str == "":
+                            return ""
+                        tids = [t.strip() for t in str(transcript_ids_str).split(",") if t.strip()]
+                        vals = []
+                        for t in tids:
+                            v = lookup.get(t, np.nan)
+                            if pd.isna(v):
+                                vals.append("NA")
+                            else:
+                                try:
+                                    vals.append(f"{float(v):.3f}")
+                                except Exception:
+                                    vals.append("NA")
+                        return ",".join(vals)
+
+                    # Dominant isoform fractions
+                    test_df_results["dominant_frac_A"] = test_df_results[
+                        "dominant_transcript_ids"
+                    ].apply(lambda s: _format_frac_list(s, frac_lookup_A))
+                    test_df_results["dominant_frac_B"] = test_df_results[
+                        "dominant_transcript_ids"
+                    ].apply(lambda s: _format_frac_list(s, frac_lookup_B))
+
+                    # Alternate isoform fractions (if present)
+                    if "alternate_transcript_ids" in test_df_results.columns:
+                        test_df_results["alternate_frac_A"] = test_df_results[
+                            "alternate_transcript_ids"
+                        ].apply(lambda s: _format_frac_list(s, frac_lookup_A))
+                        test_df_results["alternate_frac_B"] = test_df_results[
+                            "alternate_transcript_ids"
+                        ].apply(lambda s: _format_frac_list(s, frac_lookup_B))
+
+                    # Record the threshold used (same across this pair)
+                    test_df_results["min_cell_fraction"] = min_cell_fraction
+
                 if all_test_results is None:
                     all_test_results = test_df_results
                 else:
@@ -222,7 +373,7 @@ def main():
 
         # perform mult test pvalue adjustment and set significance status
         all_test_results = FDR_mult_tests_adjustment(
-            all_test_results, min_delta_pi, signif_threshold
+            all_test_results, signif_threshold, min_delta_pi
         )
 
         all_test_results.to_csv(
