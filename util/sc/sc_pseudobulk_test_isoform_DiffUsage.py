@@ -215,27 +215,34 @@ def main():
             splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
         )
     )
-    sp_hash_mapping2 = dict(
-        zip(
-            splice_hashcode_id_mappings_df["new_transcript_id"],
-            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+    sp_hash_mapping2 = dict()
+    if "new_transcript_id" in splice_hashcode_id_mappings_df.columns:
+        sp_hash_mapping2 = dict(
+            zip(
+                splice_hashcode_id_mappings_df["new_transcript_id"],
+                splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+            )
         )
-    )
 
     # include the splice code direct mappings as well in case the splice pattern collapsing already happened earlier.
-    sp_hash_mapping3 = dict(
-        zip(
-            splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
-            splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
-        )
-    )
+    sp_hash_mapping3 = dict()
+    if "transcript_splice_hash_code" in splice_hashcode_id_mappings_df.columns:
 
-    sp_hash_mapping4 = dict(
-        zip(
-            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
-            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+        sp_hash_mapping3 = dict(
+            zip(
+                splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
+                splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
+            )
         )
-    )
+
+    sp_hash_mapping4 = dict()
+    if "new_transcript_splice_hash_code" in splice_hashcode_id_mappings_df.columns:
+        sp_hash_mapping4 = dict(
+            zip(
+                splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+                splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+            )
+        )
 
     sp_hash_mapping = {
         **sp_hash_mapping1,
