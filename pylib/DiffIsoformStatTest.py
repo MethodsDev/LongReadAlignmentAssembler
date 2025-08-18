@@ -155,6 +155,25 @@ def differential_isoform_tests(
             [f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_B_values]
         )
 
+        # Extract gene_ids and splice_hashcodes for dominant transcripts
+        dominant_gene_ids = []
+        dominant_splice_hashcodes = []
+        if "gene_id" in filtered_group.columns:
+            dominant_gene_ids = filtered_group.loc[dominant_indices, "gene_id"].tolist()
+        if "splice_hashcode" in filtered_group.columns:
+            dominant_splice_hashcodes = filtered_group.loc[
+                dominant_indices, "splice_hashcode"
+            ].tolist()
+
+        dominant_gene_ids_str = (
+            ",".join(map(str, dominant_gene_ids)) if dominant_gene_ids else ""
+        )
+        dominant_splice_hashcodes_str = (
+            ",".join(map(str, dominant_splice_hashcodes))
+            if dominant_splice_hashcodes
+            else ""
+        )
+
         alternate_transcript_ids_str = ",".join(
             filtered_group.loc[alternate_indices, "transcript_id"].tolist()
         )
@@ -170,6 +189,27 @@ def differential_isoform_tests(
         )
         alternate_pi_B_str = ",".join(
             [f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_B_values]
+        )
+
+        # Extract gene_ids and splice_hashcodes for alternate transcripts
+        alternate_gene_ids = []
+        alternate_splice_hashcodes = []
+        if "gene_id" in filtered_group.columns:
+            alternate_gene_ids = filtered_group.loc[
+                alternate_indices, "gene_id"
+            ].tolist()
+        if "splice_hashcode" in filtered_group.columns:
+            alternate_splice_hashcodes = filtered_group.loc[
+                alternate_indices, "splice_hashcode"
+            ].tolist()
+
+        alternate_gene_ids_str = (
+            ",".join(map(str, alternate_gene_ids)) if alternate_gene_ids else ""
+        )
+        alternate_splice_hashcodes_str = (
+            ",".join(map(str, alternate_splice_hashcodes))
+            if alternate_splice_hashcodes
+            else ""
         )
 
         # Check minimum read count requirements for DTU isoforms
@@ -206,27 +246,38 @@ def differential_isoform_tests(
             else None
         )
 
-        results.append(
-            [
-                group_by_id,
-                pvalue,
-                dominant_delta_pi_rounded,
-                dominant_transcript_ids_str,
-                dominant_pi_A_str,
-                dominant_pi_B_str,
-                original_total_counts_A,  # Keep original totals for reference
-                original_total_counts_B,  # Keep original totals for reference
-                dominant_counts_A,
-                dominant_counts_B,
-                alternate_delta_pi_rounded if reciprocal_delta_pi else None,
-                alternate_transcript_ids_str if reciprocal_delta_pi else None,
-                alternate_pi_A_str if reciprocal_delta_pi else None,
-                alternate_pi_B_str if reciprocal_delta_pi else None,
-                alternate_counts_A if reciprocal_delta_pi else None,
-                alternate_counts_B if reciprocal_delta_pi else None,
-                status,
-            ]
-        )
+        # Build results array based on reciprocal_delta_pi setting
+        result_row = [
+            group_by_id,
+            pvalue,
+            dominant_delta_pi_rounded,
+            dominant_transcript_ids_str,
+            dominant_pi_A_str,
+            dominant_pi_B_str,
+            dominant_gene_ids_str,
+            dominant_splice_hashcodes_str,
+            original_total_counts_A,  # Keep original totals for reference
+            original_total_counts_B,  # Keep original totals for reference
+            dominant_counts_A,
+            dominant_counts_B,
+        ]
+
+        if reciprocal_delta_pi:
+            result_row.extend(
+                [
+                    alternate_delta_pi_rounded,
+                    alternate_transcript_ids_str,
+                    alternate_pi_A_str,
+                    alternate_pi_B_str,
+                    alternate_gene_ids_str,
+                    alternate_splice_hashcodes_str,
+                    alternate_counts_A,
+                    alternate_counts_B,
+                ]
+            )
+
+        result_row.append(status)
+        results.append(result_row)
 
     if results:
         columns = [
@@ -236,6 +287,8 @@ def differential_isoform_tests(
             "dominant_transcript_ids",
             "dominant_pi_A",
             "dominant_pi_B",
+            "dominant_gene_ids",
+            "dominant_splice_hashcodes",
             "total_counts_A",
             "total_counts_B",
             "dominant_counts_A",
@@ -247,6 +300,8 @@ def differential_isoform_tests(
                 "alternate_transcript_ids",
                 "alternate_pi_A",
                 "alternate_pi_B",
+                "alternate_gene_ids",
+                "alternate_splice_hashcodes",
                 "alternate_counts_A",
                 "alternate_counts_B",
             ]
@@ -266,17 +321,28 @@ def generate_test_data(num_genes=20):
         for isoform_id in range(1, num_isoforms + 1):
             count_A = np.random.randint(0, 100)
             count_B = np.random.randint(0, 100)
+            # Add splice_hashcode for testing
+            splice_hashcode = f"hash_{gene_id}_{isoform_id}"
             data.append(
                 [
                     f"gene{gene_id}",
                     f"isoform{isoform_id}",
                     f"transcript{gene_id}_{isoform_id}",
+                    splice_hashcode,
                     count_A,
                     count_B,
                 ]
             )
     return pd.DataFrame(
-        data, columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"]
+        data,
+        columns=[
+            "gene_id",
+            "isoform_id",
+            "transcript_id",
+            "splice_hashcode",
+            "count_A",
+            "count_B",
+        ],
     )
 
 

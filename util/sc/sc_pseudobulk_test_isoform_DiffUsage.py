@@ -39,6 +39,20 @@ def main():
     )
 
     parser.add_argument(
+        "--splice_hashcode_id_mappings",
+        type=str,
+        required=True,
+        help="LRAA.gene_transcript_splicehashcode.tsv.wAnnotIDs file",
+    )
+
+    parser.add_argument(
+        "--group_by_feature",
+        default="gene_id",
+        choices=["gene_id", "splice_hashcode"],
+        help="organize groupings according to gene_id or splice_hashcode",
+    )
+
+    parser.add_argument(
         "--top_isoforms_each",
         type=int,
         default=5,
@@ -106,6 +120,8 @@ def main():
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
     output_prefix = args.output_prefix
     signif_threshold = args.signif_threshold
+    splice_hashcode_id_mappings_file = args.splice_hashcode_id_mappings
+    group_by_feature = args.group_by_feature
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG, force=True)
@@ -121,11 +137,41 @@ def main():
 
     cluster_names = column_names[2:]
 
+    ################################
+    ## Incorporate splice hash codes
+    ################################
+
+    splice_hashcode_id_mappings_df = pd.read_csv(
+        splice_hashcode_id_mappings_file, sep="\t"
+    )
+
+    sp_hash_mapping1 = dict(
+        zip(
+            splice_hashcode_id_mappings_df["transcript_id"],
+            splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
+        )
+    )
+    sp_hash_mapping2 = dict(
+        zip(
+            splice_hashcode_id_mappings_df["new_transcript_id"],
+            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+        )
+    )
+    sp_hash_mapping = {**sp_hash_mapping1, **sp_hash_mapping2}
+
+    counts_big_df["splice_hashcode"] = counts_big_df["transcript_id"].map(
+        sp_hash_mapping
+    )
+
+    #########
+    ## Exclude unspliced if indicated
+    #########
+
     if args.ignore_unspliced:
         logger.info("-pruning unspliced isoforms")
         logger.info("before pruning, have {} rows".format(counts_big_df.shape[0]))
         mask_to_exclude = (
-            counts_big_df["transcript_id"].astype(str).str.contains(":iso-", na=False)
+            counts_big_df["splice_hashcode"].astype(str).str.contains(":iso-", na=False)
         )
         counts_big_df = counts_big_df[~mask_to_exclude]
         logger.info("after pruning, have {} rows".format(counts_big_df.shape[0]))
@@ -142,7 +188,7 @@ def main():
 
             logger.info("Testing pair: {} vs {}".format(cluster_i, cluster_j))
             test_df = counts_big_df[
-                ["gene_id", "transcript_id", cluster_i, cluster_j]
+                ["gene_id", "transcript_id", "splice_hashcode", cluster_i, cluster_j]
             ].copy()
             test_df.rename(
                 columns={cluster_i: "count_A", cluster_j: "count_B"}, inplace=True
@@ -154,6 +200,7 @@ def main():
 
             test_df_results = differential_isoform_tests(
                 df=test_df,
+                group_by_token=group_by_feature,
                 min_reads_per_gene=min_reads_per_gene,
                 min_delta_pi=min_delta_pi,
                 top_isoforms_each=top_isoforms_each,
