@@ -874,7 +874,7 @@ top_DTU_results_w_same_splicehash
 
 ```{r}
 
-p = make_diff_iso_usage_compound_plot("SELENOH^g:chr11:+:comp-103", MIN_DELTA_PI, ignore_unspliced = FALSE)
+p = make_diff_iso_usage_compound_plot(top_DTU_results_w_same_splicehash$gene_id[1], MIN_DELTA_PI, ignore_unspliced = FALSE)
 
 plot(p)
 
