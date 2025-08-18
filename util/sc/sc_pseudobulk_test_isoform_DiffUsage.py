@@ -125,7 +125,7 @@ def main():
 
     parser.add_argument(
         "--signif_threshold",
-    type=float,
+        type=float,
         default=0.001,
         help="significance threshold for stat test to mark as signfiicantly DE",
     )
@@ -221,7 +221,28 @@ def main():
             splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
         )
     )
-    sp_hash_mapping = {**sp_hash_mapping1, **sp_hash_mapping2}
+
+    # include the splice code direct mappings as well in case the splice pattern collapsing already happened earlier.
+    sp_hash_mapping3 = dict(
+        zip(
+            splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
+            splice_hashcode_id_mappings_df["transcript_splice_hash_code"],
+        )
+    )
+
+    sp_hash_mapping4 = dict(
+        zip(
+            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+            splice_hashcode_id_mappings_df["new_transcript_splice_hash_code"],
+        )
+    )
+
+    sp_hash_mapping = {
+        **sp_hash_mapping1,
+        **sp_hash_mapping2,
+        **sp_hash_mapping3,
+        **sp_hash_mapping4,
+    }
 
     counts_big_df["splice_hashcode"] = counts_big_df["transcript_id"].map(
         sp_hash_mapping
@@ -267,7 +288,9 @@ def main():
                 and cluster_i in fraction_big_df.columns
                 and cluster_j in fraction_big_df.columns
             ):
-                frac_subset = fraction_big_df[["gene_id", "transcript_id", cluster_i, cluster_j]].copy()
+                frac_subset = fraction_big_df[
+                    ["gene_id", "transcript_id", cluster_i, cluster_j]
+                ].copy()
                 frac_subset.rename(
                     columns={cluster_i: "frac_A", cluster_j: "frac_B"}, inplace=True
                 )
@@ -330,7 +353,11 @@ def main():
                     def _format_frac_list(transcript_ids_str, lookup):
                         if pd.isna(transcript_ids_str) or transcript_ids_str == "":
                             return ""
-                        tids = [t.strip() for t in str(transcript_ids_str).split(",") if t.strip()]
+                        tids = [
+                            t.strip()
+                            for t in str(transcript_ids_str).split(",")
+                            if t.strip()
+                        ]
                         vals = []
                         for t in tids:
                             v = lookup.get(t, np.nan)
