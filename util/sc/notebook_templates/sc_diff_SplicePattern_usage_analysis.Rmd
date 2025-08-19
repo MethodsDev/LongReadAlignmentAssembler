@@ -16,17 +16,17 @@ library(pheatmap)
 # define inputs
 ```{r}
 
-sample_name = "PBMCs_LRAA-isoforms"
+sample_name = "PBMCs_LRAA-splice_patterns"
 
-sparse_matrix_data_dir = "../../LRAA_sc_PBMCs^isoform-sparseM/"
+sparse_matrix_data_dir = "../../LRAA_sc_PBMCs^splice_pattern-sparseM/"
 
 umap_cluster_file = "../../LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
 
-cluster_pseudobulk_matrix_filename = "LRAA_sc_PBMCs^isoform-sparseM.clusters_pseudobulk.matrix"
+cluster_pseudobulk_matrix_filename = "LRAA.pbmc.splicepatterns.cluster_pseudobulks.matrix"
 
-gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.gtf.segmented.gtf"
+gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.splice_collapsed.segmented.gtf"
 
-diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.minCF0.20.diff_iso.tsv"
+diff_iso_usage_stats_filename = "LRAA.pbmc.splicepatterns.top_only_w_recip_delta_pi.minCF0.05.diff_iso.tsv.signif_only"
 
 ```
 
@@ -59,7 +59,6 @@ umap_df %>% head()
 
 cluster_counts_matrix = read.csv(cluster_pseudobulk_matrix_filename, header=T, row.names=1, sep="\t")
 
-
 cluster_counts_matrix %>% head()
 
 ```
@@ -69,6 +68,7 @@ cluster_counts_matrix %>% head()
 cluster_CPM_matrix = sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
 
 head(cluster_CPM_matrix)
+
 ```
 
 
@@ -348,7 +348,6 @@ diff_iso_usage_stats %>% head()
 
 diff_iso_usage_stats %>% select(gene_id) %>% unique() %>% nrow()
 
-
 ```
 
 
@@ -388,10 +387,10 @@ diff_iso_usage_cluster_count_pairs %>%
   theme_bw() +   
   ggtitle("Counts of genes with isoform switching events detected")
 
-
 ```
 
 ```{r}
+
 dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
   # Create a complete matrix (assuming it's symmetric)
   bind_rows(
@@ -482,6 +481,8 @@ symmetric_data %>%
 ```{r}
 
 # pick an example gene to explore
+
+diff_iso_usage_stats = diff_iso_usage_stats %>% arrange(pvalue, desc(abs(delta_pi)))
 
 diff_iso_usage_stats %>% head()
 ```
@@ -867,68 +868,6 @@ top_DTU_results_w_same_splicehash = DTU_results_w_splicehash %>% filter(same_spl
   arrange(pvalue, desc(abs(delta_pi)))
 
 top_DTU_results_w_same_splicehash
-
-```
-
-
-
-```{r}
-
-p = make_diff_iso_usage_compound_plot(top_DTU_results_w_same_splicehash$gene_id, MIN_DELTA_PI, ignore_unspliced = FALSE)
-
-plot(p)
-
-```
-
-```{r}
-
-if (FALSE) { # only run on demand
-  
-  top_DTU_results_w_same_splicehash_genes = top_DTU_results_w_same_splicehash %>% 
-    group_by(gene_id) %>% arrange(pvalue) %>% filter(row_number() == 1) %>% ungroup() %>% arrange(pvalue) %>%
-    head(100)
-  
-  # Specify the path for the directory you want to create
-  top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage-alt-termini_plots.TOP_ISO_RECIP")
-  
-  # Check if the directory already exists
-  if (!dir.exists(top_diff_iso_usage_plots_dir)) {
-    # If the directory doesn't exist, create it
-    dir.create(top_diff_iso_usage_plots_dir)
-  }
-  
-  counter = 0
-  for(gene_sym_value in top_DTU_results_w_same_splicehash_genes$gene_id) {
-    
-    message("plotting ", counter, " gene: ", gene_sym_value)
-    
-    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_sym_value, ".diff_iso_usage-alt-termini.pdf")
-    
-    counter = counter + 1
-    
-    print(counter)
-    
-    #if (counter < 200) {
-    #   next;
-    #}
-    
-    #gene_sym_value = paste0("^", gene_sym_value, "\\^")
-    
-    tryCatch({
-      
-      p = make_diff_iso_usage_compound_plot(gene_sym_value, MIN_DELTA_PI, ignore_unspliced = F)
-      ggsave(p, file=filename, width=12, 
-             height=12)
-      
-      
-    }, error = function(e) {
-      message("Caught error: ", e$message)
-      
-    })
-  }  
-}
-
-
 
 ```
 
