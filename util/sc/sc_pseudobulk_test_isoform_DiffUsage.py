@@ -333,66 +333,6 @@ def main():
                 test_df_results["cluster_A"] = cluster_i
                 test_df_results["cluster_B"] = cluster_j
 
-                # If fraction data is available for both clusters, add fraction columns
-                if (
-                    fraction_big_df is not None
-                    and cluster_i in fraction_big_df.columns
-                    and cluster_j in fraction_big_df.columns
-                ):
-                    # Build quick lookup dicts for transcript -> fraction per cluster
-                    frac_lookup_A = dict(
-                        zip(
-                            fraction_big_df["transcript_id"],
-                            fraction_big_df[cluster_i],
-                        )
-                    )
-                    frac_lookup_B = dict(
-                        zip(
-                            fraction_big_df["transcript_id"],
-                            fraction_big_df[cluster_j],
-                        )
-                    )
-
-                    def _format_frac_list(transcript_ids_str, lookup):
-                        if pd.isna(transcript_ids_str) or transcript_ids_str == "":
-                            return ""
-                        tids = [
-                            t.strip()
-                            for t in str(transcript_ids_str).split(",")
-                            if t.strip()
-                        ]
-                        vals = []
-                        for t in tids:
-                            v = lookup.get(t, np.nan)
-                            if pd.isna(v):
-                                vals.append("NA")
-                            else:
-                                try:
-                                    vals.append(f"{float(v):.3f}")
-                                except Exception:
-                                    vals.append("NA")
-                        return ",".join(vals)
-
-                    # Dominant isoform fractions
-                    test_df_results["dominant_frac_A"] = test_df_results[
-                        "dominant_transcript_ids"
-                    ].apply(lambda s: _format_frac_list(s, frac_lookup_A))
-                    test_df_results["dominant_frac_B"] = test_df_results[
-                        "dominant_transcript_ids"
-                    ].apply(lambda s: _format_frac_list(s, frac_lookup_B))
-
-                    # Alternate isoform fractions (if present)
-                    if "alternate_transcript_ids" in test_df_results.columns:
-                        test_df_results["alternate_frac_A"] = test_df_results[
-                            "alternate_transcript_ids"
-                        ].apply(lambda s: _format_frac_list(s, frac_lookup_A))
-                        test_df_results["alternate_frac_B"] = test_df_results[
-                            "alternate_transcript_ids"
-                        ].apply(lambda s: _format_frac_list(s, frac_lookup_B))
-
-                    # Record the threshold used (same across this pair)
-                    test_df_results["min_cell_fraction"] = min_cell_fraction
-
                 if all_test_results is None:
                     all_test_results = test_df_results
                 else:
