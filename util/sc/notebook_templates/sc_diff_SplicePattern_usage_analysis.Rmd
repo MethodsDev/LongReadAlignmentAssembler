@@ -16,17 +16,17 @@ library(pheatmap)
 # define inputs
 ```{r}
 
-sample_name = "PBMCs_LRAA-splice_patterns"
+sample_name = "PBMCs_LRAA-init"
 
-sparse_matrix_data_dir = "../../LRAA_sc_PBMCs^splice_pattern-sparseM/"
+sparse_matrix_data_dir = "../../LRAA_PBMCs^isoform-sparseM/"
 
-umap_cluster_file = "../../LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
+umap_cluster_file = "LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
 
-cluster_pseudobulk_matrix_filename = "LRAA.pbmc.splicepatterns.cluster_pseudobulks.matrix"
+cluster_pseudobulk_matrix_filename = "LRAA_PBMCs^isoform-sparseM.clusters_pseudobulk.matrix"
 
-gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.splice_collapsed.segmented.gtf"
+gtf_filename = "../../PBMCs_pbio.LRAA.gtf.updated.gtf.segmented.gtf"
 
-diff_iso_usage_stats_filename = "LRAA.pbmc.splicepatterns.top_only_w_recip_delta_pi.minCF0.05.diff_iso.tsv.signif_only"
+diff_iso_usage_stats_filename = "LRAA_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.minCF0.05.diff_iso.tsv.signif_only"
 
 ```
 
@@ -144,16 +144,19 @@ get_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL)
 }
 
 
-base_umap = umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='black', alpha=0.1)
+base_umap = umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1)
 
 plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
   
   isoform_umap = get_isoform_umap(gene_of_interest, restrict_to_transcript_ids)
   
-  # Calculate 99th percentile for color scale
-  max_color_value = quantile(isoform_umap$read_count, 0.99, na.rm = TRUE)
+  isoform_umap =  isoform_umap %>% filter(read_count > 0) %>% mutate(log_read_count = log1p(read_count)) 
   
-  base_umap + geom_point(data=isoform_umap, aes(color=read_count)) +
+  
+  # Calculate 95th percentile for color scale
+  max_color_value = quantile(isoform_umap$log_read_count, 0.95, na.rm = TRUE)
+  
+  base_umap + geom_point(data=isoform_umap, aes(color=log_read_count)) +
     facet_wrap(~transcript_id) +
     theme_bw() +
     ggtitle(gene_of_interest)  +
@@ -858,18 +861,6 @@ DTU_results_w_splicehash %>% select(gene_id, same_splice_pattern) %>% unique() %
 ```
 
 
-## top with same splicing pattern
-
-```{r}
-
-top_DTU_results_w_same_splicehash = DTU_results_w_splicehash %>% filter(same_splice_pattern) %>% 
-  filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
-  filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
-  arrange(pvalue, desc(abs(delta_pi)))
-
-top_DTU_results_w_same_splicehash
-
-```
 
 
 ## top with different splicing pattern
@@ -947,5 +938,83 @@ if (FALSE) { # only run on demand
 
 
 ```
+
+
+
+
+## top with same splicing pattern
+
+```{r}
+
+top_DTU_results_w_same_splicehash = DTU_results_w_splicehash %>% filter(same_splice_pattern) %>% 
+  filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
+  filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
+  arrange(pvalue, desc(abs(delta_pi)))
+
+top_DTU_results_w_same_splicehash
+
+```
+
+```{r}
+
+p = make_diff_iso_usage_compound_plot(top_DTU_results_w_same_splicehash$gene_id[1], MIN_DELTA_PI, ignore_unspliced = FALSE)
+
+plot(p)
+
+```
+
+
+```{r}
+
+if (FALSE) { # only run on demand
+  
+  top_DTU_results_w_same_splicehash_genes = top_DTU_results_w_same_splicehash %>% 
+    group_by(gene_id) %>% arrange(pvalue) %>% filter(row_number() == 1) %>% ungroup() %>% arrange(pvalue) %>%
+    head(100)
+  
+  # Specify the path for the directory you want to create
+  top_diff_iso_usage_plots_dir <- paste0("top_", num_top_diff_iso_usage_plots, "_diff_iso_usage-alt-termini-only_plots.TOP_ISO_RECIP")
+  
+  # Check if the directory already exists
+  if (!dir.exists(top_diff_iso_usage_plots_dir)) {
+    # If the directory doesn't exist, create it
+    dir.create(top_diff_iso_usage_plots_dir)
+  }
+  
+  counter = 0
+  for(gene_sym_value in top_DTU_results_w_same_splicehash_genes$gene_id) {
+    
+    message("plotting ", counter, " gene: ", gene_sym_value)
+    
+    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_sym_value, ".diff_iso_usage-alt-termini.pdf")
+    
+    counter = counter + 1
+    
+    print(counter)
+    
+    #if (counter < 200) {
+    #   next;
+    #}
+    
+    #gene_sym_value = paste0("^", gene_sym_value, "\\^")
+    
+    tryCatch({
+      
+      p = make_diff_iso_usage_compound_plot(gene_sym_value, MIN_DELTA_PI, ignore_unspliced = F)
+      ggsave(p, file=filename, width=12, 
+             height=12)
+      
+      
+    }, error = function(e) {
+      message("Caught error: ", e$message)
+      
+    })
+  }  
+}
+
+
+
+```
+
 
 
