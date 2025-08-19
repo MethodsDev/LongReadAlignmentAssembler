@@ -24,12 +24,44 @@ def differential_isoform_tests(
     min_reads_DTU_isoform=25,
     show_progress_monitor=True,
     delta_pi_precision=3,
+    # Optional fraction filtering with pairwise dataframe having 'frac_A' and 'frac_B'
+    fraction_df=None,
+    min_cell_fraction=0.0,
 ):
 
     logger = logging.getLogger(__name__)
     logger.debug("Running differential_isoform_tests()")
 
     results = []
+
+    # Prepare fraction lookups if provided
+    # Determine if fraction data is available for reporting vs. for filtering
+    have_fraction_data = False
+    use_fraction_filter = False
+    frac_lookup_A = None
+    frac_lookup_B = None
+    if fraction_df is not None:
+        required_cols = {"gene_id", "transcript_id", "frac_A", "frac_B"}
+        missing = required_cols - set(fraction_df.columns)
+        if missing:
+            logger.warning(
+                f"fraction_df is missing required columns: {','.join(sorted(missing))}. Fraction reporting/filtering disabled."
+            )
+        else:
+            have_fraction_data = True
+            # Build per-transcript lookups for fast access
+            frac_lookup_A = dict(
+                zip(fraction_df["transcript_id"], fraction_df["frac_A"])
+            )
+            frac_lookup_B = dict(
+                zip(fraction_df["transcript_id"], fraction_df["frac_B"])
+            )
+            # Enable filtering only if threshold > 0
+            use_fraction_filter = (
+                isinstance(min_cell_fraction, (int, float))
+                and float(min_cell_fraction) > 0.0
+            )
+            # Always apply 'both' logic for simplicity and biological justification
     grouped = df.groupby(group_by_token)
     debug_mode = logger.getEffectiveLevel() == logging.DEBUG
     num_groups = len(grouped)
@@ -75,7 +107,7 @@ def differential_isoform_tests(
             )
             continue
 
-        # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
+    # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
         pi_A = group["count_A"] / original_total_counts_A
         pi_B = group["count_B"] / original_total_counts_B
         delta_pi = pi_B - pi_A
@@ -86,7 +118,7 @@ def differential_isoform_tests(
         group["pi_B"] = pi_B
         group["delta_pi"] = delta_pi
 
-        # Now filter to top isoforms for downstream analysis
+        # Select top isoforms by counts from the full group
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
@@ -95,6 +127,34 @@ def differential_isoform_tests(
         filtered_group = filtered_group.sort_values(by="total", ascending=False).head(
             10
         )
+
+        # Presence-based fraction gating on the selected top isoforms
+        if use_fraction_filter:
+            thr = float(min_cell_fraction)
+
+            def _ge(v):
+                try:
+                    return (not pd.isna(v)) and float(v) >= thr
+                except Exception:
+                    return False
+
+            has_A = any(
+                _ge(frac_lookup_A.get(tid, np.nan))
+                for tid in top_countA["transcript_id"].tolist()
+            )
+            has_B = any(
+                _ge(frac_lookup_B.get(tid, np.nan))
+                for tid in top_countB["transcript_id"].tolist()
+            )
+
+            # Require presence in both clusters' top sets
+            pass_fraction = has_A and has_B
+
+            if not pass_fraction:
+                logger.debug(
+                    f"{group_by_token} {group_by_id} failed presence-based fraction gating (A:{has_A}, B:{has_B})."
+                )
+                continue
 
         # Extract delta_pi values for the filtered isoforms only
         filtered_delta_pi = filtered_group["delta_pi"]
@@ -246,6 +306,34 @@ def differential_isoform_tests(
             else None
         )
 
+        # Prepare fraction reporting if available
+        dominant_frac_A_str = None
+        dominant_frac_B_str = None
+        alternate_frac_A_str = None
+        alternate_frac_B_str = None
+        if have_fraction_data:
+            def _format_frac_list(transcript_ids_str, lookup):
+                if transcript_ids_str is None or transcript_ids_str == "":
+                    return ""
+                tids = [t.strip() for t in str(transcript_ids_str).split(",") if t.strip()]
+                vals = []
+                for t in tids:
+                    v = lookup.get(t, np.nan)
+                    if pd.isna(v):
+                        vals.append("NA")
+                    else:
+                        try:
+                            vals.append(f"{float(v):.3f}")
+                        except Exception:
+                            vals.append("NA")
+                return ",".join(vals)
+
+            dominant_frac_A_str = _format_frac_list(dominant_transcript_ids_str, frac_lookup_A)
+            dominant_frac_B_str = _format_frac_list(dominant_transcript_ids_str, frac_lookup_B)
+            if reciprocal_delta_pi:
+                alternate_frac_A_str = _format_frac_list(alternate_transcript_ids_str, frac_lookup_A)
+                alternate_frac_B_str = _format_frac_list(alternate_transcript_ids_str, frac_lookup_B)
+
         # Build results array based on reciprocal_delta_pi setting
         result_row = [
             group_by_id,
@@ -262,6 +350,13 @@ def differential_isoform_tests(
             dominant_counts_B,
         ]
 
+        # Append fraction reporting for dominant isoforms if available
+        if have_fraction_data:
+            result_row.extend([
+                dominant_frac_A_str,
+                dominant_frac_B_str,
+            ])
+
         if reciprocal_delta_pi:
             result_row.extend(
                 [
@@ -275,8 +370,16 @@ def differential_isoform_tests(
                     alternate_counts_B,
                 ]
             )
+            if have_fraction_data:
+                result_row.extend([
+                    alternate_frac_A_str,
+                    alternate_frac_B_str,
+                ])
 
+        # Add status and optional min_cell_fraction for transparency
         result_row.append(status)
+        if have_fraction_data:
+            result_row.append(min_cell_fraction)
         results.append(result_row)
 
     if results:
@@ -294,6 +397,11 @@ def differential_isoform_tests(
             "dominant_counts_A",
             "dominant_counts_B",
         ]
+        if have_fraction_data:
+            columns += [
+                "dominant_frac_A",
+                "dominant_frac_B",
+            ]
         if reciprocal_delta_pi:
             columns += [
                 "alternate_delta_pi",
@@ -305,7 +413,14 @@ def differential_isoform_tests(
                 "alternate_counts_A",
                 "alternate_counts_B",
             ]
+            if have_fraction_data:
+                columns += [
+                    "alternate_frac_A",
+                    "alternate_frac_B",
+                ]
         columns += ["status"]
+        if have_fraction_data:
+            columns += ["min_cell_fraction"]
         results_df = pd.DataFrame(results, columns=columns)
         return results_df
 

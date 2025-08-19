@@ -63,6 +63,7 @@ def main():
         ),
     )
 
+
     parser.add_argument(
         "--splice_hashcode_id_mappings",
         type=str,
@@ -288,10 +289,10 @@ def main():
 
             test_df = test_df.loc[((test_df["count_A"] > 0) | (test_df["count_B"] > 0))]
 
-            # Optionally filter by cell-fraction expression per cluster
+            # Build pairwise fraction dataframe when available
+            pair_fraction_df = None
             if (
                 fraction_big_df is not None
-                and min_cell_fraction > 0.0
                 and cluster_i in fraction_big_df.columns
                 and cluster_j in fraction_big_df.columns
             ):
@@ -310,19 +311,13 @@ def main():
                     (test_df["frac_A"].fillna(0.0) >= min_cell_fraction)
                     & (test_df["frac_B"].fillna(0.0) >= min_cell_fraction)
                 ].copy()
-                after_n = test_df.shape[0]
-                # Drop helper columns
-                test_df.drop(columns=["frac_A", "frac_B"], inplace=True)
-                logger.info(
-                    f"Applied fraction filter ({cluster_i} vs {cluster_j}): {before_n} -> {after_n} features"
+                pair_fraction_df.rename(
+                    columns={cluster_i: "frac_A", cluster_j: "frac_B"},
+                    inplace=True,
                 )
-            elif sc_cluster_fraction_matrix and min_cell_fraction > 0.0:
-                logger.warning(
-                    f"Skipping fraction filter for pair {cluster_i} vs {cluster_j} (missing columns in fraction matrix)."
-                )
+                # fraction reporting and filtering handled in differential_isoform_tests
 
-            # print(test_df)
-
+            # Run DTU tests for this pair
             test_df_results = differential_isoform_tests(
                 df=test_df,
                 group_by_token=group_by_feature,
@@ -331,6 +326,8 @@ def main():
                 top_isoforms_each=top_isoforms_each,
                 reciprocal_delta_pi=args.reciprocal_delta_pi,
                 min_reads_DTU_isoform=args.min_reads_DTU_isoform,
+                fraction_df=pair_fraction_df,
+                min_cell_fraction=min_cell_fraction,
             )
 
             if test_df_results is not None:
