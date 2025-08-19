@@ -299,6 +299,7 @@ def main():
                 frac_subset = fraction_big_df[
                     ["gene_id", "transcript_id", cluster_i, cluster_j]
                 ].copy()
+                # rename cluster-specific fraction columns to standardized names
                 frac_subset.rename(
                     columns={cluster_i: "frac_A", cluster_j: "frac_B"}, inplace=True
                 )
@@ -311,10 +312,8 @@ def main():
                     (test_df["frac_A"].fillna(0.0) >= min_cell_fraction)
                     & (test_df["frac_B"].fillna(0.0) >= min_cell_fraction)
                 ].copy()
-                pair_fraction_df.rename(
-                    columns={cluster_i: "frac_A", cluster_j: "frac_B"},
-                    inplace=True,
-                )
+                # Provide the pairwise fraction dataframe to downstream testing
+                pair_fraction_df = frac_subset[["gene_id", "transcript_id", "frac_A", "frac_B"]].copy()
                 # fraction reporting and filtering handled in differential_isoform_tests
 
             # Run DTU tests for this pair
