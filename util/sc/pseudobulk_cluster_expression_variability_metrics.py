@@ -9,18 +9,18 @@ Input
 -----
 A table with rows = transcripts (or genes) and columns = clusters.
 Values should be nonnegative pseudobulk expression (raw counts or CPM/TPM).
-An ID column may be included (default: first non-numeric column is ID).
+An ID column may be included (default: first column is ID).
 
 Output
 ------
-TSV with metrics for each transcript.
+TSV with metrics for each transcript. Note: "evenness" was removed as it is
+equivalent to normalized entropy.
 
 Usage
 -----
 python specificity_metrics.py \
-  --input pseudobulk.tsv \
-  --output metrics.tsv \
-  --id-col transcript_id
+    --input pseudobulk.tsv \
+    --output metrics.tsv
 """
 
 import argparse
@@ -35,7 +35,12 @@ import sys
 
 
 def shannon_entropy(p: np.ndarray) -> float:
-    """Shannon entropy H = -sum p log p (natural log)."""
+    """Shannon entropy H = -sum p log p (natural log).
+
+    Interpretation:
+    - Low H (~0): expression concentrated in one/few clusters (specific).
+    - High H (up to log K): expression spread uniformly across clusters (broad).
+    """
     p = p[(p > 0) & np.isfinite(p)]
     if p.size == 0:
         return np.nan
@@ -43,7 +48,12 @@ def shannon_entropy(p: np.ndarray) -> float:
 
 
 def normalized_entropy(p: np.ndarray) -> float:
-    """H / log(K), in [0,1] for K>1."""
+    """H / log(K), ranges in [0,1] for K>1.
+
+    Interpretation:
+    - 0: highly specific (mass on a single cluster).
+    - 1: perfectly uniform across clusters (maximal breadth).
+    """
     K = p.size
     if K <= 1:
         return np.nan
@@ -54,7 +64,12 @@ def normalized_entropy(p: np.ndarray) -> float:
 
 
 def gini(x: np.ndarray) -> float:
-    """Gini coefficient over raw (nonnegative) expression x."""
+    """Gini coefficient over raw (nonnegative) expression x.
+
+    Interpretation:
+    - 0: perfectly equal expression across clusters.
+    - 1: all expression in one cluster (max inequality/specificity).
+    """
     x = x[np.isfinite(x)]
     x = x[x >= 0]
     n = x.size
@@ -69,7 +84,12 @@ def gini(x: np.ndarray) -> float:
 
 
 def tau_metric(x: np.ndarray) -> float:
-    """Tau (Yanai et al. 2005). 0=uniform, 1=single-cluster specific."""
+    """Tau (Yanai et al. 2005). 0=uniform, 1=single-cluster specific.
+
+    Interpretation:
+    - 0: uniform (broadly expressed).
+    - 1: expressed only in the max-expressing cluster (high specificity).
+    """
     x = x[np.isfinite(x)]
     K = x.size
     if K <= 1:
@@ -81,7 +101,12 @@ def tau_metric(x: np.ndarray) -> float:
 
 
 def kl_divergence_to_uniform(p: np.ndarray) -> float:
-    """KL divergence to uniform distribution."""
+    """KL divergence to the uniform distribution.
+
+    Interpretation:
+    - 0: identical to uniform (broad expression).
+    - Higher: deviates from uniform (more specific/skewed).
+    """
     K = p.size
     if K == 0:
         return np.nan
@@ -92,7 +117,12 @@ def kl_divergence_to_uniform(p: np.ndarray) -> float:
 
 
 def simpson_index(p: np.ndarray) -> float:
-    """Simpson’s index: sum p_i^2. High when skewed."""
+    """Simpson’s index: sum p_i^2.
+
+    Interpretation:
+    - Low (near 1/K): uniform distribution (broad expression).
+    - High (up to 1): dominated by a single cluster (specific).
+    """
     if p.size == 0:
         return np.nan
     return float(np.sum(np.square(p)))
@@ -118,13 +148,12 @@ def compute_metrics_for_row(
     p, row_sum = as_proportions(x, pseudocount=pseudocount)
 
     if not np.isfinite(p).all():
-        H = H_norm = KL = D = evenness = np.nan
+        H = H_norm = KL = D = np.nan
     else:
         H = shannon_entropy(p)
         H_norm = normalized_entropy(p)
         KL = kl_divergence_to_uniform(p)
         D = simpson_index(p)
-        evenness = H_norm
 
     G = gini(x)
     tau = tau_metric(x)
@@ -141,7 +170,6 @@ def compute_metrics_for_row(
         "row_sum": row_sum,
         "entropy": H,
         "entropy_normalized": H_norm,
-        "evenness": evenness,
         "kl_to_uniform": KL,
         "simpson": D,
         "gini": G,
@@ -218,7 +246,6 @@ def main():
         "row_sum",
         "entropy",
         "entropy_normalized",
-        "evenness",
         "kl_to_uniform",
         "simpson",
         "gini",
