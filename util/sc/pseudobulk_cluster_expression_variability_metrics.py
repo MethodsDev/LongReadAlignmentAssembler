@@ -192,9 +192,9 @@ def main():
     sep = "\t"
 
     df = pd.read_csv(args.input, sep=sep)
-
-    # ID column handling
-    id_col = 0
+    # Preserve the original first column (e.g., transcript_id)
+    id_col_name = df.columns[0]
+    id_values = df.iloc[:, 0].copy()
 
     # Keep only numeric cluster columns
     cluster_cols = list(df.columns[1:])
@@ -227,9 +227,9 @@ def main():
         "max_cluster",
     ]
     out = out[cols]
-    out.index.name = "transcript"
-
-    out.to_csv(args.output, sep="\t", index=True)
+    # Insert original ID column as the first column and write without index
+    out.insert(0, id_col_name, id_values.values)
+    out.to_csv(args.output, sep="\t", index=False)
     print(
         f"Wrote metrics for {out.shape[0]} transcripts across {len(cluster_cols)} clusters to {args.output}"
     )
