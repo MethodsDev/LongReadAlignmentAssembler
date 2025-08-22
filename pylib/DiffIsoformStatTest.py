@@ -52,7 +52,7 @@ def differential_isoform_tests(
             ("dominant_set", bool, False),
             ("alternate_set", bool, False),
             ("candidate_top_isoform", bool, False),  # top isoforms considered even if test aborted
-            ("skip_reason", object, ""),  # reason gene not fully tested / no result row
+            ("skip_reason", object, "."),  # reason gene not fully tested / no result row; '.' means successful test
         ]:
             if col not in annotated_df.columns:
                 annotated_df[col] = default
@@ -446,7 +446,7 @@ def differential_isoform_tests(
             if reciprocal_delta_pi:
                 annotated_df.loc[alternate_indices, "alternate_set"] = True
             # Clear skip_reason (if any) since test succeeded
-            annotated_df.loc[group.index, "skip_reason"] = ""
+            annotated_df.loc[group.index, "skip_reason"] = "."
 
     if results:
         columns = [
