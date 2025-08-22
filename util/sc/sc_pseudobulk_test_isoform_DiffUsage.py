@@ -365,6 +365,12 @@ def main():
                 annotated_subset["cluster_A"] = cluster_i
                 annotated_subset["cluster_B"] = cluster_j
                 # Keep ALL isoforms (even if not tested) for complete transparency.
+                # Make grouping_id unique per cluster comparison by appending cluster pair.
+                if "grouping_id" in annotated_subset.columns:
+                    annotated_subset["grouping_id"] = (
+                        annotated_subset["grouping_id"].astype(str).fillna("NA")
+                        + f"|{cluster_i}|{cluster_j}"
+                    )
                 all_annotated_isoforms.append(annotated_subset)
 
     if all_test_results is not None:

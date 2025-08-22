@@ -55,6 +55,7 @@ def differential_isoform_tests(
             ("alternate_set", bool, False),
             ("candidate_top_isoform", bool, False),  # top isoforms considered even if test aborted
             ("skip_reason", object, "."),  # reason gene not fully tested / no result row; '.' means successful test
+            ("grouping_id", object, None),  # explicit group identifier (mirrors group_by_token value per row)
         ]:
             if col not in annotated_df.columns:
                 annotated_df[col] = default
@@ -137,6 +138,7 @@ def differential_isoform_tests(
             annotated_df.loc[group.index, "delta_pi"] = delta_pi
             annotated_df.loc[group.index, "total_counts_A_gene"] = original_total_counts_A
             annotated_df.loc[group.index, "total_counts_B_gene"] = original_total_counts_B
+            annotated_df.loc[group.index, "grouping_id"] = group_by_id
 
         # Early annotation for single-isoform or zero-count cases
         if len(group) < 2:
