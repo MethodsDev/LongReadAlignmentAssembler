@@ -51,6 +51,8 @@ def differential_isoform_tests(
             ("evaluated_isoform", bool, False),  # part of filtered_group used in chi2
             ("dominant_set", bool, False),
             ("alternate_set", bool, False),
+            ("candidate_top_isoform", bool, False),  # top isoforms considered even if test aborted
+            ("skip_reason", object, ""),  # reason gene not fully tested / no result row
         ]:
             if col not in annotated_df.columns:
                 annotated_df[col] = default
@@ -106,38 +108,19 @@ def differential_isoform_tests(
 
         if debug_mode:
             logger.debug(str(group))
-        if len(group) < 2:
-            continue
-
-        if group[["count_A", "count_B"]].sum().min() == 0:
-            logger.debug(
-                f"Either count_A or count_B is zero for {group_by_token} {group_by_id}, skipping."
-            )
-            continue
-
-        # Store original total counts for reporting
+        # Store original total counts for reporting (can be zero leading to skip)
         original_total_counts_A = group["count_A"].sum()
         original_total_counts_B = group["count_B"].sum()
 
-        if original_total_counts_A == 0 or original_total_counts_B == 0:
-            logger.debug(
-                f"Total counts in condition A or B is zero for {group_by_token} {group_by_id}, skipping."
-            )
-            continue
-
-        if (
-            original_total_counts_A < min_reads_per_gene
-            or original_total_counts_B < min_reads_per_gene
-        ):
-            logger.debug(
-                f"{group_by_token} {group_by_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
-            )
-            continue
-
-        # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
-        pi_A = group["count_A"] / original_total_counts_A
-        pi_B = group["count_B"] / original_total_counts_B
-        delta_pi = pi_B - pi_A
+        # Calculate pi only if totals > 0 to avoid division by zero
+        if original_total_counts_A > 0 and original_total_counts_B > 0:
+            pi_A = group["count_A"] / original_total_counts_A
+            pi_B = group["count_B"] / original_total_counts_B
+            delta_pi = pi_B - pi_A
+        else:
+            pi_A = pd.Series([np.nan]*len(group), index=group.index)
+            pi_B = pd.Series([np.nan]*len(group), index=group.index)
+            delta_pi = pd.Series([np.nan]*len(group), index=group.index)
 
         # Add these calculations to the original group
         group = group.copy()
@@ -153,6 +136,20 @@ def differential_isoform_tests(
             annotated_df.loc[group.index, "total_counts_A_gene"] = original_total_counts_A
             annotated_df.loc[group.index, "total_counts_B_gene"] = original_total_counts_B
 
+        # Early annotation for single-isoform or zero-count cases
+        if len(group) < 2:
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "single_isoform"
+            continue
+
+        if original_total_counts_A == 0 or original_total_counts_B == 0:
+            logger.debug(
+                f"Total counts in condition A or B is zero for {group_by_token} {group_by_id}, skipping."
+            )
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "zero_total_counts"
+            continue
+
         # Select top isoforms by counts from the full group
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
@@ -160,6 +157,22 @@ def differential_isoform_tests(
 
         filtered_group["total"] = filtered_group["count_A"] + filtered_group["count_B"]
         filtered_group = filtered_group.sort_values(by="total", ascending=False).head(10)
+
+        # Mark candidate top isoforms regardless of downstream filtering outcome
+        if return_annotated_df:
+            annotated_df.loc[filtered_group.index, "candidate_top_isoform"] = True
+
+        # Now enforce min_reads_per_gene after pi computation so skipped genes retain pi annotation
+        if (
+            original_total_counts_A < min_reads_per_gene
+            or original_total_counts_B < min_reads_per_gene
+        ):
+            logger.debug(
+                f"{group_by_token} {group_by_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
+            )
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "insufficient_gene_reads"
+            continue
 
         # Presence-based fraction gating on the selected top isoforms
         if use_fraction_filter:
@@ -187,6 +200,8 @@ def differential_isoform_tests(
                 logger.debug(
                     f"{group_by_token} {group_by_id} failed presence-based fraction gating (A:{has_A}, B:{has_B})."
                 )
+                if return_annotated_df:
+                    annotated_df.loc[group.index, "skip_reason"] = "fraction_gating_fail"
                 continue
 
         # Extract delta_pi values for the filtered isoforms only
@@ -217,6 +232,8 @@ def differential_isoform_tests(
 
         if not pass_delta_pi:
             logger.debug(f"{group_by_token} {group_by_id} failed delta_pi threshold.")
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "delta_pi_fail"
             continue
 
         if abs(positive_sum) > abs(negative_sum):
@@ -310,12 +327,16 @@ def differential_isoform_tests(
             logger.debug(
                 f"{group_by_token} {group_by_id} dominant isoforms have insufficient reads ({dominant_total_reads}), skipping."
             )
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "dominant_isoform_low_reads"
             continue
 
         if reciprocal_delta_pi and alternate_total_reads < min_reads_DTU_isoform:
             logger.debug(
                 f"{group_by_token} {group_by_id} alternate isoforms have insufficient reads ({alternate_total_reads}), skipping."
             )
+            if return_annotated_df:
+                annotated_df.loc[group.index, "skip_reason"] = "alternate_isoform_low_reads"
             continue
 
         # Use filtered group for chi-squared test matrix
@@ -424,6 +445,8 @@ def differential_isoform_tests(
             annotated_df.loc[dominant_indices, "dominant_set"] = True
             if reciprocal_delta_pi:
                 annotated_df.loc[alternate_indices, "alternate_set"] = True
+            # Clear skip_reason (if any) since test succeeded
+            annotated_df.loc[group.index, "skip_reason"] = ""
 
     if results:
         columns = [

@@ -364,10 +364,7 @@ def main():
                 annotated_subset = annotated_df.copy()
                 annotated_subset["cluster_A"] = cluster_i
                 annotated_subset["cluster_B"] = cluster_j
-                # reduce size: keep only isoforms from genes considered OR isoforms evaluated in chi2
-                if {"gene_tested", "evaluated_isoform"}.issubset(set(annotated_subset.columns)):
-                    mask = (annotated_subset["gene_tested"]) | (annotated_subset["evaluated_isoform"])
-                    annotated_subset = annotated_subset.loc[mask].copy()
+                # Keep ALL isoforms (even if not tested) for complete transparency.
                 all_annotated_isoforms.append(annotated_subset)
 
     if all_test_results is not None:
