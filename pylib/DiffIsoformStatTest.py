@@ -494,10 +494,10 @@ def differential_isoform_tests(
         if float_cols:
             results_df[float_cols] = results_df[float_cols].round(output_decimal_places)
         if return_annotated_df and annotated_df is not None:
-            # Round all float columns (including pi, delta_pi, fractions) in annotated_df
+            # Round all float columns (including pi, delta_pi, fractions) in annotated_df using np.round for consistency
             float_cols_ann = [c for c in annotated_df.columns if annotated_df[c].dtype.kind in ("f", "d")]
             if float_cols_ann:
-                annotated_df[float_cols_ann] = annotated_df[float_cols_ann].round(output_decimal_places)
+                annotated_df[float_cols_ann] = np.round(annotated_df[float_cols_ann], output_decimal_places)
         if return_annotated_df:
             return results_df, annotated_df
         return results_df
@@ -549,6 +549,10 @@ def FDR_mult_tests_adjustment(df, signif_threshold=0.001, min_abs_delta_pi=0.1):
     df["significant"] = (df["adj_pvalue"] <= signif_threshold) & (
         df["delta_pi"].abs() >= min_abs_delta_pi
     )
+    # Standardize numeric precision (3 decimals)
+    for col in ["pvalue", "adj_pvalue", "delta_pi"]:
+        if col in df.columns:
+            df[col] = df[col].round(3)
     return df
 
 

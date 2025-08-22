@@ -382,8 +382,12 @@ def main():
         )
         if save_annot and all_annotated_isoforms:
             annot_df = pd.concat(all_annotated_isoforms, ignore_index=True)
+            # enforce 3-decimal rounding on all float columns prior to write
+            float_cols = [c for c in annot_df.columns if annot_df[c].dtype.kind in ("f", "d")]
+            if float_cols:
+                annot_df[float_cols] = annot_df[float_cols].round(3)
             annot_outfile = f"{output_prefix}.diff_iso.annotated_isoforms.tsv"
-            annot_df.to_csv(annot_outfile, sep="\t", index=False)
+            annot_df.to_csv(annot_outfile, sep="\t", index=False, float_format="%.3f")
             logger.info(f"Wrote annotated isoform details to: {annot_outfile}")
     else:
         logger.info("No results to report")
