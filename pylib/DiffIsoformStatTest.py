@@ -29,6 +29,8 @@ def differential_isoform_tests(
     min_cell_fraction=0.0,
     # Return the annotated per-isoform dataframe in addition to summary results
     return_annotated_df=False,
+    # Fixed decimal places for numeric outputs in returned tables
+    output_decimal_places=3,
 ):
 
     logger = logging.getLogger(__name__)
@@ -351,11 +353,10 @@ def differential_isoform_tests(
             status = "failed"
 
         # Round delta_pi values to specified precision
-        dominant_delta_pi_rounded = round_to_significant_figures(
-            dominant_delta_pi, delta_pi_precision
-        )
+        # Fixed decimal-place rounding instead of significant figures
+        dominant_delta_pi_rounded = round(dominant_delta_pi, output_decimal_places)
         alternate_delta_pi_rounded = (
-            round_to_significant_figures(alternate_delta_pi, delta_pi_precision)
+            round(alternate_delta_pi, output_decimal_places)
             if reciprocal_delta_pi
             else None
         )
@@ -488,6 +489,15 @@ def differential_isoform_tests(
         if have_fraction_data:
             columns += ["min_cell_fraction"]
         results_df = pd.DataFrame(results, columns=columns)
+        # Round selected float columns to fixed decimal places
+        float_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]
+        if float_cols:
+            results_df[float_cols] = results_df[float_cols].round(output_decimal_places)
+        if return_annotated_df and annotated_df is not None:
+            # Round pi values and delta_pi in annotated_df
+            for col in ["pi_A", "pi_B", "delta_pi"]:
+                if col in annotated_df.columns:
+                    annotated_df[col] = annotated_df[col].round(output_decimal_places)
         if return_annotated_df:
             return results_df, annotated_df
         return results_df
