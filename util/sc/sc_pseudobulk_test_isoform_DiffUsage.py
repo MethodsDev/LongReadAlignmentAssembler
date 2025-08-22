@@ -143,6 +143,16 @@ def main():
     )
 
     parser.add_argument(
+        "--limit_clusters",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of EXACTLY two cluster names to restrict the comparison to. "
+            "Useful for quick testing. Example: --limit_clusters clusterX,clusterY"
+        ),
+    )
+
+    parser.add_argument(
         "-d",
         "--debug",
         action="store_true",
@@ -177,6 +187,19 @@ def main():
     assert column_names[1] == "transcript_id"
 
     cluster_names = column_names[2:]
+
+    # Optional restriction to a specific pair of clusters
+    if args.limit_clusters:
+        restricted = [c.strip() for c in args.limit_clusters.split(",") if c.strip()]
+        if len(restricted) != 2:
+            raise ValueError("--limit_clusters must specify exactly two distinct cluster names separated by a comma.")
+        if restricted[0] == restricted[1]:
+            raise ValueError("--limit_clusters requires two DIFFERENT cluster names.")
+        missing = [c for c in restricted if c not in cluster_names]
+        if missing:
+            raise ValueError(f"--limit_clusters: cluster(s) not found in matrix columns: {','.join(missing)}")
+        cluster_names = restricted
+        logger.info(f"Restricting analysis to cluster pair: {cluster_names[0]} vs {cluster_names[1]}")
 
     # If using fraction filtering, load and validate the fraction matrix
     fraction_big_df = None
