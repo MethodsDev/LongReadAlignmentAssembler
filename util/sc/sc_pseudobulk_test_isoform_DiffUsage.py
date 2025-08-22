@@ -53,15 +53,7 @@ def main():
         ),
     )
 
-    parser.add_argument(
-        "--min_cell_fraction",
-        type=float,
-        default=0.0,
-        help=(
-            "Minimum fraction of cells that must express a feature in each cluster being compared. "
-            "Used only if --sc_cluster_fraction_matrix is provided. Range: 0..1 (default: 0.0 disables filtering)."
-        ),
-    )
+    # Removed min_cell_fraction filtering; fraction matrix now only used for annotation.
 
 
     parser.add_argument(
@@ -167,7 +159,6 @@ def main():
     min_delta_pi = args.min_delta_pi
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
     sc_cluster_fraction_matrix = args.sc_cluster_fraction_matrix
-    min_cell_fraction = args.min_cell_fraction
     output_prefix = args.output_prefix
     signif_threshold = args.signif_threshold
     splice_hashcode_id_mappings_file = args.splice_hashcode_id_mappings
@@ -204,12 +195,8 @@ def main():
     # If using fraction filtering, load and validate the fraction matrix
     fraction_big_df = None
     if sc_cluster_fraction_matrix:
-        if not (0.0 <= float(min_cell_fraction) <= 1.0):
-            raise ValueError(
-                f"--min_cell_fraction must be within [0,1], got: {min_cell_fraction}"
-            )
         logger.info(
-            f"-loading fraction-expression matrix: {sc_cluster_fraction_matrix} (min_cell_fraction={min_cell_fraction})"
+            f"-loading fraction-expression matrix (annotation only): {sc_cluster_fraction_matrix}"
         )
         fraction_big_df = pd.read_csv(sc_cluster_fraction_matrix, sep="\t")
 
@@ -339,16 +326,10 @@ def main():
                 frac_subset.rename(
                     columns={cluster_i: "frac_A", cluster_j: "frac_B"}, inplace=True
                 )
-                before_n = test_df.shape[0]
                 test_df = test_df.merge(
                     frac_subset, on=["gene_id", "transcript_id"], how="left"
                 )
-                # Keep rows with sufficient fraction in both clusters
-                test_df = test_df.loc[
-                    (test_df["frac_A"].fillna(0.0) >= min_cell_fraction)
-                    & (test_df["frac_B"].fillna(0.0) >= min_cell_fraction)
-                ].copy()
-                # Provide the pairwise fraction dataframe to downstream testing
+                # Provide the pairwise fraction dataframe to downstream testing (annotation only)
                 pair_fraction_df = frac_subset[["gene_id", "transcript_id", "frac_A", "frac_B"]].copy()
                 # fraction reporting and filtering handled in differential_isoform_tests
 
@@ -364,7 +345,6 @@ def main():
                 reciprocal_delta_pi=args.reciprocal_delta_pi,
                 min_reads_DTU_isoform=args.min_reads_DTU_isoform,
                 fraction_df=pair_fraction_df,
-                min_cell_fraction=min_cell_fraction,
                 return_annotated_df=save_annot,
             )
             if save_annot:

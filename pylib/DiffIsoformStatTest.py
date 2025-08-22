@@ -70,7 +70,7 @@ def differential_isoform_tests(
     # Prepare fraction lookups if provided
     # Determine if fraction data is available for reporting vs. for filtering
     have_fraction_data = False
-    use_fraction_filter = False
+    use_fraction_filter = False  # disabled: we only annotate fractions now
     frac_lookup_A = None
     frac_lookup_B = None
     if fraction_df is not None:
@@ -89,12 +89,7 @@ def differential_isoform_tests(
             frac_lookup_B = dict(
                 zip(fraction_df["transcript_id"], fraction_df["frac_B"])
             )
-            # Enable filtering only if threshold > 0
-            use_fraction_filter = (
-                isinstance(min_cell_fraction, (int, float))
-                and float(min_cell_fraction) > 0.0
-            )
-            # Always apply 'both' logic for simplicity and biological justification
+            # Previously: set use_fraction_filter based on min_cell_fraction. Now disabled per user request.
     grouped = df.groupby(group_by_token)
     debug_mode = logger.getEffectiveLevel() == logging.DEBUG
     num_groups = len(grouped)
@@ -178,35 +173,7 @@ def differential_isoform_tests(
                 annotated_df.loc[group.index, "skip_reason"] = "insufficient_gene_reads"
             continue
 
-        # Presence-based fraction gating on the selected top isoforms
-        if use_fraction_filter:
-            thr = float(min_cell_fraction)
-
-            def _ge(v):
-                try:
-                    return (not pd.isna(v)) and float(v) >= thr
-                except Exception:
-                    return False
-
-            has_A = any(
-                _ge(frac_lookup_A.get(tid, np.nan))
-                for tid in top_countA["transcript_id"].tolist()
-            )
-            has_B = any(
-                _ge(frac_lookup_B.get(tid, np.nan))
-                for tid in top_countB["transcript_id"].tolist()
-            )
-
-            # Require presence in both clusters' top sets
-            pass_fraction = has_A and has_B
-
-            if not pass_fraction:
-                logger.debug(
-                    f"{group_by_token} {group_by_id} failed presence-based fraction gating (A:{has_A}, B:{has_B})."
-                )
-                if return_annotated_df:
-                    annotated_df.loc[group.index, "skip_reason"] = "fraction_gating_fail"
-                continue
+    # Fraction-based gating disabled; we only annotate fractions now.
 
         # Extract delta_pi values for the filtered isoforms only
         filtered_delta_pi = filtered_group["delta_pi"]
