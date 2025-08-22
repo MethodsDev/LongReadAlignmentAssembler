@@ -27,12 +27,40 @@ def differential_isoform_tests(
     # Optional fraction filtering with pairwise dataframe having 'frac_A' and 'frac_B'
     fraction_df=None,
     min_cell_fraction=0.0,
+    # Return the annotated per-isoform dataframe in addition to summary results
+    return_annotated_df=False,
 ):
 
     logger = logging.getLogger(__name__)
     logger.debug("Running differential_isoform_tests()")
 
     results = []
+
+    # Prepare annotated dataframe if requested
+    annotated_df = None
+    if return_annotated_df:
+        annotated_df = df.copy()
+        # Initialize annotation columns
+        for col, dtype, default in [
+            ("pi_A", float, np.nan),
+            ("pi_B", float, np.nan),
+            ("delta_pi", float, np.nan),
+            ("total_counts_A_gene", float, np.nan),
+            ("total_counts_B_gene", float, np.nan),
+            ("gene_tested", bool, False),
+            ("evaluated_isoform", bool, False),  # part of filtered_group used in chi2
+            ("dominant_set", bool, False),
+            ("alternate_set", bool, False),
+        ]:
+            if col not in annotated_df.columns:
+                annotated_df[col] = default
+        # Optionally add fraction columns (copy over if present externally later)
+        if fraction_df is not None:
+            for frac_col in ["frac_A", "frac_B"]:
+                if frac_col in fraction_df.columns and frac_col not in annotated_df.columns:
+                    # Map fractions by transcript_id (assumes transcript_id uniqueness)
+                    frac_map = dict(zip(fraction_df["transcript_id"], fraction_df[frac_col]))
+                    annotated_df[frac_col] = annotated_df["transcript_id"].map(frac_map)
 
     # Prepare fraction lookups if provided
     # Determine if fraction data is available for reporting vs. for filtering
@@ -78,7 +106,6 @@ def differential_isoform_tests(
 
         if debug_mode:
             logger.debug(str(group))
-
         if len(group) < 2:
             continue
 
@@ -107,7 +134,7 @@ def differential_isoform_tests(
             )
             continue
 
-    # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
+        # Calculate pi_A and pi_B on the ORIGINAL group data (before filtering)
         pi_A = group["count_A"] / original_total_counts_A
         pi_B = group["count_B"] / original_total_counts_B
         delta_pi = pi_B - pi_A
@@ -118,15 +145,21 @@ def differential_isoform_tests(
         group["pi_B"] = pi_B
         group["delta_pi"] = delta_pi
 
+        # If annotating, store per-isoform metrics now
+        if return_annotated_df:
+            annotated_df.loc[group.index, "pi_A"] = pi_A
+            annotated_df.loc[group.index, "pi_B"] = pi_B
+            annotated_df.loc[group.index, "delta_pi"] = delta_pi
+            annotated_df.loc[group.index, "total_counts_A_gene"] = original_total_counts_A
+            annotated_df.loc[group.index, "total_counts_B_gene"] = original_total_counts_B
+
         # Select top isoforms by counts from the full group
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
 
         filtered_group["total"] = filtered_group["count_A"] + filtered_group["count_B"]
-        filtered_group = filtered_group.sort_values(by="total", ascending=False).head(
-            10
-        )
+        filtered_group = filtered_group.sort_values(by="total", ascending=False).head(10)
 
         # Presence-based fraction gating on the selected top isoforms
         if use_fraction_filter:
@@ -382,6 +415,16 @@ def differential_isoform_tests(
             result_row.append(min_cell_fraction)
         results.append(result_row)
 
+        # Update annotation flags for this gene if requested
+        if return_annotated_df:
+            annotated_df.loc[group.index, "gene_tested"] = True
+            # Indices in filtered_group correspond to filtered_group's own index (original df indices retained during concat/drop_duplicates)
+            filtered_indices = filtered_group.index
+            annotated_df.loc[filtered_indices, "evaluated_isoform"] = True
+            annotated_df.loc[dominant_indices, "dominant_set"] = True
+            if reciprocal_delta_pi:
+                annotated_df.loc[alternate_indices, "alternate_set"] = True
+
     if results:
         columns = [
             group_by_token,
@@ -422,9 +465,13 @@ def differential_isoform_tests(
         if have_fraction_data:
             columns += ["min_cell_fraction"]
         results_df = pd.DataFrame(results, columns=columns)
+        if return_annotated_df:
+            return results_df, annotated_df
         return results_df
 
     logger.debug("-didn't meet requirements to test.")
+    if return_annotated_df and annotated_df is not None:
+        return None, annotated_df
     return None
 
 
@@ -484,11 +531,13 @@ def run_test():
     print(df)
 
     logger.info("** Test results (chi2):\n")
-    DE_results = differential_isoform_tests(
-        df, reciprocal_delta_pi=True, top_isoforms_each=1
+    DE_results, annotated = differential_isoform_tests(
+        df, reciprocal_delta_pi=True, top_isoforms_each=1, return_annotated_df=True
     )
     DE_results = FDR_mult_tests_adjustment(DE_results)
     print(DE_results)
+    print("\nAnnotated isoform dataframe (subset):")
+    print(annotated.head())
 
 
 if __name__ == "__main__":

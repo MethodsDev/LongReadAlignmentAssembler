@@ -132,6 +132,17 @@ def main():
     )
 
     parser.add_argument(
+        "--save_annotated_isoform_details",
+        action="store_true",
+        default=False,
+        help=(
+            "If set, also output an isoform-level annotated table including per-isoform pi values, "
+            "delta_pi, and flags indicating whether the isoform/gene was tested, used in the chi2 test, "
+            "and membership in dominant/alternate sets. File: <output_prefix>.diff_iso.annotated_isoforms.tsv"
+        ),
+    )
+
+    parser.add_argument(
         "-d",
         "--debug",
         action="store_true",
@@ -151,6 +162,7 @@ def main():
     signif_threshold = args.signif_threshold
     splice_hashcode_id_mappings_file = args.splice_hashcode_id_mappings
     group_by_feature = args.group_by_feature
+    save_annot = args.save_annotated_isoform_details
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG, force=True)
@@ -274,6 +286,7 @@ def main():
     ############################################################
 
     all_test_results = None
+    all_annotated_isoforms = []  # collect annotated per-pair if requested
     for i in range(len(cluster_names)):
         cluster_i = cluster_names[i]
         for j in range(i + 1, len(cluster_names)):
@@ -317,7 +330,9 @@ def main():
                 # fraction reporting and filtering handled in differential_isoform_tests
 
             # Run DTU tests for this pair
-            test_df_results = differential_isoform_tests(
+            test_df_results = None
+            annotated_df = None
+            ditsu_return = differential_isoform_tests(
                 df=test_df,
                 group_by_token=group_by_feature,
                 min_reads_per_gene=min_reads_per_gene,
@@ -327,7 +342,13 @@ def main():
                 min_reads_DTU_isoform=args.min_reads_DTU_isoform,
                 fraction_df=pair_fraction_df,
                 min_cell_fraction=min_cell_fraction,
+                return_annotated_df=save_annot,
             )
+            if save_annot:
+                # ditsu_return is a tuple (results_df or None, annotated_df)
+                test_df_results, annotated_df = ditsu_return
+            else:
+                test_df_results = ditsu_return
 
             if test_df_results is not None:
                 test_df_results["cluster_A"] = cluster_i
@@ -337,6 +358,17 @@ def main():
                     all_test_results = test_df_results
                 else:
                     all_test_results = pd.concat([all_test_results, test_df_results])
+
+            # Handle annotated isoforms (collect even if no significant test rows produced)
+            if save_annot and annotated_df is not None:
+                annotated_subset = annotated_df.copy()
+                annotated_subset["cluster_A"] = cluster_i
+                annotated_subset["cluster_B"] = cluster_j
+                # reduce size: keep only isoforms from genes considered OR isoforms evaluated in chi2
+                if {"gene_tested", "evaluated_isoform"}.issubset(set(annotated_subset.columns)):
+                    mask = (annotated_subset["gene_tested"]) | (annotated_subset["evaluated_isoform"])
+                    annotated_subset = annotated_subset.loc[mask].copy()
+                all_annotated_isoforms.append(annotated_subset)
 
     if all_test_results is not None:
         # all_test_results = pd.concat([all_test_results, test_df_results])
@@ -351,6 +383,11 @@ def main():
             sep="\t",
             index=False,
         )
+        if save_annot and all_annotated_isoforms:
+            annot_df = pd.concat(all_annotated_isoforms, ignore_index=True)
+            annot_outfile = f"{output_prefix}.diff_iso.annotated_isoforms.tsv"
+            annot_df.to_csv(annot_outfile, sep="\t", index=False)
+            logger.info(f"Wrote annotated isoform details to: {annot_outfile}")
     else:
         logger.info("No results to report")
 
