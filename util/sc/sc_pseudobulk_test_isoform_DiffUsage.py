@@ -319,18 +319,17 @@ def main():
                 and cluster_i in fraction_big_df.columns
                 and cluster_j in fraction_big_df.columns
             ):
-                frac_subset = fraction_big_df[
-                    ["gene_id", "transcript_id", cluster_i, cluster_j]
-                ].copy()
-                # rename cluster-specific fraction columns to standardized names
-                frac_subset.rename(
-                    columns={cluster_i: "frac_A", cluster_j: "frac_B"}, inplace=True
-                )
+                frac_subset = fraction_big_df[["gene_id", "transcript_id", cluster_i, cluster_j]].copy()
+                # Rename cluster-specific fraction columns to new descriptive names (fraction of cells expressing isoform)
+                frac_subset.rename(columns={cluster_i: "cell_detect_frac_A", cluster_j: "cell_detect_frac_B"}, inplace=True)
+                # Provide legacy column names for backward compatibility
+                frac_subset["frac_A"] = frac_subset["cell_detect_frac_A"]
+                frac_subset["frac_B"] = frac_subset["cell_detect_frac_B"]
                 test_df = test_df.merge(
                     frac_subset, on=["gene_id", "transcript_id"], how="left"
                 )
                 # Provide the pairwise fraction dataframe to downstream testing (annotation only)
-                pair_fraction_df = frac_subset[["gene_id", "transcript_id", "frac_A", "frac_B"]].copy()
+                pair_fraction_df = frac_subset[["gene_id", "transcript_id", "cell_detect_frac_A", "cell_detect_frac_B", "frac_A", "frac_B"]].copy()
                 # fraction reporting and filtering handled in differential_isoform_tests
 
             # Run DTU tests for this pair

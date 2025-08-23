@@ -24,219 +24,183 @@ def differential_isoform_tests(
     min_reads_DTU_isoform=25,
     show_progress_monitor=True,
     delta_pi_precision=3,
-    # Optional fraction filtering with pairwise dataframe having 'frac_A' and 'frac_B'
+    # Optional per-isoform fraction reporting dataframe. Historically columns named 'frac_A','frac_B'
+    # representing FRACTION OF CELLS with detected expression for that isoform in each condition.
+    # New preferred column names: 'cell_detect_frac_A','cell_detect_frac_B'. Either naming is accepted.
     fraction_df=None,
     min_cell_fraction=0.0,
     # Return the annotated per-isoform dataframe in addition to summary results
     return_annotated_df=False,
     # Fixed decimal places for numeric outputs in returned tables
     output_decimal_places=3,
+    # When True add clearer, more descriptive duplicate columns (leaving legacy names for compatibility)
+    add_descriptive_fraction_columns=True,
 ):
+    """Perform differential isoform usage (DTU) testing between two conditions.
+
+    Two fraction concepts:
+      (a) Isoform expression fractions within a gene (pi_A / pi_B).
+      (b) Cell-detection fractions across cells (cell_detect_frac_A / B).
+    Legacy names (frac_A/frac_B, delta_pi) are retained as aliases.
+    """
 
     logger = logging.getLogger(__name__)
     logger.debug("Running differential_isoform_tests()")
 
     results = []
 
-    # Prepare annotated dataframe if requested
+    # Annotated DF preparation
     annotated_df = None
     if return_annotated_df:
         annotated_df = df.copy()
-        # Initialize annotation columns
-        for col, dtype, default in [
+        add_cols = [
             ("pi_A", float, np.nan),
             ("pi_B", float, np.nan),
             ("delta_pi", float, np.nan),
+            ("isoform_expr_frac_A", float, np.nan),
+            ("isoform_expr_frac_B", float, np.nan),
+            ("delta_isoform_expr_frac", float, np.nan),
             ("total_counts_A_gene", float, np.nan),
             ("total_counts_B_gene", float, np.nan),
             ("gene_tested", bool, False),
-            ("evaluated_isoform", bool, False),  # part of filtered_group used in chi2
+            ("evaluated_isoform", bool, False),
             ("dominant_set", bool, False),
             ("alternate_set", bool, False),
-            ("candidate_top_isoform", bool, False),  # top isoforms considered even if test aborted
-            ("skip_reason", object, "."),  # reason gene not fully tested / no result row; '.' means successful test
-            ("grouping_id", object, None),  # explicit group identifier (mirrors group_by_token value per row)
-        ]:
+            ("candidate_top_isoform", bool, False),
+            ("skip_reason", object, "."),
+            ("grouping_id", object, None),
+        ]
+        for col, _, default in add_cols:
             if col not in annotated_df.columns:
                 annotated_df[col] = default
-        # Optionally add fraction columns (copy over if present externally later)
+        # Map cell-detection fractions if provided
         if fraction_df is not None:
-            for frac_col in ["frac_A", "frac_B"]:
-                if frac_col in fraction_df.columns and frac_col not in annotated_df.columns:
-                    # Map fractions by transcript_id (assumes transcript_id uniqueness)
-                    frac_map = dict(zip(fraction_df["transcript_id"], fraction_df[frac_col]))
-                    annotated_df[frac_col] = annotated_df["transcript_id"].map(frac_map)
+            legacy_to_new = {"frac_A": "cell_detect_frac_A", "frac_B": "cell_detect_frac_B"}
+            for src in ["frac_A", "frac_B", "cell_detect_frac_A", "cell_detect_frac_B"]:
+                if src in fraction_df.columns:
+                    dest = legacy_to_new.get(src, src)
+                    if dest not in annotated_df.columns:
+                        m = dict(zip(fraction_df["transcript_id"], fraction_df[src]))
+                        annotated_df[dest] = annotated_df["transcript_id"].map(m)
 
-    # Prepare fraction lookups if provided
-    # Determine if fraction data is available for reporting vs. for filtering
+    # Fraction lookups
     have_fraction_data = False
-    use_fraction_filter = False  # disabled: we only annotate fractions now
-    frac_lookup_A = None
-    frac_lookup_B = None
+    frac_lookup_A = frac_lookup_B = None
     if fraction_df is not None:
-        required_cols = {"gene_id", "transcript_id", "frac_A", "frac_B"}
-        missing = required_cols - set(fraction_df.columns)
+        present = set(fraction_df.columns)
+        if {"frac_A", "frac_B"}.issubset(present) and not {"cell_detect_frac_A", "cell_detect_frac_B"}.issubset(present):
+            fraction_df = fraction_df.copy()
+            fraction_df["cell_detect_frac_A"] = fraction_df["frac_A"]
+            fraction_df["cell_detect_frac_B"] = fraction_df["frac_B"]
+        required = {"gene_id", "transcript_id", "cell_detect_frac_A", "cell_detect_frac_B"}
+        missing = required - set(fraction_df.columns)
         if missing:
-            logger.warning(
-                f"fraction_df is missing required columns: {','.join(sorted(missing))}. Fraction reporting/filtering disabled."
-            )
+            logger.warning("fraction_df missing columns: %s -- disabling fraction annotation", ",".join(sorted(missing)))
         else:
             have_fraction_data = True
-            # Build per-transcript lookups for fast access
-            frac_lookup_A = dict(
-                zip(fraction_df["transcript_id"], fraction_df["frac_A"])
-            )
-            frac_lookup_B = dict(
-                zip(fraction_df["transcript_id"], fraction_df["frac_B"])
-            )
-            # Previously: set use_fraction_filter based on min_cell_fraction. Now disabled per user request.
-    grouped = df.groupby(group_by_token)
-    debug_mode = logger.getEffectiveLevel() == logging.DEBUG
-    num_groups = len(grouped)
+            frac_lookup_A = dict(zip(fraction_df["transcript_id"], fraction_df["cell_detect_frac_A"]))
+            frac_lookup_B = dict(zip(fraction_df["transcript_id"], fraction_df["cell_detect_frac_B"]))
 
-    for group_counter, (group_by_id, group) in enumerate(grouped, 1):
+    grouped = df.groupby(group_by_token)
+    num_groups = len(grouped)
+    debug_mode = logger.getEffectiveLevel() == logging.DEBUG
+
+    for group_counter, (group_by_id, group) in enumerate(grouped, start=1):
 
         if show_progress_monitor and group_counter % 1000 == 0:
-            frac_done = f"{group_counter / num_groups * 100:.2f}% done"
-            print(
-                f"\r[{group_counter}/{num_groups}] = {frac_done}   ",
-                file=sys.stderr,
-                end="",
-            )
+            pct = 100 * group_counter / num_groups
+            print(f"\r[{group_counter}/{num_groups}] = {pct:.2f}% done   ", file=sys.stderr, end="")
 
         if debug_mode:
-            logger.debug(str(group))
-        # Store original total counts for reporting (can be zero leading to skip)
+            logger.debug("Processing %s=%s", group_by_token, group_by_id)
+
         original_total_counts_A = group["count_A"].sum()
         original_total_counts_B = group["count_B"].sum()
 
-        # Calculate pi only if totals > 0 to avoid division by zero
         if original_total_counts_A > 0 and original_total_counts_B > 0:
             pi_A = group["count_A"] / original_total_counts_A
             pi_B = group["count_B"] / original_total_counts_B
             delta_pi = pi_B - pi_A
         else:
-            pi_A = pd.Series([np.nan]*len(group), index=group.index)
-            pi_B = pd.Series([np.nan]*len(group), index=group.index)
-            delta_pi = pd.Series([np.nan]*len(group), index=group.index)
+            pi_A = pd.Series([np.nan] * len(group), index=group.index)
+            pi_B = pd.Series([np.nan] * len(group), index=group.index)
+            delta_pi = pd.Series([np.nan] * len(group), index=group.index)
 
-        # Add these calculations to the original group
         group = group.copy()
         group["pi_A"] = pi_A
         group["pi_B"] = pi_B
         group["delta_pi"] = delta_pi
 
-        # If annotating, store per-isoform metrics now
         if return_annotated_df:
-            annotated_df.loc[group.index, "pi_A"] = pi_A
-            annotated_df.loc[group.index, "pi_B"] = pi_B
-            annotated_df.loc[group.index, "delta_pi"] = delta_pi
+            annotated_df.loc[group.index, ["pi_A", "isoform_expr_frac_A"]] = np.column_stack([pi_A, pi_A])
+            annotated_df.loc[group.index, ["pi_B", "isoform_expr_frac_B"]] = np.column_stack([pi_B, pi_B])
+            annotated_df.loc[group.index, ["delta_pi", "delta_isoform_expr_frac"]] = np.column_stack([delta_pi, delta_pi])
             annotated_df.loc[group.index, "total_counts_A_gene"] = original_total_counts_A
             annotated_df.loc[group.index, "total_counts_B_gene"] = original_total_counts_B
             annotated_df.loc[group.index, "grouping_id"] = group_by_id
 
-        # Early annotation for single-isoform or zero-count cases
         if len(group) < 2:
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "single_isoform"
             continue
 
         if original_total_counts_A == 0 or original_total_counts_B == 0:
-            logger.debug(
-                f"Total counts in condition A or B is zero for {group_by_token} {group_by_id}, skipping."
-            )
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "zero_total_counts"
             continue
 
-        # Select top isoforms by counts from the full group
         top_countA = group.nlargest(top_isoforms_each, "count_A")
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
 
         filtered_group["total"] = filtered_group["count_A"] + filtered_group["count_B"]
-        filtered_group = filtered_group.sort_values(by="total", ascending=False).head(10)
+        filtered_group = filtered_group.sort_values("total", ascending=False).head(10)
 
-        # Mark candidate top isoforms regardless of downstream filtering outcome
         if return_annotated_df:
             annotated_df.loc[filtered_group.index, "candidate_top_isoform"] = True
 
-        # Now enforce min_reads_per_gene after pi computation so skipped genes retain pi annotation
-        if (
-            original_total_counts_A < min_reads_per_gene
-            or original_total_counts_B < min_reads_per_gene
-        ):
-            logger.debug(
-                f"{group_by_token} {group_by_id} has insufficient reads (A: {original_total_counts_A} or B: {original_total_counts_B}), skipping."
-            )
+        if original_total_counts_A < min_reads_per_gene or original_total_counts_B < min_reads_per_gene:
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "insufficient_gene_reads"
             continue
 
-    # Fraction-based gating disabled; we only annotate fractions now.
+        # Fraction-based gating disabled; we only annotate fractions now.
 
-        # Extract delta_pi values for the filtered isoforms only
         filtered_delta_pi = filtered_group["delta_pi"]
 
-        # Now work with delta_pi from filtered isoforms (but calculated on original proportions)
-        positive_indices = (
-            filtered_delta_pi[filtered_delta_pi > 0]
-            .sort_values(ascending=False)
-            .index[:2]
-        )
-        negative_indices = (
-            filtered_delta_pi[filtered_delta_pi < 0].sort_values().index[:2]
-        )
+        positive_indices = filtered_delta_pi[filtered_delta_pi > 0].sort_values(ascending=False).index[:2]
+        negative_indices = filtered_delta_pi[filtered_delta_pi < 0].sort_values().index[:2]
 
         positive_sum = filtered_delta_pi.loc[positive_indices].sum()
         negative_sum = filtered_delta_pi.loc[negative_indices].sum()
 
-        pass_delta_pi = False
         if reciprocal_delta_pi:
-            pass_delta_pi = (
-                abs(positive_sum) > min_delta_pi and abs(negative_sum) > min_delta_pi
-            )
+            pass_delta_pi = (abs(positive_sum) > min_delta_pi) and (abs(negative_sum) > min_delta_pi)
         else:
-            pass_delta_pi = (
-                abs(positive_sum) > min_delta_pi or abs(negative_sum) > min_delta_pi
-            )
+            pass_delta_pi = (abs(positive_sum) > min_delta_pi) or (abs(negative_sum) > min_delta_pi)
 
         if not pass_delta_pi:
-            logger.debug(f"{group_by_token} {group_by_id} failed delta_pi threshold.")
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "delta_pi_fail"
             continue
 
         if abs(positive_sum) > abs(negative_sum):
-            dominant_delta_pi = positive_sum
-            dominant_indices = positive_indices
-            alternate_delta_pi = negative_sum
-            alternate_indices = negative_indices
+            dominant_delta_pi, dominant_indices = positive_sum, positive_indices
+            alternate_delta_pi, alternate_indices = negative_sum, negative_indices
         else:
-            dominant_delta_pi = negative_sum
-            dominant_indices = negative_indices
-            alternate_delta_pi = positive_sum
-            alternate_indices = positive_indices
+            dominant_delta_pi, dominant_indices = negative_sum, negative_indices
+            alternate_delta_pi, alternate_indices = positive_sum, positive_indices
 
-        # Use FILTERED group data for transcript information and counts
-        dominant_transcript_ids_str = ",".join(
-            filtered_group.loc[dominant_indices, "transcript_id"].tolist()
-        )
+        dominant_transcript_ids_str = ",".join(filtered_group.loc[dominant_indices, "transcript_id"].tolist())
         dominant_counts_A = filtered_group.loc[dominant_indices, "count_A"].sum()
         dominant_counts_B = filtered_group.loc[dominant_indices, "count_B"].sum()
         dominant_total_reads = dominant_counts_A + dominant_counts_B
 
-        # Get pi values for dominant transcripts
         dominant_pi_A_values = filtered_group.loc[dominant_indices, "pi_A"].tolist()
         dominant_pi_B_values = filtered_group.loc[dominant_indices, "pi_B"].tolist()
-        dominant_pi_A_str = ",".join(
-            [f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_A_values]
-        )
-        dominant_pi_B_str = ",".join(
-            [f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_B_values]
-        )
+        dominant_pi_A_str = ",".join([f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_A_values])
+        dominant_pi_B_str = ",".join([f"{pi:.{delta_pi_precision}f}" for pi in dominant_pi_B_values])
 
-        # Extract gene_ids and splice_hashcodes for dominant transcripts
         dominant_gene_ids = []
         dominant_splice_hashcodes = []
         if "gene_id" in filtered_group.columns:
@@ -255,24 +219,16 @@ def differential_isoform_tests(
             else ""
         )
 
-        alternate_transcript_ids_str = ",".join(
-            filtered_group.loc[alternate_indices, "transcript_id"].tolist()
-        )
+        alternate_transcript_ids_str = ",".join(filtered_group.loc[alternate_indices, "transcript_id"].tolist())
         alternate_counts_A = filtered_group.loc[alternate_indices, "count_A"].sum()
         alternate_counts_B = filtered_group.loc[alternate_indices, "count_B"].sum()
         alternate_total_reads = alternate_counts_A + alternate_counts_B
 
-        # Get pi values for alternate transcripts
         alternate_pi_A_values = filtered_group.loc[alternate_indices, "pi_A"].tolist()
         alternate_pi_B_values = filtered_group.loc[alternate_indices, "pi_B"].tolist()
-        alternate_pi_A_str = ",".join(
-            [f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_A_values]
-        )
-        alternate_pi_B_str = ",".join(
-            [f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_B_values]
-        )
+        alternate_pi_A_str = ",".join([f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_A_values])
+        alternate_pi_B_str = ",".join([f"{pi:.{delta_pi_precision}f}" for pi in alternate_pi_B_values])
 
-        # Extract gene_ids and splice_hashcodes for alternate transcripts
         alternate_gene_ids = []
         alternate_splice_hashcodes = []
         if "gene_id" in filtered_group.columns:
@@ -293,19 +249,11 @@ def differential_isoform_tests(
             else ""
         )
 
-        # Check minimum read count requirements for DTU isoforms
         if dominant_total_reads < min_reads_DTU_isoform:
-            logger.debug(
-                f"{group_by_token} {group_by_id} dominant isoforms have insufficient reads ({dominant_total_reads}), skipping."
-            )
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "dominant_isoform_low_reads"
             continue
-
         if reciprocal_delta_pi and alternate_total_reads < min_reads_DTU_isoform:
-            logger.debug(
-                f"{group_by_token} {group_by_id} alternate isoforms have insufficient reads ({alternate_total_reads}), skipping."
-            )
             if return_annotated_df:
                 annotated_df.loc[group.index, "skip_reason"] = "alternate_isoform_low_reads"
             continue
@@ -317,46 +265,32 @@ def differential_isoform_tests(
         status = "OK"
         try:
             chi2, pvalue, _, _ = chi2_contingency(matrix)
-        except Exception as e:
-            logger.debug(f"Chi2 failed for {group_by_token} {group_by_id}: {e}")
+        except Exception:
             status = "failed"
 
-        # Round delta_pi values to specified precision
-        # Fixed decimal-place rounding instead of significant figures
         dominant_delta_pi_rounded = round(dominant_delta_pi, output_decimal_places)
-        alternate_delta_pi_rounded = (
-            round(alternate_delta_pi, output_decimal_places)
-            if reciprocal_delta_pi
-            else None
-        )
+        alternate_delta_pi_rounded = round(alternate_delta_pi, output_decimal_places) if reciprocal_delta_pi else None
 
-        # Prepare fraction reporting if available
-        dominant_frac_A_str = None
-        dominant_frac_B_str = None
-        alternate_frac_A_str = None
-        alternate_frac_B_str = None
+        dominant_cell_detect_frac_A_str = dominant_cell_detect_frac_B_str = None
+        alternate_cell_detect_frac_A_str = alternate_cell_detect_frac_B_str = None
         if have_fraction_data:
-            def _format_frac_list(transcript_ids_str, lookup):
-                if transcript_ids_str is None or transcript_ids_str == "":
+            def _fmt(ids_str, lookup):
+                if not ids_str:
                     return ""
-                tids = [t.strip() for t in str(transcript_ids_str).split(",") if t.strip()]
                 vals = []
-                for t in tids:
+                for t in [t.strip() for t in ids_str.split(",") if t.strip()]:
                     v = lookup.get(t, np.nan)
                     if pd.isna(v):
                         vals.append("NA")
                     else:
-                        try:
-                            vals.append(f"{float(v):.3f}")
-                        except Exception:
-                            vals.append("NA")
+                        vals.append(f"{float(v):.3f}")
                 return ",".join(vals)
 
-            dominant_frac_A_str = _format_frac_list(dominant_transcript_ids_str, frac_lookup_A)
-            dominant_frac_B_str = _format_frac_list(dominant_transcript_ids_str, frac_lookup_B)
+            dominant_cell_detect_frac_A_str = _fmt(dominant_transcript_ids_str, frac_lookup_A)
+            dominant_cell_detect_frac_B_str = _fmt(dominant_transcript_ids_str, frac_lookup_B)
             if reciprocal_delta_pi:
-                alternate_frac_A_str = _format_frac_list(alternate_transcript_ids_str, frac_lookup_A)
-                alternate_frac_B_str = _format_frac_list(alternate_transcript_ids_str, frac_lookup_B)
+                alternate_cell_detect_frac_A_str = _fmt(alternate_transcript_ids_str, frac_lookup_A)
+                alternate_cell_detect_frac_B_str = _fmt(alternate_transcript_ids_str, frac_lookup_B)
 
         # Build results array based on reciprocal_delta_pi setting
         result_row = [
@@ -368,8 +302,8 @@ def differential_isoform_tests(
             dominant_pi_B_str,
             dominant_gene_ids_str,
             dominant_splice_hashcodes_str,
-            original_total_counts_A,  # Keep original totals for reference
-            original_total_counts_B,  # Keep original totals for reference
+            original_total_counts_A,
+            original_total_counts_B,
             dominant_counts_A,
             dominant_counts_B,
         ]
@@ -377,8 +311,8 @@ def differential_isoform_tests(
         # Append fraction reporting for dominant isoforms if available
         if have_fraction_data:
             result_row.extend([
-                dominant_frac_A_str,
-                dominant_frac_B_str,
+                dominant_cell_detect_frac_A_str,
+                dominant_cell_detect_frac_B_str,
             ])
 
         if reciprocal_delta_pi:
@@ -396,8 +330,8 @@ def differential_isoform_tests(
             )
             if have_fraction_data:
                 result_row.extend([
-                    alternate_frac_A_str,
-                    alternate_frac_B_str,
+                    alternate_cell_detect_frac_A_str,
+                    alternate_cell_detect_frac_B_str,
                 ])
 
         # Add status and optional min_cell_fraction for transparency
@@ -409,72 +343,77 @@ def differential_isoform_tests(
         # Update annotation flags for this gene if requested
         if return_annotated_df:
             annotated_df.loc[group.index, "gene_tested"] = True
-            # Indices in filtered_group correspond to filtered_group's own index (original df indices retained during concat/drop_duplicates)
-            filtered_indices = filtered_group.index
-            annotated_df.loc[filtered_indices, "evaluated_isoform"] = True
+            annotated_df.loc[filtered_group.index, "evaluated_isoform"] = True
             annotated_df.loc[dominant_indices, "dominant_set"] = True
             if reciprocal_delta_pi:
                 annotated_df.loc[alternate_indices, "alternate_set"] = True
-            # Clear skip_reason (if any) since test succeeded
             annotated_df.loc[group.index, "skip_reason"] = "."
 
-    if results:
-        columns = [
-            group_by_token,
-            "pvalue",
-            "delta_pi",
-            "dominant_transcript_ids",
-            "dominant_pi_A",
-            "dominant_pi_B",
-            "dominant_gene_ids",
-            "dominant_splice_hashcodes",
-            "total_counts_A",
-            "total_counts_B",
-            "dominant_counts_A",
-            "dominant_counts_B",
+    if not results:
+        if return_annotated_df and annotated_df is not None:
+            return None, annotated_df
+        return None
+
+    columns = [
+        group_by_token,
+        "pvalue",
+        "delta_pi",
+        "dominant_transcript_ids",
+        "dominant_pi_A",
+        "dominant_pi_B",
+        "dominant_gene_ids",
+        "dominant_splice_hashcodes",
+        "total_counts_A",
+        "total_counts_B",
+        "dominant_counts_A",
+        "dominant_counts_B",
+    ]
+    if have_fraction_data:
+        columns += ["dominant_cell_detect_frac_A", "dominant_cell_detect_frac_B"]
+    if reciprocal_delta_pi:
+        columns += [
+            "alternate_delta_pi",
+            "alternate_transcript_ids",
+            "alternate_pi_A",
+            "alternate_pi_B",
+            "alternate_gene_ids",
+            "alternate_splice_hashcodes",
+            "alternate_counts_A",
+            "alternate_counts_B",
         ]
         if have_fraction_data:
-            columns += [
-                "dominant_frac_A",
-                "dominant_frac_B",
-            ]
-        if reciprocal_delta_pi:
-            columns += [
-                "alternate_delta_pi",
-                "alternate_transcript_ids",
-                "alternate_pi_A",
-                "alternate_pi_B",
-                "alternate_gene_ids",
-                "alternate_splice_hashcodes",
-                "alternate_counts_A",
-                "alternate_counts_B",
-            ]
-            if have_fraction_data:
-                columns += [
-                    "alternate_frac_A",
-                    "alternate_frac_B",
-                ]
-        columns += ["status"]
-        if have_fraction_data:
-            columns += ["min_cell_fraction"]
-        results_df = pd.DataFrame(results, columns=columns)
-        # Round selected float columns to fixed decimal places
-        float_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]
-        if float_cols:
-            results_df[float_cols] = results_df[float_cols].round(output_decimal_places)
-        if return_annotated_df and annotated_df is not None:
-            # Round all float columns (including pi, delta_pi, fractions) in annotated_df using np.round for consistency
-            float_cols_ann = [c for c in annotated_df.columns if annotated_df[c].dtype.kind in ("f", "d")]
-            if float_cols_ann:
-                annotated_df[float_cols_ann] = np.round(annotated_df[float_cols_ann], output_decimal_places)
-        if return_annotated_df:
-            return results_df, annotated_df
-        return results_df
+            columns += ["alternate_cell_detect_frac_A", "alternate_cell_detect_frac_B"]
+    columns += ["status"]
+    if have_fraction_data:
+        columns += ["min_cell_fraction"]
+    results_df = pd.DataFrame(results, columns=columns)
 
-    logger.debug("-didn't meet requirements to test.")
+    # Add legacy aliases
+    if have_fraction_data:
+        if "dominant_cell_detect_frac_A" in results_df.columns:
+            results_df["dominant_frac_A"] = results_df["dominant_cell_detect_frac_A"]
+            results_df["dominant_frac_B"] = results_df["dominant_cell_detect_frac_B"]
+        if reciprocal_delta_pi and "alternate_cell_detect_frac_A" in results_df.columns:
+            results_df["alternate_frac_A"] = results_df["alternate_cell_detect_frac_A"]
+            results_df["alternate_frac_B"] = results_df["alternate_cell_detect_frac_B"]
+    # Expression fraction aliases
+    results_df["isoform_expr_frac_delta"] = results_df["delta_pi"]
+    results_df["dominant_isoform_expr_frac_A"] = results_df["dominant_pi_A"]
+    results_df["dominant_isoform_expr_frac_B"] = results_df["dominant_pi_B"]
+    if reciprocal_delta_pi:
+        results_df["alternate_isoform_expr_frac_A"] = results_df["alternate_pi_A"]
+        results_df["alternate_isoform_expr_frac_B"] = results_df["alternate_pi_B"]
+
+    # Rounding
+    float_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]
+    if float_cols:
+        results_df[float_cols] = results_df[float_cols].round(output_decimal_places)
     if return_annotated_df and annotated_df is not None:
-        return None, annotated_df
-    return None
+        float_cols_ann = [c for c in annotated_df.columns if annotated_df[c].dtype.kind in ("f", "d")]
+        if float_cols_ann:
+            annotated_df[float_cols_ann] = np.round(annotated_df[float_cols_ann], output_decimal_places)
+        return results_df, annotated_df
+    return results_df
 
 
 def generate_test_data(num_genes=20):
