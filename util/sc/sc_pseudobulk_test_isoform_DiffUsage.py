@@ -96,6 +96,16 @@ def main():
     )
 
     parser.add_argument(
+        "--min_cell_fraction",
+        type=float,
+        default=0.05,
+        help=(
+            "Minimum cell-detection fraction required for the dominant isoform set in condition A. "
+            "If --reciprocal_delta_pi is set, also require alternate isoform set in condition B to meet this."
+        ),
+    )
+
+    parser.add_argument(
         "--reciprocal_delta_pi",
         action="store_true",
         default=False,
@@ -157,6 +167,7 @@ def main():
     top_isoforms_each = args.top_isoforms_each
     min_reads_per_gene = args.min_reads_per_gene
     min_delta_pi = args.min_delta_pi
+    min_cell_fraction = args.min_cell_fraction
     sc_cluster_counts_matrix = args.sc_cluster_counts_matrix
     sc_cluster_fraction_matrix = args.sc_cluster_fraction_matrix
     output_prefix = args.output_prefix
@@ -345,6 +356,7 @@ def main():
                 min_reads_DTU_isoform=args.min_reads_DTU_isoform,
                 fraction_df=pair_fraction_df,
                 return_annotated_df=save_annot,
+                min_cell_fraction=min_cell_fraction,
             )
             if save_annot:
                 # ditsu_return is a tuple (results_df or None, annotated_df)

@@ -258,6 +258,24 @@ def differential_isoform_tests(
                 annotated_df.loc[group.index, "skip_reason"] = "alternate_isoform_low_reads"
             continue
 
+        # Cell-detection fraction gating (dominant in A; if reciprocal also alternate in B)
+        if have_fraction_data and min_cell_fraction > 0:
+            # Evaluate dominant cell-detection fractions in A cluster/condition
+            def _collect_frac(ids_str, lookup):
+                if not ids_str:
+                    return []
+                return [lookup.get(t, np.nan) for t in ids_str.split(",") if t]
+            dominant_cell_fracs_A = _collect_frac(dominant_transcript_ids_str, frac_lookup_A)
+            pass_cell_frac = any([not pd.isna(v) and v >= min_cell_fraction for v in dominant_cell_fracs_A])
+            alt_cell_frac_ok = True
+            if reciprocal_delta_pi:
+                alternate_cell_fracs_B = _collect_frac(alternate_transcript_ids_str, frac_lookup_B)
+                alt_cell_frac_ok = any([not pd.isna(v) and v >= min_cell_fraction for v in alternate_cell_fracs_B])
+            if not (pass_cell_frac and alt_cell_frac_ok):
+                if return_annotated_df:
+                    annotated_df.loc[group.index, "skip_reason"] = "cell_fraction_fail"
+                continue
+
         # Use filtered group for chi-squared test matrix
         matrix = filtered_group[["count_A", "count_B"]].values
 
