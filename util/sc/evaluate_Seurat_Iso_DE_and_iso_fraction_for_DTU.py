@@ -44,7 +44,7 @@ def parse_args():
         "-o",
         "--out_prefix",
         required=True,
-        help="Prefix for output files (writes *_rows.tsv, *_groups.tsv, *_dominant.tsv).",
+        help="Prefix for output file (writes only *_dominant.tsv).",
     )
     ap.add_argument(
         "--min_log2fc",
@@ -55,14 +55,14 @@ def parse_args():
     ap.add_argument(
         "--min_frac_diff",
         type=float,
-        default=0.05,
-        help="Minimum |isoform_fraction_diff| to consider meaningful (default: 0.05).",
+        default=0.1,
+        help="Minimum |isoform_fraction_diff| to consider meaningful (default: 0.1).",
     )
     ap.add_argument(
-        "--allow-sign-inconsistency",
-        action="store_true",
-        help="By default, require sign(avg_log2FC) matches sign(isoform_fraction_diff). "
-        "Set this flag to DISABLE that requirement (less strict).",
+        "--min_cells_fraction",
+        type=float,
+        default=0.05,
+        help="Minimum fraction of cells (pct.*) required in the relevant cluster for a dominant isoform to count toward both_dom_qualify (default: 0.05).",
     )
     ap.add_argument(
         "--no-progress",
@@ -84,110 +84,33 @@ def check_columns(df):
         sys.exit(f"ERROR: Input is missing required columns: {missing}")
 
 
-def annotate_rows(df, min_log2fc, min_frac_diff, require_sign_consistency=True):
+def annotate_rows(df, min_log2fc, min_frac_diff):
     df = df.copy()
-    df["direction"] = np.where(
+    # Expression direction (change in expression level)
+    df["expr_direction"] = np.where(
         df["avg_log2FC"] > min_log2fc,
         "up",
         np.where(df["avg_log2FC"] < -min_log2fc, "down", "neutral"),
     )
     df["passes_fc"] = df["avg_log2FC"].abs() >= min_log2fc
     df["passes_frac"] = df["isoform_fraction_diff"].abs() >= min_frac_diff
-
-    # Sign consistency: up => frac_diff > 0; down => frac_diff < 0
-    sign_consistent = np.full(len(df), True, dtype=bool)
-    up_mask = df["direction"] == "up"
-    down_mask = df["direction"] == "down"
-    sign_consistent[up_mask] = df.loc[up_mask, "isoform_fraction_diff"] > 0
-    sign_consistent[down_mask] = df.loc[down_mask, "isoform_fraction_diff"] < 0
-    df["sign_consistent"] = sign_consistent
-
-    if require_sign_consistency:
-        df["qualifies"] = (
-            df["passes_fc"]
-            & df["passes_frac"]
-            & df["sign_consistent"]
-            & (df["direction"] != "neutral")
-        )
-    else:
-        df["qualifies"] = (
-            df["passes_fc"] & df["passes_frac"] & (df["direction"] != "neutral")
-        )
+    # Qualification now ignores sign consistency between fold-change direction and fraction difference.
+    df["qualifies"] = (
+        df["passes_fc"] & df["passes_frac"] & (df["expr_direction"] != "neutral")
+    )
 
     df["abs_log2fc"] = df["avg_log2FC"].abs()
     df["abs_frac_diff"] = df["isoform_fraction_diff"].abs()
+    # Isoform fraction direction: increase or decrease in isoform fraction
+    df["isoform_fraction_direction"] = np.where(
+        df["isoform_fraction_diff"] > 0,
+        "up",
+        np.where(df["isoform_fraction_diff"] < 0, "down", "neutral"),
+    )
     return df
 
 
-def summarize_groups(df, show_progress=True, fallback_interval=1000):
-    group_cols = ["gene_id", "comparison"]
-
-    # Estimate number of groups up-front for better progress bars
-    n_groups = df[group_cols].drop_duplicates().shape[0]
-    results = []
-
-    iterator = df.groupby(group_cols, sort=False)
-    if hasattr(tqdm, "__call__"):
-        iterator = tqdm(
-            iterator,
-            total=n_groups,
-            desc="Summarizing groups",
-            disable=not show_progress,
-        )
-
-    for (gene_id, comparison), g in iterator:
-        n = len(g)
-        n_up = (g["direction"] == "up").sum()
-        n_down = (g["direction"] == "down").sum()
-        n_up_qual = ((g["direction"] == "up") & g["qualifies"]).sum()
-        n_down_qual = ((g["direction"] == "down") & g["qualifies"]).sum()
-
-        switching = (n_up_qual >= 1) and (n_down_qual >= 1)
-
-        g_sorted = g.sort_values(
-            ["abs_frac_diff", "abs_log2fc"], ascending=[False, False]
-        )
-        top_up = g_sorted[g_sorted["direction"] == "up"].head(3)
-        top_down = g_sorted[g_sorted["direction"] == "down"].head(3)
-
-        results.append(
-            {
-                "gene_id": gene_id,
-                "comparison": comparison,
-                "n_transcripts": int(n),
-                "n_up": int(n_up),
-                "n_down": int(n_down),
-                "n_up_qualifying": int(n_up_qual),
-                "n_down_qualifying": int(n_down_qual),
-                "switching_candidate": bool(switching),
-                "top_up_transcripts": ",".join(top_up["transcript_id"].astype(str)),
-                "top_down_transcripts": ",".join(top_down["transcript_id"].astype(str)),
-                "max_abs_frac_diff": float(g["abs_frac_diff"].max()),
-                "max_abs_log2fc": float(g["abs_log2fc"].max()),
-            }
-        )
-
-        # Fallback periodic logging if tqdm isn't available
-        if (
-            not hasattr(tqdm, "__call__")
-            and show_progress
-            and (len(results) % fallback_interval == 0)
-        ):
-            done = len(results)
-            print(
-                f"[progress] summarize_groups: processed {done}/{n_groups} groups...",
-                file=sys.stderr,
-            )
-
-    summary = pd.DataFrame(results)
-    summary = summary.sort_values(
-        ["switching_candidate", "max_abs_frac_diff", "max_abs_log2fc"],
-        ascending=[False, False, False],
-    )
-    return summary
-
-
-def dominant_summary(df, show_progress=True, fallback_interval=1000):
+def dominant_summary(df, min_cells_fraction, show_progress=True, fallback_interval=1000):
     """
     For each (gene_id, comparison) group, identify the dominant isoform in each cluster
     using isoform_fraction_cluster1/2. Also report coverage diagnostics
@@ -221,24 +144,58 @@ def dominant_summary(df, show_progress=True, fallback_interval=1000):
         dom1 = pick_dominant(g, "isoform_fraction_cluster1")
         dom2 = pick_dominant(g, "isoform_fraction_cluster2")
 
+        # Determine cell fraction pass criteria for dominant isoforms in their respective clusters
+        dom1_cells_frac_cluster1 = float(dom1["pct.1"])  # cluster1 fraction for domIso1
+        dom2_cells_frac_cluster2 = float(dom2["pct.2"])  # cluster2 fraction for domIso2
+        dom1_cells_pass = dom1_cells_frac_cluster1 >= min_cells_fraction
+        dom2_cells_pass = dom2_cells_frac_cluster2 >= min_cells_fraction
+
         records.append(
             {
                 "gene_id": gene_id,
                 "comparison": comparison,
-                "dom_isoform_cluster1": dom1["transcript_id"],
-                "dom1_fraction": float(dom1["isoform_fraction_cluster1"]),
-                "dom1_log2fc": float(dom1["avg_log2FC"]),
-                "dom1_direction": dom1["direction"],
-                "dom_isoform_cluster2": dom2["transcript_id"],
-                "dom2_fraction": float(dom2["isoform_fraction_cluster2"]),
-                "dom2_log2fc": float(dom2["avg_log2FC"]),
-                "dom2_direction": dom2["direction"],
+                "domIso1_transcript_id": dom1["transcript_id"],
+                "domIso1_fraction_cluster1": float(dom1["isoform_fraction_cluster1"]),
+                "domIso1_fraction_cluster2": float(dom1["isoform_fraction_cluster2"]),
+                "domIso1_isoform_fraction_diff": float(dom1["isoform_fraction_diff"]),
+                "domIso1_isoform_fraction_direction": dom1["isoform_fraction_direction"],
+                "domIso1_log2fc": float(dom1["avg_log2FC"]),
+                "domIso1_expr_direction": dom1["expr_direction"],
+                "domIso1_cells_fraction1": dom1_cells_frac_cluster1,
+                "domIso1_cells_fraction2": float(dom1["pct.2"]),
+                "domIso1_cells_fraction_pass": dom1_cells_pass,
+                "domIso1_p_val": float(dom1["p_val"]),
+                "domIso1_p_val_adj": float(dom1["p_val_adj"]),
+                "domIso1_qualifies": bool(dom1["qualifies"]),
+                "domIso2_transcript_id": dom2["transcript_id"],
+                "domIso2_fraction_cluster1": float(dom2["isoform_fraction_cluster1"]),
+                "domIso2_fraction_cluster2": float(dom2["isoform_fraction_cluster2"]),
+                "domIso2_isoform_fraction_diff": float(dom2["isoform_fraction_diff"]),
+                "domIso2_isoform_fraction_direction": dom2["isoform_fraction_direction"],
+                "domIso2_log2fc": float(dom2["avg_log2FC"]),
+                "domIso2_expr_direction": dom2["expr_direction"],
+                "domIso2_cells_fraction1": float(dom2["pct.1"]),
+                "domIso2_cells_fraction2": dom2_cells_frac_cluster2,
+                "domIso2_cells_fraction_pass": dom2_cells_pass,
+                "domIso2_p_val": float(dom2["p_val"]),
+                "domIso2_p_val_adj": float(dom2["p_val_adj"]),
+                "domIso2_qualifies": bool(dom2["qualifies"]),
                 "switched": dom1["transcript_id"] != dom2["transcript_id"],
                 "sum_frac_cluster1": sum1,
                 "sum_frac_cluster2": sum2,
+                # PASS if both dominant isoforms qualify and meet cell fraction thresholds
+                "PASS": bool(
+                    dom1["qualifies"]
+                    and dom2["qualifies"]
+                    and dom1_cells_pass
+                    and dom2_cells_pass
+                    and (
+                        (dom1["isoform_fraction_direction"] == "up" and dom2["isoform_fraction_direction"] == "down")
+                        or (dom1["isoform_fraction_direction"] == "down" and dom2["isoform_fraction_direction"] == "up")
+                    )
+                ),
             }
         )
-
         if (
             not hasattr(tqdm, "__call__")
             and show_progress
@@ -251,10 +208,6 @@ def dominant_summary(df, show_progress=True, fallback_interval=1000):
             )
 
     dom_df = pd.DataFrame.from_records(records)
-    dom_df["max_dom_fraction"] = dom_df[["dom1_fraction", "dom2_fraction"]].max(axis=1)
-    dom_df = dom_df.sort_values(
-        ["switched", "max_dom_fraction"], ascending=[False, False]
-    ).drop(columns=["max_dom_fraction"])
     return dom_df
 
 
@@ -272,44 +225,41 @@ def main():
         )
     check_columns(df)
 
-    require_sign_consistency = not args.allow_sign_inconsistency
-
     df_ann = annotate_rows(
         df,
         min_log2fc=args.min_log2fc,
         min_frac_diff=args.min_frac_diff,
-        require_sign_consistency=require_sign_consistency,
     )
 
-    group_summary = summarize_groups(
-        df_ann,
-        show_progress=(not args.no_progress),
-        fallback_interval=args.progress_interval,
-    )
     dom_summary = dominant_summary(
         df_ann,
+        min_cells_fraction=args.min_cells_fraction,
         show_progress=(not args.no_progress),
         fallback_interval=args.progress_interval,
     )
 
-    rows_out = f"{args.out_prefix}_rows.tsv"
-    groups_out = f"{args.out_prefix}_groups.tsv"
+    # Round numeric columns to three decimal places for output consistency
+    def round_numeric(df, ndigits=3):
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].round(ndigits)
+        return df
+
+    dom_summary = round_numeric(dom_summary)
     dom_out = f"{args.out_prefix}_dominant.tsv"
-
-    df_ann.to_csv(rows_out, sep="\t", index=False)
-    group_summary.to_csv(groups_out, sep="\t", index=False)
+    both_out = f"{args.out_prefix}_dominant.PASS.tsv"
+    # Only writing dominant summary as final output
     dom_summary.to_csv(dom_out, sep="\t", index=False)
+    dom_summary[dom_summary["PASS"]].to_csv(both_out, sep="\t", index=False)
 
-    n_groups = group_summary.shape[0]
-    n_switching = int(group_summary["switching_candidate"].sum())
     n_switched_dom = int(dom_summary["switched"].sum())
-
-    print(f"Wrote per-row annotations: {rows_out}")
-    print(f"Wrote per-group summary:   {groups_out}")
-    print(f"Wrote dominant summary:    {dom_out}")
+    n_both_qual = int((dom_summary["switched"] & dom_summary["PASS"]).sum())
+    print(f"Wrote dominant summary: {dom_out}")
+    print(f"Wrote PASS subset: {both_out}")
     print(
-        f"Groups analyzed: {n_groups}; switching candidates: {n_switching}; dominant switched: {n_switched_dom}"
+        f"Dominant isoform switches: {n_switched_dom}; switched comparisons with both dominant isoforms qualifying: {n_both_qual}"
     )
+
+    # Done
 
 
 if __name__ == "__main__":
