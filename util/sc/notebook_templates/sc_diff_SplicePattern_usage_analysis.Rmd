@@ -16,17 +16,18 @@ library(pheatmap)
 # define inputs
 ```{r}
 
-sample_name = "PBMCs_LRAA-init"
+sample_name = "PBMCs_LRAA-isoforms"
 
-sparse_matrix_data_dir = "../../LRAA_PBMCs^isoform-sparseM/"
+sparse_matrix_data_dir = "../../LRAA_sc_PBMCs^isoform-sparseM/"
 
-umap_cluster_file = "LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
+umap_cluster_file = "../../LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
 
-cluster_pseudobulk_matrix_filename = "LRAA_PBMCs^isoform-sparseM.clusters_pseudobulk.matrix"
+cluster_pseudobulk_matrix_filename = "LRAA_sc_PBMCs^isoform-sparseM.clusters_pseudobulk.matrix"
 
-gtf_filename = "../../PBMCs_pbio.LRAA.gtf.updated.gtf.segmented.gtf"
+gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.gtf.segmented.gtf"
 
-diff_iso_usage_stats_filename = "LRAA_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.minCF0.05.diff_iso.tsv.signif_only"
+diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.diff_iso.tsv.signif_only"
+
 
 ```
 
@@ -150,13 +151,15 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
   
   isoform_umap = get_isoform_umap(gene_of_interest, restrict_to_transcript_ids)
   
-  isoform_umap =  isoform_umap %>% filter(read_count > 0) %>% mutate(log_read_count = log1p(read_count)) 
+  #isoform_umap =  isoform_umap %>% filter(read_count > 0) %>% mutate(log_read_count = log1p(read_count)) 
   
+  
+  isoform_umap =  isoform_umap %>% filter(read_count > 0) 
   
   # Calculate 95th percentile for color scale
-  max_color_value = quantile(isoform_umap$log_read_count, 0.95, na.rm = TRUE)
+  max_color_value = quantile(isoform_umap$read_count, 0.95, na.rm = TRUE)
   
-  base_umap + geom_point(data=isoform_umap, aes(color=log_read_count)) +
+  base_umap + geom_point(data=isoform_umap, aes(color=read_count)) +
     facet_wrap(~transcript_id) +
     theme_bw() +
     ggtitle(gene_of_interest)  +
@@ -507,18 +510,24 @@ get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
 get_expression_ggplot2_heatmap_w_exon_structures = function(
     gene_of_interest, 
     min_isoform_frac_expr_any_cluster = 0,
-    ignore_unspliced = FALSE) {
+    ignore_unspliced = FALSE,
+    transcript_ids = NULL) {
 
   library(patchwork)
   library(ggdendro)
   
+  message("Transcript_ids: ", transcript_ids)
   
-  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
-    filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
-  
-  if (ignore_unspliced) {
-    transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
+  if (is.null(transcript_ids)) {
+    transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
+      filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+    
+    if (ignore_unspliced) {
+      transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
+    }
   }
+  
+  message("Transcript_ids: ", transcript_ids)
   
   isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
   
@@ -747,9 +756,11 @@ ggsave(p_both,
 
 library(cowplot)
 
-make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0, ignore_unspliced=FALSE) {
+make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0, ignore_unspliced=FALSE,
+                                             transcript_ids=NULL) {
   
-  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction, ignore_unspliced)
+  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction, 
+                                                                      ignore_unspliced, transcript_ids)
   
   p_exon_expr = p_exon_expr_info$plot
   
@@ -797,10 +808,13 @@ top_diff_iso_usage_genes
 ```{r}
 
 test_gene = top_diff_iso_usage_genes$gene_id[1]
+transcript_ids_use = c(top_diff_iso_usage_genes$dominant_transcript_ids[1],
+                       top_diff_iso_usage_genes$alternate_transcript_ids[1])
 
 
-
-test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.2, ignore_unspliced=F)
+test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.2, 
+                                                                  ignore_unspliced=F, 
+                                                                  transcript_ids=transcript_ids_use)
 test_plot_info$plot
 
 ```
@@ -868,8 +882,8 @@ DTU_results_w_splicehash %>% select(gene_id, same_splice_pattern) %>% unique() %
 ```{r}
 
 top_DTU_results_w_diff_splicehash = DTU_results_w_splicehash %>% filter(! same_splice_pattern) %>% 
-  filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
-  filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
+  #filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
+  #filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
   arrange(pvalue)
 
 top_DTU_results_w_diff_splicehash
@@ -880,7 +894,12 @@ top_DTU_results_w_diff_splicehash
 
 ```{r}
 
-p = make_diff_iso_usage_compound_plot(top_DTU_results_w_diff_splicehash$gene_id[1], MIN_DELTA_PI, ignore_unspliced = FALSE)
+transcript_ids_use = c(top_DTU_results_w_diff_splicehash$dominant_transcript_ids[1],
+                       top_DTU_results_w_diff_splicehash$alternate_transcript_ids[1])
+
+
+p = make_diff_iso_usage_compound_plot(top_DTU_results_w_diff_splicehash$gene_id[1], MIN_DELTA_PI, ignore_unspliced = FALSE,
+                                      transcript_ids=transcript_ids_use)
 
 plot(p)
 
@@ -889,7 +908,7 @@ plot(p)
 
 ```{r}
 
-if (FALSE) { # only run on demand
+if (TRUE) { # only run on demand
   
   top_DTU_results_w_diff_splicehash_genes = top_DTU_results_w_diff_splicehash %>% 
     group_by(gene_id) %>% arrange(pvalue) %>% filter(row_number() == 1) %>% ungroup() %>% arrange(pvalue) %>%
@@ -905,11 +924,11 @@ if (FALSE) { # only run on demand
   }
   
   counter = 0
-  for(gene_sym_value in top_DTU_results_w_diff_splicehash_genes$gene_id) {
+  for(gene_id_val in top_DTU_results_w_diff_splicehash_genes$gene_id) {
     
-    message("plotting ", counter, " gene: ", gene_sym_value)
+    message("plotting ", counter, " gene: ", gene_id_val)
     
-    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_sym_value, ".diff_iso_usage-alt-termini.pdf")
+    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_id_val, ".diff_iso_usage-alt-splicing.pdf")
     
     counter = counter + 1
     
@@ -921,9 +940,17 @@ if (FALSE) { # only run on demand
     
     #gene_sym_value = paste0("^", gene_sym_value, "\\^")
     
+     transcript_ids_use = top_DTU_results_w_diff_splicehash %>% filter(gene_id == gene_id_val) %>%
+      select(dominant_transcript_ids, alternate_transcript_ids) %>%
+      gather(key=transcript_id_type, value=transcript_id_val, dominant_transcript_ids, alternate_transcript_ids) %>%
+      select(transcript_id_val) %>% unique() %>% pull(transcript_id_val)
+    
+    
+    
     tryCatch({
       
-      p = make_diff_iso_usage_compound_plot(gene_sym_value, MIN_DELTA_PI, ignore_unspliced = F)
+      p = make_diff_iso_usage_compound_plot(gene_id_val, MIN_DELTA_PI, ignore_unspliced = F,
+                                            transcript_ids=transcript_ids_use)
       ggsave(p, file=filename, width=12, 
              height=12)
       
@@ -947,8 +974,8 @@ if (FALSE) { # only run on demand
 ```{r}
 
 top_DTU_results_w_same_splicehash = DTU_results_w_splicehash %>% filter(same_splice_pattern) %>% 
-  filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
-  filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
+  #filter(abs(delta_pi) >= 0.2 & abs(alternate_delta_pi) >= 0.2) %>% 
+  #filter(dominant_pi_A >= 0.5 & alternate_pi_B >= 0.5) %>%
   arrange(pvalue, desc(abs(delta_pi)))
 
 top_DTU_results_w_same_splicehash
@@ -956,8 +983,13 @@ top_DTU_results_w_same_splicehash
 ```
 
 ```{r}
+transcript_ids_use = c(top_DTU_results_w_same_splicehash$dominant_transcript_ids[1],
+                       top_DTU_results_w_same_splicehash$alternate_transcript_ids[1])
 
-p = make_diff_iso_usage_compound_plot(top_DTU_results_w_same_splicehash$gene_id[1], MIN_DELTA_PI, ignore_unspliced = FALSE)
+
+p = make_diff_iso_usage_compound_plot(top_DTU_results_w_same_splicehash$gene_id[1], MIN_DELTA_PI, 
+                                      ignore_unspliced = FALSE,
+                                      transcript_ids=transcript_ids_use)
 
 plot(p)
 
@@ -966,7 +998,7 @@ plot(p)
 
 ```{r}
 
-if (FALSE) { # only run on demand
+if (TRUE) { # only run on demand
   
   top_DTU_results_w_same_splicehash_genes = top_DTU_results_w_same_splicehash %>% 
     group_by(gene_id) %>% arrange(pvalue) %>% filter(row_number() == 1) %>% ungroup() %>% arrange(pvalue) %>%
@@ -982,11 +1014,11 @@ if (FALSE) { # only run on demand
   }
   
   counter = 0
-  for(gene_sym_value in top_DTU_results_w_same_splicehash_genes$gene_id) {
+  for(gene_id_val in top_DTU_results_w_same_splicehash_genes$gene_id) {
     
-    message("plotting ", counter, " gene: ", gene_sym_value)
+    message("plotting ", counter, " gene: ", gene_id_val)
     
-    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_sym_value, ".diff_iso_usage-alt-termini.pdf")
+    filename = paste0(top_diff_iso_usage_plots_dir, "/", counter, ".", gene_id_val, ".diff_iso_usage-alt-termini.pdf")
     
     counter = counter + 1
     
@@ -998,9 +1030,15 @@ if (FALSE) { # only run on demand
     
     #gene_sym_value = paste0("^", gene_sym_value, "\\^")
     
+    
+    transcript_ids_use = top_DTU_results_w_same_splicehash %>% filter(gene_id == gene_id_val) %>%
+      select(dominant_transcript_ids, alternate_transcript_ids) %>%
+      gather(key=transcript_id_type, value=transcript_id_val, dominant_transcript_ids, alternate_transcript_ids) %>%
+      select(transcript_id_val) %>% unique() %>% pull(transcript_id_val)
+    
     tryCatch({
       
-      p = make_diff_iso_usage_compound_plot(gene_sym_value, MIN_DELTA_PI, ignore_unspliced = F)
+      p = make_diff_iso_usage_compound_plot(gene_id_val, MIN_DELTA_PI, ignore_unspliced = F, transcript_ids=transcript_ids_use)
       ggsave(p, file=filename, width=12, 
              height=12)
       
@@ -1013,8 +1051,8 @@ if (FALSE) { # only run on demand
 }
 
 
-
 ```
+
 
 
 
