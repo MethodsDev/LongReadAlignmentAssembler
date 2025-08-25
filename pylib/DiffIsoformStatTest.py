@@ -422,10 +422,9 @@ def differential_isoform_tests(
         results_df["alternate_isoform_expr_frac_A"] = results_df["alternate_pi_A"]
         results_df["alternate_isoform_expr_frac_B"] = results_df["alternate_pi_B"]
 
-    # Rounding
-    float_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]
-    if float_cols:
-        results_df[float_cols] = results_df[float_cols].round(output_decimal_places)
+    # Rounding: only apply fixed decimal rounding to delta_pi for readability; keep raw p-values untouched.
+    if "delta_pi" in results_df.columns:
+        results_df["delta_pi"] = results_df["delta_pi"].round(output_decimal_places)
     if return_annotated_df and annotated_df is not None:
         float_cols_ann = [c for c in annotated_df.columns if annotated_df[c].dtype.kind in ("f", "d")]
         if float_cols_ann:
@@ -467,18 +466,35 @@ def generate_test_data(num_genes=20):
     )
 
 
-def FDR_mult_tests_adjustment(df, signif_threshold=0.001, min_abs_delta_pi=0.1):
-    print(df)
-    assert "pvalue" in df.columns
-    assert "delta_pi" in df.columns
+def FDR_mult_tests_adjustment(
+    df,
+    signif_threshold=0.001,
+    min_abs_delta_pi=0.1,
+):
+    """Apply FDR correction and flag significance.
+
+    Parameters
+    ----------
+    df : DataFrame from differential_isoform_tests
+    signif_threshold : float
+        FDR threshold.
+    min_abs_delta_pi : float
+        Minimum absolute delta_pi for calling significance.
+    preserve_pvalue_precision : bool
+        If True, do not round raw pvalues / adjusted pvalues to fixed decimals (except optional formatting).
+    pvalue_sig_figs : int or None
+        If set and preserve_pvalue_precision, adds formatted string columns with compact scientific notation.
+    """
+    assert "pvalue" in df.columns, "Input df missing pvalue column"
+    assert "delta_pi" in df.columns, "Input df missing delta_pi column"
+
+    # Perform adjustment
     df["adj_pvalue"] = multipletests(df["pvalue"], method="fdr_bh")[1]
-    df["significant"] = (df["adj_pvalue"] <= signif_threshold) & (
-        df["delta_pi"].abs() >= min_abs_delta_pi
-    )
-    # Standardize numeric precision (3 decimals)
-    for col in ["pvalue", "adj_pvalue", "delta_pi"]:
-        if col in df.columns:
-            df[col] = df[col].round(3)
+    df["significant"] = (df["adj_pvalue"] <= signif_threshold) & (df["delta_pi"].abs() >= min_abs_delta_pi)
+
+    # Round only delta_pi; keep pvalue and adj_pvalue unmodified
+    if "delta_pi" in df.columns:
+        df["delta_pi"] = df["delta_pi"].round(3)
     return df
 
 
