@@ -422,13 +422,18 @@ def differential_isoform_tests(
         results_df["alternate_isoform_expr_frac_A"] = results_df["alternate_pi_A"]
         results_df["alternate_isoform_expr_frac_B"] = results_df["alternate_pi_B"]
 
-    # Rounding: only apply fixed decimal rounding to delta_pi for readability; keep raw p-values untouched.
-    if "delta_pi" in results_df.columns:
-        results_df["delta_pi"] = results_df["delta_pi"].round(output_decimal_places)
+    # Rounding: apply fixed decimal rounding to all numeric columns except pvalue / adj_pvalue; keep p-values raw.
+    numeric_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]
+    protected = {"pvalue", "adj_pvalue"}
+    round_cols = [c for c in numeric_cols if c not in protected]
+    if round_cols:
+        results_df[round_cols] = results_df[round_cols].round(output_decimal_places)
     if return_annotated_df and annotated_df is not None:
         float_cols_ann = [c for c in annotated_df.columns if annotated_df[c].dtype.kind in ("f", "d")]
         if float_cols_ann:
-            annotated_df[float_cols_ann] = np.round(annotated_df[float_cols_ann], output_decimal_places)
+            round_ann_cols = [c for c in float_cols_ann if c not in protected]
+            if round_ann_cols:
+                annotated_df[round_ann_cols] = np.round(annotated_df[round_ann_cols], output_decimal_places)
         return results_df, annotated_df
     return results_df
 
