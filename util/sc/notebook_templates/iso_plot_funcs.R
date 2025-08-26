@@ -1,4 +1,6 @@
-
+library(tidyverse)
+library(Seurat)
+library(pheatmap)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # define inputs
@@ -27,7 +29,7 @@ parse_inputs = function(sample_name,
     
     
     message("-loading sparse matrix data: ", sparse_matrix_data_dir)
-    isoform_expr_data = Read10X(data.dir=sparse_matrix_data_dir,
+    isoform_expr_data <<- Read10X(data.dir=sparse_matrix_data_dir,
                                 gene.column = 1,
                                 cell.column = 2,
                                 unique.features = TRUE,
@@ -35,21 +37,23 @@ parse_inputs = function(sample_name,
     
 
     message("-reading umap: ", umap_cluster_file)
-    umap_df = read.csv(umap_cluster_file, header=T, sep="\t")
+    umap_df <<- read.csv(umap_cluster_file, header=T, sep="\t")
+    
+    base_umap <<- umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1)
     
     message("-parsing cluster pseudobulk matrix: ", cluster_pseudobulk_matrix_filename)
-    cluster_counts_matrix = read.csv(cluster_pseudobulk_matrix_filename, header=T, row.names=1, sep="\t")
+    cluster_counts_matrix <<- read.csv(cluster_pseudobulk_matrix_filename, header=T, row.names=1, sep="\t")
     
     message("-making CPM matrix")
-    cluster_CPM_matrix = sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
+    cluster_CPM_matrix <<- sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
     
     
     message("-parsing diff iso usage stats: ", diff_iso_usage_stats_filename)
-    diff_iso_usage_stats = read.csv(diff_iso_usage_stats_filename, sep="\t", header=T)
+    diff_iso_usage_stats <<- read.csv(diff_iso_usage_stats_filename, sep="\t", header=T)
     
     
     message("-parsing gtf file: ", gtf_filename)
-    parse_gtf_file(gtf_filename)
+    gtf_parsed <<- parse_gtf_file(gtf_filename)
     
 }
 
@@ -86,11 +90,12 @@ parse_gtf_file = function(gtf_filename) {
         gtf_parsed$attr_list <- map(gtf_parsed$attribute, parse_attributes)
         
         # Turn the named list column into separate columns
-        gtf_parsed <- gtf_parsed %>% unnest_wider(attr_list)
+        gtf_parsed = gtf_parsed %>% unnest_wider(attr_list)
         saveRDS(object = gtf_parsed, file=gtf_parsed_file)
         
     }
     
+    return(gtf_parsed)
 }
 
 
@@ -118,8 +123,6 @@ get_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL)
     return(umap_df_w_expr_data)
 }
 
-
-base_umap = umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1)
 
 plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
     
@@ -305,8 +308,6 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
     
 }
 
-
-```{r}
 
 get_expression_ggplot2_heatmap_w_exon_structures = function(
         gene_of_interest, 
