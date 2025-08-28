@@ -460,6 +460,42 @@ class Transcript(GenomeFeature):
         return
 
 
+    @classmethod
+    def recluster_transcripts_to_genes(cls, transcripts, contig_acc, contig_strand):
+        import networkx as nx
+        from typing import Sequence, Callable, Hashable, Any, List, Dict
+
+        G = nx.Graph()
+        G.add_nodes_from(range(len(transcripts)))  # nodes are transcript indices
+
+        seen: Dict[Hashable, int] = {}  # node_id -> first transcript index seen
+        for i, t in enumerate(transcripts):
+            print("Transcript: " + str(t))
+            simple_path = t.get_simple_path()
+            print("Simple path: " + str(simple_path))
+            for nid in set(simple_path):
+                if nid in seen:
+                    G.add_edge(seen[nid], i)  # star-connect to the first one we saw for this node_id
+                else:
+                    seen[nid] = i
+
+        idx_clusters = nx.connected_components(G)
+        clusters = [[transcripts[i] for i in comp] for comp in idx_clusters]
+
+        
+        # rename transcripts by component
+        revised_transcripts = []   
+        for i, cluster in enumerate(clusters):
+            # gene_id "g:chr17:+:comp-9"; transcript_id "t:chr17:+:comp-9:iso-1";
+            new_gene_id = f"g:{contig_acc}:{contig_strand}:comp-{i+1}"
+            for j, t in enumerate(cluster):
+                new_transcript_id = f"t:{contig_acc}:{contig_strand}:comp-{i+1}:iso-{j+1}"
+                t.set_gene_id(new_gene_id)
+                t.set_transcript_id(new_transcript_id)
+                revised_transcripts.append(t)
+
+        return revised_transcripts
+
 class GTF_contig_to_transcripts:
 
     @classmethod

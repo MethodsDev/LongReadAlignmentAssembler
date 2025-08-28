@@ -47,9 +47,6 @@ class Bam_alignment_extractor:
     ):
 
 
-        if restrict_splice_type is None:
-            raise RuntimeError("restrict_splice_type must be specified")
-
         discarded_read_counter = defaultdict(int)
 
         read_alignments = list()
