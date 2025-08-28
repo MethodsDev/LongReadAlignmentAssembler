@@ -198,6 +198,7 @@ class Splice_graph:
         region_rend,
         input_transcripts=None,
         quant_mode=False,
+        restrict_splice_type=None,
     ):
 
         logger.info(
@@ -212,6 +213,7 @@ class Splice_graph:
         self._contig_seq_len = len(contig_seq_str)
         self._region_lend = region_lend
         self._region_rend = region_rend
+        self._restrict_splice_type = restrict_splice_type
 
         ## do the work:
 
@@ -227,7 +229,7 @@ class Splice_graph:
 
         if alignments_bam_file is not None:
             self._populate_exon_coverage_and_extract_introns(
-                alignments_bam_file, contig_acc, contig_strand, quant_mode
+                alignments_bam_file, contig_acc, contig_strand, quant_mode, restrict_splice_type
             )
 
         # incorporate guide structures if provided
@@ -390,7 +392,7 @@ class Splice_graph:
         return
 
     def _populate_exon_coverage_and_extract_introns(
-        self, bam_filename, contig_acc, contig_strand, quant_mode
+        self, bam_filename, contig_acc, contig_strand, quant_mode, restrict_splice_type
     ):
 
         ## Intron Capture
@@ -413,6 +415,7 @@ class Splice_graph:
             region_rend=self._region_rend,
             pretty=True,
             per_id_QC_raise_error=True,
+            restrict_splice_type=restrict_splice_type
         )
 
         assert contig_strand in ("+", "-")

@@ -755,6 +755,7 @@ def run_quant_only(
         restrict_region_rend,
         input_transcripts,
         quant_mode=True,
+        restrict_splice_type="ME",
     )
 
     if sg.is_empty():
@@ -786,6 +787,7 @@ def run_quant_only(
         contig_seq_str,
         bam_file_for_quant,
         allow_spacers,
+        restrict_splice_type="ME",
     )
 
     q = Quantify(
@@ -855,6 +857,7 @@ def run_transcript_assembly(
         restrict_region_rend,
         input_transcripts,
         quant_mode=False,
+        restrict_splice_type="ME",
     )
 
     if sg.is_empty():
@@ -889,6 +892,7 @@ def run_transcript_assembly(
         bam_file_for_sg,
         allow_spacers,
         input_transcripts,
+        restrict_splice_type="ME",
     )
 
     # Define isoforms
@@ -918,6 +922,7 @@ def run_transcript_assembly(
         bam_file_for_quant,
         allow_spacers,
         input_transcripts,
+        restrict_splice_type="ME",
     )
 
     q = Quantify(
@@ -944,10 +949,12 @@ def run_transcript_assembly(
         ## initial filter of novel isoforms with insufficient read support
 
         logger.info("\n// Filtering novel isoforms by min read support")
+        logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
         min_read_support_novel_isoforms = LRAA_Globals.config["min_reads_novel_isoform"]
         transcripts = TranscriptFiltering.filter_novel_isoforms_by_min_read_support(
             transcripts, min_read_support_novel_isoforms
         )
+        logger.info("After filtering, have {} transcripts".format(len(transcripts)))
 
         if len(transcripts) < 1:
             logger.info(
@@ -968,10 +975,12 @@ def run_transcript_assembly(
         # pruning likely degradation products
 
         logger.info("\n// -pruning likely degradation products")
+        logger.info("Before pruning, have {} transcripts".format(len(transcripts)))
 
         transcripts = TranscriptFiltering.prune_likely_degradation_products(
             transcripts, sg, frac_read_assignments
         )
+        logger.info("After pruning, have {} transcripts".format(len(transcripts)))
 
         if len(transcripts) < 1:
             logger.info(
@@ -989,14 +998,17 @@ def run_transcript_assembly(
         #######################################################
         # Filter isoforms according to minimum isoform fraction
 
-        logger.info("\n// -filtering isoforms according to minimum isoform fraction")
+        
         if min_isoform_fraction > 0:
+            logger.info("\n// -filtering isoforms according to minimum isoform fraction")
+            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
             transcripts = TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
                 transcripts,
                 min_isoform_fraction,
                 run_EM,
                 LRAA_Globals.config["max_EM_iterations_during_asm"],
             )
+            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
 
             if len(transcripts) < 1:
                 logger.info(
@@ -1011,11 +1023,13 @@ def run_transcript_assembly(
         # Filter monoexonic transcripts according to expression thresholds
         if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
             logger.info("\n// -filtering monoexonic transcripts based on min TPM")
+            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
             transcripts = (
                 TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
                     transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                 )
             )
+            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
             if len(transcripts) < 1:
                 logger.info(
                     "-no transcripts on contig {} {} survived monoexonic filtering strategy".format(
@@ -1029,6 +1043,7 @@ def run_transcript_assembly(
         # Filter isoforms apparently derived from internal priming artifacts
         if LRAA_Globals.config["filter_internal_priming"]:
             logger.info("\n// -filtering out internal priming")
+            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
             transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
                 transcripts,
                 contig_seq_str,
@@ -1038,6 +1053,7 @@ def run_transcript_assembly(
                     "restrict_internal_priming_filter_to_monoexonic"
                 ],
             )
+            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
             if len(transcripts) < 1:
                 logger.info(
                     "-no transcripts on contig {} {} survived internal priming filtering".format(
@@ -1061,6 +1077,8 @@ def run_transcript_assembly(
         LRAA_Globals.DEBUG = False
 
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
+
+    logger.info("Running final quant for {} transcripts".format(len(transcripts)))
 
     q = run_quant_only(
         contig_acc,

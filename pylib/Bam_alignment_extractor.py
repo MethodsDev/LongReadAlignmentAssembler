@@ -42,8 +42,13 @@ class Bam_alignment_extractor:
         region_rend=None,
         pretty=False,
         per_id_QC_raise_error=False,
+        restrict_splice_type=None,
         config=LRAA_Globals.config,
     ):
+
+
+        if restrict_splice_type is None:
+            raise RuntimeError("restrict_splice_type must be specified")
 
         discarded_read_counter = defaultdict(int)
 
@@ -118,6 +123,15 @@ class Bam_alignment_extractor:
             if aligned_base_count == 0:
                 aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
 
+            if restrict_splice_type is not None:
+                n_introns = cigar_stats[0][3]
+                if restrict_splice_type == "ME" and n_introns == 0:
+                    logger.debug(f"Skipping read {read.query_name} with {n_introns} introns")
+                    continue
+                elif restrict_splice_type == "SE" and n_introns > 0:
+                    logger.debug(f"Skipping read {read.query_name} with {n_introns} introns")
+                    continue
+
             mismatch_count = None
             if read.has_tag("NM"):
                 mismatch_count = int(read.get_tag("NM"))
@@ -167,6 +181,20 @@ class Bam_alignment_extractor:
                 )
 
         if pretty:
-            return Pretty_alignment.get_pretty_alignments(read_alignments)
+            pretty_alignments = Pretty_alignment.get_pretty_alignments(read_alignments)
+            if restrict_splice_type is None:
+                return pretty_alignments
+            else:
+                pretty_alignments_ok = list()
+                for pretty_alignment in pretty_alignments:
+                    
+                    if restrict_splice_type == "ME" and not pretty_alignment.has_introns():
+                        logger.debug(f"Skipping read {pretty_alignment.read_name} as not having introns")
+                        continue
+                    elif restrict_splice_type == "SE" and  pretty_alignment.has_introns():
+                        logger.debug(f"Skipping read {pretty_alignment.read_name} as introns")
+                        continue
+                    pretty_alignments_ok.append(pretty_alignment)
+            return pretty_alignments_ok
         else:
             return read_alignments
