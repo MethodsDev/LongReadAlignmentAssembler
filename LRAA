@@ -1030,7 +1030,13 @@ def run_transcript_assembly(
         if LRAA_Globals.config["filter_internal_priming"]:
             logger.info("\n// -filtering out internal priming")
             transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
-                transcripts, contig_seq_str
+                transcripts,
+                contig_seq_str,
+                contig_strand,
+                sg,
+                restrict_filter_to_monoexonic=LRAA_Globals.config[
+                    "restrict_internal_priming_filter_to_monoexonic"
+                ],
             )
             if len(transcripts) < 1:
                 logger.info(

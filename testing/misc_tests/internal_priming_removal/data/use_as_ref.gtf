@@ -1,0 +1,5 @@
+chr18	LRAA	transcript	119867	151525	.	-	.	gene_id "myrefgene"; transcript_id "myreftrans";
+chr18	LRAA	exon	119867	120034	.	-	.	gene_id "myrefgene"; transcript_id "myreftrans";
+chr18	LRAA	exon	123182	123277	.	-	.	gene_id "myrefgene"; transcript_id "myreftrans";
+chr18	LRAA	exon	129327	129527	.	-	.	gene_id "myrefgene"; transcript_id "myreftrans";
+chr18	LRAA	exon	151346	151525	.	-	.	gene_id "myrefgene"; transcript_id "myreftrans";

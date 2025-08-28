@@ -73,6 +73,7 @@ config = {
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
     "min_monoexonic_TPM": 1.0,
     "filter_internal_priming": True,
+    "restrict_internal_priming_filter_to_monoexonic": False,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,

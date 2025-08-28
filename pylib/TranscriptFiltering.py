@@ -11,7 +11,7 @@ import LRAA_Globals
 from LRAA_Globals import SPACER, DEBUG
 import logging
 from math import log
-import lmdb
+import intervaltree as itree
 
 logger = logging.getLogger(__name__)
 
@@ -416,14 +416,36 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
 
 
 def filter_internally_primed_transcripts(
-    transcripts, contig_seq_str, restrict_filter_to_monoexonic=True
+    transcripts,
+    contig_seq_str,
+    contig_strand,
+    splice_graph,
+    restrict_filter_to_monoexonic,
 ):
+
+    known_polyA_dist_ok_window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+    known_polyA_dist_ok_window_half = int(known_polyA_dist_ok_window / 2)
+
+    # build a list of known/acceptable 3' ends that get a free pass
+    known_ok_3prime_ends = (
+        splice_graph._input_transcript_rend_boundaries
+        if contig_strand == "+"
+        else splice_graph._input_transcript_lend_boundaries
+    )
+    known_ok_3prime_ends_itree = itree.IntervalTree()
+    for ok_3prime_end in known_ok_3prime_ends:
+        known_ok_3prime_ends_itree[
+            max(1, ok_3prime_end - known_polyA_dist_ok_window_half) : (
+                ok_3prime_end + known_polyA_dist_ok_window_half
+            )
+        ] = ok_3prime_end
 
     retained_transcripts = list()
 
     for transcript in transcripts:
 
         if restrict_filter_to_monoexonic and not transcript.is_monoexonic():
+            # retaining all multi-exonic transcripts when restrict_filter_to_monoexonic set
             retained_transcripts.append(transcript)
             continue
 
@@ -431,12 +453,38 @@ def filter_internally_primed_transcripts(
         transcript_lend, transcript_rend = transcript.get_coords()
         strand = transcript.get_orient()
 
-        if _looks_internally_primed(
+        looks_internally_primed = _looks_internally_primed(
             transcript_lend, transcript_rend, strand, contig_seq_str
-        ):
-            # gbye
-            pass
-        else:
+        )
+
+        filter_flag = False
+
+        if looks_internally_primed:
+
+            if transcript.is_monoexonic():
+                # gbye
+                logger.debug(
+                    "FILTERING monoexonic transcript {} as likely internally primed".format(
+                        transcript
+                    )
+                )
+                filter_flag = True
+
+            else:
+                # different rules for mutlti-exon transcripts.
+                end_check = transcript_rend if contig_strand == "+" else transcript_lend
+
+                if len(known_ok_3prime_ends_itree[end_check : end_check + 1]) == 0:
+                    # no overlap with known acceptable site.
+                    # gbye
+                    logger.debug(
+                        "FILTERING multiexonic transcript {} as likely internally primed".format(
+                            transcript
+                        )
+                    )
+                    filter_flag = True
+
+        if not filter_flag:
             # keep
             retained_transcripts.append(transcript)
 
