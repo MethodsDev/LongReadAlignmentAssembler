@@ -24,3 +24,8 @@ test_keep_iprime:
 		exit 1; \
 	fi
 
+
+
+clean:
+	rm -rf ./test_*  ./iprime* ./__*
+
