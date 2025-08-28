@@ -514,11 +514,14 @@ def _looks_internally_primed(
     start = max(1, start)
     end = min(end, contig_length)
 
-    extracted_sequence = contig_seq_str[start - 1 : end].upper()
+    extracted_long_sequence = contig_seq_str[start - 1 : end].upper()
+    extracted_short_sequence = (
+        extracted_long_sequence[-8:] if strand == "-" else extracted_long_sequence[0:8]
+    )
 
     has_flanking_polyA = (
-        extracted_sequence.count(target_base) >= 12
-        or target_polyA_motif in extracted_sequence
+        extracted_long_sequence.count(target_base) >= 12
+        or target_polyA_motif in extracted_short_sequence
     )
 
     return has_flanking_polyA
