@@ -956,7 +956,7 @@ def run_transcript_assembly(
 
 
     if input_transcripts:
-        lraa_SE_obj.assign_transcripts_paths_in_graph(input_transcripts) # limit to SE input transcripts
+        lraa_SE_obj.assign_transcripts_paths_in_graph(input_transcripts) 
         if LRAA_Globals.DEBUG:
             report_transcript_paths_in_graph(
                 input_transcripts, "__input_transcripts_path_in_graph"
@@ -972,6 +972,7 @@ def run_transcript_assembly(
         allow_spacers,
         input_transcripts,
         restrict_splice_type="SE",
+        SE_read_encapsulation_mask=ME_transcripts,
     )
 
     #####################

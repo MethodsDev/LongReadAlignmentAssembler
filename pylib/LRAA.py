@@ -70,12 +70,14 @@ class LRAA:
         allow_spacers=False,
         input_transcripts=None,
         restrict_splice_type=None,
+        SE_read_encapsulation_mask=None,
     ):
 
         logger.info(f"-building multipath graph for {contig_acc}")
         start_time = time.time()
         mp_counter = self._populate_read_multi_paths(
-            contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type
+            contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type,
+            SE_read_encapsulation_mask
         )
         self._mp_counter = mp_counter
 
@@ -456,7 +458,8 @@ class LRAA:
             return transcripts
 
     def _populate_read_multi_paths(
-        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type
+        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type,
+        SE_read_encapsulation_mask=None,
     ):
         """
         Reads the alignments from the BAM and for each read traces it
@@ -481,9 +484,9 @@ class LRAA:
 
         alignment_cache_file = os.path.join(
             alignment_cache_dir,
-            f"{contig_acc}^{contig_strand}.{bam_file_basename}.pretty_alignments.pkl",
+            f"{contig_acc}^{contig_strand}.{bam_file_basename}.pretty_alignments.restrict-{restrict_splice_type}.pkl",
         )
-
+        
         if os.path.exists(alignment_cache_file):
             logger.info(
                 "reusing earlier-generated pretty alignments for {}{}".format(
