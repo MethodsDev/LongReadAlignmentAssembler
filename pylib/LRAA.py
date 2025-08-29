@@ -73,6 +73,9 @@ class LRAA:
         SE_read_encapsulation_mask=None,
     ):
 
+        if SE_read_encapsulation_mask is not None and restrict_splice_type != "SE":
+            raise RuntimeError("Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments")
+
         logger.info(f"-building multipath graph for {contig_acc}")
         start_time = time.time()
         mp_counter = self._populate_read_multi_paths(
@@ -486,7 +489,7 @@ class LRAA:
             alignment_cache_dir,
             f"{contig_acc}^{contig_strand}.{bam_file_basename}.pretty_alignments.restrict-{restrict_splice_type}.pkl",
         )
-        
+
         if os.path.exists(alignment_cache_file):
             logger.info(
                 "reusing earlier-generated pretty alignments for {}{}".format(
@@ -522,6 +525,17 @@ class LRAA:
             Pretty_alignment.prune_long_terminal_introns(
                 pretty_alignments, self._splice_graph
             )
+
+            # Re-enforce single-exon constraint after corrections/pruning (which can introduce segments)
+            if restrict_splice_type == "SE":
+                pre_refilter_count = len(pretty_alignments)
+                pretty_alignments = [pa for pa in pretty_alignments if not pa.has_introns()]
+                num_removed = pre_refilter_count - len(pretty_alignments)
+                if num_removed > 0:
+                    logger.info(f"Removed {num_removed} alignments that became multi-exon after correction when restricting to SE")
+
+            if SE_read_encapsulation_mask is not None:
+                pretty_alignments = self.apply_SE_read_encapsulation_mask(pretty_alignments, SE_read_encapsulation_mask)
 
             # store for reuse
             pretty_alignments = [
@@ -1306,3 +1320,46 @@ class LRAA:
                 transcript.set_is_novel_isoform(False)
             else:
                 transcript.set_is_novel_isoform(True)
+
+
+    def apply_SE_read_encapsulation_mask(self, pretty_alignments, SE_read_encapsulation_mask):
+
+        # apply the SE read encapsulation mask
+        # exclude those alignments that are fully contained within exons of multi-exon isoforms.
+
+        exon_itree = itree.IntervalTree()
+
+        FUZZDIST = 10 # allow slight extension from exon boundaries
+
+        non_encapsulated_pretty_alignments = list()
+
+        for transcript in SE_read_encapsulation_mask:
+            exon_segments = transcript.get_exon_segments()
+            for exon in exon_segments:
+                exon_lend, exon_rend = exon
+                # store each exon as half-open interval [lend, rend+1); data not needed
+                exon_itree[exon_lend:exon_rend + 1] = True
+
+        for pretty_alignment in pretty_alignments:
+            # only evaluate single-exon (SE) alignments; keep others unchanged
+            if hasattr(pretty_alignment, "get_pretty_alignment_segments"):
+                segs = pretty_alignment.get_pretty_alignment_segments()
+                assert len(segs) == 1, "Error, should only apply mask to SE alignment introns: {}".format(pretty_alignment)
+
+            align_lend, align_rend = pretty_alignment.get_alignment_span()
+            encapsulated = False
+            # intervaltree expects either a point lookup tree[point] or a slice tree[start:stop]
+            # Here we want all exons overlapping the alignment span
+            for exon_interval in exon_itree[align_lend:align_rend + 1]:
+                exon_lend = exon_interval.begin
+                exon_rend = exon_interval.end - 1  # convert from half-open to inclusive
+                if (align_lend >= (exon_lend - FUZZDIST) and
+                        align_rend <= (exon_rend + FUZZDIST)):
+                    encapsulated = True
+                    logger.debug("Excluding SE alignment as encapsulated: {}".format(pretty_alignment))
+                    break
+            if not encapsulated:
+                non_encapsulated_pretty_alignments.append(pretty_alignment)
+
+        return(non_encapsulated_pretty_alignments)
+        

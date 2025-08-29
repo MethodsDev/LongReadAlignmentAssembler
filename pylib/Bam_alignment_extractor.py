@@ -188,7 +188,7 @@ class Bam_alignment_extractor:
                     if restrict_splice_type == "ME" and not pretty_alignment.has_introns():
                         logger.debug(f"Skipping read {pretty_alignment.read_name} as not having introns")
                         continue
-                    elif restrict_splice_type == "SE" and  pretty_alignment.has_introns():
+                    elif restrict_splice_type == "SE" and pretty_alignment.has_introns():
                         logger.debug(f"Skipping read {pretty_alignment.read_name} as introns")
                         continue
                     pretty_alignments_ok.append(pretty_alignment)
