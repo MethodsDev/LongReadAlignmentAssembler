@@ -38,8 +38,10 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
 num_threads = 4
+CPU = num_threads
 allow_spacers = False
-
+single_best_only = False
+prereconstruct_info_dir = "__prereconstruct"
 
 def main():
 
@@ -526,7 +528,7 @@ def main():
             )
         )
 
-    prereconstruct_info_dir = "__prereconstruct"
+    
     if LRAA_Globals.DEBUG:
         if not os.path.exists(prereconstruct_info_dir):
             os.makedirs(prereconstruct_info_dir)
@@ -710,7 +712,7 @@ def main():
                 ofh_quant_read_tracking_filename,
             ]
         )
-        logger.info("tagginb bam file with transcripts assigned to each read")
+        logger.info("tagging bam file with transcripts assigned to each read")
         subprocess.check_call(cmd, shell=True)
 
     return
@@ -849,67 +851,20 @@ def run_transcript_assembly(
     ## Multi-exon read processing section
     ##
 
-    sg_ME = Splice_graph()
+    ME_input_transcripts = None
+    if input_transcripts is not None:
+        # extract the ME ones.
+        ME_input_transcripts = [x for x in input_transcripts if x.has_introns()]
+        if len(ME_input_transcripts) == 0:
+            ME_input_transcripts = None
 
-    ## Build ME Splice Graph
-    logger.info(f"\n// -building splice graph for {contig_acc}")
-    sg_ME.build_splice_graph_for_contig(
-        contig_acc,
-        contig_strand,
+    ME_transcripts = build_ME_transcripts(contig_acc,
+                                          contig_strand,
         contig_seq_str,
         bam_file_for_sg,
         restrict_region_lend,
         restrict_region_rend,
-        input_transcripts,
-        quant_mode=False,
-        restrict_splice_type="ME",
-    )
-
-    if sg_ME.is_empty():
-        logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
-        # continue
-        return
-
-    if LRAA_Globals.DEBUG:
-        sg_ME.write_intron_exon_splice_graph_bed_files(
-            "{}/__prereconstruct.{}.{}.pad1".format(
-                prereconstruct_info_dir, contig_acc, contig_strand
-            ),
-            pad=1,
-        )
-
-    # Incorporate reference transcripts if provided
-    lraa_ME_obj = LRAA(sg_ME, CPU)
-
-    if input_transcripts:
-        lraa_ME_obj.assign_transcripts_paths_in_graph(input_transcripts) # limit to ME input transcripts
-        if LRAA_Globals.DEBUG:
-            report_transcript_paths_in_graph(
-                input_transcripts, "__input_transcripts_path_in_graph"
-            )
-
-    # build graph path nodes based on reads (and input transcripts) paths through graph.
-    logger.info(f"\n// -building multpath graph for {contig_acc} {contig_strand}")
-    mp_ME_counter = lraa_ME_obj.build_multipath_graph(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        allow_spacers,
-        input_transcripts,
-        restrict_splice_type="ME",
-    )
-
-    # Define ME isoforms
-    logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
-    ME_transcripts = lraa_ME_obj.reconstruct_isoforms(single_best_only)
-
-    if len(ME_transcripts) == 0:
-        logger.info(
-            "no ME transcripts constructed on {} {}".format(contig_acc, contig_strand)
-        )
-        # continue
-        return
+        ME_input_transcripts)
 
 
 
@@ -917,85 +872,34 @@ def run_transcript_assembly(
     ## Single-exon read processing section
     ##
 
-    sg_SE = Splice_graph()
-
-    ## Build SE Splice Graph
-
-    transcripts_incl_in_graph = ME_transcripts
+    SE_input_transcripts = None
     if input_transcripts is not None:
-        transcripts_incl_in_graph += input_transcripts
+        # extract the ME ones.
+        SE_input_transcripts = [x for x in input_transcripts if not x.has_introns()]
+        if len(SE_input_transcripts) == 0:
+            SE_input_transcripts = None
 
-    logger.info(f"\n// -building splice graph for {contig_acc}")
-    sg_SE.build_splice_graph_for_contig(
-        contig_acc,
+
+    SE_transcripts = build_SE_transcripts(contig_acc,
         contig_strand,
         contig_seq_str,
         bam_file_for_sg,
         restrict_region_lend,
         restrict_region_rend,
-        transcripts_incl_in_graph,
-        quant_mode=False,
-        restrict_splice_type="SE",
-    )
+        SE_input_transcripts,
+        SE_read_encapsulation_mask=ME_transcripts)
 
-    if sg_SE.is_empty():
-        logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
-        # continue
-        return
-
-    if LRAA_Globals.DEBUG:
-        sg_SE.write_intron_exon_splice_graph_bed_files(
-            "{}/__prereconstruct.{}.{}.pad1".format(
-                prereconstruct_info_dir, contig_acc, contig_strand
-            ),
-            pad=1,
-        )
-
-    # Incorporate reference transcripts if provided
-    lraa_SE_obj = LRAA(sg_SE, CPU)
-
-
-    if input_transcripts:
-        lraa_SE_obj.assign_transcripts_paths_in_graph(input_transcripts) 
-        if LRAA_Globals.DEBUG:
-            report_transcript_paths_in_graph(
-                input_transcripts, "__input_transcripts_path_in_graph"
-            )
-
-    # build graph path nodes based on reads (and input transcripts) paths through graph.
-    logger.info(f"\n// -building multpath graph for {contig_acc} {contig_strand}")
-    mp_SE_counter = lraa_SE_obj.build_multipath_graph(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        allow_spacers,
-        input_transcripts,
-        restrict_splice_type="SE",
-        SE_read_encapsulation_mask=ME_transcripts,
-    )
-
-    #####################
-    # Define SE isoforms
-
-    logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
-    SE_transcripts = lraa_SE_obj.reconstruct_isoforms(single_best_only)
-
-    if len(SE_transcripts) == 0:
-        logger.info(
-            "no SE transcripts constructed on {} {}".format(contig_acc, contig_strand)
-        )
-        # continue
-        return
-
-
-
-
-
+   
     ##############################
     # Integrate ME and SE isoforms
-    all_transcripts = ME_transcripts + SE_transcripts
+    all_transcripts = list()
+    if ME_transcripts is not None:
+        all_transcripts += ME_transcripts
+    if SE_transcripts is not None:
+        all_transcripts += SE_transcripts
 
+    if len(all_transcripts) == 0:
+        return
     
     ## Build final Splice Graph
     sg_all = Splice_graph()
@@ -1063,7 +967,7 @@ def run_transcript_assembly(
     transcripts = all_transcripts # legacy varname
 
     if input_transcripts is not None:
-        lraa_obj.differentiate_known_vs_novel_isoforms(transcripts)
+        LRAA.differentiate_known_vs_novel_isoforms(transcripts)
 
     if NO_FILTER_ISOFORMS:
 
@@ -1337,6 +1241,172 @@ def count_reads_from_bam(bam_filename):
         count = int(count)
         assert count > 0, "Error, no reads counted from bam file..."
         return count
+
+
+def build_ME_transcripts(contig_acc, 
+                         contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        restrict_region_lend,
+        restrict_region_rend,
+        input_transcripts):
+     
+    sg_ME = Splice_graph()
+
+    ## Build ME Splice Graph
+    logger.info(f"\n// -building splice graph for {contig_acc}")
+    sg_ME.build_splice_graph_for_contig(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        restrict_region_lend,
+        restrict_region_rend,
+        input_transcripts,
+        quant_mode=False,
+        restrict_splice_type="ME",
+    )
+
+    if sg_ME.is_empty():
+        logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
+        # continue
+        return
+
+    if LRAA_Globals.DEBUG:
+        sg_ME.write_intron_exon_splice_graph_bed_files(
+            "{}/__prereconstruct.{}.{}.pad1".format(
+                prereconstruct_info_dir, contig_acc, contig_strand
+            ),
+            pad=1,
+        )
+
+    # Incorporate reference transcripts if provided
+    lraa_ME_obj = LRAA(sg_ME, CPU)
+
+    if input_transcripts:
+        lraa_ME_obj.assign_transcripts_paths_in_graph(input_transcripts) # limit to ME input transcripts
+        if LRAA_Globals.DEBUG:
+            report_transcript_paths_in_graph(
+                input_transcripts, "__input_transcripts_path_in_graph"
+            )
+
+    # build graph path nodes based on reads (and input transcripts) paths through graph.
+    logger.info(f"\n// -building multpath graph for {contig_acc} {contig_strand}")
+    mp_ME_counter = lraa_ME_obj.build_multipath_graph(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        allow_spacers,
+        input_transcripts,
+        restrict_splice_type="ME",
+    )
+
+    # Define ME isoforms
+    logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
+    ME_transcripts = lraa_ME_obj.reconstruct_isoforms(single_best_only)
+
+    if len(ME_transcripts) == 0:
+        logger.info(
+            "no ME transcripts constructed on {} {}".format(contig_acc, contig_strand)
+        )
+        
+        return None
+
+    else:
+        with open("__ME_isoforms.gtf", "at") as tmp_ofh:
+            for transcript in ME_transcripts:
+                tmp_ofh.write(transcript.to_GTF_format() + "\n")
+
+        return ME_transcripts
+
+
+def build_SE_transcripts(contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        restrict_region_lend,
+        restrict_region_rend,
+        transcripts_incl_in_graph,
+        SE_read_encapsulation_mask):
+     
+
+    sg_SE = Splice_graph()
+
+    ## Build SE Splice Graph
+
+    logger.info(f"\n// -building splice graph for {contig_acc}")
+    sg_SE.build_splice_graph_for_contig(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        restrict_region_lend,
+        restrict_region_rend,
+        transcripts_incl_in_graph,
+        quant_mode=False,
+        restrict_splice_type="SE",
+        SE_read_encapsulation_mask=SE_read_encapsulation_mask,
+    )
+
+    if sg_SE.is_empty():
+        logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
+        # continue
+        return
+
+    if LRAA_Globals.DEBUG:
+        sg_SE.write_intron_exon_splice_graph_bed_files(
+            "{}/__prereconstruct.{}.{}.pad1".format(
+                prereconstruct_info_dir, contig_acc, contig_strand
+            ),
+            pad=1,
+        )
+
+    # Incorporate reference transcripts if provided
+    lraa_SE_obj = LRAA(sg_SE, CPU)
+
+
+    if transcripts_incl_in_graph:
+        lraa_SE_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph) 
+        if LRAA_Globals.DEBUG:
+            report_transcript_paths_in_graph(
+                transcripts_incl_in_graph, "__SE_incl_transcripts_path_in_graph"
+            )
+
+    # build graph path nodes based on reads (and input transcripts) paths through graph.
+    logger.info(f"\n// -building multpath graph for {contig_acc} {contig_strand}")
+    mp_SE_counter = lraa_SE_obj.build_multipath_graph(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_sg,
+        allow_spacers,
+        transcripts_incl_in_graph,
+        restrict_splice_type="SE",
+        SE_read_encapsulation_mask=SE_read_encapsulation_mask,
+    )
+
+    #####################
+    # Define SE isoforms
+
+    logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
+    SE_transcripts = lraa_SE_obj.reconstruct_isoforms(single_best_only)
+
+    if len(SE_transcripts) == 0:
+        logger.info(
+            "no SE transcripts constructed on {} {}".format(contig_acc, contig_strand)
+        )
+        # continue
+        return None
+
+    else:
+        with open("__SE_isoforms.gtf", "at") as tmp_ofh:
+            for transcript in SE_transcripts:
+                tmp_ofh.write(transcript.to_GTF_format() + "\n")
+
+        return SE_transcripts
+
+
 
 
 if __name__ == "__main__":

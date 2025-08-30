@@ -1,6 +1,14 @@
-SIRV3	LexogenSIRVData	exon	1964	2005	.	+	0	gene_id "SIRV3"; transcript_id "SIRV303"; exon_assignment "SIRV303_0";
-SIRV3	LexogenSIRVData	exon	4569	4779	.	+	0	gene_id "SIRV3"; transcript_id "SIRV303"; exon_assignment "SIRV303_1";
-SIRV3	LexogenSIRVData	exon	6058	7822	.	+	0	gene_id "SIRV3"; transcript_id "SIRV303"; exon_assignment "SIRV303_2";
+SIRV3	LexogenSIRVData	exon	1001	1167	.	-	0	gene_id "SIRV3"; transcript_id "SIRV308"; exon_assignment "SIRV308_0";
+SIRV3	LexogenSIRVData	exon	1533	1764	.	-	0	gene_id "SIRV3"; transcript_id "SIRV308"; exon_assignment "SIRV308_1";
+SIRV3	LexogenSIRVData	exon	1903	1982	.	-	0	gene_id "SIRV3"; transcript_id "SIRV308"; exon_assignment "SIRV308_2";
 
 SIRV3	LexogenSIRVData	exon	4602	4762	.	-	0	gene_id "SIRV3"; transcript_id "SIRV311"; exon_assignment "SIRV311_0";
+
+SIRV3	LexogenSIRVData	exon	8760	8966	.	-	0	gene_id "SIRV3"; transcript_id "SIRV310"; exon_assignment "SIRV310_0";
+SIRV3	LexogenSIRVData	exon	9190	9324	.	-	0	gene_id "SIRV3"; transcript_id "SIRV310"; exon_assignment "SIRV310_1";
+SIRV3	LexogenSIRVData	exon	9668	9914	.	-	0	gene_id "SIRV3"; transcript_id "SIRV310"; exon_assignment "SIRV310_2";
+
+SIRV3	LexogenSIRVData	exon	8798	8975	.	-	0	gene_id "SIRV3"; transcript_id "SIRV309"; exon_assignment "SIRV309_0";
+SIRV3	LexogenSIRVData	exon	9190	9298	.	-	0	gene_id "SIRV3"; transcript_id "SIRV309"; exon_assignment "SIRV309_1";
+SIRV3	LexogenSIRVData	exon	9435	9943	.	-	0	gene_id "SIRV3"; transcript_id "SIRV309"; exon_assignment "SIRV309_2";
 

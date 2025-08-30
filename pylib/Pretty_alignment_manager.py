@@ -114,7 +114,7 @@ class Pretty_alignment_manager:
                 with open(all_alignment_cache_file, "wb") as f:
                     pickle.dump(pretty_alignments, f)
                     logger.info(
-                        f"Saved corrected alignments to cache: {all_alignment_cache_file}"
+                        f"Saved {len(pretty_alignments)} alignments to cache: {all_alignment_cache_file}"
                     )
 
 
@@ -136,13 +136,13 @@ class Pretty_alignment_manager:
                 with open(ME_alignment_cache_file, "wb") as f:
                     pickle.dump(ME_alignments, f)
                     logger.info(
-                        f"Saved corrected alignments to cache: {ME_alignment_cache_file}"
+                        f"Saved {len(ME_alignments)} alignments to cache: {ME_alignment_cache_file}"
                     )
 
                 with open(SE_alignment_cache_file, "wb") as f:
                     pickle.dump(SE_alignments, f)
                     logger.info(
-                        f"Saved corrected alignments to cache: {SE_alignment_cache_file}"
+                        f"Saved {len(SE_alignments)} alignments to cache: {SE_alignment_cache_file}"
                     )
 
             if restrict_splice_type == "ME":

@@ -1,1 +1,1 @@
-rm -rf ./__*
+rm -rf ./__* ./LRAA.* ./gffcompare.*

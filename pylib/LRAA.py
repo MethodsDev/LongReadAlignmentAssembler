@@ -1264,7 +1264,8 @@ class LRAA:
 
         return
 
-    def differentiate_known_vs_novel_isoforms(self, transcripts):
+    @classmethod
+    def differentiate_known_vs_novel_isoforms(cls, transcripts):
 
         for transcript in transcripts:
             if len(transcript.get_ref_trans_included()) > 0:
