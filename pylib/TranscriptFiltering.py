@@ -419,19 +419,24 @@ def filter_internally_primed_transcripts(
     transcripts,
     contig_seq_str,
     contig_strand,
-    splice_graph,
+    known_transcripts,
     restrict_filter_to_monoexonic,
 ):
+
+    logger.info("filtering internally primed. Restricting to monoexonic: {}".format(restrict_filter_to_monoexonic))
 
     known_polyA_dist_ok_window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
     known_polyA_dist_ok_window_half = int(known_polyA_dist_ok_window / 2)
 
     # build a list of known/acceptable 3' ends that get a free pass
-    known_ok_3prime_ends = (
-        splice_graph._input_transcript_rend_boundaries
-        if contig_strand == "+"
-        else splice_graph._input_transcript_lend_boundaries
-    )
+    known_ok_3prime_ends = set()
+    if known_transcripts is not None:
+        for known_transcript in known_transcripts:
+            if known_transcript.get_strand() == contig_strand:
+                transcript_lend, transcript_rend = known_transcript.get_coords()
+                known_3prime_end = transcript_rend if contig_strand == "+" else transcript_lend
+                known_ok_3prime_ends.add(known_3prime_end)
+
     known_ok_3prime_ends_itree = itree.IntervalTree()
     for ok_3prime_end in known_ok_3prime_ends:
         known_ok_3prime_ends_itree[
@@ -456,6 +461,8 @@ def filter_internally_primed_transcripts(
         looks_internally_primed = _looks_internally_primed(
             transcript_lend, transcript_rend, strand, contig_seq_str
         )
+
+        logger.info("Transcript {} looks internally primed? {}".format(transcript, looks_internally_primed))
 
         filter_flag = False
 
@@ -483,6 +490,8 @@ def filter_internally_primed_transcripts(
                         )
                     )
                     filter_flag = True
+                else:
+                    logger.info("Ignoring internal priming info for {} as found consistent with known 3' end".format(transcript))
 
         if not filter_flag:
             # keep

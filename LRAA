@@ -5,6 +5,7 @@ import sys, os, re
 import pysam
 import argparse
 import subprocess
+import json
 from collections import defaultdict
 
 sys.path.insert(
@@ -327,6 +328,14 @@ def main():
         help="restrict to region on contig chr\\d+[+-]?:\\d+-\\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
     )
 
+    ## generic config update via json
+    parser.add_argument(
+        "--config_update",
+        type=str,
+        required=False,
+        help="JSON file containing key:value pairs to override entries in LRAA_Globals.config after other CLI options are processed",
+    )
+
     if "--version" in sys.argv:
         print("LRAA VERSION: {}".format(VERSION))
         if len(sys.argv) == 2:
@@ -387,6 +396,66 @@ def main():
         LRAA_Globals.config["max_exon_spur_length"] = 20
         LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
         LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
+
+    # apply generic config overrides last so they take precedence
+    if args.config_update:
+        cfg_file = args.config_update
+        if not os.path.exists(cfg_file):
+            sys.exit(f"Error, --config_update file not found: {cfg_file}")
+        try:
+            with open(cfg_file, "rt") as fh:
+                user_cfg = json.load(fh)
+        except Exception as e:
+            sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
+
+        if not isinstance(user_cfg, dict):
+            sys.exit(f"Error, JSON in {cfg_file} must decode to an object with key:value pairs")
+
+        def _cast_value(orig_val, new_val):
+            # attempt gentle casting to preserve expected primitive types
+            try:
+                if isinstance(orig_val, bool):
+                    if isinstance(new_val, bool):
+                        return new_val
+                    if isinstance(new_val, (int, float)):
+                        return bool(new_val)
+                    if isinstance(new_val, str):
+                        if new_val.lower() in ("true", "t", "1", "yes", "y"): return True
+                        if new_val.lower() in ("false", "f", "0", "no", "n"): return False
+                if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
+                    if isinstance(new_val, str):
+                        if re.match(r"^-?\\d+$", new_val):
+                            return int(new_val)
+                        if re.match(r"^-?\\d+\\.0+$", new_val):
+                            return int(float(new_val))
+                    if isinstance(new_val, float) and new_val.is_integer():
+                        return int(new_val)
+                    if isinstance(new_val, int):
+                        return new_val
+                if isinstance(orig_val, float) and isinstance(new_val, (int, float, str)):
+                    if isinstance(new_val, str) and re.match(r"^-?\\d+(\\.\\d+)?$", new_val):
+                        return float(new_val)
+                    if isinstance(new_val, (int, float)):
+                        return float(new_val)
+            except Exception:
+                pass
+            # fallback raw
+            return new_val
+
+        applied_keys = []
+        skipped_keys = []
+        for k, v in user_cfg.items():
+            if k not in LRAA_Globals.config:
+                logger.warning(f"--config_update ignoring unknown config key: {k}")
+                skipped_keys.append(k)
+                continue
+            orig = LRAA_Globals.config[k]
+            newv = _cast_value(orig, v)
+            LRAA_Globals.config[k] = newv
+            applied_keys.append(k)
+        logger.info(f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}")
+        if skipped_keys:
+            logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -1080,7 +1149,7 @@ def run_transcript_assembly(
                 transcripts,
                 contig_seq_str,
                 contig_strand,
-                sg_all,
+                input_transcripts,
                 restrict_filter_to_monoexonic=LRAA_Globals.config[
                     "restrict_internal_priming_filter_to_monoexonic"
                 ],
