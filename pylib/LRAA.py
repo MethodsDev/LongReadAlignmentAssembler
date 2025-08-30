@@ -10,7 +10,6 @@ from collections import defaultdict
 import networkx as nx
 import intervaltree as itree
 from GenomeFeature import *
-from Bam_alignment_extractor import Bam_alignment_extractor
 from MultiPath import MultiPath
 from MultiPathCounter import MultiPathCounter
 from LRAA_Globals import SPACER
@@ -20,6 +19,7 @@ from Vertex import Vertex
 from Transcript import Transcript
 import Simple_path_utils
 from Pretty_alignment import *
+from Pretty_alignment_manager import Pretty_alignment_manager
 from Scored_path import Scored_path
 from shutil import rmtree
 import time
@@ -30,7 +30,7 @@ from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
 import math
-import pickle
+
 
 logger = logging.getLogger(__name__)
 
@@ -461,7 +461,8 @@ class LRAA:
             return transcripts
 
     def _populate_read_multi_paths(
-        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type,
+        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, 
+        restrict_splice_type,
         SE_read_encapsulation_mask=None,
     ):
         """
@@ -479,74 +480,24 @@ class LRAA:
         if bam_file is None:
             return mp_counter  # nothing to do here.
 
-        bam_file_basename = os.path.basename(bam_file)
+     
+        pretty_alignment_manager = Pretty_alignment_manager(self._splice_graph)
 
-        alignment_cache_dir = "__alignment_cache"
-        if not os.path.exists(alignment_cache_dir):
-            os.makedirs(alignment_cache_dir)
+        pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(contig_acc, contig_strand, 
+                                                                                contig_seq, bam_file,
+                                                                                region_lend=self._splice_graph._region_lend,
+                                                                                region_rend=self._splice_graph._region_rend,
+                                                                                use_cache=True, 
+                                                                                restrict_splice_type=restrict_splice_type,
+                                                                                try_correct_alignments=LRAA_Globals.config["try_correct_alignments"],
+                                                                                SE_read_encapsulation_mask=SE_read_encapsulation_mask)
+            
 
-        alignment_cache_file = os.path.join(
-            alignment_cache_dir,
-            f"{contig_acc}^{contig_strand}.{bam_file_basename}.pretty_alignments.restrict-{restrict_splice_type}.pkl",
+        # must redo base coverage and exon coverage assignments
+        self._splice_graph.reset_exon_coverage_via_pretty_alignments(
+            pretty_alignments
         )
-
-        if os.path.exists(alignment_cache_file):
-            logger.info(
-                "reusing earlier-generated pretty alignments for {}{}".format(
-                    contig_acc, contig_strand
-                )
-            )
-            with open(alignment_cache_file, "rb") as f:
-                pretty_alignments = pickle.load(f)
-
-        else:
-
-            bam_extractor = Bam_alignment_extractor(bam_file)
-            pretty_alignments = bam_extractor.get_read_alignments(
-                contig_acc,
-                contig_strand,
-                region_lend=self._splice_graph._region_lend,
-                region_rend=self._splice_graph._region_rend,
-                pretty=True,
-                restrict_splice_type=restrict_splice_type,
-            )
-
-            ## correct alignments containing soft-clips
-            if LRAA_Globals.config["try_correct_alignments"]:
-
-                Pretty_alignment.try_correct_alignments(
-                    pretty_alignments, self._splice_graph, contig_seq
-                )
-                # must redo base coverage and exon coverage assignments
-                self._splice_graph.reset_exon_coverage_via_pretty_alignments(
-                    pretty_alignments
-                )
-
-            Pretty_alignment.prune_long_terminal_introns(
-                pretty_alignments, self._splice_graph
-            )
-
-            # Re-enforce single-exon constraint after corrections/pruning (which can introduce segments)
-            if restrict_splice_type == "SE":
-                pre_refilter_count = len(pretty_alignments)
-                pretty_alignments = [pa for pa in pretty_alignments if not pa.has_introns()]
-                num_removed = pre_refilter_count - len(pretty_alignments)
-                if num_removed > 0:
-                    logger.info(f"Removed {num_removed} alignments that became multi-exon after correction when restricting to SE")
-
-            if SE_read_encapsulation_mask is not None:
-                pretty_alignments = self.apply_SE_read_encapsulation_mask(pretty_alignments, SE_read_encapsulation_mask)
-
-            # store for reuse
-            pretty_alignments = [
-                x.lighten() for x in pretty_alignments
-            ]  # remove pysam record before storing
-            with open(alignment_cache_file, "wb") as f:
-                pickle.dump(pretty_alignments, f)
-                logger.info(
-                    f"Saved corrected alignments to cache: {alignment_cache_file}"
-                )
-
+        
         # grouping read alignments according to read pairings (for illumina PE data):
         # group alignments:  grouped_alignments['read_name'] = list(read1_pretty_alignment, read2_pretty_alignment, ...)
         grouped_alignments = self._group_alignments_by_read_name(pretty_alignments)
@@ -1322,44 +1273,4 @@ class LRAA:
                 transcript.set_is_novel_isoform(True)
 
 
-    def apply_SE_read_encapsulation_mask(self, pretty_alignments, SE_read_encapsulation_mask):
-
-        # apply the SE read encapsulation mask
-        # exclude those alignments that are fully contained within exons of multi-exon isoforms.
-
-        exon_itree = itree.IntervalTree()
-
-        FUZZDIST = 10 # allow slight extension from exon boundaries
-
-        non_encapsulated_pretty_alignments = list()
-
-        for transcript in SE_read_encapsulation_mask:
-            exon_segments = transcript.get_exon_segments()
-            for exon in exon_segments:
-                exon_lend, exon_rend = exon
-                # store each exon as half-open interval [lend, rend+1); data not needed
-                exon_itree[exon_lend:exon_rend + 1] = True
-
-        for pretty_alignment in pretty_alignments:
-            # only evaluate single-exon (SE) alignments; keep others unchanged
-            if hasattr(pretty_alignment, "get_pretty_alignment_segments"):
-                segs = pretty_alignment.get_pretty_alignment_segments()
-                assert len(segs) == 1, "Error, should only apply mask to SE alignment introns: {}".format(pretty_alignment)
-
-            align_lend, align_rend = pretty_alignment.get_alignment_span()
-            encapsulated = False
-            # intervaltree expects either a point lookup tree[point] or a slice tree[start:stop]
-            # Here we want all exons overlapping the alignment span
-            for exon_interval in exon_itree[align_lend:align_rend + 1]:
-                exon_lend = exon_interval.begin
-                exon_rend = exon_interval.end - 1  # convert from half-open to inclusive
-                if (align_lend >= (exon_lend - FUZZDIST) and
-                        align_rend <= (exon_rend + FUZZDIST)):
-                    encapsulated = True
-                    logger.debug("Excluding SE alignment as encapsulated: {}".format(pretty_alignment))
-                    break
-            if not encapsulated:
-                non_encapsulated_pretty_alignments.append(pretty_alignment)
-
-        return(non_encapsulated_pretty_alignments)
-        
+    

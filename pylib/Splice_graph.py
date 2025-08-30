@@ -10,7 +10,7 @@ from collections import defaultdict
 import networkx as nx
 import intervaltree as itree
 from GenomeFeature import *
-from Bam_alignment_extractor import Bam_alignment_extractor
+from Pretty_alignment_manager import Pretty_alignment_manager
 import LRAA_Globals
 import statistics
 
@@ -403,17 +403,19 @@ class Splice_graph:
 
         intron_splice_site_support = defaultdict(int)
 
-        bam_extractor = Bam_alignment_extractor(bam_filename)
-
         # get read alignments
         # - illumina and pacbio reads filtered based on tech-specific min per_id
         # - pretty alignments: store the pysam alignment record along with inferred transcript exons segments.
-        pretty_alignments = bam_extractor.get_read_alignments(
+        pretty_alignment_manager = Pretty_alignment_manager(self)
+        pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(
             contig_acc,
             contig_strand,
+            self._contig_seq_str,
+            bam_filename,
             region_lend=self._region_lend,
             region_rend=self._region_rend,
-            pretty=True,
+            use_cache=False,
+            try_correct_alignments=False,
             per_id_QC_raise_error=True,
             restrict_splice_type=restrict_splice_type
         )
