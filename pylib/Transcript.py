@@ -55,6 +55,8 @@ class Transcript(GenomeFeature):
         self._imported_has_TSS = None  # if parsed info from gtf, set True/False
         self._imported_has_POLYA = None
 
+        self._likely_internal_primed = None
+
         self._scored_path_obj = (
             None  # optional - useful if transcript obj was built based on a scored path
         )
@@ -215,6 +217,11 @@ class Transcript(GenomeFeature):
             return True
         else:
             return False
+
+
+    def set_likely_internal_primed(self, TorF_boolean):
+        # indicate if the transcript looks like it's internally primed.
+        self._likely_internal_primed = TorF_boolean
 
     def __repr__(self):
 
@@ -413,6 +420,13 @@ class Transcript(GenomeFeature):
 
         misc_transcript_features["PolyA"] = str(self.has_PolyA())
         misc_transcript_features["TSS"] = str(self.has_TSS())
+
+        # Internal priming annotation: prefer internal flag, else fallback to imported meta if present
+        if self._likely_internal_primed is not None:
+            misc_transcript_features["InternalPriming"] = str(self._likely_internal_primed)
+        elif self._meta and "InternalPriming" in self._meta:
+            # ensure we still propagate an imported value even if the internal flag wasn't explicitly set
+            misc_transcript_features["InternalPriming"] = str(self._meta["InternalPriming"])
 
         for misc_feature, misc_val in misc_transcript_features.items():
             gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
@@ -646,6 +660,12 @@ class GTF_contig_to_transcripts:
 
             if "TPM" in transcript_meta:
                 transcript_obj._imported_TPM_val = float(transcript_meta["TPM"])
+
+            # import InternalPriming flag if present so it will be re-exported via to_GTF_format
+            if "InternalPriming" in transcript_meta:
+                transcript_obj._likely_internal_primed = (
+                    True if transcript_meta["InternalPriming"] == "True" else False
+                )
 
             contig_to_transcripts[contig].append(transcript_obj)
 

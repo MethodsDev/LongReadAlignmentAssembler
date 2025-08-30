@@ -449,11 +449,6 @@ def filter_internally_primed_transcripts(
 
     for transcript in transcripts:
 
-        if restrict_filter_to_monoexonic and not transcript.is_monoexonic():
-            # retaining all multi-exonic transcripts when restrict_filter_to_monoexonic set
-            retained_transcripts.append(transcript)
-            continue
-
         # evaluate whether transcript looks internally primed.
         transcript_lend, transcript_rend = transcript.get_coords()
         strand = transcript.get_orient()
@@ -462,7 +457,21 @@ def filter_internally_primed_transcripts(
             transcript_lend, transcript_rend, strand, contig_seq_str
         )
 
-        logger.info("Transcript {} looks internally primed? {}".format(transcript, looks_internally_primed))
+        logger.info(
+            "Transcript {} looks internally primed? {}".format(
+                transcript, looks_internally_primed
+            )
+        )
+
+        # persist evaluation result (may later be overridden in special monoexonic restriction case)
+        transcript.set_likely_internal_primed(looks_internally_primed)
+
+        if restrict_filter_to_monoexonic and not transcript.is_monoexonic():
+            # In this special mode, we tag multi-exonic transcripts as internally primed (conservative) but retain them.
+            transcript.set_likely_internal_primed(looks_internally_primed or True)
+            retained_transcripts.append(transcript)
+            continue
+
 
         filter_flag = False
 
