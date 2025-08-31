@@ -103,6 +103,20 @@ def main():
     )
 
     parser.add_argument(
+        "--ME_only",
+        action="store_true",
+        default=False,
+        help="restrict transcript reconstruction to multi-exonic (ME) transcripts only",
+    )
+
+    parser.add_argument(
+        "--SE_only",
+        action="store_true",
+        default=False,
+        help="restrict transcript reconstruction to single-exon (SE) transcripts only",
+    )
+
+    parser.add_argument(
         "--tag_bam",
         action="store_true",
         default=False,
@@ -343,9 +357,14 @@ def main():
 
     args = parser.parse_args()
 
+    if args.ME_only and args.SE_only:
+        sys.exit("Error: Cannot specify both --ME_only and --SE_only")
+
     genome_fasta_filename = args.genome
     bam_filename = args.bam
     output_prefix = args.output_prefix
+    # ensure global vars used by helper functions are updated
+    global single_best_only, CPU
     single_best_only = args.single_best_only
     CPU = args.CPU
     QUANT_ONLY = args.quant_only
@@ -354,6 +373,8 @@ def main():
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
     run_EM = not args.no_EM
+    ME_only = args.ME_only
+    SE_only = args.SE_only
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
 
@@ -745,6 +766,8 @@ def main():
                     min_isoform_fraction,
                     quant_EM_alpha,
                     prereconstruct_info_dir,
+                    ME_only,
+                    SE_only,
                 )
 
     ofh_gtf.close()
@@ -906,6 +929,8 @@ def run_transcript_assembly(
     min_isoform_fraction,
     quant_EM_alpha,
     prereconstruct_info_dir,
+    ME_only,
+    SE_only,
 ):
 
     ##---------------------
@@ -927,13 +952,17 @@ def run_transcript_assembly(
         if len(ME_input_transcripts) == 0:
             ME_input_transcripts = None
 
-    ME_transcripts = build_ME_transcripts(contig_acc,
-                                          contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        ME_input_transcripts)
+    ME_transcripts = None
+    if not SE_only:  # build ME unless explicitly restricted to SE
+        ME_transcripts = build_ME_transcripts(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            ME_input_transcripts,
+        )
 
 
 
@@ -949,14 +978,18 @@ def run_transcript_assembly(
             SE_input_transcripts = None
 
 
-    SE_transcripts = build_SE_transcripts(contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        SE_input_transcripts,
-        SE_read_encapsulation_mask=ME_transcripts)
+    SE_transcripts = None
+    if not ME_only:  # build SE unless explicitly restricted to ME
+        SE_transcripts = build_SE_transcripts(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            SE_input_transcripts,
+            SE_read_encapsulation_mask=ME_transcripts,
+        )
 
    
     ##############################
@@ -973,9 +1006,15 @@ def run_transcript_assembly(
     ## Build final Splice Graph
     sg_all = Splice_graph()
     logger.info(f"\n// -building splice graph for {contig_acc}")
-    transcripts_incl_in_graph = all_transcripts
+    transcripts_incl_in_graph = list(all_transcripts)
     if input_transcripts is not None:
-        transcripts_incl_in_graph += input_transcripts
+        # include only those input transcripts consistent with ME/SE restrictions
+        if ME_only:
+            transcripts_incl_in_graph += [t for t in input_transcripts if t.has_introns()]
+        elif SE_only:
+            transcripts_incl_in_graph += [t for t in input_transcripts if not t.has_introns()]
+        else:
+            transcripts_incl_in_graph += input_transcripts
     
     sg_all.build_splice_graph_for_contig(
         contig_acc,
@@ -991,7 +1030,7 @@ def run_transcript_assembly(
 
     lraa_all_obj = LRAA(sg_all, CPU)
 
-    lraa_all_obj.assign_transcripts_paths_in_graph(all_transcripts) # limit to all input transcripts
+    lraa_all_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph) # limit to all input transcripts
 
     # reassign gene and transcript component ids based on shared nodes.
     logger.info("reclustering combined ME and SE transcripts to genes")
@@ -1018,7 +1057,7 @@ def run_transcript_assembly(
         contig_seq_str,
         bam_file_for_quant,
         allow_spacers,
-        input_transcripts,
+        transcripts_incl_in_graph,
         restrict_splice_type=None,
     )
 
@@ -1043,8 +1082,6 @@ def run_transcript_assembly(
         logger.info("NOT FILTERING ISOFORMS.")
 
     else:
-
-       
 
         ##################################################################
         ## initial filter of novel isoforms with insufficient read support
