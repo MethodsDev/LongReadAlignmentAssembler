@@ -48,6 +48,13 @@ def main():
     )
 
     parser.add_argument(
+        "--exclude_SE_transcripts",
+        action="store_true",
+        default=False,
+        help="exclude single-exon isoforms from the merge",
+    )
+
+    parser.add_argument(
         "--debug",
         "-d",
         action="store_true",
@@ -66,6 +73,7 @@ def main():
     gtf_list = args.gtf
     genome_fasta_file = args.genome
     output_gtf = args.output_gtf
+    exclude_SE = args.exclude_SE_transcripts
 
     if len(gtf_list) < 2 and not LRAA_Globals.DEBUG:
         exit("Error, need at least two gtf files to merge")
@@ -81,6 +89,10 @@ def main():
         )
         for contig, transcript_obj_list in contig_to_input_transcripts.items():
             for transcript in transcript_obj_list:
+                if exclude_SE and not transcript.has_introns():
+                    logger.debug("-excluding SE isoform: {}".format(transcript))
+                    continue
+
                 transcript_strand = transcript.get_strand()
                 contig_strand_token = "{}^{}".format(contig, transcript_strand)
                 contig_strand_to_input_transcripts[contig_strand_token].append(
