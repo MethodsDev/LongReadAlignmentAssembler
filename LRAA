@@ -1061,12 +1061,40 @@ def run_transcript_assembly(
         restrict_splice_type=None,
     )
 
+    # Ensure subsequent filtering/quant steps use ONLY real read evidence (not injected reference transcript pseudo-reads)
+    # Rationale: earlier build_multipath_graph() calls (with input_transcripts) inject a synthetic "reftranscript:<id>" read per
+    # reference transcript to guarantee a path in the graph. These pseudo-reads artificially inflate initial read support counts
+    # and can cause inconsistencies vs. the final quant (which rebuilds without reinjecting them). By pruning them here we enforce
+    # consistent real-read-based support across all downstream filtering and quantification passes.
+    try:
+        if mp_all_counter is not None:
+            before_prune = sum([m.get_multipath_and_count()[1] for m in mp_all_counter.get_all_MultiPathCountPairs()]) if hasattr(mp_all_counter, 'get_all_MultiPathCountPairs') else None
+            mp_all_counter.prune_ref_transcripts_as_evidence()
+            after_prune = sum([m.get_multipath_and_count()[1] for m in mp_all_counter.get_all_MultiPathCountPairs()]) if hasattr(mp_all_counter, 'get_all_MultiPathCountPairs') else None
+            if before_prune is not None and after_prune is not None:
+                logger.info(f"Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}")
+            else:
+                logger.info("Pruned reference transcript pseudo-read evidence from multipath counter")
+    except Exception as e:
+        logger.warning(f"Failed pruning reference transcript pseudo-read evidence: {e}")
+
     q = Quantify(
         run_EM,
         LRAA_Globals.config["max_EM_iterations_during_asm"],
         quant_mode="draft",
     )
     frac_read_assignments = q.quantify(sg_all, all_transcripts, mp_all_counter)
+
+    if LRAA_Globals.DEBUG:
+        with open("__prefilter_quant.expr", "at") as ofh_prefilter_quant_expr:
+            with open("__prefilter_quant.tracking", "at") as ofh_prefilter_quant_tracking:
+                q.report_quant_results(
+                    all_transcripts,
+                    frac_read_assignments,
+                    ofh_prefilter_quant_expr,
+                    ofh_prefilter_quant_tracking
+                )
+
 
     ##########################################
     ## Filtering of isoforms to remove 'noise'
@@ -1075,7 +1103,17 @@ def run_transcript_assembly(
     transcripts = all_transcripts # legacy varname
 
     if input_transcripts is not None:
-        LRAA.differentiate_known_vs_novel_isoforms(transcripts)
+        # build splice pattern hash set for spliced reference transcripts only
+        ref_splice_hashes = set(
+            [
+                Util_funcs.get_hash_code(t.get_introns_string())
+                for t in input_transcripts
+                if t.has_introns()
+            ]
+        )
+        LRAA.differentiate_known_vs_novel_isoforms(
+            transcripts, reference_splice_hashes=ref_splice_hashes
+        )
 
     if NO_FILTER_ISOFORMS:
 

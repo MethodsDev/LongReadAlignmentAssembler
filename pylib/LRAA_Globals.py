@@ -30,6 +30,10 @@ config = {
     "aggregate_splice_boundary_dist": 5,
     "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
     "max_path_nodes_per_component": 1000,  # max number of path graph nodes per connected component
+    # transcript reclustering (gene definition) criteria
+    # gene reclustering overlap thresholds
+    "min_recluster_overlap_shorter_iso_frac": 0.50,  # (overlap_len / shorter_transcript_len) >= this to connect isoforms in second-stage graph
+    "min_recluster_overlap_longer_iso_frac": 0.20,  # also require (overlap_len / longer_transcript_len) >= this to avoid linking large multi-exon to long single-exon with tiny shared portion
     #
     ############
     # TSS config

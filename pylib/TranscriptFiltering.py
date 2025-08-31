@@ -632,6 +632,7 @@ def filter_novel_isoforms_by_min_read_support(
 
     for transcript in transcripts:
         if transcript.is_novel_isoform() is True:
+            logger.info("transcript {} is a novel isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
             if transcript.get_read_counts_assigned() >= min_reads_novel_isoform:
                 retained_transcripts.append(transcript)
             else:
@@ -647,6 +648,7 @@ def filter_novel_isoforms_by_min_read_support(
                 pass
         else:
             # known transcript, retaining.
+            logger.info("transcript {} is a known isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
             retained_transcripts.append(transcript)
 
     return retained_transcripts

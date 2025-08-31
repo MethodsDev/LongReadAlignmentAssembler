@@ -1265,13 +1265,32 @@ class LRAA:
         return
 
     @classmethod
-    def differentiate_known_vs_novel_isoforms(cls, transcripts):
+    def differentiate_known_vs_novel_isoforms(
+        cls, transcripts, reference_splice_hashes=None
+    ):
+        """Set novelty flag on transcripts based on splice pattern (introns) only.
+
+        Rationale: We want only transcripts whose splice pattern exactly matches one
+        provided among the reference input transcripts (and that are spliced) to be
+        treated as known. All others, including ME/SE-derived isoforms (even if they
+        may share some multipath evidence with references) are considered novel and
+        subjected to min_reads_novel_isoform filtering. Mono-exonic transcripts are
+        always classified as novel here per user guidance (restriction to spliced).
+        """
+
+        if reference_splice_hashes is not None and not isinstance(
+            reference_splice_hashes, set
+        ):
+            reference_splice_hashes = set(reference_splice_hashes)
 
         for transcript in transcripts:
-            if len(transcript.get_ref_trans_included()) > 0:
-                transcript.set_is_novel_isoform(False)
-            else:
-                transcript.set_is_novel_isoform(True)
+            if transcript.has_introns() and reference_splice_hashes is not None:
+                splice_hash = Util_funcs.get_hash_code(transcript.get_introns_string())
+                if splice_hash in reference_splice_hashes:
+                    transcript.set_is_novel_isoform(False)
+                    continue
+            # default novel
+            transcript.set_is_novel_isoform(True)
 
 
     

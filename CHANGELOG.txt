@@ -1,3 +1,6 @@
+Unreleased
+- classify known isoforms by splice pattern hash (introns) matching input reference set; ME/SE or mono-exonic isoforms always treated as novel for min_reads_novel_isoform filtering
+
 v0.7.0
 - rework single cell ref-guided and denovo pipes so isoform ID happens at the cluster-level, but quant is more simply performed post gtf-merge step in pseudobulk-all mode
 - updating the LRAA_globals to "max_dist_between_alt_TSS_sites": 50 from earlier zero setting

@@ -477,30 +477,96 @@ class Transcript(GenomeFeature):
     @classmethod
     def recluster_transcripts_to_genes(cls, transcripts, contig_acc, contig_strand):
         import networkx as nx
-        from typing import Sequence, Callable, Hashable, Any, List, Dict
+        from typing import Hashable, List, Dict
 
+        # Build first-pass graph linking transcripts sharing any simple path node
         G = nx.Graph()
-        G.add_nodes_from(range(len(transcripts)))  # nodes are transcript indices
-
-        seen: Dict[Hashable, int] = {}  # node_id -> first transcript index seen
+        G.add_nodes_from(range(len(transcripts)))
+        seen: Dict[Hashable, int] = {}
         for i, t in enumerate(transcripts):
-            print("Transcript: " + str(t))
-            simple_path = t.get_simple_path()
-            print("Simple path: " + str(simple_path))
-            for nid in set(simple_path):
+            sp = t.get_simple_path()
+            for nid in set(sp):
                 if nid in seen:
-                    G.add_edge(seen[nid], i)  # star-connect to the first one we saw for this node_id
+                    G.add_edge(seen[nid], i)
                 else:
                     seen[nid] = i
 
-        idx_clusters = nx.connected_components(G)
-        clusters = [[transcripts[i] for i in comp] for comp in idx_clusters]
+        initial_clusters = [
+            [transcripts[i] for i in comp] for comp in nx.connected_components(G)
+        ]
 
-        
-        # rename transcripts by component
-        revised_transcripts = []   
-        for i, cluster in enumerate(clusters):
-            # gene_id "g:chr17:+:comp-9"; transcript_id "t:chr17:+:comp-9:iso-1";
+        # Overlap thresholds
+        min_overlap_shorter_frac = LRAA_Globals.config.get(
+            "min_recluster_overlap_shorter_iso_frac", 0.50
+        )
+        min_overlap_longer_frac = LRAA_Globals.config.get(
+            "min_recluster_overlap_longer_iso_frac", 0.10
+        )
+
+        def transcript_overlap_len(t1: 'Transcript', t2: 'Transcript') -> int:
+            def merge_intervals(exons):
+                merged = []
+                for a, b in sorted(exons):
+                    if not merged or a > merged[-1][1] + 1:
+                        merged.append([a, b])
+                    else:
+                        if b > merged[-1][1]:
+                            merged[-1][1] = b
+                return merged
+
+            m1 = merge_intervals(t1.get_exon_segments())
+            m2 = merge_intervals(t2.get_exon_segments())
+            i = j = 0
+            ov = 0
+            while i < len(m1) and j < len(m2):
+                a1, b1 = m1[i]
+                a2, b2 = m2[j]
+                if b1 < a2:
+                    i += 1
+                elif b2 < a1:
+                    j += 1
+                else:
+                    ov += min(b1, b2) - max(a1, a2) + 1
+                    if b1 < b2:
+                        i += 1
+                    elif b2 < b1:
+                        j += 1
+                    else:
+                        i += 1
+                        j += 1
+            return ov
+
+        def transcript_len(t: 'Transcript') -> int:
+            return t.get_cdna_len()
+
+        refined_clusters: List[List['Transcript']] = []
+        for cluster in initial_clusters:
+            if len(cluster) == 1:
+                refined_clusters.append(cluster)
+                continue
+            H = nx.Graph()
+            H.add_nodes_from(range(len(cluster)))
+            for i in range(len(cluster)):
+                for j in range(i + 1, len(cluster)):
+                    t1 = cluster[i]
+                    t2 = cluster[j]
+                    ov = transcript_overlap_len(t1, t2)
+                    len1 = transcript_len(t1)
+                    len2 = transcript_len(t2)
+                    shorter = min(len1, len2)
+                    longer = max(len1, len2)
+                    if (
+                        shorter > 0
+                        and longer > 0
+                        and (ov / shorter) >= min_overlap_shorter_frac
+                        and (ov / longer) >= min_overlap_longer_frac
+                    ):
+                        H.add_edge(i, j)
+            for comp in nx.connected_components(H):
+                refined_clusters.append([cluster[i] for i in comp])
+
+        revised_transcripts = []
+        for i, cluster in enumerate(refined_clusters):
             new_gene_id = f"g:{contig_acc}:{contig_strand}:comp-{i+1}"
             for j, t in enumerate(cluster):
                 new_transcript_id = f"t:{contig_acc}:{contig_strand}:comp-{i+1}:iso-{j+1}"
