@@ -23,7 +23,7 @@ import logging
 import shutil
 
 
-VERSION = "v0.7.0"
+VERSION = "v0.8.0"
 # VERSION = "BLEEDING_EDGE-v0.4.0"
 
 
@@ -43,6 +43,7 @@ CPU = num_threads
 allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
+
 
 def main():
 
@@ -430,7 +431,9 @@ def main():
             sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
 
         if not isinstance(user_cfg, dict):
-            sys.exit(f"Error, JSON in {cfg_file} must decode to an object with key:value pairs")
+            sys.exit(
+                f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
+            )
 
         def _cast_value(orig_val, new_val):
             # attempt gentle casting to preserve expected primitive types
@@ -441,8 +444,10 @@ def main():
                     if isinstance(new_val, (int, float)):
                         return bool(new_val)
                     if isinstance(new_val, str):
-                        if new_val.lower() in ("true", "t", "1", "yes", "y"): return True
-                        if new_val.lower() in ("false", "f", "0", "no", "n"): return False
+                        if new_val.lower() in ("true", "t", "1", "yes", "y"):
+                            return True
+                        if new_val.lower() in ("false", "f", "0", "no", "n"):
+                            return False
                 if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
                     if isinstance(new_val, str):
                         if re.match(r"^-?\\d+$", new_val):
@@ -453,8 +458,12 @@ def main():
                         return int(new_val)
                     if isinstance(new_val, int):
                         return new_val
-                if isinstance(orig_val, float) and isinstance(new_val, (int, float, str)):
-                    if isinstance(new_val, str) and re.match(r"^-?\\d+(\\.\\d+)?$", new_val):
+                if isinstance(orig_val, float) and isinstance(
+                    new_val, (int, float, str)
+                ):
+                    if isinstance(new_val, str) and re.match(
+                        r"^-?\\d+(\\.\\d+)?$", new_val
+                    ):
                         return float(new_val)
                     if isinstance(new_val, (int, float)):
                         return float(new_val)
@@ -474,7 +483,9 @@ def main():
             newv = _cast_value(orig, v)
             LRAA_Globals.config[k] = newv
             applied_keys.append(k)
-        logger.info(f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}")
+        logger.info(
+            f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
+        )
         if skipped_keys:
             logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
 
@@ -618,7 +629,6 @@ def main():
             )
         )
 
-    
     if LRAA_Globals.DEBUG:
         if not os.path.exists(prereconstruct_info_dir):
             os.makedirs(prereconstruct_info_dir)
@@ -940,7 +950,6 @@ def run_transcript_assembly(
 
     LRAA_Globals.LRAA_MODE = "ID-init_norm_reads"
 
-
     ##
     ## Multi-exon read processing section
     ##
@@ -964,8 +973,6 @@ def run_transcript_assembly(
             ME_input_transcripts,
         )
 
-
-
     ##
     ## Single-exon read processing section
     ##
@@ -976,7 +983,6 @@ def run_transcript_assembly(
         SE_input_transcripts = [x for x in input_transcripts if not x.has_introns()]
         if len(SE_input_transcripts) == 0:
             SE_input_transcripts = None
-
 
     SE_transcripts = None
     if not ME_only:  # build SE unless explicitly restricted to ME
@@ -991,7 +997,6 @@ def run_transcript_assembly(
             SE_read_encapsulation_mask=ME_transcripts,
         )
 
-   
     ##############################
     # Integrate ME and SE isoforms
     all_transcripts = list()
@@ -1002,7 +1007,7 @@ def run_transcript_assembly(
 
     if len(all_transcripts) == 0:
         return
-    
+
     ## Build final Splice Graph
     sg_all = Splice_graph()
     logger.info(f"\n// -building splice graph for {contig_acc}")
@@ -1010,12 +1015,16 @@ def run_transcript_assembly(
     if input_transcripts is not None:
         # include only those input transcripts consistent with ME/SE restrictions
         if ME_only:
-            transcripts_incl_in_graph += [t for t in input_transcripts if t.has_introns()]
+            transcripts_incl_in_graph += [
+                t for t in input_transcripts if t.has_introns()
+            ]
         elif SE_only:
-            transcripts_incl_in_graph += [t for t in input_transcripts if not t.has_introns()]
+            transcripts_incl_in_graph += [
+                t for t in input_transcripts if not t.has_introns()
+            ]
         else:
             transcripts_incl_in_graph += input_transcripts
-    
+
     sg_all.build_splice_graph_for_contig(
         contig_acc,
         contig_strand,
@@ -1030,17 +1039,20 @@ def run_transcript_assembly(
 
     lraa_all_obj = LRAA(sg_all, CPU)
 
-    lraa_all_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph) # limit to all input transcripts
+    lraa_all_obj.assign_transcripts_paths_in_graph(
+        transcripts_incl_in_graph
+    )  # limit to all input transcripts
 
     # reassign gene and transcript component ids based on shared nodes.
     logger.info("reclustering combined ME and SE transcripts to genes")
-    all_transcripts = Transcript.recluster_transcripts_to_genes(all_transcripts, contig_acc, contig_strand)
-    
+    all_transcripts = Transcript.recluster_transcripts_to_genes(
+        all_transcripts, contig_acc, contig_strand
+    )
+
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(
-                all_transcripts, "__ME_and_SE_combined_transcripts_path_in_graph"
-            )
-
+            all_transcripts, "__ME_and_SE_combined_transcripts_path_in_graph"
+        )
 
     ###########################################################
     # Do an initial quant
@@ -1068,13 +1080,35 @@ def run_transcript_assembly(
     # consistent real-read-based support across all downstream filtering and quantification passes.
     try:
         if mp_all_counter is not None:
-            before_prune = sum([m.get_multipath_and_count()[1] for m in mp_all_counter.get_all_MultiPathCountPairs()]) if hasattr(mp_all_counter, 'get_all_MultiPathCountPairs') else None
+            before_prune = (
+                sum(
+                    [
+                        m.get_multipath_and_count()[1]
+                        for m in mp_all_counter.get_all_MultiPathCountPairs()
+                    ]
+                )
+                if hasattr(mp_all_counter, "get_all_MultiPathCountPairs")
+                else None
+            )
             mp_all_counter.prune_ref_transcripts_as_evidence()
-            after_prune = sum([m.get_multipath_and_count()[1] for m in mp_all_counter.get_all_MultiPathCountPairs()]) if hasattr(mp_all_counter, 'get_all_MultiPathCountPairs') else None
+            after_prune = (
+                sum(
+                    [
+                        m.get_multipath_and_count()[1]
+                        for m in mp_all_counter.get_all_MultiPathCountPairs()
+                    ]
+                )
+                if hasattr(mp_all_counter, "get_all_MultiPathCountPairs")
+                else None
+            )
             if before_prune is not None and after_prune is not None:
-                logger.info(f"Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}")
+                logger.info(
+                    f"Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}"
+                )
             else:
-                logger.info("Pruned reference transcript pseudo-read evidence from multipath counter")
+                logger.info(
+                    "Pruned reference transcript pseudo-read evidence from multipath counter"
+                )
     except Exception as e:
         logger.warning(f"Failed pruning reference transcript pseudo-read evidence: {e}")
 
@@ -1087,20 +1121,21 @@ def run_transcript_assembly(
 
     if LRAA_Globals.DEBUG:
         with open("__prefilter_quant.expr", "at") as ofh_prefilter_quant_expr:
-            with open("__prefilter_quant.tracking", "at") as ofh_prefilter_quant_tracking:
+            with open(
+                "__prefilter_quant.tracking", "at"
+            ) as ofh_prefilter_quant_tracking:
                 q.report_quant_results(
                     all_transcripts,
                     frac_read_assignments,
                     ofh_prefilter_quant_expr,
-                    ofh_prefilter_quant_tracking
+                    ofh_prefilter_quant_tracking,
                 )
-
 
     ##########################################
     ## Filtering of isoforms to remove 'noise'
     #########################################
 
-    transcripts = all_transcripts # legacy varname
+    transcripts = all_transcripts  # legacy varname
 
     if input_transcripts is not None:
         # build splice pattern hash set for spliced reference transcripts only
@@ -1174,10 +1209,13 @@ def run_transcript_assembly(
         #######################################################
         # Filter isoforms according to minimum isoform fraction
 
-        
         if min_isoform_fraction > 0:
-            logger.info("\n// -filtering isoforms according to minimum isoform fraction")
-            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(
+                "\n// -filtering isoforms according to minimum isoform fraction"
+            )
+            logger.info(
+                "Before filtering, have {} transcripts".format(len(transcripts))
+            )
             transcripts = TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
                 transcripts,
                 min_isoform_fraction,
@@ -1199,7 +1237,9 @@ def run_transcript_assembly(
         # Filter monoexonic transcripts according to expression thresholds
         if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
             logger.info("\n// -filtering monoexonic transcripts based on min TPM")
-            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(
+                "Before filtering, have {} transcripts".format(len(transcripts))
+            )
             transcripts = (
                 TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
                     transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
@@ -1219,7 +1259,9 @@ def run_transcript_assembly(
         # Filter isoforms apparently derived from internal priming artifacts
         if LRAA_Globals.config["filter_internal_priming"]:
             logger.info("\n// -filtering out internal priming")
-            logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(
+                "Before filtering, have {} transcripts".format(len(transcripts))
+            )
             transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
                 transcripts,
                 contig_seq_str,
@@ -1387,14 +1429,16 @@ def count_reads_from_bam(bam_filename):
         return count
 
 
-def build_ME_transcripts(contig_acc, 
-                         contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        input_transcripts):
-     
+def build_ME_transcripts(
+    contig_acc,
+    contig_strand,
+    contig_seq_str,
+    bam_file_for_sg,
+    restrict_region_lend,
+    restrict_region_rend,
+    input_transcripts,
+):
+
     sg_ME = Splice_graph()
 
     ## Build ME Splice Graph
@@ -1428,7 +1472,9 @@ def build_ME_transcripts(contig_acc,
     lraa_ME_obj = LRAA(sg_ME, CPU)
 
     if input_transcripts:
-        lraa_ME_obj.assign_transcripts_paths_in_graph(input_transcripts) # limit to ME input transcripts
+        lraa_ME_obj.assign_transcripts_paths_in_graph(
+            input_transcripts
+        )  # limit to ME input transcripts
         if LRAA_Globals.DEBUG:
             report_transcript_paths_in_graph(
                 input_transcripts, "__input_transcripts_path_in_graph"
@@ -1454,7 +1500,7 @@ def build_ME_transcripts(contig_acc,
         logger.info(
             "no ME transcripts constructed on {} {}".format(contig_acc, contig_strand)
         )
-        
+
         return None
 
     else:
@@ -1465,15 +1511,16 @@ def build_ME_transcripts(contig_acc,
         return ME_transcripts
 
 
-def build_SE_transcripts(contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        transcripts_incl_in_graph,
-        SE_read_encapsulation_mask):
-     
+def build_SE_transcripts(
+    contig_acc,
+    contig_strand,
+    contig_seq_str,
+    bam_file_for_sg,
+    restrict_region_lend,
+    restrict_region_rend,
+    transcripts_incl_in_graph,
+    SE_read_encapsulation_mask,
+):
 
     sg_SE = Splice_graph()
 
@@ -1509,9 +1556,8 @@ def build_SE_transcripts(contig_acc,
     # Incorporate reference transcripts if provided
     lraa_SE_obj = LRAA(sg_SE, CPU)
 
-
     if transcripts_incl_in_graph:
-        lraa_SE_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph) 
+        lraa_SE_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph)
         if LRAA_Globals.DEBUG:
             report_transcript_paths_in_graph(
                 transcripts_incl_in_graph, "__SE_incl_transcripts_path_in_graph"
@@ -1549,8 +1595,6 @@ def build_SE_transcripts(contig_acc,
                 tmp_ofh.write(transcript.to_GTF_format() + "\n")
 
         return SE_transcripts
-
-
 
 
 if __name__ == "__main__":
