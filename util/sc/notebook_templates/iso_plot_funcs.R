@@ -39,7 +39,7 @@ parse_inputs = function(sample_name,
     message("-reading umap: ", umap_cluster_file)
     umap_df <<- read.csv(umap_cluster_file, header=T, sep="\t")
     
-    base_umap <<- umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1)
+    base_umap <<- umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1) + theme_void()
     
     message("-parsing cluster pseudobulk matrix: ", cluster_pseudobulk_matrix_filename)
     cluster_counts_matrix <<- read.csv(cluster_pseudobulk_matrix_filename, header=T, row.names=1, sep="\t")
@@ -138,7 +138,7 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
     
     base_umap + geom_point(data=isoform_umap, aes(color=read_count)) +
         facet_wrap(~transcript_id) +
-        theme_bw() +
+        #theme_bw() +
         ggtitle(gene_of_interest)  +
         theme(legend.position="none") +
         scale_color_viridis_c(limits = c(0, max_color_value), oob = scales::squish) +
@@ -149,7 +149,8 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
                   aes(label = seurat_clusters), 
                   size = 5,
                   color = 'purple',
-                  fontface = "bold") 
+                  fontface = "bold") +
+    theme_void()
     
 }
 
@@ -541,5 +542,23 @@ make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction 
 }
 
 
+################
+# get gene-level expr view of umap
 
+get_gene_umap = function(gene_symbol_val, gene_component) {
+  
+  gene_isoform_umap =  get_isoform_umap(gene_symbol_val)
+  
+  gene_isoform_umap = gene_isoform_umap %>% filter(grepl(gene_component, transcript_id)) %>% filter(read_count > 0) 
+  
+  gene_isoform_umap = gene_isoform_umap %>% group_by(cell_barcode) %>% mutate(read_count = sum(read_count))
+  
+  # Calculate 95th percentile for color scale
+  max_color_value = quantile(gene_isoform_umap$read_count, 0.95, na.rm = TRUE)
+  
+  p_gene = base_umap + geom_point(data=gene_isoform_umap, aes(color=read_count)) +
+    scale_color_viridis_c(limits = c(0, max_color_value), oob = scales::squish) +
+    theme_void()
 
+  return(p_gene)
+}
