@@ -42,7 +42,7 @@ CPU = num_threads
 allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
-
+INCLUDE_PRELIM_TRANSCRIPTS = False
 
 def main():
 
@@ -135,6 +135,13 @@ def main():
         action="store_true",
         default=False,
         help="low fidelity mode: min_per_id: 80, no_infer_TSS, no_infer_PolyA, max_exon_spur_length: 20",
+    )
+
+    parser.add_argument(
+        "--include_prelim_transcripts",
+        action='store_true',
+        default=False,
+        help="write preliminary pre-filtered transcripts gtf and quant files"
     )
 
     parser.add_argument(
@@ -364,7 +371,7 @@ def main():
     bam_filename = args.bam
     output_prefix = args.output_prefix
     # ensure global vars used by helper functions are updated
-    global single_best_only, CPU
+    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS
     single_best_only = args.single_best_only
     CPU = args.CPU
     QUANT_ONLY = args.quant_only
@@ -377,6 +384,7 @@ def main():
     SE_only = args.SE_only
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
+    INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -800,6 +808,27 @@ def main():
         logger.info("-making bed output file: {}".format(bed_output_file))
         subprocess.check_call(cmd, shell=True)
 
+        if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
+            # write bed for the prelim isoforms too.
+            prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"
+            bed_output_file = "__PRE-Tx-Filtering.transcripts.bed"
+            cmd = " ".join(
+                [
+                    os.path.join(
+                        UTILDIR,
+                        "gtf_to_bed_format.pl",
+                    ),
+                    prelim_gtf,
+                    ">",
+                    bed_output_file,
+                ]
+            )
+            logger.info("-making bed output file: {}".format(bed_output_file))
+            subprocess.check_call(cmd, shell=True)
+
+            
+
+
     ##############################################################################
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
 
@@ -1118,10 +1147,15 @@ def run_transcript_assembly(
     )
     frac_read_assignments = q.quantify(sg_all, all_transcripts, mp_all_counter)
 
-    if LRAA_Globals.DEBUG:
-        with open("__prefilter_quant.expr", "at") as ofh_prefilter_quant_expr:
+    if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
+
+        with open("__PRE-Tx-Filtering.transcripts.gtf", "at") as ofh:
+            for transcript in all_transcripts:
+                ofh.write(transcript.to_GTF_format(include_TPM=False) + "\n")
+
+        with open("__PRE-Tx-Filtering.quant.expr", "at") as ofh_prefilter_quant_expr:
             with open(
-                "__prefilter_quant.tracking", "at"
+                "__PRE-Tx-Filtering.quant.tracking", "at"
             ) as ofh_prefilter_quant_tracking:
                 q.report_quant_results(
                     all_transcripts,
