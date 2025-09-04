@@ -486,12 +486,14 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     p_expr <- p_expr + theme(
         legend.position = "bottom",
         legend.key.size = unit(1, "line"),
-        legend.text = element_text(size = rel(0.8))
+        legend.text = element_text(size = rel(0.8), angle = 45),
+        legend.title = element_text(angle = 0)
     )
     p_frac_expr <- p_frac_expr + theme(
         legend.position = "bottom",
         legend.key.size = unit(1, "line"),
-        legend.text = element_text(size = rel(0.8))
+        legend.text = element_text(size = rel(0.8), angle = 45),
+        legend.title = element_text(angle = 0)
     )
     
     
