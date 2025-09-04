@@ -482,11 +482,17 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
               axis.ticks.y = element_blank())
 
     
-    # remove legends
-    p_expr <- p_expr + theme(legend.position = "none")
-    p_frac_expr <- p_frac_expr + theme(legend.position = "none")
-    
-    
+    # restore legends and use relative units for scaling
+    p_expr <- p_expr + theme(
+        legend.position = "bottom",
+        legend.key.size = unit(1, "line"),
+        legend.text = element_text(size = rel(0.8))
+    )
+    p_frac_expr <- p_frac_expr + theme(
+        legend.position = "bottom",
+        legend.key.size = unit(1, "line"),
+        legend.text = element_text(size = rel(0.8))
+    )
     
     
     # Exon structure tile map
