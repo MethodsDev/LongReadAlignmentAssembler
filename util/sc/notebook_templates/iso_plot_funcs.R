@@ -376,7 +376,7 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     
     frac_expr_long = isoform_frac_expr %>%
         rownames_to_column("transcript_id") %>%
-        pivot_longer(-transcript_id, names_to = "cluster", values_to = "expression")
+        pivot_longer(-transcript_id, names_to = "cluster", values_to = "iso_frac")
     
     
     expr_long$cluster <- factor(expr_long$cluster, levels = ordered_clusters)
@@ -466,15 +466,16 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
               axis.ticks.y = element_blank())
 
     # Isoform fraction heatmap
-    p_frac_expr = ggplot(frac_expr_long, aes(x = cluster, y = transcript_id, fill = expression)) +
+    p_frac_expr = ggplot(frac_expr_long, aes(x = cluster, y = transcript_id, fill = iso_frac)) +
         geom_tile() +
+        scale_fill_viridis_c() +
         #scale_fill_viridis_c(limits = c(0, 1), oob = scales::squish) +
-        scale_fill_gradient(
-            low = "black", 
-            high = "red", 
-            limits = c(0, NA), 
-            oob = scales::squish
-        ) +
+        #scale_fill_gradient(
+        #    low = "black", 
+        #    high = "red", 
+        #    limits = c(0, NA), 
+        #    oob = scales::squish
+        #) +
         #theme_minimal() +
         labs(title = "Iso Fraction", x = "Cluster", y = NULL) +
         theme(axis.text.x = element_text(angle = 90, hjust = 1),
