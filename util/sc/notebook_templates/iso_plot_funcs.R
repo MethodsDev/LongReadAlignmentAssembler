@@ -320,21 +320,28 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     library(ggdendro)
     
     message("Transcript_ids: ", transcript_ids)
+
+    all_transcript_ids_for_gene = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
+            filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+
+    all_expr_for_gene = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% all_transcript_ids_for_gene, ]
+    all_isoform_frac_expr =  sweep(all_expr_for_gene, 2, colSums(all_expr_for_gene), "/")
+
+    
     
     if (is.null(transcript_ids)) {
-        transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
-            filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+        transcript_ids = all_transcript_ids_for_gene
         
         if (ignore_unspliced) {
             transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
         }
     }
-    
+        
     message("Transcript_ids: ", transcript_ids)
     
-    isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
+    isoform_expr = all_expr_for_gene[rownames(all_expr_for_gene) %in% transcript_ids,]
     
-    isoform_frac_expr <- sweep(isoform_expr, 2, colSums(isoform_expr), "/")
+    isoform_frac_expr <- all_isoform_frac_expr[rownames(all_isoform_frac_expr) %in% transcript_ids, ]
     isoform_frac_expr[is.na(isoform_frac_expr)] = 0
     
     if (min_isoform_frac_expr_any_cluster > 0) {
@@ -457,16 +464,23 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
         theme(axis.text.x = element_text(angle = 90, hjust = 1),
               axis.text.y = element_blank(),
               axis.ticks.y = element_blank())
-    
+
+    # Isoform fraction heatmap
     p_frac_expr = ggplot(frac_expr_long, aes(x = cluster, y = transcript_id, fill = expression)) +
         geom_tile() +
-        scale_fill_viridis_c() +
-        theme_minimal() +
+        #scale_fill_viridis_c(limits = c(0, 1), oob = scales::squish) +
+        scale_fill_gradient(
+            low = "black", 
+            high = "red", 
+            limits = c(0, NA), 
+            oob = scales::squish
+        ) +
+        #theme_minimal() +
         labs(title = "Iso Fraction", x = "Cluster", y = NULL) +
         theme(axis.text.x = element_text(angle = 90, hjust = 1),
               axis.text.y = element_blank(),
               axis.ticks.y = element_blank())
-    
+
     
     # remove legends
     p_expr <- p_expr + theme(legend.position = "none")
