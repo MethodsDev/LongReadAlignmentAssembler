@@ -37,11 +37,12 @@ def main():
         help="Input .iso_cats.summary_counts.tsv.gz files",
     )
     parser.add_argument(
-        "-c", "--counts_out", required=True, help="Output TSV file for counts"
+        "-o",
+        "--out_prefix",
+        required=True,
+        help="output prefix for .counts.tsv and .frac.tsv files",
     )
-    parser.add_argument(
-        "-f", "--fractions_out", required=True, help="Output TSV file for fractions"
-    )
+
     args = parser.parse_args()
 
     # Collect data
@@ -57,7 +58,8 @@ def main():
     categories = sorted(all_categories)
 
     # Write counts table
-    with open(args.counts_out, "w", newline="") as out_f:
+    counts_out_file = f"{args.out_prefix}.counts.tsv"
+    with open(counts_out_file, "w", newline="") as out_f:
         writer = csv.writer(out_f, delimiter="\t")
         writer.writerow(["sample_id"] + categories)
         for sample_id, cat_counts in sorted(all_samples.items()):
@@ -65,7 +67,8 @@ def main():
             writer.writerow(row)
 
     # Write fractions table
-    with open(args.fractions_out, "w", newline="") as out_f:
+    frac_out_file = f"{args.out_prefix}.fracs.tsv"
+    with open(frac_out_file, "w", newline="") as out_f:
         writer = csv.writer(out_f, delimiter="\t")
         writer.writerow(["sample_id"] + categories)
         for sample_id, cat_counts in sorted(all_samples.items()):
