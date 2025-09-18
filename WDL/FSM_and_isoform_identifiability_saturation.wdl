@@ -1,4 +1,4 @@
-version 1.1
+version 1.0
 
 ################################################################################
 # Task: Run read_FSM_and_identifiability_saturation_fit.py on one input file
