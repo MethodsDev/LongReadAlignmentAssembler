@@ -109,11 +109,19 @@ RUN R -e 'BiocManager::install("clustermole")'
 RUN pip install numpy --break-system-packages
 
 RUN pip install pytest --break-system-packages
-    
+
+RUN python -m pip install \
+    "numpy>=1.26" \
+    "pandas>=2.2" \
+    "pyarrow>=15" \
+    "scipy>=1.11" \
+    "matplotlib>=3.8" --break-system-packages
+
+        
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.8.0"
-ENV LRAA_CO=ec6fb74889f14d881ce7a3082b55dc9254920856
+ENV LRAA_VERSION="v0.8.0-postdev"
+ENV LRAA_CO=bfd9eb78384e61f7f325f25375ac5d4d8274938a
 
 
 # update VERSION and LRAA_CO files with version info and checkout
