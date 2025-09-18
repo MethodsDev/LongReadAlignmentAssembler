@@ -1,5 +1,53 @@
 version 1.0
 
+workflow IsoformSaturationRow {
+  input {
+    File input_tsv
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+
+    String iso_col = "matching_isoforms"
+    String cat_col = "sqanti_cat"
+    String fsm_value = "FSM"
+    Int seed = 42
+    Boolean no_shuffle = false
+    Int thin = 10000
+    Int limit_rows = 0
+
+    Int cpu = 2
+    Int memory_gb = 8
+    Int preemptible_tries = 0
+    Float disk_multiplier = 3.0
+    Int disk_min_gb = 20
+  }
+
+  call RunSaturation {
+    input:
+      input_tsv = input_tsv,
+      docker = docker,
+      iso_col = iso_col,
+      cat_col = cat_col,
+      fsm_value = fsm_value,
+      seed = seed,
+      no_shuffle = no_shuffle,
+      thin = thin,
+      limit_rows = limit_rows,
+      cpu = cpu,
+      memory_gb = memory_gb,
+      preemptible_tries = preemptible_tries,
+      disk_multiplier = disk_multiplier,
+      disk_min_gb = disk_min_gb
+  }
+
+  output {
+    File thin_tsv        = RunSaturation.thin_tsv
+    File fit_summary_tsv = RunSaturation.fit_summary_tsv
+    File plot_png        = RunSaturation.plot_png
+  }
+}
+
+
+
+    
 ################################################################################
 # Task: Run read_FSM_and_identifiability_saturation_fit.py on one input file
 ################################################################################
