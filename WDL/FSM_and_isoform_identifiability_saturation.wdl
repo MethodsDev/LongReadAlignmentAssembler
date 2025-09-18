@@ -13,8 +13,8 @@ workflow IsoformSaturationRow {
     Int thin = 10000
     Int limit_rows = 0
 
-    Int cpu = 2
-    Int memory_gb = 8
+    Int cpu = 4
+    Int memory_gb = 32
     Int preemptible_tries = 0
     Float disk_multiplier = 3.0
     Int disk_min_gb = 20
