@@ -46,11 +46,6 @@ workflow IsoformSaturationRow {
 }
 
 
-
-    
-################################################################################
-# Task: Run read_FSM_and_identifiability_saturation_fit.py on one input file
-################################################################################
 task RunSaturation {
   input {
     File input_tsv
@@ -63,46 +58,27 @@ task RunSaturation {
     Int thin = 10000
     Int limit_rows = 0
 
-    # Resources
     Int cpu = 2
     Int memory_gb = 8
     Int preemptible_tries = 0
 
-    # Disk autosize multiplier (working room for parsing + outputs)
     Float disk_multiplier = 3.0
     Int disk_min_gb = 20
   }
 
-  meta {
-    description: "Compute Identifiable vs FSM saturation curves + model fits"
-  }
-
-  parameter_meta {
-    input_tsv: { description: "Input TSV or TSV.GZ with columns: matching_isoforms, sqanti_cat" }
-    docker:    { description: "Docker image (Artifact Registry URL)" }
-    iso_col:   { description: "Column containing isoform IDs" }
-    cat_col:   { description: "Column containing SQANTI category" }
-    fsm_value: { description: "SQANTI value treated as FSM" }
-    seed:      { description: "Random seed for shuffling" }
-    no_shuffle:{ description: "If true, do not shuffle read order" }
-    thin:      { description: "Target #points to keep in curve TSV/plot" }
-    limit_rows:{ description: "Process only first N rows (0 = all)" }
-    cpu:       { description: "vCPUs" }
-    memory_gb: { description: "Memory (GB)" }
-    preemptible_tries: { description: "Number of preemptible attempts (GCE only)" }
-    disk_multiplier: { description: "Autosize factor for disk (= input_size_gb * factor)" }
-    disk_min_gb:     { description: "Minimum disk GB" }
-  }
+  # ---- derive the script's auto-named outputs from input basename ----
+  String base = basename(input_tsv)
+  String root = sub(base, "\\.(tsv|txt|csv)(\\.gz)?$", "")
+  String thin_path = root + ".saturation_identifiable_vs_FSM.thin.tsv.gz"
+  String fit_path  = root + ".saturation_identifiable_vs_FSM.fit_summary.tsv"
+  String png_path  = root + ".saturation_identifiable_vs_FSM.fit.png"
 
   command <<<
     set -euo pipefail
 
-    # Localize input
-    IN="~{input_tsv}"
-
     # Run
     read_FSM_and_identifiability_saturation_fit.py \
-      -i "${IN}" \
+      -i "~{input_tsv}" \
       --iso-col "~{iso_col}" \
       --cat-col "~{cat_col}" \
       --fsm-value "~{fsm_value}" \
@@ -111,28 +87,27 @@ task RunSaturation {
       --thin ~{thin} \
       --limit-rows ~{limit_rows}
 
-    # The script auto-names outputs based on input basename.
-    # Capture them via globs.
-    echo "Capturing outputs..."
-    ls -1 *.saturation_identifiable_vs_FSM.thin.tsv.gz > thin_list.txt
-    ls -1 *.saturation_identifiable_vs_FSM.fit_summary.tsv > fit_list.txt
-    ls -1 *.saturation_identifiable_vs_FSM.fit.png > png_list.txt
+    # sanity-check the expected outputs exist (fail fast if not)
+    test -s "~{thin_path}" || { echo "Missing ~{thin_path}" >&2; ls -lh; exit 1; }
+    test -s "~{fit_path}"  || { echo "Missing ~{fit_path}"  >&2; ls -lh; exit 1; }
+    test -s "~{png_path}"  || { echo "Missing ~{png_path}"  >&2; ls -lh; exit 1; }
+
+    # optional: list for logs
+    ls -lh "~{thin_path}" "~{fit_path}" "~{png_path}"
   >>>
 
   output {
-    File thin_tsv = read_string("thin_list.txt")
-    File fit_summary_tsv = read_string("fit_list.txt")
-    File plot_png = read_string("png_list.txt")
+    File thin_tsv        = thin_path
+    File fit_summary_tsv = fit_path
+    File plot_png        = png_path
   }
 
   runtime {
     docker: docker
     cpu: cpu
     memory: memory_gb + " GB"
-
-    # Autosize disk from input
     disks: "local-disk " + (ceil(size(input_tsv, "GB") * disk_multiplier) + disk_min_gb) + " HDD"
-
     preemptible: preemptible_tries
   }
 }
+
