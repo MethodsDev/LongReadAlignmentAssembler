@@ -24,4 +24,10 @@ workflows:
      authors:
          - name: Brian Haas
            email: bhaas@broadinstitute.org
+   - name: FSM_and_isoform_identifiability_saturation
+     subclass: WDL
+     primaryDescriptorPath: /WDL/FSM_and_isoform_identifiability_saturation.wdl
+     authors:
+         - name: Brian Haas & chatgpt
+           email: bhaas@broadinstitute.org
 
