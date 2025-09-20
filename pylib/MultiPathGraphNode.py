@@ -62,6 +62,10 @@ class MultiPathGraphNode:
             False  # should be initialized to False before each reconstruction round.
         )
 
+        # Optional: min/max genomic span across reads supporting this node (if provided by caller)
+        self._min_read_lend = None
+        self._max_read_rend = None
+
     def get_id(self):
         return self._id
 
@@ -95,6 +99,15 @@ class MultiPathGraphNode:
 
     def get_coords(self):
         return (self._lend, self._rend)
+
+    def set_read_span_bounds(self, lend, rend):
+        self._min_read_lend = lend
+        self._max_read_rend = rend
+
+    def get_read_span_bounds(self):
+        if self._min_read_lend is None or self._max_read_rend is None:
+            return None
+        return (self._min_read_lend, self._max_read_rend)
 
     def get_count(self):
         return self._count

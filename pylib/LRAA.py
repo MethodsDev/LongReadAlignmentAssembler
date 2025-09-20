@@ -59,6 +59,10 @@ class LRAA:
 
         self._num_parallel_processes = num_parallel_processes
 
+        # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
+        # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
+        self._read_name_to_span = dict()
+
         return
 
     def build_multipath_graph(
@@ -74,13 +78,20 @@ class LRAA:
     ):
 
         if SE_read_encapsulation_mask is not None and restrict_splice_type != "SE":
-            raise RuntimeError("Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments")
+            raise RuntimeError(
+                "Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments"
+            )
 
         logger.info(f"-building multipath graph for {contig_acc}")
         start_time = time.time()
         mp_counter = self._populate_read_multi_paths(
-            contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, restrict_splice_type,
-            SE_read_encapsulation_mask
+            contig_acc,
+            contig_strand,
+            contig_seq,
+            bam_file,
+            allow_spacers,
+            restrict_splice_type,
+            SE_read_encapsulation_mask,
         )
         self._mp_counter = mp_counter
 
@@ -97,6 +108,7 @@ class LRAA:
             contig_strand,
             LRAA.min_mpgn_read_count,
             allow_spacers,
+            read_name_to_span=self._read_name_to_span,
         )
         self._multipath_graph = multipath_graph
         self._contig_acc = contig_acc
@@ -274,7 +286,6 @@ class LRAA:
             )
         )
 
-        
         return all_reconstructed_transcripts
 
     def prune_ref_transcripts_as_evidence(self, transcripts):
@@ -441,6 +452,90 @@ class LRAA:
             )
         )
 
+        ###################
+        #
+        #  Adjust UTRs based on contained path nodes
+        #
+        #
+
+        def _adjust_transcript_terminals_from_reads(transcript):
+            # Gather all read names that supported this transcript
+            read_names = set()
+            for mp in transcript.get_multipaths_evidence_assigned():
+                read_names.update(mp.get_read_names())
+
+            # Collect spans for reads we have recorded; exclude reference/fake reads
+            spans = []
+            for rn in read_names:
+                if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
+                    continue
+                if rn in self._read_name_to_span:
+                    spans.append(self._read_name_to_span[rn])
+            if not spans:
+                return  # nothing to adjust
+
+            min_lend = min(l for l, _ in spans)
+            max_rend = max(r for _, r in spans)
+
+            exons = transcript.get_exon_segments()
+            if not exons:
+                return
+
+            # Determine allowable terminal exon bounds from splice graph nodes
+            sg = self.get_splice_graph()
+            sp = transcript.get_simple_path()
+
+            # find first and last exon node objects
+            first_exon_bounds = None
+            last_exon_bounds = None
+            for nid in sp:
+                if isinstance(nid, str) and nid.startswith("E:"):
+                    node = sg.get_node_obj_via_id(nid)
+                    if node is not None:
+                        first_exon_bounds = list(node.get_coords())
+                        break
+            for nid in reversed(sp):
+                if isinstance(nid, str) and nid.startswith("E:"):
+                    node = sg.get_node_obj_via_id(nid)
+                    if node is not None:
+                        last_exon_bounds = list(node.get_coords())
+                        break
+
+            # Fallback to current exon bounds if node lookup fails
+            first_lend, first_rend = exons[0]
+            last_lend, last_rend = exons[-1]
+            if first_exon_bounds is None:
+                first_exon_bounds = [first_lend, first_rend]
+            if last_exon_bounds is None:
+                last_exon_bounds = [last_lend, last_rend]
+
+            # Adjust toward farthest read bounds but clip to exon node extents
+            exon_left_limit = first_exon_bounds[0]
+            exon_right_limit = last_exon_bounds[1]
+            new_first_lend = max(exon_left_limit, min_lend)
+            new_last_rend = min(exon_right_limit, max_rend)
+
+            # Sanity: ensure we don't invert exons
+            if new_first_lend > first_rend or new_last_rend < last_lend:
+                return
+
+            if new_first_lend != first_lend or new_last_rend != last_rend:
+                # Apply updates
+                exons[0] = [new_first_lend, first_rend]
+                exons[-1] = [last_lend, new_last_rend]
+
+                # Write back into transcript and update transcript bounds and cDNA length
+                transcript._exon_segments = exons
+                transcript._lend = exons[0][0]
+                transcript._rend = exons[-1][1]
+                transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
+
+        for transcript in transcripts:
+            _adjust_transcript_terminals_from_reads(transcript)
+
+        #
+        ###################
+
         # lighten the transcripts before returning them
         for transcript in transcripts:
             transcript.lighten()
@@ -457,7 +552,12 @@ class LRAA:
             return transcripts
 
     def _populate_read_multi_paths(
-        self, contig_acc, contig_strand, contig_seq, bam_file, allow_spacers, 
+        self,
+        contig_acc,
+        contig_strand,
+        contig_seq,
+        bam_file,
+        allow_spacers,
         restrict_splice_type,
         SE_read_encapsulation_mask=None,
     ):
@@ -476,24 +576,24 @@ class LRAA:
         if bam_file is None:
             return mp_counter  # nothing to do here.
 
-     
         pretty_alignment_manager = Pretty_alignment_manager(self._splice_graph)
 
-        pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(contig_acc, contig_strand, 
-                                                                                contig_seq, bam_file,
-                                                                                region_lend=self._splice_graph._region_lend,
-                                                                                region_rend=self._splice_graph._region_rend,
-                                                                                use_cache=True, 
-                                                                                restrict_splice_type=restrict_splice_type,
-                                                                                try_correct_alignments=LRAA_Globals.config["try_correct_alignments"],
-                                                                                SE_read_encapsulation_mask=SE_read_encapsulation_mask)
-            
+        pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(
+            contig_acc,
+            contig_strand,
+            contig_seq,
+            bam_file,
+            region_lend=self._splice_graph._region_lend,
+            region_rend=self._splice_graph._region_rend,
+            use_cache=True,
+            restrict_splice_type=restrict_splice_type,
+            try_correct_alignments=LRAA_Globals.config["try_correct_alignments"],
+            SE_read_encapsulation_mask=SE_read_encapsulation_mask,
+        )
 
         # must redo base coverage and exon coverage assignments
-        self._splice_graph.reset_exon_coverage_via_pretty_alignments(
-            pretty_alignments
-        )
-        
+        self._splice_graph.reset_exon_coverage_via_pretty_alignments(pretty_alignments)
+
         # grouping read alignments according to read pairings (for illumina PE data):
         # group alignments:  grouped_alignments['read_name'] = list(read1_pretty_alignment, read2_pretty_alignment, ...)
         grouped_alignments = self._group_alignments_by_read_name(pretty_alignments)
@@ -524,6 +624,7 @@ class LRAA:
 
             # print("{}\t{}".format(read_name, len(grouped_alignments[read_name])))
             paths_list = list()
+            path_candidates = list()  # (path, (lend, rend)) per pretty_alignment
             read_type = None
             for pretty_alignment in grouped_alignments[read_name]:
                 if read_type is None:
@@ -542,12 +643,19 @@ class LRAA:
                     assert path[0] != SPACER, "path[0] is SPACER, not allowed"
                     assert path[-1] != SPACER, "path[-1] is SPACER, not allowed"
                     paths_list.append(path)
+                    try:
+                        span = pretty_alignment.get_alignment_span()
+                    except Exception:
+                        span = None
+                    path_candidates.append((path, span))
 
             ## not allowing spacers in paths
             paths_list_no_spacers = list()
-            for path in paths_list:
+            candidates_no_spacers = list()
+            for idx, path in enumerate(paths_list):
                 if SPACER not in path:
                     paths_list_no_spacers.append(path)
+                    candidates_no_spacers.append(path_candidates[idx])
                 else:
                     if LRAA_Globals.DEBUG:
                         read_graph_mappings_ofh.write(
@@ -563,7 +671,11 @@ class LRAA:
                         )
 
             if paths_list_no_spacers:
-                paths_list = [paths_list_no_spacers[0]]  # take first one.
+                # take first one to represent this read
+                chosen_path, chosen_span = candidates_no_spacers[0]
+                paths_list = [chosen_path]
+                if chosen_span is not None:
+                    self._read_name_to_span[read_name] = chosen_span
             else:
                 continue
 
@@ -1287,6 +1399,3 @@ class LRAA:
                     continue
             # default novel
             transcript.set_is_novel_isoform(True)
-
-
-    

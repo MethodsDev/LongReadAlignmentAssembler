@@ -27,6 +27,7 @@ class MultiPathGraph:
         contig_strand,
         min_mpgn_read_count=1,
         allow_spacers=False,
+        read_name_to_span=None,
     ):
 
         local_debug = False
@@ -42,6 +43,9 @@ class MultiPathGraph:
 
         mp_graph = nx.DiGraph()
         self._mp_graph = mp_graph
+        self._read_name_to_span = (
+            read_name_to_span if read_name_to_span is not None else {}
+        )
 
         self._mp_graph_nodes_list = list()
 
@@ -73,6 +77,15 @@ class MultiPathGraph:
                 mp, count, lend_coord, rend_coord, mpg=self
             )
             mp_graph.add_node(mp_graph_node)
+
+            # Optional: set read span bounds from supporting reads
+            if self._read_name_to_span:
+                all_reads = mp_graph_node.get_read_names()
+                spans = [self._read_name_to_span[r] for r in all_reads if r in self._read_name_to_span]
+                if spans:
+                    min_l = min(x[0] for x in spans)
+                    max_r = max(x[1] for x in spans)
+                    mp_graph_node.set_read_span_bounds(min_l, max_r)
 
             if type(first_node_obj) in (TSS, PolyAsite):
                 mp_graph_node._left_boundary = 1
