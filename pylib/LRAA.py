@@ -512,8 +512,22 @@ class LRAA:
             # Adjust toward farthest read bounds but clip to exon node extents
             exon_left_limit = first_exon_bounds[0]
             exon_right_limit = last_exon_bounds[1]
-            new_first_lend = max(exon_left_limit, min_lend)
-            new_last_rend = min(exon_right_limit, max_rend)
+            candidate_first_lend = max(exon_left_limit, min_lend)
+            candidate_last_rend = min(exon_right_limit, max_rend)
+
+            # Only adjust ends lacking explicit annotation: TSS and PolyA
+            has_TSS = transcript.has_TSS()
+            has_PolyA = transcript.has_PolyA()
+            strand = transcript.get_strand()
+
+            # Map which side to adjust depending on strand
+            # left boundary: '+' => TSS, '-' => PolyA
+            # right boundary: '+' => PolyA, '-' => TSS
+            adjust_left = (strand == "+" and not has_TSS) or (strand == "-" and not has_PolyA)
+            adjust_right = (strand == "+" and not has_PolyA) or (strand == "-" and not has_TSS)
+
+            new_first_lend = candidate_first_lend if adjust_left else first_lend
+            new_last_rend = candidate_last_rend if adjust_right else last_rend
 
             # Sanity: ensure we don't invert exons
             if new_first_lend > first_rend or new_last_rend < last_lend:
