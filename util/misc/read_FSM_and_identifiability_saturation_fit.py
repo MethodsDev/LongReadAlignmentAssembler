@@ -24,8 +24,12 @@ Author: you + ChatGPT
 import argparse
 import logging
 import os
+import tempfile
+import shutil
 import time
-from typing import Optional, Dict, Tuple, Set
+import gzip
+import heapq
+from typing import Optional, Dict, Tuple, Set, List
 
 import numpy as np
 import pandas as pd
@@ -161,6 +165,518 @@ def allowed_isoforms_from_rpm(
     thr = (min_rpm * float(total_reads)) / 1_000_000.0
     passed = counts[counts >= thr]
     return set(passed.index.astype(str))
+
+
+# --------------- Streaming utilities for low-memory operation ---------------
+
+
+def stream_fractional_counts(
+    path: str,
+    iso_col: str,
+    chunksize: int = 5_000_000,
+) -> Tuple[pd.Series, int]:
+    """
+    Stream the file to compute fractional counts per isoform and total reads.
+    Returns (counts_series, total_rows).
+    """
+    total = 0
+    counts_sum: Optional[pd.Series] = None
+    usecols = [iso_col]
+    read_iter = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=usecols,
+        dtype={iso_col: "string"},
+        chunksize=chunksize,
+        engine="c",
+        compression="infer",
+    )
+    for chunk in read_iter:
+        total += len(chunk)
+        s = chunk[iso_col].astype("string").str.strip().mask(lambda x: x == "", other=pd.NA).dropna()
+        if s.empty:
+            continue
+        splits = s.str.split(",", regex=False)
+        lens = splits.str.len().astype("int64")
+        exploded = splits.explode().str.strip()
+        exploded = exploded[exploded.ne("")]
+        if exploded.empty:
+            continue
+        weights = (1.0 / lens).loc[exploded.index]
+        counts_chunk = weights.groupby(exploded).sum()
+        if counts_sum is None:
+            counts_sum = counts_chunk.astype(np.float64)
+        else:
+            counts_sum = counts_sum.add(counts_chunk, fill_value=0.0)
+    if counts_sum is None:
+        counts_sum = pd.Series(dtype=np.float64)
+    else:
+        counts_sum = counts_sum.astype(np.float64)
+    return counts_sum, int(total)
+
+
+def stream_curves_thin_and_fit(
+    path: str,
+    iso_col: str,
+    cat_col: str,
+    fsm_value: str,
+    allowed_isos: Optional[Set[str]],
+    total_reads: int,
+    thin_target: int,
+    chunksize: int = 5_000_000,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int, int, int]:
+    """
+    Stream to build thinned curves and perform fit on the same thinned grid.
+    Returns (xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident_reads, n_fsm_reads) where:
+      - xt: x positions for thinned curve TSV
+      - yi_t, yf_t: y values (int) for Identifiable and FSM at xt
+      - xf: x positions for fitting
+      - yi_f, yf_f: y values (float) for fitting
+      - n_ident_reads, n_fsm_reads: counts of eligible reads per curve
+    """
+    # Determine grids
+    step_curve = max(1, total_reads // max(1, thin_target))
+    xt = np.arange(1, total_reads + 1, step_curve, dtype=np.int64)
+    fit_step = max(1, total_reads // max(1, thin_target))
+    xf = xt.astype(np.float64)
+
+    yi_t = np.zeros_like(xt, dtype=np.int64)
+    yf_t = np.zeros_like(xt, dtype=np.int64)
+    yi_f = np.zeros_like(xf, dtype=np.float64)
+    yf_f = np.zeros_like(xf, dtype=np.float64)
+
+    # Streaming counters
+    seen_ident: Set[str] = set()
+    seen_fsm: Set[str] = set()
+    y_ident = 0
+    y_fsm = 0
+    n_ident_reads = 0
+    n_fsm_reads = 0
+
+    next_curve_idx = 0
+    next_fit_idx = 0
+
+    usecols = [iso_col, cat_col]
+    read_iter = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=usecols,
+        dtype={iso_col: "string", cat_col: "string"},
+        chunksize=chunksize,
+        engine="c",
+        compression="infer",
+    )
+
+    i_global = 0
+    for chunk in read_iter:
+        iso_s = chunk[iso_col].astype("string").str.strip()
+        cat_s = chunk[cat_col].astype("string").str.strip()
+        for iso_val, cat_val in zip(iso_s, cat_s):
+            i_global += 1
+            # Identifiable if single isoform token (no comma) and not NA/empty
+            if pd.isna(iso_val) or ("," in str(iso_val)):
+                pass
+            else:
+                iso_token = str(iso_val)
+                if allowed_isos is None or iso_token in allowed_isos:
+                    n_ident_reads += 1
+                    if iso_token not in seen_ident:
+                        seen_ident.add(iso_token)
+                        y_ident += 1
+                    if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
+                        n_fsm_reads += 1
+                        if iso_token not in seen_fsm:
+                            seen_fsm.add(iso_token)
+                            y_fsm += 1
+            # Record thinned points
+            while next_curve_idx < len(xt) and i_global >= int(xt[next_curve_idx]):
+                yi_t[next_curve_idx] = y_ident
+                yf_t[next_curve_idx] = y_fsm
+                next_curve_idx += 1
+            while next_fit_idx < len(xf) and i_global >= int(xf[next_fit_idx]):
+                yi_f[next_fit_idx] = float(y_ident)
+                yf_f[next_fit_idx] = float(y_fsm)
+                next_fit_idx += 1
+
+    return (
+        xt,
+        yi_t,
+        yf_t,
+        xf,
+        yi_f,
+        yf_f,
+        n_ident_reads,
+        n_fsm_reads,
+        int(y_ident),
+        int(y_fsm),
+    )
+
+
+def stream_observed_quantiles(
+    path: str,
+    iso_col: str,
+    cat_col: str,
+    fsm_value: str,
+    allowed_isos: Optional[Set[str]],
+    thresholds_ident: Dict[int, int],
+    thresholds_fsm: Dict[int, int],
+    chunksize: int = 5_000_000,
+) -> Tuple[Dict[int, float], Dict[int, float]]:
+    """
+    Stream to find first read index crossing each absolute threshold.
+    thresholds_* map percent (e.g., 80) -> y threshold count (absolute).
+    Returns dicts mapping percent -> read index (float) or NaN if never crossed.
+    """
+    pending_i = {k: True for k in thresholds_ident}
+    pending_f = {k: True for k in thresholds_fsm}
+    out_i: Dict[int, float] = {k: float("nan") for k in thresholds_ident}
+    out_f: Dict[int, float] = {k: float("nan") for k in thresholds_fsm}
+
+    seen_ident: Set[str] = set()
+    seen_fsm: Set[str] = set()
+    y_ident = 0
+    y_fsm = 0
+
+    i_global = 0
+    usecols = [iso_col, cat_col]
+    read_iter = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=usecols,
+        dtype={iso_col: "string", cat_col: "string"},
+        chunksize=chunksize,
+        engine="c",
+        compression="infer",
+    )
+    for chunk in read_iter:
+        iso_s = chunk[iso_col].astype("string").str.strip()
+        cat_s = chunk[cat_col].astype("string").str.strip()
+        for iso_val, cat_val in zip(iso_s, cat_s):
+            i_global += 1
+            if not pd.isna(iso_val) and "," not in str(iso_val):
+                iso_token = str(iso_val)
+                if allowed_isos is None or iso_token in allowed_isos:
+                    if iso_token not in seen_ident:
+                        seen_ident.add(iso_token)
+                        y_ident += 1
+                        for p, thr in thresholds_ident.items():
+                            if pending_i.get(p) and y_ident >= thr:
+                                out_i[p] = float(i_global)
+                                pending_i[p] = False
+                    if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
+                        if iso_token not in seen_fsm:
+                            seen_fsm.add(iso_token)
+                            y_fsm += 1
+                            for p, thr in thresholds_fsm.items():
+                                if pending_f.get(p) and y_fsm >= thr:
+                                    out_f[p] = float(i_global)
+                                    pending_f[p] = False
+        if not any(pending_i.values()) and not any(pending_f.values()):
+            break
+    return out_i, out_f
+
+
+# --------------- External disk-based full randomization (random-key sort) ---------------
+
+
+def _open_read_text(path: str):
+    return gzip.open(path, "rt") if path.endswith(".gz") else open(path, "rt")
+
+
+def _open_write_text(path: str):
+    return gzip.open(path, "wt") if path.endswith(".gz") else open(path, "wt")
+
+
+def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir: str, run_paths: List[str]):
+    n = len(batch_lines)
+    if n == 0:
+        return
+    keys = rng.random(n)
+    order = np.argsort(keys, kind="mergesort")
+    run_path = os.path.join(tmp_dir, f"run_{len(run_paths)}.run")
+    with open(run_path, "wt") as f:
+        for idx in order:
+            key_str = f"{keys[idx]:0.17f}"
+            f.write(key_str)
+            f.write("\t")
+            f.write(batch_lines[idx])
+    run_paths.append(run_path)
+
+
+def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False):
+    mode = "at" if append else "wt"
+    fout = open(out_path, mode)
+    files = [open(p, "rt") for p in run_paths]
+    try:
+        heap = []
+        for i, f in enumerate(files):
+            line = f.readline()
+            if not line:
+                continue
+            key, row = line.split("\t", 1)
+            heap.append((key, i, row))
+        heapq.heapify(heap)
+        while heap:
+            key, i, row = heapq.heappop(heap)
+            fout.write(row)
+            nxt = files[i].readline()
+            if nxt:
+                k2, r2 = nxt.split("\t", 1)
+                heapq.heappush(heap, (k2, i, r2))
+    finally:
+        for f in files:
+            try:
+                f.close()
+            except Exception:
+                pass
+        try:
+            fout.close()
+        except Exception:
+            pass
+
+
+def external_shuffle_to_file(
+    in_path: str,
+    out_path: str,
+    seed: int,
+    lines_per_run: int = 200_000,
+    fan_in: int = 64,
+    tmp_dir: Optional[str] = None,
+) -> str:
+    if tmp_dir is None:
+        tdir_obj = tempfile.TemporaryDirectory(prefix="shuffle_runs_")
+        tmp_dir = tdir_obj.name
+        auto_cleanup = True
+    else:
+        os.makedirs(tmp_dir, exist_ok=True)
+        tdir_obj = None
+        auto_cleanup = False
+
+    rng = np.random.default_rng(seed)
+
+    run_paths: List[str] = []
+    with _open_read_text(in_path) as fin:
+        header = fin.readline()
+        if header == "":
+            with _open_write_text(out_path) as fout:
+                pass
+            return out_path
+        if not header.endswith("\n"):
+            header = header + "\n"
+
+        batch_lines: List[str] = []
+        for line in fin:
+            batch_lines.append(line)
+            if len(batch_lines) >= lines_per_run:
+                _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
+                batch_lines.clear()
+        if batch_lines:
+            _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
+            batch_lines.clear()
+
+    cur_runs = run_paths
+    level = 0
+    while len(cur_runs) > fan_in:
+        next_runs: List[str] = []
+        for i in range(0, len(cur_runs), fan_in):
+            group = cur_runs[i : i + fan_in]
+            out_run = os.path.join(tmp_dir, f"merge_level{level}_group{i//fan_in}.run")
+            _kway_merge_runs(group, out_run)
+            next_runs.append(out_run)
+            for rp in group:
+                try:
+                    os.remove(rp)
+                except OSError:
+                    pass
+        cur_runs = next_runs
+        level += 1
+
+    with _open_write_text(out_path) as fout:
+        fout.write(header)
+    _kway_merge_runs(cur_runs, out_path, append=True)
+    for rp in cur_runs:
+        try:
+            os.remove(rp)
+        except OSError:
+            pass
+
+    if auto_cleanup and tdir_obj is not None:
+        tdir_obj.cleanup()
+    return out_path
+
+
+def randomized_row_iter(
+    path: str,
+    iso_col: str,
+    cat_col: str,
+    chunksize: int,
+    buffer_max: int,
+    seed: int,
+):
+    """
+    Yield (iso, cat) rows in approximately random order using a bounded shuffle buffer.
+    Memory usage is O(buffer_max) rows.
+    """
+    rng = np.random.default_rng(seed)
+    buffer = []  # list of tuples (iso, cat)
+    usecols = [iso_col, cat_col]
+    reader = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=usecols,
+        dtype={iso_col: "string", cat_col: "string"},
+        chunksize=chunksize,
+        engine="c",
+        compression="infer",
+    )
+    # Helper to fill buffer up to capacity
+    def extend_buffer_from_chunk(df_chunk: pd.DataFrame):
+        nonlocal buffer
+        if df_chunk is None or df_chunk.empty:
+            return
+        iso_s = df_chunk[iso_col].astype("string").str.strip()
+        cat_s = df_chunk[cat_col].astype("string").str.strip()
+        # Append tuples; avoid creating large intermediate DataFrame
+        for iso_val, cat_val in zip(iso_s, cat_s):
+            buffer.append((iso_val, cat_val))
+
+    chunk_iter = iter(reader)
+    next_chunk = None
+
+    # Prime buffer
+    while len(buffer) < buffer_max:
+        try:
+            next_chunk = next(chunk_iter)
+        except StopIteration:
+            next_chunk = None
+            break
+        extend_buffer_from_chunk(next_chunk)
+        next_chunk = None
+
+    # Main loop: pop random items, refill from stream
+    while buffer:
+        # Refill if below capacity and chunks remain
+        while len(buffer) < buffer_max:
+            try:
+                next_chunk = next(chunk_iter)
+            except StopIteration:
+                next_chunk = None
+                break
+            extend_buffer_from_chunk(next_chunk)
+            next_chunk = None
+        # Randomly pop one
+        j = int(rng.integers(len(buffer)))
+        iso_val, cat_val = buffer[j]
+        buffer[j] = buffer[-1]
+        buffer.pop()
+        yield (iso_val, cat_val)
+    # Drain remaining chunks (if any) — occurs when initial file smaller than buffer
+    for chunk in chunk_iter:
+        extend_buffer_from_chunk(chunk)
+        while buffer:
+            j = int(rng.integers(len(buffer)))
+            iso_val, cat_val = buffer[j]
+            buffer[j] = buffer[-1]
+            buffer.pop()
+            yield (iso_val, cat_val)
+
+
+def stream_curves_thin_and_fit_from_rows(
+    row_iter,
+    fsm_value: str,
+    allowed_isos: Optional[Set[str]],
+    total_reads: int,
+    thin_target: int,
+):
+    step_curve = max(1, total_reads // max(1, thin_target))
+    xt = np.arange(1, total_reads + 1, step_curve, dtype=np.int64)
+    xf = xt.astype(np.float64)
+
+    yi_t = np.zeros_like(xt, dtype=np.int64)
+    yf_t = np.zeros_like(xt, dtype=np.int64)
+    yi_f = np.zeros_like(xf, dtype=np.float64)
+    yf_f = np.zeros_like(xf, dtype=np.float64)
+
+    seen_ident: Set[str] = set()
+    seen_fsm: Set[str] = set()
+    y_ident = 0
+    y_fsm = 0
+    n_ident_reads = 0
+    n_fsm_reads = 0
+
+    next_curve_idx = 0
+    next_fit_idx = 0
+
+    i_global = 0
+    for iso_val, cat_val in row_iter:
+        i_global += 1
+        if pd.isna(iso_val) or ("," in str(iso_val)):
+            pass
+        else:
+            iso_token = str(iso_val)
+            if allowed_isos is None or iso_token in allowed_isos:
+                n_ident_reads += 1
+                if iso_token not in seen_ident:
+                    seen_ident.add(iso_token)
+                    y_ident += 1
+                if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
+                    n_fsm_reads += 1
+                    if iso_token not in seen_fsm:
+                        seen_fsm.add(iso_token)
+                        y_fsm += 1
+        while next_curve_idx < len(xt) and i_global >= int(xt[next_curve_idx]):
+            yi_t[next_curve_idx] = y_ident
+            yf_t[next_curve_idx] = y_fsm
+            next_curve_idx += 1
+        while next_fit_idx < len(xf) and i_global >= int(xf[next_fit_idx]):
+            yi_f[next_fit_idx] = float(y_ident)
+            yf_f[next_fit_idx] = float(y_fsm)
+            next_fit_idx += 1
+
+    return xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident_reads, n_fsm_reads, int(y_ident), int(y_fsm)
+
+
+def stream_observed_quantiles_from_rows(
+    row_iter,
+    fsm_value: str,
+    allowed_isos: Optional[Set[str]],
+    thresholds_ident: Dict[int, int],
+    thresholds_fsm: Dict[int, int],
+):
+    pending_i = {k: True for k in thresholds_ident}
+    pending_f = {k: True for k in thresholds_fsm}
+    out_i: Dict[int, float] = {k: float("nan") for k in thresholds_ident}
+    out_f: Dict[int, float] = {k: float("nan") for k in thresholds_fsm}
+
+    seen_ident: Set[str] = set()
+    seen_fsm: Set[str] = set()
+    y_ident = 0
+    y_fsm = 0
+
+    i_global = 0
+    for iso_val, cat_val in row_iter:
+        i_global += 1
+        if not pd.isna(iso_val) and "," not in str(iso_val):
+            iso_token = str(iso_val)
+            if allowed_isos is None or iso_token in allowed_isos:
+                if iso_token not in seen_ident:
+                    seen_ident.add(iso_token)
+                    y_ident += 1
+                    for p, thr in thresholds_ident.items():
+                        if pending_i.get(p) and y_ident >= thr:
+                            out_i[p] = float(i_global)
+                            pending_i[p] = False
+                if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
+                    if iso_token not in seen_fsm:
+                        seen_fsm.add(iso_token)
+                        y_fsm += 1
+                        for p, thr in thresholds_fsm.items():
+                            if pending_f.get(p) and y_fsm >= thr:
+                                out_f[p] = float(i_global)
+                                pending_f[p] = False
+        if not any(pending_i.values()) and not any(pending_f.values()):
+            break
+    return out_i, out_f
 
 
 # --------------- Fitting ---------------
@@ -345,7 +861,6 @@ def main():
         help="Value in sqanti_cat indicating full splice match.",
     )
     p.add_argument("--seed", type=int, default=42, help="Shuffle seed.")
-    p.add_argument("--no-shuffle", action="store_true", help="Disable shuffling.")
     p.add_argument(
         "--thin",
         type=int,
@@ -368,6 +883,50 @@ def main():
         "Minimum expression threshold in reads-per-million total reads."
         " Isoforms must meet this threshold (with fractional counting) to be included",
     )
+    p.add_argument(
+        "--chunksize",
+        type=int,
+        default=5_000_000,
+        help="Rows per chunk when streaming (memory/perf trade-off).",
+    )
+    p.add_argument(
+        "--shuffle-buffer",
+        type=int,
+        default=2_000_000,
+        help="Approximate shuffle buffer size for streaming mode (O(buffer) memory).",
+    )
+    p.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Skip generating the PNG plot (saves memory and dependencies).",
+    )
+    p.add_argument(
+        "--no-curves",
+        action="store_true",
+        help="Skip writing the thinned curves TSV (saves I/O).",
+    )
+    p.add_argument(
+        "--shuffle-out",
+        default=None,
+        help="Path to write the shuffled file (default: auto next to input). Use .gz to compress.",
+    )
+    p.add_argument(
+        "--shuffle-run-lines",
+        type=int,
+        default=200_000,
+        help="Approx. number of lines per run (controls memory/temp file size in external shuffle).",
+    )
+    p.add_argument(
+        "--shuffle-fan-in",
+        type=int,
+        default=64,
+        help="Run merge fan-in (controls number of runs merged at once).",
+    )
+    p.add_argument(
+        "--shuffle-tmpdir",
+        default=None,
+        help="Temporary directory for external shuffle runs (default: system temp).",
+    )
     p.add_argument("-q", "--quiet", action="store_true", help="Reduce logging.")
     args = p.parse_args()
 
@@ -376,27 +935,36 @@ def main():
         format="%(asctime)s %(levelname)s: %(message)s",
     )
 
-    nrows = args.limit_rows if args.limit_rows and args.limit_rows > 0 else None
-
     t0 = time.perf_counter()
-    df = read_columns(args.input, args.iso_col, args.cat_col, nrows=nrows)
-    n = len(df)
-    logging.info("Loaded %d rows.", n)
+    in_path = args.input
+    # Always do an external full shuffle pre-step
+    base = os.path.basename(in_path)
+    root = base
+    for ext in (".tsv.gz", ".txt.gz", ".csv.gz", ".tsv", ".txt", ".csv"):
+        if root.endswith(ext):
+            root = root[: -len(ext)]
+            break
+    shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
+    logging.info("External shuffle starting -> %s", shuffle_out)
+    external_shuffle_to_file(
+        in_path,
+        shuffle_out,
+        seed=args.seed,
+        lines_per_run=args.shuffle_run_lines,
+        fan_in=args.shuffle_fan_in,
+        tmp_dir=args.shuffle_tmpdir,
+    )
+    in_path = shuffle_out
+    logging.info("External shuffle complete: %s", in_path)
 
-    if not args.no_shuffle and n > 0:
-        rng = np.random.default_rng(args.seed)
-        df = df.take(rng.permutation(n)).reset_index(drop=True)
-        logging.info("Shuffled with seed=%d", args.seed)
-    else:
-        df = df.reset_index(drop=True)
-
-    # Fractional counting pass and RPM filtering
-    frac_counts = compute_fractional_iso_counts(df, args.iso_col)
+    # Always run in streaming mode
+    # Pass 1: fractional counts and total reads
+    frac_counts, n = stream_fractional_counts(
+        in_path, args.iso_col, chunksize=args.chunksize
+    )
     allowed_isos = allowed_isoforms_from_rpm(frac_counts, n, args.min_rpm)
     n_allowed_iso = (
-        len(allowed_isos)
-        if allowed_isos is not None
-        else int(len(frac_counts))
+        len(allowed_isos) if allowed_isos is not None else int(len(frac_counts))
     )
     if args.min_rpm and args.min_rpm > 0:
         logging.info(
@@ -406,46 +974,55 @@ def main():
             n_allowed_iso,
         )
 
-    curves = build_curves(
-        df, args.iso_col, args.cat_col, args.fsm_value, allowed_isos=allowed_isos
+    # Pass 2: thinned curves and fit (sequential since input is externally shuffled)
+    xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident, n_fsm, obs_max_ident, obs_max_fsm = stream_curves_thin_and_fit(
+        in_path,
+        args.iso_col,
+        args.cat_col,
+        args.fsm_value,
+        allowed_isos,
+        n,
+        args.thin,
+        chunksize=args.chunksize,
     )
-    y_ident, y_fsm = curves["ident"], curves["fsm"]
-    n_ident, n_fsm = curves["mask_counts"]
-
-    # Build x
-    x = np.arange(1, n + 1, dtype=np.float64)
-
-    # Fit on a thinned grid for speed/robustness, but evaluate stats on full vectors
-    # (We fit using the thinned subset but compute observed x80 on the full curve.)
-    fit_step = max(1, n // max(1, args.thin))
-    xf = x[::fit_step]
-    yi_f = y_ident[::fit_step].astype(np.float64)
-    yf_f = y_fsm[::fit_step].astype(np.float64)
-
     fit_ident = fit_best_model(xf, yi_f)
     fit_fsm = fit_best_model(xf, yf_f)
 
-    # Observed stats (full curves)
-    x80i_obs, y80i_obs = observed_x80(x, y_ident)
-    x80f_obs, y80f_obs = observed_x80(x, y_fsm)
-
-    # Additional quantiles (80 to 95 step 5)
+    # Compute observed quantiles (exact) with pass 3
     fracs = [0.80, 0.85, 0.90, 0.95]
-    obs_ident = {int(f * 100): observed_x_at_fraction(x, y_ident, f) for f in fracs}
-    obs_fsm = {int(f * 100): observed_x_at_fraction(x, y_fsm, f) for f in fracs}
+    thr_i = {int(f * 100): int(np.ceil(f * obs_max_ident)) for f in fracs}
+    thr_f = {int(f * 100): int(np.ceil(f * obs_max_fsm)) for f in fracs}
+    obs_ident, obs_fsm = stream_observed_quantiles(
+        in_path,
+        args.iso_col,
+        args.cat_col,
+        args.fsm_value,
+        allowed_isos,
+        thr_i,
+        thr_f,
+        chunksize=args.chunksize,
+    )
+    # Extract x80 from dicts
+    x80i_obs = obs_ident.get(80, float("nan"))
+    x80f_obs = obs_fsm.get(80, float("nan"))
     pred_ident = {int(f * 100): predicted_x_at_fraction(fit_ident, f) for f in fracs}
     pred_fsm = {int(f * 100): predicted_x_at_fraction(fit_fsm, f) for f in fracs}
+    # Prepare arrays for output already computed: xt, yi_t, yf_t
+    y_ident = None  # not used further
+    y_fsm = None
 
     # Compose fit summary TSV
-    out_tsv, out_png, out_fit = auto_paths(
-        args.input, args.out_tsv, args.png_out, args.fit_out
-    )
+    out_tsv, out_png, out_fit = auto_paths(args.input, args.out_tsv, args.png_out, args.fit_out)
+    # Observed maxima per curve for summary
+    observed_max_ident_val = int(obs_max_ident)
+    observed_max_fsm_val = int(obs_max_fsm)
+
     fit_df = pd.DataFrame(
         [
             {
                 "curve": "Identifiable",
                 "eligible_read_count": n_ident,
-                "observed_max": int(y_ident[-1]) if n else 0,
+                "observed_max": observed_max_ident_val,
                 "observed_x80_reads": x80i_obs,
                 # Additional observed quantiles
                 "observed_x85_reads": obs_ident.get(85, float("nan")),
@@ -465,7 +1042,7 @@ def main():
             {
                 "curve": "FSM",
                 "eligible_read_count": n_fsm,
-                "observed_max": int(y_fsm[-1]) if n else 0,
+                "observed_max": observed_max_fsm_val,
                 "observed_x80_reads": x80f_obs,
                 "observed_x85_reads": obs_fsm.get(85, float("nan")),
                 "observed_x90_reads": obs_fsm.get(90, float("nan")),
@@ -491,128 +1068,126 @@ def main():
     fit_df.to_csv(out_fit, sep="\t", index=False)
     logging.info("Wrote fit summary: %s", out_fit)
 
-    # Thinned curve TSV for plotting elsewhere
-    step_curve = max(1, n // max(1, args.thin))
-    xt = np.arange(1, n + 1, step_curve, dtype=np.int64)
-    yi_t = y_ident[::step_curve]
-    yf_t = y_fsm[::step_curve]
-    thin_df = pd.DataFrame(
-        {
-            "read_index": xt,
-            "cum_unique_identifiable": yi_t,
-            "cum_unique_FSM": yf_t,
-        }
-    )
-    thin_df.to_csv(out_tsv, sep="\t", index=False, compression="infer")
-    logging.info("Wrote thinned curves: %s  (%d rows)", out_tsv, len(thin_df))
+    if not args.no_curves:
+        thin_df = pd.DataFrame(
+            {
+                "read_index": xt,
+                "cum_unique_identifiable": yi_t,
+                "cum_unique_FSM": yf_t,
+            }
+        )
+        thin_df.to_csv(out_tsv, sep="\t", index=False, compression="infer")
+        logging.info("Wrote thinned curves: %s  (%d rows)", out_tsv, len(thin_df))
 
     # Plot overlay with fitted curves + 80% lines and subtle extra quantiles (85/90/95)
-    import matplotlib.pyplot as plt
+    if not args.no_plot:
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception as e:
+            logging.warning("matplotlib not available (%s); skipping plot.", e)
+        else:
+            plt.figure(figsize=(8.6, 5.4), dpi=120)
+            # Empirical (thinned)
+            plt.plot(xt, yi_t, label="Identifiable (empirical)", linewidth=1.6)
+            plt.plot(xt, yf_t, label="FSM (empirical)", linewidth=1.6)
 
-    plt.figure(figsize=(8.6, 5.4), dpi=120)
-    # Empirical (thinned)
-    plt.plot(xt, yi_t, label="Identifiable (empirical)", linewidth=1.6)
-    plt.plot(xt, yf_t, label="FSM (empirical)", linewidth=1.6)
+            # Fitted curves (evaluated on xt for display)
+            fracs_extra = [0.85, 0.90, 0.95]
 
-    # Fitted curves (evaluated on xt for display)
-    # Extra fractions beyond 80% for subtle guides
-    fracs_extra = [0.85, 0.90, 0.95]
+            if fit_ident["model"] == "exp":
+                vmax, k = fit_ident["vmax"], fit_ident["param1"]
+                yi_fit = vmax * (1.0 - np.exp(-k * xt))
+                y80 = 0.8 * vmax
+                x80 = fit_ident["x80_pred"]
+                plt.plot(
+                    xt,
+                    yi_fit,
+                    linestyle="--",
+                    linewidth=1.2,
+                    label=f"Identifiable fit ({fit_ident['model']})",
+                )
+                plt.axhline(y80, linestyle=":", linewidth=1.0)
+                if np.isfinite(x80):
+                    plt.axvline(x80, linestyle=":", linewidth=1.0)
+                for f in fracs_extra:
+                    y_f = f * vmax
+                    x_f = predicted_x_at_fraction(fit_ident, f)
+                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    if np.isfinite(x_f):
+                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            elif fit_ident["model"] == "mm":
+                vmax, K = fit_ident["vmax"], fit_ident["param1"]
+                yi_fit = vmax * (xt / (K + xt))
+                y80 = 0.8 * vmax
+                x80 = fit_ident["x80_pred"]
+                plt.plot(
+                    xt,
+                    yi_fit,
+                    linestyle="--",
+                    linewidth=1.2,
+                    label=f"Identifiable fit ({fit_ident['model']})",
+                )
+                plt.axhline(y80, linestyle=":", linewidth=1.0)
+                if np.isfinite(x80):
+                    plt.axvline(x80, linestyle=":", linewidth=1.0)
+                for f in fracs_extra:
+                    y_f = f * vmax
+                    x_f = predicted_x_at_fraction(fit_ident, f)
+                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    if np.isfinite(x_f):
+                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
 
-    if fit_ident["model"] == "exp":
-        vmax, k = fit_ident["vmax"], fit_ident["param1"]
-        yi_fit = vmax * (1.0 - np.exp(-k * xt))
-        y80 = 0.8 * vmax
-        x80 = fit_ident["x80_pred"]
-        plt.plot(
-            xt,
-            yi_fit,
-            linestyle="--",
-            linewidth=1.2,
-            label=f"Identifiable fit ({fit_ident['model']})",
-        )
-        plt.axhline(y80, linestyle=":", linewidth=1.0)
-        if np.isfinite(x80):
-            plt.axvline(x80, linestyle=":", linewidth=1.0)
-        # Subtle extra quantile guides
-        for f in fracs_extra:
-            y_f = f * vmax
-            x_f = predicted_x_at_fraction(fit_ident, f)
-            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-            if np.isfinite(x_f):
-                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-    elif fit_ident["model"] == "mm":
-        vmax, K = fit_ident["vmax"], fit_ident["param1"]
-        yi_fit = vmax * (xt / (K + xt))
-        y80 = 0.8 * vmax
-        x80 = fit_ident["x80_pred"]
-        plt.plot(
-            xt,
-            yi_fit,
-            linestyle="--",
-            linewidth=1.2,
-            label=f"Identifiable fit ({fit_ident['model']})",
-        )
-        plt.axhline(y80, linestyle=":", linewidth=1.0)
-        if np.isfinite(x80):
-            plt.axvline(x80, linestyle=":", linewidth=1.0)
-        for f in fracs_extra:
-            y_f = f * vmax
-            x_f = predicted_x_at_fraction(fit_ident, f)
-            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-            if np.isfinite(x_f):
-                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            if fit_fsm["model"] == "exp":
+                vmax, k = fit_fsm["vmax"], fit_fsm["param1"]
+                yf_fit = vmax * (1.0 - np.exp(-k * xt))
+                y80 = 0.8 * vmax
+                x80 = fit_fsm["x80_pred"]
+                plt.plot(
+                    xt,
+                    yf_fit,
+                    linestyle="--",
+                    linewidth=1.2,
+                    label=f"FSM fit ({fit_fsm['model']})",
+                )
+                plt.axhline(y80, linestyle=":", linewidth=1.0)
+                if np.isfinite(x80):
+                    plt.axvline(x80, linestyle=":", linewidth=1.0)
+                for f in fracs_extra:
+                    y_f = f * vmax
+                    x_f = predicted_x_at_fraction(fit_fsm, f)
+                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    if np.isfinite(x_f):
+                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            elif fit_fsm["model"] == "mm":
+                vmax, K = fit_fsm["vmax"], fit_fsm["param1"]
+                yf_fit = vmax * (xt / (K + xt))
+                y80 = 0.8 * vmax
+                x80 = fit_fsm["x80_pred"]
+                plt.plot(
+                    xt,
+                    yf_fit,
+                    linestyle="--",
+                    linewidth=1.2,
+                    label=f"FSM fit ({fit_fsm['model']})",
+                )
+                plt.axhline(y80, linestyle=":", linewidth=1.0)
+                if np.isfinite(x80):
+                    plt.axvline(x80, linestyle=":", linewidth=1.0)
+                for f in fracs_extra:
+                    y_f = f * vmax
+                    x_f = predicted_x_at_fraction(fit_fsm, f)
+                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    if np.isfinite(x_f):
+                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
 
-    if fit_fsm["model"] == "exp":
-        vmax, k = fit_fsm["vmax"], fit_fsm["param1"]
-        yf_fit = vmax * (1.0 - np.exp(-k * xt))
-        y80 = 0.8 * vmax
-        x80 = fit_fsm["x80_pred"]
-        plt.plot(
-            xt,
-            yf_fit,
-            linestyle="--",
-            linewidth=1.2,
-            label=f"FSM fit ({fit_fsm['model']})",
-        )
-        plt.axhline(y80, linestyle=":", linewidth=1.0)
-        if np.isfinite(x80):
-            plt.axvline(x80, linestyle=":", linewidth=1.0)
-        for f in fracs_extra:
-            y_f = f * vmax
-            x_f = predicted_x_at_fraction(fit_fsm, f)
-            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-            if np.isfinite(x_f):
-                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-    elif fit_fsm["model"] == "mm":
-        vmax, K = fit_fsm["vmax"], fit_fsm["param1"]
-        yf_fit = vmax * (xt / (K + xt))
-        y80 = 0.8 * vmax
-        x80 = fit_fsm["x80_pred"]
-        plt.plot(
-            xt,
-            yf_fit,
-            linestyle="--",
-            linewidth=1.2,
-            label=f"FSM fit ({fit_fsm['model']})",
-        )
-        plt.axhline(y80, linestyle=":", linewidth=1.0)
-        if np.isfinite(x80):
-            plt.axvline(x80, linestyle=":", linewidth=1.0)
-        for f in fracs_extra:
-            y_f = f * vmax
-            x_f = predicted_x_at_fraction(fit_fsm, f)
-            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-            if np.isfinite(x_f):
-                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-
-    plt.xlabel("Number of reads")
-    plt.ylabel("Unique transcript discovered")
-    plt.title("Saturation: Identifiable vs FSM (fit + 80% thresholds)")
-    plt.legend(frameon=False, ncol=2)
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logging.info("Wrote plot: %s  (elapsed: %.2fs)", out_png, time.perf_counter() - t0)
+            plt.xlabel("Number of reads")
+            plt.ylabel("Unique transcript discovered")
+            plt.title("Saturation: Identifiable vs FSM (fit + thresholds)")
+            plt.legend(frameon=False, ncol=2)
+            plt.tight_layout()
+            plt.savefig(out_png)
+            plt.close()
+            logging.info("Wrote plot: %s  (elapsed: %.2fs)", out_png, time.perf_counter() - t0)
 
 
 if __name__ == "__main__":
