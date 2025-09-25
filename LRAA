@@ -23,7 +23,7 @@ import logging
 import shutil
 
 
-VERSION = "v0.8.0-postdev"
+VERSION = "v0.8.0-postdev3"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -43,6 +43,7 @@ allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
+
 
 def main():
 
@@ -139,9 +140,9 @@ def main():
 
     parser.add_argument(
         "--include_prelim_transcripts",
-        action='store_true',
+        action="store_true",
         default=False,
-        help="write preliminary pre-filtered transcripts gtf and quant files"
+        help="write preliminary pre-filtered transcripts gtf and quant files",
     )
 
     parser.add_argument(
@@ -825,9 +826,6 @@ def main():
             )
             logger.info("-making bed output file: {}".format(bed_output_file))
             subprocess.check_call(cmd, shell=True)
-
-            
-
 
     ##############################################################################
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
