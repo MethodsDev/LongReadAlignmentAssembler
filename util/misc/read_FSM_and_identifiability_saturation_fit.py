@@ -405,7 +405,8 @@ def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir:
 
 def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False):
     mode = "at" if append else "wt"
-    fout = open(out_path, mode)
+    # Use gzip when writing to a gzip file to avoid corrupting output
+    fout = gzip.open(out_path, mode) if out_path.endswith(".gz") else open(out_path, mode)
     files = [open(p, "rt") for p in run_paths]
     try:
         heap = []
