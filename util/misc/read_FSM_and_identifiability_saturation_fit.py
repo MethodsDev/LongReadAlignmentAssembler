@@ -25,7 +25,7 @@ import argparse
 import logging
 import os
 import time
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Set
 
 import numpy as np
 import pandas as pd
@@ -96,12 +96,19 @@ def cumulative_unique_curve(ids: pd.Series, eligible_mask: np.ndarray) -> np.nda
 
 
 def build_curves(
-    df: pd.DataFrame, iso_col: str, cat_col: str, fsm_value: str
+    df: pd.DataFrame,
+    iso_col: str,
+    cat_col: str,
+    fsm_value: str,
+    allowed_isos: Optional[Set[str]] = None,
 ) -> Dict[str, np.ndarray]:
     iso = df[iso_col]
     cat = df[cat_col]
 
     mask_ident = iso.notna() & ~iso.str.contains(",", na=False)
+    if allowed_isos is not None:
+        # Only consider identifiable reads whose isoform passes the RPM threshold
+        mask_ident = mask_ident & iso.isin(allowed_isos)
     mask_fsm = mask_ident & (cat == fsm_value)
 
     y_ident = cumulative_unique_curve(iso, mask_ident.to_numpy())
@@ -112,6 +119,48 @@ def build_curves(
         "fsm": y_fsm,
         "mask_counts": (int(mask_ident.sum()), int(mask_fsm.sum())),
     }
+
+
+# --------------- Expression thresholding (RPM with fractional counting) ---------------
+
+
+def compute_fractional_iso_counts(df: pd.DataFrame, iso_col: str) -> pd.Series:
+    """
+    Compute fractional read support per isoform.
+    For each row with k assigned transcripts, each transcript gets +1/k.
+    Returns a Series indexed by isoform ID with float counts.
+    """
+    s = df[iso_col].dropna()
+    if s.empty:
+        return pd.Series(dtype=np.float64)
+    splits = s.str.split(",", regex=False)
+    lens = splits.str.len().astype("int64")
+    exploded = splits.explode()
+    # Strip whitespace from tokens and drop empty tokens
+    exploded = exploded.str.strip()
+    exploded = exploded[exploded.ne("")]
+    if exploded.empty:
+        return pd.Series(dtype=np.float64)
+    weights_per_row = 1.0 / lens
+    weights = weights_per_row.loc[exploded.index]
+    counts = weights.groupby(exploded).sum()
+    # Ensure float64 dtype
+    return counts.astype(np.float64)
+
+
+def allowed_isoforms_from_rpm(
+    counts: pd.Series, total_reads: int, min_rpm: float
+) -> Optional[Set[str]]:
+    """
+    Given fractional counts per isoform and total reads, return isoforms with
+    counts >= min_rpm * total_reads / 1e6.
+    """
+    if min_rpm is None or min_rpm <= 0 or total_reads <= 0 or counts.empty:
+        # No filtering to apply
+        return None
+    thr = (min_rpm * float(total_reads)) / 1_000_000.0
+    passed = counts[counts >= thr]
+    return set(passed.index.astype(str))
 
 
 # --------------- Fitting ---------------
@@ -277,6 +326,14 @@ def main():
     )
     p.add_argument("--png-out", default=None, help="Output PNG plot.")
     p.add_argument("--fit-out", default=None, help="Output TSV summarizing fits.")
+    p.add_argument(
+        "--min-rpm",
+        type=float,
+        default=0.0,
+        help=
+        "Minimum expression threshold in reads-per-million total reads."
+        " Isoforms must meet this threshold (with fractional counting) to be included",
+    )
     p.add_argument("-q", "--quiet", action="store_true", help="Reduce logging.")
     args = p.parse_args()
 
@@ -299,7 +356,25 @@ def main():
     else:
         df = df.reset_index(drop=True)
 
-    curves = build_curves(df, args.iso_col, args.cat_col, args.fsm_value)
+    # Fractional counting pass and RPM filtering
+    frac_counts = compute_fractional_iso_counts(df, args.iso_col)
+    allowed_isos = allowed_isoforms_from_rpm(frac_counts, n, args.min_rpm)
+    n_allowed_iso = (
+        len(allowed_isos)
+        if allowed_isos is not None
+        else int(len(frac_counts))
+    )
+    if args.min_rpm and args.min_rpm > 0:
+        logging.info(
+            "RPM filter: min_rpm=%.6g; total_reads=%d; allowed_isoforms=%d",
+            args.min_rpm,
+            n,
+            n_allowed_iso,
+        )
+
+    curves = build_curves(
+        df, args.iso_col, args.cat_col, args.fsm_value, allowed_isos=allowed_isos
+    )
     y_ident, y_fsm = curves["ident"], curves["fsm"]
     n_ident, n_fsm = curves["mask_counts"]
 
@@ -352,6 +427,12 @@ def main():
             },
         ]
     )
+    # Add metadata columns (same values for both rows)
+    rpm_thr_count = (args.min_rpm * float(n)) / 1_000_000.0 if n else 0.0
+    fit_df.insert(1, "total_reads", n)
+    fit_df.insert(2, "min_rpm", args.min_rpm)
+    fit_df.insert(3, "rpm_count_threshold", rpm_thr_count)
+    fit_df.insert(4, "n_isoforms_above_threshold", n_allowed_iso)
     fit_df.to_csv(out_fit, sep="\t", index=False)
     logging.info("Wrote fit summary: %s", out_fit)
 
