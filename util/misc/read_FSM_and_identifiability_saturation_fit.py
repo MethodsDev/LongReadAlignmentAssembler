@@ -66,6 +66,60 @@ def read_columns(
     return df
 
 
+def verify_shuffled_integrity(
+    path: str, sample_n: int = 5000, expect_col: str = "feature_name"
+) -> None:
+    """
+    Sample up to sample_n data rows from the shuffled file and:
+      - Check header vs data column count consistency.
+      - If expect_col in header, report how many sampled rows have a non-empty value.
+    Logs warnings if inconsistencies are detected.
+    """
+    try:
+        with _open_read_text(path) as f:
+            header = f.readline().rstrip("\n\r")
+            if not header:
+                logging.warning("verify: empty shuffled file: %s", path)
+                return
+            hcols = header.split("\t")
+            idx_feature = hcols.index(expect_col) if expect_col in hcols else -1
+            rows_seen = 0
+            mismatches = 0
+            nonempty_feature = 0
+            while rows_seen < sample_n:
+                line = f.readline()
+                if not line:
+                    break
+                rcols = line.rstrip("\n\r").split("\t")
+                if len(rcols) != len(hcols):
+                    mismatches += 1
+                if idx_feature >= 0:
+                    val = rcols[idx_feature] if idx_feature < len(rcols) else ""
+                    if val != "":
+                        nonempty_feature += 1
+                rows_seen += 1
+        if rows_seen == 0:
+            logging.info("verify: no data rows sampled from %s", path)
+        else:
+            if mismatches > 0:
+                logging.warning(
+                    "verify: column-count mismatches: %d out of %d sampled rows",
+                    mismatches,
+                    rows_seen,
+                )
+            if idx_feature >= 0:
+                logging.info(
+                    "verify: %s non-empty in %d/%d sampled rows",
+                    expect_col,
+                    nonempty_feature,
+                    rows_seen,
+                )
+            else:
+                logging.info("verify: header missing expected column: %s", expect_col)
+    except Exception as e:
+        logging.warning("verify failed for %s: %s", path, e)
+
+
 def auto_paths(
     in_path: str, out_tsv: Optional[str], out_png: Optional[str], out_fit: Optional[str]
 ):
@@ -383,8 +437,12 @@ def _open_read_text(path: str):
     return gzip.open(path, "rt") if path.endswith(".gz") else open(path, "rt")
 
 
-def _open_write_text(path: str):
-    return gzip.open(path, "wt") if path.endswith(".gz") else open(path, "wt")
+def _open_write_text(path: str, compresslevel: Optional[int] = None):
+    if path.endswith(".gz"):
+        if compresslevel is not None:
+            return gzip.open(path, "wt", compresslevel=compresslevel)
+        return gzip.open(path, "wt")
+    return open(path, "wt")
 
 
 def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir: str, run_paths: List[str]):
@@ -404,10 +462,13 @@ def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir:
     logging.debug("Wrote sorted run: %s (lines=%d)", run_path, n)
 
 
-def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False):
+def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False, compresslevel: Optional[int] = None):
     mode = "at" if append else "wt"
     # Use gzip when writing to a gzip file to avoid corrupting output
-    fout = gzip.open(out_path, mode) if out_path.endswith(".gz") else open(out_path, mode)
+    if out_path.endswith(".gz"):
+        fout = gzip.open(out_path, mode, compresslevel=compresslevel) if compresslevel is not None else gzip.open(out_path, mode)
+    else:
+        fout = open(out_path, mode)
     files = [open(p, "rt") for p in run_paths]
     try:
         heap = []
@@ -437,6 +498,33 @@ def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False):
             pass
 
 
+def _kway_merge_runs_to_handle(run_paths: List[str], fout):
+    """Merge sorted run files (key\trow) into an already-open text handle fout."""
+    files = [open(p, "rt") for p in run_paths]
+    try:
+        heap = []
+        for i, f in enumerate(files):
+            line = f.readline()
+            if not line:
+                continue
+            key, row = line.split("\t", 1)
+            heap.append((key, i, row))
+        heapq.heapify(heap)
+        while heap:
+            key, i, row = heapq.heappop(heap)
+            fout.write(row)
+            nxt = files[i].readline()
+            if nxt:
+                k2, r2 = nxt.split("\t", 1)
+                heapq.heappush(heap, (k2, i, r2))
+    finally:
+        for f in files:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
 def external_shuffle_to_file(
     in_path: str,
     out_path: str,
@@ -444,6 +532,7 @@ def external_shuffle_to_file(
     lines_per_run: int = 200_000,
     fan_in: int = 64,
     tmp_dir: Optional[str] = None,
+    gzip_level: Optional[int] = None,
 ) -> str:
     logging.info(
         "Shuffle params: seed=%d, lines_per_run=%d, fan_in=%d, tmp_dir=%s",
@@ -453,8 +542,11 @@ def external_shuffle_to_file(
         str(tmp_dir) if tmp_dir is not None else "<auto>",
     )
     if tmp_dir is None:
-        tdir_obj = tempfile.TemporaryDirectory(prefix="shuffle_runs_")
-        tmp_dir = tdir_obj.name
+        # Create tmp dir within the current working directory by default
+        cwd = os.getcwd()
+        tmp_dir = os.path.join(cwd, f"shuffle_runs_{int(time.time())}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        tdir_obj = None
         auto_cleanup = True
     else:
         os.makedirs(tmp_dir, exist_ok=True)
@@ -525,23 +617,51 @@ def external_shuffle_to_file(
         level += 1
     logging.info("Final merge: remaining runs=%d", len(cur_runs))
 
-    with _open_write_text(out_path) as fout:
+    t_merge0 = time.perf_counter()
+    # Open once and write both header and merged rows to a single stream
+    with _open_write_text(out_path, compresslevel=gzip_level) as fout:
         fout.write(header)
-    _kway_merge_runs(cur_runs, out_path, append=True)
+        _kway_merge_runs_to_handle(cur_runs, fout)
+    logging.info("Final merge elapsed: %.2fs", time.perf_counter() - t_merge0)
     try:
         size_bytes = os.path.getsize(out_path)
         logging.info("Shuffled file written: %s (size=%d bytes)", out_path, size_bytes)
     except OSError:
         logging.info("Shuffled file written: %s", out_path)
+
+    # Quick integrity check: header vs first data row column count and feature_name presence if applicable
+    try:
+        with _open_read_text(out_path) as fcheck:
+            hdr = fcheck.readline().rstrip("\n\r")
+            row = fcheck.readline().rstrip("\n\r")
+        if hdr and row:
+            hcols = hdr.split("\t")
+            rcols = row.split("\t")
+            if len(hcols) != len(rcols):
+                logging.warning(
+                    "Shuffled file column count mismatch: header=%d, row=%d",
+                    len(hcols),
+                    len(rcols),
+                )
+            else:
+                if "feature_name" in hcols:
+                    idx = hcols.index("feature_name")
+                    val = rcols[idx]
+                    logging.info("feature_name (first row): %s", val if val != "" else "<empty>")
+    except Exception as e:
+        logging.warning("Integrity check failed for %s: %s", out_path, e)
     for rp in cur_runs:
         try:
             os.remove(rp)
         except OSError:
             pass
 
-    if auto_cleanup and tdir_obj is not None:
-        tdir_obj.cleanup()
-        logging.info("Cleaned up temp dir: %s", tmp_dir)
+    if auto_cleanup:
+        try:
+            shutil.rmtree(tmp_dir)
+            logging.info("Cleaned up temp dir: %s", tmp_dir)
+        except Exception as e:
+            logging.warning("Failed to clean temp dir %s: %s", tmp_dir, e)
     return out_path
 
 
@@ -951,16 +1071,27 @@ def main():
         help="Path to write the shuffled file (default: auto next to input). Use .gz to compress.",
     )
     p.add_argument(
+        "--shuffle-gzip-level",
+        type=int,
+        default=3,
+        help="Gzip compression level for shuffled file (1=fast, 9=small). Only used if output ends with .gz.",
+    )
+    p.add_argument(
+        "--shuffle-plain",
+        action="store_true",
+        help="Write shuffled output uncompressed (.tsv) for faster merging and downstream reads.",
+    )
+    p.add_argument(
         "--shuffle-run-lines",
         type=int,
-        default=200_000,
-        help="Approx. number of lines per run (controls memory/temp file size in external shuffle).",
+        default=1_000_000,
+        help="Approx. lines per run (higher uses more RAM but fewer runs; good default for ~32GB RAM).",
     )
     p.add_argument(
         "--shuffle-fan-in",
         type=int,
-        default=64,
-        help="Run merge fan-in (controls number of runs merged at once).",
+        default=256,
+        help="Run merge fan-in (more reduces merge levels; requires available file descriptors).",
     )
     p.add_argument(
         "--shuffle-tmpdir",
@@ -984,7 +1115,13 @@ def main():
         if root.endswith(ext):
             root = root[: -len(ext)]
             break
-    shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
+    # Decide shuffled output path and compression
+    if args.shuffle_plain:
+        shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv"
+        gzip_level = None
+    else:
+        shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
+        gzip_level = int(args.shuffle_gzip_level) if args.shuffle_gzip_level is not None else 3
     logging.info("External shuffle starting -> %s", shuffle_out)
     external_shuffle_to_file(
         in_path,
@@ -993,6 +1130,7 @@ def main():
         lines_per_run=args.shuffle_run_lines,
         fan_in=args.shuffle_fan_in,
         tmp_dir=args.shuffle_tmpdir,
+        gzip_level=gzip_level,
     )
     in_path = shuffle_out
     logging.info("External shuffle complete: %s", in_path)
