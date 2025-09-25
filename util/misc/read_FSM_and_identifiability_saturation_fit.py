@@ -401,6 +401,7 @@ def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir:
             f.write("\t")
             f.write(batch_lines[idx])
     run_paths.append(run_path)
+    logging.debug("Wrote sorted run: %s (lines=%d)", run_path, n)
 
 
 def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False):
@@ -444,6 +445,13 @@ def external_shuffle_to_file(
     fan_in: int = 64,
     tmp_dir: Optional[str] = None,
 ) -> str:
+    logging.info(
+        "Shuffle params: seed=%d, lines_per_run=%d, fan_in=%d, tmp_dir=%s",
+        seed,
+        lines_per_run,
+        fan_in,
+        str(tmp_dir) if tmp_dir is not None else "<auto>",
+    )
     if tmp_dir is None:
         tdir_obj = tempfile.TemporaryDirectory(prefix="shuffle_runs_")
         tmp_dir = tdir_obj.name
@@ -452,10 +460,15 @@ def external_shuffle_to_file(
         os.makedirs(tmp_dir, exist_ok=True)
         tdir_obj = None
         auto_cleanup = False
+    logging.info("Shuffle temp dir: %s (auto_cleanup=%s)", tmp_dir, auto_cleanup)
 
     rng = np.random.default_rng(seed)
 
     run_paths: List[str] = []
+    total_lines = 0
+    runs_written = 0
+    report_every_runs = max(1, 20)
+    report_every_lines = max(1_000_000, 5 * lines_per_run)
     with _open_read_text(in_path) as fin:
         header = fin.readline()
         if header == "":
@@ -468,16 +481,35 @@ def external_shuffle_to_file(
         batch_lines: List[str] = []
         for line in fin:
             batch_lines.append(line)
+            total_lines += 1
             if len(batch_lines) >= lines_per_run:
                 _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
                 batch_lines.clear()
+                runs_written += 1
+                if runs_written % report_every_runs == 0 or total_lines % report_every_lines == 0:
+                    logging.info(
+                        "Run gen progress: runs=%d, lines=%d",
+                        runs_written,
+                        total_lines,
+                    )
         if batch_lines:
             _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
             batch_lines.clear()
+            runs_written += 1
+    logging.info("Run generation complete: runs=%d, lines=%d", len(run_paths), total_lines)
 
     cur_runs = run_paths
     level = 0
+    level = 0
     while len(cur_runs) > fan_in:
+        groups = (len(cur_runs) + fan_in - 1) // fan_in
+        logging.info(
+            "Merge level %d: runs=%d, fan_in=%d, groups=%d",
+            level,
+            len(cur_runs),
+            fan_in,
+            groups,
+        )
         next_runs: List[str] = []
         for i in range(0, len(cur_runs), fan_in):
             group = cur_runs[i : i + fan_in]
@@ -491,10 +523,16 @@ def external_shuffle_to_file(
                     pass
         cur_runs = next_runs
         level += 1
+    logging.info("Final merge: remaining runs=%d", len(cur_runs))
 
     with _open_write_text(out_path) as fout:
         fout.write(header)
     _kway_merge_runs(cur_runs, out_path, append=True)
+    try:
+        size_bytes = os.path.getsize(out_path)
+        logging.info("Shuffled file written: %s (size=%d bytes)", out_path, size_bytes)
+    except OSError:
+        logging.info("Shuffled file written: %s", out_path)
     for rp in cur_runs:
         try:
             os.remove(rp)
@@ -503,6 +541,7 @@ def external_shuffle_to_file(
 
     if auto_cleanup and tdir_obj is not None:
         tdir_obj.cleanup()
+        logging.info("Cleaned up temp dir: %s", tmp_dir)
     return out_path
 
 
