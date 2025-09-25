@@ -8,10 +8,10 @@ Compute saturation curves for:
 
 Then fit saturation models to each curve and estimate:
   - Predicted Vmax
-  - Reads to reach 80% of Vmax (x80_pred)
+    - Reads to reach 80–95% of Vmax (step 5; x80_pred, x85_pred, x90_pred, x95_pred)
 Also report observed:
   - Observed max (last y)
-  - Reads to reach 80% of observed max (x80_obs; first index at/above 0.8*obs_max)
+    - Reads to reach 80–95% of observed max (x80_obs, x85_obs, x90_obs, x95_obs)
 
 Outputs:
   - TSV (thinned curve samples): read_index, cum_unique_identifiable, cum_unique_FSM
@@ -286,6 +286,40 @@ def observed_x80(x: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
     return float(x[idx]), float(thr)
 
 
+def observed_x_at_fraction(x: np.ndarray, y: np.ndarray, frac: float) -> float:
+    """
+    First x where y >= frac * observed_max. Returns NaN if never reached.
+    """
+    if len(y) == 0 or not (0.0 < frac < 1.0):
+        return float("nan")
+    y_obs_max = float(np.nanmax(y))
+    thr = frac * y_obs_max
+    idx = int(np.argmax(y >= thr))
+    if y[idx] < thr:
+        return float("nan")
+    return float(x[idx])
+
+
+def predicted_x_at_fraction(fit: Dict[str, float], frac: float) -> float:
+    """
+    Compute predicted reads to reach a given fraction of Vmax based on chosen model.
+    """
+    model = fit.get("model", "none")
+    if not (0.0 < frac < 1.0):
+        return float("nan")
+    if model == "exp":
+        k = fit.get("param1", float("nan"))
+        if k and k > 0:
+            return float(-np.log(1.0 - frac) / k)
+        return float("nan")
+    if model == "mm":
+        K = fit.get("param1", float("nan"))
+        if np.isfinite(K):
+            return float((frac * K) / (1.0 - frac))
+        return float("nan")
+    return float("nan")
+
+
 # --------------- Main ---------------
 
 
@@ -395,6 +429,13 @@ def main():
     x80i_obs, y80i_obs = observed_x80(x, y_ident)
     x80f_obs, y80f_obs = observed_x80(x, y_fsm)
 
+    # Additional quantiles (80 to 95 step 5)
+    fracs = [0.80, 0.85, 0.90, 0.95]
+    obs_ident = {int(f * 100): observed_x_at_fraction(x, y_ident, f) for f in fracs}
+    obs_fsm = {int(f * 100): observed_x_at_fraction(x, y_fsm, f) for f in fracs}
+    pred_ident = {int(f * 100): predicted_x_at_fraction(fit_ident, f) for f in fracs}
+    pred_fsm = {int(f * 100): predicted_x_at_fraction(fit_fsm, f) for f in fracs}
+
     # Compose fit summary TSV
     out_tsv, out_png, out_fit = auto_paths(
         args.input, args.out_tsv, args.png_out, args.fit_out
@@ -406,24 +447,38 @@ def main():
                 "eligible_read_count": n_ident,
                 "observed_max": int(y_ident[-1]) if n else 0,
                 "observed_x80_reads": x80i_obs,
+                # Additional observed quantiles
+                "observed_x85_reads": obs_ident.get(85, float("nan")),
+                "observed_x90_reads": obs_ident.get(90, float("nan")),
+                "observed_x95_reads": obs_ident.get(95, float("nan")),
                 "model": fit_ident["model"],
                 "vmax_pred": fit_ident["vmax"],
                 "param1": fit_ident["param1"],  # k for exp; K for MM
                 "rss": fit_ident["rss"],
                 "aic": fit_ident["aic"],
                 "pred_x80_reads": fit_ident["x80_pred"],
+                # Additional predicted quantiles
+                "pred_x85_reads": pred_ident.get(85, float("nan")),
+                "pred_x90_reads": pred_ident.get(90, float("nan")),
+                "pred_x95_reads": pred_ident.get(95, float("nan")),
             },
             {
                 "curve": "FSM",
                 "eligible_read_count": n_fsm,
                 "observed_max": int(y_fsm[-1]) if n else 0,
                 "observed_x80_reads": x80f_obs,
+                "observed_x85_reads": obs_fsm.get(85, float("nan")),
+                "observed_x90_reads": obs_fsm.get(90, float("nan")),
+                "observed_x95_reads": obs_fsm.get(95, float("nan")),
                 "model": fit_fsm["model"],
                 "vmax_pred": fit_fsm["vmax"],
                 "param1": fit_fsm["param1"],
                 "rss": fit_fsm["rss"],
                 "aic": fit_fsm["aic"],
                 "pred_x80_reads": fit_fsm["x80_pred"],
+                "pred_x85_reads": pred_fsm.get(85, float("nan")),
+                "pred_x90_reads": pred_fsm.get(90, float("nan")),
+                "pred_x95_reads": pred_fsm.get(95, float("nan")),
             },
         ]
     )
@@ -451,7 +506,7 @@ def main():
     thin_df.to_csv(out_tsv, sep="\t", index=False, compression="infer")
     logging.info("Wrote thinned curves: %s  (%d rows)", out_tsv, len(thin_df))
 
-    # Plot overlay with fitted curves + 80% lines
+    # Plot overlay with fitted curves + 80% lines and subtle extra quantiles (85/90/95)
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(8.6, 5.4), dpi=120)
@@ -460,6 +515,9 @@ def main():
     plt.plot(xt, yf_t, label="FSM (empirical)", linewidth=1.6)
 
     # Fitted curves (evaluated on xt for display)
+    # Extra fractions beyond 80% for subtle guides
+    fracs_extra = [0.85, 0.90, 0.95]
+
     if fit_ident["model"] == "exp":
         vmax, k = fit_ident["vmax"], fit_ident["param1"]
         yi_fit = vmax * (1.0 - np.exp(-k * xt))
@@ -475,6 +533,13 @@ def main():
         plt.axhline(y80, linestyle=":", linewidth=1.0)
         if np.isfinite(x80):
             plt.axvline(x80, linestyle=":", linewidth=1.0)
+        # Subtle extra quantile guides
+        for f in fracs_extra:
+            y_f = f * vmax
+            x_f = predicted_x_at_fraction(fit_ident, f)
+            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            if np.isfinite(x_f):
+                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
     elif fit_ident["model"] == "mm":
         vmax, K = fit_ident["vmax"], fit_ident["param1"]
         yi_fit = vmax * (xt / (K + xt))
@@ -490,6 +555,12 @@ def main():
         plt.axhline(y80, linestyle=":", linewidth=1.0)
         if np.isfinite(x80):
             plt.axvline(x80, linestyle=":", linewidth=1.0)
+        for f in fracs_extra:
+            y_f = f * vmax
+            x_f = predicted_x_at_fraction(fit_ident, f)
+            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            if np.isfinite(x_f):
+                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
 
     if fit_fsm["model"] == "exp":
         vmax, k = fit_fsm["vmax"], fit_fsm["param1"]
@@ -506,6 +577,12 @@ def main():
         plt.axhline(y80, linestyle=":", linewidth=1.0)
         if np.isfinite(x80):
             plt.axvline(x80, linestyle=":", linewidth=1.0)
+        for f in fracs_extra:
+            y_f = f * vmax
+            x_f = predicted_x_at_fraction(fit_fsm, f)
+            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            if np.isfinite(x_f):
+                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
     elif fit_fsm["model"] == "mm":
         vmax, K = fit_fsm["vmax"], fit_fsm["param1"]
         yf_fit = vmax * (xt / (K + xt))
@@ -521,6 +598,12 @@ def main():
         plt.axhline(y80, linestyle=":", linewidth=1.0)
         if np.isfinite(x80):
             plt.axvline(x80, linestyle=":", linewidth=1.0)
+        for f in fracs_extra:
+            y_f = f * vmax
+            x_f = predicted_x_at_fraction(fit_fsm, f)
+            plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+            if np.isfinite(x_f):
+                plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
 
     plt.xlabel("Number of reads")
     plt.ylabel("Unique transcript discovered")
