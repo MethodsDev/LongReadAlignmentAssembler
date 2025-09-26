@@ -481,7 +481,14 @@ def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False, 
         heapq.heapify(heap)
         while heap:
             key, i, row = heapq.heappop(heap)
-            fout.write(row)
+            # For intermediate merged runs, preserve the random key for subsequent merges
+            if out_path.endswith(".run"):
+                fout.write(key)
+                fout.write("\t")
+                fout.write(row)
+            else:
+                # Safety: if writing to a non-.run path (unexpected for intermediate), write row only
+                fout.write(row)
             nxt = files[i].readline()
             if nxt:
                 k2, r2 = nxt.split("\t", 1)
