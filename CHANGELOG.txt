@@ -1,3 +1,7 @@
+v0.9.0 Sept 26, 2025
+- trimming transcript UTRs to min/max of contained evidence transcripts and only adjust UTRs to min/max of contained isoforms if the corresponding polyA or TSS annotation flags arent set
+
+
 v0.8.0
 - ME and SE distinct phases followed by integration
 - classify known isoforms by splice pattern hash (introns) matching input reference set; ME/SE or mono-exonic isoforms always treated as novel for min_reads_novel_isoform filtering
