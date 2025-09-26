@@ -1078,6 +1078,11 @@ def main():
         help="Path to write the shuffled file (default: auto next to input). Use .gz to compress.",
     )
     p.add_argument(
+        "--skip-shuffle",
+        action="store_true",
+        help="Skip external shuffling and process the input as-is (assumed already randomized).",
+    )
+    p.add_argument(
         "--shuffle-gzip-level",
         type=int,
         default=3,
@@ -1115,32 +1120,35 @@ def main():
 
     t0 = time.perf_counter()
     in_path = args.input
-    # Always do an external full shuffle pre-step
-    base = os.path.basename(in_path)
-    root = base
-    for ext in (".tsv.gz", ".txt.gz", ".csv.gz", ".tsv", ".txt", ".csv"):
-        if root.endswith(ext):
-            root = root[: -len(ext)]
-            break
-    # Decide shuffled output path and compression
-    if args.shuffle_plain:
-        shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv"
-        gzip_level = None
+    # External full shuffle pre-step unless skipped
+    if args.skip_shuffle:
+        logging.info("Skipping external shuffle; using input as-is: %s", in_path)
     else:
-        shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
-        gzip_level = int(args.shuffle_gzip_level) if args.shuffle_gzip_level is not None else 3
-    logging.info("External shuffle starting -> %s", shuffle_out)
-    external_shuffle_to_file(
-        in_path,
-        shuffle_out,
-        seed=args.seed,
-        lines_per_run=args.shuffle_run_lines,
-        fan_in=args.shuffle_fan_in,
-        tmp_dir=args.shuffle_tmpdir,
-        gzip_level=gzip_level,
-    )
-    in_path = shuffle_out
-    logging.info("External shuffle complete: %s", in_path)
+        base = os.path.basename(in_path)
+        root = base
+        for ext in (".tsv.gz", ".txt.gz", ".csv.gz", ".tsv", ".txt", ".csv"):
+            if root.endswith(ext):
+                root = root[: -len(ext)]
+                break
+        # Decide shuffled output path and compression
+        if args.shuffle_plain:
+            shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv"
+            gzip_level = None
+        else:
+            shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
+            gzip_level = int(args.shuffle_gzip_level) if args.shuffle_gzip_level is not None else 3
+        logging.info("External shuffle starting -> %s", shuffle_out)
+        external_shuffle_to_file(
+            in_path,
+            shuffle_out,
+            seed=args.seed,
+            lines_per_run=args.shuffle_run_lines,
+            fan_in=args.shuffle_fan_in,
+            tmp_dir=args.shuffle_tmpdir,
+            gzip_level=gzip_level,
+        )
+        in_path = shuffle_out
+        logging.info("External shuffle complete: %s", in_path)
 
     # Always run in streaming mode
     # Pass 1: fractional counts and total reads
