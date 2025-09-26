@@ -120,8 +120,8 @@ RUN python -m pip install \
         
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.8.0-postdev3"
-ENV LRAA_CO=bf8c7fbc140e379b460404b0fb0b4a876232841e
+ENV LRAA_VERSION="v0.9.0"
+ENV LRAA_CO=65ee6ac1f8c9b5f5257fb43bd05c90da91d23430
 
 
 # update VERSION and LRAA_CO files with version info and checkout
