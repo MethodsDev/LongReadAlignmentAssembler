@@ -1,4 +1,4 @@
-DIRS = internal_priming_removal
+DIRS = internal_priming_removal LRAA_to_ORFs
 
 test:
 	@for i in $(DIRS); do \

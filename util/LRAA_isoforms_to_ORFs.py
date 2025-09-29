@@ -16,21 +16,22 @@ def main():
     parser.add_argument("--genome", required=True, help="Genome fasta file")
     parser.add_argument("--gtf", required=True, help="Input GTF file")
     parser.add_argument("--output_prefix", required=True, help="Prefix for outputs")
-    parser.add_argument("--utildir", required=True, help="Path to utility scripts")
     parser.add_argument(
         "--td_dir", required=True, help="Path to TransDecoder executables"
     )
 
     args = parser.parse_args()
 
+    utildir = args.td_dir + "/util"
+
     pipeliner = Pipeliner("__chckpts")
 
     # Step 1: generate alignment gff3 formatted output
-    cmd = f"{args.utildir}/gtf_to_alignment_gff3.pl {args.gtf} > {args.output_prefix}.input_converted.gff3"
+    cmd = f"{utildir}/gtf_to_alignment_gff3.pl {args.gtf} > {args.output_prefix}.input_converted.gff3"
     pipeliner.add_commands([Command(cmd, "gtf_to_alignment_gff3.ok")])
 
     # Step 2: generate cdna fasta
-    cmd = f"{args.utildir}/gtf_genome_to_cdna_fasta.pl {args.gtf} > {args.output_prefix}.cdna.fasta"
+    cmd = f"{utildir}/gtf_genome_to_cdna_fasta.pl {args.gtf} {args.genome} > {args.output_prefix}.cdna.fasta"
     pipeliner.add_commands([Command(cmd, "gtf_genome_to_cdna_fasta.ok")])
 
     # Step 3: extract the long ORFs
@@ -38,12 +39,12 @@ def main():
     pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
 
     # Step 4: predict likely ORFs
-    cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta"
+    cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta --no_refine_starts --single_best_only"
     pipeliner.add_commands([Command(cmd, "transdecoder_predict.ok")])
 
     # Step 5: convert to genome coordinates
     cmd = (
-        f"{args.utildir}/cdna_alignment_orf_to_genome_orf.pl "
+        f"{utildir}/cdna_alignment_orf_to_genome_orf.pl "
         f"{args.output_prefix}.cdna.fasta.transdecoder.gff3 "
         f"{args.output_prefix}.input_converted.gff3 "
         f"{args.output_prefix}.cdna.fasta "
@@ -53,7 +54,7 @@ def main():
 
     # Step 6a: gtf to bed
     cmd = (
-        f"{args.utildir}/gtf_to_bed.pl {args.gtf} "
+        f"{utildir}/gtf_to_bed.pl {args.gtf} "
         f"| sort -k1,1 -k2,2g -k3,3g > {args.output_prefix}.input_converted.bed"
     )
     pipeliner.add_commands([Command(cmd, "gtf_to_bed.ok")])
@@ -67,8 +68,9 @@ def main():
 
     # Step 6c: genome-based gff3 to bed
     cmd = (
-        f"{args.utildir}/gff3_file_to_bed.pl "
+        f"{utildir}/gff3_file_to_bed.pl "
         f"{args.output_prefix}.transcripts.fasta.transdecoder.genome.gff3 "
+        f"| sort -k1,1 -k2,2g -k3,3g "
         f"> {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed"
     )
     pipeliner.add_commands([Command(cmd, "gff3_to_bed.ok")])
