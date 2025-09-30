@@ -19,6 +19,12 @@ def main():
     parser.add_argument(
         "--td_dir", required=True, help="Path to TransDecoder executables"
     )
+    parser.add_argument(
+        "--complete_orfs_only",
+        action="store_true",
+        default=False,
+        help="require complete ORFs starting with Met",
+    )
 
     args = parser.parse_args()
 
@@ -36,6 +42,8 @@ def main():
 
     # Step 3: extract the long ORFs
     cmd = f"{args.td_dir}/TransDecoder.LongOrfs -t {args.output_prefix}.cdna.fasta -S"
+    if args.complete_orfs_only:
+        cmd += " --complete_orfs_only "
     pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
 
     # Step 4: predict likely ORFs
