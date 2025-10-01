@@ -50,10 +50,7 @@ workflow LRAA_wf {
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = main_chromosomes,
-            
                 docker = docker,
-                memoryGB = memoryGB,
-                diskSizeGB = diskSizeGB
             }
      
                   
@@ -88,8 +85,6 @@ workflow LRAA_wf {
                 gtfFiles = LRAA_scatter.LRAA_gtf,
                 outputFilePrefix = sample_id + ".LRAA",
                 docker = docker,
-                memoryGB = memoryGB,
-                diskSizeGB = diskSizeGB
         }
     }
 
@@ -133,8 +128,6 @@ task mergeResults {
         Array[File] gtfFiles
         String outputFilePrefix
         String docker
-        Int memoryGB
-        Int diskSizeGB
     }
 
     command <<<
@@ -199,8 +192,8 @@ task mergeResults {
     runtime {
         docker: docker
         cpu: 1
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{diskSizeGB} HDD"
+        memory: "4 GiB"
+        disks: "local-disk " + ceil((size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB") + size(gtfFiles, "GB")) * 2.2 + 5) + " SSD"
     }
 }
 
@@ -217,6 +210,7 @@ task count_bam {
   runtime {
     docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
     disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " HDD"
+    cpu: 1
     memory: "4G"
   }
   output {
