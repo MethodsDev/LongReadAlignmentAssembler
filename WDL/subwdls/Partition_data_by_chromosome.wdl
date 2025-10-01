@@ -8,8 +8,6 @@ task partition_by_chromosome_task {
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
         String docker
-        Int memoryGB
-        Int diskSizeGB
     }
 
     command <<<
@@ -53,8 +51,9 @@ task partition_by_chromosome_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 30
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{diskSizeGB} HDD"
+        cpu: 1
+        memory: "4 GiB"
+        disks: "local-disk " + ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 5) + " SSD"
     }
 }
 
@@ -78,8 +77,6 @@ workflow partition_by_chromosome {
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,
-          memoryGB = memoryGB,
-          diskSizeGB = diskSizeGB,
           docker = docker
       
     }
