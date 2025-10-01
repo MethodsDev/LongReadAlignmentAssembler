@@ -3,6 +3,7 @@ version 1.0
 task partition_by_chromosome_task {
     input {
         File? inputBAM
+        File? inputBAMindex
         File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
@@ -18,6 +19,7 @@ task partition_by_chromosome_task {
         mkdir -p split_fastas
         mkdir -p split_gtfs
       
+        # ideally should check if inputBAMindex exists, if it does use it with the -X option of samtools view, if it doesn't run index and don't use -X
         if [ -f  "~{inputBAM}" ] && [ ! -f "~{inputBAM}.bai" ]; then
             samtools index ~{inputBAM}
         fi
@@ -61,6 +63,7 @@ task partition_by_chromosome_task {
 workflow partition_by_chromosome {
   input {
         File? inputBAM
+        File? inputBAMindex
         File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
@@ -74,6 +77,7 @@ workflow partition_by_chromosome {
     call partition_by_chromosome_task {
         input:
           inputBAM=inputBAM,
+          inputBAMindex=inputBAMindex,
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,

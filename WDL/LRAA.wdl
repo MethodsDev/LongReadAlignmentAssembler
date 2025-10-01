@@ -10,6 +10,7 @@ workflow LRAA_wf {
                  
         File referenceGenome 
         File inputBAM
+        File? inputBAMindex
         File? annot_gtf
         Boolean LowFi = false
          
@@ -38,7 +39,8 @@ workflow LRAA_wf {
 
         call count_bam {
             input:
-              bam = inputBAM
+              bam = inputBAM, 
+              bamindex = inputBAMindex
         }
 
         
@@ -47,6 +49,7 @@ workflow LRAA_wf {
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
                 inputBAM = inputBAM,
+                inputBAMindex = inputBAMindex,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = main_chromosomes,
@@ -198,22 +201,38 @@ task mergeResults {
 }
 
 task count_bam {
-  input {
-    File bam
-  }
+    input {
+        File bam
+        File? bamindex
+    }
 
-  command <<<
-    set -ex
-    samtools view -c ~{bam}
+    # mapped only
+    # '" samtools idxstats ~{bamindex} | awk -F'\t' '{m+=$3; u+=$4} END{print m}'"'
+    # mapped + unmapped
+    # '" samtools idxstats ~{bamindex} | awk -F'\t' '{m+=$3; u+=$4} END{print m+u}'"'
 
-  >>>
-  runtime {
-    docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-    disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " HDD"
-    cpu: 1
-    memory: "4G"
-  }
-  output {
-    Int count = read_int(stdout())
-  }
+    String cmd_to_run = if defined(bamindex) then
+      "samtools idxstats ~{bam} | awk -F'\\t' '{m+=$3; u+=$4} END{print m+u}'"
+    else
+      "samtools view -c ~{bam}"
+
+
+
+    command <<<
+        set -ex
+        # samtools view -c ~{bam}
+        ~{cmd_to_run}
+
+    >>>
+
+    runtime {
+        docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " HDD"
+        cpu: 1
+        memory: "4G"
+    }
+
+    output {
+        Int count = read_int(stdout())
+    }
 }
