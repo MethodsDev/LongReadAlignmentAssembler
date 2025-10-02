@@ -25,9 +25,9 @@ workflow LRAA_wf {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
-        Int numThreads = 4
-        Int memoryGB = 32
-        Int diskSizeGB = 128
+        Int numThreads = 8
+        Int memoryGB = 64
+        Int diskSizeGB = 500
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         
         
