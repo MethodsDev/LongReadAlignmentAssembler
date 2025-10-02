@@ -211,17 +211,20 @@ task count_bam {
     # mapped + unmapped
     # '" samtools idxstats ~{bamindex} | awk -F'\t' '{m+=$3; u+=$4} END{print m+u}'"'
 
-    String cmd_to_run = if defined(bamindex) then
-      "samtools idxstats ~{bam} | awk -F'\\t' '{m+=$3; u+=$4} END{print m+u}'"
-    else
-      "samtools view -c ~{bam}"
-
-
-
     command <<<
         set -ex
         # samtools view -c ~{bam}
-        ~{cmd_to_run}
+
+        if [[ -f "~{bam}.bai" ]]; then
+            samtools idxstats "~{bam}" | awk -F $'\t' '{m+=$3; u+=$4} END{print m+u}'
+        else
+            ~{if defined(bamindex) then
+                'ln -s "~{bamindex}" "~{bam}.bai"'
+                else
+                ''
+            }
+            samtools view -c "~{bam}"
+        fi
 
     >>>
 
