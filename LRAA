@@ -532,6 +532,8 @@ def main():
     else:
         LRAA_Globals.config["num_total_reads"] = args.num_total_reads
         logger.info("using total number of reads as: {}".format(args.num_total_reads))
+        if args.num_total_reads == 0:
+            raise RuntimeError("Error, number of total reads is set to zero.")
 
     if (not QUANT_ONLY) and (not NO_NORM) and (args.normalize_max_cov_level > 0):
 
