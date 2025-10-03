@@ -26,7 +26,7 @@ workflow LRAA_wf {
         String read_umi_tag = "XM"
 
         Int numThreads = 8
-        Int memoryGB = 64
+        Int memoryGB = 128
         Int diskSizeGB = 500
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         
