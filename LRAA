@@ -23,7 +23,7 @@ import logging
 import shutil
 
 
-VERSION = "v0.9.0"
+VERSION = "v0.9.0-postdev"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
