@@ -1,34 +1,48 @@
 #!/usr/bin/env python3
-import argparse, os, gzip, sys
+import argparse, os, sys, gzip
 import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
 from collections import defaultdict
 
+def count_lines(filename):
+    """Count lines in file (for progress estimation)."""
+    opener = gzip.open if filename.endswith(".gz") else open
+    with opener(filename, "rt") as f:
+        for i, _ in enumerate(f, 1):
+            pass
+    return i
+
 def stream_group_counts(filename, feature_col, chunksize=1_000_000):
     """
-    Stream the tracking file in chunks, aggregate frac_assigned
+    Stream the tracking file in chunks and aggregate frac_assigned
     by (feature_id, cell_barcode), with progress monitoring.
+    Works for .gz or plain text.
     """
-    file_size = os.path.getsize(filename)
-    bytes_read = 0
     agg = defaultdict(float)
 
-    with open(filename, "rb") as f:
+    is_gz = filename.endswith(".gz")
+    opener = gzip.open if is_gz else open
+
+    # count lines for progress estimation
+    total_lines = count_lines(filename)
+    header_lines = 1
+    total_data_lines = max(1, total_lines - header_lines)
+    rows_processed = 0
+
+    with opener(filename, "rt") as f:
         reader = pd.read_csv(f, sep="\t", chunksize=chunksize,
                              usecols=["read_name", feature_col, "frac_assigned"])
         for i, chunk in enumerate(reader, 1):
-            # track progress by file pointer
-            bytes_read = f.tell()
-            pct = (bytes_read / file_size) * 100
-            sys.stderr.write(f"\r  [chunk {i}] processed ~{pct:.1f}% of file")
+            rows_processed += len(chunk)
+            pct = (rows_processed / total_data_lines) * 100
+            sys.stderr.write(f"\r  [chunk {i}] processed ~{pct:.1f}% of rows")
             sys.stderr.flush()
 
-            # split read_name
+            # split read_name into cell_barcode
             split = chunk["read_name"].str.split("^", n=2, expand=True)
             chunk["cell_barcode"] = split[0]
 
-            # aggregate within this chunk
             grouped = chunk.groupby([feature_col, "cell_barcode"], observed=True)["frac_assigned"].sum()
             for (feat, bc), val in grouped.items():
                 agg[(feat, bc)] += val
@@ -37,10 +51,9 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
 
     # convert dict → dataframe
     feature_ids, barcodes, counts = zip(*((f, c, v) for (f, c), v in agg.items()))
-    df = pd.DataFrame({"feature_id": feature_ids,
-                       "cell_barcode": barcodes,
-                       "UMI_counts": counts})
-    return df
+    return pd.DataFrame({"feature_id": feature_ids,
+                         "cell_barcode": barcodes,
+                         "UMI_counts": counts})
 
 def make_sparse_matrix_outputs(counts_data, outdirname):
     print(f"-making sparse matrix outputs for: {outdirname}")
@@ -73,14 +86,15 @@ def make_sparse_matrix_outputs(counts_data, outdirname):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tracking", required=True, help="input data file quant.tracking")
+    parser.add_argument("--tracking", required=True, help="input data file quant.tracking[.gz]")
     parser.add_argument("--output_prefix", required=True, help="output prefix")
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
     args = parser.parse_args()
 
-    # write mapping file (small)
-    ids = pd.read_csv(args.tracking, sep="\t",
+    # mapping file (small)
+    opener = gzip.open if args.tracking.endswith(".gz") else open
+    ids = pd.read_csv(opener(args.tracking, "rt"), sep="\t",
                       usecols=["gene_id","transcript_id","transcript_splice_hash_code"])
     ids.drop_duplicates().to_csv(f"{args.output_prefix}.gene_transcript_splicehashcode.tsv",
                                  sep="\t", index=False)
