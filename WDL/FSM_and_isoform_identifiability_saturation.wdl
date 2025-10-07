@@ -17,7 +17,7 @@ workflow IsoformSaturationRow {
     Int cpu = 4
     Int memory_gb = 32
     Int preemptible_tries = 0
-    Float disk_multiplier = 3.0
+    Float disk_multiplier = 20.0
     Int disk_min_gb = 20
   }
 
