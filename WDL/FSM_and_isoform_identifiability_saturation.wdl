@@ -12,7 +12,8 @@ workflow IsoformSaturationRow {
     Boolean no_shuffle = false
     Int thin = 10000
     Int limit_rows = 0
-
+    Float min_rpm
+    
     Int cpu = 4
     Int memory_gb = 32
     Int preemptible_tries = 0
@@ -27,6 +28,7 @@ workflow IsoformSaturationRow {
       iso_col = iso_col,
       cat_col = cat_col,
       fsm_value = fsm_value,
+      min_rpm = min_rpm,
       seed = seed,
       no_shuffle = no_shuffle,
       thin = thin,
@@ -57,7 +59,8 @@ task RunSaturation {
     Boolean no_shuffle = false
     Int thin = 10000
     Int limit_rows = 0
-
+    Float min_rpm
+    
     Int cpu = 2
     Int memory_gb = 8
     Int preemptible_tries = 0
@@ -85,7 +88,8 @@ task RunSaturation {
       --seed ~{seed} \
       ~{if no_shuffle then "--no-shuffle" else ""} \
       --thin ~{thin} \
-      --limit-rows ~{limit_rows}
+      --limit-rows ~{limit_rows} \
+      ~{"--min_rpm " + min_rpm }
 
     # sanity-check the expected outputs exist (fail fast if not)
     test -s "~{thin_path}" || { echo "Missing ~{thin_path}" >&2; ls -lh; exit 1; }
