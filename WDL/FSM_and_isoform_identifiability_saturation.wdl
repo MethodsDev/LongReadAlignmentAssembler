@@ -89,7 +89,7 @@ task RunSaturation {
       ~{if no_shuffle then "--no-shuffle" else ""} \
       --thin ~{thin} \
       --limit-rows ~{limit_rows} \
-      ~{"--min_rpm " + min_rpm }
+      ~{"--min-rpm " + min_rpm }
 
     # sanity-check the expected outputs exist (fail fast if not)
     test -s "~{thin_path}" || { echo "Missing ~{thin_path}" >&2; ls -lh; exit 1; }
