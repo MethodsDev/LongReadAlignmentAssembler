@@ -8,17 +8,20 @@ Compute saturation curves for:
 
 Then fit saturation models to each curve and estimate:
   - Predicted Vmax
-    - Reads to reach 80–95% of Vmax (step 5; x80_pred, x85_pred, x90_pred, x95_pred)
+  - Reads to reach 80–95% of Vmax (x80/x85/x90/x95, from the chosen model)
 Also report observed:
   - Observed max (last y)
-    - Reads to reach 80–95% of observed max (x80_obs, x85_obs, x90_obs, x95_obs)
+  - Reads to reach 80–95% of observed max (x80/x85/x90/x95)
 
 Outputs:
   - TSV (thinned curve samples): read_index, cum_unique_identifiable, cum_unique_FSM
   - TSV (fit summary): one row per curve with fit + observed stats
-  - PNG overlay: data curves, fitted curves, 80% lines
+  - PNG overlay: data curves, fitted curves, 80% line (with optional 85/90/95 guides)
 
-Author: you + ChatGPT
+Updates in this version:
+  * Predicted thresholds are computed consistently via predicted_x_at_fraction()
+  * Optional --fit-max-reads / --fit-max-frac to constrain fit range
+  * Optional --model {auto,exp,mm} to force a model across runs
 """
 
 import argparse
@@ -33,7 +36,6 @@ from typing import Optional, Dict, Tuple, Set, List
 
 import numpy as np
 import pandas as pd
-
 
 # --------------- IO ---------------
 
@@ -64,60 +66,6 @@ def read_columns(
     df[iso_col] = df[iso_col].str.strip().mask(lambda s: s == "", other=pd.NA)
     df[cat_col] = df[cat_col].str.strip().mask(lambda s: s == "", other=pd.NA)
     return df
-
-
-def verify_shuffled_integrity(
-    path: str, sample_n: int = 5000, expect_col: str = "feature_name"
-) -> None:
-    """
-    Sample up to sample_n data rows from the shuffled file and:
-      - Check header vs data column count consistency.
-      - If expect_col in header, report how many sampled rows have a non-empty value.
-    Logs warnings if inconsistencies are detected.
-    """
-    try:
-        with _open_read_text(path) as f:
-            header = f.readline().rstrip("\n\r")
-            if not header:
-                logging.warning("verify: empty shuffled file: %s", path)
-                return
-            hcols = header.split("\t")
-            idx_feature = hcols.index(expect_col) if expect_col in hcols else -1
-            rows_seen = 0
-            mismatches = 0
-            nonempty_feature = 0
-            while rows_seen < sample_n:
-                line = f.readline()
-                if not line:
-                    break
-                rcols = line.rstrip("\n\r").split("\t")
-                if len(rcols) != len(hcols):
-                    mismatches += 1
-                if idx_feature >= 0:
-                    val = rcols[idx_feature] if idx_feature < len(rcols) else ""
-                    if val != "":
-                        nonempty_feature += 1
-                rows_seen += 1
-        if rows_seen == 0:
-            logging.info("verify: no data rows sampled from %s", path)
-        else:
-            if mismatches > 0:
-                logging.warning(
-                    "verify: column-count mismatches: %d out of %d sampled rows",
-                    mismatches,
-                    rows_seen,
-                )
-            if idx_feature >= 0:
-                logging.info(
-                    "verify: %s non-empty in %d/%d sampled rows",
-                    expect_col,
-                    nonempty_feature,
-                    rows_seen,
-                )
-            else:
-                logging.info("verify: header missing expected column: %s", expect_col)
-    except Exception as e:
-        logging.warning("verify failed for %s: %s", path, e)
 
 
 def auto_paths(
@@ -165,7 +113,6 @@ def build_curves(
 
     mask_ident = iso.notna() & ~iso.str.contains(",", na=False)
     if allowed_isos is not None:
-        # Only consider identifiable reads whose isoform passes the RPM threshold
         mask_ident = mask_ident & iso.isin(allowed_isos)
     mask_fsm = mask_ident & (cat == fsm_value)
 
@@ -184,44 +131,34 @@ def build_curves(
 
 def compute_fractional_iso_counts(df: pd.DataFrame, iso_col: str) -> pd.Series:
     """
-    Compute fractional read support per isoform.
+    Fractional read support per isoform.
     For each row with k assigned transcripts, each transcript gets +1/k.
-    Returns a Series indexed by isoform ID with float counts.
     """
     s = df[iso_col].dropna()
     if s.empty:
         return pd.Series(dtype=np.float64)
     splits = s.str.split(",", regex=False)
     lens = splits.str.len().astype("int64")
-    exploded = splits.explode()
-    # Strip whitespace from tokens and drop empty tokens
-    exploded = exploded.str.strip()
+    exploded = splits.explode().str.strip()
     exploded = exploded[exploded.ne("")]
     if exploded.empty:
         return pd.Series(dtype=np.float64)
-    weights_per_row = 1.0 / lens
-    weights = weights_per_row.loc[exploded.index]
+    weights = (1.0 / lens).loc[exploded.index]
     counts = weights.groupby(exploded).sum()
-    # Ensure float64 dtype
     return counts.astype(np.float64)
 
 
 def allowed_isoforms_from_rpm(
     counts: pd.Series, total_reads: int, min_rpm: float
 ) -> Optional[Set[str]]:
-    """
-    Given fractional counts per isoform and total reads, return isoforms with
-    counts >= min_rpm * total_reads / 1e6.
-    """
     if min_rpm is None or min_rpm <= 0 or total_reads <= 0 or counts.empty:
-        # No filtering to apply
         return None
     thr = (min_rpm * float(total_reads)) / 1_000_000.0
     passed = counts[counts >= thr]
     return set(passed.index.astype(str))
 
 
-# --------------- Streaming utilities for low-memory operation ---------------
+# --------------- Streaming utilities ---------------
 
 
 def stream_fractional_counts(
@@ -229,10 +166,6 @@ def stream_fractional_counts(
     iso_col: str,
     chunksize: int = 5_000_000,
 ) -> Tuple[pd.Series, int]:
-    """
-    Stream the file to compute fractional counts per isoform and total reads.
-    Returns (counts_series, total_rows).
-    """
     total = 0
     counts_sum: Optional[pd.Series] = None
     usecols = [iso_col]
@@ -247,7 +180,13 @@ def stream_fractional_counts(
     )
     for chunk in read_iter:
         total += len(chunk)
-        s = chunk[iso_col].astype("string").str.strip().mask(lambda x: x == "", other=pd.NA).dropna()
+        s = (
+            chunk[iso_col]
+            .astype("string")
+            .str.strip()
+            .mask(lambda x: x == "", other=pd.NA)
+            .dropna()
+        )
         if s.empty:
             continue
         splits = s.str.split(",", regex=False)
@@ -278,20 +217,24 @@ def stream_curves_thin_and_fit(
     total_reads: int,
     thin_target: int,
     chunksize: int = 5_000_000,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int, int, int]:
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    int,
+    int,
+    int,
+    int,
+]:
     """
-    Stream to build thinned curves and perform fit on the same thinned grid.
-    Returns (xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident_reads, n_fsm_reads) where:
-      - xt: x positions for thinned curve TSV
-      - yi_t, yf_t: y values (int) for Identifiable and FSM at xt
-      - xf: x positions for fitting
-      - yi_f, yf_f: y values (float) for fitting
-      - n_ident_reads, n_fsm_reads: counts of eligible reads per curve
+    Stream to build thinned curves and produce the (x,y) arrays used for fitting.
+    Returns (xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident_reads, n_fsm_reads, y_ident, y_fsm)
     """
-    # Determine grids
     step_curve = max(1, total_reads // max(1, thin_target))
     xt = np.arange(1, total_reads + 1, step_curve, dtype=np.int64)
-    fit_step = max(1, total_reads // max(1, thin_target))
     xf = xt.astype(np.float64)
 
     yi_t = np.zeros_like(xt, dtype=np.int64)
@@ -299,7 +242,6 @@ def stream_curves_thin_and_fit(
     yi_f = np.zeros_like(xf, dtype=np.float64)
     yf_f = np.zeros_like(xf, dtype=np.float64)
 
-    # Streaming counters
     seen_ident: Set[str] = set()
     seen_fsm: Set[str] = set()
     y_ident = 0
@@ -327,7 +269,6 @@ def stream_curves_thin_and_fit(
         cat_s = chunk[cat_col].astype("string").str.strip()
         for iso_val, cat_val in zip(iso_s, cat_s):
             i_global += 1
-            # Identifiable if single isoform token (no comma) and not NA/empty
             if pd.isna(iso_val) or ("," in str(iso_val)):
                 pass
             else:
@@ -342,7 +283,6 @@ def stream_curves_thin_and_fit(
                         if iso_token not in seen_fsm:
                             seen_fsm.add(iso_token)
                             y_fsm += 1
-            # Record thinned points
             while next_curve_idx < len(xt) and i_global >= int(xt[next_curve_idx]):
                 yi_t[next_curve_idx] = y_ident
                 yf_t[next_curve_idx] = y_fsm
@@ -377,9 +317,7 @@ def stream_observed_quantiles(
     chunksize: int = 5_000_000,
 ) -> Tuple[Dict[int, float], Dict[int, float]]:
     """
-    Stream to find first read index crossing each absolute threshold.
-    thresholds_* map percent (e.g., 80) -> y threshold count (absolute).
-    Returns dicts mapping percent -> read index (float) or NaN if never crossed.
+    Return dicts percent -> read index (float) where y first crosses frac*observed_max.
     """
     pending_i = {k: True for k in thresholds_ident}
     pending_f = {k: True for k in thresholds_fsm}
@@ -430,7 +368,7 @@ def stream_observed_quantiles(
     return out_i, out_f
 
 
-# --------------- External disk-based full randomization (random-key sort) ---------------
+# --------------- External full shuffle (optional) ---------------
 
 
 def _open_read_text(path: str):
@@ -445,7 +383,9 @@ def _open_write_text(path: str, compresslevel: Optional[int] = None):
     return open(path, "wt")
 
 
-def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir: str, run_paths: List[str]):
+def _write_sorted_run(
+    batch_lines: List[str], rng: np.random.Generator, tmp_dir: str, run_paths: List[str]
+):
     n = len(batch_lines)
     if n == 0:
         return
@@ -459,14 +399,21 @@ def _write_sorted_run(batch_lines: List[str], rng: np.random.Generator, tmp_dir:
             f.write("\t")
             f.write(batch_lines[idx])
     run_paths.append(run_path)
-    logging.debug("Wrote sorted run: %s (lines=%d)", run_path, n)
 
 
-def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False, compresslevel: Optional[int] = None):
+def _kway_merge_runs(
+    run_paths: List[str],
+    out_path: str,
+    append: bool = False,
+    compresslevel: Optional[int] = None,
+):
     mode = "at" if append else "wt"
-    # Use gzip when writing to a gzip file to avoid corrupting output
     if out_path.endswith(".gz"):
-        fout = gzip.open(out_path, mode, compresslevel=compresslevel) if compresslevel is not None else gzip.open(out_path, mode)
+        fout = (
+            gzip.open(out_path, mode, compresslevel=compresslevel)
+            if compresslevel is not None
+            else gzip.open(out_path, mode)
+        )
     else:
         fout = open(out_path, mode)
     files = [open(p, "rt") for p in run_paths]
@@ -481,13 +428,11 @@ def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False, 
         heapq.heapify(heap)
         while heap:
             key, i, row = heapq.heappop(heap)
-            # For intermediate merged runs, preserve the random key for subsequent merges
             if out_path.endswith(".run"):
                 fout.write(key)
                 fout.write("\t")
                 fout.write(row)
             else:
-                # Safety: if writing to a non-.run path (unexpected for intermediate), write row only
                 fout.write(row)
             nxt = files[i].readline()
             if nxt:
@@ -506,7 +451,6 @@ def _kway_merge_runs(run_paths: List[str], out_path: str, append: bool = False, 
 
 
 def _kway_merge_runs_to_handle(run_paths: List[str], fout):
-    """Merge sorted run files (key\trow) into an already-open text handle fout."""
     files = [open(p, "rt") for p in run_paths]
     try:
         heap = []
@@ -542,32 +486,24 @@ def external_shuffle_to_file(
     gzip_level: Optional[int] = None,
 ) -> str:
     logging.info(
-        "Shuffle params: seed=%d, lines_per_run=%d, fan_in=%d, tmp_dir=%s",
+        "Shuffle params: seed=%d, lines_per_run=%d, fan_in=%d",
         seed,
         lines_per_run,
         fan_in,
-        str(tmp_dir) if tmp_dir is not None else "<auto>",
     )
     if tmp_dir is None:
-        # Create tmp dir within the current working directory by default
         cwd = os.getcwd()
         tmp_dir = os.path.join(cwd, f"shuffle_runs_{int(time.time())}")
         os.makedirs(tmp_dir, exist_ok=True)
-        tdir_obj = None
         auto_cleanup = True
     else:
         os.makedirs(tmp_dir, exist_ok=True)
-        tdir_obj = None
         auto_cleanup = False
-    logging.info("Shuffle temp dir: %s (auto_cleanup=%s)", tmp_dir, auto_cleanup)
 
     rng = np.random.default_rng(seed)
-
     run_paths: List[str] = []
     total_lines = 0
-    runs_written = 0
-    report_every_runs = max(1, 20)
-    report_every_lines = max(1_000_000, 5 * lines_per_run)
+
     with _open_read_text(in_path) as fin:
         header = fin.readline()
         if header == "":
@@ -584,31 +520,13 @@ def external_shuffle_to_file(
             if len(batch_lines) >= lines_per_run:
                 _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
                 batch_lines.clear()
-                runs_written += 1
-                if runs_written % report_every_runs == 0 or total_lines % report_every_lines == 0:
-                    logging.info(
-                        "Run gen progress: runs=%d, lines=%d",
-                        runs_written,
-                        total_lines,
-                    )
         if batch_lines:
             _write_sorted_run(batch_lines, rng, tmp_dir, run_paths)
             batch_lines.clear()
-            runs_written += 1
-    logging.info("Run generation complete: runs=%d, lines=%d", len(run_paths), total_lines)
 
     cur_runs = run_paths
     level = 0
-    level = 0
     while len(cur_runs) > fan_in:
-        groups = (len(cur_runs) + fan_in - 1) // fan_in
-        logging.info(
-            "Merge level %d: runs=%d, fan_in=%d, groups=%d",
-            level,
-            len(cur_runs),
-            fan_in,
-            groups,
-        )
         next_runs: List[str] = []
         for i in range(0, len(cur_runs), fan_in):
             group = cur_runs[i : i + fan_in]
@@ -622,228 +540,22 @@ def external_shuffle_to_file(
                     pass
         cur_runs = next_runs
         level += 1
-    logging.info("Final merge: remaining runs=%d", len(cur_runs))
 
-    t_merge0 = time.perf_counter()
-    # Open once and write both header and merged rows to a single stream
     with _open_write_text(out_path, compresslevel=gzip_level) as fout:
         fout.write(header)
         _kway_merge_runs_to_handle(cur_runs, fout)
-    logging.info("Final merge elapsed: %.2fs", time.perf_counter() - t_merge0)
-    try:
-        size_bytes = os.path.getsize(out_path)
-        logging.info("Shuffled file written: %s (size=%d bytes)", out_path, size_bytes)
-    except OSError:
-        logging.info("Shuffled file written: %s", out_path)
 
-    # Quick integrity check: header vs first data row column count and feature_name presence if applicable
-    try:
-        with _open_read_text(out_path) as fcheck:
-            hdr = fcheck.readline().rstrip("\n\r")
-            row = fcheck.readline().rstrip("\n\r")
-        if hdr and row:
-            hcols = hdr.split("\t")
-            rcols = row.split("\t")
-            if len(hcols) != len(rcols):
-                logging.warning(
-                    "Shuffled file column count mismatch: header=%d, row=%d",
-                    len(hcols),
-                    len(rcols),
-                )
-            else:
-                if "feature_name" in hcols:
-                    idx = hcols.index("feature_name")
-                    val = rcols[idx]
-                    logging.info("feature_name (first row): %s", val if val != "" else "<empty>")
-    except Exception as e:
-        logging.warning("Integrity check failed for %s: %s", out_path, e)
     for rp in cur_runs:
         try:
             os.remove(rp)
         except OSError:
             pass
-
     if auto_cleanup:
         try:
             shutil.rmtree(tmp_dir)
-            logging.info("Cleaned up temp dir: %s", tmp_dir)
         except Exception as e:
             logging.warning("Failed to clean temp dir %s: %s", tmp_dir, e)
     return out_path
-
-
-def randomized_row_iter(
-    path: str,
-    iso_col: str,
-    cat_col: str,
-    chunksize: int,
-    buffer_max: int,
-    seed: int,
-):
-    """
-    Yield (iso, cat) rows in approximately random order using a bounded shuffle buffer.
-    Memory usage is O(buffer_max) rows.
-    """
-    rng = np.random.default_rng(seed)
-    buffer = []  # list of tuples (iso, cat)
-    usecols = [iso_col, cat_col]
-    reader = pd.read_csv(
-        path,
-        sep="\t",
-        usecols=usecols,
-        dtype={iso_col: "string", cat_col: "string"},
-        chunksize=chunksize,
-        engine="c",
-        compression="infer",
-    )
-    # Helper to fill buffer up to capacity
-    def extend_buffer_from_chunk(df_chunk: pd.DataFrame):
-        nonlocal buffer
-        if df_chunk is None or df_chunk.empty:
-            return
-        iso_s = df_chunk[iso_col].astype("string").str.strip()
-        cat_s = df_chunk[cat_col].astype("string").str.strip()
-        # Append tuples; avoid creating large intermediate DataFrame
-        for iso_val, cat_val in zip(iso_s, cat_s):
-            buffer.append((iso_val, cat_val))
-
-    chunk_iter = iter(reader)
-    next_chunk = None
-
-    # Prime buffer
-    while len(buffer) < buffer_max:
-        try:
-            next_chunk = next(chunk_iter)
-        except StopIteration:
-            next_chunk = None
-            break
-        extend_buffer_from_chunk(next_chunk)
-        next_chunk = None
-
-    # Main loop: pop random items, refill from stream
-    while buffer:
-        # Refill if below capacity and chunks remain
-        while len(buffer) < buffer_max:
-            try:
-                next_chunk = next(chunk_iter)
-            except StopIteration:
-                next_chunk = None
-                break
-            extend_buffer_from_chunk(next_chunk)
-            next_chunk = None
-        # Randomly pop one
-        j = int(rng.integers(len(buffer)))
-        iso_val, cat_val = buffer[j]
-        buffer[j] = buffer[-1]
-        buffer.pop()
-        yield (iso_val, cat_val)
-    # Drain remaining chunks (if any) — occurs when initial file smaller than buffer
-    for chunk in chunk_iter:
-        extend_buffer_from_chunk(chunk)
-        while buffer:
-            j = int(rng.integers(len(buffer)))
-            iso_val, cat_val = buffer[j]
-            buffer[j] = buffer[-1]
-            buffer.pop()
-            yield (iso_val, cat_val)
-
-
-def stream_curves_thin_and_fit_from_rows(
-    row_iter,
-    fsm_value: str,
-    allowed_isos: Optional[Set[str]],
-    total_reads: int,
-    thin_target: int,
-):
-    step_curve = max(1, total_reads // max(1, thin_target))
-    xt = np.arange(1, total_reads + 1, step_curve, dtype=np.int64)
-    xf = xt.astype(np.float64)
-
-    yi_t = np.zeros_like(xt, dtype=np.int64)
-    yf_t = np.zeros_like(xt, dtype=np.int64)
-    yi_f = np.zeros_like(xf, dtype=np.float64)
-    yf_f = np.zeros_like(xf, dtype=np.float64)
-
-    seen_ident: Set[str] = set()
-    seen_fsm: Set[str] = set()
-    y_ident = 0
-    y_fsm = 0
-    n_ident_reads = 0
-    n_fsm_reads = 0
-
-    next_curve_idx = 0
-    next_fit_idx = 0
-
-    i_global = 0
-    for iso_val, cat_val in row_iter:
-        i_global += 1
-        if pd.isna(iso_val) or ("," in str(iso_val)):
-            pass
-        else:
-            iso_token = str(iso_val)
-            if allowed_isos is None or iso_token in allowed_isos:
-                n_ident_reads += 1
-                if iso_token not in seen_ident:
-                    seen_ident.add(iso_token)
-                    y_ident += 1
-                if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
-                    n_fsm_reads += 1
-                    if iso_token not in seen_fsm:
-                        seen_fsm.add(iso_token)
-                        y_fsm += 1
-        while next_curve_idx < len(xt) and i_global >= int(xt[next_curve_idx]):
-            yi_t[next_curve_idx] = y_ident
-            yf_t[next_curve_idx] = y_fsm
-            next_curve_idx += 1
-        while next_fit_idx < len(xf) and i_global >= int(xf[next_fit_idx]):
-            yi_f[next_fit_idx] = float(y_ident)
-            yf_f[next_fit_idx] = float(y_fsm)
-            next_fit_idx += 1
-
-    return xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident_reads, n_fsm_reads, int(y_ident), int(y_fsm)
-
-
-def stream_observed_quantiles_from_rows(
-    row_iter,
-    fsm_value: str,
-    allowed_isos: Optional[Set[str]],
-    thresholds_ident: Dict[int, int],
-    thresholds_fsm: Dict[int, int],
-):
-    pending_i = {k: True for k in thresholds_ident}
-    pending_f = {k: True for k in thresholds_fsm}
-    out_i: Dict[int, float] = {k: float("nan") for k in thresholds_ident}
-    out_f: Dict[int, float] = {k: float("nan") for k in thresholds_fsm}
-
-    seen_ident: Set[str] = set()
-    seen_fsm: Set[str] = set()
-    y_ident = 0
-    y_fsm = 0
-
-    i_global = 0
-    for iso_val, cat_val in row_iter:
-        i_global += 1
-        if not pd.isna(iso_val) and "," not in str(iso_val):
-            iso_token = str(iso_val)
-            if allowed_isos is None or iso_token in allowed_isos:
-                if iso_token not in seen_ident:
-                    seen_ident.add(iso_token)
-                    y_ident += 1
-                    for p, thr in thresholds_ident.items():
-                        if pending_i.get(p) and y_ident >= thr:
-                            out_i[p] = float(i_global)
-                            pending_i[p] = False
-                if (not pd.isna(cat_val)) and (str(cat_val) == fsm_value):
-                    if iso_token not in seen_fsm:
-                        seen_fsm.add(iso_token)
-                        y_fsm += 1
-                        for p, thr in thresholds_fsm.items():
-                            if pending_f.get(p) and y_fsm >= thr:
-                                out_f[p] = float(i_global)
-                                pending_f[p] = False
-        if not any(pending_i.values()) and not any(pending_f.values()):
-            break
-    return out_i, out_f
 
 
 # --------------- Fitting ---------------
@@ -873,14 +585,16 @@ def _safe_curve_fit(model, x, y, p0):
 
 
 def _aic(n, rss, k_params):
-    # Gaussian log-likelihood approximation
     return n * np.log(rss / n if rss > 0 else 1e-12) + 2 * k_params
 
 
-def fit_best_model(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+def fit_best_model(
+    x: np.ndarray, y: np.ndarray, force: str = "auto"
+) -> Dict[str, float]:
     """
-    Try exponential and Michaelis–Menten models; pick by AIC.
-    Returns dict with model name, params, rss, aic, vmax, x80_pred.
+    Fit exponential and Michaelis–Menten; pick by AIC unless 'force' is 'exp' or 'mm'.
+    Returns: {model, rss, aic, vmax, param1}
+      param1 = k (exp) or K (mm)
     """
     n = len(x)
     if n < 5 or np.nanmax(y) <= 0:
@@ -888,15 +602,12 @@ def fit_best_model(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
             "model": "none",
             "rss": float("nan"),
             "aic": float("nan"),
-            "vmax": float(np.nan),
+            "vmax": float("nan"),
             "param1": float("nan"),
-            "x80_pred": float(np.nan),
         }
 
-    # Initial guesses
     y_max = float(np.nanmax(y))
-    # For exp: k ~ initial slope / vmax; rough slope from first few points
-    idx_front = max(5, n // 200)  # up to ~0.5%
+    idx_front = max(5, n // 200)
     slope_guess = max(
         1e-9,
         (y[min(n - 1, idx_front)] - y[0]) / (x[min(n - 1, idx_front)] - x[0] + 1e-9),
@@ -904,9 +615,7 @@ def fit_best_model(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     k0 = min(1.0, max(1e-9, slope_guess / max(1.0, y_max)))
     p0_exp = (max(y_max, 1.0), k0)
 
-    # For MM: K ~ x at half of ymax
     half = 0.5 * y_max
-    # Find closest index where y crosses half
     if np.any(y >= half):
         j = int(np.argmax(y >= half))
         K0 = max(1.0, x[j])
@@ -914,35 +623,48 @@ def fit_best_model(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         K0 = np.median(x)
     p0_mm = (max(y_max, 1.0), K0)
 
-    # Fit both
     ok_e, pexp, yhat_e, rss_e = _safe_curve_fit(_exp_model, x, y, p0_exp)
     ok_m, pmm, yhat_m, rss_m = _safe_curve_fit(_mm_model, x, y, p0_mm)
 
-    # Score
     aic_e = _aic(n, rss_e, 2) if ok_e else np.inf
     aic_m = _aic(n, rss_m, 2) if ok_m else np.inf
 
-    if aic_e < aic_m:
-        vmax, k = pexp if ok_e else (np.nan, np.nan)
-        x80 = (np.log(5.0) / k) if ok_e and k > 0 else np.nan  # ln(5) ~ 1.609
+    if force == "exp" and ok_e:
+        vmax, k = pexp
         return {
             "model": "exp",
             "rss": rss_e,
             "aic": aic_e,
             "vmax": float(vmax),
             "param1": float(k),
-            "x80_pred": float(x80),
         }
-    elif aic_m < np.inf:
+    if force == "mm" and ok_m:
         vmax, K = pmm
-        x80 = 4.0 * K
         return {
             "model": "mm",
             "rss": rss_m,
             "aic": aic_m,
             "vmax": float(vmax),
             "param1": float(K),
-            "x80_pred": float(x80),
+        }
+
+    if aic_e < aic_m:
+        vmax, k = pexp if ok_e else (np.nan, np.nan)
+        return {
+            "model": "exp",
+            "rss": rss_e,
+            "aic": aic_e,
+            "vmax": float(vmax),
+            "param1": float(k),
+        }
+    elif aic_m < np.inf:
+        vmax, K = pmm
+        return {
+            "model": "mm",
+            "rss": rss_m,
+            "aic": aic_m,
+            "vmax": float(vmax),
+            "param1": float(K),
         }
     else:
         return {
@@ -951,41 +673,12 @@ def fit_best_model(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
             "aic": float("nan"),
             "vmax": float("nan"),
             "param1": float("nan"),
-            "x80_pred": float("nan"),
         }
-
-
-def observed_x80(x: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
-    """
-    Return (x80_obs, y80_obs) where y reaches 80% of observed max (first crossing).
-    """
-    if len(y) == 0:
-        return float("nan"), float("nan")
-    y_obs_max = float(np.nanmax(y))
-    thr = 0.8 * y_obs_max
-    idx = np.argmax(y >= thr)
-    if y[idx] < thr:
-        return float("nan"), float("nan")
-    return float(x[idx]), float(thr)
-
-
-def observed_x_at_fraction(x: np.ndarray, y: np.ndarray, frac: float) -> float:
-    """
-    First x where y >= frac * observed_max. Returns NaN if never reached.
-    """
-    if len(y) == 0 or not (0.0 < frac < 1.0):
-        return float("nan")
-    y_obs_max = float(np.nanmax(y))
-    thr = frac * y_obs_max
-    idx = int(np.argmax(y >= thr))
-    if y[idx] < thr:
-        return float("nan")
-    return float(x[idx])
 
 
 def predicted_x_at_fraction(fit: Dict[str, float], frac: float) -> float:
     """
-    Compute predicted reads to reach a given fraction of Vmax based on chosen model.
+    Compute predicted reads to reach a given fraction of Vmax for the chosen model.
     """
     model = fit.get("model", "none")
     if not (0.0 < frac < 1.0):
@@ -1008,7 +701,7 @@ def predicted_x_at_fraction(fit: Dict[str, float], frac: float) -> float:
 
 def main():
     p = argparse.ArgumentParser(
-        description="Saturation analysis for Identifiable vs FSM (fit + 80% reads)."
+        description="Saturation analysis for Identifiable vs FSM (fit + thresholds)."
     )
     p.add_argument(
         "-i",
@@ -1046,69 +739,70 @@ def main():
         "--min-rpm",
         type=float,
         default=0.0,
-        help=
-        "Minimum expression threshold in reads-per-million total reads."
-        " Isoforms must meet this threshold (with fractional counting) to be included",
+        help="Minimum reads-per-million threshold (fractional counting).",
     )
     p.add_argument(
         "--chunksize",
         type=int,
         default=5_000_000,
-        help="Rows per chunk when streaming (memory/perf trade-off).",
+        help="Rows per chunk when streaming.",
     )
     p.add_argument(
-        "--shuffle-buffer",
-        type=int,
-        default=2_000_000,
-        help="Approximate shuffle buffer size for streaming mode (O(buffer) memory).",
+        "--shuffle-buffer", type=int, default=2_000_000, help="(unused in this path)"
     )
     p.add_argument(
-        "--no-plot",
-        action="store_true",
-        help="Skip generating the PNG plot (saves memory and dependencies).",
+        "--no-plot", action="store_true", help="Skip generating the PNG plot."
     )
     p.add_argument(
-        "--no-curves",
-        action="store_true",
-        help="Skip writing the thinned curves TSV (saves I/O).",
+        "--no-curves", action="store_true", help="Skip writing the thinned curves TSV."
     )
     p.add_argument(
         "--shuffle-out",
         default=None,
-        help="Path to write the shuffled file (default: auto next to input). Use .gz to compress.",
+        help="Path to write the shuffled file (default: auto).",
     )
     p.add_argument(
         "--skip-shuffle",
         action="store_true",
-        help="Skip external shuffling and process the input as-is (assumed already randomized).",
+        help="Skip external shuffling; use input as-is.",
     )
     p.add_argument(
         "--shuffle-gzip-level",
         type=int,
         default=3,
-        help="Gzip compression level for shuffled file (1=fast, 9=small). Only used if output ends with .gz.",
+        help="Gzip level for shuffled file.",
     )
     p.add_argument(
         "--shuffle-plain",
         action="store_true",
-        help="Write shuffled output uncompressed (.tsv) for faster merging and downstream reads.",
+        help="Write shuffled output uncompressed (.tsv).",
     )
     p.add_argument(
         "--shuffle-run-lines",
         type=int,
         default=1_000_000,
-        help="Approx. lines per run (higher uses more RAM but fewer runs; good default for ~32GB RAM).",
+        help="Approx. lines per run.",
     )
+    p.add_argument("--shuffle-fan-in", type=int, default=256, help="Run merge fan-in.")
+    p.add_argument("--shuffle-tmpdir", default=None, help="Temp dir for shuffle runs.")
+    # NEW knobs for comparability
     p.add_argument(
-        "--shuffle-fan-in",
-        type=int,
-        default=256,
-        help="Run merge fan-in (more reduces merge levels; requires available file descriptors).",
-    )
-    p.add_argument(
-        "--shuffle-tmpdir",
+        "--fit-max-reads",
+        type=float,
         default=None,
-        help="Temporary directory for external shuffle runs (default: system temp).",
+        help="Only use reads <= this value for model fitting (still plots full curve).",
+    )
+    p.add_argument(
+        "--fit-max-frac",
+        type=float,
+        default=None,
+        help="Alternatively, use the first frac (0..1) of reads for fitting.",
+    )
+    p.add_argument(
+        "--model",
+        choices=["auto", "exp", "mm"],
+        default="auto",
+        help="Force model selection across runs; default auto by AIC.",
     )
     p.add_argument("-q", "--quiet", action="store_true", help="Reduce logging.")
     args = p.parse_args()
@@ -1120,23 +814,25 @@ def main():
 
     t0 = time.perf_counter()
     in_path = args.input
-    # External full shuffle pre-step unless skipped
-    if args.skip_shuffle:
-        logging.info("Skipping external shuffle; using input as-is: %s", in_path)
-    else:
+
+    # External shuffle (unless skipped)
+    if not args.skip_shuffle:
         base = os.path.basename(in_path)
         root = base
         for ext in (".tsv.gz", ".txt.gz", ".csv.gz", ".tsv", ".txt", ".csv"):
             if root.endswith(ext):
                 root = root[: -len(ext)]
                 break
-        # Decide shuffled output path and compression
         if args.shuffle_plain:
             shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv"
             gzip_level = None
         else:
             shuffle_out = args.shuffle_out or f"{root}.shuffled.tsv.gz"
-            gzip_level = int(args.shuffle_gzip_level) if args.shuffle_gzip_level is not None else 3
+            gzip_level = (
+                int(args.shuffle_gzip_level)
+                if args.shuffle_gzip_level is not None
+                else 3
+            )
         logging.info("External shuffle starting -> %s", shuffle_out)
         external_shuffle_to_file(
             in_path,
@@ -1149,9 +845,10 @@ def main():
         )
         in_path = shuffle_out
         logging.info("External shuffle complete: %s", in_path)
+    else:
+        logging.info("Skipping external shuffle; using input as-is: %s", in_path)
 
-    # Always run in streaming mode
-    # Pass 1: fractional counts and total reads
+    # Pass 1: fractional counts + total reads
     frac_counts, n = stream_fractional_counts(
         in_path, args.iso_col, chunksize=args.chunksize
     )
@@ -1167,21 +864,44 @@ def main():
             n_allowed_iso,
         )
 
-    # Pass 2: thinned curves and fit (sequential since input is externally shuffled)
-    xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident, n_fsm, obs_max_ident, obs_max_fsm = stream_curves_thin_and_fit(
-        in_path,
-        args.iso_col,
-        args.cat_col,
-        args.fsm_value,
-        allowed_isos,
-        n,
-        args.thin,
-        chunksize=args.chunksize,
+    # Pass 2: thinned curves + fit arrays
+    xt, yi_t, yf_t, xf, yi_f, yf_f, n_ident, n_fsm, obs_max_ident, obs_max_fsm = (
+        stream_curves_thin_and_fit(
+            in_path,
+            args.iso_col,
+            args.cat_col,
+            args.fsm_value,
+            allowed_isos,
+            n,
+            args.thin,
+            chunksize=args.chunksize,
+        )
     )
-    fit_ident = fit_best_model(xf, yi_f)
-    fit_fsm = fit_best_model(xf, yf_f)
 
-    # Compute observed quantiles (exact) with pass 3
+    # Optionally restrict the *fit* domain for stability/comparability
+    fit_xmax = None
+    if args.fit_max_reads is not None:
+        fit_xmax = float(args.fit_max_reads)
+    elif args.fit_max_frac is not None:
+        fit_xmax = float(args.fit_max_frac) * float(n)
+    if fit_xmax is not None and np.isfinite(fit_xmax):
+        m = xf <= fit_xmax
+        if np.count_nonzero(m) >= 5:
+            xf_use, yi_use, yf_use = xf[m], yi_f[m], yf_f[m]
+            fit_xmax_used = float(np.max(xf_use))
+        else:
+            logging.warning("Requested fit range too small; using full domain.")
+            xf_use, yi_use, yf_use = xf, yi_f, yf_f
+            fit_xmax_used = float(np.max(xf))
+    else:
+        xf_use, yi_use, yf_use = xf, yi_f, yf_f
+        fit_xmax_used = float(np.max(xf))
+
+    # Fit (optionally force model)
+    fit_ident = fit_best_model(xf_use, yi_use, force=args.model)
+    fit_fsm = fit_best_model(xf_use, yf_use, force=args.model)
+
+    # Pass 3: exact observed thresholds
     fracs = [0.80, 0.85, 0.90, 0.95]
     thr_i = {int(f * 100): int(np.ceil(f * obs_max_ident)) for f in fracs}
     thr_f = {int(f * 100): int(np.ceil(f * obs_max_fsm)) for f in fracs}
@@ -1195,48 +915,51 @@ def main():
         thr_f,
         chunksize=args.chunksize,
     )
-    # Extract x80 from dicts
-    x80i_obs = obs_ident.get(80, float("nan"))
-    x80f_obs = obs_fsm.get(80, float("nan"))
+
+    # Predicted thresholds (ALL via one routine)
     pred_ident = {int(f * 100): predicted_x_at_fraction(fit_ident, f) for f in fracs}
     pred_fsm = {int(f * 100): predicted_x_at_fraction(fit_fsm, f) for f in fracs}
-    # Prepare arrays for output already computed: xt, yi_t, yf_t
-    y_ident = None  # not used further
-    y_fsm = None
 
-    # Compose fit summary TSV
-    out_tsv, out_png, out_fit = auto_paths(args.input, args.out_tsv, args.png_out, args.fit_out)
-    # Observed maxima per curve for summary
-    observed_max_ident_val = int(obs_max_ident)
-    observed_max_fsm_val = int(obs_max_fsm)
+    # Compose outputs
+    out_tsv, out_png, out_fit = auto_paths(
+        args.input, args.out_tsv, args.png_out, args.fit_out
+    )
+    rpm_thr_count = (args.min_rpm * float(n)) / 1_000_000.0 if n else 0.0
 
     fit_df = pd.DataFrame(
         [
             {
                 "curve": "Identifiable",
+                "total_reads": n,
+                "min_rpm": args.min_rpm,
+                "rpm_count_threshold": rpm_thr_count,
+                "n_isoforms_above_threshold": n_allowed_iso,
                 "eligible_read_count": n_ident,
-                "observed_max": observed_max_ident_val,
-                "observed_x80_reads": x80i_obs,
-                # Additional observed quantiles
+                "observed_max": int(obs_max_ident),
+                "observed_x80_reads": obs_ident.get(80, float("nan")),
                 "observed_x85_reads": obs_ident.get(85, float("nan")),
                 "observed_x90_reads": obs_ident.get(90, float("nan")),
                 "observed_x95_reads": obs_ident.get(95, float("nan")),
                 "model": fit_ident["model"],
                 "vmax_pred": fit_ident["vmax"],
-                "param1": fit_ident["param1"],  # k for exp; K for MM
+                "param1": fit_ident["param1"],  # k (exp) or K (mm)
                 "rss": fit_ident["rss"],
                 "aic": fit_ident["aic"],
-                "pred_x80_reads": fit_ident["x80_pred"],
-                # Additional predicted quantiles
+                "fit_max_reads_used": fit_xmax_used,
+                "pred_x80_reads": pred_ident.get(80, float("nan")),
                 "pred_x85_reads": pred_ident.get(85, float("nan")),
                 "pred_x90_reads": pred_ident.get(90, float("nan")),
                 "pred_x95_reads": pred_ident.get(95, float("nan")),
             },
             {
                 "curve": "FSM",
+                "total_reads": n,
+                "min_rpm": args.min_rpm,
+                "rpm_count_threshold": rpm_thr_count,
+                "n_isoforms_above_threshold": n_allowed_iso,
                 "eligible_read_count": n_fsm,
-                "observed_max": observed_max_fsm_val,
-                "observed_x80_reads": x80f_obs,
+                "observed_max": int(obs_max_fsm),
+                "observed_x80_reads": obs_fsm.get(80, float("nan")),
                 "observed_x85_reads": obs_fsm.get(85, float("nan")),
                 "observed_x90_reads": obs_fsm.get(90, float("nan")),
                 "observed_x95_reads": obs_fsm.get(95, float("nan")),
@@ -1245,37 +968,27 @@ def main():
                 "param1": fit_fsm["param1"],
                 "rss": fit_fsm["rss"],
                 "aic": fit_fsm["aic"],
-                "pred_x80_reads": fit_fsm["x80_pred"],
+                "fit_max_reads_used": fit_xmax_used,
+                "pred_x80_reads": pred_fsm.get(80, float("nan")),
                 "pred_x85_reads": pred_fsm.get(85, float("nan")),
                 "pred_x90_reads": pred_fsm.get(90, float("nan")),
                 "pred_x95_reads": pred_fsm.get(95, float("nan")),
             },
         ]
     )
-    # Add metadata columns (same values for both rows)
-    rpm_thr_count = (args.min_rpm * float(n)) / 1_000_000.0 if n else 0.0
-    fit_df.insert(1, "total_reads", n)
-    fit_df.insert(2, "min_rpm", args.min_rpm)
-    fit_df.insert(3, "rpm_count_threshold", rpm_thr_count)
-    fit_df.insert(4, "n_isoforms_above_threshold", n_allowed_iso)
     fit_df.to_csv(out_fit, sep="\t", index=False)
     logging.info("Wrote fit summary: %s", out_fit)
 
     if not args.no_curves:
         thin_df = pd.DataFrame(
-            {
-                "read_index": xt,
-                "cum_unique_identifiable": yi_t,
-                "cum_unique_FSM": yf_t,
-            }
+            {"read_index": xt, "cum_unique_identifiable": yi_t, "cum_unique_FSM": yf_t}
         )
         thin_df.to_csv(out_tsv, sep="\t", index=False, compression="infer")
         logging.info("Wrote thinned curves: %s  (%d rows)", out_tsv, len(thin_df))
 
-    # Plot overlay with fitted curves + 80% lines and subtle extra quantiles (85/90/95)
     if not args.no_plot:
         try:
-            import matplotlib.pyplot as plt  # type: ignore
+            import matplotlib.pyplot as plt
         except Exception as e:
             logging.warning("matplotlib not available (%s); skipping plot.", e)
         else:
@@ -1284,35 +997,19 @@ def main():
             plt.plot(xt, yi_t, label="Identifiable (empirical)", linewidth=1.6)
             plt.plot(xt, yf_t, label="FSM (empirical)", linewidth=1.6)
 
-            # Fitted curves (evaluated on xt for display)
             fracs_extra = [0.85, 0.90, 0.95]
 
+            # Identifiable fit + guides
             if fit_ident["model"] == "exp":
                 vmax, k = fit_ident["vmax"], fit_ident["param1"]
                 yi_fit = vmax * (1.0 - np.exp(-k * xt))
-                y80 = 0.8 * vmax
-                x80 = fit_ident["x80_pred"]
-                plt.plot(
-                    xt,
-                    yi_fit,
-                    linestyle="--",
-                    linewidth=1.2,
-                    label=f"Identifiable fit ({fit_ident['model']})",
-                )
-                plt.axhline(y80, linestyle=":", linewidth=1.0)
-                if np.isfinite(x80):
-                    plt.axvline(x80, linestyle=":", linewidth=1.0)
-                for f in fracs_extra:
-                    y_f = f * vmax
-                    x_f = predicted_x_at_fraction(fit_ident, f)
-                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-                    if np.isfinite(x_f):
-                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
             elif fit_ident["model"] == "mm":
                 vmax, K = fit_ident["vmax"], fit_ident["param1"]
                 yi_fit = vmax * (xt / (K + xt))
-                y80 = 0.8 * vmax
-                x80 = fit_ident["x80_pred"]
+            else:
+                yi_fit = None
+
+            if yi_fit is not None:
                 plt.plot(
                     xt,
                     yi_fit,
@@ -1320,42 +1017,33 @@ def main():
                     linewidth=1.2,
                     label=f"Identifiable fit ({fit_ident['model']})",
                 )
+                y80 = 0.8 * fit_ident["vmax"]
+                x80 = predicted_x_at_fraction(fit_ident, 0.80)
                 plt.axhline(y80, linestyle=":", linewidth=1.0)
                 if np.isfinite(x80):
                     plt.axvline(x80, linestyle=":", linewidth=1.0)
                 for f in fracs_extra:
-                    y_f = f * vmax
+                    y_f = f * fit_ident["vmax"]
                     x_f = predicted_x_at_fraction(fit_ident, f)
-                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    plt.axhline(
+                        y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray"
+                    )
                     if np.isfinite(x_f):
-                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                        plt.axvline(
+                            x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray"
+                        )
 
+            # FSM fit + guides
             if fit_fsm["model"] == "exp":
                 vmax, k = fit_fsm["vmax"], fit_fsm["param1"]
                 yf_fit = vmax * (1.0 - np.exp(-k * xt))
-                y80 = 0.8 * vmax
-                x80 = fit_fsm["x80_pred"]
-                plt.plot(
-                    xt,
-                    yf_fit,
-                    linestyle="--",
-                    linewidth=1.2,
-                    label=f"FSM fit ({fit_fsm['model']})",
-                )
-                plt.axhline(y80, linestyle=":", linewidth=1.0)
-                if np.isfinite(x80):
-                    plt.axvline(x80, linestyle=":", linewidth=1.0)
-                for f in fracs_extra:
-                    y_f = f * vmax
-                    x_f = predicted_x_at_fraction(fit_fsm, f)
-                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
-                    if np.isfinite(x_f):
-                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
             elif fit_fsm["model"] == "mm":
                 vmax, K = fit_fsm["vmax"], fit_fsm["param1"]
                 yf_fit = vmax * (xt / (K + xt))
-                y80 = 0.8 * vmax
-                x80 = fit_fsm["x80_pred"]
+            else:
+                yf_fit = None
+
+            if yf_fit is not None:
                 plt.plot(
                     xt,
                     yf_fit,
@@ -1363,15 +1051,21 @@ def main():
                     linewidth=1.2,
                     label=f"FSM fit ({fit_fsm['model']})",
                 )
+                y80 = 0.8 * fit_fsm["vmax"]
+                x80 = predicted_x_at_fraction(fit_fsm, 0.80)
                 plt.axhline(y80, linestyle=":", linewidth=1.0)
                 if np.isfinite(x80):
                     plt.axvline(x80, linestyle=":", linewidth=1.0)
                 for f in fracs_extra:
-                    y_f = f * vmax
+                    y_f = f * fit_fsm["vmax"]
                     x_f = predicted_x_at_fraction(fit_fsm, f)
-                    plt.axhline(y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                    plt.axhline(
+                        y_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray"
+                    )
                     if np.isfinite(x_f):
-                        plt.axvline(x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray")
+                        plt.axvline(
+                            x_f, linestyle=":", linewidth=0.8, alpha=0.25, color="gray"
+                        )
 
             plt.xlabel("Number of reads")
             plt.ylabel("Unique transcript discovered")
@@ -1380,7 +1074,9 @@ def main():
             plt.tight_layout()
             plt.savefig(out_png)
             plt.close()
-            logging.info("Wrote plot: %s  (elapsed: %.2fs)", out_png, time.perf_counter() - t0)
+            logging.info(
+                "Wrote plot: %s  (elapsed: %.2fs)", out_png, time.perf_counter() - t0
+            )
 
 
 if __name__ == "__main__":
