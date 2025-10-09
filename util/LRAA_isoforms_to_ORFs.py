@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 import os, sys
 import argparse
+import logging
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"])
 )
 
 from Pipeliner import Pipeliner, Command
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s : %(levelname)s : %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -25,6 +33,19 @@ def main():
         default=False,
         help="require complete ORFs starting with Met",
     )
+    parser.add_argument(
+        "--single_best_only",
+        action="store_true",
+        default=False,
+        help="single best orf per transcript only",
+    )
+
+    parser.add_argument(
+        "-m",
+        "--min_prot_length",
+        default=100,
+        help="minimum protein length to be considered",
+    )
 
     args = parser.parse_args()
 
@@ -41,13 +62,16 @@ def main():
     pipeliner.add_commands([Command(cmd, "gtf_genome_to_cdna_fasta.ok")])
 
     # Step 3: extract the long ORFs
-    cmd = f"{args.td_dir}/TransDecoder.LongOrfs -t {args.output_prefix}.cdna.fasta -S"
+    cmd = f"{args.td_dir}/TransDecoder.LongOrfs -t {args.output_prefix}.cdna.fasta -S -m {args.min_prot_length}"
     if args.complete_orfs_only:
         cmd += " --complete_orfs_only "
     pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
 
     # Step 4: predict likely ORFs
-    cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta --no_refine_starts --single_best_only"
+    cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta --no_refine_starts "
+    if args.single_best_only:
+        cmd += " --single_best_only"
+
     pipeliner.add_commands([Command(cmd, "transdecoder_predict.ok")])
 
     # Step 5: convert to genome coordinates
