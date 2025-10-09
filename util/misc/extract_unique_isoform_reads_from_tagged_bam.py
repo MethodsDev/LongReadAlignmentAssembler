@@ -3,10 +3,11 @@
 
 """
 Extract reads from a BAM file that are uniquely assigned to a single isoform
-(based on the `XI:Z:` tag) and retain only the N longest reads per isoform.
+(based on the `XI:Z:` tag, or falling back to `CI:Z:` if `XI` is absent) and
+retain only the N longest reads per isoform.
 
 Example usage:
-    ./extract_unique_isoform_reads.py \
+    ./extract_unique_isoform_reads_from_tagged_bam.py \
         --bam input.bam \
         --output unique_longest.bam \
         --topN 10
@@ -22,8 +23,10 @@ from collections import defaultdict
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Extract uniquely assigned reads (single XI:Z isoform) "
-        "and keep top N longest reads per isoform."
+        description=(
+            "Extract uniquely assigned reads (single XI:Z or CI:Z isoform) "
+            "and keep top N longest reads per isoform."
+        )
     )
     parser.add_argument(
         "--bam",
@@ -63,12 +66,20 @@ def main():
         if read.is_unmapped or read.mapping_quality < args.min_mapq:
             continue
 
-        try:
-            xi_tag = read.get_tag("XI")
-        except KeyError:
-            continue  # skip reads without XI tag
+        # Prefer XI tag; if absent, fall back to CI tag
+        tag_value = None
+        for tag_name in ("XI", "CI"):
+            try:
+                tag_value = read.get_tag(tag_name)
+                if tag_value is not None:
+                    break
+            except KeyError:
+                continue
 
-        isoforms = xi_tag.split(",")
+        if tag_value is None:
+            continue  # skip reads without XI/CI tag
+
+        isoforms = [x.strip() for x in tag_value.split(",") if x.strip()]
         if len(isoforms) != 1:
             continue  # skip multi-mapped reads
 
