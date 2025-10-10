@@ -236,6 +236,31 @@ class Quantify:
                     splice_graph,
                     mp,
                     gene_isoforms,
+                    test_type="COMPATIBLE_CONTAINED",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=False,
+                    anchor_PolyA_TSS=True,
+                )
+  
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
+                    test_type="INTRONS_CONTAINED",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=False,
+                    anchor_PolyA_TSS=True,
+                )
+
+
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
                     test_type="other",
                     fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=False,
@@ -264,6 +289,30 @@ class Quantify:
                     mp,
                     gene_isoforms,
                     test_type="exact",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=True,
+                    anchor_PolyA_TSS=False,
+                )
+
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
+                    test_type="COMPATIBLE_CONTAINED",
+                    fraction_read_align_overlap=fraction_read_align_overlap,
+                    trim_TSS_polyA=True,
+                    anchor_PolyA_TSS=False,
+                )
+  
+            if transcripts_assigned is None:
+                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+                transcripts_assigned = self._assign_path_to_transcript(
+                    splice_graph,
+                    mp,
+                    gene_isoforms,
+                    test_type="INTRONS_CONTAINED",
                     fraction_read_align_overlap=fraction_read_align_overlap,
                     trim_TSS_polyA=True,
                     anchor_PolyA_TSS=False,
@@ -432,7 +481,7 @@ class Quantify:
             fraction_read_align_overlap >= 0 and fraction_read_align_overlap <= 1.0
         ), "Error, fraction_read_align_overlap must be between 0 and 1.0"
 
-        test_type_choices = ["exact", "FSM", "other"]
+        test_type_choices = ["exact", "FSM", "COMPATIBLE_CONTAINED", "INTRONS_CONTAINED", "other"]
 
         assert (
             test_type in test_type_choices
@@ -457,6 +506,14 @@ class Quantify:
                 return True
             else:
                 return False
+
+        # Precompute read ordered introns and read span (lend, rend) for containment checks
+        read_introns_ordered = [node for node in read_sp if re.match("^I:", node)]
+        _trimmed_read_no_spacers = SPU.trim_terminal_spacers(read_sp.copy())
+        read_span = (
+            splice_graph.get_node_obj_via_id(_trimmed_read_no_spacers[0]).get_coords()[0],
+            splice_graph.get_node_obj_via_id(_trimmed_read_no_spacers[-1]).get_coords()[1],
+        )
 
         transcripts_compatible_with_read = list()
 
@@ -615,13 +672,58 @@ class Quantify:
                     )
                     # print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
                     transcripts_compatible_with_read.append(transcript)
+            
 
-            else:  # test_type == "other"
+            elif test_type == "COMPATIBLE_CONTAINED":
+
+                # check for transcript path fully containing the splice pattern of the read
+                if (SPU.path_A_contains_path_B(transcript_sp, read_sp)):
+                    logger.debug(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE and CONTAINED by transcript {}".format(
+                            mp_descr,
+                            trim_TSS_polyA,
+                            test_type,
+                            anchor_PolyA_TSS,
+                            read_sp,
+                            transcript_sp,
+                        )
+                    )
+                    # print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
+                    transcripts_compatible_with_read.append(transcript)
+
+
+            elif test_type == "INTRONS_CONTAINED":
+
+                # ordered intron match within read span (no extra transcript introns within span) + meets fraction read overlap criteria
+                if (
+                    SPU.read_introns_match_transcript_introns_overlapping_read_span(
+                        splice_graph, read_sp, transcript_sp
+                    )
+                    and SPU.fraction_read_overlap(
+                        splice_graph, read_sp, transcript_sp
+                    )
+                    >= fraction_read_align_overlap
+                ):
+
+                    logger.debug(
+                        "{} [trim_TSS_polyA={} test_type={} anchor_PolyA_TSS={}]  Read {} COMPATIBLE (ordered introns within read span + overlap) with transcript {}".format(
+                            mp_descr,
+                            trim_TSS_polyA,
+                            test_type,
+                            anchor_PolyA_TSS,
+                            read_sp,
+                            transcript_sp,
+                        )
+                    )
+                    transcripts_compatible_with_read.append(transcript)
+
+            elif test_type == "other":
 
                 ######################################################################################
                 # Test for compatibilty, no gaps within region of overlap, and sufficient read overlap
                 ######################################################################################
 
+                # compatible and meets fraction read overlap criteria
                 if (
                     SPU.are_overlapping_and_compatible_NO_gaps_in_overlap(
                         transcript_sp, read_sp
@@ -654,6 +756,8 @@ class Quantify:
                             transcript_sp,
                         )
                     )
+            else:
+                RuntimeError("not recognizing test type: " + test_type)
 
         if len(transcripts_compatible_with_read) == 0:
             logger.debug(

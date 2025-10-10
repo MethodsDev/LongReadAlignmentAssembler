@@ -109,8 +109,8 @@ def merge_simple_paths(simple_path_A, simple_path_B):
     if not are_overlapping_and_compatible_NO_gaps_in_overlap(
         simple_path_A, simple_path_B
     ):
-        raise RuntimeException(
-            "cannot merge paths that are not compatible in overlapping region"
+            raise RuntimeError(
+               "cannot merge paths that are not compatible in overlapping region"
         )
 
     ## find first non-spacer match between two paths, then merge.
@@ -153,7 +153,7 @@ def merge_simple_paths(simple_path_A, simple_path_B):
                     merged_path.extend(simple_path_B[extension_idx_B:])
                 return merged_path
 
-    raise RuntimeException(
+    raise RuntimeError(
         "Error, could not merge simple paths {} and {} ... bug... ".format(
             simple_path_A, simple_path_B
         )
@@ -939,6 +939,73 @@ def get_simple_path_introns(simple_path: list) -> set:
             introns.add(node)
 
     return introns
+
+
+def read_intron_sequence_is_consecutive_subsequence_of_transcript(
+    read_simple_path: list, transcript_simple_path: list
+) -> bool:
+    """
+    Returns True if the ordered intron IDs (nodes starting with 'I:') from the read path
+    appear as a consecutive subsequence within the ordered intron IDs of the transcript path.
+
+    Notes:
+    - Paths are already left-to-right ordered; we anchor on the first read intron and
+      ensure the remaining read introns match consecutively in the transcript intron series.
+    - If the read has no introns, return False here (let other compatibility checks handle
+      exon-only reads to avoid overly permissive matches).
+    """
+
+    # Extract ordered intron IDs
+    read_introns = [node for node in read_simple_path if re.match("^I:", node)]
+    if len(read_introns) == 0:
+        return False
+
+    tx_introns = [node for node in transcript_simple_path if re.match("^I:", node)]
+
+    # Anchor on first read intron occurrence in transcript intron list
+    try:
+        start_idx = tx_introns.index(read_introns[0])
+    except ValueError:
+        return False
+
+    # Ensure remaining read introns match consecutively in transcript introns
+    end_idx = start_idx + len(read_introns)
+    if end_idx > len(tx_introns):
+        return False
+
+    return tx_introns[start_idx:end_idx] == read_introns
+
+
+def read_introns_match_transcript_introns_overlapping_read_span(
+    sg: Splice_graph, read_simple_path: list, transcript_simple_path: list
+) -> bool:
+    """
+    Returns True if the ordered intron IDs from the read path are exactly equal to
+    the ordered intron IDs from the transcript path that overlap the read's span.
+
+    This ensures no extra transcript introns overlap the read span and that order matches.
+    """
+    # ordered read introns
+    read_introns = [node for node in read_simple_path if re.match("^I:", node)]
+
+    # determine read span using first/last non-SPACER nodes
+    trimmed = trim_terminal_spacers(read_simple_path.copy())
+    if len(trimmed) == 0:
+        # no nodes? not expected, but consider no introns to match
+        return len(read_introns) == 0
+
+    read_lend = sg.get_node_obj_via_id(trimmed[0]).get_coords()[0]
+    read_rend = sg.get_node_obj_via_id(trimmed[-1]).get_coords()[1]
+
+    # ordered transcript introns overlapping read span
+    tx_introns_in_span = []
+    for node in transcript_simple_path:
+        if re.match("^I:", node):
+            i_lend, i_rend = sg.get_node_obj_via_id(node).get_coords()
+            if i_lend < read_rend and i_rend > read_lend:
+                tx_introns_in_span.append(node)
+
+    return tx_introns_in_span == read_introns
 
 
 ###############
