@@ -156,8 +156,8 @@ workflow LRAA_runner {
             docker=docker,
             numThreads=numThreads,
             memoryGB=memoryGB,
-         diskSizeGB=diskSizeGB,
-         region=region
+            diskSizeGB=diskSizeGB,
+            region=region
      }
 
      output {
