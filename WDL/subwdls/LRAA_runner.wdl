@@ -9,6 +9,7 @@ task LRAA_runner_task {
         File? annot_gtf
         Boolean quant_only
         Boolean LowFi = false
+        String? region
         
         Int? num_total_reads
         Float? min_per_id
@@ -46,6 +47,7 @@ task LRAA_runner_task {
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
+                                ~{"--region " + region} \
                                  ~{"--min_per_id " + min_per_id} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
@@ -106,6 +108,7 @@ workflow LRAA_runner {
         File? annot_gtf
         Boolean quant_only
         Boolean LowFi = false
+        String? region
         
         Int? num_total_reads
         Float? min_per_id
@@ -153,7 +156,8 @@ workflow LRAA_runner {
             docker=docker,
             numThreads=numThreads,
             memoryGB=memoryGB,
-            diskSizeGB=diskSizeGB
+         diskSizeGB=diskSizeGB,
+         region=region
      }
 
      output {

@@ -14,6 +14,7 @@ workflow LRAA_wf {
         Boolean LowFi = false
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
+    String? region # example: "chr1:100000-200000"; when set, workflow will not split by chromosome and will pass --region to LRAA
         
         Float? min_per_id
         Boolean no_EM = false
@@ -32,7 +33,7 @@ workflow LRAA_wf {
         
     }
 
-    Boolean run_without_splitting = (main_chromosomes == "")
+    Boolean run_without_splitting = (main_chromosomes == "" || defined(region))
     
     if (!run_without_splitting) {
 
@@ -96,6 +97,7 @@ workflow LRAA_wf {
                 inputBAM = inputBAM,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
+                region = region,
                 min_per_id = min_per_id,
                 quant_only = quant_only,
                 LowFi = LowFi,
