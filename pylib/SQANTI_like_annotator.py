@@ -255,7 +255,7 @@ class SQANTI_like_annotator:
                     )
                     feature_classified = True
                 elif (
-                    len(overlapping_exon_intervals) == 1
+                    len(overlapping_exon_intervals) > 0
                     and len(overlapping_intron_intervals) == 0
                 ):
                     feature_class_info["sqanti_cat"] = (
