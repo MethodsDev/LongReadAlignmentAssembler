@@ -55,6 +55,13 @@ def _contig_job_runner(job):
         contig_acc, genome_fasta
     )
 
+    # Ensure worker has config overrides and splice-graph params identical to parent
+    if job.get("config_overrides"):
+        # Shallow update into module-level config
+        LRAA_Globals.config.update(job["config_overrides"])
+    if job.get("splice_graph_params"):
+        Splice_graph.init_sg_params(job["splice_graph_params"])
+
     input_transcripts = None
     if job["input_gtf"]:
         contig_to_input_transcripts = (
@@ -944,6 +951,8 @@ def main():
                         restrict_region_lend=restrict_region_lend,
                         restrict_region_rend=restrict_region_rend,
                         input_gtf=input_gtf,
+                        config_overrides=dict(LRAA_Globals.config),
+                        splice_graph_params=splice_graph_params_dict,
                         run_EM=run_EM,
                         single_best_only=single_best_only,
                         NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,

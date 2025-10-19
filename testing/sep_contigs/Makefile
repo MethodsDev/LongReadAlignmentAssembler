@@ -1,25 +1,22 @@
 
-
-
-test:
-	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm
+test: test_serial test_parallel
 
 
 # Run serial across (contig,strand) using component-level multiprocessing only
 test_serial:
-	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 2 --output_prefix LRAA.serial
+	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --output_prefix LRAA.serial
 
 
 # Run with new contig/strand-level parallelization (plus component-level inside each worker)
 test_parallel:
-	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 2 --parallelize_contigs --output_prefix LRAA.par
+	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --parallelize_contigs --output_prefix LRAA.par
 
 
 # Quick timing harness to compare serial vs parallelized contig processing
 # Produces: bench.summary.tsv with real/user/sys times for both modes
 bench: bench_clean
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 2 --output_prefix LRAA.serial ) 2> serial.time.txt
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 2 --parallelize_contigs --output_prefix LRAA.par ) 2> parallel.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 15 --output_prefix LRAA.serial ) 2> serial.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 15 --parallelize_contigs --output_prefix LRAA.par ) 2> parallel.time.txt
 	@echo -e "mode\tCPU\tparallelize_contigs\treal\tuser\tsys" > bench.summary.tsv
 	@SER_REAL=`grep '^real' serial.time.txt | awk '{print $$2}'`; \
 	 SER_USER=`grep '^user' serial.time.txt | awk '{print $$2}'`; \
