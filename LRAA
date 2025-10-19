@@ -6,6 +6,7 @@ import pysam
 import argparse
 import subprocess
 import json
+from multiprocessing import Pool
 from collections import defaultdict
 
 sys.path.insert(
@@ -43,6 +44,130 @@ allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
+
+
+def _contig_job_runner(job):
+    # Module-scope function so it can be pickled by multiprocessing on macOS/Windows (spawn start method)
+    contig_acc = job["contig_acc"]
+    contig_strand = job["contig_strand"]
+    genome_fasta = job["genome_fasta_filename"]
+    contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
+        contig_acc, genome_fasta
+    )
+
+    input_transcripts = None
+    if job["input_gtf"]:
+        contig_to_input_transcripts = (
+            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
+                job["input_gtf"],
+                contig_acc,
+                contig_strand,
+                job["restrict_region_lend"],
+                job["restrict_region_rend"],
+            )
+        )
+        input_transcripts = contig_to_input_transcripts.get(contig_acc, [])
+        if input_transcripts is not None and len(input_transcripts) == 0:
+            input_transcripts = None
+
+    tmp_prefix = f"{job['output_prefix']}.contigtmp.{contig_acc}.{contig_strand}"
+
+    # prepare writers
+    quant_expr_tmp = f"{tmp_prefix}.quant.expr"
+    quant_tracking_tmp = f"{tmp_prefix}.quant.tracking"
+
+    # Headers
+    quant_header = [
+        "gene_id",
+        "transcript_id",
+        "uniq_reads",
+        "all_reads",
+        "isoform_fraction",
+        "unique_gene_read_fraction",
+        "TPM",
+        "exons",
+        "introns",
+        "splice_hash_code",
+    ]
+    if not job["QUANT_ONLY"]:
+        quant_header += ["splice_compat_contained", "splice_contained_by"]
+
+    tracking_header = [
+        "gene_id",
+        "transcript_id",
+        "transcript_splice_hash_code",
+        "mp_id",
+        "read_name",
+        "frac_assigned",
+    ]
+    if job["DEBUG"]:
+        tracking_header.append("read_weight")
+
+    ofh_quant = open(quant_expr_tmp, "wt")
+    print("\t".join(quant_header), file=ofh_quant)
+
+    ofh_track = open(quant_tracking_tmp, "wt")
+    print("\t".join(tracking_header), file=ofh_track)
+
+    gtf_tmp = None
+    ofh_gtf_local = None
+    if not job["QUANT_ONLY"]:
+        gtf_tmp = f"{tmp_prefix}.gtf"
+        ofh_gtf_local = open(gtf_tmp, "wt")
+
+    if job["QUANT_ONLY"]:
+        run_quant_only(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            job["bam_file_for_sg"],
+            job["bam_file_for_quant"],
+            job["restrict_region_lend"],
+            job["restrict_region_rend"],
+            input_transcripts,
+            ofh_quant,
+            ofh_track,
+            job["CPU_inner"],
+            job["run_EM"],
+            job["prereconstruct_info_dir"],
+            report_quants=True,
+        )
+    else:
+        run_transcript_assembly(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            job["bam_file_for_sg"],
+            job["bam_file_for_quant"],
+            job["restrict_region_lend"],
+            job["restrict_region_rend"],
+            input_transcripts,
+            ofh_gtf_local,
+            ofh_quant,
+            ofh_track,
+            job["CPU_inner"],
+            job["run_EM"],
+            job["single_best_only"],
+            job["NO_FILTER_ISOFORMS"],
+            job["min_isoform_fraction"],
+            job["quant_EM_alpha"],
+            job["prereconstruct_info_dir"],
+            job["ME_only"],
+            job["SE_only"],
+        )
+
+    ofh_quant.close()
+    ofh_track.close()
+    if ofh_gtf_local is not None:
+        ofh_gtf_local.close()
+
+    return dict(
+        contig_acc=contig_acc,
+        contig_strand=contig_strand,
+        quant_expr=quant_expr_tmp,
+        quant_tracking=quant_tracking_tmp,
+        gtf=gtf_tmp,
+    )
 
 
 def main():
@@ -150,6 +275,13 @@ def main():
         action="store_true",
         default=False,
         help="display version: {}".format(VERSION),
+    )
+
+    parser.add_argument(
+        "--parallelize_contigs",
+        action="store_true",
+        default=False,
+        help="parallelize at (contig,strand) level; each job uses 1 core and outputs are merged at the end (respects --CPU as max concurrent jobs)",
     )
 
     ## debug params
@@ -386,6 +518,7 @@ def main():
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
+    PARALLELIZE_CONTIGS = args.parallelize_contigs
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -644,7 +777,8 @@ def main():
             os.makedirs(prereconstruct_info_dir)
 
     contig_strand_to_input_transcripts = defaultdict(list)
-    if input_gtf:
+    if input_gtf and not PARALLELIZE_CONTIGS:
+        # Only preload transcripts in non-parallel mode; in contig-parallel mode, each worker parses GTF just for its (contig,strand)
         logger.info(f"-capturing input transcripts from gtf {input_gtf}")
         contig_to_input_transcripts = (
             GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
@@ -666,133 +800,250 @@ def main():
     ##----------------------------------------------
     ## Begin, target each contig separately
 
+    # In contig-parallel mode, each worker writes per-task outputs; main merges later.
+    ofh_quant_output = None
     ofh_quant_read_tracker = None
-
     ofh_quant_output_filename = f"{output_prefix}.quant.expr"
-    ofh_quant_output = open(ofh_quant_output_filename, "wt")
-
     ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
-    ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
-    # write header
-    tracking_file_header = [
-        "gene_id",
-        "transcript_id",
-        "transcript_splice_hash_code",
-        "mp_id",
-        "read_name",
-        "frac_assigned",
-    ]
-
-    if LRAA_Globals.DEBUG:
-        tracking_file_header.append("read_weight")
-
-    print(
-        "\t".join(tracking_file_header),
-        file=ofh_quant_read_tracker,
-    )
-
     gtf_output_filename = f"{output_prefix}.gtf"
+    if not PARALLELIZE_CONTIGS:
+        ofh_quant_output = open(ofh_quant_output_filename, "wt")
+        ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
+        # write header for tracking
+        tracking_file_header = [
+            "gene_id",
+            "transcript_id",
+            "transcript_splice_hash_code",
+            "mp_id",
+            "read_name",
+            "frac_assigned",
+        ]
+        if LRAA_Globals.DEBUG:
+            tracking_file_header.append("read_weight")
+        print("\t".join(tracking_file_header), file=ofh_quant_read_tracker)
 
-    ofh_gtf = open(gtf_output_filename, "wt")
+        ofh_gtf = open(gtf_output_filename, "wt")
 
-    # write header
-    header = [
-        "gene_id",
-        "transcript_id",
-        "uniq_reads",
-        "all_reads",
-        "isoform_fraction",
-        "unique_gene_read_fraction",
-        "TPM",
-        "exons",
-        "introns",
-        "splice_hash_code",
-    ]
+        # write header for quant expr
+        header = [
+            "gene_id",
+            "transcript_id",
+            "uniq_reads",
+            "all_reads",
+            "isoform_fraction",
+            "unique_gene_read_fraction",
+            "TPM",
+            "exons",
+            "introns",
+            "splice_hash_code",
+        ]
+        if not QUANT_ONLY:
+            header += ["splice_compat_contained", "splice_contained_by"]
+        print("\t".join(header), file=ofh_quant_output)
 
-    if not QUANT_ONLY:
-        header += ["splice_compat_contained", "splice_contained_by"]
+    if PARALLELIZE_CONTIGS:
+        if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+            logger.warning(
+                "--parallelize_contigs is incompatible with --debug or --include_prelim_transcripts; proceeding may overwrite debug/prelim files. Disabling parallelization for safety."
+            )
+            PARALLELIZE_CONTIGS = False
 
-    print(
-        "\t".join(header),
-        file=ofh_quant_output,
-    )
+    if not PARALLELIZE_CONTIGS:
+        for contig_acc in genome_contigs_list:
 
-    for contig_acc in genome_contigs_list:
-
-        contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
-            contig_acc, genome_fasta_filename
-        )
-
-        for contig_strand in ("+", "-"):
-
-            if (
-                restrict_to_contig_orient is not None
-                and restrict_to_contig_orient != contig_strand
-            ):
-                continue
-
-            logger.info(f"-processing contig: {contig_acc} {contig_strand}")
-
-            ##-------------------
-            ## build splice graph
-
-            contig_strand_token = "{}^{}".format(contig_acc, contig_strand)
-            input_transcripts = contig_strand_to_input_transcripts[contig_strand_token]
-            logger.info(
-                "Have {} transcripts on {}".format(
-                    len(input_transcripts), contig_strand_token
-                )
+            contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
+                contig_acc, genome_fasta_filename
             )
 
-            if input_transcripts is not None and len(input_transcripts) == 0:
-                input_transcripts = None
+            for contig_strand in ("+", "-"):
 
-            if QUANT_ONLY:
+                if (
+                    restrict_to_contig_orient is not None
+                    and restrict_to_contig_orient != contig_strand
+                ):
+                    continue
 
-                run_quant_only(
-                    contig_acc,
-                    contig_strand,
-                    contig_seq_str,
-                    bam_file_for_sg,
-                    bam_file_for_quant,
-                    restrict_region_lend,
-                    restrict_region_rend,
-                    input_transcripts,
-                    ofh_quant_output,
-                    ofh_quant_read_tracker,
-                    CPU,
-                    run_EM,
-                    prereconstruct_info_dir,
-                    report_quants=True,
+                logger.info(f"-processing contig: {contig_acc} {contig_strand}")
+
+                contig_strand_token = "{}^{}".format(contig_acc, contig_strand)
+                input_transcripts = contig_strand_to_input_transcripts[
+                    contig_strand_token
+                ]
+                logger.info(
+                    "Have {} transcripts on {}".format(
+                        len(input_transcripts), contig_strand_token
+                    )
                 )
 
-            else:
-                run_transcript_assembly(
-                    contig_acc,
-                    contig_strand,
-                    contig_seq_str,
-                    bam_file_for_sg,
-                    bam_file_for_quant,
-                    restrict_region_lend,
-                    restrict_region_rend,
-                    input_transcripts,
-                    ofh_gtf,
-                    ofh_quant_output,
-                    ofh_quant_read_tracker,
-                    CPU,
-                    run_EM,
-                    single_best_only,
-                    NO_FILTER_ISOFORMS,
-                    min_isoform_fraction,
-                    quant_EM_alpha,
-                    prereconstruct_info_dir,
-                    ME_only,
-                    SE_only,
+                if input_transcripts is not None and len(input_transcripts) == 0:
+                    input_transcripts = None
+
+                if QUANT_ONLY:
+                    run_quant_only(
+                        contig_acc,
+                        contig_strand,
+                        contig_seq_str,
+                        bam_file_for_sg,
+                        bam_file_for_quant,
+                        restrict_region_lend,
+                        restrict_region_rend,
+                        input_transcripts,
+                        ofh_quant_output,
+                        ofh_quant_read_tracker,
+                        CPU,
+                        run_EM,
+                        prereconstruct_info_dir,
+                        report_quants=True,
+                    )
+
+                else:
+                    run_transcript_assembly(
+                        contig_acc,
+                        contig_strand,
+                        contig_seq_str,
+                        bam_file_for_sg,
+                        bam_file_for_quant,
+                        restrict_region_lend,
+                        restrict_region_rend,
+                        input_transcripts,
+                        ofh_gtf,
+                        ofh_quant_output,
+                        ofh_quant_read_tracker,
+                        CPU,
+                        run_EM,
+                        single_best_only,
+                        NO_FILTER_ISOFORMS,
+                        min_isoform_fraction,
+                        quant_EM_alpha,
+                        prereconstruct_info_dir,
+                        ME_only,
+                        SE_only,
+                    )
+
+        # close writers after serial processing
+        ofh_gtf.close()
+        ofh_quant_output.close()
+        ofh_quant_read_tracker.close()
+    else:
+        # Build contig/strand jobs and run up to CPU in parallel. Each worker writes temp outputs we merge after.
+        jobs = []
+        for contig_acc in genome_contigs_list:
+            for contig_strand in ("+", "-"):
+                if (
+                    restrict_to_contig_orient is not None
+                    and restrict_to_contig_orient != contig_strand
+                ):
+                    continue
+                jobs.append(
+                    dict(
+                        contig_acc=contig_acc,
+                        contig_strand=contig_strand,
+                        genome_fasta_filename=genome_fasta_filename,
+                        bam_file_for_sg=bam_file_for_sg,
+                        bam_file_for_quant=bam_file_for_quant,
+                        restrict_region_lend=restrict_region_lend,
+                        restrict_region_rend=restrict_region_rend,
+                        input_gtf=input_gtf,
+                        run_EM=run_EM,
+                        single_best_only=single_best_only,
+                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+                        min_isoform_fraction=min_isoform_fraction,
+                        quant_EM_alpha=quant_EM_alpha,
+                        prereconstruct_info_dir=prereconstruct_info_dir,
+                        ME_only=ME_only,
+                        SE_only=SE_only,
+                        output_prefix=output_prefix,
+                        QUANT_ONLY=QUANT_ONLY,
+                        DEBUG=LRAA_Globals.DEBUG,
+                    )
                 )
 
-    ofh_gtf.close()
-    ofh_quant_output.close()
-    ofh_quant_read_tracker.close()
+        # worker function declared at module scope (_contig_job_runner)
+
+        # Run jobs with a Pool of size CPU
+        # determine pool size and cores per worker so total cores <= CPU
+        pool_size = max(1, min(CPU, len(jobs)))
+        CPU_inner = max(1, CPU // pool_size)
+        # set per-job CPU
+        for j in jobs:
+            j["CPU_inner"] = CPU_inner
+
+        logger.info(
+            f"Running {len(jobs)} contig/strand jobs with pool={pool_size}, CPU_inner={CPU_inner} (cap={CPU})"
+        )
+        with Pool(processes=pool_size) as pool:
+            results = pool.map(_contig_job_runner, jobs)
+
+        # Merge results
+        # Write merged headers
+        merged_quant_fh = open(ofh_quant_output_filename, "wt")
+        merged_track_fh = open(ofh_quant_read_tracking_filename, "wt")
+
+        # Build and write headers deterministically (DEBUG off for merged header)
+        quant_header_final = [
+            "gene_id",
+            "transcript_id",
+            "uniq_reads",
+            "all_reads",
+            "isoform_fraction",
+            "unique_gene_read_fraction",
+            "TPM",
+            "exons",
+            "introns",
+            "splice_hash_code",
+        ]
+        if not QUANT_ONLY:
+            quant_header_final += ["splice_compat_contained", "splice_contained_by"]
+        print("\t".join(quant_header_final), file=merged_quant_fh)
+
+        tracking_header_final = [
+            "gene_id",
+            "transcript_id",
+            "transcript_splice_hash_code",
+            "mp_id",
+            "read_name",
+            "frac_assigned",
+        ]
+        if LRAA_Globals.DEBUG:
+            tracking_header_final.append("read_weight")
+        print("\t".join(tracking_header_final), file=merged_track_fh)
+
+        # Append worker contents (skip first header line)
+        def _append_without_first_line(src_path, dst_fh):
+            if src_path is None or (not os.path.exists(src_path)):
+                return
+            with open(src_path, "rt") as fh:
+                first = True
+                for line in fh:
+                    if first:
+                        first = False
+                        continue
+                    dst_fh.write(line)
+
+        for r in results:
+            _append_without_first_line(r["quant_expr"], merged_quant_fh)
+            _append_without_first_line(r["quant_tracking"], merged_track_fh)
+
+        merged_quant_fh.close()
+        merged_track_fh.close()
+
+        if not QUANT_ONLY:
+            # Merge GTFs (no header lines in GTF)
+            with open(gtf_output_filename, "wt") as gtf_out:
+                for r in results:
+                    if r["gtf"] and os.path.exists(r["gtf"]):
+                        with open(r["gtf"], "rt") as fh:
+                            shutil.copyfileobj(fh, gtf_out)
+
+        # cleanup temp files
+        for r in results:
+            for k in ("quant_expr", "quant_tracking", "gtf"):
+                p = r.get(k)
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
 
     # make bed file for convenience
     if not QUANT_ONLY:
