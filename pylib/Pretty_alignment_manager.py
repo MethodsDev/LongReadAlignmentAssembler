@@ -21,8 +21,14 @@ class Pretty_alignment_manager:
         self._splice_graph = splice_graph
         self._alignment_cache_dir = alignment_cache_dir
 
-        if not os.path.exists(alignment_cache_dir):
-            os.makedirs(alignment_cache_dir)
+        # Avoid race conditions when multiple processes attempt to create the cache dir
+        # Using exist_ok ensures parallel workers don't crash if the dir appears between check and mkdir
+        try:
+            os.makedirs(alignment_cache_dir, exist_ok=True)
+        except Exception:
+            # Best-effort: if another process created it concurrently, proceed
+            if not os.path.isdir(alignment_cache_dir):
+                raise
 
 
     def retrieve_pretty_alignments(self, 
