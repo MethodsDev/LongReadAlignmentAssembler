@@ -21,11 +21,11 @@ bench: bench_clean
 	@SER_REAL=`grep '^real' serial.time.txt | awk '{print $$2}'`; \
 	 SER_USER=`grep '^user' serial.time.txt | awk '{print $$2}'`; \
 	 SER_SYS=`grep '^sys'  serial.time.txt | awk '{print $$2}'`; \
-	 echo -e "serial\t2\tno\t$${SER_REAL}\t$${SER_USER}\t$${SER_SYS}" >> bench.summary.tsv
+	 echo -e "serial\t15\tno\t$${SER_REAL}\t$${SER_USER}\t$${SER_SYS}" >> bench.summary.tsv
 	@PAR_REAL=`grep '^real' parallel.time.txt | awk '{print $$2}'`; \
 	 PAR_USER=`grep '^user' parallel.time.txt | awk '{print $$2}'`; \
 	 PAR_SYS=`grep  '^sys' parallel.time.txt | awk '{print $$2}'`; \
-	 echo -e "parallel\t2\tyes\t$${PAR_REAL}\t$${PAR_USER}\t$${PAR_SYS}" >> bench.summary.tsv
+	 echo -e "parallel\t15\tyes\t$${PAR_REAL}\t$${PAR_USER}\t$${PAR_SYS}" >> bench.summary.tsv
 	@echo "Wrote bench.summary.tsv" && cat bench.summary.tsv
 
 
