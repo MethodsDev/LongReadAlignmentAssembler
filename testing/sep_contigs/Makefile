@@ -54,7 +54,8 @@ wdl_clean:
 
 clean: wdl_clean
 	rm -rf ./__*  ./LRAA.gtf ./LRAA.bed ./LRAA.quant.expr ./LRAA.quant.tracking \
-		./LRAA.serial.* ./LRAA.par.* serial.time.txt parallel.time.txt bench.summary.tsv
+		./LRAA.serial.* ./LRAA.par.* serial.time.txt parallel.time.txt bench.summary.tsv \
+		./LRAA.contigtmp ./LRAA.serial.contigtmp ./LRAA.par.contigtmp
 
 bench_clean:
 	$(MAKE) clean

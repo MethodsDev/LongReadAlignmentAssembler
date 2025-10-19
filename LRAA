@@ -6,7 +6,7 @@ import pysam
 import argparse
 import subprocess
 import json
-from multiprocessing import Pool
+from multiprocessing import Process
 from collections import defaultdict
 
 sys.path.insert(
@@ -77,7 +77,16 @@ def _contig_job_runner(job):
         if input_transcripts is not None and len(input_transcripts) == 0:
             input_transcripts = None
 
-    tmp_prefix = f"{job['output_prefix']}.contigtmp.{contig_acc}.{contig_strand}"
+    # Use a structured temp dir for contig/strand results
+    tmp_root = f"{job['output_prefix']}.contigtmp"
+    try:
+        os.makedirs(tmp_root, exist_ok=True)
+    except Exception:
+        if not os.path.isdir(tmp_root):
+            raise
+    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
     # prepare writers
     quant_expr_tmp = f"{tmp_prefix}.quant.expr"
@@ -167,6 +176,13 @@ def _contig_job_runner(job):
     ofh_track.close()
     if ofh_gtf_local is not None:
         ofh_gtf_local.close()
+
+    # write completion checkpoint so master can resume gracefully
+    try:
+        with open(f"{tmp_prefix}.ok", "wt") as ofh:
+            print("ok", file=ofh)
+    except Exception:
+        pass
 
     return dict(
         contig_acc=contig_acc,
@@ -289,6 +305,20 @@ def main():
         action="store_true",
         default=False,
         help="parallelize at (contig,strand) level; each job uses 1 core and outputs are merged at the end (respects --CPU as max concurrent jobs)",
+    )
+
+    parser.add_argument(
+        "--no_resume_parallel",
+        action="store_true",
+        default=False,
+        help="do not reuse existing per-(contig,strand) temp outputs when --parallelize_contigs; always recompute",
+    )
+
+    parser.add_argument(
+        "--clean_parallel_tmp",
+        action="store_true",
+        default=False,
+        help="after merging, remove per-(contig,strand) temp outputs (.quant.expr/.tracking/.gtf/.ok)",
     )
 
     ## debug params
@@ -526,6 +556,8 @@ def main():
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
     PARALLELIZE_CONTIGS = args.parallelize_contigs
+    NO_RESUME_PARALLEL = args.no_resume_parallel
+    CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -964,6 +996,7 @@ def main():
                         output_prefix=output_prefix,
                         QUANT_ONLY=QUANT_ONLY,
                         DEBUG=LRAA_Globals.DEBUG,
+                        skip=False,
                     )
                 )
 
@@ -978,10 +1011,50 @@ def main():
             j["CPU_inner"] = CPU_inner
 
         logger.info(
-            f"Running {len(jobs)} contig/strand jobs with pool={pool_size}, CPU_inner={CPU_inner} (cap={CPU})"
+            f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; CPU_inner={CPU_inner} (cap={CPU})"
         )
-        with Pool(processes=pool_size) as pool:
-            results = pool.map(_contig_job_runner, jobs)
+
+        # Launch in batches of size pool_size to avoid daemonic Pool workers (so inner component multiprocessing can spawn)
+        # Before launching, mark jobs already completed (resume) if allowed
+        if not NO_RESUME_PARALLEL:
+            resumed = 0
+            for j in jobs:
+                tmp_root = f"{j['output_prefix']}.contigtmp"
+                tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                ok_path = f"{tmp_prefix}.ok"
+                # require all expected outputs to be present
+                have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
+                have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
+                have_gtf = True if j["QUANT_ONLY"] else os.path.exists(f"{tmp_prefix}.gtf")
+                if os.path.exists(ok_path) and have_expr and have_track and have_gtf:
+                    j["skip"] = True
+                    resumed += 1
+            if resumed:
+                logger.info(f"Resuming {resumed} completed contig/strand jobs from previous run")
+
+        procs = []
+        job_batches = [jobs[i : i + pool_size] for i in range(0, len(jobs), pool_size)]
+        for batch_idx, batch in enumerate(job_batches, start=1):
+            logger.info(f"Starting contig/strand batch {batch_idx}/{len(job_batches)} size={len(batch)}")
+            procs = []
+            for j in batch:
+                if j.get("skip"):
+                    continue
+                p = Process(target=_contig_job_runner, args=(j,))
+                p.start()
+                procs.append((p, j))
+            # join all in batch
+            any_fail = False
+            for p, j in procs:
+                p.join()
+                if p.exitcode != 0:
+                    logger.error(
+                        f"Contig job failed: {j['contig_acc']} {j['contig_strand']} with exit code {p.exitcode}"
+                    )
+                    any_fail = True
+            if any_fail:
+                raise RuntimeError("One or more contig/strand jobs failed; see logs above")
 
         # Merge results
         # Write merged headers
@@ -1029,9 +1102,12 @@ def main():
                         continue
                     dst_fh.write(line)
 
-        for r in results:
-            _append_without_first_line(r["quant_expr"], merged_quant_fh)
-            _append_without_first_line(r["quant_tracking"], merged_track_fh)
+        for j in jobs:
+            tmp_root = f"{j['output_prefix']}.contigtmp"
+            tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+            tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+            _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
+            _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
 
         merged_quant_fh.close()
         merged_track_fh.close()
@@ -1039,20 +1115,32 @@ def main():
         if not QUANT_ONLY:
             # Merge GTFs (no header lines in GTF)
             with open(gtf_output_filename, "wt") as gtf_out:
-                for r in results:
-                    if r["gtf"] and os.path.exists(r["gtf"]):
-                        with open(r["gtf"], "rt") as fh:
+                for j in jobs:
+                    tmp_root = f"{j['output_prefix']}.contigtmp"
+                    tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                    tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                    gtf_tmp = f"{tmp_prefix}.gtf"
+                    if os.path.exists(gtf_tmp):
+                        with open(gtf_tmp, "rt") as fh:
                             shutil.copyfileobj(fh, gtf_out)
 
         # cleanup temp files
-        for r in results:
-            for k in ("quant_expr", "quant_tracking", "gtf"):
-                p = r.get(k)
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+        if CLEAN_PARALLEL_TMP:
+            for j in jobs:
+                tmp_root = f"{j['output_prefix']}.contigtmp"
+                tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                for pth in (
+                    f"{tmp_prefix}.quant.expr",
+                    f"{tmp_prefix}.quant.tracking",
+                    f"{tmp_prefix}.gtf",
+                    f"{tmp_prefix}.ok",
+                ):
+                    if os.path.exists(pth):
+                        try:
+                            os.remove(pth)
+                        except Exception:
+                            pass
 
     # make bed file for convenience
     if not QUANT_ONLY:
