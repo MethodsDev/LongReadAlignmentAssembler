@@ -16,6 +16,7 @@ from Splice_graph import Splice_graph
 from LRAA import LRAA
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
+from ResourceMonitor import ResourceMonitor
 import TranscriptFiltering
 import Util_funcs
 import LRAA_Globals
@@ -87,6 +88,29 @@ def _contig_job_runner(job):
     tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+
+    # optional per-worker resource monitor
+    worker_monitor = None
+    try:
+        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+            tmp_root_m = f"{job['output_prefix']}.contigtmp"
+            os.makedirs(tmp_root_m, exist_ok=True)
+            tmp_dir_m = os.path.join(tmp_root_m, f"{contig_acc}", f"{contig_strand}")
+            os.makedirs(tmp_dir_m, exist_ok=True)
+            tmp_prefix_m = os.path.join(tmp_dir_m, f"{contig_acc}.{contig_strand}")
+            monitor_path = f"{tmp_prefix_m}.resources.tsv"
+            note = f"worker:{contig_acc}:{contig_strand}"
+            worker_monitor = ResourceMonitor(
+                monitor_path,
+                interval_sec=float(LRAA_Globals.config.get("resource_monitor_interval", 2.0)),
+                include_children=bool(
+                    LRAA_Globals.config.get("resource_monitor_include_children", True)
+                ),
+                note=note,
+            )
+            worker_monitor.start()
+    except Exception:
+        pass
 
     # prepare writers
     quant_expr_tmp = f"{tmp_prefix}.quant.expr"
@@ -183,6 +207,12 @@ def _contig_job_runner(job):
             print("ok", file=ofh)
     except Exception:
         pass
+
+    if worker_monitor is not None:
+        try:
+            worker_monitor.stop()
+        except Exception:
+            pass
 
     return dict(
         contig_acc=contig_acc,
@@ -527,6 +557,29 @@ def main():
         help="JSON file containing key:value pairs to override entries in LRAA_Globals.config after other CLI options are processed",
     )
 
+    # resource monitoring
+    monitor_group = parser.add_argument_group("resource monitoring")
+    monitor_group.add_argument(
+        "--monitor_resources",
+        action="store_true",
+        default=False,
+        help="enable lightweight resource usage monitoring; writes <output_prefix>.resources.tsv and per-worker logs in parallel mode",
+    )
+    monitor_group.add_argument(
+        "--monitor_interval",
+        type=float,
+        default=LRAA_Globals.config["resource_monitor_interval"],
+        help="resource sampling interval in seconds (default: {})".format(
+            LRAA_Globals.config["resource_monitor_interval"]
+        ),
+    )
+    monitor_group.add_argument(
+        "--monitor_children",
+        action="store_true",
+        default=LRAA_Globals.config["resource_monitor_include_children"],
+        help="include child processes in aggregate resource metrics",
+    )
+
     if "--version" in sys.argv:
         print("LRAA VERSION: {}".format(VERSION))
         if len(sys.argv) == 2:
@@ -558,6 +611,7 @@ def main():
     PARALLELIZE_CONTIGS = args.parallelize_contigs
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
+    MONITOR_RESOURCES = args.monitor_resources
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -587,6 +641,13 @@ def main():
 
     quant_EM_alpha = args.EM_alpha
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
+
+    # resource monitor config
+    LRAA_Globals.config["resource_monitor_enabled"] = MONITOR_RESOURCES
+    LRAA_Globals.config["resource_monitor_interval"] = float(args.monitor_interval)
+    LRAA_Globals.config["resource_monitor_include_children"] = bool(
+        args.monitor_children
+    )
 
     LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
     LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
@@ -887,6 +948,21 @@ def main():
             )
             PARALLELIZE_CONTIGS = False
 
+    # optional main resource monitor
+    main_monitor = None
+    try:
+        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+            monitor_path_main = f"{output_prefix}.resources.tsv"
+            main_monitor = ResourceMonitor(
+                monitor_path_main,
+                interval_sec=LRAA_Globals.config["resource_monitor_interval"],
+                include_children=LRAA_Globals.config["resource_monitor_include_children"],
+                note="main",
+            )
+            main_monitor.start()
+    except Exception:
+        pass
+
     if not PARALLELIZE_CONTIGS:
         for contig_acc in genome_contigs_list:
 
@@ -1135,12 +1211,20 @@ def main():
                     f"{tmp_prefix}.quant.tracking",
                     f"{tmp_prefix}.gtf",
                     f"{tmp_prefix}.ok",
+                    f"{tmp_prefix}.resources.tsv",
                 ):
                     if os.path.exists(pth):
                         try:
                             os.remove(pth)
                         except Exception:
                             pass
+
+    # stop main resource monitor prior to final output conversions
+    if main_monitor is not None:
+        try:
+            main_monitor.stop()
+        except Exception:
+            pass
 
     # make bed file for convenience
     if not QUANT_ONLY:

@@ -107,4 +107,9 @@ config = {
     # parallelization
     #
     "min_mpgn_component_size_for_spawn": 150,
+    ######
+    # resource monitoring
+    "resource_monitor_enabled": False,
+    "resource_monitor_interval": 2.0,  # seconds
+    "resource_monitor_include_children": True,
 }
