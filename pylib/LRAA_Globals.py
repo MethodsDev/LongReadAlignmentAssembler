@@ -109,7 +109,7 @@ config = {
     "min_mpgn_component_size_for_spawn": 150,
     ######
     # resource monitoring
-    "resource_monitor_enabled": False,
+    "resource_monitor_enabled": True,
     "resource_monitor_interval": 60.0,  # seconds
     "resource_monitor_include_children": True,
 }

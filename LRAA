@@ -561,10 +561,10 @@ def main():
     # resource monitoring
     monitor_group = parser.add_argument_group("resource monitoring")
     monitor_group.add_argument(
-        "--monitor_resources",
+        "--no_monitor_resources",
         action="store_true",
         default=False,
-        help="enable lightweight resource usage monitoring; writes <output_prefix>.resources.tsv and per-worker logs in parallel mode",
+        help="disable resource usage monitoring (enabled by default); if enabled, writes <output_prefix>.resources.tsv and per-worker logs in parallel mode",
     )
     monitor_group.add_argument(
         "--monitor_interval",
@@ -612,7 +612,7 @@ def main():
     PARALLELIZE_CONTIGS = args.parallelize_contigs
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
-    MONITOR_RESOURCES = args.monitor_resources
+    MONITOR_RESOURCES = not args.no_monitor_resources
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True

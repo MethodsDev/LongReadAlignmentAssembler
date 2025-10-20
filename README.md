@@ -7,9 +7,9 @@ Visit the [LRAA wiki](https://github.com/MethodsDev/LongReadAlignmentAssembler/w
 
 ## Resource usage monitoring (optional)
 
-You can enable lightweight CPU and memory sampling to help size runs and tune parallelism:
+Lightweight CPU and memory sampling is enabled by default to help size runs and tune parallelism:
 
-- Enable monitoring: pass `--monitor_resources`
+- Disable monitoring: pass `--no_monitor_resources`
 - Sampling interval: `--monitor_interval <seconds>` (default 60.0)
 - Include child processes: `--monitor_children` (on by default)
 
