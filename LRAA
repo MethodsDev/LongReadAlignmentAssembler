@@ -2087,9 +2087,10 @@ def build_ME_transcripts(
         return None
 
     else:
-        with open("__ME_isoforms.gtf", "at") as tmp_ofh:
-            for transcript in ME_transcripts:
-                tmp_ofh.write(transcript.to_GTF_format() + "\n")
+        if LRAA_Globals.DEBUG:
+            with open("__ME_isoforms.gtf", "at") as tmp_ofh:
+                for transcript in ME_transcripts:
+                    tmp_ofh.write(transcript.to_GTF_format() + "\n")
 
         return ME_transcripts
 
@@ -2173,9 +2174,10 @@ def build_SE_transcripts(
         return None
 
     else:
-        with open("__SE_isoforms.gtf", "at") as tmp_ofh:
-            for transcript in SE_transcripts:
-                tmp_ofh.write(transcript.to_GTF_format() + "\n")
+        if LRAA_Globals.DEBUG:
+            with open("__SE_isoforms.gtf", "at") as tmp_ofh:
+                for transcript in SE_transcripts:
+                    tmp_ofh.write(transcript.to_GTF_format() + "\n")
 
         return SE_transcripts
 
