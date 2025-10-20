@@ -26,7 +26,7 @@ class ResourceMonitor:
     def __init__(
         self,
         output_tsv: str,
-        interval_sec: float = 2.0,
+    interval_sec: float = 60.0,
         include_children: bool = True,
         note: Optional[str] = None,
     ):

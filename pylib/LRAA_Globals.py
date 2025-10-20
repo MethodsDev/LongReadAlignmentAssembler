@@ -110,6 +110,6 @@ config = {
     ######
     # resource monitoring
     "resource_monitor_enabled": False,
-    "resource_monitor_interval": 2.0,  # seconds
+    "resource_monitor_interval": 60.0,  # seconds
     "resource_monitor_include_children": True,
 }

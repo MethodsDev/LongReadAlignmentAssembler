@@ -993,6 +993,29 @@ def main():
                 if input_transcripts is not None and len(input_transcripts) == 0:
                     input_transcripts = None
 
+                # optional per-(contig,strand) monitor in serial mode
+                contig_monitor = None
+                contig_tmp_prefix = None
+                try:
+                    if LRAA_Globals.config.get("resource_monitor_enabled", False):
+                        tmp_root = f"{output_prefix}.contigtmp"
+                        tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+                        os.makedirs(tmp_dir, exist_ok=True)
+                        contig_tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+                        monitor_path = f"{contig_tmp_prefix}.resources.tsv"
+                        note = f"serial:{contig_acc}:{contig_strand}"
+                        contig_monitor = ResourceMonitor(
+                            monitor_path,
+                            interval_sec=float(LRAA_Globals.config.get("resource_monitor_interval", 2.0)),
+                            include_children=bool(
+                                LRAA_Globals.config.get("resource_monitor_include_children", True)
+                            ),
+                            note=note,
+                        )
+                        contig_monitor.start()
+                except Exception:
+                    contig_monitor = None
+
                 if QUANT_ONLY:
                     run_quant_only(
                         contig_acc,
@@ -1035,10 +1058,33 @@ def main():
                         SE_only,
                     )
 
+                # stop per-contig monitor
+                if contig_monitor is not None:
+                    try:
+                        contig_monitor.stop()
+                    except Exception:
+                        pass
+
         # close writers after serial processing
         ofh_gtf.close()
         ofh_quant_output.close()
         ofh_quant_read_tracker.close()
+        # write optional consolidated resource summary across contigs
+        try:
+            if LRAA_Globals.config.get("resource_monitor_enabled", False):
+                # Build list of (contig, strand) we processed
+                processed = []
+                for contig_acc in genome_contigs_list:
+                    for contig_strand in ("+", "-"):
+                        if (
+                            restrict_to_contig_orient is not None
+                            and restrict_to_contig_orient != contig_strand
+                        ):
+                            continue
+                        processed.append((contig_acc, contig_strand))
+                _summarize_contig_resource_logs(output_prefix, processed, parallel_mode=False)
+        except Exception:
+            pass
     else:
         # Build contig/strand jobs and run up to CPU in parallel. Each worker writes temp outputs we merge after.
         jobs = []
@@ -1200,6 +1246,13 @@ def main():
                         with open(gtf_tmp, "rt") as fh:
                             shutil.copyfileobj(fh, gtf_out)
 
+        # write optional consolidated resource summary across contig/strand workers
+        try:
+            if LRAA_Globals.config.get("resource_monitor_enabled", False):
+                _summarize_contig_resource_logs(output_prefix, jobs, parallel_mode=True)
+        except Exception:
+            pass
+
         # cleanup temp files
         if CLEAN_PARALLEL_TMP:
             for j in jobs:
@@ -1278,6 +1331,81 @@ def main():
         subprocess.check_call(cmd, shell=True)
 
     return
+    
+
+def _summarize_contig_resource_logs(output_prefix, jobs_or_contigs, parallel_mode=False):
+    """Write a consolidated summary TSV across per-(contig,strand) resource logs if monitoring enabled.
+    Writes: <output_prefix>.resources.summary.tsv
+    """
+    try:
+        if not LRAA_Globals.config.get("resource_monitor_enabled", False):
+            return
+        summary_path = f"{output_prefix}.resources.summary.tsv"
+        with open(summary_path, "wt") as out:
+            out.write("\t".join(["contig", "strand", "samples", "duration_sec", "peak_rss_mb_total", "avg_rss_mb_total", "peak_cpu_percent_total", "avg_cpu_percent_total"]) + "\n")
+            for item in jobs_or_contigs:
+                if parallel_mode:
+                    contig_acc = item['contig_acc']
+                    contig_strand = item['contig_strand']
+                else:
+                    contig_acc, contig_strand = item
+                tmp_root = f"{output_prefix}.contigtmp"
+                tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+                tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+                log_path = f"{tmp_prefix}.resources.tsv"
+                if not os.path.exists(log_path):
+                    continue
+                # local summarization (avoid importing the util script here)
+                try:
+                    with open(log_path, "rt") as fh:
+                        header = next(fh).rstrip("\n").split("\t")
+                        idx = {k: i for i, k in enumerate(header)}
+                        peak_rss = 0.0
+                        peak_cpu = 0.0
+                        sum_rss = 0.0
+                        sum_cpu = 0.0
+                        n = 0
+                        first_ts = None
+                        last_ts = None
+                        for line in fh:
+                            parts = line.rstrip("\n").split("\t")
+                            try:
+                                ts = float(parts[idx.get("epoch_ts", 0)])
+                                rss = float(parts[idx.get("rss_mb", 2)])
+                                cpu = float(parts[idx.get("cpu_percent", 3)])
+                                rss_ch = float(parts[idx.get("rss_mb_children", 4)])
+                                cpu_ch = float(parts[idx.get("cpu_percent_children", 5)])
+                            except Exception:
+                                continue
+                            total_rss = rss + rss_ch
+                            total_cpu = cpu + cpu_ch
+                            peak_rss = max(peak_rss, total_rss)
+                            peak_cpu = max(peak_cpu, total_cpu)
+                            sum_rss += total_rss
+                            sum_cpu += total_cpu
+                            n += 1
+                            if first_ts is None:
+                                first_ts = ts
+                            last_ts = ts
+                        if n:
+                            avg_rss = sum_rss / n
+                            avg_cpu = sum_cpu / n
+                            duration = (last_ts - first_ts) if (first_ts is not None and last_ts is not None) else 0.0
+                            out.write("\t".join([
+                                contig_acc,
+                                contig_strand,
+                                str(n),
+                                f"{duration:.1f}",
+                                f"{peak_rss:.1f}",
+                                f"{avg_rss:.1f}",
+                                f"{peak_cpu:.1f}",
+                                f"{avg_cpu:.1f}",
+                            ]) + "\n")
+                except Exception:
+                    continue
+    except Exception:
+        # summarization failures should not break the pipeline
+        pass
 
 
 def run_quant_only(
