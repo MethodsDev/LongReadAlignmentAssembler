@@ -337,6 +337,7 @@ def main():
         help="parallelize at (contig,strand) level; each job uses 1 core and outputs are merged at the end (respects --CPU as max concurrent jobs)",
     )
 
+
     parser.add_argument(
         "--no_resume_parallel",
         action="store_true",
@@ -1155,28 +1156,17 @@ def main():
             if resumed:
                 logger.info(f"Resuming {resumed} completed contig/strand jobs from previous run")
 
-        procs = []
-        job_batches = [jobs[i : i + pool_size] for i in range(0, len(jobs), pool_size)]
-        for batch_idx, batch in enumerate(job_batches, start=1):
-            logger.info(f"Starting contig/strand batch {batch_idx}/{len(job_batches)} size={len(batch)}")
-            procs = []
-            for j in batch:
-                if j.get("skip"):
-                    continue
-                p = Process(target=_contig_job_runner, args=(j,))
-                p.start()
-                procs.append((p, j))
-            # join all in batch
-            any_fail = False
-            for p, j in procs:
-                p.join()
-                if p.exitcode != 0:
-                    logger.error(
-                        f"Contig job failed: {j['contig_acc']} {j['contig_strand']} with exit code {p.exitcode}"
-                    )
-                    any_fail = True
-            if any_fail:
-                raise RuntimeError("One or more contig/strand jobs failed; see logs above")
+        # Use rolling scheduling to keep all slots busy
+        logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
+        mgr = mpm.MultiProcessManager(pool_size)
+        for j in jobs:
+            if j.get("skip"):
+                continue
+            p = Process(target=_contig_job_runner, args=(j,))
+            mgr.launch_process(p)
+        errs = mgr.wait_for_remaining_processes()
+        if errs > 0:
+            raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
 
         # Merge results
         # Write merged headers
