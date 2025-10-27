@@ -52,6 +52,17 @@ def _contig_job_runner(job):
     contig_acc = job["contig_acc"]
     contig_strand = job["contig_strand"]
     genome_fasta = job["genome_fasta_filename"]
+    # Propagate DEBUG flag into worker so debug-mode artifacts are produced consistently
+    try:
+        LRAA_Globals.DEBUG = bool(job.get("DEBUG", False))
+    except Exception:
+        pass
+    # Propagate INCLUDE_PRELIM_TRANSCRIPTS into worker so prelim files are written without requiring --debug
+    try:
+        global INCLUDE_PRELIM_TRANSCRIPTS
+        INCLUDE_PRELIM_TRANSCRIPTS = bool(job.get("INCLUDE_PRELIM_TRANSCRIPTS", False))
+    except Exception:
+        pass
     contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
         contig_acc, genome_fasta
     )
@@ -289,10 +300,17 @@ def main():
     )
 
     parser.add_argument(
+        "--HiFi",
+        action="store_true",
+        default=False,
+        help="high fidelity mode (more stringent): min_per_id: 98, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
+    )
+    # Backward compatibility: accept deprecated --LowFi flag (now default); no-op with warning
+    parser.add_argument(
         "--LowFi",
         action="store_true",
         default=False,
-        help="low fidelity mode: min_per_id: 80, no_infer_TSS, no_infer_PolyA, max_exon_spur_length: 20",
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
@@ -645,8 +663,8 @@ def main():
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
-    LRAA_Globals.config["infer_TSS"] = not args.no_infer_TSS
-    LRAA_Globals.config["infer_PolyA"] = not args.no_infer_PolyA
+    # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
+    # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
     LRAA_Globals.config["run_EM"] = run_EM
     LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
@@ -670,12 +688,27 @@ def main():
     LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
 
     if args.LowFi:
-        LRAA_Globals.config["infer_TSS"] = False
-        LRAA_Globals.config["infer_PolyA"] = False
-        LRAA_Globals.config["min_per_id"] = 80.0
-        LRAA_Globals.config["max_exon_spur_length"] = 20
-        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
-        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
+        sys.exit(
+            "Error: --LowFi has been removed. Defaults are now tuned for LowFi reads. Use --HiFi to enable the more stringent HiFi parameters."
+        )
+
+    if args.HiFi:
+        # Override defaults with stringent HiFi settings
+        # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
+        LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
+        LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
+        LRAA_Globals.config["min_per_id"] = 98.0
+        LRAA_Globals.config["max_exon_spur_length"] = 13
+        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
+        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
+        # HiFi-specific splice frequency threshold
+        LRAA_Globals.config["min_alt_splice_freq"] = 0.01
+        # Ensure splice-graph params derive the HiFi value if user didn't explicitly override
+        # If user did not pass --min_alt_splice_freq, argparse will have set it to the parser default,
+        # which was computed before we overrode config. Force HiFi value unless user provided a value.
+        default_min_alt = parser.get_default("min_alt_splice_freq")
+        if args.min_alt_splice_freq == default_min_alt:
+            args.min_alt_splice_freq = 0.01
 
     # apply generic config overrides last so they take precedence
     if args.config_update:
@@ -1120,6 +1153,7 @@ def main():
                                 output_prefix=output_prefix_cluster,
                                 QUANT_ONLY=True,
                                 DEBUG=LRAA_Globals.DEBUG,
+                                INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
                                 skip=False,
                             )
                         )
@@ -1310,6 +1344,7 @@ def main():
                     output_prefix=output_prefix,
                     QUANT_ONLY=QUANT_ONLY,
                     DEBUG=LRAA_Globals.DEBUG,
+                    INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
                     skip=False,
                 )
             )
@@ -1479,22 +1514,27 @@ def main():
         subprocess.check_call(cmd, shell=True)
 
         if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
-            # write bed for the prelim isoforms too.
+            # write bed for the prelim isoforms too, if the prelim GTF exists
             prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"
             bed_output_file = "__PRE-Tx-Filtering.transcripts.bed"
-            cmd = " ".join(
-                [
-                    os.path.join(
-                        UTILDIR,
-                        "gtf_to_bed_format.pl",
-                    ),
-                    prelim_gtf,
-                    ">",
-                    bed_output_file,
-                ]
-            )
-            logger.info("-making bed output file: {}".format(bed_output_file))
-            subprocess.check_call(cmd, shell=True)
+            if os.path.exists(prelim_gtf) and os.path.getsize(prelim_gtf) > 0:
+                cmd = " ".join(
+                    [
+                        os.path.join(
+                            UTILDIR,
+                            "gtf_to_bed_format.pl",
+                        ),
+                        prelim_gtf,
+                        ">",
+                        bed_output_file,
+                    ]
+                )
+                logger.info("-making bed output file: {}".format(bed_output_file))
+                subprocess.check_call(cmd, shell=True)
+            else:
+                logger.warning(
+                    f"Skipping prelim BED generation; missing or empty GTF: {prelim_gtf}"
+                )
 
     ##############################################################################
     ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)

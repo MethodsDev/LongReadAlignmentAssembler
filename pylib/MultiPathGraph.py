@@ -124,7 +124,8 @@ class MultiPathGraph:
         if LRAA_Globals.DEBUG:
             global ITER
             ITER += 1
-            component_descr_file = f"__MPGN_components_described.{ITER}.bed"
+            # Include contig and strand in filename to avoid collisions across contigs/strands and processes
+            component_descr_file = f"__MPGN_components_described.{self._contig_acc}.{self._contig_strand}.{ITER}.bed"
             if os.path.exists(component_descr_file):
                 raise RuntimeError(
                     "Error! - delete existing file {}".format(component_descr_file)

@@ -11,7 +11,7 @@ workflow LRAA_wf {
         File referenceGenome 
         File inputBAM
         File? annot_gtf
-        Boolean LowFi = false
+        Boolean HiFi = false
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         String? region # example: "chr1:100000-200000"; when set, workflow will not split by chromosome and will pass --region to LRAA
@@ -66,7 +66,7 @@ workflow LRAA_wf {
                     num_total_reads = count_bam.count,
                     min_per_id = min_per_id,
                     quant_only = quant_only,
-                    LowFi = LowFi,
+                    HiFi = HiFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
                     cell_barcode_tag = cell_barcode_tag,
@@ -110,7 +110,7 @@ workflow LRAA_wf {
                 region = region,
                 min_per_id = min_per_id,
                 quant_only = quant_only,
-                LowFi = LowFi,
+                HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
                 cell_barcode_tag = cell_barcode_tag,

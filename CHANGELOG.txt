@@ -1,3 +1,7 @@
+v0.9.1 Oct 27, 2025
+- Defaults now tuned for LowFi reads (e.g., ONT). Replaced --LowFi flag with --HiFi to enable more stringent PacBio HiFi parameters.
+- HiFi mode sets: min_per_id=98, infer_TSS/PolyA enabled, max_exon_spur_length=13, no splice-boundary aggregation, and fractures splice graph at input transcript bounds.
+
 v0.9.0 Sept 26, 2025
 - trimming transcript UTRs to min/max of contained evidence transcripts and only adjust UTRs to min/max of contained isoforms if the corresponding polyA or TSS annotation flags arent set
 

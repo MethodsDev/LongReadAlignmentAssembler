@@ -9,7 +9,7 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 config = {
     #########################
     # read alignment criteria
-    "min_per_id": 98,
+    "min_per_id": 80,
     "min_mapping_quality": 1,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
@@ -22,13 +22,14 @@ config = {
     #
     ####################################
     # splice graph construction criteria
-    "min_alt_splice_freq": 0.01,
+    # default tuned for not HiFi (e.g., ONT); HiFi mode overrides to 0.01 via --HiFi
+    "min_alt_splice_freq": 0.03,
     "min_alt_unspliced_freq": 0.01,
     "min_feature_frac_overlap": 0.50,
-    "max_exon_spur_length": 13,  # exon spurs not tied to TSS or PolyA and at most this length get pruned
-    "aggregate_adjacent_splice_boundaries": False,
+    "max_exon_spur_length": 20,  # exon spurs not tied to TSS or PolyA and at most this length get pruned (HiFi sets 13)
+    "aggregate_adjacent_splice_boundaries": True,
     "aggregate_splice_boundary_dist": 5,
-    "fracture_splice_graph_at_input_transcript_bounds": True,  # disabled under LowFi mode
+    "fracture_splice_graph_at_input_transcript_bounds": False,  # enabled under HiFi mode
     "max_path_nodes_per_component": 1000,  # max number of path graph nodes per connected component
     # transcript reclustering (gene definition) criteria
     # gene reclustering overlap thresholds
@@ -37,7 +38,7 @@ config = {
     #
     ############
     # TSS config
-    "infer_TSS": True,  # include TSS feature in read path assignments
+    "infer_TSS": False,  # include TSS feature in read path assignments (HiFi enables)
     "max_dist_between_alt_TSS_sites": 50,
     "min_alignments_define_TSS_site": 5,
     "max_soft_clip_at_TSS": 0,
@@ -53,7 +54,7 @@ config = {
     #
     ####################
     ## polyA site config
-    "infer_PolyA": True,  # include PolyA site feature in read path assignments
+    "infer_PolyA": False,  # include PolyA site feature in read path assignments (HiFi enables)
     "max_dist_between_alt_polyA_sites": 50,
     "min_alignments_define_polyA_site": 5,
     "min_frac_alignments_define_polyA_site": 0.1,

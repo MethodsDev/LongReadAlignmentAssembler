@@ -8,7 +8,7 @@ task LRAA_runner_task {
 
         File? annot_gtf
         Boolean quant_only
-        Boolean LowFi = false
+        Boolean HiFi = false
         String? region
         
         Int? num_total_reads
@@ -61,7 +61,7 @@ task LRAA_runner_task {
                                  ~{"--gtf " + annot_gtf} \
                                  ~{"--num_total_reads " + num_total_reads} \
                                  ~{true="--quant_only" false='' quant_only} \
-                                 ~{true="--LowFi" false='' LowFi} \
+                                 ~{true="--HiFi" false='' HiFi} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
         ) || {
@@ -109,7 +109,7 @@ workflow LRAA_runner {
 
         File? annot_gtf
         Boolean quant_only
-        Boolean LowFi = false
+    Boolean HiFi = false
         String? region
         
         Int? num_total_reads
@@ -141,7 +141,7 @@ workflow LRAA_runner {
             inputBAM=inputBAM,
             annot_gtf=annot_gtf,
             quant_only=quant_only,
-            LowFi = LowFi,
+            HiFi = HiFi,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 

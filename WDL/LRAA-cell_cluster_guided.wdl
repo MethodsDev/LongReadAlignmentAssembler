@@ -15,7 +15,7 @@ workflow LRAA_cell_cluster_guided {
         
         File? annot_gtf
         
-        Boolean LowFi = false
+        Boolean HiFi = false
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
@@ -49,7 +49,7 @@ workflow LRAA_cell_cluster_guided {
                referenceGenome = referenceGenome,
                annot_gtf = annot_gtf,
                inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
-               LowFi = LowFi,
+               HiFi = HiFi,
                main_chromosomes = main_chromosomes,
                quant_only = false,
                numThreads = numThreadsPerLRAA,
@@ -102,7 +102,7 @@ workflow LRAA_cell_cluster_guided {
            referenceGenome = referenceGenome,
            annot_gtf = lraa_merge_gtf_task.mergedGTF,
            bam_files = partition_bam_by_cell_cluster.partitioned_bams,
-           LowFi = LowFi,
+           HiFi = HiFi,
            numThreads = numThreadsPerLRAA,
            memoryGB = memoryGBquantFinal,
            docker = docker
@@ -340,7 +340,7 @@ task LRAA_quant_bam_list {
         File referenceGenome
         File annot_gtf
         Array[File] bam_files
-        Boolean LowFi = false
+    Boolean HiFi = false
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
         Int numThreads = 4
@@ -367,7 +367,7 @@ task LRAA_quant_bam_list {
                --gtf ~{annot_gtf} \
                --quant_only \
                --CPU ~{numThreads} \
-               ~{true="--LowFi" false='' LowFi} \
+               ~{true="--HiFi" false='' HiFi} \
                --cell_barcode_tag ~{cell_barcode_tag} --read_umi_tag ~{read_umi_tag} \
                --output_prefix ~{output_prefix} > command_output.log 2>&1
         ) || {

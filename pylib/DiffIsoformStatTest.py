@@ -333,24 +333,24 @@ def differential_isoform_tests(
                 dominant_cell_detect_frac_B_str,
             ])
 
-        if reciprocal_delta_pi:
-            result_row.extend(
-                [
-                    alternate_delta_pi_rounded,
-                    alternate_transcript_ids_str,
-                    alternate_pi_A_str,
-                    alternate_pi_B_str,
-                    alternate_gene_ids_str,
-                    alternate_splice_hashcodes_str,
-                    alternate_counts_A,
-                    alternate_counts_B,
-                ]
-            )
-            if have_fraction_data:
-                result_row.extend([
-                    alternate_cell_detect_frac_A_str,
-                    alternate_cell_detect_frac_B_str,
-                ])
+        # Always append alternate columns; when not reciprocal, fill with None placeholders
+        result_row.extend(
+            [
+                alternate_delta_pi_rounded if reciprocal_delta_pi else None,
+                alternate_transcript_ids_str if reciprocal_delta_pi else None,
+                alternate_pi_A_str if reciprocal_delta_pi else None,
+                alternate_pi_B_str if reciprocal_delta_pi else None,
+                alternate_gene_ids_str if reciprocal_delta_pi else None,
+                alternate_splice_hashcodes_str if reciprocal_delta_pi else None,
+                alternate_counts_A if reciprocal_delta_pi else None,
+                alternate_counts_B if reciprocal_delta_pi else None,
+            ]
+        )
+        if have_fraction_data:
+            result_row.extend([
+                alternate_cell_detect_frac_A_str if reciprocal_delta_pi else None,
+                alternate_cell_detect_frac_B_str if reciprocal_delta_pi else None,
+            ])
 
         # Add status and optional min_cell_fraction for transparency
         result_row.append(status)
@@ -388,19 +388,19 @@ def differential_isoform_tests(
     ]
     if have_fraction_data:
         columns += ["dominant_cell_detect_frac_A", "dominant_cell_detect_frac_B"]
-    if reciprocal_delta_pi:
-        columns += [
-            "alternate_delta_pi",
-            "alternate_transcript_ids",
-            "alternate_pi_A",
-            "alternate_pi_B",
-            "alternate_gene_ids",
-            "alternate_splice_hashcodes",
-            "alternate_counts_A",
-            "alternate_counts_B",
-        ]
-        if have_fraction_data:
-            columns += ["alternate_cell_detect_frac_A", "alternate_cell_detect_frac_B"]
+    # Always include alternate columns; populate with None when not reciprocal
+    columns += [
+        "alternate_delta_pi",
+        "alternate_transcript_ids",
+        "alternate_pi_A",
+        "alternate_pi_B",
+        "alternate_gene_ids",
+        "alternate_splice_hashcodes",
+        "alternate_counts_A",
+        "alternate_counts_B",
+    ]
+    if have_fraction_data:
+        columns += ["alternate_cell_detect_frac_A", "alternate_cell_detect_frac_B"]
     columns += ["status"]
     if have_fraction_data:
         columns += ["min_cell_fraction"]
@@ -421,6 +421,10 @@ def differential_isoform_tests(
     if reciprocal_delta_pi:
         results_df["alternate_isoform_expr_frac_A"] = results_df["alternate_pi_A"]
         results_df["alternate_isoform_expr_frac_B"] = results_df["alternate_pi_B"]
+    else:
+        # Keep schema consistent when not reciprocal
+        results_df["alternate_isoform_expr_frac_A"] = None
+        results_df["alternate_isoform_expr_frac_B"] = None
 
     # Rounding: apply fixed decimal rounding to all numeric columns except pvalue / adj_pvalue; keep p-values raw.
     numeric_cols = [c for c in results_df.columns if results_df[c].dtype.kind in ("f", "d")]

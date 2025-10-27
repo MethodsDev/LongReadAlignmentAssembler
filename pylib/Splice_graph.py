@@ -28,7 +28,8 @@ class Splice_graph:
     _max_genomic_contig_length = 1e10
 
     # noise filtering params
-    _min_alt_splice_freq = 0.01
+    # default tuned for LowFi (e.g., ONT); HiFi mode overrides via init_sg_params
+    _min_alt_splice_freq = 0.03
     _min_alt_unspliced_freq = 0.20
     _max_intron_length_for_exon_segment_filtering = 10000
     _min_intron_support = 2
@@ -294,11 +295,11 @@ class Splice_graph:
         # populates self._itree_exon_segments for overlap queries
         self._finalize_splice_graph()
 
-        ## incorporate TSS and PolyA features
-        if len(self._TSS_objs) > 0:
+        ## incorporate TSS and PolyA features (only when enabled)
+        if LRAA_Globals.config["infer_TSS"] and len(self._TSS_objs) > 0:
             self._incorporate_TSS()
 
-        if len(self._PolyA_objs) > 0:
+        if LRAA_Globals.config["infer_PolyA"] and len(self._PolyA_objs) > 0:
             self._incorporate_PolyAsites()
 
         self._finalize_splice_graph()  # do again after TSS and PolyA integration
@@ -453,8 +454,12 @@ class Splice_graph:
         TSS_position_counter = defaultdict(int)
         polyA_position_counter = defaultdict(int)
 
-        if LRAA_Globals.DEBUG:
+        # Debug read support logs only when the corresponding feature inference is enabled
+        TSS_reads_ofh = None
+        POLYA_reads_ofh = None
+        if LRAA_Globals.DEBUG and LRAA_Globals.config["infer_TSS"]:
             TSS_reads_ofh = open("__TSS_read_support.tsv", "at")
+        if LRAA_Globals.DEBUG and LRAA_Globals.config["infer_PolyA"]:
             POLYA_reads_ofh = open("__POLYA_read_support.tsv", "at")
 
         if contig_strand == "+":
@@ -492,7 +497,7 @@ class Splice_graph:
 
             if TSS_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]:
                 TSS_position_counter[TSS_pos] += 1
-                if LRAA_Globals.DEBUG:
+                if TSS_reads_ofh is not None:
                     print(
                         "\t".join(
                             [
@@ -513,7 +518,7 @@ class Splice_graph:
 
             if polyA_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]:
                 polyA_position_counter[polyA_pos] += 1
-                if LRAA_Globals.DEBUG:
+                if POLYA_reads_ofh is not None:
                     print(
                         "\t".join(
                             [
@@ -785,12 +790,12 @@ class Splice_graph:
 
                 last_rend = rend
 
-        if len(TSS_evidence_counter) > 0:
+        if LRAA_Globals.config["infer_TSS"] and len(TSS_evidence_counter) > 0:
             self._incorporate_TSS_objects(
                 contig_acc, contig_strand, TSS_evidence_counter
             )
 
-        if len(PolyA_evidence_counter) > 0:
+        if LRAA_Globals.config["infer_PolyA"] and len(PolyA_evidence_counter) > 0:
             self._incorporate_PolyA_objects(
                 contig_acc, contig_strand, PolyA_evidence_counter
             )
@@ -1172,10 +1177,18 @@ class Splice_graph:
 
         # see if there are relatively poorly supported junctions
         for intron_list in introns_shared_coord.values():
+            # sort by support so we can quickly access the top-supported intron
             intron_list = sorted(intron_list, key=lambda x: x.get_read_support())
-            most_supported_intron = intron_list.pop()
+            most_supported_intron = intron_list[-1]
             most_supported_intron_abundance = most_supported_intron.get_read_support()
-            for alt_intron in intron_list:
+
+            # total support for all introns sharing this boundary (more intuitive denominator)
+            total_shared_boundary_support = sum(
+                i.get_read_support() for i in intron_list
+            )
+
+            # iterate all but keep the top for comparison; we still consider pruning the alts
+            for alt_intron in intron_list[:-1]:
 
                 assert (
                     alt_intron != most_supported_intron
@@ -1202,8 +1215,17 @@ class Splice_graph:
                     continue
 
                 alt_intron_abundance = alt_intron.get_read_support()
-                alt_intron_relative_freq = (
+                # relative to total support at this shared boundary (preferred)
+                alt_intron_rel_of_total = (
+                    alt_intron_abundance / total_shared_boundary_support
+                    if total_shared_boundary_support > 0
+                    else 0
+                )
+                # legacy-style relative to the top-supported intron (kept for safety)
+                alt_intron_rel_of_top = (
                     alt_intron_abundance / most_supported_intron_abundance
+                    if most_supported_intron_abundance > 0
+                    else 0
                 )
 
                 delta_other_boundary = abs(
@@ -1211,11 +1233,17 @@ class Splice_graph:
                     - alt_intron.get_coords()[other_idx]
                 )
 
-                if alt_intron_relative_freq < Splice_graph._min_alt_splice_freq:
+                # prune if the alternative is below threshold by either definition
+                if (
+                    alt_intron_rel_of_total < Splice_graph._min_alt_splice_freq
+                    or alt_intron_rel_of_top < Splice_graph._min_alt_splice_freq
+                ):
                     logger.debug(
-                        "alt intron: {}".format(alt_intron)
-                        + " has rel freq: {} and will be purged".format(
-                            alt_intron_relative_freq
+                        "alt intron: {} has rel_of_total: {:.4f}, rel_of_top: {:.4f} < min_alt_splice_freq: {:.4f} -> purge".format(
+                            alt_intron,
+                            alt_intron_rel_of_total,
+                            alt_intron_rel_of_top,
+                            Splice_graph._min_alt_splice_freq,
                         )
                     )
                     introns_to_delete.add(alt_intron)

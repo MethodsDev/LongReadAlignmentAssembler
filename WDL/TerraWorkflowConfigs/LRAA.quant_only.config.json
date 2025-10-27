@@ -1,5 +1,5 @@
 {
-  "LRAA_wf.LowFi":"${this.LRAA_LowFi}",
+  "LRAA_wf.HiFi":"${this.LRAA_HiFi}",
   "LRAA_wf.annot_gtf":"${this.referenceAnnotation_full}",
   "LRAA_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:0.2.30",
   "LRAA_wf.inputBAM":"${this.inputBAM}",
