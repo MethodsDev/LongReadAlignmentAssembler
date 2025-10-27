@@ -202,11 +202,27 @@ class Splice_graph:
         SE_read_encapsulation_mask=None,
     ):
 
-        logger.info(
-            "creating splice graph for {} leveraging bam {}, strand {}".format(
-                contig_acc, alignments_bam_file, contig_strand
+        # allow single BAM path or a list/tuple of BAM paths for accumulation
+        bam_files = None
+        if alignments_bam_file is None:
+            bam_files = []
+        elif isinstance(alignments_bam_file, (list, tuple)):
+            bam_files = list(alignments_bam_file)
+        else:
+            bam_files = [alignments_bam_file]
+
+        if len(bam_files) == 1:
+            logger.info(
+                "creating splice graph for {} leveraging bam {}, strand {}".format(
+                    contig_acc, bam_files[0], contig_strand
+                )
             )
-        )
+        else:
+            logger.info(
+                "creating splice graph for {} leveraging {} bam files ({}), strand {}".format(
+                    contig_acc, len(bam_files), ",".join([os.path.basename(str(x)) for x in bam_files]), contig_strand
+                )
+            )
 
         self._contig_acc = contig_acc
         self._contig_strand = contig_strand
@@ -228,11 +244,15 @@ class Splice_graph:
         # - base coverage incremented under self._contig_base_cov
         # - defines and stores TSS and PolyA objects
 
-        if alignments_bam_file is not None:
-            self._populate_exon_coverage_and_extract_introns(
-                alignments_bam_file, contig_acc, contig_strand, quant_mode, restrict_splice_type,
-                SE_read_encapsulation_mask
-            )
+        if bam_files:
+            # accumulate coverage/intron/TSS/PolyA evidence across all bam inputs
+            for bamf in bam_files:
+                if bamf is None:
+                    continue
+                self._populate_exon_coverage_and_extract_introns(
+                    bamf, contig_acc, contig_strand, quant_mode, restrict_splice_type,
+                    SE_read_encapsulation_mask
+                )
 
         # incorporate guide structures if provided
         if input_transcripts:

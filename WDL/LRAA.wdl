@@ -79,13 +79,23 @@ workflow LRAA_wf {
             }
         }
 
-        call mergeResults {
+        # Always merge quant outputs regardless of quant_only
+        call mergeQuantResults {
             input:
                 quantExprFiles = LRAA_scatter.LRAA_quant_expr,
                 quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
-                gtfFiles = LRAA_scatter.LRAA_gtf,
                 outputFilePrefix = sample_id + ".LRAA",
                 docker = docker,
+        }
+
+        # Only merge GTFs when not in quant-only mode
+        if (!quant_only) {
+            call merge_GTFs {
+                input:
+                    gtfFiles = select_all(LRAA_scatter.LRAA_gtf),
+                    outputFilePrefix = sample_id + ".LRAA",
+                    docker = docker,
+            }
         }
     }
 
@@ -115,19 +125,50 @@ workflow LRAA_wf {
     }
     
     output {
-        File mergedQuantExpr = select_first([mergeResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr, ""]) 
-        File mergedQuantTracking = select_first([mergeResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking, ""])
-        File? mergedGTF = if (quant_only) then annot_gtf else select_first([mergeResults.mergedGtfFile, LRAA_direct.LRAA_gtf, ""])
+    File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
+    File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
+    File? mergedGTF = if (quant_only) then "" else select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) 
     }
 }
 
 
 
-task mergeResults {
+ 
+
+task merge_GTFs {
+    input {
+        Array[File] gtfFiles
+        String outputFilePrefix
+        String docker
+    }
+
+    command <<<
+        set -eo pipefail
+
+        gtf_output="~{outputFilePrefix}.gtf"
+        touch "$gtf_output"
+        gtf_files_str="~{sep=' ' gtfFiles}"
+        for file in $gtf_files_str; do
+           cat "$file" >> "$gtf_output"
+        done
+    >>>
+
+    output {
+        File mergedGtfFile = "~{outputFilePrefix}.gtf"
+    }
+    
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
+        disks: "local-disk " + ceil(size(gtfFiles, "GB") * 2.0 + 5) + " SSD"
+    }
+}
+
+task mergeQuantResults {
     input {
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
-        Array[File] gtfFiles
         String outputFilePrefix
         String docker
     }
@@ -144,29 +185,12 @@ task mergeResults {
             fi
         done
 
-        #quant_tracking_output="~{outputFilePrefix}.quant.tracking"
-        #for file in ~{sep=' ' quantTrackingFiles}; do
-        #    if [[ ! -f "$quant_tracking_output" ]]; then
-        #        cp "$file" "$quant_tracking_output"
-        #    else
-        #        tail -n +2 "$file" >> "$quant_tracking_output"
-        #    fi
-        #done
-
-        gtf_output="~{outputFilePrefix}.gtf"
-        touch "$gtf_output"
-        gtf_files_str="~{sep=' ' gtfFiles}"
-        for file in $gtf_files_str; do
-           cat "$file" >> "$gtf_output"
-        done
-
-
-        python <<CODE
+    python <<CODE
         import json
         import gzip
 
         tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
-        tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
+        tracking_files_list = json.loads(tracking_files_json)
 
         with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
             for i, tracking_file in enumerate(tracking_files_list):
@@ -177,25 +201,19 @@ task mergeResults {
                          print(header, file=ofh, end='')
                     for line in fh:
                          print(line, file=ofh, end='')
-
-
         CODE
-
-
-      
     >>>
 
     output {
         File mergedQuantExprFile = "~{outputFilePrefix}.quant.expr"
         File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking.gz"
-        File mergedGtfFile = "~{outputFilePrefix}.gtf"
     }
     
     runtime {
         docker: docker
         cpu: 1
         memory: "4 GiB"
-        disks: "local-disk " + ceil((size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB") + size(gtfFiles, "GB")) * 2.2 + 5) + " SSD"
+        disks: "local-disk " + ceil((size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")) * 2.2 + 5) + " SSD"
     }
 }
 

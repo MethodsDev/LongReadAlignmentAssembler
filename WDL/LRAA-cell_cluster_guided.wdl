@@ -23,6 +23,7 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBperLRAA = 16
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
+        Int memoryGBscSparseMatrices = 16
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -94,25 +95,51 @@ workflow LRAA_cell_cluster_guided {
      }
 
      
-     call LRAA.LRAA_wf as LRAA_quant_final {
-             input:
-               sample_id = sample_id, 
-               referenceGenome = referenceGenome,
-               annot_gtf = lraa_merge_gtf_task.mergedGTF,
-               inputBAM = inputBAM,
-               LowFi = LowFi,
-               main_chromosomes = main_chromosomes,
-               quant_only = true,
-               numThreads = numThreadsPerLRAA,
-               memoryGB = memoryGBquantFinal,
-               docker = docker
+     # Final quant: use LRAA --bam_list with all cluster-partitioned BAMs and the merged GTF
+     call LRAA_quant_bam_list as LRAA_quant_final_bamlist {
+         input:
+           sample_id = sample_id,
+           referenceGenome = referenceGenome,
+           annot_gtf = lraa_merge_gtf_task.mergedGTF,
+           bam_files = partition_bam_by_cell_cluster.partitioned_bams,
+           LowFi = LowFi,
+           numThreads = numThreadsPerLRAA,
+           memoryGB = memoryGBquantFinal,
+           docker = docker
      }
+
+         # Build sparse matrices (Seurat-compatible) from the final merged tracking
+         call sc_build_sparse_matrices as build_sc_sparse_matrices {
+                 input:
+                     sample_id = sample_id,
+                     tracking_file = LRAA_quant_final_bamlist.quant_tracking,
+             docker = docker,
+             memoryGB = memoryGBscSparseMatrices
+         }
 
      output {
          # final outputs
          File LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
-         File LRAA_final_expr = LRAA_quant_final.mergedQuantExpr
-         File LRAA_final_tracking = LRAA_quant_final.mergedQuantTracking
+         File LRAA_final_expr = LRAA_quant_final_bamlist.quant_expr
+         File LRAA_final_tracking = LRAA_quant_final_bamlist.quant_tracking
+
+         # single-cell sparse matrices and intermediate counts
+         File sc_gene_transcript_splicehash_mapping = build_sc_sparse_matrices.mapping_file
+         File sc_gene_counts = build_sc_sparse_matrices.gene_counts
+         File sc_isoform_counts = build_sc_sparse_matrices.isoform_counts
+         File sc_splice_pattern_counts = build_sc_sparse_matrices.splice_pattern_counts
+         # gene level
+         File sc_gene_matrix_mtx_gz = build_sc_sparse_matrices.gene_matrix_mtx_gz
+         File sc_gene_features_tsv_gz = build_sc_sparse_matrices.gene_features_tsv_gz
+         File sc_gene_barcodes_tsv_gz = build_sc_sparse_matrices.gene_barcodes_tsv_gz
+         # isoform level
+         File sc_isoform_matrix_mtx_gz = build_sc_sparse_matrices.isoform_matrix_mtx_gz
+         File sc_isoform_features_tsv_gz = build_sc_sparse_matrices.isoform_features_tsv_gz
+         File sc_isoform_barcodes_tsv_gz = build_sc_sparse_matrices.isoform_barcodes_tsv_gz
+         # splice-pattern level
+         File sc_splice_pattern_matrix_mtx_gz = build_sc_sparse_matrices.splice_pattern_matrix_mtx_gz
+         File sc_splice_pattern_features_tsv_gz = build_sc_sparse_matrices.splice_pattern_features_tsv_gz
+         File sc_splice_pattern_barcodes_tsv_gz = build_sc_sparse_matrices.splice_pattern_barcodes_tsv_gz
 
          # preliminary intermediate outputs.
          File LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
@@ -304,6 +331,119 @@ task partition_bam_by_cell_cluster {
         disks: "local-disk ~{disksize} HDD"
     }
 
+}
+
+
+task LRAA_quant_bam_list {
+    input {
+        String sample_id
+        File referenceGenome
+        File annot_gtf
+        Array[File] bam_files
+        Boolean LowFi = false
+        String cell_barcode_tag = "CB"
+        String read_umi_tag = "XM"
+        Int numThreads = 4
+        Int memoryGB = 32
+        String docker
+    }
+
+    Int disksize = 50 + ceil(2 * size(bam_files, "GB"))
+
+    String output_prefix = "~{sample_id}.LRAA.quant-only.clusters"
+
+    command <<<
+        set -ex
+
+        # build bam list file
+        : > bam_list.txt
+        for f in ~{sep=' ' bam_files}; do
+            echo "$f" >> bam_list.txt
+        done
+
+        (
+          LRAA --genome ~{referenceGenome} \
+               --bam_list bam_list.txt \
+               --gtf ~{annot_gtf} \
+               --quant_only \
+               --CPU ~{numThreads} \
+               ~{true="--LowFi" false='' LowFi} \
+               --cell_barcode_tag ~{cell_barcode_tag} --read_umi_tag ~{read_umi_tag} \
+               --output_prefix ~{output_prefix} > command_output.log 2>&1
+        ) || {
+             echo "Command failed with exit code $?" >&2
+             echo "Last 100 lines of output:" >&2
+             tail -n 100 command_output.log >&2
+             exit 1
+        }
+
+        if [[ -f ~{output_prefix}.quant.tracking ]]; then
+            gzip ~{output_prefix}.quant.tracking
+        fi
+    >>>
+
+    output {
+        File quant_expr = "~{output_prefix}.quant.expr"
+        File quant_tracking = "~{output_prefix}.quant.tracking.gz"
+    }
+
+    runtime {
+        docker: docker
+        cpu: "~{numThreads}"
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk ~{disksize} HDD"
+    }
+}
+
+
+task sc_build_sparse_matrices {
+    input {
+        String sample_id
+        File tracking_file
+        String docker
+        Int memoryGB = 16
+    }
+
+    Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
+
+    String output_prefix = "~{sample_id}.LRAA.sc"
+
+    command <<<
+        set -ex
+
+        singlecell_tracking_to_sparse_matrix.py \
+            --tracking ~{tracking_file} \
+            --output_prefix ~{output_prefix}
+    >>>
+
+    output {
+        File mapping_file = "~{output_prefix}.gene_transcript_splicehashcode.tsv"
+        File gene_counts = "~{output_prefix}.gene_cell_counts.tsv"
+        File isoform_counts = "~{output_prefix}.isoform_cell_counts.tsv"
+        File splice_pattern_counts = "~{output_prefix}.splice_pattern_cell_counts.tsv"
+
+        # gene level sparse outputs
+        File gene_matrix_mtx_gz = "~{output_prefix}^gene-sparseM/matrix.mtx.gz"
+        File gene_features_tsv_gz = "~{output_prefix}^gene-sparseM/features.tsv.gz"
+        File gene_barcodes_tsv_gz = "~{output_prefix}^gene-sparseM/barcodes.tsv.gz"
+
+        # isoform level sparse outputs
+        File isoform_matrix_mtx_gz = "~{output_prefix}^isoform-sparseM/matrix.mtx.gz"
+        File isoform_features_tsv_gz = "~{output_prefix}^isoform-sparseM/features.tsv.gz"
+        File isoform_barcodes_tsv_gz = "~{output_prefix}^isoform-sparseM/barcodes.tsv.gz"
+
+        # splice pattern level sparse outputs
+        File splice_pattern_matrix_mtx_gz = "~{output_prefix}^splice_pattern-sparseM/matrix.mtx.gz"
+        File splice_pattern_features_tsv_gz = "~{output_prefix}^splice_pattern-sparseM/features.tsv.gz"
+        File splice_pattern_barcodes_tsv_gz = "~{output_prefix}^splice_pattern-sparseM/barcodes.tsv.gz"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 2
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk ~{disksize} HDD"
+    }
 }
 
      

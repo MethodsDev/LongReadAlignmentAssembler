@@ -75,14 +75,16 @@ task LRAA_runner_task {
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
         fi
     
-        # always ensure an output file exists for the wdl output capture.
-        touch ~{output_prefix_use}.~{output_suffix}.gtf
+        # only create GTF file when not in quant-only mode
+        if [[ "~{quant_only}" != "true" ]]; then
+            touch ~{output_prefix_use}.~{output_suffix}.gtf
+        fi
 
         
     >>>
 
     output {
-        File LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
+        File? LRAA_gtf = if (quant_only) then "" else "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
     }
@@ -161,7 +163,7 @@ workflow LRAA_runner {
      }
 
      output {
-        File LRAA_gtf = LRAA_runner_task.LRAA_gtf
+        File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
         File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
         File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
     }

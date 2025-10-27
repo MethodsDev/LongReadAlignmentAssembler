@@ -5,7 +5,7 @@ test:
 	../../util/sc/incorporate_gene_symbols_in_sc_features.py  --ref_gtf chr19.gtf --LRAA_gtf LRAA.gtf --gffcompare_tracking gffcmp.tracking  --id_mappings test.gene_transcript_splicehashcode.tsv   --sparseM_dirs 'test^gene-sparseM' 'test^isoform-sparseM' test^splice_pattern-sparseM
 
 clean:
-	rm -f ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
+	rm -rf ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
 	rm -rf ./test* ./__chckpts ./__alignment_cache
 
 
