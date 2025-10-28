@@ -127,7 +127,7 @@ workflow LRAA_wf {
     output {
     File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
     File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
-    File? mergedGTF = if (quant_only) then "" else select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) 
+    File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
     }
 }
 

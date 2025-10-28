@@ -84,7 +84,7 @@ task LRAA_runner_task {
     >>>
 
     output {
-        File? LRAA_gtf = if (quant_only) then "" else "~{output_prefix_use}.~{output_suffix}.gtf"
+        File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
     }
