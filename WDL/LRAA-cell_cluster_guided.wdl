@@ -26,6 +26,7 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBscSparseMatrices = 16
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        Boolean quant_only_cluster_guided = false
 
      }
 
@@ -38,106 +39,119 @@ workflow LRAA_cell_cluster_guided {
             docker = docker,
      }
 
+    # Package the partitioned cluster BAMs for convenient retrieval
+    call LRAA_tar_outputs as tar_partitioned_cluster_bams {
+        input:
+            tar_directory_name = sample_id + ".LRAA.cluster_partitioned_bams",
+            input_files = partition_bam_by_cell_cluster.partitioned_bams,
+            docker = docker
+    }
 
-     scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
+    # If running in quant-only mode, require annot_gtf to be provided
+    if (quant_only_cluster_guided) {
+        call require_annot_gtf {
+            input:
+                annot_gtf = select_first([annot_gtf])
+        }
+    }
 
-           String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
-                  
-           call LRAA.LRAA_wf as LRAA_by_cluster {
-             input:
-               sample_id = cluster_sample_id,
-               referenceGenome = referenceGenome,
-               annot_gtf = annot_gtf,
-               inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
-               HiFi = HiFi,
-               main_chromosomes = main_chromosomes,
-               quant_only = false,
-               numThreads = numThreadsPerLRAA,
-               memoryGB  = memoryGBperLRAA,
-               docker = docker
+
+    if (quant_only_cluster_guided == false) {
+
+        scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
+            String cluster_sample_id = sub(basename(partition_bam_by_cell_cluster.partitioned_bams[i]), ".bam$", "")
+            call LRAA.LRAA_wf as LRAA_by_cluster {
+                input:
+                    sample_id = cluster_sample_id,
+                    referenceGenome = referenceGenome,
+                    annot_gtf = annot_gtf,
+                    inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
+                    HiFi = HiFi,
+                    main_chromosomes = main_chromosomes,
+                    quant_only = false,
+                    numThreads = numThreadsPerLRAA,
+                    memoryGB  = memoryGBperLRAA,
+                    docker = docker
+            }
+        }
+
+        # package them up
+        call LRAA_tar_outputs as tar_cluster_prelim_gtf_files {
+            input:
+                tar_directory_name = sample_id + ".LRAA.prelim.cluster_gtfs",
+                input_files = select_all(LRAA_by_cluster.mergedGTF),
+                docker = docker
+        }
+
+        call LRAA_tar_outputs as tar_cluster_prelim_tracking_files {
+            input:
+                tar_directory_name = sample_id + ".LRAA.prelim.cluster_read_trackings",
+                input_files = LRAA_by_cluster.mergedQuantTracking,
+                docker = docker
+        }
+
+        call LRAA_tar_outputs as tar_cluster_prelim_pseudobulk_expr_files {
+            input:
+                tar_directory_name = sample_id + ".LRAA.prelim.cluster_pseudobulk.EXPRs",
+                input_files = LRAA_by_cluster.mergedQuantExpr,
+                docker = docker
+        }
+
+        # merge gtfs from the per-cluster runs into a single final gtf.
+        call lraa_merge_gtf_task {
+            input:
+                sample_id = sample_id,
+                LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
+                referenceGenome = referenceGenome,
+                docker = docker,
+                memoryGB = memoryGBmergeGTFs ,
+        }
+    }
+
      
-
-         }
-    }
-    
-    # package them up
-    call LRAA_tar_outputs as tar_cluster_prelim_gtf_files {
-          input:
-             tar_directory_name = sample_id + ".LRAA.prelim.cluster_gtfs",
-             input_files = select_all(LRAA_by_cluster.mergedGTF),
-             docker = docker
-    }
-
-    call LRAA_tar_outputs as tar_cluster_prelim_tracking_files {
-          input:
-             tar_directory_name = sample_id + ".LRAA.prelim.cluster_read_trackings",
-             input_files = LRAA_by_cluster.mergedQuantTracking,
-             docker = docker
-    }
-
-        
-    call LRAA_tar_outputs as tar_cluster_prelim_pseudobulk_expr_files {
-          input:
-             tar_directory_name = sample_id + ".LRAA.prelim.cluster_pseudobulk.EXPRs",
-             input_files = LRAA_by_cluster.mergedQuantExpr,
-             docker = docker
-    }
-        
-    # merge gtfs from the per-cluster runs into a single final gtf.
-    call lraa_merge_gtf_task {
-          input:
+    # Final quantification (single call): prefer merged GTF if produced, else use provided annot_gtf
+    call LRAA_quant_bam_list as LRAA_quant_final_bamlist {
+        input:
             sample_id = sample_id,
-            LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
             referenceGenome = referenceGenome,
-            docker=docker,
-            memoryGB = memoryGBmergeGTFs ,
-    
-     }
-
-     
-     # Final quant: use LRAA --bam_list with all cluster-partitioned BAMs and the merged GTF
-     call LRAA_quant_bam_list as LRAA_quant_final_bamlist {
-         input:
-           sample_id = sample_id,
-           referenceGenome = referenceGenome,
-           annot_gtf = lraa_merge_gtf_task.mergedGTF,
-           bam_files = partition_bam_by_cell_cluster.partitioned_bams,
-           HiFi = HiFi,
-           numThreads = numThreadsPerLRAA,
-           memoryGB = memoryGBquantFinal,
-           docker = docker
-     }
+            annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
+            bam_files = partition_bam_by_cell_cluster.partitioned_bams,
+            HiFi = HiFi,
+            numThreads = numThreadsPerLRAA,
+            memoryGB = memoryGBquantFinal,
+            docker = docker
+    }
 
     # Tar the per-cluster final quant outputs for convenient retrieval
     call LRAA_tar_outputs as tar_final_cluster_expr_files {
         input:
-         tar_directory_name = sample_id + ".LRAA.final.cluster_quant.EXPRs",
-         input_files = LRAA_quant_final_bamlist.quant_exprs,
-         docker = docker
+            tar_directory_name = sample_id + ".LRAA.final.cluster_quant.EXPRs",
+            input_files = LRAA_quant_final_bamlist.quant_exprs,
+            docker = docker
     }
 
     call LRAA_tar_outputs as tar_final_cluster_tracking_files {
         input:
-         tar_directory_name = sample_id + ".LRAA.final.cluster_quant.trackings",
-         input_files = LRAA_quant_final_bamlist.quant_trackings,
-         docker = docker
+            tar_directory_name = sample_id + ".LRAA.final.cluster_quant.trackings",
+            input_files = LRAA_quant_final_bamlist.quant_trackings,
+            docker = docker
     }
 
     # Build cluster-level pseudobulk matrices from the per-cluster quant expr files
     call build_cluster_pseudobulk_matrices as build_cluster_pseudobulk {
-            input:
-                sample_id = sample_id,
-                quant_expr_files = LRAA_quant_final_bamlist.quant_exprs,
-                docker = docker
+        input:
+            sample_id = sample_id,
+            quant_expr_files = LRAA_quant_final_bamlist.quant_exprs,
+            docker = docker
     }
 
      # Merge all per-cluster tracking files into a single tracking.gz for downstream single-cell matrices
-     call LRAA_merge_trackings as merge_cluster_trackings {
-           input:
-             sample_id = sample_id,
-             tracking_files = LRAA_quant_final_bamlist.quant_trackings,
-             docker = docker
-     }
+    call LRAA_merge_trackings as merge_cluster_trackings {
+        input:
+            sample_id = sample_id,
+            tracking_files = LRAA_quant_final_bamlist.quant_trackings,
+            docker = docker
+    }
 
      # Build sparse matrices (Seurat-compatible) from the merged tracking
      call sc_build_sparse_matrices as build_sc_sparse_matrices {
@@ -150,7 +164,9 @@ workflow LRAA_cell_cluster_guided {
 
      output {
          # final outputs
-         File LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
+         File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
+         # partitioned cluster BAMs (always produced)
+         File LRAA_partitioned_cluster_bams_tar = tar_partitioned_cluster_bams.tar_gz
          # cluster-level final quant outputs (per-cluster/partition) packaged
          File LRAA_final_cluster_exprs_tar = tar_final_cluster_expr_files.tar_gz
          File LRAA_final_cluster_trackings_tar = tar_final_cluster_tracking_files.tar_gz
@@ -162,23 +178,15 @@ workflow LRAA_cell_cluster_guided {
          File sc_gene_counts = build_sc_sparse_matrices.gene_counts
          File sc_isoform_counts = build_sc_sparse_matrices.isoform_counts
          File sc_splice_pattern_counts = build_sc_sparse_matrices.splice_pattern_counts
-         # gene level
-         File sc_gene_matrix_mtx_gz = build_sc_sparse_matrices.gene_matrix_mtx_gz
-         File sc_gene_features_tsv_gz = build_sc_sparse_matrices.gene_features_tsv_gz
-         File sc_gene_barcodes_tsv_gz = build_sc_sparse_matrices.gene_barcodes_tsv_gz
-         # isoform level
-         File sc_isoform_matrix_mtx_gz = build_sc_sparse_matrices.isoform_matrix_mtx_gz
-         File sc_isoform_features_tsv_gz = build_sc_sparse_matrices.isoform_features_tsv_gz
-         File sc_isoform_barcodes_tsv_gz = build_sc_sparse_matrices.isoform_barcodes_tsv_gz
-         # splice-pattern level
-         File sc_splice_pattern_matrix_mtx_gz = build_sc_sparse_matrices.splice_pattern_matrix_mtx_gz
-         File sc_splice_pattern_features_tsv_gz = build_sc_sparse_matrices.splice_pattern_features_tsv_gz
-         File sc_splice_pattern_barcodes_tsv_gz = build_sc_sparse_matrices.splice_pattern_barcodes_tsv_gz
+         # gene/isoform/splice-pattern sparse directories as tar.gz
+         File sc_gene_sparse_tar_gz = build_sc_sparse_matrices.gene_sparse_dir_tgz
+         File sc_isoform_sparse_tar_gz = build_sc_sparse_matrices.isoform_sparse_dir_tgz
+         File sc_splice_pattern_sparse_tar_gz = build_sc_sparse_matrices.splice_pattern_sparse_dir_tgz
 
-         # preliminary intermediate outputs.
-         File LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
-         File LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
-         File LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
+         # preliminary intermediate outputs (only in discovery mode)
+         File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
+         File? LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
+         File? LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
 
          # cluster pseudobulk matrices
          File cluster_gene_counts_matrix = build_cluster_pseudobulk.cluster_gene_counts_matrix
@@ -496,6 +504,11 @@ task sc_build_sparse_matrices {
         singlecell_tracking_to_sparse_matrix.py \
             --tracking ~{tracking_file} \
             --output_prefix ~{output_prefix}
+
+        # Tar the generated sparse matrix directories for compact output
+        tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
+        tar -zcvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
+        tar -zcvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
     >>>
 
     output {
@@ -504,20 +517,10 @@ task sc_build_sparse_matrices {
         File isoform_counts = "~{output_prefix}.isoform_cell_counts.tsv"
         File splice_pattern_counts = "~{output_prefix}.splice_pattern_cell_counts.tsv"
 
-        # gene level sparse outputs
-        File gene_matrix_mtx_gz = "~{output_prefix}^gene-sparseM/matrix.mtx.gz"
-        File gene_features_tsv_gz = "~{output_prefix}^gene-sparseM/features.tsv.gz"
-        File gene_barcodes_tsv_gz = "~{output_prefix}^gene-sparseM/barcodes.tsv.gz"
-
-        # isoform level sparse outputs
-        File isoform_matrix_mtx_gz = "~{output_prefix}^isoform-sparseM/matrix.mtx.gz"
-        File isoform_features_tsv_gz = "~{output_prefix}^isoform-sparseM/features.tsv.gz"
-        File isoform_barcodes_tsv_gz = "~{output_prefix}^isoform-sparseM/barcodes.tsv.gz"
-
-        # splice pattern level sparse outputs
-        File splice_pattern_matrix_mtx_gz = "~{output_prefix}^splice_pattern-sparseM/matrix.mtx.gz"
-        File splice_pattern_features_tsv_gz = "~{output_prefix}^splice_pattern-sparseM/features.tsv.gz"
-        File splice_pattern_barcodes_tsv_gz = "~{output_prefix}^splice_pattern-sparseM/barcodes.tsv.gz"
+        # tar.gz of sparse matrix directories
+        File gene_sparse_dir_tgz = "~{output_prefix}^gene-sparseM.tar.gz"
+        File isoform_sparse_dir_tgz = "~{output_prefix}^isoform-sparseM.tar.gz"
+        File splice_pattern_sparse_dir_tgz = "~{output_prefix}^splice_pattern-sparseM.tar.gz"
     }
 
     runtime {
@@ -525,6 +528,28 @@ task sc_build_sparse_matrices {
         cpu: 2
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} HDD"
+    }
+}
+
+
+task require_annot_gtf {
+    input {
+        File annot_gtf
+    }
+
+    command <<<
+        set -euo pipefail
+        echo "Annotation GTF provided: ${annot_gtf}"
+    >>>
+
+    output {
+        File ok = annot_gtf
+    }
+
+    runtime {
+        cpu: 1
+        memory: "1 GiB"
+        disks: "local-disk 10 HDD"
     }
 }
 
