@@ -25,7 +25,7 @@ import logging
 import shutil
 
 
-VERSION = "v0.9.0-postdev"
+VERSION = "v0.9.0-postdev3"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -113,7 +113,9 @@ def _contig_job_runner(job):
             note = f"worker:{contig_acc}:{contig_strand}"
             worker_monitor = ResourceMonitor(
                 monitor_path,
-                interval_sec=float(LRAA_Globals.config.get("resource_monitor_interval", 2.0)),
+                interval_sec=float(
+                    LRAA_Globals.config.get("resource_monitor_interval", 2.0)
+                ),
                 include_children=bool(
                     LRAA_Globals.config.get("resource_monitor_include_children", True)
                 ),
@@ -232,6 +234,8 @@ def _contig_job_runner(job):
         quant_tracking=quant_tracking_tmp,
         gtf=gtf_tmp,
     )
+
+
 def main():
     # CLI: define arguments and groups
     parser = argparse.ArgumentParser(
@@ -241,14 +245,18 @@ def main():
 
     # Primary inputs and run mode
     primary = parser.add_argument_group("primary inputs")
-    primary.add_argument("--bam", type=str, default=None, help="input BAM of aligned reads")
+    primary.add_argument(
+        "--bam", type=str, default=None, help="input BAM of aligned reads"
+    )
     primary.add_argument(
         "--bam_list",
         type=str,
         default=None,
         help="file listing cluster-specific BAMs (lines: '<cluster_id> <bam>' or '<bam>'); supported only with --quant_only; splice graph is built once from the union of all BAMs, then each cluster is quantified separately",
     )
-    primary.add_argument("--genome", type=str, required=True, help="reference genome FASTA")
+    primary.add_argument(
+        "--genome", type=str, required=True, help="reference genome FASTA"
+    )
     primary.add_argument(
         "--gtf",
         type=str,
@@ -275,7 +283,10 @@ def main():
         help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
     )
     primary.add_argument(
-        "--no_norm", action="store_true", default=False, help="disable pre-assembly depth normalization"
+        "--no_norm",
+        action="store_true",
+        default=False,
+        help="disable pre-assembly depth normalization",
     )
     primary.add_argument(
         "--normalize_max_cov_level",
@@ -289,9 +300,21 @@ def main():
         default=False,
         help="during assembly, keep only the single best isoform per gene",
     )
-    primary.add_argument("--CPU", type=int, default=num_threads, help="maximum CPU cores to use")
-    primary.add_argument("--ME_only", action="store_true", default=False, help="restrict to multi-exon isoforms only")
-    primary.add_argument("--SE_only", action="store_true", default=False, help="restrict to single-exon isoforms only")
+    primary.add_argument(
+        "--CPU", type=int, default=num_threads, help="maximum CPU cores to use"
+    )
+    primary.add_argument(
+        "--ME_only",
+        action="store_true",
+        default=False,
+        help="restrict to multi-exon isoforms only",
+    )
+    primary.add_argument(
+        "--SE_only",
+        action="store_true",
+        default=False,
+        help="restrict to single-exon isoforms only",
+    )
     primary.add_argument(
         "--no_EM",
         action="store_true",
@@ -334,7 +357,6 @@ def main():
         default=False,
         help="disable contig/strand-level parallelization; use --CPU for within-contig/component multithreading",
     )
-
 
     parser.add_argument(
         "--no_resume_parallel",
@@ -634,7 +656,9 @@ def main():
         if not os.path.exists(args.bam_list):
             sys.exit(f"Error, --bam_list file not found: {args.bam_list}")
         if args.num_total_reads is not None:
-            sys.exit("Error: --num_total_reads cannot be used with --bam_list; per-cluster read counts are always derived from each BAM.")
+            sys.exit(
+                "Error: --num_total_reads cannot be used with --bam_list; per-cluster read counts are always derived from each BAM."
+            )
 
         def _sanitize_cluster_id(s):
             # keep alnum, underscore, dash, dot
@@ -797,9 +821,7 @@ def main():
         for cb in cluster_bams:
             bam_p = cb["bam"]
             if not os.path.exists(bam_p + ".bai"):
-                logger.info(
-                    f"-missing index for bam {bam_p}, will try to make it..."
-                )
+                logger.info(f"-missing index for bam {bam_p}, will try to make it...")
                 subprocess.check_call("samtools index " + bam_p, shell=True)
     else:
         if not os.path.exists(bam_filename + ".bai"):
@@ -827,7 +849,9 @@ def main():
 
         else:
             LRAA_Globals.config["num_total_reads"] = args.num_total_reads
-            logger.info("using total number of reads as: {}".format(args.num_total_reads))
+            logger.info(
+                "using total number of reads as: {}".format(args.num_total_reads)
+            )
             if args.num_total_reads == 0:
                 raise RuntimeError("Error, number of total reads is set to zero.")
 
@@ -976,9 +1000,7 @@ def main():
             cluster_bam = cb["bam"]
 
             # set per-cluster total reads for TPM (always from BAM in bam_list mode)
-            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-                cluster_bam
-            )
+            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(cluster_bam)
             logger.info(
                 f"[{cluster_id}] total number of reads counted from {cluster_bam} as: {LRAA_Globals.config['num_total_reads']}"
             )
@@ -993,7 +1015,9 @@ def main():
                     main_monitor = ResourceMonitor(
                         monitor_path_main,
                         interval_sec=LRAA_Globals.config["resource_monitor_interval"],
-                        include_children=LRAA_Globals.config["resource_monitor_include_children"],
+                        include_children=LRAA_Globals.config[
+                            "resource_monitor_include_children"
+                        ],
                         note=f"main:{cluster_id}",
                     )
                     main_monitor.start()
@@ -1055,24 +1079,41 @@ def main():
                         input_transcripts = contig_strand_to_input_transcripts[
                             contig_strand_token
                         ]
-                        if input_transcripts is not None and len(input_transcripts) == 0:
+                        if (
+                            input_transcripts is not None
+                            and len(input_transcripts) == 0
+                        ):
                             input_transcripts = None
 
                         # optional per-(contig,strand) monitor in serial mode
                         contig_monitor = None
                         try:
-                            if LRAA_Globals.config.get("resource_monitor_enabled", False):
+                            if LRAA_Globals.config.get(
+                                "resource_monitor_enabled", False
+                            ):
                                 tmp_root = f"{output_prefix_cluster}.contigtmp"
-                                tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+                                tmp_dir = os.path.join(
+                                    tmp_root, f"{contig_acc}", f"{contig_strand}"
+                                )
                                 os.makedirs(tmp_dir, exist_ok=True)
-                                contig_tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+                                contig_tmp_prefix = os.path.join(
+                                    tmp_dir, f"{contig_acc}.{contig_strand}"
+                                )
                                 monitor_path = f"{contig_tmp_prefix}.resources.tsv"
-                                note = f"serial:{cluster_id}:{contig_acc}:{contig_strand}"
+                                note = (
+                                    f"serial:{cluster_id}:{contig_acc}:{contig_strand}"
+                                )
                                 contig_monitor = ResourceMonitor(
                                     monitor_path,
-                                    interval_sec=float(LRAA_Globals.config.get("resource_monitor_interval", 2.0)),
+                                    interval_sec=float(
+                                        LRAA_Globals.config.get(
+                                            "resource_monitor_interval", 2.0
+                                        )
+                                    ),
                                     include_children=bool(
-                                        LRAA_Globals.config.get("resource_monitor_include_children", True)
+                                        LRAA_Globals.config.get(
+                                            "resource_monitor_include_children", True
+                                        )
                                     ),
                                     note=note,
                                 )
@@ -1118,7 +1159,9 @@ def main():
                                 ):
                                     continue
                                 processed.append((contig_acc, contig_strand))
-                        _summarize_contig_resource_logs(output_prefix_cluster, processed, parallel_mode=False)
+                        _summarize_contig_resource_logs(
+                            output_prefix_cluster, processed, parallel_mode=False
+                        )
                 except Exception:
                     pass
 
@@ -1175,17 +1218,28 @@ def main():
                     resumed = 0
                     for j in jobs:
                         tmp_root = f"{j['output_prefix']}.contigtmp"
-                        tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-                        tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                        tmp_dir = os.path.join(
+                            tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                        )
+                        tmp_prefix = os.path.join(
+                            tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+                        )
                         ok_path = f"{tmp_prefix}.ok"
                         have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
                         have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
                         have_gtf = True  # quant-only
-                        if os.path.exists(ok_path) and have_expr and have_track and have_gtf:
+                        if (
+                            os.path.exists(ok_path)
+                            and have_expr
+                            and have_track
+                            and have_gtf
+                        ):
                             j["skip"] = True
                             resumed += 1
                     if resumed:
-                        logger.info(f"[{cluster_id}] Resuming {resumed} completed contig/strand jobs from previous run")
+                        logger.info(
+                            f"[{cluster_id}] Resuming {resumed} completed contig/strand jobs from previous run"
+                        )
 
                 mgr = mpm.MultiProcessManager(pool_size)
                 for j in jobs:
@@ -1195,7 +1249,9 @@ def main():
                     mgr.launch_process(p)
                 errs = mgr.wait_for_remaining_processes()
                 if errs > 0:
-                    raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
+                    raise RuntimeError(
+                        f"{errs} contig/strand jobs failed; see logs above"
+                    )
 
                 # merge per-cluster results
                 merged_quant_fh = open(ofh_quant_output_filename, "wt")
@@ -1238,25 +1294,39 @@ def main():
 
                 for j in jobs:
                     tmp_root = f"{j['output_prefix']}.contigtmp"
-                    tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-                    tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
-                    _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
-                    _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
+                    tmp_dir = os.path.join(
+                        tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                    )
+                    tmp_prefix = os.path.join(
+                        tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+                    )
+                    _append_without_first_line(
+                        f"{tmp_prefix}.quant.expr", merged_quant_fh
+                    )
+                    _append_without_first_line(
+                        f"{tmp_prefix}.quant.tracking", merged_track_fh
+                    )
 
                 merged_quant_fh.close()
                 merged_track_fh.close()
 
                 try:
                     if LRAA_Globals.config.get("resource_monitor_enabled", False):
-                        _summarize_contig_resource_logs(output_prefix_cluster, jobs, parallel_mode=True)
+                        _summarize_contig_resource_logs(
+                            output_prefix_cluster, jobs, parallel_mode=True
+                        )
                 except Exception:
                     pass
 
                 if CLEAN_PARALLEL_TMP:
                     for j in jobs:
                         tmp_root = f"{j['output_prefix']}.contigtmp"
-                        tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-                        tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                        tmp_dir = os.path.join(
+                            tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                        )
+                        tmp_prefix = os.path.join(
+                            tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+                        )
                         for pth in (
                             f"{tmp_prefix}.quant.expr",
                             f"{tmp_prefix}.quant.tracking",
@@ -1280,14 +1350,18 @@ def main():
             if TAG_BAM:
                 cmd = " ".join(
                     [
-                        os.path.join(UTILDIR, "annotate_bam_with_read_tracking_info.py"),
+                        os.path.join(
+                            UTILDIR, "annotate_bam_with_read_tracking_info.py"
+                        ),
                         "--bam",
                         cluster_bam,
                         "--tracking",
                         ofh_quant_read_tracking_filename,
                     ]
                 )
-                logger.info(f"[{cluster_id}] tagging bam file with transcripts assigned to each read")
+                logger.info(
+                    f"[{cluster_id}] tagging bam file with transcripts assigned to each read"
+                )
                 subprocess.check_call(cmd, shell=True)
 
         return
@@ -1313,7 +1387,9 @@ def main():
             main_monitor = ResourceMonitor(
                 monitor_path_main,
                 interval_sec=LRAA_Globals.config["resource_monitor_interval"],
-                include_children=LRAA_Globals.config["resource_monitor_include_children"],
+                include_children=LRAA_Globals.config[
+                    "resource_monitor_include_children"
+                ],
                 note="main",
             )
             main_monitor.start()
@@ -1376,7 +1452,7 @@ def main():
         j["CPU_inner"] = CPU_inner
 
     logger.info(
-    f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
+        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
     )
 
     # Launch in batches of size pool_size to avoid daemonic Pool workers (so inner component multiprocessing can spawn)
@@ -1385,8 +1461,12 @@ def main():
         resumed = 0
         for j in jobs:
             tmp_root = f"{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-            tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+            tmp_dir = os.path.join(
+                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+            )
+            tmp_prefix = os.path.join(
+                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+            )
             ok_path = f"{tmp_prefix}.ok"
             # require all expected outputs to be present
             have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
@@ -1396,7 +1476,9 @@ def main():
                 j["skip"] = True
                 resumed += 1
         if resumed:
-            logger.info(f"Resuming {resumed} completed contig/strand jobs from previous run")
+            logger.info(
+                f"Resuming {resumed} completed contig/strand jobs from previous run"
+            )
 
     # Use rolling scheduling to keep all slots busy
     logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
@@ -1471,8 +1553,12 @@ def main():
         with open(gtf_output_filename, "wt") as gtf_out:
             for j in jobs:
                 tmp_root = f"{j['output_prefix']}.contigtmp"
-                tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-                tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                tmp_dir = os.path.join(
+                    tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                )
+                tmp_prefix = os.path.join(
+                    tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+                )
                 gtf_tmp = f"{tmp_prefix}.gtf"
                 if os.path.exists(gtf_tmp):
                     with open(gtf_tmp, "rt") as fh:
@@ -1489,8 +1575,12 @@ def main():
     if CLEAN_PARALLEL_TMP:
         for j in jobs:
             tmp_root = f"{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-            tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+            tmp_dir = os.path.join(
+                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+            )
+            tmp_prefix = os.path.join(
+                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+            )
             for pth in (
                 f"{tmp_prefix}.quant.expr",
                 f"{tmp_prefix}.quant.tracking",
@@ -1568,9 +1658,11 @@ def main():
         subprocess.check_call(cmd, shell=True)
 
     return
-    
 
-def _summarize_contig_resource_logs(output_prefix, jobs_or_contigs, parallel_mode=False):
+
+def _summarize_contig_resource_logs(
+    output_prefix, jobs_or_contigs, parallel_mode=False
+):
     """Write a consolidated summary TSV across per-(contig,strand) resource logs if monitoring enabled.
     Writes: <output_prefix>.resources.summary.tsv
     """
@@ -1579,11 +1671,25 @@ def _summarize_contig_resource_logs(output_prefix, jobs_or_contigs, parallel_mod
             return
         summary_path = f"{output_prefix}.resources.summary.tsv"
         with open(summary_path, "wt") as out:
-            out.write("\t".join(["contig", "strand", "samples", "duration_sec", "peak_rss_mb_total", "avg_rss_mb_total", "peak_cpu_percent_total", "avg_cpu_percent_total"]) + "\n")
+            out.write(
+                "\t".join(
+                    [
+                        "contig",
+                        "strand",
+                        "samples",
+                        "duration_sec",
+                        "peak_rss_mb_total",
+                        "avg_rss_mb_total",
+                        "peak_cpu_percent_total",
+                        "avg_cpu_percent_total",
+                    ]
+                )
+                + "\n"
+            )
             for item in jobs_or_contigs:
                 if parallel_mode:
-                    contig_acc = item['contig_acc']
-                    contig_strand = item['contig_strand']
+                    contig_acc = item["contig_acc"]
+                    contig_strand = item["contig_strand"]
                 else:
                     contig_acc, contig_strand = item
                 tmp_root = f"{output_prefix}.contigtmp"
@@ -1611,7 +1717,9 @@ def _summarize_contig_resource_logs(output_prefix, jobs_or_contigs, parallel_mod
                                 rss = float(parts[idx.get("rss_mb", 2)])
                                 cpu = float(parts[idx.get("cpu_percent", 3)])
                                 rss_ch = float(parts[idx.get("rss_mb_children", 4)])
-                                cpu_ch = float(parts[idx.get("cpu_percent_children", 5)])
+                                cpu_ch = float(
+                                    parts[idx.get("cpu_percent_children", 5)]
+                                )
                             except Exception:
                                 continue
                             total_rss = rss + rss_ch
@@ -1627,17 +1735,26 @@ def _summarize_contig_resource_logs(output_prefix, jobs_or_contigs, parallel_mod
                         if n:
                             avg_rss = sum_rss / n
                             avg_cpu = sum_cpu / n
-                            duration = (last_ts - first_ts) if (first_ts is not None and last_ts is not None) else 0.0
-                            out.write("\t".join([
-                                contig_acc,
-                                contig_strand,
-                                str(n),
-                                f"{duration:.1f}",
-                                f"{peak_rss:.1f}",
-                                f"{avg_rss:.1f}",
-                                f"{peak_cpu:.1f}",
-                                f"{avg_cpu:.1f}",
-                            ]) + "\n")
+                            duration = (
+                                (last_ts - first_ts)
+                                if (first_ts is not None and last_ts is not None)
+                                else 0.0
+                            )
+                            out.write(
+                                "\t".join(
+                                    [
+                                        contig_acc,
+                                        contig_strand,
+                                        str(n),
+                                        f"{duration:.1f}",
+                                        f"{peak_rss:.1f}",
+                                        f"{avg_rss:.1f}",
+                                        f"{peak_cpu:.1f}",
+                                        f"{avg_cpu:.1f}",
+                                    ]
+                                )
+                                + "\n"
+                            )
                 except Exception:
                     continue
     except Exception:
