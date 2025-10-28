@@ -17,6 +17,11 @@ test_QC:
 test_docker:
 	cd sirvs && ${MAKE} test_docker
 
+
+test_wdls:
+	cd testing/sep_contigs && $(MAKE) test_wdls
+	cd single_cells/sc_cluster_guided_pipe && $(MAKE) test_wdls
+
 clean:
 	@for i in $(DIRS) $(QC) $(MISC); do \
     echo "Running example in $$i..."; \

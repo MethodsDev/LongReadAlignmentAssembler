@@ -7,5 +7,6 @@ test:
 clean:
 	rm -rf ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
 	rm -rf ./test* ./__chckpts ./__alignment_cache
+	cd sc_cluster_guided_pipe && $(MAKE) clean
 
 

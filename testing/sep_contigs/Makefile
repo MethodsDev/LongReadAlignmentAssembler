@@ -35,6 +35,9 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 ##########
 # wdls
 
+test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
+
+
 test_wdl_quant_only: wdl_clean
 	 miniwdl run ../../WDL/LRAA.wdl -i wf.quant-only.json  --verbose --no-cache
 
