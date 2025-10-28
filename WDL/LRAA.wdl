@@ -174,34 +174,34 @@ task mergeQuantResults {
     }
 
     command <<<
-        set -eo pipefail
+    set -eo pipefail
 
-        quant_expr_output="~{outputFilePrefix}.quant.expr"
-        for file in ~{sep=' ' quantExprFiles}; do
-            if [[ ! -f "$quant_expr_output" ]]; then
-                cp "$file" "$quant_expr_output"
-            else
-                tail -n +2 "$file" >> "$quant_expr_output"
-            fi
-        done
+    quant_expr_output="~{outputFilePrefix}.quant.expr"
+    for file in ~{sep=' ' quantExprFiles}; do
+        if [[ ! -f "$quant_expr_output" ]]; then
+            cp "$file" "$quant_expr_output"
+        else
+            tail -n +2 "$file" >> "$quant_expr_output"
+        fi
+    done
 
     python <<CODE
-        import json
-        import gzip
+    import json
+    import gzip
 
-        tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
-        tracking_files_list = json.loads(tracking_files_json)
+    tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
+    tracking_files_list = json.loads(tracking_files_json)
 
-        with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
-            for i, tracking_file in enumerate(tracking_files_list):
-                openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-                with openf(tracking_file, "rt") as fh:
-                    header = next(fh)
-                    if i == 0:
-                         print(header, file=ofh, end='')
-                    for line in fh:
-                         print(line, file=ofh, end='')
-        CODE
+    with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
+        for i, tracking_file in enumerate(tracking_files_list):
+            openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+            with openf(tracking_file, "rt") as fh:
+                header = next(fh)
+                if i == 0:
+                        print(header, file=ofh, end='')
+                for line in fh:
+                        print(line, file=ofh, end='')
+    CODE
     >>>
 
     output {
