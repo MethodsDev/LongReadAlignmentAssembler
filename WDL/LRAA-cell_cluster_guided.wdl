@@ -108,6 +108,21 @@ workflow LRAA_cell_cluster_guided {
            docker = docker
      }
 
+    # Tar the per-cluster final quant outputs for convenient retrieval
+    call LRAA_tar_outputs as tar_final_cluster_expr_files {
+        input:
+         tar_directory_name = sample_id + ".LRAA.final.cluster_quant.EXPRs",
+         input_files = LRAA_quant_final_bamlist.quant_exprs,
+         docker = docker
+    }
+
+    call LRAA_tar_outputs as tar_final_cluster_tracking_files {
+        input:
+         tar_directory_name = sample_id + ".LRAA.final.cluster_quant.trackings",
+         input_files = LRAA_quant_final_bamlist.quant_trackings,
+         docker = docker
+    }
+
     # Build cluster-level pseudobulk matrices from the per-cluster quant expr files
     call build_cluster_pseudobulk_matrices as build_cluster_pseudobulk {
             input:
@@ -136,9 +151,9 @@ workflow LRAA_cell_cluster_guided {
      output {
          # final outputs
          File LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
-         # cluster-level final quant outputs (per-cluster/partition)
-         Array[File] LRAA_final_cluster_exprs = LRAA_quant_final_bamlist.quant_exprs
-         Array[File] LRAA_final_cluster_trackings = LRAA_quant_final_bamlist.quant_trackings
+         # cluster-level final quant outputs (per-cluster/partition) packaged
+         File LRAA_final_cluster_exprs_tar = tar_final_cluster_expr_files.tar_gz
+         File LRAA_final_cluster_trackings_tar = tar_final_cluster_tracking_files.tar_gz
          # merged tracking across clusters (used for downstream SC matrices)
          File LRAA_final_tracking = merge_cluster_trackings.merged_tracking
 
