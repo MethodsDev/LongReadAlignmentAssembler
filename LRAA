@@ -280,7 +280,7 @@ def main():
     primary.add_argument(
         "--normalize_max_cov_level",
         type=int,
-        default=0,
+        default=LRAA_Globals.config["normalize_max_cov_level"],
         help="normalize BAM so per-base coverage is capped at this value prior to assembly (0 disables)",
     )
     primary.add_argument(
