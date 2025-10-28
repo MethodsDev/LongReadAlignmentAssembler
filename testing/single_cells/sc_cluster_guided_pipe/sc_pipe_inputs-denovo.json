@@ -6,7 +6,9 @@
 
     "LRAA_cell_cluster_guided.referenceGenome" : "data/chr19.genome.2M.fa",
 
-    "LRAA_cell_cluster_guided.inputBAM" : "data/chr19.2M.bam"
+    "LRAA_cell_cluster_guided.inputBAM" : "data/chr19.2M.bam",
+    
+    "LRAA_cell_cluster_guided.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing"
 
 }
 

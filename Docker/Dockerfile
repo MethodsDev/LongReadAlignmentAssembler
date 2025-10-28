@@ -89,6 +89,13 @@ RUN apt-get install -y r-base r-base-dev
 
 RUN R -e 'install.packages("BiocManager", repos="http://cran.us.r-project.org")'
 
+RUN apt-get update && \
+    apt-get install -y --fix-missing \
+        libharfbuzz-dev \
+        libfribidi-dev \
+        libtiff5-dev
+
+    
 RUN apt-get install -y libharfbuzz-dev libfribidi-dev libtiff5-dev 
 
 RUN R -e 'BiocManager::install("tidyverse")'
@@ -120,8 +127,8 @@ RUN python -m pip install \
         
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.9.0-postdev"
-ENV LRAA_CO=9b6a458ab9112c326b98e3493ba4e21198f9db95
+ENV LRAA_VERSION="v0.9.0-postdev2"
+ENV LRAA_CO=b82ef247b0fa99c71bf431cc2576d02f9c9aa3a6
 
 
 # update VERSION and LRAA_CO files with version info and checkout
