@@ -539,7 +539,7 @@ task require_annot_gtf {
 
     command <<<
         set -euo pipefail
-        echo "Annotation GTF provided: ${annot_gtf}"
+        echo "Annotation GTF provided: ~{annot_gtf}"
     >>>
 
     output {
