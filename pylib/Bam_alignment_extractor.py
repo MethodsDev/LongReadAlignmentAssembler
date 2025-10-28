@@ -45,10 +45,11 @@ class Bam_alignment_extractor:
         config=LRAA_Globals.config,
     ):
 
-
         discarded_read_counter = defaultdict(int)
 
-        read_alignments = list()
+        # Collect either raw reads or Pretty_alignment objects depending on 'pretty'
+        read_alignments = [] if not pretty else None
+        pretty_alignments = [] if pretty else None
 
         MIN_MAPPING_QUALITY = int(LRAA_Globals.config["min_mapping_quality"])
 
@@ -142,11 +143,16 @@ class Bam_alignment_extractor:
                 else:
                     num_alignments_per_id_ok += 1
 
-            read_alignments.append(read)
+            if pretty:
+                # Build Pretty_alignment on the fly to avoid storing all pysam AlignedSegment objects simultaneously
+                pretty_alignments.append(Pretty_alignment.get_pretty_alignment(read))
+            else:
+                read_alignments.append(read)
 
+        kept_count = len(pretty_alignments) if pretty else len(read_alignments)
         logger.info(
             "reads kept for {} {}: {} and discarded: {}".format(
-                contig_acc, contig_strand, len(read_alignments), discarded_read_counter
+                contig_acc, contig_strand, kept_count, discarded_read_counter
             )
         )
 
@@ -168,7 +174,6 @@ class Bam_alignment_extractor:
                 )
 
         if pretty:
-            pretty_alignments = Pretty_alignment.get_pretty_alignments(read_alignments)
             return pretty_alignments
         else:
             return read_alignments

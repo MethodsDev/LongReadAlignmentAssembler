@@ -124,37 +124,35 @@ class Pretty_alignment_manager:
                     )
 
 
-            # Define SE and ME alignments and cache them separately
+            # Define SE and ME alignments and cache them separately when requested
+            # To reduce peak memory, only materialize the subset we actually need unless caching all variants
+            if restrict_splice_type in ("ME", "SE") or use_cache:
+                ME_alignments = []
+                SE_alignments = []
+                for pa in pretty_alignments:
+                    if pa.has_introns():
+                        ME_alignments.append(pa)
+                    else:
+                        SE_alignments.append(pa)
 
-            ME_alignments = list()
-            SE_alignments = list()
+                if use_cache:
+                    # store the ME and SE alignments
+                    with open(ME_alignment_cache_file, "wb") as f:
+                        pickle.dump(ME_alignments, f)
+                        logger.info(
+                            f"Saved {len(ME_alignments)} alignments to cache: {ME_alignment_cache_file}"
+                        )
 
-            for pretty_alignment in pretty_alignments:
-                
-                if pretty_alignment.has_introns():
-                    ME_alignments.append(pretty_alignment)
-                else:
-                    SE_alignments.append(pretty_alignment)
-                   
-            
-            if use_cache:
-                # store the ME and SE alignments
-                with open(ME_alignment_cache_file, "wb") as f:
-                    pickle.dump(ME_alignments, f)
-                    logger.info(
-                        f"Saved {len(ME_alignments)} alignments to cache: {ME_alignment_cache_file}"
-                    )
+                    with open(SE_alignment_cache_file, "wb") as f:
+                        pickle.dump(SE_alignments, f)
+                        logger.info(
+                            f"Saved {len(SE_alignments)} alignments to cache: {SE_alignment_cache_file}"
+                        )
 
-                with open(SE_alignment_cache_file, "wb") as f:
-                    pickle.dump(SE_alignments, f)
-                    logger.info(
-                        f"Saved {len(SE_alignments)} alignments to cache: {SE_alignment_cache_file}"
-                    )
-
-            if restrict_splice_type == "ME":
-                pretty_alignments = ME_alignments
-            elif restrict_splice_type == "SE":
-                pretty_alignments = SE_alignments
+                if restrict_splice_type == "ME":
+                    pretty_alignments = ME_alignments
+                elif restrict_splice_type == "SE":
+                    pretty_alignments = SE_alignments
 
             
         if SE_read_encapsulation_mask is not None:
