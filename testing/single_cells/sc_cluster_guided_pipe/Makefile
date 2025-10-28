@@ -1,5 +1,5 @@
 
-all: ref_guided quant_only
+all: denovo ref_guided quant_only
 
 
 quant_only:
