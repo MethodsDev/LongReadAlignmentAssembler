@@ -15,7 +15,7 @@ Lightweight CPU and memory sampling is enabled by default to help size runs and 
 
 Outputs:
 - Main process: `<output_prefix>.resources.tsv`
-- When `--parallelize_contigs` is used, each worker also writes: `<output_prefix>.contigtmp/<contig>/<strand>/<contig>.<strand>.resources.tsv`
+- In contig-parallel runs (default), each worker also writes: `<output_prefix>.contigtmp/<contig>/<strand>/<contig>.<strand>.resources.tsv`
 
 Columns (TSV): `epoch_ts, elapsed_sec, rss_mb, cpu_percent, rss_mb_children, cpu_percent_children, note`
 
@@ -51,6 +51,6 @@ Behavior:
 Notes:
 
 - `--bam_list` is only supported with `--quant_only`.
-- `--CPU` and `--parallelize_contigs` are respected; resources are managed per cluster.
+- `--CPU` is respected; contig-parallel execution is the default. Use `--no_parallelize_contigs` to disable contig-level parallelism and use inner component-level multithreading instead; resources are managed per cluster accordingly.
 - `TPM` normalization uses the read count of each cluster BAM independently. `--num_total_reads` is not allowed with `--bam_list` and will raise an error.
 

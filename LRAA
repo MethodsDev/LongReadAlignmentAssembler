@@ -327,11 +327,12 @@ def main():
         help="display version: {}".format(VERSION),
     )
 
+    # Parallelization strategy
     parser.add_argument(
-        "--parallelize_contigs",
+        "--no_parallelize_contigs",
         action="store_true",
         default=False,
-        help="parallelize at (contig,strand) level; each job uses 1 core and outputs are merged at the end (respects --CPU as max concurrent jobs)",
+        help="disable contig/strand-level parallelization; use --CPU for within-contig/component multithreading",
     )
 
 
@@ -339,7 +340,7 @@ def main():
         "--no_resume_parallel",
         action="store_true",
         default=False,
-        help="do not reuse existing per-(contig,strand) temp outputs when --parallelize_contigs; always recompute",
+        help="do not reuse existing per-(contig,strand) temp outputs in contig-parallel runs; always recompute",
     )
 
     parser.add_argument(
@@ -610,7 +611,8 @@ def main():
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
-    PARALLELIZE_CONTIGS = args.parallelize_contigs
+    # By default, parallelize contigs; allow explicit opt-out
+    CONTIG_PARALLEL = not args.no_parallelize_contigs
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     MONITOR_RESOURCES = not args.no_monitor_resources
@@ -938,7 +940,7 @@ def main():
             os.makedirs(prereconstruct_info_dir)
 
     contig_strand_to_input_transcripts = defaultdict(list)
-    if input_gtf and not PARALLELIZE_CONTIGS:
+    if input_gtf and not CONTIG_PARALLEL:
         # Only preload transcripts in non-parallel mode; in contig-parallel mode, each worker parses GTF just for its (contig,strand)
         logger.info(f"-capturing input transcripts from gtf {input_gtf}")
         contig_to_input_transcripts = (
@@ -1003,7 +1005,7 @@ def main():
             ofh_quant_output_filename = f"{output_prefix_cluster}.quant.expr"
             ofh_quant_read_tracking_filename = f"{output_prefix_cluster}.quant.tracking"
 
-            if not PARALLELIZE_CONTIGS:
+            if not CONTIG_PARALLEL:
                 ofh_quant_output = open(ofh_quant_output_filename, "wt")
                 ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
                 # write headers
@@ -1158,8 +1160,14 @@ def main():
                             )
                         )
 
-                pool_size = max(1, min(CPU, len(jobs)))
-                CPU_inner = max(1, CPU // pool_size)
+                # Determine pool size and inner CPU under the new default policy
+                # Default (parallel contigs): up to CPU concurrent jobs, each with CPU_inner=1
+                # If debug/prelim forces a single worker, allow inner concurrency to use all CPUs
+                requested_pool = max(1, min(CPU, len(jobs)))
+                pool_size = requested_pool
+                if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+                    pool_size = 1
+                CPU_inner = 1 if pool_size > 1 else max(1, CPU)
                 for j in jobs:
                     j["CPU_inner"] = CPU_inner
 
@@ -1351,17 +1359,24 @@ def main():
 
     # worker function declared at module scope (_contig_job_runner)
 
-    # Determine pool size and cores per worker so total cores <= CPU
-    requested_pool = max(1, min(CPU, len(jobs)))
-    # Constrain to 1 worker if debug or prelim requested
-    pool_size = 1 if (LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS or not PARALLELIZE_CONTIGS) else requested_pool
-    CPU_inner = max(1, CPU // pool_size)
+    # Determine pool size and cores per worker per policy
+    # Default: parallelize contigs with one core per worker; if disabled, use inner concurrency
+    if CONTIG_PARALLEL:
+        requested_pool = max(1, min(CPU, len(jobs)))
+        pool_size = requested_pool
+        # constrain to single worker when in debug/prelim to avoid clobbering debug/prelim artifacts
+        if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+            pool_size = 1
+        CPU_inner = 1 if pool_size > 1 else max(1, CPU)
+    else:
+        pool_size = 1
+        CPU_inner = max(1, CPU)
     # set per-job CPU
     for j in jobs:
         j["CPU_inner"] = CPU_inner
 
     logger.info(
-        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; CPU_inner={CPU_inner} (cap={CPU})"
+    f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
     )
 
     # Launch in batches of size pool_size to avoid daemonic Pool workers (so inner component multiprocessing can spawn)
