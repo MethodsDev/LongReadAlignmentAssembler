@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 
 class Pretty_alignment:
 
+    # Reduce per-instance memory by avoiding a dynamic __dict__
+    __slots__ = (
+        "_pysam_alignment",
+        "_pretty_alignment_segments",
+        "_read_type",
+        "orig_left_soft_clipping",
+        "orig_right_soft_clipping",
+        "left_soft_clipping",
+        "right_soft_clipping",
+        "read_name",
+        "strand",
+    )
+
     read_aln_gap_merge_int = LRAA_Globals.config["read_aln_gap_merge_int"]
     min_terminal_splice_exon_anchor_length = LRAA_Globals.config[
         "min_terminal_splice_exon_anchor_length"
@@ -32,17 +45,13 @@ class Pretty_alignment:
         #    self._read_type = "ILMN"
         self._read_type = "PacBio"
 
-        ## soft clipping before/after polyA trimming.
+        # soft clipping before/after polyA trimming (store lengths only; sequences are transient)
         # - pre-trimming
         self.orig_left_soft_clipping = None
         self.orig_right_soft_clipping = None
-        self.orig_left_soft_clipped_seq = None
-        self.orig_right_soft_clipped_seq = None
         # - post-trimming
         self.left_soft_clipping = None
         self.right_soft_clipping = None
-        self.left_soft_clipped_seq = None
-        self.right_soft_clipped_seq = None
 
         self.read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
         self.strand = self.get_strand(pysam_alignment)
@@ -132,13 +141,9 @@ class Pretty_alignment:
         if left_soft_clipping > 0:
             left_soft_clipped_seq = read_sequence[0:left_soft_clipping]
 
-        self.orig_left_soft_clipped_seq = left_soft_clipped_seq
-
         right_soft_clipped_seq = ""
         if right_soft_clipping > 0:
             right_soft_clipped_seq = read_sequence[(-1 * right_soft_clipping) :]
-
-        self.orig_right_soft_clipped_seq = right_soft_clipped_seq
 
         ## deal with polyA
         min_PolyA_ident_length = LRAA_Globals.config["min_PolyA_ident_length"]
@@ -163,11 +168,9 @@ class Pretty_alignment:
             left_soft_clipping = 0
             logger.debug("Stripped polyT from beginning of read {}".format(read_name))
 
-        # set obj vars
+        # set obj vars (lengths only; do not store sequences to minimize memory)
         self.left_soft_clipping = left_soft_clipping
         self.right_soft_clipping = right_soft_clipping
-        self.left_soft_clipped_seq = left_soft_clipped_seq
-        self.right_soft_clipped_seq = right_soft_clipped_seq
 
     def has_soft_clipping(self):
 
