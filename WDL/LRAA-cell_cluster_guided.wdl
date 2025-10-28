@@ -108,20 +108,39 @@ workflow LRAA_cell_cluster_guided {
            docker = docker
      }
 
-         # Build sparse matrices (Seurat-compatible) from the final merged tracking
-         call sc_build_sparse_matrices as build_sc_sparse_matrices {
-                 input:
-                     sample_id = sample_id,
-                     tracking_file = LRAA_quant_final_bamlist.quant_tracking,
-             docker = docker,
-             memoryGB = memoryGBscSparseMatrices
-         }
+    # Build cluster-level pseudobulk matrices from the per-cluster quant expr files
+    call build_cluster_pseudobulk_matrices as build_cluster_pseudobulk {
+            input:
+                sample_id = sample_id,
+                quant_expr_files = LRAA_quant_final_bamlist.quant_exprs,
+                docker = docker
+    }
+
+     # Merge all per-cluster tracking files into a single tracking.gz for downstream single-cell matrices
+     call LRAA_merge_trackings as merge_cluster_trackings {
+           input:
+             sample_id = sample_id,
+             tracking_files = LRAA_quant_final_bamlist.quant_trackings,
+             docker = docker
+     }
+
+     # Build sparse matrices (Seurat-compatible) from the merged tracking
+     call sc_build_sparse_matrices as build_sc_sparse_matrices {
+             input:
+                 sample_id = sample_id,
+                 tracking_file = merge_cluster_trackings.merged_tracking,
+                 docker = docker,
+                 memoryGB = memoryGBscSparseMatrices
+     }
 
      output {
          # final outputs
          File LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
-         File LRAA_final_expr = LRAA_quant_final_bamlist.quant_expr
-         File LRAA_final_tracking = LRAA_quant_final_bamlist.quant_tracking
+         # cluster-level final quant outputs (per-cluster/partition)
+         Array[File] LRAA_final_cluster_exprs = LRAA_quant_final_bamlist.quant_exprs
+         Array[File] LRAA_final_cluster_trackings = LRAA_quant_final_bamlist.quant_trackings
+         # merged tracking across clusters (used for downstream SC matrices)
+         File LRAA_final_tracking = merge_cluster_trackings.merged_tracking
 
          # single-cell sparse matrices and intermediate counts
          File sc_gene_transcript_splicehash_mapping = build_sc_sparse_matrices.mapping_file
@@ -145,6 +164,13 @@ workflow LRAA_cell_cluster_guided {
          File LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
          File LRAA_prelim_cluster_read_trackings = tar_cluster_prelim_tracking_files.tar_gz
          File LRAA_prelim_cluster_pseudobulk_exprs = tar_cluster_prelim_pseudobulk_expr_files.tar_gz
+
+         # cluster pseudobulk matrices
+         File cluster_gene_counts_matrix = build_cluster_pseudobulk.cluster_gene_counts_matrix
+         File cluster_gene_TPM_matrix = build_cluster_pseudobulk.cluster_gene_TPM_matrix
+         File cluster_isoform_counts_matrix = build_cluster_pseudobulk.cluster_isoform_counts_matrix
+         File cluster_isoform_TPM_matrix = build_cluster_pseudobulk.cluster_isoform_TPM_matrix
+         File cluster_isoform_counts_forDiffIsoUsage = build_cluster_pseudobulk.cluster_isoform_counts_forDiffIsoUsage
     
      }
      
@@ -377,19 +403,60 @@ task LRAA_quant_bam_list {
              exit 1
         }
 
-        if [[ -f ~{output_prefix}.quant.tracking ]]; then
-            gzip ~{output_prefix}.quant.tracking
-        fi
+        # gzip any per-cluster tracking files produced (handle zero or many)
+        shopt -s nullglob
+        for f in ~{output_prefix}*.quant.tracking; do
+            gzip "$f"
+        done
+        shopt -u nullglob
     >>>
 
     output {
-        File quant_expr = "~{output_prefix}.quant.expr"
-        File quant_tracking = "~{output_prefix}.quant.tracking.gz"
+        # Capture either single merged outputs (~{output_prefix}.quant.*) or per-cluster/partition outputs (~{output_prefix}.*.quant.*)
+        Array[File] quant_exprs = glob("~{output_prefix}*.quant.expr")
+        Array[File] quant_trackings = glob("~{output_prefix}*.quant.tracking*")
     }
 
     runtime {
         docker: docker
         cpu: "~{numThreads}"
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk ~{disksize} HDD"
+    }
+}
+
+
+task build_cluster_pseudobulk_matrices {
+    input {
+        String sample_id
+        Array[File] quant_expr_files
+        String docker
+        Int memoryGB = 8
+    }
+
+    Int disksize = 20 + ceil(10 * length(quant_expr_files))
+
+    String output_prefix = "~{sample_id}.LRAA.cluster_pseudobulk"
+
+    command <<<
+        set -ex
+
+        build_LRAA_expr_matrices.py \
+            --output_prefix ~{output_prefix} \
+            --quant_files ~{sep=' ' quant_expr_files}
+    >>>
+
+    output {
+        File cluster_gene_counts_matrix = "~{output_prefix}.gene.counts.matrix"
+        File cluster_gene_TPM_matrix = "~{output_prefix}.gene.TPM.matrix"
+        File cluster_isoform_counts_matrix = "~{output_prefix}.isoform.counts.matrix"
+        File cluster_isoform_TPM_matrix = "~{output_prefix}.isoform.TPM.matrix"
+        File cluster_isoform_counts_forDiffIsoUsage = "~{output_prefix}.isoform.counts.matrix.forDiffIsoUsage"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} HDD"
     }
