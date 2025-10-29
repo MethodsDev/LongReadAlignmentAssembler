@@ -47,6 +47,338 @@ prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
 
 
+# -------------------------
+# Small helpers to declutter main() decision tree
+# -------------------------
+
+def _append_without_first_line(src_path, dst_fh):
+    """Append file to dst_fh skipping the first line (header)."""
+    if src_path is None or (not os.path.exists(src_path)):
+        return
+    with open(src_path, "rt") as fh:
+        first = True
+        for line in fh:
+            if first:
+                first = False
+                continue
+            dst_fh.write(line)
+
+
+def _parse_input_transcripts_for_cs(
+    input_gtf, contig_acc, contig_strand, restrict_region_lend, restrict_region_rend
+):
+    """Parse input transcripts filtered to a specific (contig, strand, region). Return None if empty or no GTF."""
+    if not input_gtf:
+        return None
+    contig_to_input_transcripts = (
+        GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
+            input_gtf,
+            contig_acc,
+            contig_strand,
+            restrict_region_lend,
+            restrict_region_rend,
+        )
+    )
+    txs = contig_to_input_transcripts.get(contig_acc, [])
+    if txs is not None and len(txs) == 0:
+        return None
+    return txs
+
+
+def _ensure_contig_tmp(output_prefix, contig_acc, contig_strand):
+    """Ensure per-(contig,strand) tmp dir exists, set LRAA_TMP_DIR, and return (tmp_dir, tmp_prefix)."""
+    tmp_root = f"{output_prefix}.contigtmp"
+    try:
+        os.makedirs(tmp_root, exist_ok=True)
+    except Exception:
+        if not os.path.isdir(tmp_root):
+            raise
+    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+    try:
+        os.environ["LRAA_TMP_DIR"] = tmp_dir
+    except Exception:
+        pass
+    return tmp_dir, tmp_prefix
+
+
+def _maybe_start_monitor(monitor_path, note):
+    """Start a ResourceMonitor if enabled; return the monitor or None."""
+    try:
+        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+            mon = ResourceMonitor(
+                monitor_path,
+                interval_sec=float(
+                    LRAA_Globals.config.get("resource_monitor_interval", 2.0)
+                ),
+                include_children=bool(
+                    LRAA_Globals.config.get("resource_monitor_include_children", True)
+                ),
+                note=note,
+            )
+            mon.start()
+            return mon
+    except Exception:
+        return None
+    return None
+
+
+def _maybe_stop_monitor(monitor_obj):
+    """Stop a ResourceMonitor safely."""
+    if monitor_obj is None:
+        return
+    try:
+        monitor_obj.stop()
+    except Exception:
+        pass
+
+
+def _run_jobs_schedule_and_merge(
+    jobs,
+    output_prefix,
+    quant_only,
+    tag_bam_path,
+    CONTIG_PARALLEL,
+    CPU,
+    NO_RESUME_PARALLEL,
+    CLEAN_PARALLEL_TMP,
+    NO_CLEANUP,
+    DEBUG,
+    INCLUDE_PRELIM_TRANSCRIPTS,
+):
+    """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging."""
+
+    # Warn if debug/prelim with parallelism due to artifact clobbering
+    if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+        logger.warning(
+            "Parallel execution with --debug or --include_prelim_transcripts can overwrite debug/prelim files; constraining to a single worker (no concurrent contig processing)."
+        )
+
+    # Start optional main resource monitor
+    main_monitor = None
+    try:
+        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+            monitor_path_main = f"{output_prefix}.resources.tsv"
+            main_monitor = ResourceMonitor(
+                monitor_path_main,
+                interval_sec=LRAA_Globals.config["resource_monitor_interval"],
+                include_children=LRAA_Globals.config[
+                    "resource_monitor_include_children"
+                ],
+                note="main",
+            )
+            main_monitor.start()
+    except Exception:
+        pass
+
+    # Determine pool size and cores per worker
+    if CONTIG_PARALLEL:
+        requested_pool = max(1, min(CPU, len(jobs)))
+        pool_size = requested_pool
+        if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+            pool_size = 1
+        CPU_inner = 1 if pool_size > 1 else max(1, CPU)
+    else:
+        pool_size = 1
+        CPU_inner = max(1, CPU)
+
+    # Set per-job CPU
+    for j in jobs:
+        j["CPU_inner"] = CPU_inner
+
+    logger.info(
+        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
+    )
+
+    # Mark completed jobs for resume if allowed
+    if not NO_RESUME_PARALLEL:
+        resumed = 0
+        for j in jobs:
+            tmp_root = f"{j['output_prefix']}.contigtmp"
+            tmp_dir = os.path.join(
+                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+            )
+            tmp_prefix = os.path.join(
+                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+            )
+            ok_path = f"{tmp_prefix}.ok"
+            have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
+            have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
+            have_gtf = True if j["QUANT_ONLY"] else os.path.exists(
+                f"{tmp_prefix}.gtf"
+            )
+            if os.path.exists(ok_path) and have_expr and have_track and have_gtf:
+                j["skip"] = True
+                resumed += 1
+        if resumed:
+            logger.info(f"Resuming {resumed} completed contig/strand jobs from previous run")
+
+    # Launch jobs via rolling scheduler
+    logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
+    mgr = mpm.MultiProcessManager(pool_size)
+    for j in jobs:
+        if j.get("skip"):
+            continue
+        p = Process(target=_contig_job_runner, args=(j,))
+        mgr.launch_process(p)
+    errs = mgr.wait_for_remaining_processes()
+    if errs > 0:
+        raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
+
+    # Merge results
+    quant_out_fn = f"{output_prefix}.quant.expr"
+    track_out_fn = f"{output_prefix}.quant.tracking"
+    merged_quant_fh = open(quant_out_fn, "wt")
+    merged_track_fh = open(track_out_fn, "wt")
+
+    # Headers
+    quant_header_final = [
+        "gene_id",
+        "transcript_id",
+        "uniq_reads",
+        "all_reads",
+        "isoform_fraction",
+        "unique_gene_read_fraction",
+        "TPM",
+        "exons",
+        "introns",
+        "splice_hash_code",
+    ]
+    if not quant_only:
+        quant_header_final += ["splice_compat_contained", "splice_contained_by"]
+    print("\t".join(quant_header_final), file=merged_quant_fh)
+
+    tracking_header_final = [
+        "gene_id",
+        "transcript_id",
+        "transcript_splice_hash_code",
+        "mp_id",
+        "read_name",
+        "frac_assigned",
+    ]
+    if LRAA_Globals.DEBUG:
+        tracking_header_final.append("read_weight")
+    print("\t".join(tracking_header_final), file=merged_track_fh)
+
+    for j in jobs:
+        tmp_root = f"{j['output_prefix']}.contigtmp"
+        tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+        tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+        _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
+        _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
+
+    merged_quant_fh.close()
+    merged_track_fh.close()
+
+    # Merge GTF and write BED in discovery mode
+    if not quant_only:
+        gtf_output_filename = f"{output_prefix}.gtf"
+        with open(gtf_output_filename, "wt") as gtf_out:
+            for j in jobs:
+                tmp_root = f"{j['output_prefix']}.contigtmp"
+                tmp_dir = os.path.join(
+                    tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                )
+                tmp_prefix = os.path.join(
+                    tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
+                )
+                gtf_tmp = f"{tmp_prefix}.gtf"
+                if os.path.exists(gtf_tmp):
+                    with open(gtf_tmp, "rt") as fh:
+                        shutil.copyfileobj(fh, gtf_out)
+
+        # BED for final GTF
+        bed_output_file = f"{output_prefix}.bed"
+        cmd = " ".join(
+            [
+                os.path.join(UTILDIR, "gtf_to_bed_format.pl"),
+                gtf_output_filename,
+                ">",
+                bed_output_file,
+            ]
+        )
+        logger.info(f"-making bed output file: {bed_output_file}")
+        subprocess.check_call(cmd, shell=True)
+
+        if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
+            prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"
+            bed_output_file = "__PRE-Tx-Filtering.transcripts.bed"
+            if os.path.exists(prelim_gtf) and os.path.getsize(prelim_gtf) > 0:
+                cmd = " ".join(
+                    [
+                        os.path.join(UTILDIR, "gtf_to_bed_format.pl"),
+                        prelim_gtf,
+                        ">",
+                        bed_output_file,
+                    ]
+                )
+                logger.info(f"-making bed output file: {bed_output_file}")
+                subprocess.check_call(cmd, shell=True)
+            else:
+                logger.warning(
+                    f"Skipping prelim BED generation; missing or empty GTF: {prelim_gtf}"
+                )
+
+    # Resource summary
+    try:
+        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+            _summarize_contig_resource_logs(output_prefix, jobs, parallel_mode=True)
+    except Exception:
+        pass
+
+    # Cleanup per-task outputs
+    if CLEAN_PARALLEL_TMP:
+        for j in jobs:
+            tmp_root = f"{j['output_prefix']}.contigtmp"
+            tmp_dir = os.path.join(
+                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+            )
+            tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+            for pth in (
+                f"{tmp_prefix}.quant.expr",
+                f"{tmp_prefix}.quant.tracking",
+                f"{tmp_prefix}.gtf",
+                f"{tmp_prefix}.ok",
+                f"{tmp_prefix}.resources.tsv",
+            ):
+                if os.path.exists(pth):
+                    try:
+                        os.remove(pth)
+                    except Exception:
+                        pass
+
+    # Remove entire temp tree unless debug or explicitly disabled
+    if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
+        try:
+            tmp_root_all = f"{output_prefix}.contigtmp"
+            if os.path.isdir(tmp_root_all):
+                shutil.rmtree(tmp_root_all)
+        except Exception:
+            pass
+
+    # Stop main monitor
+    if main_monitor is not None:
+        try:
+            main_monitor.stop()
+        except Exception:
+            pass
+
+    # Optional BAM tagging
+    if tag_bam_path:
+        cmd = " ".join(
+            [
+                os.path.join(UTILDIR, "annotate_bam_with_read_tracking_info.py"),
+                "--bam",
+                tag_bam_path,
+                "--tracking",
+                track_out_fn,
+            ]
+        )
+        logger.info("tagging bam file with transcripts assigned to each read")
+        subprocess.check_call(cmd, shell=True)
+
+
 def _contig_job_runner(job):
     # Module-scope function so it can be pickled by multiprocessing on macOS/Windows (spawn start method)
     contig_acc = job["contig_acc"]
@@ -980,26 +1312,7 @@ def main():
         if not os.path.exists(prereconstruct_info_dir):
             os.makedirs(prereconstruct_info_dir)
 
-    contig_strand_to_input_transcripts = defaultdict(list)
-    if input_gtf and not CONTIG_PARALLEL:
-        # Only preload transcripts in non-parallel mode; in contig-parallel mode, each worker parses GTF just for its (contig,strand)
-        logger.info(f"-capturing input transcripts from gtf {input_gtf}")
-        contig_to_input_transcripts = (
-            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
-                input_gtf,
-                restricted_contig,
-                restrict_to_contig_orient,
-                restrict_region_lend,
-                restrict_region_rend,
-            )
-        )
-        for contig, transcript_obj_list in contig_to_input_transcripts.items():
-            for transcript in transcript_obj_list:
-                transcript_strand = transcript.get_strand()
-                contig_strand_token = "{}^{}".format(contig, transcript_strand)
-                contig_strand_to_input_transcripts[contig_strand_token].append(
-                    transcript
-                )
+    # No preload of input transcripts; parse per (contig,strand) uniformly in both serial and parallel paths
 
     ##----------------------------------------------
     ## Begin, target each contig separately
@@ -1024,202 +1337,28 @@ def main():
 
             output_prefix_cluster = f"{output_prefix}.{cluster_id}"
 
-            # optional per-cluster main resource monitor
-            main_monitor = None
-            try:
-                if LRAA_Globals.config.get("resource_monitor_enabled", False):
-                    monitor_path_main = f"{output_prefix_cluster}.resources.tsv"
-                    main_monitor = ResourceMonitor(
-                        monitor_path_main,
-                        interval_sec=LRAA_Globals.config["resource_monitor_interval"],
-                        include_children=LRAA_Globals.config[
-                            "resource_monitor_include_children"
-                        ],
-                        note=f"main:{cluster_id}",
-                    )
-                    main_monitor.start()
-            except Exception:
-                pass
-
-            ofh_quant_output = None
-            ofh_quant_read_tracker = None
-            ofh_quant_output_filename = f"{output_prefix_cluster}.quant.expr"
-            ofh_quant_read_tracking_filename = f"{output_prefix_cluster}.quant.tracking"
-
-            if not CONTIG_PARALLEL:
-                ofh_quant_output = open(ofh_quant_output_filename, "wt")
-                ofh_quant_read_tracker = open(ofh_quant_read_tracking_filename, "wt")
-                # write headers
-                tracking_file_header = [
-                    "gene_id",
-                    "transcript_id",
-                    "transcript_splice_hash_code",
-                    "mp_id",
-                    "read_name",
-                    "frac_assigned",
-                ]
-                if LRAA_Globals.DEBUG:
-                    tracking_file_header.append("read_weight")
-                print("\t".join(tracking_file_header), file=ofh_quant_read_tracker)
-
-                header = [
-                    "gene_id",
-                    "transcript_id",
-                    "uniq_reads",
-                    "all_reads",
-                    "isoform_fraction",
-                    "unique_gene_read_fraction",
-                    "TPM",
-                    "exons",
-                    "introns",
-                    "splice_hash_code",
-                ]
-                # no splice-compat cols in quant-only
-                print("\t".join(header), file=ofh_quant_output)
-
-                for contig_acc in genome_contigs_list:
-                    contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
-                        contig_acc, genome_fasta_filename
-                    )
-                    for contig_strand in ("+", "-"):
-                        if (
-                            restrict_to_contig_orient is not None
-                            and restrict_to_contig_orient != contig_strand
-                        ):
-                            continue
-
-                        logger.info(
-                            f"[{cluster_id}] -processing contig: {contig_acc} {contig_strand}"
-                        )
-
-                        contig_strand_token = f"{contig_acc}^{contig_strand}"
-                        input_transcripts = contig_strand_to_input_transcripts[
-                            contig_strand_token
-                        ]
-                        if (
-                            input_transcripts is not None
-                            and len(input_transcripts) == 0
-                        ):
-                            input_transcripts = None
-
-                        # optional per-(contig,strand) monitor in serial mode
-                        contig_monitor = None
-                        try:
-                            if LRAA_Globals.config.get(
-                                "resource_monitor_enabled", False
-                            ):
-                                tmp_root = f"{output_prefix_cluster}.contigtmp"
-                                tmp_dir = os.path.join(
-                                    tmp_root, f"{contig_acc}", f"{contig_strand}"
-                                )
-                                os.makedirs(tmp_dir, exist_ok=True)
-                                contig_tmp_prefix = os.path.join(
-                                    tmp_dir, f"{contig_acc}.{contig_strand}"
-                                )
-                                monitor_path = f"{contig_tmp_prefix}.resources.tsv"
-                                note = (
-                                    f"serial:{cluster_id}:{contig_acc}:{contig_strand}"
-                                )
-                                contig_monitor = ResourceMonitor(
-                                    monitor_path,
-                                    interval_sec=float(
-                                        LRAA_Globals.config.get(
-                                            "resource_monitor_interval", 2.0
-                                        )
-                                    ),
-                                    include_children=bool(
-                                        LRAA_Globals.config.get(
-                                            "resource_monitor_include_children", True
-                                        )
-                                    ),
-                                    note=note,
-                                )
-                                contig_monitor.start()
-                        except Exception:
-                            contig_monitor = None
-
-                        # Expose per-(contig,strand) tmp dir in serial mode as well
-                        try:
-                            os.environ["LRAA_TMP_DIR"] = tmp_dir
-                        except Exception:
-                            pass
-
-                        run_quant_only(
-                            contig_acc,
-                            contig_strand,
-                            contig_seq_str,
-                            union_bams_for_sg,
-                            cluster_bam,
-                            restrict_region_lend,
-                            restrict_region_rend,
-                            input_transcripts,
-                            ofh_quant_output,
-                            ofh_quant_read_tracker,
-                            CPU,
-                            run_EM,
-                            prereconstruct_info_dir,
-                            report_quants=True,
-                        )
-
-                        if contig_monitor is not None:
-                            try:
-                                contig_monitor.stop()
-                            except Exception:
-                                pass
-
-                ofh_quant_output.close()
-                ofh_quant_read_tracker.close()
-
-                # summarize per-contig monitors
-                try:
-                    if LRAA_Globals.config.get("resource_monitor_enabled", False):
-                        processed = []
-                        for contig_acc in genome_contigs_list:
-                            for contig_strand in ("+", "-"):
-                                if (
-                                    restrict_to_contig_orient is not None
-                                    and restrict_to_contig_orient != contig_strand
-                                ):
-                                    continue
-                                processed.append((contig_acc, contig_strand))
-                        _summarize_contig_resource_logs(
-                            output_prefix_cluster, processed, parallel_mode=False
-                        )
-                except Exception:
-                    pass
-
-                # Remove entire temp tree for this cluster unless debug or explicitly disabled
-                if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
-                    try:
-                        tmp_root_cluster = f"{output_prefix_cluster}.contigtmp"
-                        if os.path.isdir(tmp_root_cluster):
-                            shutil.rmtree(tmp_root_cluster)
-                    except Exception:
-                        pass
-
-            else:
-                # parallel contig mode per-cluster
-                jobs = []
-                for contig_acc in genome_contigs_list:
-                    for contig_strand in ("+", "-"):
-                        if (
-                            restrict_to_contig_orient is not None
-                            and restrict_to_contig_orient != contig_strand
-                        ):
-                            continue
-                        jobs.append(
-                            dict(
-                                contig_acc=contig_acc,
-                                contig_strand=contig_strand,
-                                genome_fasta_filename=genome_fasta_filename,
-                                bam_file_for_sg=union_bams_for_sg,
-                                bam_file_for_quant=cluster_bam,
-                                restrict_region_lend=restrict_region_lend,
-                                restrict_region_rend=restrict_region_rend,
-                                input_gtf=input_gtf,
-                                config_overrides=dict(LRAA_Globals.config),
-                                splice_graph_params=splice_graph_params_dict,
-                                run_EM=run_EM,
+            # Build contig/strand jobs for this cluster; scheduler will decide pool size
+            jobs = []
+            for contig_acc in genome_contigs_list:
+                for contig_strand in ("+", "-"):
+                    if (
+                        restrict_to_contig_orient is not None
+                        and restrict_to_contig_orient != contig_strand
+                    ):
+                        continue
+                    jobs.append(
+                        dict(
+                            contig_acc=contig_acc,
+                            contig_strand=contig_strand,
+                            genome_fasta_filename=genome_fasta_filename,
+                            bam_file_for_sg=union_bams_for_sg,
+                            bam_file_for_quant=cluster_bam,
+                            restrict_region_lend=restrict_region_lend,
+                            restrict_region_rend=restrict_region_rend,
+                            input_gtf=input_gtf,
+                            config_overrides=dict(LRAA_Globals.config),
+                            splice_graph_params=splice_graph_params_dict,
+                            run_EM=run_EM,
                                 single_best_only=single_best_only,
                                 NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
                                 min_isoform_fraction=min_isoform_fraction,
@@ -1235,477 +1374,74 @@ def main():
                             )
                         )
 
-                # Determine pool size and inner CPU under the new default policy
-                # Default (parallel contigs): up to CPU concurrent jobs, each with CPU_inner=1
-                # If debug/prelim forces a single worker, allow inner concurrency to use all CPUs
-                requested_pool = max(1, min(CPU, len(jobs)))
-                pool_size = requested_pool
-                if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
-                    pool_size = 1
-                CPU_inner = 1 if pool_size > 1 else max(1, CPU)
-                for j in jobs:
-                    j["CPU_inner"] = CPU_inner
-
-                if not NO_RESUME_PARALLEL:
-                    resumed = 0
-                    for j in jobs:
-                        tmp_root = f"{j['output_prefix']}.contigtmp"
-                        tmp_dir = os.path.join(
-                            tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                        )
-                        tmp_prefix = os.path.join(
-                            tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-                        )
-                        ok_path = f"{tmp_prefix}.ok"
-                        have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
-                        have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
-                        have_gtf = True  # quant-only
-                        if (
-                            os.path.exists(ok_path)
-                            and have_expr
-                            and have_track
-                            and have_gtf
-                        ):
-                            j["skip"] = True
-                            resumed += 1
-                    if resumed:
-                        logger.info(
-                            f"[{cluster_id}] Resuming {resumed} completed contig/strand jobs from previous run"
-                        )
-
-                mgr = mpm.MultiProcessManager(pool_size)
-                for j in jobs:
-                    if j.get("skip"):
-                        continue
-                    p = Process(target=_contig_job_runner, args=(j,))
-                    mgr.launch_process(p)
-                errs = mgr.wait_for_remaining_processes()
-                if errs > 0:
-                    raise RuntimeError(
-                        f"{errs} contig/strand jobs failed; see logs above"
-                    )
-
-                # merge per-cluster results
-                merged_quant_fh = open(ofh_quant_output_filename, "wt")
-                merged_track_fh = open(ofh_quant_read_tracking_filename, "wt")
-                quant_header_final = [
-                    "gene_id",
-                    "transcript_id",
-                    "uniq_reads",
-                    "all_reads",
-                    "isoform_fraction",
-                    "unique_gene_read_fraction",
-                    "TPM",
-                    "exons",
-                    "introns",
-                    "splice_hash_code",
-                ]
-                print("\t".join(quant_header_final), file=merged_quant_fh)
-                tracking_header_final = [
-                    "gene_id",
-                    "transcript_id",
-                    "transcript_splice_hash_code",
-                    "mp_id",
-                    "read_name",
-                    "frac_assigned",
-                ]
-                if LRAA_Globals.DEBUG:
-                    tracking_header_final.append("read_weight")
-                print("\t".join(tracking_header_final), file=merged_track_fh)
-
-                def _append_without_first_line(src_path, dst_fh):
-                    if src_path is None or (not os.path.exists(src_path)):
-                        return
-                    with open(src_path, "rt") as fh:
-                        first = True
-                        for line in fh:
-                            if first:
-                                first = False
-                                continue
-                            dst_fh.write(line)
-
-                for j in jobs:
-                    tmp_root = f"{j['output_prefix']}.contigtmp"
-                    tmp_dir = os.path.join(
-                        tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                    )
-                    tmp_prefix = os.path.join(
-                        tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-                    )
-                    _append_without_first_line(
-                        f"{tmp_prefix}.quant.expr", merged_quant_fh
-                    )
-                    _append_without_first_line(
-                        f"{tmp_prefix}.quant.tracking", merged_track_fh
-                    )
-
-                merged_quant_fh.close()
-                merged_track_fh.close()
-
-                try:
-                    if LRAA_Globals.config.get("resource_monitor_enabled", False):
-                        _summarize_contig_resource_logs(
-                            output_prefix_cluster, jobs, parallel_mode=True
-                        )
-                except Exception:
-                    pass
-
-                if CLEAN_PARALLEL_TMP:
-                    for j in jobs:
-                        tmp_root = f"{j['output_prefix']}.contigtmp"
-                        tmp_dir = os.path.join(
-                            tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                        )
-                        tmp_prefix = os.path.join(
-                            tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-                        )
-                        for pth in (
-                            f"{tmp_prefix}.quant.expr",
-                            f"{tmp_prefix}.quant.tracking",
-                            f"{tmp_prefix}.ok",
-                            f"{tmp_prefix}.resources.tsv",
-                        ):
-                            if os.path.exists(pth):
-                                try:
-                                    os.remove(pth)
-                                except Exception:
-                                    pass
-
-                # Remove entire temp tree for this cluster unless debug or explicitly disabled
-                if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
-                    try:
-                        tmp_root_cluster = f"{output_prefix_cluster}.contigtmp"
-                        if os.path.isdir(tmp_root_cluster):
-                            shutil.rmtree(tmp_root_cluster)
-                    except Exception:
-                        pass
-
-            # stop per-cluster main monitor
-            if main_monitor is not None:
-                try:
-                    main_monitor.stop()
-                except Exception:
-                    pass
-
-            # tag bam per cluster if requested
-            if TAG_BAM:
-                cmd = " ".join(
-                    [
-                        os.path.join(
-                            UTILDIR, "annotate_bam_with_read_tracking_info.py"
-                        ),
-                        "--bam",
-                        cluster_bam,
-                        "--tracking",
-                        ofh_quant_read_tracking_filename,
-                    ]
-                )
-                logger.info(
-                    f"[{cluster_id}] tagging bam file with transcripts assigned to each read"
-                )
-                subprocess.check_call(cmd, shell=True)
-
-        return
-
-    # In contig-parallel mode, each worker writes per-task outputs; main merges later.
-    ofh_quant_output = None
-    ofh_quant_read_tracker = None
-    ofh_quant_output_filename = f"{output_prefix}.quant.expr"
-    ofh_quant_read_tracking_filename = f"{output_prefix}.quant.tracking"
-    gtf_output_filename = f"{output_prefix}.gtf"
-
-    # Always use the parallel execution machinery; restrict pool size when needed.
-    if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
-        logger.warning(
-            "Parallel execution with --debug or --include_prelim_transcripts can overwrite debug/prelim files; constraining to a single worker (no concurrent contig processing)."
-        )
-
-    # optional main resource monitor
-    main_monitor = None
-    try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
-            monitor_path_main = f"{output_prefix}.resources.tsv"
-            main_monitor = ResourceMonitor(
-                monitor_path_main,
-                interval_sec=LRAA_Globals.config["resource_monitor_interval"],
-                include_children=LRAA_Globals.config[
-                    "resource_monitor_include_children"
-                ],
-                note="main",
-            )
-            main_monitor.start()
-    except Exception:
-        pass
-
-    # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
-    jobs = []
-    for contig_acc in genome_contigs_list:
-        for contig_strand in ("+", "-"):
-            if (
-                restrict_to_contig_orient is not None
-                and restrict_to_contig_orient != contig_strand
-            ):
-                continue
-            jobs.append(
-                dict(
-                    contig_acc=contig_acc,
-                    contig_strand=contig_strand,
-                    genome_fasta_filename=genome_fasta_filename,
-                    bam_file_for_sg=bam_file_for_sg,
-                    bam_file_for_quant=bam_file_for_quant,
-                    restrict_region_lend=restrict_region_lend,
-                    restrict_region_rend=restrict_region_rend,
-                    input_gtf=input_gtf,
-                    config_overrides=dict(LRAA_Globals.config),
-                    splice_graph_params=splice_graph_params_dict,
-                    run_EM=run_EM,
-                    single_best_only=single_best_only,
-                    NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                    min_isoform_fraction=min_isoform_fraction,
-                    quant_EM_alpha=quant_EM_alpha,
-                    prereconstruct_info_dir=prereconstruct_info_dir,
-                    ME_only=ME_only,
-                    SE_only=SE_only,
-                    output_prefix=output_prefix,
-                    QUANT_ONLY=QUANT_ONLY,
-                    DEBUG=LRAA_Globals.DEBUG,
-                    INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                    skip=False,
-                )
+            # Unified schedule/merge/cleanup/tagging for this cluster
+            _run_jobs_schedule_and_merge(
+                jobs=jobs,
+                output_prefix=output_prefix_cluster,
+                quant_only=True,
+                tag_bam_path=(cluster_bam if TAG_BAM else None),
+                CONTIG_PARALLEL=CONTIG_PARALLEL,
+                CPU=CPU,
+                NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+                CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+                NO_CLEANUP=NO_CLEANUP,
+                DEBUG=LRAA_Globals.DEBUG,
+                INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
             )
 
-    # worker function declared at module scope (_contig_job_runner)
-
-    # Determine pool size and cores per worker per policy
-    # Default: parallelize contigs with one core per worker; if disabled, use inner concurrency
-    if CONTIG_PARALLEL:
-        requested_pool = max(1, min(CPU, len(jobs)))
-        pool_size = requested_pool
-        # constrain to single worker when in debug/prelim to avoid clobbering debug/prelim artifacts
-        if LRAA_Globals.DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
-            pool_size = 1
-        CPU_inner = 1 if pool_size > 1 else max(1, CPU)
     else:
-        pool_size = 1
-        CPU_inner = max(1, CPU)
-    # set per-job CPU
-    for j in jobs:
-        j["CPU_inner"] = CPU_inner
 
-    logger.info(
-        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
-    )
-
-    # Launch in batches of size pool_size to avoid daemonic Pool workers (so inner component multiprocessing can spawn)
-    # Before launching, mark jobs already completed (resume) if allowed
-    if not NO_RESUME_PARALLEL:
-        resumed = 0
-        for j in jobs:
-            tmp_root = f"{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(
-                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-            )
-            tmp_prefix = os.path.join(
-                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-            )
-            ok_path = f"{tmp_prefix}.ok"
-            # require all expected outputs to be present
-            have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
-            have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
-            have_gtf = True if j["QUANT_ONLY"] else os.path.exists(f"{tmp_prefix}.gtf")
-            if os.path.exists(ok_path) and have_expr and have_track and have_gtf:
-                j["skip"] = True
-                resumed += 1
-        if resumed:
-            logger.info(
-                f"Resuming {resumed} completed contig/strand jobs from previous run"
-            )
-
-    # Use rolling scheduling to keep all slots busy
-    logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
-    mgr = mpm.MultiProcessManager(pool_size)
-    for j in jobs:
-        if j.get("skip"):
-            continue
-        p = Process(target=_contig_job_runner, args=(j,))
-        mgr.launch_process(p)
-    errs = mgr.wait_for_remaining_processes()
-    if errs > 0:
-        raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
-
-    # Merge results
-    # Write merged headers
-    merged_quant_fh = open(ofh_quant_output_filename, "wt")
-    merged_track_fh = open(ofh_quant_read_tracking_filename, "wt")
-
-    # Build and write headers deterministically (DEBUG off for merged header)
-    quant_header_final = [
-        "gene_id",
-        "transcript_id",
-        "uniq_reads",
-        "all_reads",
-        "isoform_fraction",
-        "unique_gene_read_fraction",
-        "TPM",
-        "exons",
-        "introns",
-        "splice_hash_code",
-    ]
-    if not QUANT_ONLY:
-        quant_header_final += ["splice_compat_contained", "splice_contained_by"]
-    print("\t".join(quant_header_final), file=merged_quant_fh)
-
-    tracking_header_final = [
-        "gene_id",
-        "transcript_id",
-        "transcript_splice_hash_code",
-        "mp_id",
-        "read_name",
-        "frac_assigned",
-    ]
-    if LRAA_Globals.DEBUG:
-        tracking_header_final.append("read_weight")
-    print("\t".join(tracking_header_final), file=merged_track_fh)
-
-    # Append worker contents (skip first header line)
-    def _append_without_first_line(src_path, dst_fh):
-        if src_path is None or (not os.path.exists(src_path)):
-            return
-        with open(src_path, "rt") as fh:
-            first = True
-            for line in fh:
-                if first:
-                    first = False
+        # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
+        jobs = []
+        for contig_acc in genome_contigs_list:
+            for contig_strand in ("+", "-"):
+                if (
+                    restrict_to_contig_orient is not None
+                    and restrict_to_contig_orient != contig_strand
+                ):
                     continue
-                dst_fh.write(line)
-
-    for j in jobs:
-        tmp_root = f"{j['output_prefix']}.contigtmp"
-        tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
-        _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
-        _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
-
-    merged_quant_fh.close()
-    merged_track_fh.close()
-
-    if not QUANT_ONLY:
-        # Merge GTFs (no header lines in GTF)
-        with open(gtf_output_filename, "wt") as gtf_out:
-            for j in jobs:
-                tmp_root = f"{j['output_prefix']}.contigtmp"
-                tmp_dir = os.path.join(
-                    tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
+                jobs.append(
+                    dict(
+                        contig_acc=contig_acc,
+                        contig_strand=contig_strand,
+                        genome_fasta_filename=genome_fasta_filename,
+                        bam_file_for_sg=bam_file_for_sg,
+                        bam_file_for_quant=bam_file_for_quant,
+                        restrict_region_lend=restrict_region_lend,
+                        restrict_region_rend=restrict_region_rend,
+                        input_gtf=input_gtf,
+                        config_overrides=dict(LRAA_Globals.config),
+                        splice_graph_params=splice_graph_params_dict,
+                        run_EM=run_EM,
+                        single_best_only=single_best_only,
+                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+                        min_isoform_fraction=min_isoform_fraction,
+                        quant_EM_alpha=quant_EM_alpha,
+                        prereconstruct_info_dir=prereconstruct_info_dir,
+                        ME_only=ME_only,
+                        SE_only=SE_only,
+                        output_prefix=output_prefix,
+                        QUANT_ONLY=QUANT_ONLY,
+                        DEBUG=LRAA_Globals.DEBUG,
+                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                        skip=False,
+                    )
                 )
-                tmp_prefix = os.path.join(
-                    tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-                )
-                gtf_tmp = f"{tmp_prefix}.gtf"
-                if os.path.exists(gtf_tmp):
-                    with open(gtf_tmp, "rt") as fh:
-                        shutil.copyfileobj(fh, gtf_out)
 
-    # write optional consolidated resource summary across contig/strand workers
-    try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
-            _summarize_contig_resource_logs(output_prefix, jobs, parallel_mode=True)
-    except Exception:
-        pass
-
-    # cleanup temp files
-    if CLEAN_PARALLEL_TMP:
-        for j in jobs:
-            tmp_root = f"{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(
-                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-            )
-            tmp_prefix = os.path.join(
-                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-            )
-            for pth in (
-                f"{tmp_prefix}.quant.expr",
-                f"{tmp_prefix}.quant.tracking",
-                f"{tmp_prefix}.gtf",
-                f"{tmp_prefix}.ok",
-                f"{tmp_prefix}.resources.tsv",
-            ):
-                if os.path.exists(pth):
-                    try:
-                        os.remove(pth)
-                    except Exception:
-                        pass
-
-    # Default success cleanup: remove the entire per-(contig,strand) temp directory tree
-    if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
-        try:
-            tmp_root_all = f"{output_prefix}.contigtmp"
-            if os.path.isdir(tmp_root_all):
-                shutil.rmtree(tmp_root_all)
-        except Exception:
-            pass
-
-    # stop main resource monitor prior to final output conversions
-    if main_monitor is not None:
-        try:
-            main_monitor.stop()
-        except Exception:
-            pass
-
-    # make bed file for convenience
-    if not QUANT_ONLY:
-        bed_output_file = f"{output_prefix}.bed"
-        cmd = " ".join(
-            [
-                os.path.join(
-                    UTILDIR,
-                    "gtf_to_bed_format.pl",
-                ),
-                gtf_output_filename,
-                ">",
-                bed_output_file,
-            ]
+        # Execute unified path for general (single BAM or discovery) case
+        _run_jobs_schedule_and_merge(
+            jobs=jobs,
+            output_prefix=output_prefix,
+            quant_only=QUANT_ONLY,
+            tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
+            CONTIG_PARALLEL=CONTIG_PARALLEL,
+            CPU=CPU,
+            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+            NO_CLEANUP=NO_CLEANUP,
+            DEBUG=LRAA_Globals.DEBUG,
+            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
         )
-        logger.info("-making bed output file: {}".format(bed_output_file))
-        subprocess.check_call(cmd, shell=True)
-
-        if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
-            # write bed for the prelim isoforms too, if the prelim GTF exists
-            prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"
-            bed_output_file = "__PRE-Tx-Filtering.transcripts.bed"
-            if os.path.exists(prelim_gtf) and os.path.getsize(prelim_gtf) > 0:
-                cmd = " ".join(
-                    [
-                        os.path.join(
-                            UTILDIR,
-                            "gtf_to_bed_format.pl",
-                        ),
-                        prelim_gtf,
-                        ">",
-                        bed_output_file,
-                    ]
-                )
-                logger.info("-making bed output file: {}".format(bed_output_file))
-                subprocess.check_call(cmd, shell=True)
-            else:
-                logger.warning(
-                    f"Skipping prelim BED generation; missing or empty GTF: {prelim_gtf}"
-                )
-
-    ##############################################################################
-    ## Incorporate read-to-isoform assignment in the aligned bam file (optionally)
-
-    if TAG_BAM:
-        cmd = " ".join(
-            [
-                os.path.join(UTILDIR, "annotate_bam_with_read_tracking_info.py"),
-                "--bam",
-                bam_file_for_quant,
-                "--tracking",
-                ofh_quant_read_tracking_filename,
-            ]
-        )
-        logger.info("tagging bam file with transcripts assigned to each read")
-        subprocess.check_call(cmd, shell=True)
 
     return
 
