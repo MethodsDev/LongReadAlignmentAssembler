@@ -1273,6 +1273,57 @@ class LRAA:
         if len(pasa_scored_paths) < 2:
             return
 
+        # If assembly is restricted to collapse, proactively prune contained/duplicate paths
+        # instead of raising. This restores pre-refactor behavior where nested paths were
+        # collapsed, not treated as a hard error.
+        if LRAA_Globals.config.get("restrict_asm_to_collapse", False):
+            # Deduplicate identical simple paths, keeping the higher-scored instance
+            token_to_idx = dict()
+            keep = [True] * len(pasa_scored_paths)
+            for idx, spath in enumerate(pasa_scored_paths):
+                sp = spath.get_multiPath_obj().get_simple_path()
+                token = "^".join(sp)
+                prev_idx = token_to_idx.get(token)
+                if prev_idx is None:
+                    token_to_idx[token] = idx
+                else:
+                    # keep the higher score, drop the other
+                    if pasa_scored_paths[idx].get_score() > pasa_scored_paths[prev_idx].get_score():
+                        keep[prev_idx] = False
+                        token_to_idx[token] = idx
+                    else:
+                        keep[idx] = False
+
+            # Prune strictly contained paths (spacer-aware). Prefer keeping the longer path.
+            sg = self.get_splice_graph()
+            for i in range(len(pasa_scored_paths)):
+                if not keep[i]:
+                    continue
+                sp_A = pasa_scored_paths[i].get_multiPath_obj().get_simple_path()
+                for j in range(len(pasa_scored_paths)):
+                    if i == j or not keep[j]:
+                        continue
+                    sp_B = pasa_scored_paths[j].get_multiPath_obj().get_simple_path()
+
+                    # If A contains B, drop B; if B contains A, drop A.
+                    if Simple_path_utils.simple_path_A_contains_and_compatible_with_simple_path_B_spacer_aware_both_paths(
+                        sg, sp_A, sp_B
+                    ) and sp_A != sp_B:
+                        keep[j] = False
+                    elif Simple_path_utils.simple_path_A_contains_and_compatible_with_simple_path_B_spacer_aware_both_paths(
+                        sg, sp_B, sp_A
+                    ) and sp_A != sp_B:
+                        keep[i] = False
+                        break
+
+            # Apply pruning in-place if anything changed
+            if not all(keep):
+                new_list = [p for k, p in enumerate(pasa_scored_paths) if keep[k]]
+                pasa_scored_paths.clear()
+                pasa_scored_paths.extend(new_list)
+            return
+
+        # Otherwise, treat overlapping and compatible final paths as a hard error (unchanged)
         for i in range(1, len(pasa_scored_paths)):
             mp_A = pasa_scored_paths[i].get_multiPath_obj()
             sp_A = mp_A.get_simple_path()
@@ -1282,17 +1333,7 @@ class LRAA:
                 mp_B = pasa_scored_paths[j].get_multiPath_obj()
                 sp_B = mp_B.get_simple_path()
 
-                if LRAA_Globals.config["restrict_asm_to_collapse"]:
-                    if Simple_path_utils.path_A_contains_path_B(
-                        sp_A, sp_B
-                    ) or Simple_path_utils.path_A_contains_path_B(sp_B, sp_A):
-                        raise RuntimeError(
-                            "Error, transcript paths contain each other:\n{}\n{}".format(
-                                sp_A, sp_B
-                            )
-                        )
-
-                elif Simple_path_utils.simple_paths_overlap_and_compatible_spacer_aware_both_paths(
+                if Simple_path_utils.simple_paths_overlap_and_compatible_spacer_aware_both_paths(
                     sg, sp_A, sp_B
                 ):
                     raise RuntimeError(

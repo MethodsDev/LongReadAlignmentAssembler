@@ -114,6 +114,10 @@ config = {
     "resource_monitor_enabled": True,
     "resource_monitor_interval": 60.0,  # seconds
     "resource_monitor_include_children": True,
+    ######
+    # disk-backed storage backend for read tracking stores
+    # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
+    "store_backend": "auto",
 }
 
 # Global, per-run external stores for read tracking (set at runtime by entry script)

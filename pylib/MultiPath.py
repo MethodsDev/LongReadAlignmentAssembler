@@ -55,6 +55,8 @@ class MultiPath:
 
         self._read_types = read_types
         self._read_names = set(read_names) if read_names is not None else set()
+        # cache for streamed names from external stores; None means not yet fetched
+        self._cached_streamed_names = None
         # maintain count independent of whether names are stored
         if read_count is not None:
             self._read_count = int(read_count)
@@ -95,9 +97,24 @@ class MultiPath:
     # read name handling
 
     def get_read_names(self):
+        """
+        Returns the set of read names supporting this multipath.
+
+        Behavior:
+        - If names are retained in-memory (typical only in small/debug cases), returns a copy of that set.
+        - Otherwise, attempts to stream names from external, disk-backed stores referenced via
+          LRAA_Globals.READ_NAME_STORE and LRAA_Globals.MP_READ_ID_STORE.
+
+        Notes:
+        - Streaming from disk can be relatively expensive. Prefer get_read_count() if only the count is needed.
+        - Results may be cached per MultiPath instance during the process lifetime to avoid repeated store I/O.
+        """
         # If names are retained in-memory, return a copy
         if len(self._read_names) > 0:
             return self._read_names.copy()
+        # If we've already streamed once during this process, return a copy of the cached result
+        if self._cached_streamed_names is not None:
+            return self._cached_streamed_names.copy()
         # Else try to stream from external stores if available
         try:
             import LRAA_Globals  # local import to avoid cycles
@@ -109,7 +126,9 @@ class MultiPath:
                     nm = name_store.get_name(int(rid))
                     if nm is not None:
                         names.add(nm)
-                return names
+                # cache and return
+                self._cached_streamed_names = names
+                return names.copy()
         except Exception:
             pass
         # Fallback: no names available
@@ -131,6 +150,8 @@ class MultiPath:
         return 0
 
     def include_read_name(self, read_name):
+        # invalidate any cached streamed names
+        self._cached_streamed_names = None
         if type(read_name) in [list, set]:
             for r in read_name:
                 self._read_names.add(r)
@@ -140,9 +161,12 @@ class MultiPath:
             self._read_count += 1
 
     def include_read_count(self, increment=1):
+        # count-only change; names unchanged, but be conservative and invalidate cache
+        self._cached_streamed_names = None
         self._read_count += int(increment)
 
     def remove_read_name(self, read_name):
+        self._cached_streamed_names = None
         self._read_names.discard(read_name)
 
     def prune_reftranscript_as_evidence(self):
@@ -156,6 +180,8 @@ class MultiPath:
                 self.remove_read_name(read_name)
             # adjust count to reflect removals
             self._read_count = max(0, self._read_count - len(read_names_to_delete))
+            # invalidate cache as names changed
+            self._cached_streamed_names = None
         else:
             # If names are external only, compute count excluding reftranscript and reset
             try:
@@ -164,11 +190,15 @@ class MultiPath:
                 mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
                 if name_store is not None and mp_store is not None:
                     kept = 0
+                    names = set()
                     for rid in mp_store.iter_read_ids(self.get_id()):
                         nm = name_store.get_name(int(rid))
                         if nm is not None and not nm.startswith("reftranscript:"):
                             kept += 1
+                            names.add(nm)
                     self._read_count = kept
+                    # refresh cached names to the filtered set
+                    self._cached_streamed_names = names
             except Exception:
                 pass
 

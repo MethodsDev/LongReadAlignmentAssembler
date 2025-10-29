@@ -198,6 +198,18 @@ class MultiPathGraphNode:
     def toString(self, recursive=False):
         containments = self.get_containments()
 
+        # Abbreviate read names for logging to avoid huge outputs
+        try:
+            names = self.get_read_names()
+        except Exception:
+            names = set()
+        if len(names) > 10:
+            read_names_show = str(list(names)[0:10]) + "....{} num reads".format(
+                len(names)
+            )
+        else:
+            read_names_show = str(names)
+
         text = "<{}:{} {}-{} Count:{} W:{:0.8f} Containments:{}, ScoreExcCont:{:.4f} ScoreInclCon:{:.4f} len:{} read_names:{}>".format(
             self.get_id(),
             self.get_simple_path(),
@@ -209,7 +221,7 @@ class MultiPathGraphNode:
             self.get_score_EXCLUDE_containments(use_prev_weight=False),
             self.get_score_INCLUDE_containments(use_prev_weight=False),
             self._seq_length,
-            self.get_read_names(),
+            read_names_show,
         )
 
         if recursive:

@@ -224,6 +224,28 @@ def _run_jobs_schedule_and_merge(
         mgr.launch_process(p)
     errs = mgr.wait_for_remaining_processes()
     if errs > 0:
+        # Provide helpful pointers to per-(contig,strand) error logs before raising
+        try:
+            for j in jobs:
+                if j.get("skip"):
+                    continue
+                tmp_root = f"{j['output_prefix']}.contigtmp"
+                tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                ok_path = f"{tmp_prefix}.ok"
+                if not os.path.exists(ok_path):
+                    err_log = f"{tmp_prefix}.err.log"
+                    if os.path.exists(err_log) and os.path.getsize(err_log) > 0:
+                        logger.error(
+                            f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → see error log: {err_log}"
+                        )
+                    else:
+                        logger.error(
+                            f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → no err log found (check worker stderr)"
+                        )
+        except Exception:
+            # Don't let reporting failures mask the underlying error
+            pass
         raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
 
     # Merge results
@@ -395,6 +417,12 @@ def _contig_job_runner(job):
         INCLUDE_PRELIM_TRANSCRIPTS = bool(job.get("INCLUDE_PRELIM_TRANSCRIPTS", False))
     except Exception:
         pass
+    # Predeclare resources for robust cleanup and error reporting
+    worker_monitor = None
+    ofh_quant = None
+    ofh_track = None
+    ofh_gtf_local = None
+    tmp_root = f"{job['output_prefix']}.contigtmp"
     contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
         contig_acc, genome_fasta
     )
@@ -422,7 +450,6 @@ def _contig_job_runner(job):
             input_transcripts = None
 
     # Use a structured temp dir for contig/strand results
-    tmp_root = f"{job['output_prefix']}.contigtmp"
     try:
         os.makedirs(tmp_root, exist_ok=True)
     except Exception:
@@ -439,7 +466,6 @@ def _contig_job_runner(job):
         pass
 
     # optional per-worker resource monitor
-    worker_monitor = None
     try:
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
             tmp_root_m = f"{job['output_prefix']}.contigtmp"
@@ -501,13 +527,13 @@ def _contig_job_runner(job):
     print("\t".join(tracking_header), file=ofh_track)
 
     gtf_tmp = None
-    ofh_gtf_local = None
     if not job["QUANT_ONLY"]:
         gtf_tmp = f"{tmp_prefix}.gtf"
         ofh_gtf_local = open(gtf_tmp, "wt")
 
-    if job["QUANT_ONLY"]:
-        run_quant_only(
+    try:
+        if job["QUANT_ONLY"]:
+            run_quant_only(
             contig_acc,
             contig_strand,
             contig_seq_str,
@@ -522,9 +548,9 @@ def _contig_job_runner(job):
             job["run_EM"],
             job["prereconstruct_info_dir"],
             report_quants=True,
-        )
-    else:
-        run_transcript_assembly(
+            )
+        else:
+            run_transcript_assembly(
             contig_acc,
             contig_strand,
             contig_seq_str,
@@ -545,33 +571,56 @@ def _contig_job_runner(job):
             job["prereconstruct_info_dir"],
             job["ME_only"],
             job["SE_only"],
-        )
+            )
 
-    ofh_quant.close()
-    ofh_track.close()
-    if ofh_gtf_local is not None:
-        ofh_gtf_local.close()
+        ofh_quant.close()
+        ofh_track.close()
+        if ofh_gtf_local is not None:
+            ofh_gtf_local.close()
 
-    # write completion checkpoint so master can resume gracefully
-    try:
-        with open(f"{tmp_prefix}.ok", "wt") as ofh:
-            print("ok", file=ofh)
-    except Exception:
-        pass
-
-    if worker_monitor is not None:
+        # write completion checkpoint so master can resume gracefully
         try:
-            worker_monitor.stop()
+            with open(f"{tmp_prefix}.ok", "wt") as ofh:
+                print("ok", file=ofh)
+        except Exception:
+            pass
+    except Exception:
+        # Write per-(contig,strand) error log to help users diagnose failures
+        try:
+            import traceback  # local import to avoid polluting module scope
+            err_path = os.path.join(
+                tmp_root, f"{contig_acc}", f"{contig_strand}", f"{contig_acc}.{contig_strand}.err.log"
+            )
+            with open(err_path, "at") as efh:
+                efh.write(traceback.format_exc())
+        except Exception:
+            pass
+        # Re-raise so the worker exit code remains non-zero
+        raise
+    finally:
+        # Ensure monitor stopped and any open handles are closed on exceptions
+        try:
+            if ofh_quant and not ofh_quant.closed:
+                ofh_quant.close()
+        except Exception:
+            pass
+        try:
+            if ofh_track and not ofh_track.closed:
+                ofh_track.close()
+        except Exception:
+            pass
+        try:
+            if ofh_gtf_local and not ofh_gtf_local.closed:
+                ofh_gtf_local.close()
+        except Exception:
+            pass
+        try:
+            if worker_monitor is not None:
+                worker_monitor.stop()
         except Exception:
             pass
 
-    return dict(
-        contig_acc=contig_acc,
-        contig_strand=contig_strand,
-        quant_expr=quant_expr_tmp,
-        quant_tracking=quant_tracking_tmp,
-        gtf=gtf_tmp,
-    )
+    return
 
 
 def main():
@@ -842,6 +891,19 @@ def main():
         help="logic around retaining input reference transcripts in guided ID mode",
     )
 
+    # Storage/backend settings for disk-backed read tracking stores
+    config_group.add_argument(
+        "--store_backend",
+        default=LRAA_Globals.config.get("store_backend", "auto"),
+        choices=["auto", "lmdb", "sqlite"],
+        help=(
+            "disk-backed storage backend for read tracking (ReadNameStore/MpReadIdStore):\n"
+            "  auto: prefer lmdb if installed, otherwise sqlite;\n"
+            "  lmdb: require python-lmdb (fast, read-scalable);\n"
+            "  sqlite: maximum portability (built-in)."
+        ),
+    )
+
     ## EM settings
     config_group_EM = parser.add_argument_group("EM settings")
 
@@ -1059,6 +1121,30 @@ def main():
 
     LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
     LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
+
+    # choose disk-backed store backend early (before spawning workers or instantiating stores)
+    LRAA_Globals.config["store_backend"] = args.store_backend
+    # Map CLI to environment knob used by ReadNameStore/MpReadIdStore
+    resolved_backend = (args.store_backend or "auto").lower()
+    if resolved_backend == "sqlite":
+        # force sqlite
+        try:
+            os.environ["LRAA_READSTORE_BACKEND"] = "sqlite"
+        except Exception:
+            pass
+    else:
+        # clear override so stores follow their default: prefer LMDB when available
+        try:
+            os.environ.pop("LRAA_READSTORE_BACKEND", None)
+        except Exception:
+            pass
+        if resolved_backend == "lmdb":
+            # Validate lmdb availability up front if explicitly requested
+            try:
+                import lmdb  # type: ignore  # noqa: F401
+            except Exception:
+                sys.exit("Error: --store_backend lmdb requested but python-lmdb is not installed.")
+    logger.info(f"read-store backend: {resolved_backend}")
 
     # low-memory behavior is always on (externalized read-name store; spans always tracked)
 

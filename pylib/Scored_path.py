@@ -137,7 +137,8 @@ class Scored_path:
         for mpgn in self._all_represented_mpgns:
             for read_name in mpgn.get_read_names():
                 read_names.add(read_name)
-            if mpgn.has_containments:
+            # has_containments is a method; call it to avoid always-True evaluation
+            if mpgn.has_containments():
                 for contained_mpgn in mpgn.get_containments():
                     for read_name in contained_mpgn.get_read_names():
                         read_names.add(read_name)
