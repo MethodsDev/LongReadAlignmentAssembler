@@ -14,10 +14,11 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 
-def retrieve_contig_seq_from_fasta_file(fasta_filename, contig_acc):
+def retrieve_contig_seq_from_fasta_file(contig_acc, fasta_filename):
 
+    # samtools faidx <fasta> <region>
     contig_seq_str = subprocess.check_output(
-        "samtools faidx {} {}".format(contig_acc, fasta_filename),
+        "samtools faidx {} {}".format(fasta_filename, contig_acc),
         shell=True,
         encoding="utf-8",
     )
