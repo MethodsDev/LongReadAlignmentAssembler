@@ -18,7 +18,20 @@ class MultiPathCountPair:
         self.reset_count()
 
     def increment(self, increment=1):
-        self._count += increment
+        # Keep the pair count and the underlying multipath's internal read_count in sync
+        try:
+            inc = int(increment)
+        except Exception:
+            inc = 1
+        if inc <= 0:
+            return
+        self._count += inc
+        # Also bump the multipath's internal count so downstream users of mp.get_read_count()
+        # (e.g., EM, equal assignment) see the aggregated count
+        try:
+            self._multipath.include_read_count(inc)
+        except Exception:
+            pass
 
     def get_multipath_and_count(self):
         return (self._multipath, self._count)
@@ -27,10 +40,14 @@ class MultiPathCountPair:
         self._multipath.include_read_type(read_type)
 
     def include_read_name(self, read_name):
-        self._multipath.include_read_name(read_name)
+        # retained for backward compatibility; prefer include_read_count in counter
+        if type(read_name) in [list, set]:
+            self._multipath.include_read_count(len(read_name))
+        else:
+            self._multipath.include_read_count(1)
 
     def reset_count(self):
-        self._count = self._multipath.get_read_names_count()
+        self._count = self._multipath.get_read_count()
 
     def __repr__(self):
         ret_text = "{}\t{}".format(str(self._multipath), self._count)
@@ -54,16 +71,17 @@ class MultiPathCounter:
 
     def add(self, multipath_obj):
 
-        assert len(multipath_obj.get_read_names()) > 0
+        # count must be positive
+        assert multipath_obj.get_read_count() > 0
 
         assert type(multipath_obj) == MultiPath.MultiPath
         multipath_key = str(multipath_obj.get_simple_path())
 
         if multipath_key in self._multipath_counter:
             orig_mp_count_pair = self._multipath_counter[multipath_key]
-            orig_mp_count_pair.include_read_name(multipath_obj.get_read_names())
+            # increment count by the incoming multipath's read count
+            orig_mp_count_pair.increment(multipath_obj.get_read_count())
             orig_mp_count_pair.include_read_type(multipath_obj.get_read_types())
-            orig_mp_count_pair.reset_count()
 
             return orig_mp_count_pair
 
@@ -92,10 +110,9 @@ class MultiPathCounter:
                                 mp.get_simple_path()
                             )
                         )
-
             self._multipath_counter[multipath_key] = MultiPathCountPair(multipath_obj)
 
-            return self
+            return self._multipath_counter[multipath_key]
 
     def get_all_MultiPathCountPairs(self):
         # self.validate_MultiPathCounter()

@@ -99,6 +99,7 @@ config = {
     "aggressively_assign_reads": False,
     "use_weighted_read_assignments": True,
     "EM_alpha": 0.01,  # regularization
+    # low-memory tuning knobs (now implicit defaults: always avoid in-memory read-name storage; always track spans)
     #
     ######
     # single cell
@@ -114,3 +115,10 @@ config = {
     "resource_monitor_interval": 60.0,  # seconds
     "resource_monitor_include_children": True,
 }
+
+# Global, per-run external stores for read tracking (set at runtime by entry script)
+# When set, MultiPath.get_read_names() can stream read names via these stores even when
+# in-memory read name retention is disabled.
+READ_NAME_STORE = None  # type: ignore
+MP_READ_ID_STORE = None  # type: ignore
+

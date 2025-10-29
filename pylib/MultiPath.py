@@ -7,7 +7,7 @@ from LRAA_Globals import SPACER
 import Simple_path_utils
 from Util_funcs import coordpairs_overlap
 import logging
-from GenomeFeature import Exon
+from GenomeFeature import Exon, Intron
 from unittest.mock import Mock
 from Splice_graph import Splice_graph
 import Transcript
@@ -25,7 +25,7 @@ class MultiPath:
 
     MP_id_counter = 0
 
-    def __init__(self, splice_graph, paths_list, read_types=set(), read_names=set()):
+    def __init__(self, splice_graph, paths_list, read_types=set(), read_names=set(), read_count=None):
 
         self._splice_graph = splice_graph
 
@@ -54,7 +54,12 @@ class MultiPath:
         self._rend = coords[-1]
 
         self._read_types = read_types
-        self._read_names = read_names
+        self._read_names = set(read_names) if read_names is not None else set()
+        # maintain count independent of whether names are stored
+        if read_count is not None:
+            self._read_count = int(read_count)
+        else:
+            self._read_count = len(self._read_names)
 
         self._exon_segments = Simple_path_utils.merge_adjacent_segments(exon_segments)
 
@@ -90,33 +95,82 @@ class MultiPath:
     # read name handling
 
     def get_read_names(self):
-        return self._read_names.copy()
+        # If names are retained in-memory, return a copy
+        if len(self._read_names) > 0:
+            return self._read_names.copy()
+        # Else try to stream from external stores if available
+        try:
+            import LRAA_Globals  # local import to avoid cycles
+            name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+            mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+            if name_store is not None and mp_store is not None:
+                names = set()
+                for rid in mp_store.iter_read_ids(self.get_id()):
+                    nm = name_store.get_name(int(rid))
+                    if nm is not None:
+                        names.add(nm)
+                return names
+        except Exception:
+            pass
+        # Fallback: no names available
+        return set()
 
     def get_read_count(self):
-        return self.get_read_names_count()
+        return self._read_count
 
     def get_read_names_count(self):
-        return len(self._read_names)
+        if len(self._read_names) > 0:
+            return len(self._read_names)
+        try:
+            import LRAA_Globals
+            mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+            if mp_store is not None:
+                return mp_store.count(self.get_id())
+        except Exception:
+            pass
+        return 0
 
     def include_read_name(self, read_name):
         if type(read_name) in [list, set]:
             for r in read_name:
                 self._read_names.add(r)
+            self._read_count += len(read_name)
         else:
             self._read_names.add(read_name)
+            self._read_count += 1
+
+    def include_read_count(self, increment=1):
+        self._read_count += int(increment)
 
     def remove_read_name(self, read_name):
         self._read_names.discard(read_name)
 
     def prune_reftranscript_as_evidence(self):
+        # Remove internal names if present
         read_names_to_delete = list()
-        for read_name in self.get_read_names():
+        for read_name in list(self._read_names):
             if "reftranscript:" in read_name:
                 read_names_to_delete.append(read_name)
-
         if read_names_to_delete:
             for read_name in read_names_to_delete:
                 self.remove_read_name(read_name)
+            # adjust count to reflect removals
+            self._read_count = max(0, self._read_count - len(read_names_to_delete))
+        else:
+            # If names are external only, compute count excluding reftranscript and reset
+            try:
+                import LRAA_Globals
+                name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+                mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+                if name_store is not None and mp_store is not None:
+                    kept = 0
+                    for rid in mp_store.iter_read_ids(self.get_id()):
+                        nm = name_store.get_name(int(rid))
+                        if nm is not None and not nm.startswith("reftranscript:"):
+                            kept += 1
+                    self._read_count = kept
+            except Exception:
+                pass
 
     # splice graph operations
 

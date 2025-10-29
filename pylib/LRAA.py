@@ -82,7 +82,25 @@ class LRAA:
                 "Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments"
             )
 
-        logger.info(f"-building multipath graph for {contig_acc}")
+        # Ensure external read-tracking stores are initialized so MultiPath.get_read_names()
+        # can stream names and debug/graph-building logic that depends on names/spans works in assembly mode too.
+        try:
+            import LRAA_Globals as LG
+            if getattr(LG, "READ_NAME_STORE", None) is None or getattr(LG, "MP_READ_ID_STORE", None) is None:
+                from ReadNameStore import ReadNameStore  # type: ignore
+                from MpReadIdStore import MpReadIdStore  # type: ignore
+                # Prefer structured temp under LRAA_TMP_DIR when available
+                base_root = os.environ.get("LRAA_TMP_DIR", os.getcwd())
+                base_dir = os.path.join(base_root, "__read_tracking")
+                os.makedirs(base_dir, exist_ok=True)
+                token = f"{contig_acc}.{contig_strand}"
+                if getattr(LG, "READ_NAME_STORE", None) is None:
+                    LG.READ_NAME_STORE = ReadNameStore(os.path.join(base_dir, f"read_names.{token}"))
+                if getattr(LG, "MP_READ_ID_STORE", None) is None:
+                    LG.MP_READ_ID_STORE = MpReadIdStore(os.path.join(base_dir, f"mp_reads.{token}"))
+        except Exception:
+            pass
+
         start_time = time.time()
         mp_counter = self._populate_read_multi_paths(
             contig_acc,
@@ -693,20 +711,32 @@ class LRAA:
             else:
                 continue
 
+            # Construct MultiPath with optional name storage to reduce memory
+            # Always avoid storing read names in memory; rely on external store for names
+            store_names = False
             mp = MultiPath(
                 self._splice_graph,
                 paths_list,
-                read_types={
-                    read_type,
-                },
-                read_names={
-                    read_name,
-                },
+                read_types={read_type},
+                read_names={read_name} if store_names else set(),
+                read_count=1,
             )
 
             logger.debug("paths_list: {} -> mp: {}".format(paths_list, mp))
 
-            mp_counter.add(mp)
+            # Add to multipath counter and capture canonical mp for attaching read ID
+            mp_pair = mp_counter.add(mp)
+
+            # If external read tracking stores are available, persist mp_id -> read_id
+            try:
+                name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+                mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+                if name_store is not None and mp_store is not None:
+                    canonical_mp, _ = mp_pair.get_multipath_and_count()
+                    rid = name_store.get_or_add(read_name)
+                    mp_store.append(canonical_mp.get_id(), rid)
+            except Exception:
+                pass
 
             if LRAA_Globals.DEBUG:
                 read_graph_mappings_ofh.write(

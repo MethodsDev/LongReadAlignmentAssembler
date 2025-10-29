@@ -100,6 +100,12 @@ def _contig_job_runner(job):
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
+    # Expose per-(contig,strand) tmp dir to downstream components (read-tracking stores, alignment cache)
+    try:
+        os.environ["LRAA_TMP_DIR"] = tmp_dir
+    except Exception:
+        pass
+
     # optional per-worker resource monitor
     worker_monitor = None
     try:
@@ -282,6 +288,7 @@ def main():
         default=False,
         help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
     )
+    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
     primary.add_argument(
         "--no_norm",
         action="store_true",
@@ -370,6 +377,13 @@ def main():
         action="store_true",
         default=False,
         help="after merging, remove per-(contig,strand) temp outputs (.quant.expr/.tracking/.gtf/.ok)",
+    )
+
+    parser.add_argument(
+        "--no_cleanup",
+        action="store_true",
+        default=False,
+        help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under <output_prefix>.contigtmp are removed unless --debug is set",
     )
 
     ## debug params
@@ -637,6 +651,7 @@ def main():
     CONTIG_PARALLEL = not args.no_parallelize_contigs
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
+    NO_CLEANUP = args.no_cleanup
     MONITOR_RESOURCES = not args.no_monitor_resources
 
     # if args.collapse:
@@ -712,6 +727,8 @@ def main():
 
     LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
     LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
+
+    # low-memory behavior is always on (externalized read-name store; spans always tracked)
 
     if args.LowFi:
         sys.exit(
@@ -1121,6 +1138,12 @@ def main():
                         except Exception:
                             contig_monitor = None
 
+                        # Expose per-(contig,strand) tmp dir in serial mode as well
+                        try:
+                            os.environ["LRAA_TMP_DIR"] = tmp_dir
+                        except Exception:
+                            pass
+
                         run_quant_only(
                             contig_acc,
                             contig_strand,
@@ -1164,6 +1187,15 @@ def main():
                         )
                 except Exception:
                     pass
+
+                # Remove entire temp tree for this cluster unless debug or explicitly disabled
+                if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
+                    try:
+                        tmp_root_cluster = f"{output_prefix_cluster}.contigtmp"
+                        if os.path.isdir(tmp_root_cluster):
+                            shutil.rmtree(tmp_root_cluster)
+                    except Exception:
+                        pass
 
             else:
                 # parallel contig mode per-cluster
@@ -1338,6 +1370,15 @@ def main():
                                     os.remove(pth)
                                 except Exception:
                                     pass
+
+                # Remove entire temp tree for this cluster unless debug or explicitly disabled
+                if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
+                    try:
+                        tmp_root_cluster = f"{output_prefix_cluster}.contigtmp"
+                        if os.path.isdir(tmp_root_cluster):
+                            shutil.rmtree(tmp_root_cluster)
+                    except Exception:
+                        pass
 
             # stop per-cluster main monitor
             if main_monitor is not None:
@@ -1594,6 +1635,15 @@ def main():
                     except Exception:
                         pass
 
+    # Default success cleanup: remove the entire per-(contig,strand) temp directory tree
+    if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
+        try:
+            tmp_root_all = f"{output_prefix}.contigtmp"
+            if os.path.isdir(tmp_root_all):
+                shutil.rmtree(tmp_root_all)
+        except Exception:
+            pass
+
     # stop main resource monitor prior to final output conversions
     if main_monitor is not None:
         try:
@@ -1827,6 +1877,27 @@ def run_quant_only(
         )
 
     logger.info("\n//SECTION QUANT: Assigning reads to paths in graph.")
+    # Initialize on-disk read tracking stores so we can keep read-level tracking with low RAM
+    try:
+        from ReadNameStore import ReadNameStore  # type: ignore
+        from MpReadIdStore import MpReadIdStore  # type: ignore
+        import LRAA_Globals as LG
+
+        # Use per-worker tmp dir if provided via env
+        base_root = os.environ.get("LRAA_TMP_DIR", os.getcwd())
+        base_dir = os.path.join(base_root, "__read_tracking")
+        os.makedirs(base_dir, exist_ok=True)
+        token = f"{contig_acc}.{contig_strand}"
+        LG.READ_NAME_STORE = ReadNameStore(os.path.join(base_dir, f"read_names.{token}"))
+        LG.MP_READ_ID_STORE = MpReadIdStore(os.path.join(base_dir, f"mp_reads.{token}"))
+    except Exception as e:
+        logger.warning(f"Failed to initialize external read tracking stores: {e}")
+        try:
+            import LRAA_Globals as LG
+            LG.READ_NAME_STORE = None
+            LG.MP_READ_ID_STORE = None
+        except Exception:
+            pass
     mp_counter = lraa_obj._populate_read_multi_paths(
         contig_acc,
         contig_strand,
@@ -1858,6 +1929,19 @@ def run_quant_only(
             ofh_quant_output,
             ofh_quant_read_tracker,
         )
+
+    # Close external read tracking stores if we already wrote final reports here
+    if report_quants:
+        try:
+            import LRAA_Globals as LG
+            if LG.READ_NAME_STORE is not None:
+                LG.READ_NAME_STORE.close()
+            if LG.MP_READ_ID_STORE is not None:
+                LG.MP_READ_ID_STORE.close()
+            LG.READ_NAME_STORE = None
+            LG.MP_READ_ID_STORE = None
+        except Exception:
+            pass
 
     return q
 
@@ -2295,6 +2379,18 @@ def run_transcript_assembly(
         splice_compatible_containments=transcript_splice_compatible_containments,
         splice_compatible_contained_by=transcript_splice_compatible_contained_by,
     )
+
+    # Close external read tracking stores now that final reporting for this contig/strand is complete
+    try:
+        import LRAA_Globals as LG
+        if LG.READ_NAME_STORE is not None:
+            LG.READ_NAME_STORE.close()
+        if LG.MP_READ_ID_STORE is not None:
+            LG.MP_READ_ID_STORE.close()
+        LG.READ_NAME_STORE = None
+        LG.MP_READ_ID_STORE = None
+    except Exception:
+        pass
 
     #######################################
     ## Done filtering, report final results
