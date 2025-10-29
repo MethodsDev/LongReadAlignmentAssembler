@@ -180,11 +180,30 @@ class Scored_path:
 
         score = 0
 
-        ## just count up the number of represented (and not excluded) read names:
-
+        # Primary scoring: unique supporting read names across represented nodes
         for read_name in self._all_represented_read_names:
             if read_name not in exclude_read_names:
                 score += 1
+
+        # Fallback (initial scoring only): if no names are available at all (e.g., external read-name
+        # store not populated or inaccessible) and we are NOT rescoring with exclusions, approximate
+        # support by summed node counts across represented mpgns. Critically, do not apply this fallback
+        # during rescoring with exclude_read_names, otherwise overlapping candidates may retain positive
+        # scores after their supporting reads were already assigned, defeating the greedy exclusion logic.
+        if score == 0 and not exclude_read_names:
+            try:
+                approx = 0
+                for mpgn in self._all_represented_mpgns:
+                    c = 0
+                    try:
+                        c = int(mpgn.get_count())
+                    except Exception:
+                        c = 0
+                    approx += max(0, c)
+                score = approx
+            except Exception:
+                # keep score at 0 if anything goes wrong
+                pass
 
         logger.debug(
             str(self.get_simple_path()) + "\n^^^ computed with score = {}".format(score)
