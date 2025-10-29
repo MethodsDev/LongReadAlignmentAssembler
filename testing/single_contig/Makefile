@@ -42,6 +42,6 @@ clean_miniwdl:
 
 
 clean: clean_miniwdl
-	rm -rf ./__* ./LRAA*.gtf ./LRAA*.quant ./LRAA*.lmdb ./LRAA.ref.tagged.bam
+	rm -rf ./__* ./LRAA*
 
 

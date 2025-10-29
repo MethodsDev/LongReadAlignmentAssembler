@@ -1184,8 +1184,8 @@ class Quantify:
                             "{:.3f}".format(transcript.get_multipath_weight(mp))
                         )
 
-                    if frac_read_assigned > 1e-3 or LRAA_Globals.DEBUG:
-                        print("\t".join(tracking_report_info), file=ofh_read_tracking)
+                    # Always emit read tracking rows for robustness; downstream annotator filters/consumes as needed
+                    print("\t".join(tracking_report_info), file=ofh_read_tracking)
 
                     if frac_read_assigned == 1:
                         num_uniquely_assigned_reads += 1

@@ -19,15 +19,23 @@ class Pretty_alignment_manager:
 
     def __init__(self, splice_graph, alignment_cache_dir = "__alignment_cache"):
         self._splice_graph = splice_graph
-        self._alignment_cache_dir = alignment_cache_dir
+        # If caller didn't specify a custom dir and we have a per-worker tmp dir, prefer a structured subdir
+        try:
+            tmp_root = os.environ.get("LRAA_TMP_DIR")
+        except Exception:
+            tmp_root = None
+        if alignment_cache_dir == "__alignment_cache" and tmp_root:
+            self._alignment_cache_dir = os.path.join(tmp_root, "__alignment_cache")
+        else:
+            self._alignment_cache_dir = alignment_cache_dir
 
         # Avoid race conditions when multiple processes attempt to create the cache dir
         # Using exist_ok ensures parallel workers don't crash if the dir appears between check and mkdir
         try:
-            os.makedirs(alignment_cache_dir, exist_ok=True)
+            os.makedirs(self._alignment_cache_dir, exist_ok=True)
         except Exception:
             # Best-effort: if another process created it concurrently, proceed
-            if not os.path.isdir(alignment_cache_dir):
+            if not os.path.isdir(self._alignment_cache_dir):
                 raise
 
 

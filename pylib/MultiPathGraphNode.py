@@ -25,9 +25,8 @@ class MultiPathGraphNode:
 
     def __init__(self, multiPathObj, count, lend, rend, mpg):
 
-        assert (
-            len(multiPathObj.get_read_names()) > 0
-        ), "error, multipath obj lacks read support - shouldnt be possible: " + str(
+        # ensure we have positive support
+        assert count > 0, "error, multipath obj lacks read support - shouldnt be possible: " + str(
             multiPathObj
         )
 
