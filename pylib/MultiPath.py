@@ -394,13 +394,18 @@ class MultiPath:
         return transcript_obj
 
     def __repr__(self):
+        # Prefer streaming names from external stores when in-memory names are not retained
+        try:
+            names = self.get_read_names()
+        except Exception:
+            names = set()
 
-        if len(self._read_names) > 10:
-            read_names_show = str(
-                list(self._read_names)[0:10]
-            ) + "....{} num reads".format(len(self._read_names))
+        if len(names) > 10:
+            read_names_show = str(list(names)[0:10]) + "....{} num reads".format(
+                len(names)
+            )
         else:
-            read_names_show = str(self._read_names)
+            read_names_show = str(names)
 
         return (
             self.get_id()

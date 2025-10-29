@@ -726,21 +726,23 @@ class LRAA:
 
             # Add to multipath counter and capture canonical mp for attaching read ID
             mp_pair = mp_counter.add(mp)
+            canonical_mp, _ = mp_pair.get_multipath_and_count()
 
             # If external read tracking stores are available, persist mp_id -> read_id
             try:
                 name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
                 mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
                 if name_store is not None and mp_store is not None:
-                    canonical_mp, _ = mp_pair.get_multipath_and_count()
                     rid = name_store.get_or_add(read_name)
                     mp_store.append(canonical_mp.get_id(), rid)
             except Exception:
                 pass
 
             if LRAA_Globals.DEBUG:
+                # Report the canonical multipath so that rnames can be resolved via external stores
                 read_graph_mappings_ofh.write(
-                    "\t".join([read_name, str(pretty_alignment), str(mp)]) + "\n"
+                    "\t".join([read_name, str(pretty_alignment), str(canonical_mp)])
+                    + "\n"
                 )
 
         if LRAA_Globals.DEBUG:
