@@ -122,6 +122,8 @@ config = {
     "mapping_update_interval_sec": 2.0,  # fallback: or at least this often in seconds
     # logging cadence for mapping stage (separate from stderr progress); set None or 0 to disable
     "mapping_log_progress_interval_sec": 30.0,
+    # splice-graph population logging cadence (coverage + intron scan); set None or 0 to disable
+    "splice_graph_log_progress_interval_sec": 30.0,
     # quant: assign reads to transcripts stage
     "show_progress_quant_assign": True,  # emit periodic progress updates during read->transcript assignment
     "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar
