@@ -681,7 +681,23 @@ class LRAA:
 
         prev_time = time.time()
         last_time_update = prev_time
+        # periodic INFO logging (separate from stderr progress)
+        log_interval = LRAA_Globals.config.get("mapping_log_progress_interval_sec", 30.0)
+        last_log_emit = prev_time
+        # mapping counters for summary and periodic logging
+        num_processed = 0
+        num_kept = 0
+        num_discard_spacer = 0
+        num_no_path = 0
+        # optional memory usage helper
+        def _rss_mb():
+            try:
+                import psutil  # type: ignore
+                return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
+            except Exception:
+                return None
         for i, read_name in enumerate(grouped_alignments):
+            num_processed += 1
             if pbar is not None:
                 try:
                     pbar.update(1)
@@ -744,6 +760,7 @@ class LRAA:
                     paths_list_no_spacers.append(path)
                     candidates_no_spacers.append(path_candidates[idx])
                 else:
+                    num_discard_spacer += 1
                     if LRAA_Globals.DEBUG:
                         read_graph_mappings_ofh.write(
                             "\t".join(
@@ -761,9 +778,11 @@ class LRAA:
                 # take first one to represent this read
                 chosen_path, chosen_span = candidates_no_spacers[0]
                 paths_list = [chosen_path]
+                num_kept += 1
                 if chosen_span is not None:
                     self._read_name_to_span[read_name] = chosen_span
             else:
+                num_no_path += 1
                 continue
 
             # Construct MultiPath with optional name storage to reduce memory
@@ -800,6 +819,19 @@ class LRAA:
                     + "\n"
                 )
 
+            # periodic INFO logs (besides stderr progress bar) for better observability
+            if log_interval and log_interval > 0:
+                now = time.time()
+                if now - last_log_emit >= float(log_interval):
+                    frac = (i + 1) / max(num_alignments, 1)
+                    rate = (i + 1) / max(now - prev_time, 1e-6)
+                    rss = _rss_mb()
+                    mem_txt = f" rss={rss:.1f}MB" if rss is not None else ""
+                    logger.info(
+                        f"[map-reads] {i+1}/{num_alignments} ({frac*100:.2f}%) kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path} rate={rate:.2f}/s{mem_txt}"
+                    )
+                    last_log_emit = now
+
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh.close()
 
@@ -818,7 +850,10 @@ class LRAA:
             except Exception:
                 pass
 
-        logger.info("-done: mapping read alignments to the graph")
+        # Final summary and completion log
+        logger.info(
+            f"-done: mapping read alignments to the graph; total={num_processed} kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path}"
+        )
 
         return mp_counter
 

@@ -120,6 +120,8 @@ config = {
     "show_progress_mapping": True,       # emit progress while mapping read alignments to the splice graph
     "mapping_update_every_n": 10000,     # fallback: update every N reads processed
     "mapping_update_interval_sec": 2.0,  # fallback: or at least this often in seconds
+    # logging cadence for mapping stage (separate from stderr progress); set None or 0 to disable
+    "mapping_log_progress_interval_sec": 30.0,
     # quant: assign reads to transcripts stage
     "show_progress_quant_assign": True,  # emit periodic progress updates during read->transcript assignment
     "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar
