@@ -128,7 +128,8 @@ config = {
     ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
-    "store_backend": "auto",
+    # default changed to 'sqlite' for robustness on diverse filesystems
+    "store_backend": "sqlite",
 }
 
 # Global, per-run external stores for read tracking (set at runtime by entry script)

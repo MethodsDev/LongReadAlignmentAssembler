@@ -216,12 +216,20 @@ def _run_jobs_schedule_and_merge(
     # Launch jobs via rolling scheduler
     logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
     mgr = mpm.MultiProcessManager(pool_size)
-    for j in jobs:
-        if j.get("skip"):
-            continue
-        p = Process(target=_contig_job_runner, args=(j,))
-        mgr.launch_process(p)
-    errs = mgr.wait_for_remaining_processes()
+    try:
+        for j in jobs:
+            if j.get("skip"):
+                continue
+            p = Process(target=_contig_job_runner, args=(j,))
+            mgr.launch_process(p)
+        errs = mgr.wait_for_remaining_processes()
+    except KeyboardInterrupt:
+        # Propagate Ctrl-C: terminate children and exit with 130
+        try:
+            logger.error("KeyboardInterrupt received: terminating contig/strand workers...")
+            mgr.terminate_all_processes()
+        finally:
+            sys.exit(130)
     if errs > 0:
         # Provide helpful pointers to per-(contig,strand) error logs before raising
         try:
@@ -266,6 +274,7 @@ def _run_jobs_schedule_and_merge(
         except Exception:
             # Don't let reporting failures mask the underlying error
             pass
+        # halt on failures
         raise RuntimeError(f"{errs} contig/strand jobs failed; see logs above")
 
     # Merge results
