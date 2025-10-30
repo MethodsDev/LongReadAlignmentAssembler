@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re
+import time
 import subprocess
 import logging
 import string
@@ -253,7 +254,6 @@ class Pretty_alignment:
 
     @classmethod
     def try_correct_alignments(cls, pretty_alignments_list, splice_graph, contig_seq):
-
         logger.info("Attempting to correct alignments at soft-clips")
 
         max_softclip_realign_test = LRAA_Globals.config["max_softclip_realign_test"]
@@ -264,9 +264,45 @@ class Pretty_alignment:
         local_debug = False
         ##################
 
+        total = len(pretty_alignments_list) if pretty_alignments_list is not None else 0
+        # Optional progress bar via tqdm, imported lazily to avoid hard dependency
+        tqdm_fn = None
+        if os.environ.get("LRAA_PROGRESS_TQDM", "1") == "1" and total > 0:
+            try:
+                from tqdm import tqdm as tqdm_fn  # type: ignore
+            except Exception:
+                tqdm_fn = None
+        use_tqdm = tqdm_fn is not None
+        LOG_EVERY = int(os.environ.get("LRAA_CORRECT_LOG_EVERY", "10000"))
+        LOG_EVERY_SEC = float(os.environ.get("LRAA_CORRECT_LOG_EVERY_SEC", "10"))
+        last_log_t = time.time()
+        start_t = last_log_t
+        processed = 0
+        corrected = 0
+
+        pbar = None
+        if use_tqdm:
+            try:
+                pbar = tqdm_fn(total=total, desc="soft-clip correction", unit="read")
+            except Exception:
+                pbar = None
+                use_tqdm = False
+
         for pretty_alignment in pretty_alignments_list:
+            processed += 1
 
             if not pretty_alignment.has_soft_clipping():
+                if use_tqdm and pbar is not None:
+                    pbar.update(1)
+                else:
+                    if (
+                        (processed % LOG_EVERY == 0)
+                        or (time.time() - last_log_t) >= LOG_EVERY_SEC
+                    ):
+                        logger.info(
+                            f"progress try_correct_alignments: processed={processed}/{total}, corrected={corrected}"
+                        )
+                        last_log_t = time.time()
                 continue
 
             alignment_segments = pretty_alignment.get_pretty_alignment_segments()
@@ -372,6 +408,7 @@ class Pretty_alignment:
                             # do reassignment:
                             alignment_segments[0][0] = intron_rend + 1
                             alignment_segments.insert(0, [genomic_lend, genomic_rend])
+                            corrected += 1
                             break
 
             # examine right-side intron realignment
@@ -442,8 +479,31 @@ class Pretty_alignment:
                             # do reassignment:
                             alignment_segments[-1][1] = intron_lend - 1
                             alignment_segments.append([genomic_lend, genomic_rend])
+                            corrected += 1
                             break
 
+            # progress update per iteration
+            if use_tqdm and pbar is not None:
+                pbar.update(1)
+            else:
+                if (
+                    (processed % LOG_EVERY == 0)
+                    or (time.time() - last_log_t) >= LOG_EVERY_SEC
+                ):
+                    logger.info(
+                        f"progress try_correct_alignments: processed={processed}/{total}, corrected={corrected}"
+                    )
+                    last_log_t = time.time()
+
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception:
+                pass
+
+        logger.info(
+            f"completed try_correct_alignments: processed={processed}, corrected={corrected}, sec={time.time()-start_t:.2f}"
+        )
         return
 
     @classmethod
