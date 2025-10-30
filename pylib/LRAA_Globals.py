@@ -115,6 +115,13 @@ config = {
     "resource_monitor_interval": 60.0,  # seconds
     "resource_monitor_include_children": True,
     ######
+    # progress monitoring
+    # quant: assign reads to transcripts stage
+    "show_progress_quant_assign": True,  # emit periodic progress updates during read->transcript assignment
+    "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar
+    "progress_update_every_n": 1000,     # update every N multipath-count pairs processed (set None to disable count-based updates)
+    "progress_update_interval_sec": 5.0, # or at least this often in seconds (set None to disable time-based updates)
+    ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
     "store_backend": "auto",
