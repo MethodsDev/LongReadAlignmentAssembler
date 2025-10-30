@@ -15,7 +15,7 @@ Lightweight CPU and memory sampling is enabled by default to help size runs and 
 
 Outputs:
 - Main process: `<output_prefix>.resources.tsv`
-- In contig-parallel runs (default), each worker also writes: `<output_prefix>.contigtmp/<contig>/<strand>/<contig>.<strand>.resources.tsv`
+- In contig-parallel runs (default), each worker also writes: `__<output_prefix>.contigtmp/<contig>/<strand>/<contig>.<strand>.resources.tsv`
 
 Columns (TSV): `epoch_ts, elapsed_sec, rss_mb, cpu_percent, rss_mb_children, cpu_percent_children, note`
 
