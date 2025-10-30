@@ -22,6 +22,30 @@ Columns (TSV): `epoch_ts, elapsed_sec, rss_mb, cpu_percent, rss_mb_children, cpu
 Notes:
 - Monitoring uses `psutil`. In the provided Docker image it is installed. On bare-metal installs, if `psutil` is unavailable, monitoring will auto-disable with a warning.
 
+## Progress updates during quantification
+
+While assigning reads to assembled isoforms ("quant" stage), LRAA emits periodic progress updates showing processed/total MultiPath pairs, processing rate, and ETA. You can control this via config overrides:
+
+- Enable/disable: `show_progress_quant_assign` (default: true)
+- Update every N records: `progress_update_every_n` (default: 1000)
+- Update at least every S seconds: `progress_update_interval_sec` (default: 5.0)
+- Prefer tqdm progress bar if available: `use_tqdm_progress` (default: true)
+
+Example using `--config_update`:
+
+```
+./LRAA \
+	--bam sample.bam \
+	--genome genome.fa \
+	--gtf targets.gtf \
+	--config_update '{"show_progress_quant_assign": true, "progress_update_every_n": 500, "progress_update_interval_sec": 2.0}'
+```
+
+Notes:
+- If `tqdm` is installed, LRAA will show a dynamic progress bar by default. If `tqdm` is not available, LRAA falls back to a lightweight stderr progress line.
+- The provided Docker image now includes `tqdm`. On bare-metal installs, you can add it via:
+	- `python3 -m pip install tqdm`
+
 ## Quantification-only for single-cell clusters (shared splice graph)
 
 Quantify multiple cell clusters separately while building a single shared splice graph from all cluster BAMs by supplying a BAM list file via `--bam_list` in quant-only mode:

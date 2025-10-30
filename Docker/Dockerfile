@@ -69,7 +69,7 @@ ENV BIN=/usr/local/bin
 ## Python 3 stuff
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-RUN pip install argparse pysam networkx lmdb psutil --break-system-packages
+RUN pip install argparse pysam networkx lmdb psutil tqdm --break-system-packages
 
 WORKDIR $SRC
 

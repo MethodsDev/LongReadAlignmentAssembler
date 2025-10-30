@@ -142,6 +142,37 @@ class Quantify:
         num_mp_count_pairs = len(mp_count_pairs)
         logger.info("- have {} mp_count_pairs".format(num_mp_count_pairs))
 
+        # progress monitoring configuration
+        show_progress = LRAA_Globals.config.get("show_progress_quant_assign", True)
+        prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
+        progress_every_n = LRAA_Globals.config.get("progress_update_every_n", 1000)
+        progress_interval = LRAA_Globals.config.get(
+            "progress_update_interval_sec", 5.0
+        )
+        start_time = time.time()
+        last_progress_time = start_time
+
+        # initialize tqdm if available and preferred
+        tqdm = None
+        pbar = None
+        if show_progress and prefer_tqdm and num_mp_count_pairs > 0:
+            try:
+                import importlib
+
+                _mod = importlib.import_module("tqdm")
+                tqdm = getattr(_mod, "tqdm", None)
+                if tqdm is not None:
+                    pbar = tqdm(
+                        total=num_mp_count_pairs,
+                        desc="quant-assign",
+                        unit="mp",
+                        leave=False,
+                        dynamic_ncols=True,
+                    )
+            except Exception:
+                tqdm = None
+                pbar = None
+
         gene_unanchored_mp_count_pairs = list()
 
         num_paths_total = 0
@@ -157,18 +188,58 @@ class Quantify:
 
         num_mp_count_pairs_processed = 0
 
+        def _maybe_report_progress():
+            nonlocal last_progress_time
+            # if tqdm is active, let it handle progress display
+            if pbar is not None:
+                return
+            if not show_progress or num_mp_count_pairs == 0:
+                return
+            now = time.time()
+            should_by_count = (
+                progress_every_n is not None
+                and progress_every_n > 0
+                and num_mp_count_pairs_processed % progress_every_n == 0
+            )
+            should_by_time = (
+                progress_interval is not None
+                and progress_interval > 0
+                and now - last_progress_time >= progress_interval
+            )
+            if should_by_count or should_by_time:
+                elapsed = now - start_time
+                frac = num_mp_count_pairs_processed / num_mp_count_pairs
+                rate = num_mp_count_pairs_processed / elapsed if elapsed > 0 else 0.0
+                remaining = max(num_mp_count_pairs - num_mp_count_pairs_processed, 0)
+                eta_sec = remaining / rate if rate > 0 else float("inf")
+                eta_txt = (
+                    "{:02.0f}m{:02.0f}s".format(eta_sec // 60, eta_sec % 60)
+                    if eta_sec != float("inf")
+                    else "inf"
+                )
+                msg = (
+                    f"\r[quant-assign] {num_mp_count_pairs_processed}/{num_mp_count_pairs} "
+                    f"({frac*100:5.1f}%) | {rate:6.1f}/s | ETA {eta_txt}    "
+                )
+                # write to stderr to avoid interfering with stdout data files
+                try:
+                    sys.stderr.write(msg)
+                    sys.stderr.flush()
+                except Exception:
+                    # fall back to logger in case stderr is unavailable
+                    logger.info(msg.strip())
+                last_progress_time = now
+
         for mp_count_pair in mp_count_pairs:
 
             num_mp_count_pairs_processed += 1
-            if num_mp_count_pairs_processed % 100 == 0:
-                print(
-                    "\r{}/{} = {:.3f} mp_count_pairs processed   ".format(
-                        num_mp_count_pairs_processed,
-                        num_mp_count_pairs,
-                        num_mp_count_pairs_processed / num_mp_count_pairs,
-                    ),
-                    end="",
-                )
+            if pbar is not None:
+                try:
+                    pbar.update(1)
+                except Exception:
+                    pass
+            else:
+                _maybe_report_progress()
 
             mp, count = mp_count_pair.get_multipath_and_count()
 
@@ -416,6 +487,19 @@ class Quantify:
 
         logger.debug(audit_txt)
         logger.info(audit_txt)
+
+        # finish the progress display cleanly
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception:
+                pass
+        elif show_progress and num_mp_count_pairs > 0:
+            try:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
         if local_debug is True:
             LRAA_Globals.DEBUG = LRAA_orig_setting
