@@ -62,6 +62,13 @@ class Pretty_alignment_manager:
     def _log_mem(self, event, extra=None):
         """Log RSS with an event label and optional extras (dict or str)."""
         m = self._mem_usage_mb()
+        # Build [contig+strand] prefix when splice graph context is available
+        try:
+            ca = self._splice_graph.get_contig_acc() if self._splice_graph else None
+            cs = self._splice_graph.get_contig_strand() if self._splice_graph else None
+            prefix = f"[{ca}{cs}] " if ca and cs else ""
+        except Exception:
+            prefix = ""
         extra_txt = ""
         if isinstance(extra, dict):
             try:
@@ -71,9 +78,9 @@ class Pretty_alignment_manager:
         elif isinstance(extra, str) and extra:
             extra_txt = f", {extra}"
         if m is not None:
-            logger.info(f"[mem] {event}: rss={m:.1f} MB{extra_txt}")
+            logger.info(f"{prefix}[mem] {event}: rss={m:.1f} MB{extra_txt}")
         else:
-            logger.info(f"[mem] {event}: rss=<unavailable>{extra_txt}")
+            logger.info(f"{prefix}[mem] {event}: rss=<unavailable>{extra_txt}")
 
 
     def retrieve_pretty_alignments(self, 
@@ -87,19 +94,18 @@ class Pretty_alignment_manager:
                                     per_id_QC_raise_error=False):
         
         # progress/logging: starting pretty alignment retrieval for this contig/strand (and region if set)
+        region_txt = (
+            f":{region_lend}-{region_rend}"
+            if region_lend is not None and region_rend is not None
+            else ""
+        )
         try:
-            region_txt = (
-                f":{region_lend}-{region_rend}"
-                if region_lend is not None and region_rend is not None
-                else ""
-            )
-            logger.info(
-                f"-start: retrieving pretty alignments for {contig_acc}{contig_strand}{region_txt} from {os.path.basename(bam_file)} "
-                f"(restrict_splice_type={restrict_splice_type}, try_correct_alignments={try_correct_alignments})"
-            )
+            prefix = f"[{contig_acc}{contig_strand}] " if contig_acc and contig_strand else ""
         except Exception:
-            # don't let logging failures interfere with processing
-            pass
+            prefix = ""
+        logger.info(
+            f"{prefix}-start: retrieving pretty alignments{region_txt} from {os.path.basename(bam_file)} (restrict_splice_type={restrict_splice_type}, try_correct_alignments={try_correct_alignments})"
+        )
 
         t_start = time.time()
         self._log_mem("start retrieve_pretty_alignments")
@@ -144,9 +150,9 @@ class Pretty_alignment_manager:
 
         if use_cache and os.path.exists(alignment_cache_file):
             logger.info(
-                "reusing earlier-generated pretty alignments for {}{}".format(
-                    contig_acc, contig_strand
-                )
+                "[%s%s] reusing earlier-generated pretty alignments",
+                contig_acc,
+                contig_strand,
             )
             with open(alignment_cache_file, "rb") as f:
                 pretty_alignments = pickle.load(f)
@@ -169,7 +175,7 @@ class Pretty_alignment_manager:
             self._log_mem("created Bam_alignment_extractor")
 
             t0 = time.time()
-            logger.info("begin get_read_alignments (pretty=True)")
+            logger.info("[%s%s] begin get_read_alignments (pretty=True)", contig_acc, contig_strand)
             pretty_alignments = bam_extractor.get_read_alignments(
                 contig_acc,
                 contig_strand,
@@ -194,7 +200,11 @@ class Pretty_alignment_manager:
                 ]
                 t1 = time.time()
                 logger.info(
-                    f"begin try_correct_alignments on candidates: {len(candidates)} / total: {len(pretty_alignments)}"
+                    "[%s%s] begin try_correct_alignments on candidates: %d / total: %d",
+                    contig_acc,
+                    contig_strand,
+                    len(candidates),
+                    len(pretty_alignments),
                 )
                 Pretty_alignment.try_correct_alignments(
                     candidates, self._splice_graph, contig_seq
@@ -224,11 +234,20 @@ class Pretty_alignment_manager:
                 with open(all_alignment_cache_file, "wb") as f:
                     pickle.dump(pretty_alignments, f)
                     logger.info(
-                        f"Saved {len(pretty_alignments)} alignments to cache: {all_alignment_cache_file}"
+                        "[%s%s] Saved %d alignments to cache: %s",
+                        contig_acc,
+                        contig_strand,
+                        len(pretty_alignments),
+                        all_alignment_cache_file,
                     )
                     try:
                         cache_sz_mb = os.path.getsize(all_alignment_cache_file) / (1024.0 * 1024.0)
-                        logger.info(f"Cache file size (all): {cache_sz_mb:.1f} MB")
+                        logger.info(
+                            "[%s%s] Cache file size (all): %.1f MB",
+                            contig_acc,
+                            contig_strand,
+                            cache_sz_mb,
+                        )
                     except Exception:
                         pass
 
@@ -251,22 +270,40 @@ class Pretty_alignment_manager:
                     with open(ME_alignment_cache_file, "wb") as f:
                         pickle.dump(ME_alignments, f)
                         logger.info(
-                            f"Saved {len(ME_alignments)} alignments to cache: {ME_alignment_cache_file}"
+                            "[%s%s] Saved %d alignments to cache: %s",
+                            contig_acc,
+                            contig_strand,
+                            len(ME_alignments),
+                            ME_alignment_cache_file,
                         )
                         try:
                             cache_sz_mb = os.path.getsize(ME_alignment_cache_file) / (1024.0 * 1024.0)
-                            logger.info(f"Cache file size (ME): {cache_sz_mb:.1f} MB")
+                            logger.info(
+                                "[%s%s] Cache file size (ME): %.1f MB",
+                                contig_acc,
+                                contig_strand,
+                                cache_sz_mb,
+                            )
                         except Exception:
                             pass
 
                     with open(SE_alignment_cache_file, "wb") as f:
                         pickle.dump(SE_alignments, f)
                         logger.info(
-                            f"Saved {len(SE_alignments)} alignments to cache: {SE_alignment_cache_file}"
+                            "[%s%s] Saved %d alignments to cache: %s",
+                            contig_acc,
+                            contig_strand,
+                            len(SE_alignments),
+                            SE_alignment_cache_file,
                         )
                         try:
                             cache_sz_mb = os.path.getsize(SE_alignment_cache_file) / (1024.0 * 1024.0)
-                            logger.info(f"Cache file size (SE): {cache_sz_mb:.1f} MB")
+                            logger.info(
+                                "[%s%s] Cache file size (SE): %.1f MB",
+                                contig_acc,
+                                contig_strand,
+                                cache_sz_mb,
+                            )
                         except Exception:
                             pass
 
@@ -281,9 +318,9 @@ class Pretty_alignment_manager:
 
             if use_cache and os.path.exists(SE_masked_alignment_cache_file):
                 logger.info(
-                    "reusing earlier-generated pretty alignments for {}{}".format(
-                        contig_acc, contig_strand
-                    )
+                    "[%s%s] reusing earlier-generated pretty alignments",
+                    contig_acc,
+                    contig_strand,
                 )
                 with open(SE_masked_alignment_cache_file, "rb") as f:
                     pretty_alignments = pickle.load(f)
@@ -298,7 +335,10 @@ class Pretty_alignment_manager:
                     with open(SE_masked_alignment_cache_file, "wb") as f:
                         pickle.dump(pretty_alignments, f)
                         logger.info(
-                            f"Saved corrected alignments to cache: {SE_masked_alignment_cache_file}"
+                            "[%s%s] Saved corrected alignments to cache: %s",
+                            contig_acc,
+                            contig_strand,
+                            SE_masked_alignment_cache_file,
                         )
 
         self._log_mem("end retrieve_pretty_alignments", extra={"n": len(pretty_alignments), "sec": f"{(time.time()-t_start):.2f}"})
