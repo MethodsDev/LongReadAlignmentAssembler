@@ -31,9 +31,10 @@ class Scored_path:
         for mpgn in path_list_of_multipath_graph_nodes:
             recursively_capture_nodes(mpgn)
 
-        self._all_represented_read_names = set()
+        # Aggregate compact read IDs for internal scoring
+        self._all_represented_read_ids = set()
         for mpgn in self._all_represented_mpgns:
-            self._all_represented_read_names.update(mpgn.get_read_names())
+            self._all_represented_read_ids.update(mpgn.get_read_ids())
 
         self._mpgn_list_path = path_list_of_multipath_graph_nodes
 
@@ -120,8 +121,8 @@ class Scored_path:
 
         return extension_scored_path
 
-    def rescore(self, exclude_read_names=set()):
-        self._score = self.compute_path_score(exclude_read_names)
+    def rescore(self, exclude_read_ids=set()):
+        self._score = self.compute_path_score(exclude_read_ids)
 
         if self._score > self._initial_score:
             raise RuntimeError(
@@ -131,19 +132,32 @@ class Scored_path:
         return
 
     def get_all_represented_reads(self):
+        """
+        Backward-compatible alias returning read NAMES for display purposes.
+        Internally, IDs are preferred. This resolves IDs -> names using READ_NAME_STORE.
+        """
+        return self.get_all_represented_read_names()
 
-        read_names = set()
+    def get_all_represented_read_ids(self):
+        # returns copy of set of IDs
+        return set(self._all_represented_read_ids)
 
-        for mpgn in self._all_represented_mpgns:
-            for read_name in mpgn.get_read_names():
-                read_names.add(read_name)
-            # has_containments is a method; call it to avoid always-True evaluation
-            if mpgn.has_containments():
-                for contained_mpgn in mpgn.get_containments():
-                    for read_name in contained_mpgn.get_read_names():
-                        read_names.add(read_name)
-
-        return read_names
+    def get_all_represented_read_names(self):
+        # Resolve IDs -> names for display/output
+        names = set()
+        try:
+            import LRAA_Globals as LG
+            name_store = getattr(LG, "READ_NAME_STORE", None)
+            if name_store is not None:
+                for rid in self._all_represented_read_ids:
+                    nm = name_store.get_name(int(rid))
+                    if nm is not None:
+                        names.add(nm)
+                return names
+        except Exception:
+            pass
+        # Fallback: stringify IDs
+        return set(str(rid) for rid in self._all_represented_read_ids)
 
     def toTranscript(self):
 
@@ -155,7 +169,8 @@ class Scored_path:
 
         orient = splice_graph.get_contig_strand()
 
-        read_names = self.get_all_represented_reads()
+        # Prefer passing IDs into MultiPath; it will store IDs in-memory
+        read_ids = self.get_all_represented_read_ids()
 
         # merge to a single multipath object
         simple_path_list = list()
@@ -164,34 +179,32 @@ class Scored_path:
             simple_path_list.append(mp.get_simple_path())
 
         transcript_mp = MultiPath.MultiPath(
-            splice_graph, simple_path_list, read_names=read_names
+            splice_graph, simple_path_list, read_names=read_ids
         )
 
         transcript_obj = transcript_mp.toTranscript()
 
         return transcript_obj
 
-    def get_all_represented_read_names(self):
-        # returns copy of set
-        return self._all_represented_read_names.copy()
+    # get_all_represented_read_names provided above as resolver from IDs
 
-    def compute_path_score(self, exclude_read_names=set()):
+    def compute_path_score(self, exclude_read_ids=set()):
 
         assert self._cdna_len > 0 and self._contig_span_len > 0
 
         score = 0
 
-        # Primary scoring: unique supporting read names across represented nodes
-        for read_name in self._all_represented_read_names:
-            if read_name not in exclude_read_names:
+        # Primary scoring: unique supporting read IDs across represented nodes
+        for rid in self._all_represented_read_ids:
+            if rid not in exclude_read_ids:
                 score += 1
 
-        # Fallback (initial scoring only): if no names are available at all (e.g., external read-name
+        # Fallback (initial scoring only): if no ids are available at all (e.g., external read-id
         # store not populated or inaccessible) and we are NOT rescoring with exclusions, approximate
         # support by summed node counts across represented mpgns. Critically, do not apply this fallback
-        # during rescoring with exclude_read_names, otherwise overlapping candidates may retain positive
+        # during rescoring with exclude_read_ids, otherwise overlapping candidates may retain positive
         # scores after their supporting reads were already assigned, defeating the greedy exclusion logic.
-        if score == 0 and not exclude_read_names:
+        if score == 0 and not exclude_read_ids:
             try:
                 approx = 0
                 for mpgn in self._all_represented_mpgns:

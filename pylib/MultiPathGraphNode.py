@@ -89,6 +89,23 @@ class MultiPathGraphNode:
 
         return all_read_names
 
+    def get_read_ids(self):
+        """
+        Returns the set of compact read IDs across this node and any contained nodes.
+        Prefer this in algorithmic paths; resolve names only for display/output.
+        """
+        all_ids = set()
+        try:
+            all_ids.update(self._multiPath.get_read_ids())
+        except Exception:
+            pass
+        for contained_mpgn in self.get_containments():
+            try:
+                all_ids.update(contained_mpgn._multiPath.get_read_ids())
+            except Exception:
+                continue
+        return all_ids
+
     def set_reweighted_flag(self, flag_setting):
         self._reweighted_flag = flag_setting
         return
