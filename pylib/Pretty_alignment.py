@@ -182,6 +182,32 @@ class Pretty_alignment:
         else:
             return False
 
+    def is_softclip_realign_candidate(self, min_len=None, max_len=None):
+        """Return True if this alignment would be considered for soft-clip realignment.
+
+        Uses post-trimming soft-clip lengths and configurable thresholds.
+        """
+        if min_len is None:
+            min_len = LRAA_Globals.config["min_softclip_realign_test"]
+        if max_len is None:
+            max_len = LRAA_Globals.config["max_softclip_realign_test"]
+
+        # Ensure values are present
+        if self.left_soft_clipping is None or self.right_soft_clipping is None:
+            return False
+
+        left_ok = (
+            self.left_soft_clipping > 0
+            and self.left_soft_clipping >= min_len
+            and self.left_soft_clipping <= max_len
+        )
+        right_ok = (
+            self.right_soft_clipping > 0
+            and self.right_soft_clipping >= min_len
+            and self.right_soft_clipping <= max_len
+        )
+        return left_ok or right_ok
+
     @classmethod
     def prune_long_terminal_introns(cls, pretty_alignments, splice_graph):
 

@@ -105,6 +105,7 @@ class Bam_alignment_extractor:
         LOG_EVERY_SEC = float(os.environ.get("LRAA_LOG_ALIGN_EVERY_SEC", "10"))
         processed = 0
         kept_so_far = 0
+        candidates_retained = 0  # number of reads not lightened (eligible for correction)
 
         for read in read_fetcher:
             processed += 1
@@ -168,8 +169,15 @@ class Bam_alignment_extractor:
                     num_alignments_per_id_ok += 1
 
             if pretty:
-                # Build Pretty_alignment on the fly to avoid storing all pysam AlignedSegment objects simultaneously
-                pretty_alignments.append(Pretty_alignment.get_pretty_alignment(read))
+                # Build Pretty_alignment on the fly. Immediately lighten non-candidates for
+                # soft-clip realignment to avoid retaining heavy pysam objects in memory.
+                pa = Pretty_alignment.get_pretty_alignment(read)
+                is_candidate = pa.is_softclip_realign_candidate()
+                if not is_candidate:
+                    pa.lighten()
+                else:
+                    candidates_retained += 1
+                pretty_alignments.append(pa)
             else:
                 read_alignments.append(read)
 
@@ -182,23 +190,40 @@ class Bam_alignment_extractor:
                 m = _mem_usage_mb()
                 discards = dict(discarded_read_counter)
                 try:
+                    frac_cand_kept = (candidates_retained / kept_so_far) if kept_so_far else 0.0
+                    frac_cand_proc = (candidates_retained / processed) if processed else 0.0
                     logger.info(
-                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}, discards={discards}, rss={(m and f'{m:.1f} MB') or '<na>'}"
+                        "progress get_read_alignments: processed=%d, kept=%d, candidates=%d (%.3f of kept; %.3f of processed), discards=%s, rss=%s"
+                        % (
+                            processed,
+                            kept_so_far,
+                            candidates_retained,
+                            frac_cand_kept,
+                            frac_cand_proc,
+                            discards,
+                            (f"{m:.1f} MB" if m is not None else "<na>"),
+                        )
                     )
                 except Exception:
                     logger.info(
-                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}"
+                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}, candidates={candidates_retained}"
                     )
                 last_log_t = time.time()
 
         kept_count = len(pretty_alignments) if pretty else len(read_alignments)
         final_mem = _mem_usage_mb()
+        try:
+            frac_cand_final = (candidates_retained / kept_count) if kept_count else 0.0
+        except Exception:
+            frac_cand_final = 0.0
         logger.info(
-            "reads kept for {} {}: {} and discarded: {} (rss: {})".format(
+            "reads kept for {} {}: {} and discarded: {} | candidates not lightened: {} ({:.3f} of kept) (rss: {})".format(
                 contig_acc,
                 contig_strand,
                 kept_count,
                 dict(discarded_read_counter),
+                candidates_retained,
+                frac_cand_final,
                 f"{final_mem:.1f} MB" if final_mem is not None else "<na>",
             )
         )

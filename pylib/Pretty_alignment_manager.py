@@ -188,14 +188,24 @@ class Pretty_alignment_manager:
 
             ## correct alignments containing soft-clips
             if try_correct_alignments:
+                # only pass candidates to the corrector to avoid accessing lightened (no pysam) objects
+                candidates = [
+                    pa for pa in pretty_alignments if pa.is_softclip_realign_candidate()
+                ]
                 t1 = time.time()
-                logger.info("begin try_correct_alignments")
+                logger.info(
+                    f"begin try_correct_alignments on candidates: {len(candidates)} / total: {len(pretty_alignments)}"
+                )
                 Pretty_alignment.try_correct_alignments(
-                    pretty_alignments, self._splice_graph, contig_seq
+                    candidates, self._splice_graph, contig_seq
                 )
                 self._log_mem(
                     "completed try_correct_alignments",
-                    extra={"sec": f"{(time.time()-t1):.2f}", "n": len(pretty_alignments)},
+                    extra={
+                        "sec": f"{(time.time()-t1):.2f}",
+                        "candidates": len(candidates),
+                        "total": len(pretty_alignments),
+                    },
                 )
                
 
