@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import os
+import time
 import pysam
 import LRAA_Globals
 import logging
@@ -39,6 +40,42 @@ class Pretty_alignment_manager:
                 raise
 
 
+    # --- diagnostics helpers ---
+    def _mem_usage_mb(self):
+        """Return current process RSS in MB if available, else None."""
+        try:
+            import psutil  # type: ignore
+            rss = psutil.Process(os.getpid()).memory_info().rss
+            return rss / (1024.0 * 1024.0)
+        except Exception:
+            try:
+                import resource  # type: ignore
+                rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                # ru_maxrss units vary: KB on Linux, bytes on macOS. Heuristic convert to MB.
+                if rss > 1e10:  # likely bytes
+                    return rss / (1024.0 * 1024.0)
+                else:  # likely KB
+                    return rss / 1024.0
+            except Exception:
+                return None
+
+    def _log_mem(self, event, extra=None):
+        """Log RSS with an event label and optional extras (dict or str)."""
+        m = self._mem_usage_mb()
+        extra_txt = ""
+        if isinstance(extra, dict):
+            try:
+                extra_txt = ", " + ", ".join(f"{k}={v}" for k, v in extra.items())
+            except Exception:
+                extra_txt = f", extra={extra}"
+        elif isinstance(extra, str) and extra:
+            extra_txt = f", {extra}"
+        if m is not None:
+            logger.info(f"[mem] {event}: rss={m:.1f} MB{extra_txt}")
+        else:
+            logger.info(f"[mem] {event}: rss=<unavailable>{extra_txt}")
+
+
     def retrieve_pretty_alignments(self, 
                                     contig_acc, contig_strand, contig_seq, bam_file, 
                                     region_lend=None,
@@ -63,6 +100,9 @@ class Pretty_alignment_manager:
         except Exception:
             # don't let logging failures interfere with processing
             pass
+
+        t_start = time.time()
+        self._log_mem("start retrieve_pretty_alignments")
 
         bam_file_basename = os.path.basename(bam_file)
 
@@ -110,10 +150,26 @@ class Pretty_alignment_manager:
             )
             with open(alignment_cache_file, "rb") as f:
                 pretty_alignments = pickle.load(f)
+            try:
+                cache_sz_mb = os.path.getsize(alignment_cache_file) / (1024.0 * 1024.0)
+            except Exception:
+                cache_sz_mb = None
+            self._log_mem(
+                "loaded pretty_alignments from cache",
+                extra={
+                    "n": len(pretty_alignments) if isinstance(pretty_alignments, list) else "?",
+                    "cache_file_mb": f"{cache_sz_mb:.1f}" if cache_sz_mb is not None else "?",
+                },
+            )
 
         else:
 
+            self._log_mem("init Bam_alignment_extractor")
             bam_extractor = Bam_alignment_extractor(bam_file)
+            self._log_mem("created Bam_alignment_extractor")
+
+            t0 = time.time()
+            logger.info("begin get_read_alignments (pretty=True)")
             pretty_alignments = bam_extractor.get_read_alignments(
                 contig_acc,
                 contig_strand,
@@ -122,28 +178,49 @@ class Pretty_alignment_manager:
                 pretty=True,
                 per_id_QC_raise_error=per_id_QC_raise_error,
             )
+            self._log_mem(
+                "completed get_read_alignments",
+                extra={
+                    "n": len(pretty_alignments) if isinstance(pretty_alignments, list) else "?",
+                    "sec": f"{(time.time()-t0):.2f}",
+                },
+            )
 
             ## correct alignments containing soft-clips
             if try_correct_alignments:
+                t1 = time.time()
+                logger.info("begin try_correct_alignments")
                 Pretty_alignment.try_correct_alignments(
                     pretty_alignments, self._splice_graph, contig_seq
+                )
+                self._log_mem(
+                    "completed try_correct_alignments",
+                    extra={"sec": f"{(time.time()-t1):.2f}", "n": len(pretty_alignments)},
                 )
                
 
             Pretty_alignment.prune_long_terminal_introns(
                 pretty_alignments, self._splice_graph
             )
+            self._log_mem("after prune_long_terminal_introns", extra={"n": len(pretty_alignments)})
 
             # store for reuse
+            self._log_mem("before lighten", extra={"n": len(pretty_alignments)})
             pretty_alignments = [
                 x.lighten() for x in pretty_alignments
             ]  # remove pysam record before storing
+            self._log_mem("after lighten", extra={"n": len(pretty_alignments)})
             if use_cache:
                 with open(all_alignment_cache_file, "wb") as f:
                     pickle.dump(pretty_alignments, f)
                     logger.info(
                         f"Saved {len(pretty_alignments)} alignments to cache: {all_alignment_cache_file}"
                     )
+                    try:
+                        cache_sz_mb = os.path.getsize(all_alignment_cache_file) / (1024.0 * 1024.0)
+                        logger.info(f"Cache file size (all): {cache_sz_mb:.1f} MB")
+                    except Exception:
+                        pass
 
 
             # Define SE and ME alignments and cache them separately when requested
@@ -157,6 +234,8 @@ class Pretty_alignment_manager:
                     else:
                         SE_alignments.append(pa)
 
+                self._log_mem("partitioned ME/SE", extra={"ME": len(ME_alignments), "SE": len(SE_alignments)})
+
                 if use_cache:
                     # store the ME and SE alignments
                     with open(ME_alignment_cache_file, "wb") as f:
@@ -164,12 +243,22 @@ class Pretty_alignment_manager:
                         logger.info(
                             f"Saved {len(ME_alignments)} alignments to cache: {ME_alignment_cache_file}"
                         )
+                        try:
+                            cache_sz_mb = os.path.getsize(ME_alignment_cache_file) / (1024.0 * 1024.0)
+                            logger.info(f"Cache file size (ME): {cache_sz_mb:.1f} MB")
+                        except Exception:
+                            pass
 
                     with open(SE_alignment_cache_file, "wb") as f:
                         pickle.dump(SE_alignments, f)
                         logger.info(
                             f"Saved {len(SE_alignments)} alignments to cache: {SE_alignment_cache_file}"
                         )
+                        try:
+                            cache_sz_mb = os.path.getsize(SE_alignment_cache_file) / (1024.0 * 1024.0)
+                            logger.info(f"Cache file size (SE): {cache_sz_mb:.1f} MB")
+                        except Exception:
+                            pass
 
                 if restrict_splice_type == "ME":
                     pretty_alignments = ME_alignments
@@ -188,9 +277,12 @@ class Pretty_alignment_manager:
                 )
                 with open(SE_masked_alignment_cache_file, "rb") as f:
                     pretty_alignments = pickle.load(f)
+                self._log_mem("loaded SE masked alignments from cache", extra={"n": len(pretty_alignments)})
             else:
                 # apply ME mask of encapsulated SEs
+                self._log_mem("before apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
                 pretty_alignments = self.apply_SE_read_encapsulation_mask(pretty_alignments, SE_read_encapsulation_mask)
+                self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
                 
                 if use_cache:
                     with open(SE_masked_alignment_cache_file, "wb") as f:
@@ -199,6 +291,7 @@ class Pretty_alignment_manager:
                             f"Saved corrected alignments to cache: {SE_masked_alignment_cache_file}"
                         )
 
+        self._log_mem("end retrieve_pretty_alignments", extra={"n": len(pretty_alignments), "sec": f"{(time.time()-t_start):.2f}"})
         return pretty_alignments                
 
 
