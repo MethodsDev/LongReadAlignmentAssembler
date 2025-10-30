@@ -119,6 +119,18 @@ class LRAA:
                 mp_counter, input_transcripts, bam_file
             )
 
+        # Ensure any batched LMDB writes are visible before downstream phases that may read from stores
+        try:
+            import LRAA_Globals as LG
+            for _store in (getattr(LG, "READ_NAME_STORE", None), getattr(LG, "MP_READ_ID_STORE", None)):
+                if _store is not None and hasattr(_store, "flush"):
+                    try:
+                        _store.flush()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         multipath_graph = MultiPathGraph(
             mp_counter,
             self._splice_graph,
@@ -278,12 +290,12 @@ class LRAA:
                         mpm.terminate_all_processes()
                     raise (e)
 
-            fraction_jobs_complete = component_counter / num_mpg_components
-            logger.info(
-                "progress monitor for {} {} : {:.2f}% of components processed.".format(
-                    self._contig_acc, self._contig_strand, fraction_jobs_complete * 100
+                fraction_jobs_complete = component_counter / num_mpg_components
+                logger.info(
+                    "progress monitor for {} {} : {:.2f}% of components processed.".format(
+                        self._contig_acc, self._contig_strand, fraction_jobs_complete * 100
+                    )
                 )
-            )
 
         if USE_MULTIPROCESSOR:
             logger.info("WAITING ON REMAINING MULTIPROCESSING JOBS")

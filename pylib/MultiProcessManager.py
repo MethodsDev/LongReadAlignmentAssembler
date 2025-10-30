@@ -170,8 +170,45 @@ class MultiProcessManager:
         return self.captured_queue_contents
 
     def terminate_all_processes(self):
-        for process in self.process_list:
-            process.terminate()
+        """Best-effort termination of all tracked child processes.
+
+        Strategy:
+        - send terminate() (SIGTERM on POSIX)
+        - join with short timeout
+        - if still alive, escalate to SIGKILL when possible
+        """
+        # First pass: request termination
+        for process in list(self.process_list):
+            try:
+                process.terminate()
+            except Exception:
+                pass
+
+        # Second pass: wait briefly and escalate if needed
+        import time as _time
+        import os as _os
+        import signal as _signal
+
+        deadline = _time.time() + 5.0  # up to ~5s total waiting across children
+        for process in list(self.process_list):
+            try:
+                # Join remaining time budget but at least a short slice
+                remaining = max(0.1, deadline - _time.time())
+                process.join(timeout=remaining)
+            except Exception:
+                pass
+            # Escalate if still alive
+            try:
+                if process.is_alive():
+                    pid = getattr(process, "pid", None)
+                    if pid:
+                        try:
+                            _os.kill(pid, _signal.SIGKILL)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
         logger.info("-terminated all processes")
 
     def get_failures(self):

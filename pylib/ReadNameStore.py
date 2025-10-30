@@ -41,14 +41,33 @@ class ReadNameStore:
             # LMDB expects a directory; create if not exists
             self._path = db_path_base if os.path.isdir(db_path_base) else db_path_base + ".lmdb"
             os.makedirs(self._path, exist_ok=True)
+            # LMDB tuning: relax sync for speed (safe for ephemeral caches) unless disabled via env
+            relaxed = os.environ.get("LRAA_LMDB_RELAXED", "1").lower() not in ("0", "false", "no")
             # map_size: 1GB default, grows by re-open if needed; big enough for many names
-            self._env = lmdb.open(self._path, map_size=1 << 30, max_dbs=4, subdir=True, lock=True)
+            self._env = lmdb.open(
+                self._path,
+                map_size=1 << 30,
+                max_dbs=4,
+                subdir=True,
+                lock=True,
+                sync=False if relaxed else True,
+                map_async=True if relaxed else False,
+                metasync=False if relaxed else True,
+            )
             self._db_id2name = self._env.open_db(b"id2name")
             self._db_name2id = self._env.open_db(b"name2id")
             # init counter
             with self._env.begin(write=True) as txn:
                 if txn.get(b"__next_id__") is None:
                     txn.put(b"__next_id__", b"1")
+            # batching state
+            try:
+                self._batch_n = int(os.environ.get("LRAA_STORE_BATCH_N", "1000"))
+            except Exception:
+                self._batch_n = 1000
+            self._batch_n = max(1, self._batch_n)
+            self._ops_since_commit = 0
+            self._wtxn = None  # lazily opened write transaction for batching
         else:
             # SQLite fallback
             self._path = db_path_base if db_path_base.endswith(".sqlite") else db_path_base + ".sqlite"
@@ -61,22 +80,50 @@ class ReadNameStore:
             self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.commit()
 
+    def _begin_wtxn(self):
+        if self._wtxn is None:
+            self._wtxn = self._env.begin(write=True)
+
+    def _commit_wtxn_if_needed(self, force: bool = False):
+        if self._wtxn is None:
+            return
+        if force or (self._ops_since_commit >= self._batch_n):
+            try:
+                self._wtxn.commit()
+            except Exception:
+                # best effort; if commit fails, discard and reopen next time
+                try:
+                    self._wtxn.abort()
+                except Exception:
+                    pass
+            finally:
+                self._wtxn = None
+                self._ops_since_commit = 0
+
     def get_or_add(self, name: str) -> int:
         if self._use_lmdb:
             key_name = name.encode("utf-8", errors="ignore")
-            # Use a single write transaction to avoid nested writer deadlocks
-            with self._env.begin(write=True) as txn:
-                val = txn.get(key_name, db=self._db_name2id)
-                if val is not None:
+            # Try fast read via current write txn (if any) to avoid extra reader
+            self._begin_wtxn()
+            txn = self._wtxn
+            assert txn is not None
+            val = txn.get(key_name, db=self._db_name2id)
+            if val is not None:
+                try:
+                    # no write performed; do not count as op
                     return int(val.decode("ascii"))
-                next_id_bytes = txn.get(b"__next_id__")
-                next_id = int(next_id_bytes.decode("ascii")) if next_id_bytes else 1
-                new_id = next_id
-                txn.put(b"__next_id__", str(next_id + 1).encode("ascii"))
-                # write both directions under same txn
-                txn.put(key_name, str(new_id).encode("ascii"), db=self._db_name2id)
-                txn.put(str(new_id).encode("ascii"), key_name, db=self._db_id2name)
-                return new_id
+                finally:
+                    pass
+            next_id_bytes = txn.get(b"__next_id__")
+            next_id = int(next_id_bytes.decode("ascii")) if next_id_bytes else 1
+            new_id = next_id
+            txn.put(b"__next_id__", str(next_id + 1).encode("ascii"))
+            # write both directions under same txn
+            txn.put(key_name, str(new_id).encode("ascii"), db=self._db_name2id)
+            txn.put(str(new_id).encode("ascii"), key_name, db=self._db_id2name)
+            self._ops_since_commit += 1
+            self._commit_wtxn_if_needed(False)
+            return new_id
         else:
             cur = self._conn.cursor()
             try:
@@ -121,8 +168,24 @@ class ReadNameStore:
         self._closed = True
         try:
             if self._use_lmdb:
+                # flush any pending writes
+                try:
+                    self._commit_wtxn_if_needed(True)
+                except Exception:
+                    pass
                 self._env.close()
             else:
                 self._conn.close()
+        except Exception:
+            pass
+
+    # optional explicit flush for LMDB batching
+    def flush(self):
+        try:
+            if self._use_lmdb:
+                self._commit_wtxn_if_needed(True)
+            else:
+                # noop for sqlite
+                pass
         except Exception:
             pass

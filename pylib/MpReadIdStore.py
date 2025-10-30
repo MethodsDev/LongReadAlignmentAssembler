@@ -36,9 +36,27 @@ class MpReadIdStore:
         if self._use_lmdb:
             self._path = db_path_base if os.path.isdir(db_path_base) else db_path_base + ".lmdb"
             os.makedirs(self._path, exist_ok=True)
-            self._env = lmdb.open(self._path, map_size=1 << 30, max_dbs=4, subdir=True, lock=True)
+            relaxed = os.environ.get("LRAA_LMDB_RELAXED", "1").lower() not in ("0", "false", "no")
+            self._env = lmdb.open(
+                self._path,
+                map_size=1 << 30,
+                max_dbs=4,
+                subdir=True,
+                lock=True,
+                sync=False if relaxed else True,
+                map_async=True if relaxed else False,
+                metasync=False if relaxed else True,
+            )
             self._db_pairs = self._env.open_db(b"mp_to_reads")
             self._db_seq = self._env.open_db(b"mp_seq")
+            # batching state
+            try:
+                self._batch_n = int(os.environ.get("LRAA_STORE_BATCH_N", "1000"))
+            except Exception:
+                self._batch_n = 1000
+            self._batch_n = max(1, self._batch_n)
+            self._ops_since_commit = 0
+            self._wtxn = None
         else:
             self._path = db_path_base if db_path_base.endswith(".sqlite") else db_path_base + ".sqlite"
             os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
@@ -51,17 +69,39 @@ class MpReadIdStore:
             self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.commit()
 
+    def _begin_wtxn(self):
+        if self._wtxn is None:
+            self._wtxn = self._env.begin(write=True)
+
+    def _commit_wtxn_if_needed(self, force: bool = False):
+        if self._wtxn is None:
+            return
+        if force or (self._ops_since_commit >= self._batch_n):
+            try:
+                self._wtxn.commit()
+            except Exception:
+                try:
+                    self._wtxn.abort()
+                except Exception:
+                    pass
+            finally:
+                self._wtxn = None
+                self._ops_since_commit = 0
+
     def append(self, mp_id: str, read_id: int):
         if self._use_lmdb:
             mp_key = mp_id.encode("utf-8")
-            # Single write txn for seq increment and pair write to avoid writer contention
-            with self._env.begin(write=True) as txn:
-                seq_key = b"__seq__:" + mp_key
-                seq_val = txn.get(seq_key, db=self._db_seq)
-                next_seq = int(seq_val.decode("ascii")) + 1 if seq_val else 1
-                txn.put(seq_key, str(next_seq).encode("ascii"), db=self._db_seq)
-                key = mp_key + b":" + str(next_seq).encode("ascii")
-                txn.put(key, str(int(read_id)).encode("ascii"), db=self._db_pairs)
+            self._begin_wtxn()
+            txn = self._wtxn
+            assert txn is not None
+            seq_key = b"__seq__:" + mp_key
+            seq_val = txn.get(seq_key, db=self._db_seq)
+            next_seq = int(seq_val.decode("ascii")) + 1 if seq_val else 1
+            txn.put(seq_key, str(next_seq).encode("ascii"), db=self._db_seq)
+            key = mp_key + b":" + str(next_seq).encode("ascii")
+            txn.put(key, str(int(read_id)).encode("ascii"), db=self._db_pairs)
+            self._ops_since_commit += 1
+            self._commit_wtxn_if_needed(False)
         else:
             self._conn.execute(
                 "INSERT INTO mp_reads(mp_id, read_id) VALUES (?, ?)", (mp_id, int(read_id))
@@ -105,8 +145,22 @@ class MpReadIdStore:
         self._closed = True
         try:
             if self._use_lmdb:
+                try:
+                    self._commit_wtxn_if_needed(True)
+                except Exception:
+                    pass
                 self._env.close()
             else:
                 self._conn.close()
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            if self._use_lmdb:
+                self._commit_wtxn_if_needed(True)
+            else:
+                # noop for sqlite
+                pass
         except Exception:
             pass
