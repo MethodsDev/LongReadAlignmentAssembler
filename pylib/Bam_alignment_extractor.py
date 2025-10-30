@@ -193,20 +193,11 @@ class Bam_alignment_extractor:
                     frac_cand_kept = (candidates_retained / kept_so_far) if kept_so_far else 0.0
                     frac_cand_proc = (candidates_retained / processed) if processed else 0.0
                     logger.info(
-                        "progress get_read_alignments: processed=%d, kept=%d, candidates=%d (%.3f of kept; %.3f of processed), discards=%s, rss=%s"
-                        % (
-                            processed,
-                            kept_so_far,
-                            candidates_retained,
-                            frac_cand_kept,
-                            frac_cand_proc,
-                            discards,
-                            (f"{m:.1f} MB" if m is not None else "<na>"),
-                        )
+                        f"progress get_read_alignments: processed={processed:,}, kept={kept_so_far:,}, candidates={candidates_retained:,} ({frac_cand_kept:.3f} of kept; {frac_cand_proc:.3f} of processed), discards={discards}, rss={(f'{m:.1f} MB' if m is not None else '<na>')}"
                     )
                 except Exception:
                     logger.info(
-                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}, candidates={candidates_retained}"
+                        f"progress get_read_alignments: processed={processed:,}, kept={kept_so_far:,}, candidates={candidates_retained:,}"
                     )
                 last_log_t = time.time()
 
@@ -217,15 +208,7 @@ class Bam_alignment_extractor:
         except Exception:
             frac_cand_final = 0.0
         logger.info(
-            "reads kept for {} {}: {} and discarded: {} | candidates not lightened: {} ({:.3f} of kept) (rss: {})".format(
-                contig_acc,
-                contig_strand,
-                kept_count,
-                dict(discarded_read_counter),
-                candidates_retained,
-                frac_cand_final,
-                f"{final_mem:.1f} MB" if final_mem is not None else "<na>",
-            )
+            f"reads kept for {contig_acc} {contig_strand}: {kept_count:,} and discarded: {dict(discarded_read_counter)} | candidates not lightened: {candidates_retained:,} ({frac_cand_final:.3f} of kept) (rss: {f'{final_mem:.1f} MB' if final_mem is not None else '<na>'})"
         )
 
         if (
