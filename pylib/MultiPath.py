@@ -54,9 +54,13 @@ class MultiPath:
         self._rend = coords[-1]
 
         self._read_types = read_types
-        self._read_names = set(read_names) if read_names is not None else set()
-        # cache for streamed names from external stores; None means not yet fetched
-        self._cached_streamed_names = None
+        # Store compact read identifiers (ints) in-memory; resolve to long names only on demand
+        self._read_names = set()  # actually stores read IDs
+        if read_names is not None:
+            for rn in read_names:
+                rid = self._coerce_read_identifier(rn)
+                if rid is not None:
+                    self._read_names.add(int(rid))
         # maintain count independent of whether names are stored
         if read_count is not None:
             self._read_count = int(read_count)
@@ -101,43 +105,61 @@ class MultiPath:
         Returns the set of read names supporting this multipath.
 
         Behavior:
-        - If names are retained in-memory (typical only in small/debug cases), returns a copy of that set.
-        - Otherwise, attempts to stream names from external, disk-backed stores referenced via
-          LRAA_Globals.READ_NAME_STORE and LRAA_Globals.MP_READ_ID_STORE.
+        - MultiPath stores compact read IDs in-memory. This method resolves those IDs to long string names
+          using LRAA_Globals.READ_NAME_STORE as needed.
+        - If no IDs are retained in-memory, attempts to stream read IDs from LRAA_Globals.MP_READ_ID_STORE and
+          resolve to names via READ_NAME_STORE.
 
         Notes:
-        - Streaming from disk can be relatively expensive. Prefer get_read_count() if only the count is needed.
-        - Results may be cached per MultiPath instance during the process lifetime to avoid repeated store I/O.
+        - Resolving names can be relatively expensive. Prefer get_read_count() or get_read_ids() when possible.
         """
-        # If names are retained in-memory, return a copy
-        if len(self._read_names) > 0:
-            return self._read_names.copy()
-        # If we've already streamed once during this process, return a copy of the cached result
-        if self._cached_streamed_names is not None:
-            return self._cached_streamed_names.copy()
-        # Else try to stream from external stores if available
+        ids = set(self._read_names)
+        if not ids:
+            # try to stream IDs from external store if configured
+            try:
+                import LRAA_Globals  # local import to avoid cycles
+                mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+                if mp_store is not None:
+                    ids = set(int(rid) for rid in mp_store.iter_read_ids(self.get_id()))
+            except Exception:
+                ids = set()
+        # resolve ids -> names
         try:
-            import LRAA_Globals  # local import to avoid cycles
+            import LRAA_Globals
             name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
-            mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
-            if name_store is not None and mp_store is not None:
+            if name_store is not None:
                 names = set()
-                for rid in mp_store.iter_read_ids(self.get_id()):
+                for rid in ids:
                     nm = name_store.get_name(int(rid))
                     if nm is not None:
                         names.add(nm)
-                # cache and return
-                self._cached_streamed_names = names
-                return names.copy()
+                return names
         except Exception:
             pass
-        # Fallback: no names available
+        # Fallback if name store not available: return stringified IDs
+        return set(str(rid) for rid in ids)
+
+    def get_read_ids(self):
+        """
+        Returns the set of compact read IDs supporting this multipath. If not retained in-memory,
+        will attempt to stream from MP_READ_ID_STORE when available.
+        """
+        if len(self._read_names) > 0:
+            return set(self._read_names)
+        try:
+            import LRAA_Globals
+            mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
+            if mp_store is not None:
+                return set(int(rid) for rid in mp_store.iter_read_ids(self.get_id()))
+        except Exception:
+            pass
         return set()
 
     def get_read_count(self):
         return self._read_count
 
     def get_read_names_count(self):
+        # count of IDs stored or externally associated
         if len(self._read_names) > 0:
             return len(self._read_names)
         try:
@@ -149,58 +171,72 @@ class MultiPath:
             pass
         return 0
 
+    # Alias reflecting ID-based semantics
+    def get_read_id_count(self):
+        return self.get_read_names_count()
+
     def include_read_name(self, read_name):
-        # invalidate any cached streamed names
-        self._cached_streamed_names = None
+        # Accept a single read identifier or a collection; coerce to ID when possible
         if type(read_name) in [list, set]:
+            added = 0
             for r in read_name:
-                self._read_names.add(r)
-            self._read_count += len(read_name)
+                rid = self._coerce_read_identifier(r)
+                if rid is not None:
+                    self._read_names.add(int(rid))
+                    added += 1
+            self._read_count += added if added > 0 else len(read_name)
         else:
-            self._read_names.add(read_name)
+            rid = self._coerce_read_identifier(read_name)
+            if rid is not None:
+                self._read_names.add(int(rid))
             self._read_count += 1
 
     def include_read_count(self, increment=1):
-        # count-only change; names unchanged, but be conservative and invalidate cache
-        self._cached_streamed_names = None
+        # count-only change; IDs unchanged
         self._read_count += int(increment)
 
     def remove_read_name(self, read_name):
-        self._cached_streamed_names = None
-        self._read_names.discard(read_name)
+        rid = self._coerce_read_identifier(read_name)
+        if rid is not None and int(rid) in self._read_names:
+            self._read_names.discard(int(rid))
+            self._read_count = max(0, self._read_count - 1)
 
     def prune_reftranscript_as_evidence(self):
-        # Remove internal names if present
-        read_names_to_delete = list()
-        for read_name in list(self._read_names):
-            if "reftranscript:" in read_name:
-                read_names_to_delete.append(read_name)
-        if read_names_to_delete:
-            for read_name in read_names_to_delete:
-                self.remove_read_name(read_name)
-            # adjust count to reflect removals
-            self._read_count = max(0, self._read_count - len(read_names_to_delete))
-            # invalidate cache as names changed
-            self._cached_streamed_names = None
-        else:
-            # If names are external only, compute count excluding reftranscript and reset
+        # Remove any reads whose resolved names start with "reftranscript:"
+        try:
+            import LRAA_Globals
+            name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+        except Exception:
+            name_store = None
+
+        if name_store is None:
+            # Without a name store we cannot resolve, so nothing to prune safely
+            return
+
+        ids_to_keep = set()
+        pruned = 0
+        # Prefer in-memory IDs if present; otherwise try streaming IDs
+        ids = set(self._read_names)
+        if not ids:
             try:
                 import LRAA_Globals
-                name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
                 mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
-                if name_store is not None and mp_store is not None:
-                    kept = 0
-                    names = set()
-                    for rid in mp_store.iter_read_ids(self.get_id()):
-                        nm = name_store.get_name(int(rid))
-                        if nm is not None and not nm.startswith("reftranscript:"):
-                            kept += 1
-                            names.add(nm)
-                    self._read_count = kept
-                    # refresh cached names to the filtered set
-                    self._cached_streamed_names = names
+                if mp_store is not None:
+                    ids = set(int(rid) for rid in mp_store.iter_read_ids(self.get_id()))
             except Exception:
-                pass
+                ids = set()
+
+        for rid in ids:
+            nm = name_store.get_name(int(rid))
+            if nm is None or not nm.startswith("reftranscript:"):
+                ids_to_keep.add(int(rid))
+            else:
+                pruned += 1
+
+        # Replace internal set with kept IDs and adjust count
+        self._read_names = ids_to_keep
+        if pruned > 0:
+            self._read_count = max(0, self._read_count - pruned)
 
     # splice graph operations
 
@@ -397,7 +433,7 @@ class MultiPath:
                 self._splice_graph,
                 [split_simple_path],
                 read_types=self.get_read_types(),
-                read_names=self.get_read_names(),
+                read_names=self.get_read_ids(),
             )
 
             split_mps.append(split_mp)
@@ -424,7 +460,7 @@ class MultiPath:
         return transcript_obj
 
     def __repr__(self):
-        # Prefer streaming names from external stores when in-memory names are not retained
+        # Resolve names on demand for human-readable representation
         try:
             names = self.get_read_names()
         except Exception:
@@ -465,6 +501,32 @@ class MultiPath:
         mp_obj = MultiPath(sg, path_list)
 
         return mp_obj
+
+    def _coerce_read_identifier(self, value):
+        """
+        Try to coerce an incoming read identifier to an integer ID. If a string name is provided,
+        use READ_NAME_STORE to map to an ID when available. Returns None if coercion is not possible.
+        """
+        try:
+            if isinstance(value, int):
+                return int(value)
+            if isinstance(value, str):
+                # numeric string?
+                try:
+                    return int(value)
+                except Exception:
+                    pass
+                # look up via name store
+                try:
+                    import LRAA_Globals
+                    name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+                    if name_store is not None:
+                        return int(name_store.get_or_add(value))
+                except Exception:
+                    return None
+        except Exception:
+            return None
+        return None
 
 
 def __get_dummy_splice_graph():

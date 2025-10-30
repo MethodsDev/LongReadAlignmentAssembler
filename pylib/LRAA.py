@@ -381,7 +381,7 @@ class LRAA:
 
         all_scored_paths = sorted(all_scored_paths, key=lambda x: x.get_score())
 
-        all_represented_reads = set()
+        all_represented_read_ids = set()
 
         while len(mpgns_require_representation) > 0 and len(all_scored_paths) > 0:
 
@@ -417,15 +417,15 @@ class LRAA:
 
                 best_transcript_paths.append(top_scored_path)
 
-                all_represented_reads.update(
-                    top_scored_path.get_all_represented_read_names()
+                all_represented_read_ids.update(
+                    top_scored_path.get_all_represented_read_ids()
                 )
 
                 # adjust weights
                 # self._decrement_transcript_path_vertices(top_scored_path, pasa_vertices)
 
                 for path in all_scored_paths:
-                    path.rescore(all_represented_reads)
+                    path.rescore(all_represented_read_ids)
 
                 # reprioritize
                 all_scored_paths = sorted(all_scored_paths, key=lambda x: x.get_score())
