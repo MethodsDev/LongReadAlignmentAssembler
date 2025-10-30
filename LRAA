@@ -87,7 +87,7 @@ def _parse_input_transcripts_for_cs(
 
 def _ensure_contig_tmp(output_prefix, contig_acc, contig_strand):
     """Ensure per-(contig,strand) tmp dir exists, set LRAA_TMP_DIR, and return (tmp_dir, tmp_prefix)."""
-    tmp_root = f"{output_prefix}.contigtmp"
+    tmp_root = f"__{output_prefix}.contigtmp"
     try:
         os.makedirs(tmp_root, exist_ok=True)
     except Exception:
@@ -195,20 +195,19 @@ def _run_jobs_schedule_and_merge(
     if not NO_RESUME_PARALLEL:
         resumed = 0
         for j in jobs:
-            tmp_root = f"{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(
-                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-            )
-            tmp_prefix = os.path.join(
-                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-            )
-            ok_path = f"{tmp_prefix}.ok"
-            have_expr = os.path.exists(f"{tmp_prefix}.quant.expr")
-            have_track = os.path.exists(f"{tmp_prefix}.quant.tracking")
-            have_gtf = True if j["QUANT_ONLY"] else os.path.exists(
-                f"{tmp_prefix}.gtf"
-            )
-            if os.path.exists(ok_path) and have_expr and have_track and have_gtf:
+            tmp_root_new = f"__{j['output_prefix']}.contigtmp"
+            tmp_root_old = f"{j['output_prefix']}.contigtmp"
+            # Prefer new location; fall back to legacy temp root for resume compatibility
+            def _have_all(prefix_root):
+                d = os.path.join(prefix_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                p = os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                ok_path = f"{p}.ok"
+                have_expr = os.path.exists(f"{p}.quant.expr")
+                have_track = os.path.exists(f"{p}.quant.tracking")
+                have_gtf = True if j["QUANT_ONLY"] else os.path.exists(f"{p}.gtf")
+                return os.path.exists(ok_path) and have_expr and have_track and have_gtf
+
+            if _have_all(tmp_root_new) or _have_all(tmp_root_old):
                 j["skip"] = True
                 resumed += 1
         if resumed:
@@ -244,9 +243,15 @@ def _run_jobs_schedule_and_merge(
             for j in jobs:
                 if j.get("skip"):
                     continue
-                tmp_root = f"{j['output_prefix']}.contigtmp"
-                tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-                tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+                tmp_root_new = f"__{j['output_prefix']}.contigtmp"
+                tmp_root_old = f"{j['output_prefix']}.contigtmp"
+                # Try new tmp location first, then legacy
+                def _prefix_for(root):
+                    d = os.path.join(root, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                    return os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                tmp_prefix = _prefix_for(tmp_root_new)
+                if not os.path.exists(f"{tmp_prefix}.ok") and not os.path.exists(f"{tmp_prefix}.quant.expr"):
+                    tmp_prefix = _prefix_for(tmp_root_old)
                 ok_path = f"{tmp_prefix}.ok"
                 if not os.path.exists(ok_path):
                     err_log = f"{tmp_prefix}.err.log"
@@ -299,9 +304,13 @@ def _run_jobs_schedule_and_merge(
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     for j in jobs:
-        tmp_root = f"{j['output_prefix']}.contigtmp"
-        tmp_dir = os.path.join(tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        tmp_prefix = os.path.join(tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}")
+        tmp_root_new = f"__{j['output_prefix']}.contigtmp"
+        tmp_root_old = f"{j['output_prefix']}.contigtmp"
+        dnew = os.path.join(tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}")
+        dold = os.path.join(tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}")
+        pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
+        pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+        tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
         _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
 
@@ -313,13 +322,13 @@ def _run_jobs_schedule_and_merge(
         gtf_output_filename = f"{output_prefix}.gtf"
         with open(gtf_output_filename, "wt") as gtf_out:
             for j in jobs:
-                tmp_root = f"{j['output_prefix']}.contigtmp"
-                tmp_dir = os.path.join(
-                    tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                tmp_prefix = os.path.join(
-                    tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-                )
+                tmp_root_new = f"__{j['output_prefix']}.contigtmp"
+                tmp_root_old = f"{j['output_prefix']}.contigtmp"
+                dnew = os.path.join(tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                dold = os.path.join(tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}")
+                pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
+                pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+                tmp_prefix = pnew if os.path.exists(f"{pnew}.gtf") else pold
                 gtf_tmp = f"{tmp_prefix}.gtf"
                 if os.path.exists(gtf_tmp):
                     with open(gtf_tmp, "rt") as fh:
@@ -367,7 +376,7 @@ def _run_jobs_schedule_and_merge(
     # Cleanup per-task outputs
     if CLEAN_PARALLEL_TMP:
         for j in jobs:
-            tmp_root = f"{j['output_prefix']}.contigtmp"
+            tmp_root = f"__{j['output_prefix']}.contigtmp"
             tmp_dir = os.path.join(
                 tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
             )
@@ -388,7 +397,7 @@ def _run_jobs_schedule_and_merge(
     # Remove entire temp tree unless debug or explicitly disabled
     if (not LRAA_Globals.DEBUG) and (not NO_CLEANUP):
         try:
-            tmp_root_all = f"{output_prefix}.contigtmp"
+            tmp_root_all = f"__{output_prefix}.contigtmp"
             if os.path.isdir(tmp_root_all):
                 shutil.rmtree(tmp_root_all)
         except Exception:
@@ -437,7 +446,7 @@ def _contig_job_runner(job):
     ofh_quant = None
     ofh_track = None
     ofh_gtf_local = None
-    tmp_root = f"{job['output_prefix']}.contigtmp"
+    tmp_root = f"__{job['output_prefix']}.contigtmp"
     contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
         contig_acc, genome_fasta
     )
@@ -514,7 +523,7 @@ def _contig_job_runner(job):
     # optional per-worker resource monitor
     try:
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
-            tmp_root_m = f"{job['output_prefix']}.contigtmp"
+            tmp_root_m = f"__{job['output_prefix']}.contigtmp"
             os.makedirs(tmp_root_m, exist_ok=True)
             tmp_dir_m = os.path.join(tmp_root_m, f"{contig_acc}", f"{contig_strand}")
             os.makedirs(tmp_dir_m, exist_ok=True)
@@ -823,7 +832,7 @@ def main():
         "--no_cleanup",
         action="store_true",
         default=False,
-        help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under <output_prefix>.contigtmp are removed unless --debug is set",
+        help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
     )
 
     ## debug params
@@ -1623,7 +1632,7 @@ def _summarize_contig_resource_logs(
                     contig_strand = item["contig_strand"]
                 else:
                     contig_acc, contig_strand = item
-                tmp_root = f"{output_prefix}.contigtmp"
+                tmp_root = f"__{output_prefix}.contigtmp"
                 tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
                 tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
                 log_path = f"{tmp_prefix}.resources.tsv"
