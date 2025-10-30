@@ -32,7 +32,7 @@ class MultiPathGraph:
 
         local_debug = False
 
-        logger.info(f"START building MultiPathGraph for {contig_acc}")
+        logger.info(f"[{contig_acc}{contig_strand}] START building MultiPathGraph")
 
         assert type(multiPathCounter) == MultiPathCounter.MultiPathCounter
         assert type(splice_graph) == Splice_graph.Splice_graph
@@ -141,7 +141,7 @@ class MultiPathGraph:
             mp_node_set = sg_component_to_mp_id[component_id]
             # print(mp_node_set)
             num_paths = len(mp_node_set)
-            logger.info(f"Component {component_id} has {num_paths} paths assigned.")
+            logger.info(f"[{self._contig_acc}{self._contig_strand}] Component {component_id} has {num_paths} paths assigned.")
             if LRAA_Globals.DEBUG:
                 component_description_file = os.path.join(
                     mpg_build_dir, f"{component_id}.comp.descr.tsv"
@@ -197,9 +197,7 @@ class MultiPathGraph:
             max_nodes = LRAA_Globals.config["max_path_nodes_per_component"]
             if len(ordered_nodes) > max_nodes:
                 logger.info(
-                    "Size of component node set is too large... shrinking to {}".format(
-                        max_nodes
-                    )
+                    f"[{self._contig_acc}{self._contig_strand}] Size of component node set is too large... shrinking to {max_nodes}"
                 )
                 ordered_nodes = sorted(
                     ordered_nodes,
@@ -233,7 +231,7 @@ class MultiPathGraph:
                 ordered_nodes[-1]._rend,
             )
             logger.info(
-                f"Building MP Graph for component_id {component_id} spanning {region} with {num_ordered_nodes} multipaths"
+                f"[{self._contig_acc}{self._contig_strand}] Building MP Graph for component_id {component_id} spanning {region} with {num_ordered_nodes} multipaths"
             )
 
             if LRAA_Globals.DEBUG and local_debug:
@@ -300,7 +298,7 @@ class MultiPathGraph:
         if LRAA_Globals.DEBUG:
             component_descr_ofh.close()
 
-        logger.info(f"DONE building MultiPathGraph for {contig_acc}")
+        logger.info(f"[{self._contig_acc}{self._contig_strand}] DONE building MultiPathGraph")
 
         return
 
@@ -369,7 +367,7 @@ class MultiPathGraph:
                 component_list.append(component)
 
         logger.info(
-            "identified {} disjoint graph components".format(len(component_list))
+            f"[{self._contig_acc}{self._contig_strand}] identified {len(component_list)} disjoint graph components"
         )
 
         ## assign the component ids
@@ -432,7 +430,7 @@ class MultiPathGraph:
             component_list.append(component)
 
         logger.info(
-            "identified {} disjoint graph components".format(len(component_list))
+            f"[{self._contig_acc}{self._contig_strand}] identified {len(component_list)} disjoint graph components"
         )
 
         ## assign the component ids

@@ -1969,7 +1969,7 @@ def run_transcript_assembly(
     )  # limit to all input transcripts
 
     # reassign gene and transcript component ids based on shared nodes.
-    logger.info("reclustering combined ME and SE transcripts to genes")
+    logger.info("[%s%s] reclustering combined ME and SE transcripts to genes", contig_acc, contig_strand)
     all_transcripts = Transcript.recluster_transcripts_to_genes(
         all_transcripts, contig_acc, contig_strand
     )
@@ -2028,11 +2028,11 @@ def run_transcript_assembly(
             )
             if before_prune is not None and after_prune is not None:
                 logger.info(
-                    f"Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}"
+                    f"[{contig_acc}{contig_strand}] Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}"
                 )
             else:
                 logger.info(
-                    "Pruned reference transcript pseudo-read evidence from multipath counter"
+                    f"[{contig_acc}{contig_strand}] Pruned reference transcript pseudo-read evidence from multipath counter"
                 )
     except Exception as e:
         logger.warning(f"Failed pruning reference transcript pseudo-read evidence: {e}")
@@ -2090,12 +2090,12 @@ def run_transcript_assembly(
         ## initial filter of novel isoforms with insufficient read support
 
         logger.info("\n// Filtering novel isoforms by min read support")
-        logger.info("Before filtering, have {} transcripts".format(len(transcripts)))
+        logger.info(f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts")
         min_read_support_novel_isoforms = LRAA_Globals.config["min_reads_novel_isoform"]
         transcripts = TranscriptFiltering.filter_novel_isoforms_by_min_read_support(
             transcripts, min_read_support_novel_isoforms
         )
-        logger.info("After filtering, have {} transcripts".format(len(transcripts)))
+        logger.info(f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts")
 
         if len(transcripts) < 1:
             logger.info(
@@ -2108,20 +2108,20 @@ def run_transcript_assembly(
 
         # rerun quant for post-filtering
         logger.info(
-            "\n// -rerunning quant post filtering novel isoforms via read thresholds"
+            f"[{contig_acc}{contig_strand}] \n// -rerunning quant post filtering novel isoforms via read thresholds"
         )
         frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter)
 
         #####################################
         # pruning likely degradation products
 
-        logger.info("\n// -pruning likely degradation products")
-        logger.info("Before pruning, have {} transcripts".format(len(transcripts)))
+        logger.info(f"[{contig_acc}{contig_strand}] \n// -pruning likely degradation products")
+        logger.info(f"[{contig_acc}{contig_strand}] Before pruning, have {len(transcripts)} transcripts")
 
         transcripts = TranscriptFiltering.prune_likely_degradation_products(
             transcripts, sg_all, frac_read_assignments
         )
-        logger.info("After pruning, have {} transcripts".format(len(transcripts)))
+        logger.info(f"[{contig_acc}{contig_strand}] After pruning, have {len(transcripts)} transcripts")
 
         if len(transcripts) < 1:
             logger.info(
@@ -2133,7 +2133,7 @@ def run_transcript_assembly(
             return
 
         # rerun quant for post-filtering
-        logger.info("\n// -rerunning quant post-filtering of degradation products")
+        logger.info(f"[{contig_acc}{contig_strand}] \n// -rerunning quant post-filtering of degradation products")
         frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter)
 
         #######################################################
@@ -2141,18 +2141,16 @@ def run_transcript_assembly(
 
         if min_isoform_fraction > 0:
             logger.info(
-                "\n// -filtering isoforms according to minimum isoform fraction"
+                f"[{contig_acc}{contig_strand}] \n// -filtering isoforms according to minimum isoform fraction"
             )
-            logger.info(
-                "Before filtering, have {} transcripts".format(len(transcripts))
-            )
+            logger.info(f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts")
             transcripts = TranscriptFiltering.filter_isoforms_by_min_isoform_fraction(
                 transcripts,
                 min_isoform_fraction,
                 run_EM,
                 LRAA_Globals.config["max_EM_iterations_during_asm"],
             )
-            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts")
 
             if len(transcripts) < 1:
                 logger.info(
@@ -2166,16 +2164,14 @@ def run_transcript_assembly(
         ##################################################################
         # Filter monoexonic transcripts according to expression thresholds
         if LRAA_Globals.config["min_monoexonic_TPM"] > 0:
-            logger.info("\n// -filtering monoexonic transcripts based on min TPM")
-            logger.info(
-                "Before filtering, have {} transcripts".format(len(transcripts))
-            )
+            logger.info(f"[{contig_acc}{contig_strand}] \n// -filtering monoexonic transcripts based on min TPM")
+            logger.info(f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts")
             transcripts = (
                 TranscriptFiltering.filter_monoexonic_isoforms_by_TPM_threshold(
                     transcripts, LRAA_Globals.config["min_monoexonic_TPM"]
                 )
             )
-            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts")
             if len(transcripts) < 1:
                 logger.info(
                     "-no transcripts on contig {} {} survived monoexonic filtering strategy".format(
@@ -2188,10 +2184,8 @@ def run_transcript_assembly(
         ####################################################################
         # Filter isoforms apparently derived from internal priming artifacts
         if LRAA_Globals.config["filter_internal_priming"]:
-            logger.info("\n// -filtering out internal priming")
-            logger.info(
-                "Before filtering, have {} transcripts".format(len(transcripts))
-            )
+            logger.info(f"[{contig_acc}{contig_strand}] \n// -filtering out internal priming")
+            logger.info(f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts")
             transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
                 transcripts,
                 contig_seq_str,
@@ -2201,7 +2195,7 @@ def run_transcript_assembly(
                     "restrict_internal_priming_filter_to_monoexonic"
                 ],
             )
-            logger.info("After filtering, have {} transcripts".format(len(transcripts)))
+            logger.info(f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts")
             if len(transcripts) < 1:
                 logger.info(
                     "-no transcripts on contig {} {} survived internal priming filtering".format(
@@ -2226,7 +2220,7 @@ def run_transcript_assembly(
 
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha  # restore for final quant step.
 
-    logger.info("Running final quant for {} transcripts".format(len(transcripts)))
+    logger.info(f"[{contig_acc}{contig_strand}] Running final quant for {len(transcripts)} transcripts")
 
     q = run_quant_only(
         contig_acc,
@@ -2259,8 +2253,13 @@ def run_transcript_assembly(
     if len(transcripts_removed) > 0:
         transcripts = transcripts_kept
 
+    # Build a contig/strand prefix for final quant logs
+    try:
+        _prefix = f"[{contig_acc}{contig_strand}] " if contig_acc and contig_strand else None
+    except Exception:
+        _prefix = None
     frac_read_assignments = q._estimate_isoform_read_support(
-        transcripts
+        transcripts, prefix_str=_prefix
     )  ##//TODO: make frac read assignments a member of the quantifier obj. Shouldn't need to run it again here unless transcripts got filtered above.
 
     ###############################################
@@ -2296,9 +2295,12 @@ def run_transcript_assembly(
 
     ## report transcripts in GTF format
     logger.info(
-        "writing gtf output for {} [{}] containing {} transcripts".format(
-            contig_acc, contig_strand, len(transcripts)
-        )
+        "[%s%s] writing gtf output for %s [%s] containing %d transcripts",
+        contig_acc,
+        contig_strand,
+        contig_acc,
+        contig_strand,
+        len(transcripts),
     )
 
     for transcript in transcripts:

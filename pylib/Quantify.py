@@ -53,11 +53,16 @@ class Quantify:
             gene_id = transcript.get_gene_id()
             gene_to_transcripts[gene_id].append(transcript)
 
-        logger.info(
-            "have {} genes and {} isoforms to quantify.".format(
-                len(gene_to_transcripts), len(transcripts)
+        try:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] have {len(gene_to_transcripts)} genes and {len(transcripts)} isoforms to quantify."
             )
-        )
+        except Exception:
+            logger.info(
+                "have {} genes and {} isoforms to quantify.".format(
+                    len(gene_to_transcripts), len(transcripts)
+                )
+            )
 
         # assign path nodes to gene
         # also assign gene_id to transcript objs
@@ -76,12 +81,35 @@ class Quantify:
             trans_coords = sorted(trans_coords)
             gene_lend = trans_coords[0]
             gene_rend = trans_coords[-1]
-            logger.info(
-                f"quant estimates for isoforms of {gene_id} {contig_acc}{contig_strand}:{gene_lend}-{gene_rend}"
-            )
+            try:
+                logger.info(
+                    "[%s%s] quant estimates for isoforms of %s %s%s:%d-%d",
+                    contig_acc,
+                    contig_strand,
+                    gene_id,
+                    contig_acc,
+                    contig_strand,
+                    gene_lend,
+                    gene_rend,
+                )
+            except Exception:
+                logger.info(
+                    "quant estimates for isoforms of %s %s%s:%d-%d",
+                    gene_id,
+                    contig_acc,
+                    contig_strand,
+                    gene_lend,
+                    gene_rend,
+                )
+
+            # build a contig/strand prefix for downstream logs
+            try:
+                prefix_str = f"[{contig_acc}{contig_strand}] " if contig_acc and contig_strand else None
+            except Exception:
+                prefix_str = None
 
             gene_transcript_to_fractional_read_assignment = (
-                self._estimate_isoform_read_support(transcripts_list)
+                self._estimate_isoform_read_support(transcripts_list, prefix_str=prefix_str)
             )
             # copy over to the full data structure
             for transcript_id in gene_transcript_to_fractional_read_assignment:
@@ -124,7 +152,19 @@ class Quantify:
         fraction_read_align_overlap=LRAA_Globals.config["fraction_read_align_overlap"],
     ):
 
-        logger.info("# Assigning reads to transcripts")
+        try:
+            ca = splice_graph.get_contig_acc()
+            cs = splice_graph.get_contig_strand()
+        except Exception:
+            ca, cs = None, None
+
+        try:
+            if ca is not None and cs is not None:
+                logger.info(f"[{ca}{cs}] # Assigning reads to transcripts")
+            else:
+                logger.info("# Assigning reads to transcripts")
+        except Exception:
+            logger.info("# Assigning reads to transcripts")
 
         local_debug = False
 
@@ -140,7 +180,13 @@ class Quantify:
         mp_count_pairs = mp_counter.get_all_MultiPathCountPairs()
 
         num_mp_count_pairs = len(mp_count_pairs)
-        logger.info("- have {} mp_count_pairs".format(num_mp_count_pairs))
+        try:
+            if ca is not None and cs is not None:
+                logger.info(f"[{ca}{cs}] - have {num_mp_count_pairs} mp_count_pairs")
+            else:
+                logger.info("- have {} mp_count_pairs".format(num_mp_count_pairs))
+        except Exception:
+            logger.info("- have {} mp_count_pairs".format(num_mp_count_pairs))
 
         # progress monitoring configuration
         show_progress = LRAA_Globals.config.get("show_progress_quant_assign", True)
@@ -227,7 +273,13 @@ class Quantify:
                     sys.stderr.flush()
                 except Exception:
                     # fall back to logger in case stderr is unavailable
-                    logger.info(msg.strip())
+                    try:
+                        if ca is not None and cs is not None:
+                            logger.info(f"[{ca}{cs}] {msg.strip()}")
+                        else:
+                            logger.info(msg.strip())
+                    except Exception:
+                        pass
                 last_progress_time = now
 
         for mp_count_pair in mp_count_pairs:
@@ -465,25 +517,30 @@ class Quantify:
             num_read_counts_total = 1e-5  # ditto above
 
         ## audit summary
-        audit_txt = "\n".join(
-            [
-                "num_paths_total: {}, num_read_counts_total: {}".format(
-                    num_paths_total, num_read_counts_total
-                ),
-                "\tnum_paths_anchored_to_gene: {} = {:.2f}%, num_read_counts_anchored_to_gene: {} = {:.2f}%\n".format(
-                    num_paths_anchored_to_gene,
-                    num_paths_anchored_to_gene / num_paths_total * 100,
-                    num_read_counts_anchored_to_gene,
-                    num_read_counts_anchored_to_gene / num_read_counts_total * 100,
-                ),
-                "\tnum_paths_assigned_to_trans: {} = {:.2f}%, num_read_counts_assigned_to_trans: {} = {:.2f}%\n".format(
-                    num_paths_assigned,
-                    num_paths_assigned / num_paths_total * 100,
-                    num_read_counts_assigned,
-                    num_read_counts_assigned / num_read_counts_total * 100,
-                ),
-            ]
-        )
+        lines = [
+            "num_paths_total: {}, num_read_counts_total: {}".format(
+                num_paths_total, num_read_counts_total
+            ),
+            "\tnum_paths_anchored_to_gene: {} = {:.2f}%, num_read_counts_anchored_to_gene: {} = {:.2f}%\n".format(
+                num_paths_anchored_to_gene,
+                num_paths_anchored_to_gene / num_paths_total * 100,
+                num_read_counts_anchored_to_gene,
+                num_read_counts_anchored_to_gene / num_read_counts_total * 100,
+            ),
+            "\tnum_paths_assigned_to_trans: {} = {:.2f}%, num_read_counts_assigned_to_trans: {} = {:.2f}%\n".format(
+                num_paths_assigned,
+                num_paths_assigned / num_paths_total * 100,
+                num_read_counts_assigned,
+                num_read_counts_assigned / num_read_counts_total * 100,
+            ),
+        ]
+
+        try:
+            prefix = f"[{ca}{cs}] " if ca is not None and cs is not None else ""
+        except Exception:
+            prefix = ""
+
+        audit_txt = "\n".join([prefix + x for x in lines])
 
         logger.debug(audit_txt)
         logger.info(audit_txt)
@@ -1018,7 +1075,7 @@ class Quantify:
 
         return dist
 
-    def _estimate_isoform_read_support(self, transcripts):
+    def _estimate_isoform_read_support(self, transcripts, prefix_str=None):
         """
 
         Given the reads assigned to the transcript (accessed with transcript.get_read_names() )
@@ -1034,11 +1091,23 @@ class Quantify:
 
         """
 
-        logger.info(
-            "-estimating isoform read support for {} transcripts.".format(
-                len(transcripts)
+        try:
+            if prefix_str:
+                logger.info(
+                    f"{prefix_str}-estimating isoform read support for {len(transcripts)} transcripts."
+                )
+            else:
+                logger.info(
+                    "-estimating isoform read support for {} transcripts.".format(
+                        len(transcripts)
+                    )
+                )
+        except Exception:
+            logger.info(
+                "-estimating isoform read support for {} transcripts.".format(
+                    len(transcripts)
+                )
             )
-        )
 
         start_time = time.time()
 
@@ -1052,7 +1121,7 @@ class Quantify:
                 transcript_to_expr_val,
                 transcript_to_fractional_mp_assignment,
                 transcript_to_read_count,
-            ) = EM.run_EM(transcripts, self._max_EM_iterations)
+            ) = EM.run_EM(transcripts, self._max_EM_iterations, prefix_str=prefix_str)
 
         else:
             # simple equal fractional assignment of reads to compatible transcripts
@@ -1146,11 +1215,23 @@ class Quantify:
 
         end_time = time.time()
 
-        logger.info(
-            "Time for quant of {} transcripts = {:.2f} minutes".format(
-                len(transcripts), (end_time - start_time) / 60
+        try:
+            if prefix_str:
+                logger.info(
+                    f"{prefix_str}Time for quant of {len(transcripts)} transcripts = {(end_time - start_time) / 60:.2f} minutes"
+                )
+            else:
+                logger.info(
+                    "Time for quant of {} transcripts = {:.2f} minutes".format(
+                        len(transcripts), (end_time - start_time) / 60
+                    )
+                )
+        except Exception:
+            logger.info(
+                "Time for quant of {} transcripts = {:.2f} minutes".format(
+                    len(transcripts), (end_time - start_time) / 60
+                )
             )
-        )
 
         return transcript_to_fractional_mp_assignment
 

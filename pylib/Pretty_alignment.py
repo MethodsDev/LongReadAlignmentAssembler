@@ -211,8 +211,15 @@ class Pretty_alignment:
 
     @classmethod
     def prune_long_terminal_introns(cls, pretty_alignments, splice_graph):
+        # Prefix logs with contig/strand when available via splice_graph
+        try:
+            ca = splice_graph.get_contig_acc() if splice_graph else None
+            cs = splice_graph.get_contig_strand() if splice_graph else None
+            prefix = f"[{ca}{cs}] " if ca and cs else ""
+        except Exception:
+            prefix = ""
 
-        logger.info("Removing long terminal introns from pretty alignments.")
+        logger.info(f"{prefix}Removing long terminal introns from pretty alignments.")
 
         for pretty_alignment in pretty_alignments:
 
@@ -227,9 +234,7 @@ class Pretty_alignment:
                 leftmost_intron_len = leftmost_intron[1] - leftmost_intron[0] + 1
                 if leftmost_intron_len > LRAA_Globals.config["max_intron_length"]:
                     logger.info(
-                        "-pruning long intron {} from left of pretty alignment {}".format(
-                            leftmost_intron, pretty_alignment
-                        )
+                        f"{prefix}-pruning long intron {leftmost_intron} from left of pretty alignment {pretty_alignment}"
                     )
                     alignment_segments.pop(0)
                     trimmed = True
@@ -240,9 +245,7 @@ class Pretty_alignment:
                 rightmost_intron_len = rightmost_intron[1] - rightmost_intron[0] + 1
                 if rightmost_intron_len > LRAA_Globals.config["max_intron_length"]:
                     logger.info(
-                        "-pruning long intron {} from left of pretty alignment {}".format(
-                            rightmost_intron, pretty_alignment
-                        )
+                        f"{prefix}-pruning long intron {rightmost_intron} from left of pretty alignment {pretty_alignment}"
                     )
                     alignment_segments.pop()
                     trimmed = True
@@ -254,7 +257,13 @@ class Pretty_alignment:
 
     @classmethod
     def try_correct_alignments(cls, pretty_alignments_list, splice_graph, contig_seq):
-        logger.info("Attempting to correct alignments at soft-clips")
+        try:
+            ca = splice_graph.get_contig_acc() if splice_graph else None
+            cs = splice_graph.get_contig_strand() if splice_graph else None
+            prefix = f"[{ca}{cs}] " if ca and cs else ""
+        except Exception:
+            prefix = ""
+        logger.info(f"{prefix}Attempting to correct alignments at soft-clips")
 
         max_softclip_realign_test = LRAA_Globals.config["max_softclip_realign_test"]
         min_softclip_realign_test = LRAA_Globals.config["min_softclip_realign_test"]

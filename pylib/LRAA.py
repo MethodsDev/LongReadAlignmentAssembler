@@ -114,7 +114,7 @@ class LRAA:
         self._mp_counter = mp_counter
 
         if input_transcripts is not None:
-            logger.info("-incorporating input transcripts into multpath graph")
+            logger.info("[%s%s] -incorporating input transcripts into multpath graph", contig_acc, contig_strand)
             self._incorporate_transcripts_into_mp_counter(
                 mp_counter, input_transcripts, bam_file
             )
@@ -149,11 +149,11 @@ class LRAA:
             debug_multipath_graph_filename = "__multipath_graph.{}.{}.dat".format(
                 contig_acc, contig_strand
             )
-            logger.info("writing {}".format(debug_multipath_graph_filename))
+            logger.info("[%s%s] writing %s", contig_acc, contig_strand, debug_multipath_graph_filename)
             multipath_graph.describe_graph(debug_multipath_graph_filename)
 
         build_time = time.time() - start_time
-        logger.info("-multipath graph building took {:.1f} seconds.".format(build_time))
+        logger.info("[%s%s] -multipath graph building took %.1f seconds.", contig_acc, contig_strand, build_time)
 
         return mp_counter
 
@@ -168,7 +168,7 @@ class LRAA:
 
         num_mpg_components = len(mpg_components)
 
-        logger.info("{} connected components identified".format(num_mpg_components))
+        logger.info("[%s%s] %d connected components identified", self._contig_acc, self._contig_strand, num_mpg_components)
 
         if LRAA_Globals.DEBUG:
             mpg.write_mp_graph_nodes_to_gtf("__mpgns.pre.gtf")
@@ -177,9 +177,11 @@ class LRAA:
             mpg_components, LRAA.min_transcript_length
         )
         logger.info(
-            "{} components surviving the min length {} criterion.".format(
-                len(mpg_components), LRAA.min_transcript_length
-            )
+            "[%s%s] %d components surviving the min length %d criterion.",
+            self._contig_acc,
+            self._contig_strand,
+            len(mpg_components),
+            LRAA.min_transcript_length,
         )
 
         if LRAA_Globals.DEBUG:
@@ -192,12 +194,14 @@ class LRAA:
         q = None
         mpm = None
         if USE_MULTIPROCESSOR:
-            logger.info("-Running assembly jobs with multiprocessing")
+            logger.info("[%s%s] -Running assembly jobs with multiprocessing", self._contig_acc, self._contig_strand)
             q = Queue()
             mpm = MultiProcessManager(self._num_parallel_processes, q)
         else:
             logger.info(
-                "-Running using single thread, so multiprocessing disabled here."
+                "[%s%s] -Running using single thread, so multiprocessing disabled here.",
+                self._contig_acc,
+                self._contig_strand,
             )  # easier for debugging sometimes
 
         def get_mpgn_list_coord_span(mpgn_list):
@@ -231,14 +235,15 @@ class LRAA:
             component_counter += 1
             coord_span = get_mpgn_list_coord_span(mpg_component)
             logger.info(
-                "LRAA - assembly of component {} size {} region: {}{}:{}-{}".format(
-                    component_counter,
-                    mpg_component_size,
-                    self._contig_acc,
-                    self._contig_strand,
-                    coord_span[0],
-                    coord_span[1],
-                )
+                "[%s%s] LRAA - assembly of component %d size %d region: %s%s:%d-%d",
+                self._contig_acc,
+                self._contig_strand,
+                component_counter,
+                mpg_component_size,
+                self._contig_acc,
+                self._contig_strand,
+                coord_span[0],
+                coord_span[1],
             )
 
             mpg_token = "{}{}:{}-{}".format(
@@ -292,15 +297,16 @@ class LRAA:
 
                 fraction_jobs_complete = component_counter / num_mpg_components
                 logger.info(
-                    "progress monitor for {} {} : {:.2f}% of components processed.".format(
-                        self._contig_acc, self._contig_strand, fraction_jobs_complete * 100
-                    )
+                    "[%s%s] progress monitor: %.2f%% of components processed.",
+                    self._contig_acc,
+                    self._contig_strand,
+                    fraction_jobs_complete * 100,
                 )
 
         if USE_MULTIPROCESSOR:
-            logger.info("WAITING ON REMAINING MULTIPROCESSING JOBS")
+            logger.info("[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS", self._contig_acc, self._contig_strand)
             num_failures = mpm.wait_for_remaining_processes()
-            logger.info(mpm.summarize_status())
+            logger.info("[%s%s] %s", self._contig_acc, self._contig_strand, mpm.summarize_status())
             if num_failures:
                 raise RuntimeError(
                     "Error, {} component failures encountered".format(num_failures)
@@ -311,9 +317,9 @@ class LRAA:
                 all_reconstructed_transcripts.extend(entry)
 
         logger.info(
-            "Finished round of isoform reconstruction for {} {}".format(
-                self._contig_acc, self._contig_strand
-            )
+            "[%s%s] Finished round of isoform reconstruction",
+            self._contig_acc,
+            self._contig_strand,
         )
 
         return all_reconstructed_transcripts
@@ -332,14 +338,19 @@ class LRAA:
 
         start_time = time.time()
 
+        contig_acc = self._splice_graph.get_contig_acc()
+        contig_strand = self._splice_graph.get_contig_strand()
+
         using_multiprocessing = q is not None
         component_size = len(mpg_component)
         logger.info(
-            f"ISOFORM RECONSTRUCTION. multiprocessing[{using_multiprocessing}] {mpg_token} component_size: {component_size}"
+            "[%s%s] ISOFORM RECONSTRUCTION. multiprocessing[%s] %s component_size: %d",
+            contig_acc,
+            contig_strand,
+            str(using_multiprocessing),
+            mpg_token,
+            component_size,
         )
-
-        contig_acc = self._splice_graph.get_contig_acc()
-        contig_strand = self._splice_graph.get_contig_strand()
 
         gene_id_use = ":".join(
             ["g", contig_acc, contig_strand, "comp-" + str(component_counter)]
@@ -358,7 +369,7 @@ class LRAA:
                 mpg_components_for_trellis.append(mpgn)
 
         mpg_component = mpg_components_for_trellis  # replace for trellis building
-        logger.info("-num vertices for trellis: {}".format(len(mpg_component)))
+        logger.info("[%s%s] -num vertices for trellis: %d", contig_acc, contig_strand, len(mpg_component))
 
         MIN_SCORE = LRAA_Globals.config["min_path_score"]
 
@@ -477,9 +488,11 @@ class LRAA:
             transcripts = self._collapse_identical_intron_isoforms(transcripts)
 
         logger.info(
-            "-reconstructed {} transcripts from component {}".format(
-                len(transcripts), component_counter
-            )
+            "[%s%s] -reconstructed %d transcripts from component %d",
+            contig_acc,
+            contig_strand,
+            len(transcripts),
+            component_counter,
         )
 
         ###################
@@ -643,16 +656,18 @@ class LRAA:
         grouped_alignments = self._group_alignments_by_read_name(pretty_alignments)
 
         logger.info(
-            "-got {} pretty alignments grouped into {} alignment groups.".format(
-                len(pretty_alignments), len(grouped_alignments)
-            )
+            "[%s%s] -got %d pretty alignments grouped into %d alignment groups.",
+            contig_acc,
+            contig_strand,
+            len(pretty_alignments),
+            len(grouped_alignments),
         )
 
         # capture the read->path assignments:
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh = open(f"__read_graph_mappings.dat.{ITER}", "a")
 
-        logger.info("-start: mapping read alignments to the graph")
+        logger.info(f"[{contig_acc}{contig_strand}] -start: mapping read alignments to the graph")
         num_alignments = len(grouped_alignments)
 
         # progress config
@@ -828,7 +843,7 @@ class LRAA:
                     rss = _rss_mb()
                     mem_txt = f" rss={rss:.1f}MB" if rss is not None else ""
                     logger.info(
-                        f"[map-reads] {i+1}/{num_alignments} ({frac*100:.2f}%) kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path} rate={rate:.2f}/s{mem_txt}"
+                        f"[{contig_acc}{contig_strand}] [map-reads] {i+1}/{num_alignments} ({frac*100:.2f}%) kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path} rate={rate:.2f}/s{mem_txt}"
                     )
                     last_log_emit = now
 
@@ -852,7 +867,7 @@ class LRAA:
 
         # Final summary and completion log
         logger.info(
-            f"-done: mapping read alignments to the graph; total={num_processed} kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path}"
+            f"[{contig_acc}{contig_strand}] -done: mapping read alignments to the graph; total={num_processed} kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path}"
         )
 
         return mp_counter

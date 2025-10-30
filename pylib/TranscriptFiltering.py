@@ -49,10 +49,17 @@ def filter_isoforms_by_min_isoform_fraction(
 
     min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
 
+    # Build contig/strand prefix from transcripts if available
+    try:
+        _pref_t = transcripts[0] if transcripts else None
+        _ca = _pref_t.get_contig_acc() if _pref_t else None
+        _cs = _pref_t.get_strand() if _pref_t else None
+        _prefix = f"[{_ca}{_cs}] " if _ca and _cs else ""
+    except Exception:
+        _prefix = ""
+
     logger.info(
-        "Filtering transcripts according to min isoform fraction: {}".format(
-            min_isoform_fraction
-        )
+        f"{_prefix}Filtering transcripts according to min isoform fraction: {min_isoform_fraction}"
     )
 
     transcript_id_to_transcript_obj = dict(
@@ -95,7 +102,18 @@ def filter_isoforms_by_min_isoform_fraction(
                 False  # update to True if we do filter an isoform out.
             )
 
-            frac_read_assignments = q._estimate_isoform_read_support(isoforms_of_gene)
+            # Build a [contig+strand] prefix for this gene's isoforms
+            try:
+                _t0 = next(iter(isoforms_of_gene)) if isoforms_of_gene else None
+                _ca = _t0.get_contig_acc() if _t0 else None
+                _cs = _t0.get_strand() if _t0 else None
+                _prefix = f"[{_ca}{_cs}] " if _ca and _cs else None
+            except Exception:
+                _prefix = None
+
+            frac_read_assignments = q._estimate_isoform_read_support(
+                isoforms_of_gene, prefix_str=_prefix
+            )
 
             gene_id_to_read_count = Quantify.get_gene_read_counts(
                 frac_read_assignments, transcript_id_to_transcript_obj
@@ -218,7 +236,14 @@ def _get_gene_id_to_transcripts(transcripts):
 
 def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assignments):
 
-    logger.info("Pruning likely degradation products")
+    try:
+        _ca = splice_graph.get_contig_acc()
+        _cs = splice_graph.get_contig_strand()
+        _prefix = f"[{_ca}{_cs}] " if _ca and _cs else ""
+    except Exception:
+        _prefix = ""
+
+    logger.info(f"{_prefix}Pruning likely degradation products")
 
     sg = splice_graph
 
@@ -423,7 +448,14 @@ def filter_internally_primed_transcripts(
     restrict_filter_to_monoexonic,
 ):
 
-    logger.info("filtering internally primed. Restricting to monoexonic: {}".format(restrict_filter_to_monoexonic))
+    # Build prefix using contig_strand and contig accession from first transcript if available
+    try:
+        _ca = transcripts[0].get_contig_acc() if transcripts else None
+        _prefix = f"[{_ca}{contig_strand}] " if _ca and contig_strand else ""
+    except Exception:
+        _prefix = ""
+
+    logger.info(f"{_prefix}filtering internally primed. Restricting to monoexonic: {restrict_filter_to_monoexonic}")
 
     known_polyA_dist_ok_window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
     known_polyA_dist_ok_window_half = int(known_polyA_dist_ok_window / 2)
@@ -457,11 +489,16 @@ def filter_internally_primed_transcripts(
             transcript_lend, transcript_rend, strand, contig_seq_str
         )
 
-        logger.info(
-            "Transcript {} looks internally primed? {}".format(
-                transcript, looks_internally_primed
+        try:
+            logger.info(
+                f"{_prefix}Transcript {transcript} looks internally primed? {looks_internally_primed}"
             )
-        )
+        except Exception:
+            logger.info(
+                "Transcript {} looks internally primed? {}".format(
+                    transcript, looks_internally_primed
+                )
+            )
 
         # persist evaluation result (may later be overridden in special monoexonic restriction case)
         transcript.set_likely_internal_primed(looks_internally_primed)
@@ -550,7 +587,16 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
     transcript_id_to_splice_compatible_containments = defaultdict(set)
     transcript_id_to_splice_compatible_contained_by = defaultdict(set)
 
-    logger.info("-evaluationg splice compatible alt isoforms:")
+    # Prefix using transcript context if available
+    try:
+        _t = transcripts[0] if transcripts else None
+        _ca = _t.get_contig_acc() if _t else None
+        _cs = _t.get_strand() if _t else None
+        _prefix = f"[{_ca}{_cs}] " if _ca and _cs else ""
+    except Exception:
+        _prefix = ""
+
+    logger.info(f"{_prefix}-evaluationg splice compatible alt isoforms:")
 
     if len(transcripts) < 2:
         return (
@@ -630,9 +676,21 @@ def filter_novel_isoforms_by_min_read_support(
 
     retained_transcripts = list()
 
+    # Build prefix from first transcript if available
+    try:
+        _t = transcripts[0] if transcripts else None
+        _ca = _t.get_contig_acc() if _t else None
+        _cs = _t.get_strand() if _t else None
+        _prefix = f"[{_ca}{_cs}] " if _ca and _cs else ""
+    except Exception:
+        _prefix = ""
+
     for transcript in transcripts:
         if transcript.is_novel_isoform() is True:
-            logger.info("transcript {} is a novel isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
+            try:
+                logger.info(f"{_prefix}transcript {transcript} is a novel isoform with {transcript.get_read_counts_assigned()} read support")
+            except Exception:
+                logger.info("transcript {} is a novel isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
             if transcript.get_read_counts_assigned() >= min_reads_novel_isoform:
                 retained_transcripts.append(transcript)
             else:
@@ -648,7 +706,10 @@ def filter_novel_isoforms_by_min_read_support(
                 pass
         else:
             # known transcript, retaining.
-            logger.info("transcript {} is a known isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
+            try:
+                logger.info(f"{_prefix}transcript {transcript} is a known isoform with {transcript.get_read_counts_assigned()} read support")
+            except Exception:
+                logger.info("transcript {} is a known isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
             retained_transcripts.append(transcript)
 
     return retained_transcripts

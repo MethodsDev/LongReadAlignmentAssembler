@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def run_EM(
     transcripts: list,
     max_EM_iterations: int = 1000,
+    prefix_str=None,
 ):
 
     if type(transcripts) != list:
@@ -54,18 +55,24 @@ def run_EM(
     for mp in multipaths:
         num_reads_mapped += mp.get_read_count()
 
-    logger.info(
-        f"Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
-    )
+    try:
+        if prefix_str:
+            logger.info(
+                f"{prefix_str}Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
+            )
+        else:
+            logger.info(
+                f"Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
+            )
+    except Exception:
+        logger.info(
+            f"Running EM for {num_transcripts} transcripts with {num_reads_mapped} mapped reads."
+        )
 
     # inputs to EM
-    mp_assignments = (
-        list()
-    )  # (list of lists): Each element is a list of transcript indices (0-based) to which the read is assigned (unique or ambiguous).
-    mp_weights = (
-        list()
-    )  # (list of lists): A matrix of weights where each sublist corresponds to the weights of a read for the assigned transcripts.
-    mp_read_counts = list()  # number of reads assigned to mp
+    mp_assignments = list()  # list of lists of transcript indices
+    mp_weights = list()  # list of lists of weights aligned with mp_assignments
+    mp_read_counts = list()  # number of reads assigned to each mp
 
     # populate inputs to EM
     start_prep_time = time.time()
@@ -96,10 +103,15 @@ def run_EM(
     end_prep_time = time.time()
 
     EM_prep_time = end_prep_time - start_prep_time
-    logger.info("EM_prep_time: {:.2f} minutes".format(EM_prep_time / 60))
+    try:
+        if prefix_str:
+            logger.info(f"{prefix_str}EM_prep_time: {EM_prep_time / 60:.2f} minutes")
+        else:
+            logger.info("EM_prep_time: {:.2f} minutes".format(EM_prep_time / 60))
+    except Exception:
+        logger.info("EM_prep_time: {:.2f} minutes".format(EM_prep_time / 60))
 
     if local_debug:
-
         mp_weights_for_printing = list()
         for _list in mp_weights:
             mp_weights_for_printing.append([f"{x:.3f}" for x in _list])
@@ -137,13 +149,14 @@ def run_EM(
         num_transcripts,
         max_iter=max_EM_iterations,
         base_alpha=alpha,
+        prefix_str=prefix_str,
     )
 
     if local_debug:
 
         fractional_mp_assignments_array_for_printing = list()
         for _list in fractional_mp_assignments_array:
-            fractional_read_assignments_array_for_printing.append(
+            fractional_mp_assignments_array_for_printing.append(
                 [f"{x:.4f}" for x in _list]
             )
 
@@ -233,6 +246,7 @@ def em_algorithm_with_weights(
     max_iter=100,
     tol=1e-6,
     base_alpha=0.1,
+    prefix_str=None,
 ):
     """
     Perform the EM algorithm to estimate transcript expression levels with weighted multipaths.
@@ -314,9 +328,19 @@ def em_algorithm_with_weights(
         # Check for convergence
         if np.linalg.norm(transcript_expression_levels - prev_expression_levels) < tol:
             runtime = time.time() - time_start
-            logger.info(
-                f"Converged after {iteration + 1} iterations. (time={runtime:.3f} sec. for {num_transcripts} transcripts)"
-            )
+            try:
+                if prefix_str:
+                    logger.info(
+                        f"{prefix_str}Converged after {iteration + 1} iterations. (time={runtime:.3f} sec. for {num_transcripts} transcripts)"
+                    )
+                else:
+                    logger.info(
+                        f"Converged after {iteration + 1} iterations. (time={runtime:.3f} sec. for {num_transcripts} transcripts)"
+                    )
+            except Exception:
+                logger.info(
+                    f"Converged after {iteration + 1} iterations. (time={runtime:.3f} sec. for {num_transcripts} transcripts)"
+                )
             break
 
         prev_expression_levels = transcript_expression_levels.copy()
@@ -375,10 +399,10 @@ def test_run_EM():
     transcripts = [transcript_0, transcript_1, transcript_2]
 
     (
-        transcript_to_mp_count,
-        transcript_to_fractional_mp_assignment,
         transcript_to_expr_val,
-    ) = run_EM(transcripts, mp_to_read_count)
+        transcript_to_fractional_mp_assignment,
+        transcript_to_mp_count,
+    ) = run_EM(transcripts, 1000)
 
     print("#LRAA-interfaced results:\n\n")
     print(

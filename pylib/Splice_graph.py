@@ -214,15 +214,11 @@ class Splice_graph:
 
         if len(bam_files) == 1:
             logger.info(
-                "creating splice graph for {} leveraging bam {}, strand {}".format(
-                    contig_acc, bam_files[0], contig_strand
-                )
+                f"[{contig_acc}{contig_strand}] creating splice graph leveraging bam {bam_files[0]}"
             )
         else:
             logger.info(
-                "creating splice graph for {} leveraging {} bam files ({}), strand {}".format(
-                    contig_acc, len(bam_files), ",".join([os.path.basename(str(x)) for x in bam_files]), contig_strand
-                )
+                f"[{contig_acc}{contig_strand}] creating splice graph leveraging {len(bam_files)} bam files ({','.join([os.path.basename(str(x)) for x in bam_files])})"
             )
 
         self._contig_acc = contig_acc
@@ -401,7 +397,10 @@ class Splice_graph:
         # get genome contig sequence
         contig_seq_str = self._contig_seq_str
         contig_len = self._contig_seq_len
-        logging.info("initing coverage array of len: {}".format(contig_len))
+        try:
+            logging.info("[{}{}] initing coverage array of len: {}".format(self._contig_acc, self._contig_strand, contig_len))
+        except Exception:
+            logging.info("initing coverage array of len: {}".format(contig_len))
         if contig_len > Splice_graph._max_genomic_contig_length:
             raise RuntimeError(
                 "genomic contig length {} exceeds maximum allowed {}".format(
@@ -412,9 +411,12 @@ class Splice_graph:
         # init depth of coverage array
         self._contig_base_cov = [0 for i in range(0, contig_len + 1)]
         try:
-            logging.info("coverage array initialized; populating from alignments next")
+            logging.info("[{}{}] coverage array initialized; populating from alignments next".format(self._contig_acc, self._contig_strand))
         except Exception:
-            pass
+            try:
+                logging.info("coverage array initialized; populating from alignments next")
+            except Exception:
+                pass
 
         return
 
@@ -450,7 +452,10 @@ class Splice_graph:
 
         assert contig_strand in ("+", "-")
 
-        logger.info("-got {} pretty alignments.".format(len(pretty_alignments)))
+        try:
+            logger.info("[{}{}] -got {} pretty alignments.".format(contig_acc, contig_strand, len(pretty_alignments)))
+        except Exception:
+            logger.info("-got {} pretty alignments.".format(len(pretty_alignments)))
 
         total_read_alignments_used = 0
 
@@ -610,15 +615,22 @@ class Splice_graph:
                     rss = _rss_mb()
                     mem_txt = f" rss={rss:.1f}MB" if rss is not None else ""
                     logger.info(
-                        f"[sg-populate] {processed}/{total} ({frac*100:.2f}%) bases+=~{total_bases_added} intron_candidates={len(intron_counter)} rate={rate:.2f}/s{mem_txt}"
+                        f"[{contig_acc}{contig_strand}] [sg-populate] {processed}/{total} ({frac*100:.2f}%) bases+=~{total_bases_added} intron_candidates={len(intron_counter)} rate={rate:.2f}/s{mem_txt}"
                     )
                     last_log = now
 
-        logger.info(
-            "-total read alignments used: {} (~bases added: {})".format(
-                total_read_alignments_used, total_bases_added
+        try:
+            logger.info(
+                "[{}{}] -total read alignments used: {} (~bases added: {})".format(
+                    contig_acc, contig_strand, total_read_alignments_used, total_bases_added
+                )
             )
-        )
+        except Exception:
+            logger.info(
+                "-total read alignments used: {} (~bases added: {})".format(
+                    total_read_alignments_used, total_bases_added
+                )
+            )
 
         # retain only those introns that meet the min threshold
         for intron_coords, count in intron_counter.items():
@@ -738,7 +750,7 @@ class Splice_graph:
 
         """
 
-        logger.info("Integrating input transcript structures.")
+        logger.info(f"[{contig_acc}{contig_strand}] Integrating input transcript structures.")
 
         TSS_evidence_counter = defaultdict(int)
         PolyA_evidence_counter = defaultdict(int)
@@ -1309,9 +1321,7 @@ class Splice_graph:
                     introns_to_delete.add(alt_intron)
 
         logger.info(
-            "removing {} low frequency introns with shared {} coord".format(
-                len(introns_to_delete), left_or_right
-            )
+            f"[{self._contig_acc}{self._contig_strand}] removing {len(introns_to_delete)} low frequency introns with shared {left_or_right} coord"
         )
 
         self.purge_introns_from_splice_graph(introns_to_delete)
@@ -1586,9 +1596,10 @@ class Splice_graph:
             exons_to_purge = exons_to_purge - exons_to_retain
 
         logger.info(
-            "-removing {} lowly expressed exon segments based on intron overlap".format(
-                len(exons_to_purge)
-            )
+            "[%s%s] -removing %d lowly expressed exon segments based on intron overlap",
+            self.get_contig_acc(),
+            self.get_contig_strand(),
+            len(exons_to_purge),
         )
         if exons_to_purge:
             draft_splice_graph.remove_nodes_from(exons_to_purge)
@@ -1618,7 +1629,7 @@ class Splice_graph:
                     introns_to_remove.append(node)
 
         logger.info(
-            "-pruning {} now disconnected introns".format(len(introns_to_remove))
+            f"[{self._contig_acc}{self._contig_strand}] -pruning {len(introns_to_remove)} now disconnected introns"
         )
 
         if LRAA_Globals.DEBUG:
@@ -1765,9 +1776,7 @@ class Splice_graph:
                             break
 
         logger.info(
-            "-removing {} low supported introns in exon islands according to min alt splice freq.".format(
-                len(introns_to_prune)
-            )
+            f"[{self._contig_acc}{self._contig_strand}] -removing {len(introns_to_prune)} low supported introns in exon islands according to min alt splice freq."
         )
 
         self.purge_introns_from_splice_graph(introns_to_prune)
@@ -2025,7 +2034,7 @@ class Splice_graph:
 
     def _prune_exon_spurs_at_introns(self):
 
-        logger.info("checking for exon spurs at introns")
+        logger.info(f"[{self._contig_acc}{self._contig_strand}] checking for exon spurs at introns")
 
         exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
 
@@ -2191,12 +2200,12 @@ class Splice_graph:
                     )
 
             logger.info(
-                f"-retaining {num_retained} exon spurs due to overlap with input transcripts"
+                f"[{self._contig_acc}{self._contig_strand}] -retaining {num_retained} exon spurs due to overlap with input transcripts"
             )
             exons_to_prune = exons_no_overlap_with_ref
 
         if exons_to_prune:
-            logger.info("-removing {} exon spurs".format(len(exons_to_prune)))
+            logger.info(f"[{self._contig_acc}{self._contig_strand}] -removing {len(exons_to_prune)} exon spurs")
 
             if LRAA_Globals.DEBUG:
                 with open("__pruned_exon_spurs.list", "a") as ofh:
@@ -2277,7 +2286,7 @@ class Splice_graph:
                         )
                     )
 
-        logger.info("itree validates.")
+        logger.info(f"[{self._contig_acc}{self._contig_strand}] itree validates.")
 
     def _is_unspliced_exon_segment_artifact(self, exon, intron):
 
