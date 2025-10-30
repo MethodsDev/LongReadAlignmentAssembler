@@ -642,17 +642,60 @@ class LRAA:
 
         logger.info("-start: mapping read alignments to the graph")
         num_alignments = len(grouped_alignments)
+
+        # progress config
+        show_progress = LRAA_Globals.config.get("show_progress_mapping", True)
+        prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
+        update_every_n = LRAA_Globals.config.get("mapping_update_every_n", 10000)
+        update_interval = LRAA_Globals.config.get("mapping_update_interval_sec", 2.0)
+
+        pbar = None
+        if show_progress and prefer_tqdm and num_alignments > 0:
+            try:
+                import importlib
+
+                _mod = importlib.import_module("tqdm")
+                _tqdm = getattr(_mod, "tqdm", None)
+                if _tqdm is not None:
+                    pbar = _tqdm(
+                        total=num_alignments,
+                        desc="map-reads",
+                        unit="reads",
+                        leave=False,
+                        dynamic_ncols=True,
+                    )
+            except Exception:
+                pbar = None
+
         prev_time = time.time()
+        last_time_update = prev_time
         for i, read_name in enumerate(grouped_alignments):
-            if i % 10000 == 0:
-                frac_done = i / num_alignments * 100
-                curr_time = time.time()
-                time_delta = curr_time - prev_time
-                mapping_rate = 10000 / time_delta if time_delta > 0 else 1e-6
-                sys.stderr.write(
-                    f"\r[{i} / {num_alignments} =  {frac_done:.2f} rate={mapping_rate:.3e} reads/sec    "
-                )
-                prev_time = curr_time
+            if pbar is not None:
+                try:
+                    pbar.update(1)
+                except Exception:
+                    pass
+            elif show_progress and num_alignments > 0:
+                should_update = False
+                if update_every_n and update_every_n > 0 and i % update_every_n == 0:
+                    should_update = True
+                now = time.time()
+                if (
+                    update_interval
+                    and update_interval > 0
+                    and now - last_time_update >= update_interval
+                ):
+                    should_update = True
+                if should_update:
+                    frac_done = i / num_alignments * 100
+                    time_delta = now - prev_time
+                    proc = max(i, 1)
+                    rate = proc / max(now - prev_time, 1e-6)
+                    sys.stderr.write(
+                        f"\r[{i} / {num_alignments} =  {frac_done:.2f} rate={rate:.3e} reads/sec    "
+                    )
+                    sys.stderr.flush()
+                    last_time_update = now
 
             # print("{}\t{}".format(read_name, len(grouped_alignments[read_name])))
             paths_list = list()
@@ -750,6 +793,18 @@ class LRAA:
 
             with open(f"__mp_counter.{ITER}", "a") as mp_counter_ofh:
                 print(str(mp_counter), file=mp_counter_ofh)
+
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception:
+                pass
+        elif show_progress and num_alignments > 0:
+            try:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
         logger.info("-done: mapping read alignments to the graph")
 

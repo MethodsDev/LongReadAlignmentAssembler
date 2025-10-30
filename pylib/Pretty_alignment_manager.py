@@ -49,6 +49,20 @@ class Pretty_alignment_manager:
                                     SE_read_encapsulation_mask=None,
                                     per_id_QC_raise_error=False):
         
+        # progress/logging: starting pretty alignment retrieval for this contig/strand (and region if set)
+        try:
+            region_txt = (
+                f":{region_lend}-{region_rend}"
+                if region_lend is not None and region_rend is not None
+                else ""
+            )
+            logger.info(
+                f"-start: retrieving pretty alignments for {contig_acc}{contig_strand}{region_txt} from {os.path.basename(bam_file)} "
+                f"(restrict_splice_type={restrict_splice_type}, try_correct_alignments={try_correct_alignments})"
+            )
+        except Exception:
+            # don't let logging failures interfere with processing
+            pass
 
         bam_file_basename = os.path.basename(bam_file)
 

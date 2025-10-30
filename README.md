@@ -22,13 +22,19 @@ Columns (TSV): `epoch_ts, elapsed_sec, rss_mb, cpu_percent, rss_mb_children, cpu
 Notes:
 - Monitoring uses `psutil`. In the provided Docker image it is installed. On bare-metal installs, if `psutil` is unavailable, monitoring will auto-disable with a warning.
 
-## Progress updates during quantification
+## Progress updates during mapping and quantification
 
-While assigning reads to assembled isoforms ("quant" stage), LRAA emits periodic progress updates showing processed/total MultiPath pairs, processing rate, and ETA. You can control this via config overrides:
+LRAA emits progress while:
+1) Mapping read alignments to the splice graph ("map-reads")
+2) Assigning reads to assembled isoforms ("quant-assign")
+
+You can control this via config overrides:
 
 - Enable/disable: `show_progress_quant_assign` (default: true)
+- Enable/disable (mapping): `show_progress_mapping` (default: true)
 - Update every N records: `progress_update_every_n` (default: 1000)
 - Update at least every S seconds: `progress_update_interval_sec` (default: 5.0)
+- Mapping stage update frequency: `mapping_update_every_n` (default: 10000), `mapping_update_interval_sec` (default: 2.0)
 - Prefer tqdm progress bar if available: `use_tqdm_progress` (default: true)
 
 Example using `--config_update`:
@@ -38,7 +44,7 @@ Example using `--config_update`:
 	--bam sample.bam \
 	--genome genome.fa \
 	--gtf targets.gtf \
-	--config_update '{"show_progress_quant_assign": true, "progress_update_every_n": 500, "progress_update_interval_sec": 2.0}'
+		--config_update '{"show_progress_mapping": true, "show_progress_quant_assign": true, "use_tqdm_progress": true, "mapping_update_every_n": 5000, "progress_update_every_n": 500, "progress_update_interval_sec": 2.0}'
 ```
 
 Notes:
