@@ -119,3 +119,9 @@ LRAA partitions work by contig and by splice-graph components. Components exceed
 ## Availability
 
 LRAA is open source under this repository. See `README.md` for installation and quickstart commands, and `Docker/` for containerized execution.
+
+## Troubleshooting parallel runs
+
+- Per-(contig,strand) worker logs: In parallel mode, each worker writes outputs under `<output_prefix>.contigtmp/<contig>/<strand>/`. On failures, an error log is written to `<contig>.<strand>.err.log` in that directory. This file now also captures stderr and Python faulthandler dumps for fatal errors (e.g., segmentation faults), so it should contain diagnostics even if the process exited abruptly.
+- Missing error log: If a job fails and no `.err.log` is present, check the main console output and any scheduler logs. Also look at the worker failure line emitted by LRAA showing the worker exit code. A negative exit code indicates the signal that terminated the worker (e.g., `-9` → SIGKILL, typically OOM).
+- Resuming: On reruns, LRAA will skip completed contig/strand jobs detected by the presence of `<contig>.<strand>.ok` and non-empty outputs in the same directory unless `--no_resume_parallel` is used.

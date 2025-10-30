@@ -226,6 +226,21 @@ def _run_jobs_schedule_and_merge(
     if errs > 0:
         # Provide helpful pointers to per-(contig,strand) error logs before raising
         try:
+            # Also report exit codes/signals for failed workers (negative exitcode => terminated by signal)
+            try:
+                failures = mgr.get_failures()
+                for f in failures:
+                    ec = f.get("exitcode")
+                    pid = f.get("pid")
+                    dur = f.get("duration_sec")
+                    sig_note = ""
+                    if isinstance(ec, int) and ec < 0:
+                        sig_note = f" (terminated by signal {-ec})"
+                    logger.error(
+                        f"Worker failure: name={f.get('name')} pid={pid} exitcode={ec}{sig_note} duration={dur if dur is not None else 'NA'}s"
+                    )
+            except Exception:
+                pass
             for j in jobs:
                 if j.get("skip"):
                     continue
@@ -459,6 +474,37 @@ def _contig_job_runner(job):
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
+    # Establish a persistent per-worker error log early and route stderr to it.
+    # Also enable Python faulthandler to capture fatal signals (e.g., segfaults).
+    err_log_path = f"{tmp_prefix}.err.log"
+    err_fh = None
+    try:
+        import faulthandler, signal  # type: ignore
+        err_fh = open(err_log_path, "at", buffering=1)
+        try:
+            sys.stderr = err_fh  # redirect worker stderr to file
+        except Exception:
+            pass
+        try:
+            faulthandler.enable(file=err_fh, all_threads=True)
+            # Best effort: also dump on TERM/INT for visibility
+            try:
+                faulthandler.register(signal.SIGTERM, file=err_fh, all_threads=True)
+            except Exception:
+                pass
+            try:
+                faulthandler.register(signal.SIGINT, file=err_fh, all_threads=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            print(f"[worker-start] contig={contig_acc} strand={contig_strand} pid={os.getpid()}", file=err_fh, flush=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     # Expose per-(contig,strand) tmp dir to downstream components (read-tracking stores, alignment cache)
     try:
         os.environ["LRAA_TMP_DIR"] = tmp_dir
@@ -617,6 +663,19 @@ def _contig_job_runner(job):
         try:
             if worker_monitor is not None:
                 worker_monitor.stop()
+        except Exception:
+            pass
+        # Flush and close error log last to capture late errors
+        try:
+            if err_fh is not None:
+                try:
+                    err_fh.flush()
+                except Exception:
+                    pass
+                try:
+                    err_fh.close()
+                except Exception:
+                    pass
         except Exception:
             pass
 

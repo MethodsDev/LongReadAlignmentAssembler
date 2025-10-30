@@ -24,6 +24,8 @@ class MultiProcessManager:
         self.queue = queue
         self.captured_queue_contents = list()
         self.process_name_to_start_time = dict()
+        # Track failure details for downstream diagnostics
+        self.failures = []  # list of dicts: {name, pid, exitcode, duration_sec}
 
     def launch_process(self, process):
 
@@ -115,6 +117,24 @@ class MultiProcessManager:
                     self.num_successes += 1
                 else:
                     self.num_errors += 1
+                    # record failure meta for later reporting
+                    try:
+                        start_ts = self.process_name_to_start_time.get(
+                            completed_process.name
+                        )
+                        duration = None
+                        if start_ts is not None:
+                            duration = max(0.0, time.time() - start_ts)
+                        self.failures.append(
+                            {
+                                "name": completed_process.name,
+                                "pid": getattr(completed_process, "pid", None),
+                                "exitcode": completed_process.exitcode,
+                                "duration_sec": duration,
+                            }
+                        )
+                    except Exception:
+                        pass
                     if MPM_DEBUG:
                         logger.info("-captured a failed process")
 
@@ -153,6 +173,15 @@ class MultiProcessManager:
         for process in self.process_list:
             process.terminate()
         logger.info("-terminated all processes")
+
+    def get_failures(self):
+        """Return a list of failure dicts collected during execution.
+        Each dict contains: name, pid, exitcode, duration_sec (may be None).
+        """
+        try:
+            return list(self.failures)
+        except Exception:
+            return []
 
 
 def set_debug():
