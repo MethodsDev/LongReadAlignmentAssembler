@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-import sys, os, re
+import sys, os, re, time
 import subprocess
 import logging
 import string
@@ -411,6 +411,10 @@ class Splice_graph:
 
         # init depth of coverage array
         self._contig_base_cov = [0 for i in range(0, contig_len + 1)]
+        try:
+            logging.info("coverage array initialized; populating from alignments next")
+        except Exception:
+            pass
 
         return
 
@@ -470,6 +474,26 @@ class Splice_graph:
             pretty_alignments = sorted(
                 pretty_alignments, key=lambda x: list(reversed(x.get_alignment_span()))
             )
+
+        # progress logging setup
+        try:
+            log_interval = LRAA_Globals.config.get(
+                "splice_graph_log_progress_interval_sec", 30.0
+            )
+        except Exception:
+            log_interval = 30.0
+        t0 = time.time()
+        last_log = t0
+        processed = 0
+        total = len(pretty_alignments)
+        total_bases_added = 0
+
+        def _rss_mb():
+            try:
+                import psutil  # type: ignore
+                return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
+            except Exception:
+                return None
 
         for pretty_alignment in pretty_alignments:
 
@@ -564,6 +588,7 @@ class Splice_graph:
                     intron_splice_site_support[intron_rend] += 1
 
             total_read_alignments_used += 1
+            processed += 1
             # add to coverage
             for segment in alignment_segments:
                 for i in range(segment[0], segment[1] + 1):
@@ -571,9 +596,28 @@ class Splice_graph:
                         break
 
                     self._contig_base_cov[i] += 1
+                try:
+                    total_bases_added += (segment[1] - segment[0] + 1)
+                except Exception:
+                    pass
+
+            # periodic progress log
+            if log_interval and log_interval > 0:
+                now = time.time()
+                if now - last_log >= float(log_interval):
+                    frac = processed / max(total, 1)
+                    rate = processed / max(now - t0, 1e-6)
+                    rss = _rss_mb()
+                    mem_txt = f" rss={rss:.1f}MB" if rss is not None else ""
+                    logger.info(
+                        f"[sg-populate] {processed}/{total} ({frac*100:.2f}%) bases+=~{total_bases_added} intron_candidates={len(intron_counter)} rate={rate:.2f}/s{mem_txt}"
+                    )
+                    last_log = now
 
         logger.info(
-            "-total read alignments used: {}".format(total_read_alignments_used)
+            "-total read alignments used: {} (~bases added: {})".format(
+                total_read_alignments_used, total_bases_added
+            )
         )
 
         # retain only those introns that meet the min threshold
