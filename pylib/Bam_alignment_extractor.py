@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re
+import time
 import subprocess
 import logging
 import string
@@ -83,7 +84,30 @@ class Bam_alignment_extractor:
         num_alignments_per_id_ok = 0
         num_alignments_per_id_fail = 0
 
+        # diagnostics
+        def _mem_usage_mb():
+            try:
+                import psutil  # type: ignore
+                return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
+            except Exception:
+                try:
+                    import resource  # type: ignore
+                    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                    if rss > 1e10:
+                        return rss / (1024.0 * 1024.0)
+                    else:
+                        return rss / 1024.0
+                except Exception:
+                    return None
+
+        LOG_EVERY_N = int(os.environ.get("LRAA_LOG_ALIGN_EVERY_N", "10000"))
+        last_log_t = time.time()
+        LOG_EVERY_SEC = float(os.environ.get("LRAA_LOG_ALIGN_EVERY_SEC", "10"))
+        processed = 0
+        kept_so_far = 0
+
         for read in read_fetcher:
+            processed += 1
 
             if contig_strand is not None:
                 if read.is_forward and contig_strand != "+":
@@ -149,10 +173,33 @@ class Bam_alignment_extractor:
             else:
                 read_alignments.append(read)
 
+            kept_so_far += 1
+
+            if (
+                (processed % LOG_EVERY_N == 0)
+                or (time.time() - last_log_t) >= LOG_EVERY_SEC
+            ):
+                m = _mem_usage_mb()
+                discards = dict(discarded_read_counter)
+                try:
+                    logger.info(
+                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}, discards={discards}, rss={(m and f'{m:.1f} MB') or '<na>'}"
+                    )
+                except Exception:
+                    logger.info(
+                        f"progress get_read_alignments: processed={processed}, kept={kept_so_far}"
+                    )
+                last_log_t = time.time()
+
         kept_count = len(pretty_alignments) if pretty else len(read_alignments)
+        final_mem = _mem_usage_mb()
         logger.info(
-            "reads kept for {} {}: {} and discarded: {}".format(
-                contig_acc, contig_strand, kept_count, discarded_read_counter
+            "reads kept for {} {}: {} and discarded: {} (rss: {})".format(
+                contig_acc,
+                contig_strand,
+                kept_count,
+                dict(discarded_read_counter),
+                f"{final_mem:.1f} MB" if final_mem is not None else "<na>",
             )
         )
 
