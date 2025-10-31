@@ -134,6 +134,12 @@ config = {
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
     # default changed to 'sqlite' for robustness on diverse filesystems
     "store_backend": "sqlite",
+    ######
+    # oversimplify (best-overlap) mode
+    # When enabled via CLI --oversimplify <contig[,contig2,...]>, specified contigs in quant-only runs
+    # will bypass graph/EM and assign each read to the single best-overlapping reference transcript.
+    "oversimplify_enabled": False,
+    "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
 }
 
 # Global, per-run external stores for read tracking (set at runtime by entry script)
