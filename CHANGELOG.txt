@@ -4,8 +4,9 @@ v0.10.0
 - runs --CPU parallel contig/strand combinations. If --no_parallelize_contigs, then allows up to --CPU per cluster of reads in per contig/strand evals.
 - can resume from earlier partially completed runs.  Disable with  --no_resume_parallel
 - uses SQLITE (or lmdb) where needed to reduce RAM usage.  See --store_backend
+- new --bam_list option intended for quant-only runs with single cell cluster data, each bam corresponding to the cell cluster partitioned bam. Used in single cell pipeline (WDL).
 
-    
+
 v0.9.0 Sept 26, 2025
 - trimming transcript UTRs to min/max of contained evidence transcripts and only adjust UTRs to min/max of contained isoforms if the corresponding polyA or TSS annotation flags arent set
 
