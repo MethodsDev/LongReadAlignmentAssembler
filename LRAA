@@ -1169,6 +1169,7 @@ def main():
         default=False,
         help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
     )
+    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
     primary.add_argument(
         "--oversimplify",
         type=str,
