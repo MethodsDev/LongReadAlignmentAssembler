@@ -27,7 +27,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.9.0-postdev4"
+VERSION = "v0.10.0-predev"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -632,8 +632,12 @@ def _contig_job_runner(job):
     try:
         # Oversimplify branch: best-overlap assignment on specified contigs in quant-only mode when GTF is provided
         try:
-            oversimplify_enabled = bool(LRAA_Globals.config.get("oversimplify_enabled", False))
-            oversimplify_contigs = set(LRAA_Globals.config.get("oversimplify_contigs", []) or [])
+            oversimplify_enabled = bool(
+                LRAA_Globals.config.get("oversimplify_enabled", False)
+            )
+            oversimplify_contigs = set(
+                LRAA_Globals.config.get("oversimplify_contigs", []) or []
+            )
         except Exception:
             oversimplify_enabled = False
             oversimplify_contigs = set()
@@ -839,7 +843,9 @@ def _run_oversimplify_best_overlap(
     """
 
     if not input_transcripts:
-        logger.info(f"[{contig_acc}{contig_strand}] oversimplify: no reference transcripts; nothing to do")
+        logger.info(
+            f"[{contig_acc}{contig_strand}] oversimplify: no reference transcripts; nothing to do"
+        )
         return
 
     # Prepare alignment fetcher
@@ -959,7 +965,14 @@ def _run_oversimplify_best_overlap(
     gene_unique_counts = {g: float(len(rds)) for g, rds in gene_to_reads.items()}
     # total per gene for normalization
     gene_totals = {
-        g: float(sum([tid_to_tx[t.get_transcript_id()].get_read_counts_assigned() for t in tls]))
+        g: float(
+            sum(
+                [
+                    tid_to_tx[t.get_transcript_id()].get_read_counts_assigned()
+                    for t in tls
+                ]
+            )
+        )
         for g, tls in gene_to_tx.items()
     }
 
@@ -1063,7 +1076,9 @@ def _run_oversimplify_aggregate(
             rend = 1
     if lend >= rend:
         # invalid span; nothing to do
-        logger.info(f"[{contig_acc}{contig_strand}] oversimplify-aggregate: empty span, skipping")
+        logger.info(
+            f"[{contig_acc}{contig_strand}] oversimplify-aggregate: empty span, skipping"
+        )
         return
 
     # Fetch reads for this contig/strand/region
@@ -1083,7 +1098,7 @@ def _run_oversimplify_aggregate(
     )
 
     read_names = []
-    for pa in (pretty_alignments or []):
+    for pa in pretty_alignments or []:
         try:
             rn = pa.get_read_name()
         except Exception:
@@ -1094,7 +1109,9 @@ def _run_oversimplify_aggregate(
     read_count = float(len(read_names))
     if read_count <= 0:
         # No reads: do not emit a pseudo-transcript for this strand
-        logger.info(f"[{contig_acc}{contig_strand}] oversimplify-aggregate: no reads; emitting nothing")
+        logger.info(
+            f"[{contig_acc}{contig_strand}] oversimplify-aggregate: no reads; emitting nothing"
+        )
         return
 
     # Build pseudo-transcript
@@ -1112,7 +1129,7 @@ def _run_oversimplify_aggregate(
     # Ensure TSS/PolyA helpers don't expect a simplepath
     try:
         t._imported_has_POLYA = False  # type: ignore
-        t._imported_has_TSS = False    # type: ignore
+        t._imported_has_TSS = False  # type: ignore
     except Exception:
         pass
 
