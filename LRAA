@@ -230,13 +230,22 @@ def _run_jobs_schedule_and_merge(
             mgr.launch_process(p)
         errs = mgr.wait_for_remaining_processes()
     except KeyboardInterrupt:
-        # Propagate Ctrl-C: terminate children and exit with 130
+        # Propagate Ctrl-C: terminate children and wait for full pruning before exit
         try:
             logger.error(
                 "KeyboardInterrupt received: terminating contig/strand workers..."
             )
             mgr.terminate_all_processes()
+            logger.error("Waiting for worker processes to exit after termination...")
+            try:
+                mgr.wait_for_remaining_processes()
+            except Exception:
+                pass
         finally:
+            try:
+                _maybe_stop_monitor(main_monitor)
+            except Exception:
+                pass
             sys.exit(130)
     if errs > 0:
         # Provide helpful pointers to per-(contig,strand) error logs before raising

@@ -228,72 +228,85 @@ class LRAA:
 
         all_reconstructed_transcripts = list()
         component_counter = 0
-        for mpg_component in mpg_components:
+        try:
+            for mpg_component in mpg_components:
 
-            mpg_component_size = len(mpg_component)
+                mpg_component_size = len(mpg_component)
 
-            component_counter += 1
-            coord_span = get_mpgn_list_coord_span(mpg_component)
-            logger.info(
-                "[%s%s] LRAA - assembly of component %d size %d region: %s%s:%d-%d",
-                self._contig_acc,
-                self._contig_strand,
-                component_counter,
-                mpg_component_size,
-                self._contig_acc,
-                self._contig_strand,
-                coord_span[0],
-                coord_span[1],
-            )
-
-            mpg_token = "{}{}:{}-{}".format(
-                self._contig_acc, self._contig_strand, coord_span[0], coord_span[1]
-            )
-            if LRAA_Globals.DEBUG:
-                mpgn_description_filename = "{}/{}.mpgns.txt".format(
-                    mpg_component_debug_dir, mpg_token
-                )
-                write_mpg_component_debug_file(mpg_component, mpgn_description_filename)
-
-            if (
-                USE_MULTIPROCESSOR
-                and mpg_component_size
-                >= LRAA_Globals.config["min_mpgn_component_size_for_spawn"]
-            ):
-                p = Process(
-                    target=self._reconstruct_isoforms_single_component,
-                    name=mpg_token,
-                    args=(
-                        q,
-                        mpg_component,
-                        component_counter,
-                        mpg_token,
-                        single_best_only,
-                    ),
+                component_counter += 1
+                coord_span = get_mpgn_list_coord_span(mpg_component)
+                logger.info(
+                    "[%s%s] LRAA - assembly of component %d size %d region: %s%s:%d-%d",
+                    self._contig_acc,
+                    self._contig_strand,
+                    component_counter,
+                    mpg_component_size,
+                    self._contig_acc,
+                    self._contig_strand,
+                    coord_span[0],
+                    coord_span[1],
                 )
 
-                mpm.launch_process(p)
+                mpg_token = "{}{}:{}-{}".format(
+                    self._contig_acc, self._contig_strand, coord_span[0], coord_span[1]
+                )
+                if LRAA_Globals.DEBUG:
+                    mpgn_description_filename = "{}/{}.mpgns.txt".format(
+                        mpg_component_debug_dir, mpg_token
+                    )
+                    write_mpg_component_debug_file(mpg_component, mpgn_description_filename)
 
-            else:
-
-                try:
-
-                    # run directly, not through multiprocessing
-                    reconstructed_transcripts = (
-                        self._reconstruct_isoforms_single_component(
-                            None,
+                if (
+                    USE_MULTIPROCESSOR
+                    and mpg_component_size
+                    >= LRAA_Globals.config["min_mpgn_component_size_for_spawn"]
+                ):
+                    p = Process(
+                        target=self._reconstruct_isoforms_single_component,
+                        name=mpg_token,
+                        args=(
+                            q,
                             mpg_component,
                             component_counter,
                             mpg_token,
                             single_best_only,
-                        )
+                        ),
                     )
-                    all_reconstructed_transcripts.extend(reconstructed_transcripts)
 
-                except Exception as e:
-                    if mpm is not None:
-                        mpm.terminate_all_processes()
-                    raise (e)
+                    mpm.launch_process(p)
+
+                else:
+
+                    try:
+
+                        # run directly, not through multiprocessing
+                        reconstructed_transcripts = (
+                            self._reconstruct_isoforms_single_component(
+                                None,
+                                mpg_component,
+                                component_counter,
+                                mpg_token,
+                                single_best_only,
+                            )
+                        )
+                        all_reconstructed_transcripts.extend(reconstructed_transcripts)
+
+                    except KeyboardInterrupt:
+                        if mpm is not None:
+                            try:
+                                mpm.terminate_all_processes()
+                                mpm.wait_for_remaining_processes()
+                            except Exception:
+                                pass
+                        raise
+                    except Exception as e:
+                        if mpm is not None:
+                            try:
+                                mpm.terminate_all_processes()
+                                mpm.wait_for_remaining_processes()
+                            except Exception:
+                                pass
+                        raise (e)
 
                 fraction_jobs_complete = component_counter / num_mpg_components
                 logger.info(
@@ -303,18 +316,28 @@ class LRAA:
                     fraction_jobs_complete * 100,
                 )
 
-        if USE_MULTIPROCESSOR:
-            logger.info("[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS", self._contig_acc, self._contig_strand)
-            num_failures = mpm.wait_for_remaining_processes()
-            logger.info("[%s%s] %s", self._contig_acc, self._contig_strand, mpm.summarize_status())
-            if num_failures:
-                raise RuntimeError(
-                    "Error, {} component failures encountered".format(num_failures)
-                )
+                if USE_MULTIPROCESSOR:
+                    logger.info("[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS", self._contig_acc, self._contig_strand)
+                    num_failures = mpm.wait_for_remaining_processes()
+                    logger.info("[%s%s] %s", self._contig_acc, self._contig_strand, mpm.summarize_status())
+                    if num_failures:
+                        raise RuntimeError(
+                            "Error, {} component failures encountered".format(num_failures)
+                        )
 
-            queue_contents = mpm.retrieve_queue_contents()
-            for entry in queue_contents:
-                all_reconstructed_transcripts.extend(entry)
+                    queue_contents = mpm.retrieve_queue_contents()
+                    for entry in queue_contents:
+                        all_reconstructed_transcripts.extend(entry)
+        except KeyboardInterrupt:
+            # Ensure all spawned component workers are pruned before bubbling up
+            if mpm is not None:
+                try:
+                    logger.error("[%s%s] KeyboardInterrupt during assembly: terminating workers and waiting for exit", self._contig_acc, self._contig_strand)
+                    mpm.terminate_all_processes()
+                    mpm.wait_for_remaining_processes()
+                except Exception:
+                    pass
+            raise
 
         logger.info(
             "[%s%s] Finished round of isoform reconstruction",
