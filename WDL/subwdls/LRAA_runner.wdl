@@ -10,6 +10,7 @@ task LRAA_runner_task {
         Boolean quant_only
         Boolean HiFi = false
         String? region
+        String? oversimplify
         
         Int? num_total_reads
         Float? min_per_id
@@ -48,6 +49,7 @@ task LRAA_runner_task {
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
                                 ~{"--region " + region} \
+                                ~{"--oversimplify " + oversimplify} \
                                  ~{"--min_per_id " + min_per_id} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
@@ -111,6 +113,7 @@ workflow LRAA_runner {
         Boolean quant_only
     Boolean HiFi = false
         String? region
+        String? oversimplify
         
         Int? num_total_reads
         Float? min_per_id
@@ -142,6 +145,7 @@ workflow LRAA_runner {
             annot_gtf=annot_gtf,
             quant_only=quant_only,
             HiFi = HiFi,
+            oversimplify = oversimplify,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
