@@ -174,6 +174,16 @@ class Pretty_alignment_manager:
             bam_extractor = Bam_alignment_extractor(bam_file)
             self._log_mem("created Bam_alignment_extractor")
 
+            # If oversimplify mode is enabled and this contig is listed, skip error correction
+            # and do not retain pysam SAM records within Pretty_alignment objects at all.
+            oversimplify_enabled = bool(LRAA_Globals.config.get("oversimplify_enabled", False))
+            oversimplify_contigs = set(LRAA_Globals.config.get("oversimplify_contigs", []) or [])
+            oversimplify_this_contig = oversimplify_enabled and (contig_acc in oversimplify_contigs)
+            # Force-disable correction if oversimplify applies
+            if oversimplify_this_contig and try_correct_alignments:
+                logger.info(f"[{contig_acc}{contig_strand}] oversimplify enabled for this contig: disabling alignment correction and forcing lightened pretty alignments")
+                try_correct_alignments = False
+
             t0 = time.time()
             logger.info("[%s%s] begin get_read_alignments (pretty=True)", contig_acc, contig_strand)
             pretty_alignments = bam_extractor.get_read_alignments(
@@ -183,6 +193,7 @@ class Pretty_alignment_manager:
                 region_rend,
                 pretty=True,
                 per_id_QC_raise_error=per_id_QC_raise_error,
+                force_lighten_all=oversimplify_this_contig,
             )
             self._log_mem(
                 "completed get_read_alignments",
@@ -225,10 +236,9 @@ class Pretty_alignment_manager:
             self._log_mem("after prune_long_terminal_introns", extra={"n": len(pretty_alignments)})
 
             # store for reuse
+            # Remove pysam records before caching; if oversimplify, most will already be lightened.
             self._log_mem("before lighten", extra={"n": len(pretty_alignments)})
-            pretty_alignments = [
-                x.lighten() for x in pretty_alignments
-            ]  # remove pysam record before storing
+            pretty_alignments = [x.lighten() for x in pretty_alignments]
             self._log_mem("after lighten", extra={"n": len(pretty_alignments)})
             if use_cache:
                 with open(all_alignment_cache_file, "wb") as f:
