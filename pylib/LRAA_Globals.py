@@ -124,6 +124,10 @@ config = {
     "mapping_log_progress_interval_sec": 30.0,
     # splice-graph population logging cadence (coverage + intron scan); set None or 0 to disable
     "splice_graph_log_progress_interval_sec": 30.0,
+    # coverage reset progress (recompute base coverage from pretty alignments)
+    "show_progress_cov_reset": True,          # show progress while recomputing base coverage
+    "cov_reset_update_every_n": 5000,         # fallback: update every N alignments processed
+    "cov_reset_update_interval_sec": 2.0,     # fallback: or at least this often in seconds
     # quant: assign reads to transcripts stage
     "show_progress_quant_assign": True,  # emit periodic progress updates during read->transcript assignment
     "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar
@@ -134,6 +138,12 @@ config = {
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
     # default changed to 'sqlite' for robustness on diverse filesystems
     "store_backend": "sqlite",
+    ######
+    # oversimplify (best-overlap) mode
+    # When enabled via CLI --oversimplify <contig[,contig2,...]>, specified contigs in quant-only runs
+    # will bypass graph/EM and assign each read to the single best-overlapping reference transcript.
+    "oversimplify_enabled": False,
+    "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
 }
 
 # Global, per-run external stores for read tracking (set at runtime by entry script)

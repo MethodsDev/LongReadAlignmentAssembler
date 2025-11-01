@@ -44,6 +44,7 @@ class Bam_alignment_extractor:
         pretty=False,
         per_id_QC_raise_error=False,
         config=LRAA_Globals.config,
+        force_lighten_all=False,
     ):
 
         discarded_read_counter = defaultdict(int)
@@ -172,11 +173,15 @@ class Bam_alignment_extractor:
                 # Build Pretty_alignment on the fly. Immediately lighten non-candidates for
                 # soft-clip realignment to avoid retaining heavy pysam objects in memory.
                 pa = Pretty_alignment.get_pretty_alignment(read)
-                is_candidate = pa.is_softclip_realign_candidate()
-                if not is_candidate:
+                if force_lighten_all:
+                    # for oversimplify contigs: never retain the heavy pysam record
                     pa.lighten()
                 else:
-                    candidates_retained += 1
+                    is_candidate = pa.is_softclip_realign_candidate()
+                    if not is_candidate:
+                        pa.lighten()
+                    else:
+                        candidates_retained += 1
                 pretty_alignments.append(pa)
             else:
                 read_alignments.append(read)

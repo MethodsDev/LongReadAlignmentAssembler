@@ -8,6 +8,7 @@ import subprocess
 import json
 from multiprocessing import Process
 from collections import defaultdict
+import random
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "pylib"])
@@ -23,6 +24,7 @@ import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
 import shutil
+from Pretty_alignment_manager import Pretty_alignment_manager
 
 
 VERSION = "v0.9.0-postdev4"
@@ -228,13 +230,22 @@ def _run_jobs_schedule_and_merge(
             mgr.launch_process(p)
         errs = mgr.wait_for_remaining_processes()
     except KeyboardInterrupt:
-        # Propagate Ctrl-C: terminate children and exit with 130
+        # Propagate Ctrl-C: terminate children and wait for full pruning before exit
         try:
             logger.error(
                 "KeyboardInterrupt received: terminating contig/strand workers..."
             )
             mgr.terminate_all_processes()
+            logger.error("Waiting for worker processes to exit after termination...")
+            try:
+                mgr.wait_for_remaining_processes()
+            except Exception:
+                pass
         finally:
+            try:
+                _maybe_stop_monitor(main_monitor)
+            except Exception:
+                pass
             sys.exit(130)
     if errs > 0:
         # Provide helpful pointers to per-(contig,strand) error logs before raising
@@ -619,46 +630,127 @@ def _contig_job_runner(job):
         ofh_gtf_local = open(gtf_tmp, "wt")
 
     try:
-        if job["QUANT_ONLY"]:
-            run_quant_only(
-                contig_acc,
-                contig_strand,
-                contig_seq_str,
-                job["bam_file_for_sg"],
-                job["bam_file_for_quant"],
-                job["restrict_region_lend"],
-                job["restrict_region_rend"],
-                input_transcripts,
-                ofh_quant,
-                ofh_track,
-                job["CPU_inner"],
-                job["run_EM"],
-                job["prereconstruct_info_dir"],
-                report_quants=True,
+        # Oversimplify branch: best-overlap assignment on specified contigs in quant-only mode when GTF is provided
+        try:
+            oversimplify_enabled = bool(LRAA_Globals.config.get("oversimplify_enabled", False))
+            oversimplify_contigs = set(LRAA_Globals.config.get("oversimplify_contigs", []) or [])
+        except Exception:
+            oversimplify_enabled = False
+            oversimplify_contigs = set()
+
+        if (
+            oversimplify_enabled
+            and (contig_acc in oversimplify_contigs)
+            and job["QUANT_ONLY"]
+            and (input_transcripts is not None and len(input_transcripts) > 0)
+        ):
+            logger.info(
+                f"[{contig_acc}{contig_strand}] Oversimplify enabled: assigning reads to best-overlap reference transcripts (no EM)"
+            )
+            _run_oversimplify_best_overlap(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                contig_seq_str=contig_seq_str,
+                bam_file_for_quant=job["bam_file_for_quant"],
+                restrict_region_lend=job["restrict_region_lend"],
+                restrict_region_rend=job["restrict_region_rend"],
+                input_transcripts=input_transcripts,
+                ofh_quant=ofh_quant,
+                ofh_track=ofh_track,
+            )
+        elif (
+            # Ref-guided, non-quant-only: skip discovery on oversimplified contigs; use provided GTF as-is and quantify via best-overlap
+            oversimplify_enabled
+            and (contig_acc in oversimplify_contigs)
+            and (not job["QUANT_ONLY"])
+            and (job["input_gtf"] is not None)
+            and (input_transcripts is not None and len(input_transcripts) > 0)
+        ):
+            logger.info(
+                f"[{contig_acc}{contig_strand}] Oversimplify enabled (ref-guided, no discovery): assigning reads to best-overlap reference transcripts and emitting provided annotations to GTF"
+            )
+            _run_oversimplify_best_overlap(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                contig_seq_str=contig_seq_str,
+                bam_file_for_quant=job["bam_file_for_quant"],
+                restrict_region_lend=job["restrict_region_lend"],
+                restrict_region_rend=job["restrict_region_rend"],
+                input_transcripts=input_transcripts,
+                ofh_quant=ofh_quant,
+                ofh_track=ofh_track,
+            )
+            # Emit the provided GTF transcripts for this contig/strand to the output GTF (no de novo discovery)
+            if ofh_gtf_local is not None:
+                try:
+                    for t in input_transcripts:
+                        ofh_gtf_local.write(t.to_GTF_format(include_TPM=False) + "\n")
+                except Exception as _e:
+                    logger.warning(
+                        f"[{contig_acc}{contig_strand}] oversimplify ref-guided: failed writing provided transcripts to GTF: {_e}"
+                    )
+        elif (
+            oversimplify_enabled
+            and (contig_acc in oversimplify_contigs)
+            and (not job["QUANT_ONLY"])
+            and (job["input_gtf"] is None)
+        ):
+            logger.info(
+                f"[{contig_acc}{contig_strand}] Oversimplify enabled: de novo aggregate pseudo-transcript spanning contig/region"
+            )
+            _run_oversimplify_aggregate(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                contig_seq_str=contig_seq_str,
+                bam_file_for_quant=job["bam_file_for_quant"],
+                restrict_region_lend=job["restrict_region_lend"],
+                restrict_region_rend=job["restrict_region_rend"],
+                ofh_gtf=ofh_gtf_local,
+                ofh_quant=ofh_quant,
+                ofh_track=ofh_track,
             )
         else:
-            run_transcript_assembly(
-                contig_acc,
-                contig_strand,
-                contig_seq_str,
-                job["bam_file_for_sg"],
-                job["bam_file_for_quant"],
-                job["restrict_region_lend"],
-                job["restrict_region_rend"],
-                input_transcripts,
-                ofh_gtf_local,
-                ofh_quant,
-                ofh_track,
-                job["CPU_inner"],
-                job["run_EM"],
-                job["single_best_only"],
-                job["NO_FILTER_ISOFORMS"],
-                job["min_isoform_fraction"],
-                job["quant_EM_alpha"],
-                job["prereconstruct_info_dir"],
-                job["ME_only"],
-                job["SE_only"],
-            )
+            # Default behavior
+            if job["QUANT_ONLY"]:
+                run_quant_only(
+                    contig_acc,
+                    contig_strand,
+                    contig_seq_str,
+                    job["bam_file_for_sg"],
+                    job["bam_file_for_quant"],
+                    job["restrict_region_lend"],
+                    job["restrict_region_rend"],
+                    input_transcripts,
+                    ofh_quant,
+                    ofh_track,
+                    job["CPU_inner"],
+                    job["run_EM"],
+                    job["prereconstruct_info_dir"],
+                    report_quants=True,
+                )
+            else:
+                run_transcript_assembly(
+                    contig_acc,
+                    contig_strand,
+                    contig_seq_str,
+                    job["bam_file_for_sg"],
+                    job["bam_file_for_quant"],
+                    job["restrict_region_lend"],
+                    job["restrict_region_rend"],
+                    input_transcripts,
+                    ofh_gtf_local,
+                    ofh_quant,
+                    ofh_track,
+                    job["CPU_inner"],
+                    job["run_EM"],
+                    job["single_best_only"],
+                    job["NO_FILTER_ISOFORMS"],
+                    job["min_isoform_fraction"],
+                    job["quant_EM_alpha"],
+                    job["prereconstruct_info_dir"],
+                    job["ME_only"],
+                    job["SE_only"],
+                )
 
         ofh_quant.close()
         ofh_track.close()
@@ -727,6 +819,350 @@ def _contig_job_runner(job):
     return
 
 
+def _run_oversimplify_best_overlap(
+    contig_acc,
+    contig_strand,
+    contig_seq_str,
+    bam_file_for_quant,
+    restrict_region_lend,
+    restrict_region_rend,
+    input_transcripts,
+    ofh_quant,
+    ofh_track,
+):
+    """Assign each read to the single best-overlapping reference transcript on this contig/strand.
+
+    - Uses exonic base-pair overlap (raw bp) between the read's exon blocks and each transcript's exon blocks.
+    - Ties are broken randomly among top-scoring transcripts.
+    - Always strand-specific (reads are fetched already filtered by strand).
+    - Outputs quant.expr and quant.tracking rows directly (no EM, no multipath graph).
+    """
+
+    if not input_transcripts:
+        logger.info(f"[{contig_acc}{contig_strand}] oversimplify: no reference transcripts; nothing to do")
+        return
+
+    # Prepare alignment fetcher
+    pam = Pretty_alignment_manager(splice_graph=None)
+    pretty_alignments = pam.retrieve_pretty_alignments(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_quant,
+        region_lend=restrict_region_lend,
+        region_rend=restrict_region_rend,
+        use_cache=False,
+        restrict_splice_type=None,
+        try_correct_alignments=False,
+        SE_read_encapsulation_mask=None,
+        per_id_QC_raise_error=False,
+    )
+
+    # Precompute transcript exon intervals and maps
+    tx_list = list(input_transcripts)
+    tx_exons = {}
+    tx_gene = {}
+    for t in tx_list:
+        tx_exons[t.get_transcript_id()] = [tuple(x) for x in t.get_exon_segments()]
+        tx_gene[t.get_transcript_id()] = t.get_gene_id()
+
+    # Helpers
+    def _overlap_len(a_intervals, b_intervals):
+        ov = 0
+        i = j = 0
+        a = sorted(a_intervals)
+        b = sorted(b_intervals)
+        while i < len(a) and j < len(b):
+            a1, a2 = a[i]
+            b1, b2 = b[j]
+            # inclusive coordinates
+            if a2 < b1:
+                i += 1
+            elif b2 < a1:
+                j += 1
+            else:
+                ov += min(a2, b2) - max(a1, b1) + 1
+                if a2 < b2:
+                    i += 1
+                elif b2 < a2:
+                    j += 1
+                else:
+                    i += 1
+                    j += 1
+        return ov
+
+    # Assign reads
+    read_to_tx = {}
+    tx_to_reads = defaultdict(list)
+    gene_to_reads = defaultdict(list)
+
+    for pa in pretty_alignments or []:
+        segs = pa.get_pretty_alignment_segments()
+        if not segs:
+            continue
+        read_name = pa.get_read_name() if hasattr(pa, "get_read_name") else None
+        if not read_name:
+            # fallback when lightened
+            try:
+                read_name = str(pa)
+            except Exception:
+                continue
+        # Compute best overlap
+        best = []  # list[(tx_id, ov)] for ties
+        best_ov = -1
+        for t in tx_list:
+            tid = t.get_transcript_id()
+            ov = _overlap_len(segs, tx_exons[tid])
+            if ov > best_ov:
+                best = [(tid, ov)]
+                best_ov = ov
+            elif ov == best_ov:
+                best.append((tid, ov))
+        if best_ov <= 0:
+            # no exonic bp overlap; skip assignment
+            continue
+        # tie-break randomly among equals
+        choice = random.choice(best)[0]
+        read_to_tx[read_name] = choice
+        tx_to_reads[choice].append(read_name)
+        gene_to_reads[tx_gene[choice]].append(read_name)
+
+    # Compute per-transcript counts and isoform fractions
+    # Initialize counts
+    for t in tx_list:
+        t.set_read_counts_assigned(0.0)
+        t.set_isoform_fraction(0.0)
+
+    gene_to_tx = defaultdict(list)
+    for t in tx_list:
+        gene_to_tx[t.get_gene_id()].append(t)
+
+    tid_to_tx = {t.get_transcript_id(): t for t in tx_list}
+
+    # Set read counts per transcript
+    for tid, reads in tx_to_reads.items():
+        t = tid_to_tx.get(tid)
+        if t is None:
+            continue
+        t.set_read_counts_assigned(float(len(reads)))
+
+    # Compute isoform fractions per gene
+    for gene_id, tlist in gene_to_tx.items():
+        gene_sum = sum([tt.get_read_counts_assigned() for tt in tlist])
+        for tt in tlist:
+            frac = (tt.get_read_counts_assigned() / gene_sum) if gene_sum > 0 else 0.0
+            tt.set_isoform_fraction(frac)
+
+    # Build quant report for all transcripts (including zeroes for completeness)
+    # Also derive unique_gene_read_fraction per transcript
+    # Prepare per-gene unique counts (all are unique here since we assign one transcript per read)
+    gene_unique_counts = {g: float(len(rds)) for g, rds in gene_to_reads.items()}
+    # total per gene for normalization
+    gene_totals = {
+        g: float(sum([tid_to_tx[t.get_transcript_id()].get_read_counts_assigned() for t in tls]))
+        for g, tls in gene_to_tx.items()
+    }
+
+    # Tracking lines: write one per assigned read
+    mp_id_token = f"ovsimp:{contig_acc}:{contig_strand}"
+    for read_name, tid in read_to_tx.items():
+        t = tid_to_tx.get(tid)
+        if t is None:
+            continue
+        gene_id = t.get_gene_id()
+        splice_hash = (
+            Util_funcs.get_hash_code(t.get_introns_string())
+            if t.get_num_exon_segments() > 1
+            else t.get_transcript_id()
+        )
+        print(
+            "\t".join(
+                [
+                    gene_id,
+                    tid,
+                    splice_hash,
+                    mp_id_token,
+                    read_name,
+                    "1.000",
+                ]
+            ),
+            file=ofh_track,
+        )
+
+    # Quant lines
+    # Sort like existing report: by counts desc then transcript_id
+    sorted_tx = sorted(
+        tx_list,
+        key=lambda x: (x.get_read_counts_assigned(), x.get_transcript_id()),
+        reverse=True,
+    )
+    for t in sorted_tx:
+        gene_id = t.get_gene_id()
+        tid = t.get_transcript_id()
+        counts = t.get_read_counts_assigned()
+        isoform_frac = t.get_isoform_fraction()
+        # unique count equals counts in this mode
+        uniq_reads = int(round(counts))
+        gene_total = gene_totals.get(gene_id, 0.0)
+        unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
+        tpm = t.get_TPM()
+        splice_hash = (
+            Util_funcs.get_hash_code(t.get_introns_string())
+            if t.get_num_exon_segments() > 1
+            else tid
+        )
+        introns_str = t.get_introns_string() if t.get_num_exon_segments() > 1 else ""
+        row = [
+            gene_id,
+            tid,
+            f"{uniq_reads}",
+            f"{counts:.1f}",
+            f"{isoform_frac:.3f}",
+            f"{unique_gene_read_fraction:0.3f}",
+            f"{tpm:.3f}",
+            t.get_exons_string(),
+            introns_str,
+            splice_hash,
+        ]
+        print("\t".join(row), file=ofh_quant)
+
+    logger.info(
+        f"[{contig_acc}{contig_strand}] oversimplify: assigned {len(read_to_tx)} reads across {len(tx_to_reads)} transcripts"
+    )
+    return
+
+
+def _run_oversimplify_aggregate(
+    contig_acc,
+    contig_strand,
+    contig_seq_str,
+    bam_file_for_quant,
+    restrict_region_lend,
+    restrict_region_rend,
+    ofh_gtf,
+    ofh_quant,
+    ofh_track,
+):
+    """De novo oversimplify: create a single pseudo-transcript spanning the contig (or region) and
+    assign all reads on this (contig,strand) to it.
+
+    - Span: region bounds if provided, else full contig length from contig_seq_str.
+    - Per-strand: this is invoked within a strand-specific worker.
+    - Outputs: writes one GTF transcript (with one exon), quant row, and tracking rows.
+    """
+
+    # Determine span
+    if restrict_region_lend is not None and restrict_region_rend is not None:
+        lend = int(restrict_region_lend)
+        rend = int(restrict_region_rend)
+    else:
+        lend = 1
+        try:
+            rend = len(contig_seq_str) if contig_seq_str is not None else 1
+        except Exception:
+            rend = 1
+    if lend >= rend:
+        # invalid span; nothing to do
+        logger.info(f"[{contig_acc}{contig_strand}] oversimplify-aggregate: empty span, skipping")
+        return
+
+    # Fetch reads for this contig/strand/region
+    pam = Pretty_alignment_manager(splice_graph=None)
+    pretty_alignments = pam.retrieve_pretty_alignments(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_quant,
+        region_lend=restrict_region_lend,
+        region_rend=restrict_region_rend,
+        use_cache=False,
+        restrict_splice_type=None,
+        try_correct_alignments=False,
+        SE_read_encapsulation_mask=None,
+        per_id_QC_raise_error=False,
+    )
+
+    read_names = []
+    for pa in (pretty_alignments or []):
+        try:
+            rn = pa.get_read_name()
+        except Exception:
+            rn = None
+        if rn:
+            read_names.append(rn)
+
+    read_count = float(len(read_names))
+    if read_count <= 0:
+        # No reads: do not emit a pseudo-transcript for this strand
+        logger.info(f"[{contig_acc}{contig_strand}] oversimplify-aggregate: no reads; emitting nothing")
+        return
+
+    # Build pseudo-transcript
+    from Transcript import Transcript  # local import to avoid circular
+
+    t = Transcript(contig_acc, [[lend, rend]], contig_strand)
+    # Override deterministic IDs and gene grouping
+    gene_id = f"g:OVSIMP:{contig_acc}:{contig_strand}"
+    trans_id = f"t:OVSIMP:{contig_acc}:{contig_strand}"
+    if restrict_region_lend is not None and restrict_region_rend is not None:
+        gene_id += f":{lend}-{rend}"
+        trans_id += f":{lend}-{rend}"
+    t.set_gene_id(gene_id)
+    t.set_transcript_id(trans_id)
+    # Ensure TSS/PolyA helpers don't expect a simplepath
+    try:
+        t._imported_has_POLYA = False  # type: ignore
+        t._imported_has_TSS = False    # type: ignore
+    except Exception:
+        pass
+
+    # Assign counts and isoform fraction (only isoform in its gene)
+    t.set_read_counts_assigned(read_count)
+    t.set_isoform_fraction(1.0)
+
+    # Tracking: one line per read
+    mp_id_token = f"ovsimp-agg:{contig_acc}:{contig_strand}"
+    splice_hash = (
+        Util_funcs.get_hash_code(t.get_introns_string())
+        if t.get_num_exon_segments() > 1
+        else t.get_transcript_id()
+    )
+    for rn in read_names:
+        print(
+            "\t".join([gene_id, trans_id, splice_hash, mp_id_token, rn, "1.000"]),
+            file=ofh_track,
+        )
+
+    # Quant row
+    uniq_reads = int(round(read_count))
+    gene_total = read_count
+    unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
+    tpm = t.get_TPM()
+    introns_str = t.get_introns_string() if t.get_num_exon_segments() > 1 else ""
+    row = [
+        gene_id,
+        trans_id,
+        f"{uniq_reads}",
+        f"{read_count:.1f}",
+        f"{1.0:.3f}",
+        f"{unique_gene_read_fraction:0.3f}",
+        f"{tpm:.3f}",
+        t.get_exons_string(),
+        introns_str,
+        splice_hash,
+    ]
+    print("\t".join(row), file=ofh_quant)
+
+    # GTF row
+    if ofh_gtf is not None:
+        ofh_gtf.write(t.to_GTF_format(include_TPM=False) + "\n")
+
+    logger.info(
+        f"[{contig_acc}{contig_strand}] oversimplify-aggregate: span {lend}-{rend}, reads {uniq_reads}"
+    )
+    return
+
+
 def main():
     # CLI: define arguments and groups
     parser = argparse.ArgumentParser(
@@ -772,6 +1208,16 @@ def main():
         action="store_true",
         default=False,
         help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
+    )
+    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
+    primary.add_argument(
+        "--oversimplify",
+        type=str,
+        default=None,
+        help=(
+            "comma/space-separated contig names to treat with simplified best-overlap assignment (quant-only with --gtf only); "
+            "on these contigs, reads are assigned to the single best-overlapping reference transcript and EM is bypassed"
+        ),
     )
     # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
     primary.add_argument(
@@ -1137,6 +1583,14 @@ def main():
     QUANT_ONLY = args.quant_only
     TAG_BAM = args.tag_bam
     input_gtf = args.gtf
+    # oversimplify setup (minimal: strategy is fixed to best-overlap; only contig list provided via CLI)
+    oversimplify_contigs = []
+    if args.oversimplify:
+        toks = re.split(r"[\s,]+", args.oversimplify.strip())
+        oversimplify_contigs = [t for t in toks if t]
+        if oversimplify_contigs:
+            LRAA_Globals.config["oversimplify_enabled"] = True
+            LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
     NO_NORM = args.no_norm
     min_isoform_fraction = args.min_isoform_fraction
     run_EM = not args.no_EM

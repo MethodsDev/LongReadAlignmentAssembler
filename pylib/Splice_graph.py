@@ -410,13 +410,9 @@ class Splice_graph:
 
         # init depth of coverage array
         self._contig_base_cov = [0 for i in range(0, contig_len + 1)]
-        try:
-            logging.info("[{}{}] coverage array initialized; populating from alignments next".format(self._contig_acc, self._contig_strand))
-        except Exception:
-            try:
-                logging.info("coverage array initialized; populating from alignments next")
-            except Exception:
-                pass
+        
+        logging.info("[{}{}] coverage array initialized; populating from alignments next".format(self._contig_acc, self._contig_strand))
+      
 
         return
 
@@ -2563,8 +2559,32 @@ class Splice_graph:
     def reset_exon_coverage_via_pretty_alignments(self, pretty_alignments):
         self._initialize_contig_coverage()
 
+        # recompute base coverage with optional progress reporting
+        total = len(pretty_alignments) if hasattr(pretty_alignments, "__len__") else None
+        show_progress = LRAA_Globals.config.get("show_progress_cov_reset", True)
+        prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
+        update_every_n = LRAA_Globals.config.get("cov_reset_update_every_n", 5000)
+        update_interval = LRAA_Globals.config.get("cov_reset_update_interval_sec", 2.0)
+
+        pbar = None
+        if show_progress and prefer_tqdm and total:
+            try:
+                import importlib
+                _mod = importlib.import_module("tqdm")
+                _tqdm = getattr(_mod, "tqdm", None)
+                if _tqdm is not None:
+                    desc = f"cov-reset [{self._contig_acc}{self._contig_strand}]"
+                    pbar = _tqdm(total=total, desc=desc, unit="reads", leave=False, dynamic_ncols=True)
+            except Exception:
+                pbar = None
+
+        import time as _time
+        import sys as _sys
+        last_update_t = _time.time()
+        processed = 0
+
         # recompute base coverage
-        for pretty_alignment in pretty_alignments:
+        for idx, pretty_alignment in enumerate(pretty_alignments):
             for pretty_segment in pretty_alignment.get_pretty_alignment_segments():
                 lend, rend = pretty_segment
                 for i in range(lend, rend + 1):
@@ -2572,6 +2592,37 @@ class Splice_graph:
                         self._contig_base_cov[i] += 1
                     else:
                         break
+            processed += 1
+            if pbar is not None:
+                try:
+                    pbar.update(1)
+                except Exception:
+                    pbar = None
+            elif show_progress and total:
+                do_emit = False
+                if update_every_n and update_every_n > 0 and (processed % update_every_n == 0):
+                    do_emit = True
+                now = _time.time()
+                if update_interval and update_interval > 0 and (now - last_update_t) >= update_interval:
+                    do_emit = True
+                if do_emit:
+                    frac = (processed / total) * 100.0
+                    # simple stderr progress line
+                    _sys.stderr.write(f"\r[{self._contig_acc}{self._contig_strand}] cov-reset: {processed}/{total} ({frac:.2f}%)    ")
+                    _sys.stderr.flush()
+                    last_update_t = now
+
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception:
+                pass
+        elif show_progress and total:
+            try:
+                _sys.stderr.write("\n")
+                _sys.stderr.flush()
+            except Exception:
+                pass
 
         # reassign exon coverage values.
         exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
