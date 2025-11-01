@@ -659,6 +659,37 @@ def _contig_job_runner(job):
                 ofh_track=ofh_track,
             )
         elif (
+            # Ref-guided, non-quant-only: skip discovery on oversimplified contigs; use provided GTF as-is and quantify via best-overlap
+            oversimplify_enabled
+            and (contig_acc in oversimplify_contigs)
+            and (not job["QUANT_ONLY"])
+            and (job["input_gtf"] is not None)
+            and (input_transcripts is not None and len(input_transcripts) > 0)
+        ):
+            logger.info(
+                f"[{contig_acc}{contig_strand}] Oversimplify enabled (ref-guided, no discovery): assigning reads to best-overlap reference transcripts and emitting provided annotations to GTF"
+            )
+            _run_oversimplify_best_overlap(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                contig_seq_str=contig_seq_str,
+                bam_file_for_quant=job["bam_file_for_quant"],
+                restrict_region_lend=job["restrict_region_lend"],
+                restrict_region_rend=job["restrict_region_rend"],
+                input_transcripts=input_transcripts,
+                ofh_quant=ofh_quant,
+                ofh_track=ofh_track,
+            )
+            # Emit the provided GTF transcripts for this contig/strand to the output GTF (no de novo discovery)
+            if ofh_gtf_local is not None:
+                try:
+                    for t in input_transcripts:
+                        ofh_gtf_local.write(t.to_GTF_format(include_TPM=False) + "\n")
+                except Exception as _e:
+                    logger.warning(
+                        f"[{contig_acc}{contig_strand}] oversimplify ref-guided: failed writing provided transcripts to GTF: {_e}"
+                    )
+        elif (
             oversimplify_enabled
             and (contig_acc in oversimplify_contigs)
             and (not job["QUANT_ONLY"])
