@@ -21,7 +21,7 @@ test_docker:
 test_wdls:
 	cd sep_contigs && $(MAKE) test_wdls
 	cd single_cells/sc_cluster_guided_pipe && $(MAKE) test_wdls
-	cd single_cells && $(MAKE) test_wdl
+	cd single_cells && $(MAKE) test_full_sc_pipe_wdl
 
 clean:
 	@for i in $(DIRS) $(QC) $(MISC); do \
