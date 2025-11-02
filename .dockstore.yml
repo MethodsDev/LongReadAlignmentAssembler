@@ -30,7 +30,7 @@ workflows:
      authors:
          - name: Brian Haas & chatgpt
            email: bhaas@broadinstitute.org
-   -name: LRAA-singlecell
+   - name: LRAA-singlecell
      subclass: WDL
      primaryDescriptorPath: /WDL/LRAA-singlecell.wdl
      authors:
