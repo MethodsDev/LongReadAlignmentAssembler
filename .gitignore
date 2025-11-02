@@ -1,3 +1,5 @@
-pylib/__pycache__/DiffIsoformStatTest.cpython-310.pyc
-testing/DTU_eval/test.dtu.diff_iso.tsv
-testing/DTU_eval/test.dtu.min_cell_frac.diff_iso.tsv
+# Ignore Python bytecode cache for pylib
+pylib/__pycache__/
+
+# Ignore all untracked files generated under testing
+testing/**
