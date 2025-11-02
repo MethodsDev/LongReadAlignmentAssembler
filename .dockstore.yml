@@ -34,5 +34,5 @@ workflows:
      subclass: WDL
      primaryDescriptorPath: /WDL/LRAA-singlecell.wdl
      authors:
-    	 - name: Brian Haas & chatgpt
+         - name: Brian Haas & chatgpt
            email: bhaas@broadinstitute.org
