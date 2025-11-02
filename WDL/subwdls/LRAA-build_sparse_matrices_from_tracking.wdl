@@ -41,7 +41,7 @@ task sc_build_sparse_matrices_from_tracking {
 
   String output_prefix = "~{sample_id}.LRAA.sc"
 
-  command <<<'
+  command <<<
     set -ex
 
     singlecell_tracking_to_sparse_matrix.py \
@@ -52,7 +52,7 @@ task sc_build_sparse_matrices_from_tracking {
     tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
     tar -zcvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
     tar -zcvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
-  '''
+  >>>
 
   output {
     File mapping_file = "~{output_prefix}.gene_transcript_splicehashcode.tsv"

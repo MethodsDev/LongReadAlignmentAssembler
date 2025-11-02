@@ -64,7 +64,7 @@ task run_seurat_from_gene_sparseM {
 
   Int disksize = 50 + ceil(2 * size(gene_sparse_tar_gz, "GB"))
 
-  command <<<'
+  command <<<
     set -ex
 
     # Extract gene sparse matrix into a fixed directory name
@@ -88,7 +88,7 @@ task run_seurat_from_gene_sparseM {
         tail -n 200 seurat_run.log >&2
         exit 1
       }
-  '''
+  >>>
 
   output {
     File seurat_rds = "~{output_prefix}-seurat_obj.rds"
