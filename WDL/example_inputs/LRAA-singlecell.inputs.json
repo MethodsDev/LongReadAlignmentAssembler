@@ -1,0 +1,26 @@
+{
+  "LRAA_singlecell_wf.sample_id": "PBMC10k",
+  "LRAA_singlecell_wf.referenceGenome": "gs://path/to/genome.fa",
+  "LRAA_singlecell_wf.inputBAM": "gs://path/to/reads.bam",
+
+  "LRAA_singlecell_wf.initial_annot_gtf": null,
+
+  "LRAA_singlecell_wf.HiFi": false,
+  "LRAA_singlecell_wf.oversimplify": null,
+  "LRAA_singlecell_wf.main_chromosomes": "",
+  "LRAA_singlecell_wf.region": null,
+
+  "LRAA_singlecell_wf.numThreads": 8,
+  "LRAA_singlecell_wf.memoryGB": 64,
+  "LRAA_singlecell_wf.diskSizeGB": 256,
+  "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest",
+
+  "LRAA_singlecell_wf.min_cells": 10,
+  "LRAA_singlecell_wf.min_features": 1000,
+  "LRAA_singlecell_wf.percent_mt_max": 20.0,
+  "LRAA_singlecell_wf.mt_pattern": "^MT-",
+  "LRAA_singlecell_wf.npcs": 12,
+  "LRAA_singlecell_wf.resolution": 0.6,
+  "LRAA_singlecell_wf.n_variable_features": 2000,
+  "LRAA_singlecell_wf.seed": 1
+}
