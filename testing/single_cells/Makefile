@@ -11,6 +11,7 @@ test_full_sc_pipe_wdl:
 clean:
 	rm -rf ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
 	rm -rf ./test* ./__chckpts ./__alignment_cache
+	rm -rf ./sc_pipe_outdir
 	cd sc_cluster_guided_pipe && $(MAKE) clean
 
 
