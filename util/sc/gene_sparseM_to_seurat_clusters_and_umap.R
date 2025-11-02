@@ -55,7 +55,7 @@ message("[1/7] Reading 10x gene sparse matrix from: ", sparseM_dir)
 data <- Read10X(
   data.dir = sparseM_dir,
   gene.column = 1,
-  cell.column = 2,
+  cell.column = 1,
   unique.features = TRUE,
   strip.suffix = FALSE
 )

@@ -23,7 +23,7 @@ output_prefix = paste0(sample_name, ".genes")
 
 data = Read10X(data.dir=data_dir,
                gene.column = 1,
-               cell.column = 2,
+               cell.column = 1,
                unique.features = TRUE,
                strip.suffix = FALSE)
 

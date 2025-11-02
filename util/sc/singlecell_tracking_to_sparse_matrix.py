@@ -71,10 +71,14 @@ def make_sparse_matrix_outputs(counts_data, outdirname):
                                        barcodes.cat.categories.size))
 
     mmwrite(os.path.join(outdirname, "matrix.mtx"), sparseM)
-    features.cat.categories.to_series().to_csv(os.path.join(outdirname, "features.tsv"),
-                                               index=False, header=False)
-    barcodes.cat.categories.to_series().to_csv(os.path.join(outdirname, "barcodes.tsv"),
-                                               index=False, header=False)
+
+    # Write single-column features.tsv and barcodes.tsv (first column used by Read10X)
+    features.cat.categories.to_series().to_csv(
+        os.path.join(outdirname, "features.tsv"), index=False, header=False
+    )
+    barcodes.cat.categories.to_series().to_csv(
+        os.path.join(outdirname, "barcodes.tsv"), index=False, header=False
+    )
 
     # gzip outputs
     for fn in ["matrix.mtx", "features.tsv", "barcodes.tsv"]:
