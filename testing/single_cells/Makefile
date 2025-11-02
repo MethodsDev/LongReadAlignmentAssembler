@@ -6,7 +6,7 @@ test:
 
 
 test_full_sc_pipe_wdl:
-	 miniwdl run ../../WDL/LRAA-singlecell.wdl -i LRAA-singlecell-test.inputs.json -d sc_pipe_outdir
+	 miniwdl run ../../WDL/LRAA-singlecell.wdl -i singlecell-test.inputs.json -d sc_pipe_outdir
 
 clean:
 	rm -rf ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
