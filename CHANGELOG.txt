@@ -1,4 +1,4 @@
-v0.10.0 
+v0.10.0 November 2, 2025
 - Defaults now tuned for non-HiFi long reads (e.g., ONT). Replaced --LowFi flag with --HiFi to enable more stringent PacBio HiFi parameters.
 - HiFi mode sets: min_per_id=98, infer_TSS/PolyA enabled, max_exon_spur_length=13, no splice-boundary aggregation, and fractures splice graph at input transcript bounds.
 - runs --CPU parallel contig/strand combinations. If --no_parallelize_contigs, then allows up to --CPU per cluster of reads in per contig/strand evals.
