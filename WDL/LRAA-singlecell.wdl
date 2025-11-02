@@ -17,7 +17,7 @@ workflow LRAA_singlecell_wf {
 
     # Platform/options
     Boolean HiFi = false
-    String? oversimplify           # e.g., "chrM" or "chrM,MT"
+    String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
 
