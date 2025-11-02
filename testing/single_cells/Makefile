@@ -4,6 +4,10 @@ test:
 	gffcompare -r chr19.gtf LRAA.gtf
 	../../util/sc/incorporate_gene_symbols_in_sc_features.py  --ref_gtf chr19.gtf --LRAA_gtf LRAA.gtf --gffcompare_tracking gffcmp.tracking  --id_mappings test.gene_transcript_splicehashcode.tsv   --sparseM_dirs 'test^gene-sparseM' 'test^isoform-sparseM' test^splice_pattern-sparseM
 
+
+test_full_sc_pipe_wdl:
+	 miniwdl run ../../WDL/LRAA-singlecell.wdl -i LRAA-singlecell-test.inputs.json -d sc_pipe_outdir
+
 clean:
 	rm -rf ./chr19.bam.SS* ./LRAA* ./chr19.bam.norm*
 	rm -rf ./test* ./__chckpts ./__alignment_cache
