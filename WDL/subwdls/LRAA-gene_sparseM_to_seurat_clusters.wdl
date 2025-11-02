@@ -71,8 +71,8 @@ task run_seurat_from_gene_sparseM {
     mkdir gene-sparseM
     tar -xzf ~{gene_sparse_tar_gz} --strip-components=1 -C gene-sparseM
 
-    # Run the Seurat pipeline script
-    Rscript gene_sparseM_to_seurat_clusters_and_umap.R \
+    # Run the Seurat pipeline script (executable on PATH)
+    gene_sparseM_to_seurat_clusters_and_umap.R \
       --sparseM_dir gene-sparseM \
       --output_prefix ~{output_prefix} \
       --min_cells ~{min_cells} \
