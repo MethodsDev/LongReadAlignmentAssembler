@@ -14,7 +14,7 @@ def main():
 
     openf = gzip.open if gtf_file.split(".")[-1] == "gz" else open
 
-    print("\t".join(["gene_id", "transcript_id", "gene_name"]))
+    print("\t".join(["gene_id", "transcript_id", "gene_name", "chr_region"]))
     with openf(gtf_file, "rt") as fh:
         for line in fh:
             vals = line.split("\t")
@@ -37,7 +37,8 @@ def main():
                 if m2:
                     gene_name = m2.group(1)
 
-                print("\t".join([gene_id, transcript_id, gene_name]))
+                chr_range = f"{vals[0]}:{vals[3]}-{vals[4]}"
+                print("\t".join([gene_id, transcript_id, gene_name, chr_range]))
 
     sys.exit(0)
 
