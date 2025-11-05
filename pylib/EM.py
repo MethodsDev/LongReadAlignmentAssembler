@@ -92,7 +92,7 @@ def run_EM(
 
             indiv_mp_to_trans_assignments.append(mp_mapped_transcript_idx)
 
-            if not LRAA_Globals.config["use_weighted_read_assignments"]:
+            if not LRAA_Globals.config["weight_reads_by_3prime_agreement"]:
                 mp_trans_weight_val = 1.0
 
             indiv_mp_to_trans_weights.append(mp_trans_weight_val)
@@ -219,7 +219,7 @@ def get_multipath_to_transcripts_and_weights(transcripts):
         for mp in multipaths:
 
             mp_weight = transcript.get_multipath_weight(mp)
-            if not LRAA_Globals.config["use_weighted_read_assignments"]:
+            if not LRAA_Globals.config["weight_reads_by_3prime_agreement"]:
                 # not using the read weights.
                 mp_weight = 1.0
 
