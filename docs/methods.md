@@ -60,7 +60,7 @@ After reconstruction, LRAA assigns reads to transcripts and estimates abundances
 
 - Compatibility: A read is considered compatible with a transcript if it matches splicing structure and overlaps sufficiently (
   `config['fraction_read_align_overlap']`). Exact matches may be prioritized; otherwise, compatible matches form a candidate set.
-- Weighted assignments: If `config['use_weighted_read_assignments']` is enabled, compatibility weights reflect alignment quality or overlap extent.
+- Weighted assignments: If `config['weight_reads_by_3prime_agreement']` is enabled, compatibility weights prioritize agreement of read 3' ends with transcript 3' ends.
 
 Model and updates:
 
@@ -83,7 +83,7 @@ Global configuration lives in `pylib/LRAA_Globals.py` as a `config` dictionary. 
 
 - Read filtering: `min_mapping_quality`, `min_per_id`.
 - Graph scale: `max_path_nodes_per_component`, thresholds controlling junction/exon evidence.
-- Assignment/EM: `fraction_read_align_overlap`, `use_weighted_read_assignments`, `EM_alpha`.
+- Assignment/EM: `fraction_read_align_overlap`, `weight_reads_by_3prime_agreement`, `EM_alpha`.
 - Parallelism: `CPU`, `min_mpgn_component_size_for_spawn`.
 - Normalization/debug: flags to normalize BAM by strand; `--debug` enables extensive intermediate artifacts.
 

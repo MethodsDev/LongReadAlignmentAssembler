@@ -36,7 +36,7 @@ This repo implements LRAA: isoform discovery and/or quantification from long-rea
 - Multiprocessing: Only components above a threshold spawn; jobs communicate via `MultiProcessManager.Queue`. Ensure objects passed between processes are picklable.
 - Debug mode: Set via `--debug` or `LRAA_Globals.DEBUG`; expect numerous `__*` files (e.g., `__mpgns.*.gtf`, `__MPGN_components_described.*.bed`). Avoid committing these.
 - BAM index: `LRAA` auto-builds a `.bai` with `samtools index` if missing. The normalization step uses `util/normalize_bam_by_strand.py` when enabled.
-- Read assignment: Default requires substantial overlap (`config['fraction_read_align_overlap']`) and may weight assignments (`config['use_weighted_read_assignments']`). EM regularization is `config['EM_alpha']`.
+- Read assignment: Default requires substantial overlap (`config['fraction_read_align_overlap']`) and may weight assignments (`config['weight_reads_by_3prime_agreement']`, based on 3' end agreement). EM regularization is `config['EM_alpha']`.
 
 ## Dependencies and external tools
 - Python libs: `pysam`, `networkx`, `intervaltree`, plus scientific stack for utilities/tests. See `Docker/Dockerfile` for an authoritative list.

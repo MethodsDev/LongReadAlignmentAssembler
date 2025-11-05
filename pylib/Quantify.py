@@ -989,16 +989,23 @@ class Quantify:
 
         mp_sp = mp.get_simple_path()
 
+        # Determine which end corresponds to the 3' end given strand.
+        # Simple paths are ordered by genomic coordinate; 3' is 'rend' on '+' and 'lend' on '-'.
+        try:
+            contig_strand = splice_graph.get_contig_strand()
+        except Exception:
+            contig_strand = "+"
+        three_prime_end_key = "rend" if contig_strand == "+" else "lend"
+
+        # Weight only by agreement of the read 3' end (rend) with the transcript 3' end.
+        # The previous behavior used both 5' (lend) and 3' (rend) distances; now we use only 3' end.
         transcript_id_to_sum_end_dists = dict()
         sum_dists = 0
         for transcript in transcripts_assigned:
             transcript_id = transcript.get_transcript_id()
             transcript_sp = transcript.get_simple_path()
-            dist_lend = self._get_simple_path_dist_to_termini(
-                splice_graph, mp_sp, transcript_sp, "lend"
-            )
             dist_rend = self._get_simple_path_dist_to_termini(
-                splice_graph, mp_sp, transcript_sp, "rend"
+                splice_graph, mp_sp, transcript_sp, three_prime_end_key
             )
             """
             logger.debug(
@@ -1012,7 +1019,8 @@ class Quantify:
                 )
             )
             """
-            sum_dist = dist_lend + dist_rend
+            # Only consider the 3' end distance for weighting
+            sum_dist = dist_rend
             transcript_id_to_sum_end_dists[transcript_id] = sum_dist
             sum_dists += sum_dist
 

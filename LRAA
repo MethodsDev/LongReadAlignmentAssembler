@@ -1445,10 +1445,10 @@ def main():
     )
 
     config_group.add_argument(
-        "--no_use_weighted_read_assignments",
+        "--no_weight_reads_by_3prime_agreement",
         action="store_true",
         default=False,
-        help="do not weight reads according to agreement with start/end of reads",
+        help="do not weight ambiguous read assignments by agreement of the read 3' end with the transcript 3' end",
     )
 
     config_group.add_argument(
@@ -1583,6 +1583,8 @@ def main():
 
     args = parser.parse_args()
 
+    # (deprecated flags removed; no back-compat mapping)
+
     # require a BAM source
     if not args.bam and not args.bam_list:
         sys.exit("Error: Must specify --bam or --bam_list")
@@ -1678,8 +1680,8 @@ def main():
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
     LRAA_Globals.config["run_EM"] = run_EM
     LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
-    LRAA_Globals.config["use_weighted_read_assignments"] = (
-        not args.no_use_weighted_read_assignments
+    LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
+        not args.no_weight_reads_by_3prime_agreement
     )
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
