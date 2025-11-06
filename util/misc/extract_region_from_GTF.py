@@ -10,7 +10,9 @@ def parse_region(region_str):
     Parse region like: chr12:6532575-6540493 or chr12+:6,532,575-6,540,493
     Returns: (chrom, lend, rend, strand or None)
     """
-    m = re.match(r"^(?P<chr>chr\S+?)(?P<strand>[+-])?:([\d,]+)-([\d,]+)$", region_str)
+    m = re.match(
+        r"^(?P<chr>(?:chr)?\S+?)(?P<strand>[+-])?:([\d,]+)-([\d,]+)$", region_str
+    )
     if not m:
         sys.stderr.write(f"Error: invalid region format: {region_str}\n")
         sys.exit(1)
