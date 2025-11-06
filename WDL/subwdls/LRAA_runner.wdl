@@ -11,6 +11,9 @@ task LRAA_runner_task {
         Boolean HiFi = false
         String? region
         String? oversimplify
+    # Optional: disable contig-level parallelization inside LRAA.
+    # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
+    Boolean no_parallelize_contigs = false
         
         Int? num_total_reads
         Float? min_per_id
@@ -64,6 +67,7 @@ task LRAA_runner_task {
                                  ~{"--num_total_reads " + num_total_reads} \
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
+                                 ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
         ) || {
@@ -111,9 +115,11 @@ workflow LRAA_runner {
 
         File? annot_gtf
         Boolean quant_only
-    Boolean HiFi = false
+        Boolean HiFi = false
         String? region
         String? oversimplify
+        # Expose toggle to workflow as well; default false here and override to true from scatter callers.
+        Boolean no_parallelize_contigs = false
         
         Int? num_total_reads
         Float? min_per_id
@@ -146,6 +152,7 @@ workflow LRAA_runner {
             quant_only=quant_only,
             HiFi = HiFi,
             oversimplify = oversimplify,
+            no_parallelize_contigs = no_parallelize_contigs,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
