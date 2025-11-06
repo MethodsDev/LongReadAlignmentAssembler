@@ -573,7 +573,7 @@ class MultiPath:
         try:
             for rid in read_ids:
                 try:
-                    self._read_names.add(int(rid))
+                    self._read_ids.add(int(rid))
                 except Exception:
                     continue
         except Exception:
