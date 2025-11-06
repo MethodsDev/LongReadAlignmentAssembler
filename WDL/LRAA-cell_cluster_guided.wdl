@@ -168,6 +168,7 @@ workflow LRAA_cell_cluster_guided {
      output {
          # final outputs
          File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
+    File? LRAA_final_gtf_tracking = lraa_merge_gtf_task.mergedTracking
          # partitioned cluster BAMs (always produced)
          File LRAA_partitioned_cluster_bams_tar = tar_partitioned_cluster_bams.tar_gz
          # cluster-level final quant outputs (per-cluster/partition) packaged
@@ -326,6 +327,7 @@ task lraa_merge_gtf_task {
 
     output {
         File mergedGTF = "~{sample_id}.LRAA.sc_merged.gtf"
+        File? mergedTracking = "~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv"
     }
 
     runtime {

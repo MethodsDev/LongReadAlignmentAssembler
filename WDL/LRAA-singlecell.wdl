@@ -116,7 +116,8 @@ workflow LRAA_singlecell_wf {
     File seurat_cluster_assignments = cluster_cells.cluster_assignments_tsv
 
     # Final cluster-guided outputs (main deliverables)
-    File? final_gtf = cluster_guided.LRAA_final_gtf
+  File? final_gtf = cluster_guided.LRAA_final_gtf
+  File? final_gtf_tracking = cluster_guided.LRAA_final_gtf_tracking
     File final_tracking = cluster_guided.LRAA_final_tracking
     File final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
