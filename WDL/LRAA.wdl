@@ -15,7 +15,7 @@ workflow LRAA_wf {
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         String? region # example: "chr1:100000-200000"; when set, workflow will not split by chromosome and will pass --region to LRAA
-    String? oversimplify # comma-separated contig names to run in oversimplify mode
+        String? oversimplify # comma-separated contig names to run in oversimplify mode
         
         Float? min_per_id
         Boolean no_EM = false
@@ -65,6 +65,8 @@ workflow LRAA_wf {
                     genome_fasta = splitByChr.chromosomeFASTAs[i],
                     annot_gtf = splitByChr.chromosomeGTFs[i],
                     oversimplify = oversimplify,
+                    # In scatter mode, disable contig-level parallelism inside each shard to prevent double-parallelization
+                    no_parallelize_contigs = true,
                     num_total_reads = count_bam.count,
                     min_per_id = min_per_id,
                     quant_only = quant_only,
