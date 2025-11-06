@@ -79,17 +79,45 @@ class MultiPathCounter:
 
         if multipath_key in self._multipath_counter:
             orig_mp_count_pair = self._multipath_counter[multipath_key]
-            # increment count by the incoming multipath's read count
-            orig_mp_count_pair.increment(multipath_obj.get_read_count())
+            orig_mp, _ = orig_mp_count_pair.get_multipath_and_count()
+
+            # Always union read types
             orig_mp_count_pair.include_read_type(multipath_obj.get_read_types())
-            # merge provenance read IDs without altering counts
+
+            # Prefer uniqueness-aware increment when we have explicit IDs
             try:
                 incoming_ids = multipath_obj.get_read_ids()
-                orig_mp, _ = orig_mp_count_pair.get_multipath_and_count()
-                if hasattr(orig_mp, "merge_read_ids"):
-                    orig_mp.merge_read_ids(incoming_ids)
             except Exception:
-                pass
+                incoming_ids = set()
+
+            if incoming_ids:
+                try:
+                    existing_ids = orig_mp.get_read_ids()
+                except Exception:
+                    existing_ids = set()
+                new_unique_ids = incoming_ids - existing_ids
+                # merge provenance IDs first
+                try:
+                    if hasattr(orig_mp, "merge_read_ids"):
+                        orig_mp.merge_read_ids(incoming_ids)
+                except Exception:
+                    pass
+                # increment count only by truly new unique IDs
+                if len(new_unique_ids) > 0:
+                    orig_mp_count_pair.increment(len(new_unique_ids))
+
+                # DEBUG guardrail: ensure count equals number of unique IDs
+                if LRAA_Globals.DEBUG:
+                    unique_ct = len(orig_mp.get_read_ids())
+                    if unique_ct != orig_mp_count_pair.get_count():
+                        raise RuntimeError(
+                            f"MultiPathCounter invariant violated: count={orig_mp_count_pair.get_count()} != unique_ids={unique_ct} for path {multipath_key}"
+                        )
+            else:
+                # Always require explicit read IDs for aggregation
+                raise RuntimeError(
+                    "Incoming multipath lacks read IDs; aggregation requires explicit IDs to ensure uniqueness."
+                )
 
             return orig_mp_count_pair
 
