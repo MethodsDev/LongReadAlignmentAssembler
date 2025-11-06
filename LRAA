@@ -7,7 +7,7 @@ import argparse
 import subprocess
 import json
 from multiprocessing import Process
-from collections import defaultdict
+from collections import defaultdict, deque
 import random
 
 sys.path.insert(
@@ -123,6 +123,41 @@ def _maybe_start_monitor(monitor_path, note):
     except Exception:
         return None
     return None
+
+
+def _print_last_lines(log_path, n=200):
+    """Best-effort: print a header and the last n lines of a file to stdout.
+    Uses `tail -n` when available; falls back to Python if that fails.
+    Never raises; logs a brief note if the file can't be read.
+    """
+    try:
+        if not (log_path and os.path.exists(log_path)):
+            print(f"[log excerpt unavailable] {log_path} not found", file=sys.stdout)
+            return
+        print("\n" + "-" * 80, file=sys.stdout)
+        print(f"Last {n} lines of {log_path}:", file=sys.stdout)
+        print("-" * 80, file=sys.stdout)
+
+        # Try system tail first so we avoid loading large files in memory
+        try:
+            subprocess.run(["tail", f"-n{n}", log_path], check=False)
+        except Exception:
+            # Python fallback: deque to keep last n lines efficiently
+            try:
+                with open(log_path, "rt", errors="replace") as fh:
+                    for line in deque(fh, maxlen=int(n)):
+                        # Print as-is; avoid extra newline since line already has one
+                        sys.stdout.write(line)
+            except Exception as e2:
+                print(
+                    f"[log excerpt error] Could not read {log_path}: {e2}",
+                    file=sys.stdout,
+                )
+        finally:
+            print("-" * 80 + "\n", file=sys.stdout)
+    except Exception:
+        # Absolutely never let this interfere with main error handling
+        pass
 
 
 def _maybe_stop_monitor(monitor_obj):
@@ -290,6 +325,11 @@ def _run_jobs_schedule_and_merge(
                         logger.error(
                             f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → see error log: {err_log}"
                         )
+                        # Emit last 200 lines of the error log for quick visibility
+                        try:
+                            _print_last_lines(err_log, n=200)
+                        except Exception:
+                            pass
                     else:
                         logger.error(
                             f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → no err log found (check worker stderr)"
