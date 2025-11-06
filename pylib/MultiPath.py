@@ -528,6 +528,24 @@ class MultiPath:
             return None
         return None
 
+    # Merge helpers (do not change counts)
+
+    def merge_read_ids(self, read_ids):
+        """
+        Merge a collection of compact read IDs into this MultiPath without adjusting read_count.
+        IDs are coerced to int; invalid values are ignored.
+        """
+        if read_ids is None:
+            return
+        try:
+            for rid in read_ids:
+                try:
+                    self._read_names.add(int(rid))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
 
 def __get_dummy_splice_graph():
 

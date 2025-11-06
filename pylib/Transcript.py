@@ -91,6 +91,14 @@ class Transcript(GenomeFeature):
     def get_exon_segments(self):
         return self._exon_segments.copy()
 
+    def get_meta(self):
+        """
+        Returns a shallow copy of the transcript metadata dictionary.
+        Useful for extracting provenance like source GTF or other annotations
+        added during parsing.
+        """
+        return dict(self._meta) if self._meta is not None else {}
+
     def get_num_exon_segments(self):
         return len(self._exon_segments)
 

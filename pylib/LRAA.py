@@ -1572,20 +1572,61 @@ class LRAA:
                     },
                 )
             else:
-                # fake read, transcript-merge mode.
-                fake_read_prefix = (
-                    input_transcript.get_transcript_id() + "-" + str(time.time())
-                )
+                # transcript-merge mode: synthesize provenance-aware fake reads
+                # Determine weight (k) for this input transcript
                 if (
                     input_transcript.has_annotated_TPM()
                     and LRAA_Globals.LRAA_MODE != "MERGE"
                 ):
-                    num_fake_reads = math.ceil(input_transcript.get_TPM())
+                    k = math.ceil(input_transcript.get_TPM())
                 else:
-                    num_fake_reads = LRAA_Globals.config["min_reads_novel_isoform"]
+                    k = LRAA_Globals.config["min_reads_novel_isoform"]
 
+                # Extract provenance
+                try:
+                    meta = input_transcript.get_meta()
+                except Exception:
+                    meta = {}
+                src_basename = meta.get("source_gtf", "unknown")
+                src_tid = input_transcript.get_transcript_id()
+                # Flags based on annotated features if available (fallback to generic has_* if not annotated)
+                has_TSS = False
+                has_PolyA = False
+                try:
+                    has_TSS = bool(input_transcript.has_annotated_TSS())
+                    has_PolyA = bool(input_transcript.has_annotated_PolyA())
+                except Exception:
+                    try:
+                        has_TSS = bool(input_transcript.has_TSS())
+                        has_PolyA = bool(input_transcript.has_PolyA())
+                    except Exception:
+                        has_TSS = False
+                        has_PolyA = False
+
+                flags = []
+                if has_TSS:
+                    flags.append("TSS")
+                if has_PolyA:
+                    flags.append("PolyA")
+                flags_str = ",".join(flags) if flags else "-"
+
+                # sanitize tokens (avoid spaces or separators)
+                def _sanitize(tok):
+                    try:
+                        tok = str(tok)
+                        return re.sub(r"[\s|=]", "_", tok)
+                    except Exception:
+                        return "unknown"
+
+                src_basename = _sanitize(src_basename)
+                src_tid = _sanitize(src_tid)
+
+                # Create k distinct fake read names to preserve scoring parity, each carrying n=k
                 fake_read_names = set(
-                    [f"{fake_read_prefix}.{i}" for i in range(num_fake_reads)]
+                    [
+                        f"fake_for_merge|src={src_basename}|tid={src_tid}|flags={flags_str}|n={k}|uid={i}"
+                        for i in range(1, k + 1)
+                    ]
                 )
 
                 mp = MultiPath(

@@ -82,6 +82,14 @@ class MultiPathCounter:
             # increment count by the incoming multipath's read count
             orig_mp_count_pair.increment(multipath_obj.get_read_count())
             orig_mp_count_pair.include_read_type(multipath_obj.get_read_types())
+            # merge provenance read IDs without altering counts
+            try:
+                incoming_ids = multipath_obj.get_read_ids()
+                orig_mp, _ = orig_mp_count_pair.get_multipath_and_count()
+                if hasattr(orig_mp, "merge_read_ids"):
+                    orig_mp.merge_read_ids(incoming_ids)
+            except Exception:
+                pass
 
             return orig_mp_count_pair
 
