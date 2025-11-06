@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class MultiPath:
+        # Memory model for read tracking:
+        # - In RAM: store compact integer read identifiers in _read_ids.
+        # - On disk: ReadNameStore (SQLite/LMDB) maps long read-name strings <-> integer IDs.
+        # - If _read_ids is empty, get_read_ids() can stream IDs from MP_READ_ID_STORE.
+        # Prefer using IDs for algorithmic decisions; resolve names only for reporting.
 
     MP_id_counter = 0
 
@@ -55,17 +60,17 @@ class MultiPath:
 
         self._read_types = read_types
         # Store compact read identifiers (ints) in-memory; resolve to long names only on demand
-        self._read_names = set()  # actually stores read IDs
+        self._read_ids = set()
         if read_names is not None:
             for rn in read_names:
                 rid = self._coerce_read_identifier(rn)
                 if rid is not None:
-                    self._read_names.add(int(rid))
+                    self._read_ids.add(int(rid))
         # maintain count independent of whether names are stored
         if read_count is not None:
             self._read_count = int(read_count)
         else:
-            self._read_count = len(self._read_names)
+            self._read_count = len(self._read_ids)
 
         self._exon_segments = Simple_path_utils.merge_adjacent_segments(exon_segments)
 
@@ -113,7 +118,7 @@ class MultiPath:
         Notes:
         - Resolving names can be relatively expensive. Prefer get_read_count() or get_read_ids() when possible.
         """
-        ids = set(self._read_names)
+        ids = set(self._read_ids)
         if not ids:
             # try to stream IDs from external store if configured
             try:
@@ -144,8 +149,8 @@ class MultiPath:
         Returns the set of compact read IDs supporting this multipath. If not retained in-memory,
         will attempt to stream from MP_READ_ID_STORE when available.
         """
-        if len(self._read_names) > 0:
-            return set(self._read_names)
+        if len(self._read_ids) > 0:
+            return set(self._read_ids)
         try:
             import LRAA_Globals
             mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
@@ -160,8 +165,8 @@ class MultiPath:
 
     def get_read_names_count(self):
         # count of IDs stored or externally associated
-        if len(self._read_names) > 0:
-            return len(self._read_names)
+        if len(self._read_ids) > 0:
+            return len(self._read_ids)
         try:
             import LRAA_Globals
             mp_store = getattr(LRAA_Globals, "MP_READ_ID_STORE", None)
@@ -182,13 +187,31 @@ class MultiPath:
             for r in read_name:
                 rid = self._coerce_read_identifier(r)
                 if rid is not None:
-                    self._read_names.add(int(rid))
+                    self._read_ids.add(int(rid))
                     added += 1
             self._read_count += added if added > 0 else len(read_name)
         else:
             rid = self._coerce_read_identifier(read_name)
             if rid is not None:
-                self._read_names.add(int(rid))
+                self._read_ids.add(int(rid))
+            self._read_count += 1
+
+    # New preferred alias for clarity
+    def include_read_id(self, read_id):
+        if type(read_id) in [list, set]:
+            added = 0
+            for r in read_id:
+                try:
+                    self._read_ids.add(int(r))
+                    added += 1
+                except Exception:
+                    continue
+            self._read_count += added if added > 0 else len(read_id)
+        else:
+            try:
+                self._read_ids.add(int(read_id))
+            except Exception:
+                pass
             self._read_count += 1
 
     def include_read_count(self, increment=1):
@@ -197,9 +220,19 @@ class MultiPath:
 
     def remove_read_name(self, read_name):
         rid = self._coerce_read_identifier(read_name)
-        if rid is not None and int(rid) in self._read_names:
-            self._read_names.discard(int(rid))
+        if rid is not None and int(rid) in self._read_ids:
+            self._read_ids.discard(int(rid))
             self._read_count = max(0, self._read_count - 1)
+
+    # Alias for clarity
+    def remove_read_id(self, read_id):
+        try:
+            rid = int(read_id)
+            if rid in self._read_ids:
+                self._read_ids.discard(rid)
+                self._read_count = max(0, self._read_count - 1)
+        except Exception:
+            pass
 
     def prune_reftranscript_as_evidence(self):
         # Remove any reads whose resolved names start with "reftranscript:"
@@ -216,7 +249,7 @@ class MultiPath:
         ids_to_keep = set()
         pruned = 0
         # Prefer in-memory IDs if present; otherwise try streaming IDs
-        ids = set(self._read_names)
+        ids = set(self._read_ids)
         if not ids:
             try:
                 import LRAA_Globals
@@ -234,7 +267,7 @@ class MultiPath:
                 pruned += 1
 
         # Replace internal set with kept IDs and adjust count
-        self._read_names = ids_to_keep
+        self._read_ids = ids_to_keep
         if pruned > 0:
             self._read_count = max(0, self._read_count - pruned)
 

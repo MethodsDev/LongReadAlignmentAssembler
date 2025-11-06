@@ -20,6 +20,11 @@ MIN_WEIGHT = 0.01
 
 
 class MultiPathGraphNode:
+    # Read tracking conventions:
+    # - For algorithmic use, prefer get_read_ids() which returns compact integer IDs
+    #   across this node and its contained nodes.
+    # - get_read_names() resolves IDs to long names via the on-disk name store and is
+    #   intended for reporting/logging, not for counting/uniqueness.
 
     mp_id_counter = 0
 

@@ -616,9 +616,11 @@ class LRAA:
         #
         ###################
 
-        # lighten the transcripts before returning them
-        for transcript in transcripts:
-            transcript.lighten()
+        # lighten the transcripts before returning them, unless running in MERGE mode
+        # where downstream tools (merge tracking) need multipath evidence retained.
+        if LRAA_Globals.LRAA_MODE != "MERGE":
+            for transcript in transcripts:
+                transcript.lighten()
 
         end_time = time.time()
         asm_time_min = (end_time - start_time) / 60
@@ -823,9 +825,9 @@ class LRAA:
                 num_no_path += 1
                 continue
 
-            # Construct MultiPath with optional name storage to reduce memory
-            # Always avoid storing read names in memory; rely on external store for names
-            store_names = False
+            # Construct MultiPath storing the single read name so ID-based uniqueness
+            # can be enforced during aggregation.
+            store_names = True
             mp = MultiPath(
                 self._splice_graph,
                 paths_list,

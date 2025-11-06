@@ -207,7 +207,7 @@ def main():
                             "source_transcript_id": tid,
                             "source_has_TSS": info["TSS"],
                             "source_has_PolyA": info["PolyA"],
-                            "contribution_count": info["n"],
+                            # contribution_count intentionally omitted from output (was info["n"]) as it's configuration-dependent
                         }
                     )
             except Exception:
@@ -228,7 +228,6 @@ def main():
                 "source_transcript_id",
                 "source_has_TSS",
                 "source_has_PolyA",
-                "contribution_count",
             ]
             tfh.write("\t".join(header) + "\n")
             for rec in tracking_records:
@@ -241,7 +240,7 @@ def main():
                     rec["source_transcript_id"],
                     str(rec["source_has_TSS"]),
                     str(rec["source_has_PolyA"]),
-                    str(rec["contribution_count"]),
+            # contribution_count removed
                 ]
                 tfh.write("\t".join(row) + "\n")
         logger.info(f"Wrote tracking file: {tracking_path}")
