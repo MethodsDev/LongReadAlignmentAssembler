@@ -219,9 +219,12 @@ def _run_jobs_schedule_and_merge(
         pool_size = 1
         CPU_inner = max(1, CPU)
 
-    # Set per-job CPU
+    # Set per-job CPU and whether worker should redirect stderr to per-contig log
+    # We only redirect when running multiple workers concurrently; otherwise, let stderr go to terminal.
+    redirect_stderr = True if pool_size > 1 else False
     for j in jobs:
         j["CPU_inner"] = CPU_inner
+        j["REDIRECT_STDERR"] = redirect_stderr
 
     logger.info(
         f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
@@ -331,9 +334,20 @@ def _run_jobs_schedule_and_merge(
                         except Exception:
                             pass
                     else:
-                        logger.error(
-                            f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → no err log found (check worker stderr)"
+                        # Provide a clearer hint based on whether this run redirected stderr
+                        hint = (
+                            "stderr was not redirected; see terminal output"
+                            if not j.get("REDIRECT_STDERR", True)
+                            else "check worker stderr"
                         )
+                        if os.path.exists(err_log) and os.path.getsize(err_log) == 0:
+                            logger.error(
+                                f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → empty err log at {err_log} ({hint})"
+                            )
+                        else:
+                            logger.error(
+                                f"Failed contig/strand {j['contig_acc']} {j['contig_strand']} → no err log found ({hint})"
+                            )
         except Exception:
             # Don't let reporting failures mask the underlying error
             pass
@@ -561,41 +575,75 @@ def _contig_job_runner(job):
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
-    # Establish a persistent per-worker error log early and route stderr to it.
-    # Also enable Python faulthandler to capture fatal signals (e.g., segfaults).
+    # Establish a persistent per-worker error log and route stderr to it ONLY when requested.
+    # If REDIRECT_STDERR is False (no parallel contig processing), keep stderr on terminal for interactive clarity.
     err_log_path = f"{tmp_prefix}.err.log"
     err_fh = None
-    try:
-        import faulthandler, signal  # type: ignore
+    if job.get("REDIRECT_STDERR", True):
+        try:
+            import faulthandler, signal  # type: ignore
 
-        err_fh = open(err_log_path, "at", buffering=1)
-        try:
-            sys.stderr = err_fh  # redirect worker stderr to file
-        except Exception:
-            pass
-        try:
-            faulthandler.enable(file=err_fh, all_threads=True)
-            # Best effort: also dump on TERM/INT for visibility
+            err_fh = open(err_log_path, "at", buffering=1)
             try:
-                faulthandler.register(signal.SIGTERM, file=err_fh, all_threads=True)
+                sys.stderr = err_fh  # redirect worker stderr to file
+            except Exception:
+                pass
+            # Ensure logging handlers stream into same file (see earlier rationale)
+            try:
+                _root_logger = logging.getLogger()
+                if _root_logger.handlers:
+                    for _h in _root_logger.handlers:
+                        try:
+                            import logging as _logging_mod
+                            if isinstance(_h, _logging_mod.StreamHandler):
+                                try:
+                                    _h.flush()
+                                except Exception:
+                                    pass
+                                _h.stream = err_fh
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        _fh = logging.StreamHandler(err_fh)
+                        _fmt = logging.Formatter(FORMAT)
+                        _fh.setFormatter(_fmt)
+                        _fh.setLevel(_root_logger.level or logging.INFO)
+                        _root_logger.addHandler(_fh)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             try:
-                faulthandler.register(signal.SIGINT, file=err_fh, all_threads=True)
+                faulthandler.enable(file=err_fh, all_threads=True)
+                for _sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+                    if _sig is not None:
+                        try:
+                            faulthandler.register(_sig, file=err_fh, all_threads=True)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            try:
+                print(
+                    f"[worker-start] contig={contig_acc} strand={contig_strand} pid={os.getpid()} redirect_stderr=1",
+                    file=err_fh,
+                    flush=True,
+                )
             except Exception:
                 pass
         except Exception:
             pass
+    else:
+        # Emit a brief start line to current stderr (terminal) noting non-redirection.
         try:
             print(
-                f"[worker-start] contig={contig_acc} strand={contig_strand} pid={os.getpid()}",
-                file=err_fh,
+                f"[worker-start] contig={contig_acc} strand={contig_strand} pid={os.getpid()} redirect_stderr=0",
+                file=sys.stderr,
                 flush=True,
             )
         except Exception:
             pass
-    except Exception:
-        pass
 
     # Expose per-(contig,strand) tmp dir to downstream components (read-tracking stores, alignment cache)
     try:
@@ -846,19 +894,20 @@ def _contig_job_runner(job):
                 worker_monitor.stop()
         except Exception:
             pass
-        # Flush and close error log last to capture late errors
-        try:
-            if err_fh is not None:
-                try:
-                    err_fh.flush()
-                except Exception:
-                    pass
-                try:
-                    err_fh.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Flush and close error log last (only if used)
+        if job.get("REDIRECT_STDERR", True):
+            try:
+                if err_fh is not None:
+                    try:
+                        err_fh.flush()
+                    except Exception:
+                        pass
+                    try:
+                        err_fh.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     return
 
