@@ -264,7 +264,15 @@ def _run_jobs_schedule_and_merge(
         for j in jobs:
             if j.get("skip"):
                 continue
-            p = Process(target=_contig_job_runner, args=(j,))
+            # Name the process with contig and strand so launcher logs include [contig+strand]
+            try:
+                _pname = f"{j['contig_acc']}{j['contig_strand']}"
+            except Exception:
+                _pname = None
+            if _pname:
+                p = Process(target=_contig_job_runner, name=_pname, args=(j,))
+            else:
+                p = Process(target=_contig_job_runner, args=(j,))
             mgr.launch_process(p)
         errs = mgr.wait_for_remaining_processes()
     except KeyboardInterrupt:
