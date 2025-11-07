@@ -562,7 +562,15 @@ class Transcript(GenomeFeature):
         refined_clusters: List[List['Transcript']] = []
         # Parallel structure capturing final component graphs for optional reporting after IDs are assigned
         refined_reports: List[Dict[str, object]] = []
-        for cluster in initial_clusters:
+        # Progress bar (tqdm) expected to be available
+        from tqdm import tqdm  # type: ignore
+        cluster_iter = tqdm(
+            initial_clusters,
+            desc=f"Reclustering transcripts {contig_acc}({contig_strand})",
+            unit="cluster",
+        )
+
+        for cluster in cluster_iter:
             if len(cluster) == 1:
                 refined_clusters.append(cluster)
                 continue

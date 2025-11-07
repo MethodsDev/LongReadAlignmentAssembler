@@ -4,6 +4,7 @@ import time
 import multiprocessing
 import random
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,20 @@ class MultiProcessManager:
         self.process_list.add(process)
         self.num_running += 1
         time_end = time.time()
-        logger.info("-time to launch process: {}".format(time_end - time_start))
+        # Include contig/strand context when available (process.name like "chr1+:123-456")
+        elapsed = time_end - time_start
+        ctx = None
+        try:
+            name = getattr(process, "name", "") or ""
+            m = re.match(r"^(.+?)([+-])(?::|$)", name)
+            if m:
+                ctx = f"{m.group(1)}{m.group(2)}"
+        except Exception:
+            ctx = None
+        if ctx:
+            logger.info("[%s] time to launch process: %.3fs", ctx, elapsed)
+        else:
+            logger.info("time to launch process: %.3fs", elapsed)
 
     def wait_for_open_slot(self):
         if MPM_DEBUG:
