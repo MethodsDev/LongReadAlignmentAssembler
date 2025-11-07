@@ -35,6 +35,21 @@ config = {
     # gene reclustering overlap thresholds
     "min_recluster_overlap_shorter_iso_frac": 0.50,  # (overlap_len / shorter_transcript_len) >= this to connect isoforms in second-stage graph
     "min_recluster_overlap_longer_iso_frac": 0.20,  # also require (overlap_len / longer_transcript_len) >= this to avoid linking large multi-exon to long single-exon with tiny shared portion
+    # merge-stage reclustering refinement (disabled by default)
+    # When enabled, applies a neighbor-based Jaccard pruning over the isoform similarity graph
+    # built from the overlap-by-length criterion to reduce over-clustering via weak bridges.
+    "merge_neighbor_prune_enable": True,
+    "merge_neighbor_jaccard_threshold": 0.50,   # J(N+(u), N+(v)) threshold; lower prunes fewer edges
+    "merge_neighbor_min_common": 1,             # require at least this many common neighbors to avoid pruning when J is low
+    "merge_neighbor_degree_guard": 2,           # do not prune edges touching nodes with degree <= this value
+    "merge_neighbor_keep_top1": True,           # ensure nodes aren’t orphaned: after pruning, keep strongest original neighbor edge if needed
+    # Debug reporting for merge neighbor pruning (logged counts only; TSVs not emitted by default)
+    "merge_neighbor_debug_report": False,
+    # Optional: path to a TSV file to emit per-edge neighbor-Jaccard values for final components
+    # If set to a non-empty string, the reclustering step will append rows describing
+    # pairs of isoforms within each final component using their final transcript IDs.
+    # Columns: contig, strand, gene_id, transcript_id_1, transcript_id_2, deg1, deg2, common_closed, union_closed, neighbor_jaccard
+    "merge_neighbor_pairs_report_path": None, #"jaccard.log",
     #
     ############
     # TSS config

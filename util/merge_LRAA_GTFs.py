@@ -62,6 +62,8 @@ def main():
         help="debug mode, more verbose",
     )
 
+    # (merge-stage clustering uses LRAA_Globals.config for tuning; no extra CLI needed here)
+
     args = parser.parse_args()
 
     if args.debug:
@@ -69,6 +71,8 @@ def main():
         LRAA_Globals.DEBUG = True
 
     LRAA_Globals.LRAA_MODE = "MERGE"
+
+    # (no additional merge-stage config mapping from CLI here)
 
     gtf_list = args.gtf
     genome_fasta_file = args.genome
@@ -144,6 +148,18 @@ def main():
         # Define merged isoforms
         logger.info(f"\n// -begin merge of isoforms for {contig_acc}")
         transcripts = lraa_obj.reconstruct_isoforms()
+
+        # Optional final reclustering/refinement + reporting
+        # This will also trigger neighbor-Jaccard pair reporting if configured
+        try:
+            transcripts = Transcript.recluster_transcripts_to_genes(
+                transcripts, contig_acc, contig_strand
+            )
+        except Exception as e:
+            # fallback to original transcripts if reclustering fails for any reason
+            logger.warning(
+                f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
+            )
 
         ## report transcripts in GTF format
         logger.info(
