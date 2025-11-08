@@ -151,6 +151,12 @@ config = {
     # pruning phases (splice graph refinement) optional progress intervals (sec); set <=0 to disable
     "prune_introns_progress_interval_sec": 60.0,
     "prune_unspliced_exons_progress_interval_sec": 60.0,
+    # finalize splice graph (interval tree + node indexing) progress logging
+    # emit periodic logs while populating interval trees for very large graphs
+    # time-based interval (sec); set <=0 to disable
+    "finalize_splice_graph_progress_interval_sec": 60.0,
+    # count-based logging: every N nodes processed (set <=0 to disable)
+    "finalize_splice_graph_progress_every_n": 10000,
     ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
