@@ -2288,47 +2288,107 @@ class Splice_graph:
         return
 
     def _finalize_splice_graph(self):
+        """Populate interval trees and node indexes.
+        Adds progress logging and bulk IntervalTree construction to mitigate long silent periods on very large graphs.
+        """
 
-        self._itree_exon_segments = itree.IntervalTree()
+        t0 = time.time()
+        progress_interval = (
+            LRAA_Globals.config.get(
+                "finalize_splice_graph_progress_interval_sec", 0
+            )
+            or 0
+        )
+        progress_every_n = (
+            LRAA_Globals.config.get("finalize_splice_graph_progress_every_n", 0) or 0
+        )
 
-        ## store node ID to node object
-        for node in self._splice_graph:
+        def _rss_mb():
+            try:
+                import psutil  # type: ignore
+
+                return (
+                    psutil.Process(os.getpid()).memory_info().rss
+                    / (1024.0 * 1024.0)
+                )
+            except Exception:
+                return None
+
+        nodes = list(self._splice_graph)
+        total_nodes = len(nodes)
+        last_log_t = t0
+        intervals = []
+        exon_ct = 0
+        tss_ct = 0
+        polyA_ct = 0
+
+        # build intervals list (bulk construction faster than repeated assignment)
+        for idx, node in enumerate(nodes):
             self._node_id_to_node[node.get_id()] = node
             if type(node) == Exon:
-                # store exon, TSS, and PolyA features in itree for overlap queries
                 lend, rend = node.get_coords()
-                self._itree_exon_segments[lend : rend + 1] = node
-
+                intervals.append(itree.Interval(lend, rend + 1, node))
+                exon_ct += 1
             elif type(node) == TSS:
                 TSS_coord, _ = node.get_coords()
-                max_dist_between_alt_TSS_sites = LRAA_Globals.config[
-                    "max_dist_between_alt_TSS_sites"
-                ]
-                half_dist = int(max_dist_between_alt_TSS_sites / 2)
-                self._itree_exon_segments[
-                    TSS_coord - half_dist : TSS_coord + half_dist + 1
-                ] = node
-
+                half_dist = int(
+                    LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2
+                )
+                intervals.append(
+                    itree.Interval(TSS_coord - half_dist, TSS_coord + half_dist + 1, node)
+                )
+                tss_ct += 1
             elif type(node) == PolyAsite:
-                polyAsite_coord, _ = node.get_coords()
-                max_dist_between_alt_polyA_sites = LRAA_Globals.config[
-                    "max_dist_between_alt_polyA_sites"
-                ]
-                half_dist = int(max_dist_between_alt_polyA_sites / 2)
-                self._itree_exon_segments[
-                    polyAsite_coord - half_dist : polyAsite_coord + half_dist + 1
-                ] = node
+                polyA_coord, _ = node.get_coords()
+                half_dist = int(
+                    LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2
+                )
+                intervals.append(
+                    itree.Interval(
+                        polyA_coord - half_dist, polyA_coord + half_dist + 1, node
+                    )
+                )
+                polyA_ct += 1
+
+            # progress logging conditions
+            if total_nodes > 0 and (
+                (progress_every_n > 0 and (idx + 1) % progress_every_n == 0)
+                or (
+                    progress_interval > 0
+                    and time.time() - last_log_t >= progress_interval
+                )
+            ):
+                try:
+                    rss = _rss_mb()
+                    rss_txt = f" rss={rss:.1f}MB" if rss is not None else ""
+                    logger.info(
+                        f"[{self._contig_acc}{self._contig_strand}] [finalize-sg] nodes_processed={idx+1}/{total_nodes} exons={exon_ct} TSS={tss_ct} PolyA={polyA_ct}{rss_txt}"
+                    )
+                except Exception:
+                    pass
+                last_log_t = time.time()
+
+        # Bulk create exon/TSS/PolyA interval tree
+        self._itree_exon_segments = itree.IntervalTree(intervals)
 
         self._validate_itree()
 
-        ################################
-        ## add introns to separate itree
-
-        self._itree_introns = itree.IntervalTree()
-
+        # intron interval tree
+        intron_t0 = time.time()
+        intron_intervals = []
         for intron_obj in self._intron_objs.values():
             lend, rend = intron_obj.get_coords()
-            self._itree_introns[lend : rend + 1] = intron_obj
+            intron_intervals.append(itree.Interval(lend, rend + 1, intron_obj))
+        self._itree_introns = itree.IntervalTree(intron_intervals)
+        intron_dt = time.time() - intron_t0
+
+        dt = time.time() - t0
+        try:
+            logger.info(
+                f"[{self._contig_acc}{self._contig_strand}] finalize splice-graph complete: nodes={total_nodes} exons={exon_ct} TSS={tss_ct} PolyA={polyA_ct} introns={len(intron_intervals)} elapsed={dt:.2f}s intron_tree={intron_dt:.2f}s"
+            )
+        except Exception:
+            pass
 
         return
 
