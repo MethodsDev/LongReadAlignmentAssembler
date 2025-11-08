@@ -74,6 +74,12 @@ RUN pip install argparse pysam networkx lmdb psutil tqdm --break-system-packages
 WORKDIR $SRC
 
 RUN pip install intervaltree --break-system-packages
+## Leiden community clustering dependencies (Python)
+# igraph requires C core; install build and runtime deps first
+RUN apt-get -qq update && apt-get -qq -y install \
+    libxml2-dev \
+    libigraph0-dev || true
+RUN pip install --break-system-packages igraph==0.11.4 leidenalg==0.10.2
 
 ## Samtools
 ENV SAMTOOLS_VERSION=1.13

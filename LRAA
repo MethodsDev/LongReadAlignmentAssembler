@@ -182,6 +182,7 @@ def _run_jobs_schedule_and_merge(
     NO_CLEANUP,
     DEBUG,
     INCLUDE_PRELIM_TRANSCRIPTS,
+    VERBOSE=False,
 ):
     """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging."""
 
@@ -220,15 +221,23 @@ def _run_jobs_schedule_and_merge(
         CPU_inner = max(1, CPU)
 
     # Set per-job CPU and whether worker should redirect stderr to per-contig log
-    # We only redirect when running multiple workers concurrently; otherwise, let stderr go to terminal.
-    redirect_stderr = True if pool_size > 1 else False
+    # We only redirect when running multiple workers concurrently; unless --verbose is set, in which case keep terminal output.
+    redirect_stderr = True if (pool_size > 1 and not VERBOSE) else False
     for j in jobs:
         j["CPU_inner"] = CPU_inner
         j["REDIRECT_STDERR"] = redirect_stderr
+        j["VERBOSE"] = VERBOSE
 
     logger.info(
         f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
     )
+    # Explicitly report how logs will be routed for this run
+    try:
+        logger.info(
+            f"log routing: redirect_stderr={'1' if redirect_stderr else '0'} verbose={'1' if VERBOSE else '0'} debug={'1' if DEBUG else '0'}"
+        )
+    except Exception:
+        pass
 
     # Mark completed jobs for resume if allowed
     if not NO_RESUME_PARALLEL:
@@ -1444,6 +1453,13 @@ def main():
     )
 
     debug_group.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="force all logging to terminal (stdout/stderr) even during parallel contig processing; disables per-contig stderr redirection",
+    )
+
+    debug_group.add_argument(
         "--mpm_monitor", action="store_true", default=False
     )  # multiprocessing monitor
 
@@ -1553,6 +1569,26 @@ def main():
         default="retain_expressed",
         choices=["retain_expressed", "retain_filtered"],
         help="logic around retaining input reference transcripts in guided ID mode",
+    )
+
+    # Community clustering (Leiden) settings
+    config_group.add_argument(
+        "--no_use_community_clustering",
+        action="store_true",
+        default=False,
+        help="Disable Leiden community clustering for transcript→gene assignment (enabled by default).",
+    )
+    config_group.add_argument(
+        "--community_resolution",
+        type=float,
+        default=LRAA_Globals.config.get("community_resolution", 1.0),
+        help="Leiden resolution parameter (higher → more communities).",
+    )
+    config_group.add_argument(
+        "--community_random_seed",
+        type=int,
+        default=LRAA_Globals.config.get("community_random_seed", 42),
+        help="Random seed for Leiden community clustering.",
     )
 
     # Storage/backend settings for disk-backed read tracking stores
@@ -1783,6 +1819,12 @@ def main():
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
 
+    # community clustering config
+    # community clustering config
+    LRAA_Globals.config["use_community_clustering"] = not bool(args.no_use_community_clustering)
+    LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
+    LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
+
     quant_EM_alpha = args.EM_alpha
     LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
 
@@ -1923,6 +1965,34 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
         LRAA_Globals.DEBUG = True
+
+    # --verbose: force console logging even when running multiple workers
+    VERBOSE = bool(getattr(args, "verbose", False))
+    if VERBOSE:
+        try:
+            root_logger = logging.getLogger()
+            have_stream = False
+            for h in list(root_logger.handlers):
+                import logging as _lm
+                if isinstance(h, _lm.StreamHandler):
+                    have_stream = True
+                    try:
+                        h.flush()
+                    except Exception:
+                        pass
+                    h.stream = sys.stderr
+            if not have_stream:
+                sh = logging.StreamHandler(stream=sys.stderr)
+                sh.setFormatter(logging.Formatter(FORMAT))
+                sh.setLevel(root_logger.level or logging.INFO)
+                root_logger.addHandler(sh)
+            logger.info("--verbose enabled: forcing terminal logging for all workers")
+        except Exception:
+            pass
+        try:
+            LRAA_Globals.config["verbose_logging"] = True
+        except Exception:
+            pass
 
     allow_spacers = False
     # allow_spacers = args.allow_spacers
@@ -2149,6 +2219,7 @@ def main():
                 NO_CLEANUP=NO_CLEANUP,
                 DEBUG=LRAA_Globals.DEBUG,
                 INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                VERBOSE=VERBOSE,
             )
 
     else:
@@ -2203,6 +2274,7 @@ def main():
             NO_CLEANUP=NO_CLEANUP,
             DEBUG=LRAA_Globals.DEBUG,
             INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+            VERBOSE=VERBOSE,
         )
 
     return
