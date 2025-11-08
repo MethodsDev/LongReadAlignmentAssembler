@@ -132,7 +132,7 @@ config = {
     "splice_graph_log_progress_interval_sec": 30.0,
     # component/timing instrumentation (post itree validation)
     "log_splice_graph_component_timing": True,  # emit timing/memory stats around connected component discovery
-    "log_splice_graph_merge_progress_interval_sec": 0,  # optional interval (sec) for progress during exon segment merging (0 disables)
+    "log_splice_graph_merge_progress_interval_sec": 120.0,  # optional interval (sec) for progress during exon segment merging (0 disables)
     "log_splice_graph_debug_counts": True,  # log node/edge counts at key refinement checkpoints
     # coverage reset progress (recompute base coverage from pretty alignments)
     "show_progress_cov_reset": True,          # show progress while recomputing base coverage
@@ -157,6 +157,20 @@ config = {
     "finalize_splice_graph_progress_interval_sec": 60.0,
     # count-based logging: every N nodes processed (set <=0 to disable)
     "finalize_splice_graph_progress_every_n": 10000,
+    # connected component discovery progress (second pass included)
+    # time-based interval (sec); set <=0 to disable
+    "cc_discovery_progress_interval_sec": 60.0,
+    # count-based logging: every N nodes considered (set <=0 to disable)
+    "cc_discovery_progress_every_n": 25000,
+    # TSS pruning progress controls
+    "tss_prune_progress_interval_sec": 60.0,
+    "tss_prune_progress_every_n": 500,
+    # PolyA pruning progress controls
+    "polya_prune_progress_interval_sec": 60.0,
+    "polya_prune_progress_every_n": 500,
+    # node→component assignment progress controls
+    "component_assign_progress_interval_sec": 60.0,
+    "component_assign_progress_every_n": 20000,
     ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'

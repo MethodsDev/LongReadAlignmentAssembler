@@ -314,17 +314,8 @@ class Splice_graph:
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
             self.describe_graph("__prefilter_r2.graph")
-        # Timing instrumentation for connected component discovery (can be expensive on large graphs)
-        _do_cc_timing = LRAA_Globals.config.get("log_splice_graph_component_timing", True)
-        cc_t0 = time.time() if _do_cc_timing else None
-        if _do_cc_timing:
-            logger.info(f"[{contig_acc}{contig_strand}] discovering connected components ...")
-        connected_components = list(
-            nx.connected_components(self._splice_graph.to_undirected())
-        )
-        if _do_cc_timing:
-            cc_dt = time.time() - cc_t0
-            logger.info(f"[{contig_acc}{contig_strand}] connected components discovered: {len(connected_components)} (elapsed {cc_dt:.2f}s)")
+        # Connected component discovery with progress
+        connected_components = self._discover_connected_components_with_progress(contig_acc, contig_strand)
 
         # filter out TSS and PolyA features based on min isoform fraction
         if len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0:
@@ -346,9 +337,7 @@ class Splice_graph:
             self._prune_exon_spurs_at_introns()
 
             self._finalize_splice_graph()  # do again after TSS and PolyA integration
-            connected_components = list(
-                nx.connected_components(self._splice_graph.to_undirected())
-            )
+            connected_components = self._discover_connected_components_with_progress(contig_acc, contig_strand, stage_label="post-TSS/PolyA")
 
         else:
             # if not quant_mode:
@@ -362,11 +351,7 @@ class Splice_graph:
             append_log_file("__PolyAsite_info.bed", self._PolyA_objs)
 
         self._components = connected_components
-        for i, component in enumerate(self._components):
-            for node in component:
-                id = node.get_id()
-                logger.debug(f"assigning node {id} to component {i}")
-                self._node_id_to_component[id] = i
+        self._assign_nodes_to_components_with_progress(contig_acc, contig_strand)
 
         return self._splice_graph
 
@@ -2392,6 +2377,82 @@ class Splice_graph:
 
         return
 
+    def _discover_connected_components_with_progress(self, contig_acc, contig_strand, stage_label="initial"):
+        """Discover connected components with optional progress logging.
+        For very large graphs networkx.connected_components can take time; we stream nodes and periodically log counts.
+        """
+        do_timing = LRAA_Globals.config.get("log_splice_graph_component_timing", True)
+        interval_sec = LRAA_Globals.config.get("cc_discovery_progress_interval_sec", 0) or 0
+        every_n = LRAA_Globals.config.get("cc_discovery_progress_every_n", 0) or 0
+        t0 = time.time() if do_timing else None
+        if do_timing:
+            logger.info(f"[{contig_acc}{contig_strand}] discovering connected components ({stage_label}) ...")
+
+        # We fall back to standard networkx call; emulate progress by iterating after converting to undirected.
+        G_u = self._splice_graph.to_undirected()
+        # networkx.connected_components returns a generator; we iterate and log.
+        components = []
+        last_log_t = time.time()
+        processed_nodes = 0
+        total_nodes = G_u.number_of_nodes()
+
+        for comp in nx.connected_components(G_u):
+            components.append(comp)
+            processed_nodes += len(comp)
+            now = time.time()
+            if (
+                (every_n > 0 and processed_nodes >= len(components) * every_n)  # simplistic threshold
+                or (interval_sec > 0 and now - last_log_t >= interval_sec)
+            ):
+                try:
+                    frac = processed_nodes / max(total_nodes, 1)
+                    logger.info(
+                        f"[{contig_acc}{contig_strand}] [cc:{stage_label}] components={len(components)} nodes_accounted={processed_nodes}/{total_nodes} ({frac*100:.2f}%)"
+                    )
+                except Exception:
+                    pass
+                last_log_t = now
+
+        if do_timing:
+            dt = time.time() - t0
+            logger.info(
+                f"[{contig_acc}{contig_strand}] connected components ({stage_label}) discovered: {len(components)} (elapsed {dt:.2f}s)"
+            )
+
+        return components
+
+    def _assign_nodes_to_components_with_progress(self, contig_acc, contig_strand):
+        interval_sec = LRAA_Globals.config.get("component_assign_progress_interval_sec", 0) or 0
+        every_n = LRAA_Globals.config.get("component_assign_progress_every_n", 0) or 0
+        total_components = len(self._components)
+        total_nodes = sum(len(c) for c in self._components)
+        processed_nodes = 0
+        last_log_t = time.time()
+        for i, component in enumerate(self._components):
+            for node in component:
+                self._node_id_to_component[node.get_id()] = i
+                processed_nodes += 1
+                now = time.time()
+                if (
+                    (every_n > 0 and processed_nodes % every_n == 0)
+                    or (interval_sec > 0 and now - last_log_t >= interval_sec)
+                ):
+                    try:
+                        frac = processed_nodes / max(total_nodes, 1)
+                        logger.info(
+                            f"[{contig_acc}{contig_strand}] [component-assign] components_done={i+1}/{total_components} nodes_assigned={processed_nodes}/{total_nodes} ({frac*100:.2f}%)"
+                        )
+                    except Exception:
+                        pass
+                    last_log_t = now
+        try:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] component assignment complete: components={total_components} nodes={total_nodes}"
+            )
+        except Exception:
+            pass
+        return
+
     def _validate_itree(self):
 
         itree = self._itree_exon_segments
@@ -2529,7 +2590,7 @@ class Splice_graph:
 
     def _eliminate_low_support_TSS(self, node_list):
 
-        logger.debug("Eliminating low support TSS")
+        logger.info(f"[{self._contig_acc}{self._contig_strand}] pruning low support TSS ...")
 
         TSS_list = list()
 
@@ -2551,12 +2612,28 @@ class Splice_graph:
                 TSS_list, key=lambda x: x.get_read_support(), reverse=True
             )
 
+            # progress controls
+            prog_interval = float(LRAA_Globals.config.get("tss_prune_progress_interval_sec", 0) or 0)
+            prog_every_n = int(LRAA_Globals.config.get("tss_prune_progress_every_n", 0) or 0)
+            last_log_t = time.time()
+
             for i, TSS_obj in enumerate(TSS_list):
                 frac_read_support = TSS_obj.get_read_support() / sum_TSS_read_support
                 if frac_read_support < min_TSS_iso_fraction:
                     TSS_to_purge = TSS_list[i:]
                     TSS_list = TSS_list[0:i]
                     break
+                # periodic progress while scanning support-ordered TSS list
+                if (prog_every_n > 0 and (i + 1) % prog_every_n == 0) or (
+                    prog_interval > 0 and time.time() - last_log_t >= prog_interval
+                ):
+                    try:
+                        logger.info(
+                            f"[{self._contig_acc}{self._contig_strand}] [tss-prune] scanned={i+1}/{len(TSS_list)}"
+                        )
+                    except Exception:
+                        pass
+                    last_log_t = time.time()
 
             if TSS_to_purge:
                 logger.debug(
@@ -2575,6 +2652,7 @@ class Splice_graph:
             max_frac_TSS_is_degradation = LRAA_Globals.config[
                 "max_frac_alt_TSS_from_degradation"
             ]  # if neighboring TSS has this frac or less, gets purged as degradation product
+            scanned = 0
             for TSS_obj in TSS_list:
                 if TSS_obj in TSS_to_purge:
                     continue
@@ -2613,11 +2691,18 @@ class Splice_graph:
                 connected_exon = connected_exons[0]
                 have_connected = True
                 while have_connected:
-                    logger.debug(
-                        "Walking exon segments looking for alt TSSs from {}".format(
-                            connected_exon
-                        )
-                    )
+                    # periodic progress during degradation walk
+                    scanned += 1
+                    if (prog_every_n > 0 and scanned % prog_every_n == 0) or (
+                        prog_interval > 0 and time.time() - last_log_t >= prog_interval
+                    ):
+                        try:
+                            logger.info(
+                                f"[{self._contig_acc}{self._contig_strand}] [tss-degradation] traversals={scanned} current_exon={connected_exon}"
+                            )
+                        except Exception:
+                            pass
+                        last_log_t = time.time()
                     have_connected = False
                     connected_exons = (
                         self._splice_graph.successors(connected_exon)
@@ -2665,37 +2750,49 @@ class Splice_graph:
         return
 
     def _eliminate_low_support_PolyA(self, node_list):
-
-        logger.debug("Eliminating low support PolyA")
+        logger.info(f"[{self._contig_acc}{self._contig_strand}] pruning low support PolyA ...")
 
         PolyA_list = list()
-
         for node in node_list:
             if type(node) == PolyAsite:
                 PolyA_list.append(node)
 
         if PolyA_list:
-
             sum_PolyA_read_support = 0
             for PolyA_obj in PolyA_list:
                 sum_PolyA_read_support += PolyA_obj.get_read_support()
 
             min_PolyA_iso_fraction = LRAA_Globals.config["min_PolyA_iso_fraction"]
-
             PolyA_to_purge = list()
 
             PolyA_list = sorted(
                 PolyA_list, key=lambda x: x.get_read_support(), reverse=True
             )
 
+            prog_interval = float(
+                LRAA_Globals.config.get("polya_prune_progress_interval_sec", 0) or 0
+            )
+            prog_every_n = int(
+                LRAA_Globals.config.get("polya_prune_progress_every_n", 0) or 0
+            )
+            last_log_t = time.time()
+
             for i, PolyA_obj in enumerate(PolyA_list):
-                frac_read_support = (
-                    PolyA_obj.get_read_support() / sum_PolyA_read_support
-                )
+                frac_read_support = PolyA_obj.get_read_support() / sum_PolyA_read_support
                 if frac_read_support < min_PolyA_iso_fraction:
                     PolyA_to_purge = PolyA_list[i:]
                     PolyA_list = PolyA_list[0:i]
                     break
+                if (prog_every_n > 0 and (i + 1) % prog_every_n == 0) or (
+                    prog_interval > 0 and time.time() - last_log_t >= prog_interval
+                ):
+                    try:
+                        logger.info(
+                            f"[{self._contig_acc}{self._contig_strand}] [polya-prune] scanned={i+1}/{len(PolyA_list)}"
+                        )
+                    except Exception:
+                        pass
+                    last_log_t = time.time()
 
             if PolyA_to_purge:
                 logger.debug(
