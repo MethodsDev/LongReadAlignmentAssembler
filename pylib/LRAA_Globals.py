@@ -143,6 +143,14 @@ config = {
     "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar
     "progress_update_every_n": 1000,     # update every N multipath-count pairs processed (set None to disable count-based updates)
     "progress_update_interval_sec": 5.0, # or at least this often in seconds (set None to disable time-based updates)
+    # isoform reconstruction progress (selection of best transcript paths within large components)
+    # emit periodic INFO logs while iterating scored paths; set interval <=0 to disable
+    "iso_recon_progress_interval_sec": 120.0,
+    # emit progress every N path iterations (in addition to time-based interval); set <=0 to disable
+    "iso_recon_progress_every_n": 250,
+    # pruning phases (splice graph refinement) optional progress intervals (sec); set <=0 to disable
+    "prune_introns_progress_interval_sec": 60.0,
+    "prune_unspliced_exons_progress_interval_sec": 60.0,
     ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'

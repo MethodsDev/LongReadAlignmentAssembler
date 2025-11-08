@@ -1555,6 +1555,12 @@ class Splice_graph:
 
         min_intron_cov_for_filtering = 1 / Splice_graph._min_alt_unspliced_freq + 1
 
+        # progress logging controls
+        _progress_interval = float(LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0)
+        _last_prog_t = time.time()
+        _total_introns = len(intron_objs)
+        _processed_introns = 0
+
         for intron in intron_objs:
 
             if intron.get_read_support() < min_intron_cov_for_filtering:
@@ -1593,6 +1599,20 @@ class Splice_graph:
                         )
                     )
                     exons_to_purge.add(overlapping_exon_seg)
+
+            # periodic progress log
+            _processed_introns += 1
+            if _progress_interval > 0:
+                _now = time.time()
+                if _now - _last_prog_t >= _progress_interval:
+                    try:
+                        frac = _processed_introns / max(_total_introns, 1)
+                        logger.info(
+                            f"[{self._contig_acc}{self._contig_strand}] [prune:exon-overlap] introns {_processed_introns}/{_total_introns} ({frac*100:.2f}%) candidates_to_purge={len(exons_to_purge)}"
+                        )
+                    except Exception:
+                        pass
+                    _last_prog_t = _now
 
         # retain exons of input transcripts
         exons_to_retain = set()
@@ -1717,6 +1737,11 @@ class Splice_graph:
 
         introns_to_prune = set()
 
+        # progress logging controls
+        _progress_interval = float(LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0)
+        _last_prog_t = time.time()
+        _exon_islands_processed = 0
+
         for node in draft_splice_graph:
             # walk each exon island, capture all linked introns
 
@@ -1788,6 +1813,19 @@ class Splice_graph:
                                 )
                                 introns_to_prune.add(intron)
                             break
+
+                # periodic progress log per exon island visited
+                _exon_islands_processed += 1
+                if _progress_interval > 0:
+                    _now = time.time()
+                    if _now - _last_prog_t >= _progress_interval:
+                        try:
+                            logger.info(
+                                f"[{self._contig_acc}{self._contig_strand}] [prune:low-support-introns] exon_islands_processed={_exon_islands_processed} introns_marked={len(introns_to_prune)} current_nodes={self._splice_graph.number_of_nodes()}"
+                            )
+                        except Exception:
+                            pass
+                        _last_prog_t = _now
 
         logger.info(
             f"[{self._contig_acc}{self._contig_strand}] -removing {len(introns_to_prune)} low supported introns in exon islands according to min alt splice freq."
@@ -2376,6 +2414,12 @@ class Splice_graph:
 
         ## should we restrict to certain introns here? min coverage? YES!!!
 
+        # progress logging controls
+        _progress_interval = float(LRAA_Globals.config.get("prune_unspliced_exons_progress_interval_sec", 0) or 0)
+        _last_prog_t = time.time()
+        _total_introns = len(intron_objs)
+        _processed_introns = 0
+
         for intron in intron_objs:
             intron_lend, intron_rend = intron.get_coords()
             overlapping_exon_segs = exon_itree[intron_lend : intron_rend + 1]
@@ -2386,6 +2430,20 @@ class Splice_graph:
                     exon=exon_seg, intron=intron
                 ):
                     exons_to_purge.add(exon_seg)
+
+            # periodic progress log
+            _processed_introns += 1
+            if _progress_interval > 0:
+                _now = time.time()
+                if _now - _last_prog_t >= _progress_interval:
+                    try:
+                        frac = _processed_introns / max(_total_introns, 1)
+                        logger.info(
+                            f"[{self._contig_acc}{self._contig_strand}] [prune:unspliced] introns {_processed_introns}/{_total_introns} ({frac*100:.2f}%) exons_marked={len(exons_to_purge)}"
+                        )
+                    except Exception:
+                        pass
+                    _last_prog_t = _now
 
         logger.info(
             "-removing {} likely unspliced exon segments based on intron overlap".format(

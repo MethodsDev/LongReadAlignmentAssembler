@@ -433,6 +433,33 @@ class LRAA:
 
             round_iter += 1
 
+            # progress logging for large components during isoform reconstruction
+            _iso_prog_interval = float(LRAA_Globals.config.get("iso_recon_progress_interval_sec", 0) or 0)
+            _iso_prog_every_n = int(LRAA_Globals.config.get("iso_recon_progress_every_n", 0) or 0)
+            if round_iter == 1:
+                _iso_last_log_t = time.time()
+            else:
+                try:
+                    _iso_last_log_t
+                except NameError:
+                    _iso_last_log_t = time.time()
+            if _iso_prog_interval > 0 or _iso_prog_every_n > 0:
+                do_log = False
+                now_t = time.time()
+                if _iso_prog_every_n > 0 and (round_iter % _iso_prog_every_n == 0):
+                    do_log = True
+                if _iso_prog_interval > 0 and (now_t - _iso_last_log_t) >= _iso_prog_interval:
+                    do_log = True
+                if do_log:
+                    try:
+                        remaining_paths = len(all_scored_paths)
+                        logger.info(
+                            f"[{contig_acc}{contig_strand}] [iso-recon] component={component_counter} rounds={round_iter} remaining_paths={remaining_paths} represented_mpgn={len(best_transcript_paths)} unrepresented={len(mpgns_require_representation)}"
+                        )
+                    except Exception:
+                        pass
+                    _iso_last_log_t = now_t
+
             # reinit_weights(mpg_component)
             top_scored_path = all_scored_paths.pop()
             assert type(top_scored_path) == Scored_path
