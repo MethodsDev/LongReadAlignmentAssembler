@@ -503,17 +503,8 @@ class Transcript(GenomeFeature):
             [transcripts[i] for i in comp] for comp in nx.connected_components(G)
         ]
 
-        # If a neighbor-Jaccard pairs report is requested, create the file with a header early
-        # so it's present even if no edges are emitted later (e.g., all singleton components).
-        try:
-            report_path = LRAA_Globals.config.get("merge_neighbor_pairs_report_path")
-            if report_path and not os.path.exists(report_path):
-                with open(report_path, "a") as rfh:
-                    rfh.write(
-                        "contig\tstrand\tgene_id\ttranscript_id_1\ttranscript_id_2\tdeg1\tdeg2\tcommon_closed\tunion_closed\tneighbor_jaccard\n"
-                    )
-        except Exception:
-            pass
+        # Note: Jaccard-based reporting and pruning removed. We retain a single
+        # overlap-based clustering stage only.
 
         # Overlap thresholds
         min_overlap_shorter_frac = LRAA_Globals.config.get(
@@ -560,8 +551,6 @@ class Transcript(GenomeFeature):
             return t.get_cdna_len()
 
         refined_clusters: List[List['Transcript']] = []
-        # Parallel structure capturing final component graphs for optional reporting after IDs are assigned
-        refined_reports: List[Dict[str, object]] = []
         # Progress bar (tqdm) expected to be available
         from tqdm import tqdm  # type: ignore
         cluster_iter = tqdm(
@@ -577,7 +566,6 @@ class Transcript(GenomeFeature):
             H = nx.Graph()
             H.add_nodes_from(range(len(cluster)))
             # Build initial similarity graph using exon-overlap-by-length criteria
-            # and record containment and edge strengths for later neighbor-based pruning.
             edge_strength = {}   # (i,j) -> strength (product of overlap fractions)
             containment_pairs = set()  # (i,j) pairs where shorter is fully overlapped
             for i in range(len(cluster)):
@@ -605,100 +593,13 @@ class Transcript(GenomeFeature):
                         except Exception:
                             edge_strength[key] = 0.0
 
-            # Optional neighbor-based Jaccard pruning to reduce over-clustering via weak bridges
-            if LRAA_Globals.config.get("merge_neighbor_prune_enable", False):
-                tau = float(LRAA_Globals.config.get("merge_neighbor_jaccard_threshold", 0.30))
-                min_common = int(LRAA_Globals.config.get("merge_neighbor_min_common", 1))
-                deg_guard = int(LRAA_Globals.config.get("merge_neighbor_degree_guard", 2))
-                keep_top1 = bool(LRAA_Globals.config.get("merge_neighbor_keep_top1", True))
-
-                # Snapshot original neighborhoods before pruning
-                original_neighbors = {n: set(H.neighbors(n)) for n in H.nodes()}
-                original_degrees = {n: len(original_neighbors[n]) for n in H.nodes()}
-
-                edges_to_prune = []
-                for (u, v) in list(H.edges()):
-                    k = (u, v) if u < v else (v, u)
-                    # Protect containment edges
-                    if k in containment_pairs:
-                        continue
-                    Nu = set(original_neighbors.get(u, set()))
-                    Nv = set(original_neighbors.get(v, set()))
-                    # Degree guard: avoid pruning around sparse nodes
-                    if min(len(Nu), len(Nv)) <= deg_guard:
-                        continue
-                    # Closed neighborhoods
-                    Nu.add(u)
-                    Nv.add(v)
-                    inter = Nu & Nv
-                    uni = Nu | Nv
-                    jacc = (len(inter) / len(uni)) if len(uni) > 0 else 1.0
-                    # Prune only if low Jaccard and insufficient common neighbors (accounting for closed sets)
-                    if jacc < tau and len(inter) < (min_common + 1):
-                        edges_to_prune.append((u, v))
-
-                if edges_to_prune:
-                    H.remove_edges_from(edges_to_prune)
-
-                # Safety: ensure nodes with original neighbors keep at least their strongest original edge
-                if keep_top1:
-                    for n in H.nodes():
-                        if original_degrees.get(n, 0) == 0:
-                            continue
-                        if H.degree(n) > 0:
-                            continue
-                        best_neighbor = None
-                        best_score = -1.0
-                        for m in original_neighbors.get(n, set()):
-                            if m not in H.nodes():
-                                continue
-                            kk = (n, m) if n < m else (m, n)
-                            score = edge_strength.get(kk, 0.0)
-                            if score > best_score:
-                                best_score = score
-                                best_neighbor = m
-                        if best_neighbor is not None:
-                            H.add_edge(n, best_neighbor)
-
-                if LRAA_Globals.config.get("merge_neighbor_debug_report", False):
-                    try:
-                        import logging
-                        logging.getLogger(__name__).debug(
-                            "[merge-neighbor-prune] cluster_size=%d original_edges=%d pruned_edges=%d final_edges=%d",
-                            len(H.nodes()),
-                            sum(len(v) for v in original_neighbors.values()) // 2,
-                            len(edges_to_prune),
-                            H.number_of_edges(),
-                        )
-                    except Exception:
-                        pass
+            # Jaccard-based neighbor pruning removed; use overlap-graph H as-is.
             for comp in nx.connected_components(H):
                 # Build final component transcript list
                 sub_nodes = sorted(list(comp))
                 comp_transcripts = [cluster[i] for i in sub_nodes]
                 refined_clusters.append(comp_transcripts)
 
-                # Build induced subgraph edges and neighbor sets for reporting
-                idx_map = {old_i: new_i for new_i, old_i in enumerate(sub_nodes)}
-                sub_edges = []
-                for (u, v) in H.edges():
-                    if u in comp and v in comp:
-                        uu, vv = idx_map[u], idx_map[v]
-                        if uu < vv:
-                            sub_edges.append((uu, vv))
-                        else:
-                            sub_edges.append((vv, uu))
-                # unique undirected edges
-                sub_edges = sorted(set(sub_edges))
-                neighbors = {i: set() for i in range(len(sub_nodes))}
-                for (a, b) in sub_edges:
-                    neighbors[a].add(b)
-                    neighbors[b].add(a)
-                refined_reports.append({
-                    "edges": sub_edges,
-                    "neighbors": neighbors,
-                    "transcripts": comp_transcripts,
-                })
         revised_transcripts = []
         for i, cluster in enumerate(refined_clusters):
             new_gene_id = f"g:{contig_acc}:{contig_strand}:comp-{i+1}"
@@ -708,46 +609,6 @@ class Transcript(GenomeFeature):
                 t.set_transcript_id(new_transcript_id)
                 revised_transcripts.append(t)
 
-            # Optional: emit neighbor-Jaccard TSV rows for each final component using final IDs
-            try:
-                report_path = LRAA_Globals.config.get("merge_neighbor_pairs_report_path")
-                if report_path:
-                    comp_report = refined_reports[i]
-                    sub_edges = comp_report["edges"]  # type: ignore
-                    neighbors = comp_report["neighbors"]  # type: ignore
-                    comp_tx = comp_report["transcripts"]  # type: ignore
-
-                    # Prepare header if needed
-                    need_header = False
-                    if not os.path.exists(report_path):
-                        need_header = True
-                    with open(report_path, "a") as rfh:
-                        if need_header:
-                            rfh.write("contig\tstrand\tgene_id\ttranscript_id_1\ttranscript_id_2\tdeg1\tdeg2\tcommon_closed\tunion_closed\tneighbor_jaccard\n")
-                        # compute per-edge neighbor Jaccard in the final component graph
-                        for (a, b) in sub_edges:  # indices in comp_tx
-                            Na = set(neighbors[a]) | {a}
-                            Nb = set(neighbors[b]) | {b}
-                            inter = Na & Nb
-                            uni = Na | Nb
-                            jacc = (len(inter) / len(uni)) if len(uni) > 0 else 1.0
-                            ta = comp_tx[a]
-                            tb = comp_tx[b]
-                            row = [
-                                str(contig_acc),
-                                str(contig_strand),
-                                ta.get_gene_id(),
-                                ta.get_transcript_id(),
-                                tb.get_transcript_id(),
-                                str(len(Na) - 1),  # degree without self
-                                str(len(Nb) - 1),
-                                str(len(inter)),
-                                str(len(uni)),
-                                f"{jacc:.6f}",
-                            ]
-                            rfh.write("\t".join(row) + "\n")
-            except Exception:
-                pass
 
         return revised_transcripts
 
