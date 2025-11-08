@@ -11,6 +11,7 @@ from Transcript import Transcript, GTF_contig_to_transcripts
 from LRAA import LRAA
 import LRAA_Globals
 import logging
+import traceback
 import argparse
 from collections import defaultdict
 import Util_funcs
@@ -20,7 +21,46 @@ FORMAT = (
 )
 
 logger = logging.getLogger()
-logging.basicConfig(format=FORMAT, level=logging.INFO)
+
+# Reconfigure logging to ensure visible output on terminal even if other modules already set handlers.
+def _configure_logging(debug=False):
+    # Remove any pre-existing handlers to avoid duplicate or suppressed output
+    try:
+        for h in list(logger.handlers):
+            logger.removeHandler(h)
+    except Exception:
+        pass
+
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+
+    # Stream handler for stdout (INFO and below)
+    class StdoutFilter(logging.Filter):
+        def filter(self, record):
+            return record.levelno <= logging.INFO
+
+    sh_out = logging.StreamHandler(stream=sys.stdout)
+    sh_out.setLevel(logging.DEBUG)
+    sh_out.addFilter(StdoutFilter())
+    sh_out.setFormatter(logging.Formatter(FORMAT))
+    logger.addHandler(sh_out)
+
+    # Stream handler for stderr (WARNING and above)
+    sh_err = logging.StreamHandler(stream=sys.stderr)
+    sh_err.setLevel(logging.WARNING)
+    sh_err.setFormatter(logging.Formatter(FORMAT))
+    logger.addHandler(sh_err)
+
+    # Basic exception hook to ensure uncaught exceptions print traceback to stderr
+    def _excepthook(exc_type, exc, tb):
+        try:
+            logger.error("Uncaught exception: %s", exc)
+            traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
+        except Exception:
+            pass
+    sys.excepthook = _excepthook
+
+
+_configure_logging(debug=False)
 
 
 def main():
@@ -62,17 +102,56 @@ def main():
         help="debug mode, more verbose",
     )
 
-    # (merge-stage clustering uses LRAA_Globals.config for tuning; no extra CLI needed here)
+    # Community clustering controls (mirrors main LRAA CLI)
+    parser.add_argument(
+        "--no_use_community_clustering",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable Leiden community clustering for transcript→gene assignment (enabled by default)."
+        ),
+    )
+
+    parser.add_argument(
+        "--community_resolution",
+        type=float,
+        default=1.0,
+        help=(
+            "Leiden resolution parameter (higher → more communities)."
+        ),
+    )
+
+    parser.add_argument(
+        "--community_random_seed",
+        type=int,
+        default=42,
+        help=(
+            "Random seed for Leiden community clustering."
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
         LRAA_Globals.DEBUG = True
+        _configure_logging(debug=True)
+        logger.debug("Debug logging enabled for merge script.")
 
     LRAA_Globals.LRAA_MODE = "MERGE"
 
-    # (no additional merge-stage config mapping from CLI here)
+    # Map community clustering flags into global config
+    try:
+        LRAA_Globals.config["use_community_clustering"] = not args.no_use_community_clustering
+        LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
+        LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
+        logger.debug(
+            "Community clustering settings (merge): use=%s, resolution=%.3f, seed=%d",
+            LRAA_Globals.config["use_community_clustering"],
+            LRAA_Globals.config["community_resolution"],
+            LRAA_Globals.config["community_random_seed"],
+        )
+    except Exception as _e:
+        logger.warning(f"Failed to apply community clustering config overrides: {_e}")
 
     gtf_list = args.gtf
     genome_fasta_file = args.genome

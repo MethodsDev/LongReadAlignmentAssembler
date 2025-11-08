@@ -267,8 +267,19 @@ class Splice_graph:
             return None
 
         if LRAA_Globals.DEBUG:
-            self.write_intron_exon_splice_graph_bed_files("__prefilter_r1", pad=0)
-            self.describe_graph("__prefilter_r1.graph")
+            self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
+            self.describe_graph("__prefilter_r2.graph")
+
+        # Optional detailed counts before connected component discovery
+        if LRAA_Globals.config.get("log_splice_graph_debug_counts", True):
+            try:
+                num_nodes = self._splice_graph.number_of_nodes()
+                num_edges = self._splice_graph.number_of_edges()
+                logger.info(
+                    f"[{contig_acc}{contig_strand}] splice-graph stats pre-components: nodes={num_nodes} edges={num_edges} introns={sum(1 for n in self._splice_graph if type(n)==Intron)} exons={sum(1 for n in self._splice_graph if type(n)==Exon)} TSS={len(self._TSS_objs)} PolyA={len(self._PolyA_objs)}"
+                )
+            except Exception:
+                pass
 
         ##----------------------------------------------
         ## Refine the splice graph
@@ -303,10 +314,17 @@ class Splice_graph:
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
             self.describe_graph("__prefilter_r2.graph")
-
+        # Timing instrumentation for connected component discovery (can be expensive on large graphs)
+        _do_cc_timing = LRAA_Globals.config.get("log_splice_graph_component_timing", True)
+        cc_t0 = time.time() if _do_cc_timing else None
+        if _do_cc_timing:
+            logger.info(f"[{contig_acc}{contig_strand}] discovering connected components ...")
         connected_components = list(
             nx.connected_components(self._splice_graph.to_undirected())
         )
+        if _do_cc_timing:
+            cc_dt = time.time() - cc_t0
+            logger.info(f"[{contig_acc}{contig_strand}] connected components discovered: {len(connected_components)} (elapsed {cc_dt:.2f}s)")
 
         # filter out TSS and PolyA features based on min isoform fraction
         if len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0:
@@ -1968,6 +1986,11 @@ class Splice_graph:
 
             return exon_seg_list
 
+        progress_interval = LRAA_Globals.config.get("log_splice_graph_merge_progress_interval_sec", 0) or 0
+        last_progress_t = time.time()
+        total_init = len(init_exons)
+        processed_init = 0
+
         for init_exon in init_exons:
             logger.debug(
                 "Init exon candidate: {}".format(self.describe_node(init_exon))
@@ -1998,6 +2021,18 @@ class Splice_graph:
 
             # prune the intervening nodes.
             self._splice_graph.remove_nodes_from(exons_to_merge_list[1:])
+
+            processed_init += 1
+            if progress_interval > 0:
+                now = time.time()
+                if now - last_progress_t >= progress_interval:
+                    try:
+                        logger.info(
+                            f"[{self._contig_acc}{self._contig_strand}] exon-merge progress: {processed_init}/{total_init} ({processed_init/max(total_init,1)*100:.2f}%) current_nodes={self._splice_graph.number_of_nodes()}"
+                        )
+                    except Exception:
+                        pass
+                    last_progress_t = now
 
         """
             

@@ -562,43 +562,55 @@ class Transcript(GenomeFeature):
         for cluster in cluster_iter:
             if len(cluster) == 1:
                 refined_clusters.append(cluster)
-                continue
-            H = nx.Graph()
-            H.add_nodes_from(range(len(cluster)))
-            # Build initial similarity graph using exon-overlap-by-length criteria
-            edge_strength = {}   # (i,j) -> strength (product of overlap fractions)
-            containment_pairs = set()  # (i,j) pairs where shorter is fully overlapped
-            for i in range(len(cluster)):
-                for j in range(i + 1, len(cluster)):
-                    t1 = cluster[i]
-                    t2 = cluster[j]
-                    ov = transcript_overlap_len(t1, t2)
-                    len1 = transcript_len(t1)
-                    len2 = transcript_len(t2)
-                    shorter = min(len1, len2)
-                    longer = max(len1, len2)
-                    key = (i, j)
-                    if shorter > 0 and ov == shorter:
-                        containment_pairs.add(key)
-                    if (
-                        shorter > 0
-                        and longer > 0
-                        and (ov / shorter) >= min_overlap_shorter_frac
-                        and (ov / longer) >= min_overlap_longer_frac
-                    ):
-                        H.add_edge(i, j)
-                        # Use product of fractions as a simple strength score
-                        try:
-                            edge_strength[key] = (ov / max(shorter, 1)) * (ov / max(longer, 1))
-                        except Exception:
-                            edge_strength[key] = 0.0
-
-            # Jaccard-based neighbor pruning removed; use overlap-graph H as-is.
-            for comp in nx.connected_components(H):
-                # Build final component transcript list
-                sub_nodes = sorted(list(comp))
-                comp_transcripts = [cluster[i] for i in sub_nodes]
-                refined_clusters.append(comp_transcripts)
+            elif LRAA_Globals.config.get("use_community_clustering", False):
+                # Leiden community clustering branch (fatal on failure)
+                from GeneCommunityCluster import partition_with_leiden
+                membership = partition_with_leiden(
+                    cluster,
+                    contig_acc,
+                    contig_strand,
+                    resolution=LRAA_Globals.config.get("community_resolution", 1.0),
+                    seed=LRAA_Globals.config.get("community_random_seed", 42),
+                )
+                comm_to_indices = defaultdict(list)
+                for idx, cid in enumerate(membership):
+                    comm_to_indices[cid].append(idx)
+                for cid in sorted(comm_to_indices.keys()):
+                    comp_transcripts = [cluster[i] for i in comm_to_indices[cid]]
+                    refined_clusters.append(comp_transcripts)
+            else:
+                # Fallback overlap-based connected components
+                H = nx.Graph()
+                H.add_nodes_from(range(len(cluster)))
+                edge_strength = {}
+                containment_pairs = set()
+                for i in range(len(cluster)):
+                    for j in range(i + 1, len(cluster)):
+                        t1 = cluster[i]
+                        t2 = cluster[j]
+                        ov = transcript_overlap_len(t1, t2)
+                        len1 = transcript_len(t1)
+                        len2 = transcript_len(t2)
+                        shorter = min(len1, len2)
+                        longer = max(len1, len2)
+                        key = (i, j)
+                        if shorter > 0 and ov == shorter:
+                            containment_pairs.add(key)
+                        if (
+                            shorter > 0
+                            and longer > 0
+                            and (ov / shorter) >= min_overlap_shorter_frac
+                            and (ov / longer) >= min_overlap_longer_frac
+                        ):
+                            H.add_edge(i, j)
+                            try:
+                                edge_strength[key] = (ov / max(shorter, 1)) * (ov / max(longer, 1))
+                            except Exception:
+                                edge_strength[key] = 0.0
+                for comp in nx.connected_components(H):
+                    sub_nodes = sorted(list(comp))
+                    comp_transcripts = [cluster[i] for i in sub_nodes]
+                    refined_clusters.append(comp_transcripts)
 
         revised_transcripts = []
         for i, cluster in enumerate(refined_clusters):
