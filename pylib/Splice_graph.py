@@ -756,7 +756,38 @@ class Splice_graph:
 
         ## Exon Coverage and Intron Capture
 
+        # Optional progress reporting while folding in annotations.
+        show_progress = LRAA_Globals.config.get(
+            "show_progress_integrate_transcripts", True
+        )
+        prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
+
+        total_transcripts = None
+        if show_progress and transcripts is not None and hasattr(transcripts, "__len__"):
+            try:
+                total_transcripts = len(transcripts)
+            except Exception:
+                total_transcripts = None
+        if total_transcripts == 0:
+            total_transcripts = None
+
+        contig_tag = f"{contig_acc}{contig_strand}" if contig_strand else contig_acc
+        pbar = None
+        if show_progress and prefer_tqdm and total_transcripts:
+            from tqdm import tqdm  # type: ignore
+
+            pbar = tqdm(
+                total=total_transcripts,
+                desc=f"integrate tx [{contig_tag}]",
+                unit="tx",
+                leave=False,
+                dynamic_ncols=True,
+            )
+
         for transcript in transcripts:
+            if pbar is not None:
+                pbar.update(1)
+
             orient = transcript.get_orient()
             transcript_id = transcript.get_transcript_id()
 
@@ -854,6 +885,9 @@ class Splice_graph:
             self._incorporate_PolyA_objects(
                 contig_acc, contig_strand, PolyA_evidence_counter
             )
+
+        if pbar is not None:
+            pbar.close()
 
         return
 

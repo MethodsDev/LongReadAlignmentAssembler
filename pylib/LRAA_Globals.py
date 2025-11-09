@@ -140,6 +140,8 @@ config = {
     "show_progress_cov_reset": True,          # show progress while recomputing base coverage
     "cov_reset_update_every_n": 5000,         # fallback: update every N alignments processed
     "cov_reset_update_interval_sec": 2.0,     # fallback: or at least this often in seconds
+    # input transcript integration progress
+    "show_progress_integrate_transcripts": True,
     # quant: assign reads to transcripts stage
     "show_progress_quant_assign": True,  # emit periodic progress updates during read->transcript assignment
     "use_tqdm_progress": True,           # if tqdm is available, prefer tqdm-based progress bar

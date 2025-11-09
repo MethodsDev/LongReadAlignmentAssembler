@@ -926,7 +926,59 @@ class LRAA:
 
     def assign_transcripts_paths_in_graph(self, transcripts):
 
-        for transcript in transcripts:
+        splice_graph = self.get_splice_graph()
+        contig_acc = splice_graph.get_contig_acc() if splice_graph else "?"
+        contig_strand = splice_graph.get_contig_strand() if splice_graph else "?"
+        total_transcripts = len(transcripts) if transcripts is not None else 0
+
+        logger.info(
+            "[%s%s] -start: assigning transcript paths in graph; total=%d",
+            contig_acc,
+            contig_strand,
+            total_transcripts,
+        )
+
+        if not transcripts:
+            logger.info(
+                "[%s%s] -done: assigning transcript paths in graph; total=0",
+                contig_acc,
+                contig_strand,
+            )
+            return
+
+        show_progress = LRAA_Globals.config.get(
+            "show_progress_assign_transcripts", True
+        )
+        prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
+        update_every_n = LRAA_Globals.config.get(
+            "assign_transcripts_update_every_n", 500
+        )
+        update_interval = float(
+            LRAA_Globals.config.get("assign_transcripts_update_interval_sec", 5.0)
+        )
+
+        pbar = None
+        if show_progress and prefer_tqdm and total_transcripts > 0:
+            try:
+                import importlib
+
+                _mod = importlib.import_module("tqdm")
+                _tqdm = getattr(_mod, "tqdm", None)
+                if _tqdm is not None:
+                    pbar = _tqdm(
+                        total=total_transcripts,
+                        desc="assign-transcripts",
+                        unit="tx",
+                        leave=False,
+                        dynamic_ncols=True,
+                    )
+            except Exception:
+                pbar = None
+
+        prev_time = time.time()
+        last_time_update = prev_time
+
+        for idx, transcript in enumerate(transcripts, 1):
             logger.debug("-mapping transcript to graph: {}".format(transcript))
             segments = transcript.get_exon_segments()
             path = self._map_read_to_graph(
@@ -946,6 +998,50 @@ class LRAA:
             )
 
             transcript.set_simple_path(path)
+
+            if pbar is not None:
+                try:
+                    pbar.update(1)
+                except Exception:
+                    pass
+            elif show_progress and total_transcripts > 0:
+                should_update = False
+                if update_every_n and update_every_n > 0 and idx % update_every_n == 0:
+                    should_update = True
+                now = time.time()
+                if (
+                    update_interval
+                    and update_interval > 0
+                    and now - last_time_update >= update_interval
+                ):
+                    should_update = True
+                if should_update:
+                    frac_done = idx / total_transcripts * 100.0
+                    rate = idx / max(now - prev_time, 1e-6)
+                    sys.stderr.write(
+                        f"\rassign-transcripts {idx}/{total_transcripts} ({frac_done:.2f}%) rate={rate:.2f}/s"
+                    )
+                    sys.stderr.flush()
+                    last_time_update = now
+
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception:
+                pass
+        elif show_progress and total_transcripts > 0:
+            try:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+        logger.info(
+            "[%s%s] -done: assigning transcript paths in graph; total=%d",
+            contig_acc,
+            contig_strand,
+            total_transcripts,
+        )
 
         return
 
