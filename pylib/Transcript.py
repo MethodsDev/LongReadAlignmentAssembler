@@ -503,8 +503,20 @@ class Transcript(GenomeFeature):
             [transcripts[i] for i in comp] for comp in nx.connected_components(G)
         ]
 
-        # Note: Jaccard-based reporting and pruning removed. We retain a single
-        # overlap-based clustering stage only.
+        # Optional debug export of initial cluster memberships
+        try:
+            debug_init_clusters = LRAA_Globals.config.get("debug_write_init_clusters", True)
+        except Exception:
+            debug_init_clusters = True
+        if debug_init_clusters:
+            # Write TSV: cluster_index (1-based) \t size \t transcript_ids (comma-separated)
+            with open("__init_clusters.tsv", "wt") as fh_dbg:
+                print("cluster_index\tsize\ttranscript_ids", file=fh_dbg)
+                for idx, clust in enumerate(initial_clusters, start=1):
+                    tids = [t.get_transcript_id() for t in clust]
+                    print(f"{idx}\t{len(clust)}\t{','.join(tids)}", file=fh_dbg)
+
+
 
         # Overlap thresholds
         min_overlap_shorter_frac = LRAA_Globals.config.get(
@@ -560,13 +572,26 @@ class Transcript(GenomeFeature):
         )
 
         for cluster in cluster_iter:
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    "recluster: processing initial cluster of %d transcripts (contig=%s strand=%s)",
+                    len(cluster),
+                    contig_acc,
+                    contig_strand,
+                )
+            use_comm = bool(LRAA_Globals.config.get("use_community_clustering", False))
+            max_for_leiden = int(
+                LRAA_Globals.config.get("max_transcripts_for_community_clustering", 1500)
+            )
             if len(cluster) == 1:
                 refined_clusters.append(cluster)
-            elif (
-                LRAA_Globals.config.get("use_community_clustering", False)
-                and len(cluster)
-                <= int(LRAA_Globals.config.get("max_transcripts_for_community_clustering", 1500))
-            ):
+            elif use_comm and len(cluster) <= max_for_leiden:
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info(
+                        "recluster: using Leiden for cluster of %d transcripts (threshold=%d)",
+                        len(cluster),
+                        max_for_leiden,
+                    )
                 # Leiden community clustering branch (fatal on failure)
                 from GeneCommunityCluster import partition_with_leiden
                 membership = partition_with_leiden(
@@ -583,84 +608,30 @@ class Transcript(GenomeFeature):
                     comp_transcripts = [cluster[i] for i in comm_to_indices[cid]]
                     refined_clusters.append(comp_transcripts)
             else:
-                # Memory-friendly fallback: build connected components using a
-                # sweep-line over genomic spans and a disjoint-set (union-find),
-                # avoiding construction of dense pairwise graphs.
-
-                class DSU:
-                    def __init__(self, n):
-                        self.p = list(range(n))
-                        self.sz = [1] * n
-
-                    def find(self, x):
-                        while self.p[x] != x:
-                            self.p[x] = self.p[self.p[x]]
-                            x = self.p[x]
-                        return x
-
-                    def union(self, a, b):
-                        ra, rb = self.find(a), self.find(b)
-                        if ra == rb:
-                            return False
-                        if self.sz[ra] < self.sz[rb]:
-                            ra, rb = rb, ra
-                        self.p[rb] = ra
-                        self.sz[ra] += self.sz[rb]
-                        return True
-
-                m = len(cluster)
-                dsu = DSU(m)
-
-                # Precompute lightweight bounds and lengths
-                bounds = []  # (lend, rend, cdna_len, local_idx)
-                for idx, t in enumerate(cluster):
-                    exons = t.get_exon_segments()
-                    if not exons:
-                        lend = t.get_lend()
-                        rend = t.get_rend()
-                    else:
-                        lend = min(a for a, _ in exons)
-                        rend = max(b for _, b in exons)
-                    bounds.append((lend, rend, transcript_len(t), idx))
-
-                bounds.sort(key=lambda x: x[0])  # sort by lend
-
-                # Sliding window over overlapping genomic spans
-                # For each i, compare to j where lend_j <= rend_i
-                for i in range(m):
-                    lend_i, rend_i, len_i, idx_i = bounds[i]
-                    j = i + 1
-                    while j < m and bounds[j][0] <= rend_i:
-                        lend_j, rend_j, len_j, idx_j = bounds[j]
-                        # Upper bound on possible overlap from spans
-                        span_ov = min(rend_i, rend_j) - max(lend_i, lend_j) + 1
-                        if span_ov > 0:
-                            shorter = min(len_i, len_j)
-                            longer = max(len_i, len_j)
-                            # Minimal overlap (in bases) required by thresholds
-                            min_required = max(
-                                int(min_overlap_shorter_frac * shorter),
-                                int(min_overlap_longer_frac * longer),
-                            )
-                            if span_ov >= min_required and shorter > 0 and longer > 0:
-                                # Compute exact exon overlap only if potentially viable
-                                ov = transcript_overlap_len(cluster[idx_i], cluster[idx_j])
-                                if ov == shorter and shorter > 0:
-                                    dsu.union(idx_i, idx_j)
-                                elif (
-                                    (ov / shorter) >= min_overlap_shorter_frac
-                                    and (ov / longer) >= min_overlap_longer_frac
-                                ):
-                                    dsu.union(idx_i, idx_j)
-                        j += 1
-
-                # Materialize components from DSU
-                comp_map = defaultdict(list)
-                for local_idx in range(m):
-                    root = dsu.find(local_idx)
-                    comp_map[root].append(local_idx)
-                for comp_local_indices in comp_map.values():
-                    comp_transcripts = [cluster[i] for i in sorted(comp_local_indices)]
+                if use_comm and len(cluster) > max_for_leiden:
+                    logger.info(
+                        "recluster: skipping Leiden due to size (%d > %d); using DSU fallback",
+                        len(cluster),
+                        max_for_leiden,
+                    )
+                elif not use_comm:
+                    logger.info(
+                        "recluster: community clustering disabled; using DSU fallback for cluster of %d",
+                        len(cluster),
+                    )
+                # Use modular DSU-based partitioning from GeneCommunityCluster
+                from GeneCommunityCluster import partition_with_dsu
+                membership = partition_with_dsu(cluster, contig_acc, contig_strand)
+                comp_to_indices = defaultdict(list)
+                for idx, cid in enumerate(membership):
+                    comp_to_indices[cid].append(idx)
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info(
+                        "recluster: DSU fallback produced %d subcomponents",
+                        len(comp_to_indices),
+                    )
+                for cid in sorted(comp_to_indices.keys()):
+                    comp_transcripts = [cluster[i] for i in comp_to_indices[cid]]
                     refined_clusters.append(comp_transcripts)
 
         revised_transcripts = []
