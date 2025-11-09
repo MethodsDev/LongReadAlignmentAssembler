@@ -180,8 +180,17 @@ class MultiProcessManager:
             self.num_successes, self.num_errors
         )
 
-    def retrieve_queue_contents(self):
-        return self.captured_queue_contents
+    def retrieve_queue_contents(self, clear=False):
+        """Return captured queue payloads.
+
+        If clear is True, the internal buffer is emptied after returning
+        the collected objects so callers can drain incrementally without
+        reprocessing prior results.
+        """
+        contents = list(self.captured_queue_contents)
+        if clear:
+            self.captured_queue_contents.clear()
+        return contents
 
     def terminate_all_processes(self):
         """Best-effort termination of all tracked child processes.
