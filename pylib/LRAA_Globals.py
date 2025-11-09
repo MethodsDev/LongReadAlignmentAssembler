@@ -39,6 +39,8 @@ config = {
     "use_community_clustering": True,     # enabled by default; use Leiden communities within initial clusters
     "community_resolution": 0.2,          # Leiden resolution parameter (higher → more, smaller communities)
     "community_random_seed": 42,          # seed for deterministic Leiden partitions
+    # safety valve for very large overlap components: skip community clustering when too large
+    "max_transcripts_for_community_clustering": 1500,  # if an initial cluster exceeds this size, fall back to lightweight overlap-based DSU reclustering
     #
     ############
     # TSS config
