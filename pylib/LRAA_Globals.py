@@ -171,6 +171,15 @@ config = {
     # node→component assignment progress controls
     "component_assign_progress_interval_sec": 60.0,
     "component_assign_progress_every_n": 20000,
+    # multipath graph build progress
+    "mp_graph_build_progress_interval_sec": 60.0,
+    "mp_graph_build_progress_every_n": 10000,
+    # multipath component discovery progress
+    "mp_component_discovery_progress_interval_sec": 60.0,
+    "mp_component_discovery_progress_every_n": 5000,
+    # multipath pruning progress (large component removal, node pruning)
+    "mp_prune_progress_interval_sec": 60.0,
+    "mp_prune_progress_every_n": 10000,
     ######
     # disk-backed storage backend for read tracking stores
     # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'

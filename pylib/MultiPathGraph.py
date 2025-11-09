@@ -33,6 +33,11 @@ class MultiPathGraph:
         local_debug = False
 
         logger.info(f"[{contig_acc}{contig_strand}] START building MultiPathGraph")
+        try:
+            import time as _time_mod
+            _build_start_t = _time_mod.time()
+        except Exception:
+            _build_start_t = None
 
         assert type(multiPathCounter) == MultiPathCounter.MultiPathCounter
         assert type(splice_graph) == Splice_graph.Splice_graph
@@ -56,6 +61,19 @@ class MultiPathGraph:
         sg_component_to_mp_id = defaultdict(set)
 
         multiPathCountPairs = multiPathCounter.get_all_MultiPathCountPairs()
+
+        # Progress configuration
+        _build_interval = float(LRAA_Globals.config.get("mp_graph_build_progress_interval_sec", 0) or 0)
+        _build_every_n = int(LRAA_Globals.config.get("mp_graph_build_progress_every_n", 0) or 0)
+        _build_last_t = None
+        try:
+            import time as _time_mod
+            _build_last_t = _time_mod.time()
+        except Exception:
+            _build_last_t = None
+
+        total_pairs = len(multiPathCountPairs)
+        processed_pairs = 0
         for mpCountPair in multiPathCountPairs:
             mp, count = mpCountPair.get_multipath_and_count()
 
@@ -103,6 +121,23 @@ class MultiPathGraph:
             # print(f"{mp_graph_node_id} first node is {first_node_id} and assigned to component_id {component_id}")
             sg_component_to_mp_id[component_id].add(mp_graph_node_id)
 
+            # Periodic progress during node creation
+            processed_pairs += 1
+            do_emit = False
+            try:
+                now_t = _time_mod.time()
+                if _build_every_n > 0 and (processed_pairs % _build_every_n == 0):
+                    do_emit = True
+                if _build_interval > 0 and _build_last_t is not None and (now_t - _build_last_t) >= _build_interval:
+                    do_emit = True
+                if do_emit:
+                    logger.info(
+                        f"[{self._contig_acc}{self._contig_strand}] [mpg-build] processed={processed_pairs}/{total_pairs} nodes={len(self._mp_graph_nodes_list)} comps_so_far={len(sg_component_to_mp_id)}"
+                    )
+                    _build_last_t = now_t
+            except Exception:
+                pass
+
         ## sort
         self._mp_graph_nodes_list = sorted(
             self._mp_graph_nodes_list,
@@ -137,6 +172,20 @@ class MultiPathGraph:
             key=lambda x: len(sg_component_to_mp_id[x]),
             reverse=True,
         )
+        # Emit a brief summary of component size distribution
+        try:
+            comp_sizes = [len(sg_component_to_mp_id[c]) for c in sorted_component_ids]
+            if comp_sizes:
+                logger.info(f"[{self._contig_acc}{self._contig_strand}] [mpg-build] components={len(comp_sizes)} max={max(comp_sizes)} p95={sorted(comp_sizes)[int(0.95*len(comp_sizes))-1]} median={sorted(comp_sizes)[len(comp_sizes)//2]}")
+        except Exception:
+            pass
+        # Progress during per-component graph build
+        _comp_interval = float(LRAA_Globals.config.get("mp_component_discovery_progress_interval_sec", 0) or 0)
+        _comp_every_n = int(LRAA_Globals.config.get("mp_component_discovery_progress_every_n", 0) or 0)
+        _comp_last_t = _build_last_t
+        total_comps = len(sorted_component_ids)
+        comps_done = 0
+
         for component_id in sorted_component_ids:
             mp_node_set = sg_component_to_mp_id[component_id]
             # print(mp_node_set)
@@ -295,10 +344,33 @@ class MultiPathGraph:
                         )
                         self._incompatible_pairs.add(incompatible_pair_token)
 
+            # Component-level progress update
+            comps_done += 1
+            try:
+                now_t2 = _time_mod.time() if _build_last_t is not None else None
+                if (_comp_every_n > 0 and comps_done % _comp_every_n == 0) or (
+                    _comp_interval > 0 and _comp_last_t is not None and now_t2 is not None and (now_t2 - _comp_last_t) >= _comp_interval
+                ):
+                    logger.info(
+                        f"[{self._contig_acc}{self._contig_strand}] [mpg-components] built={comps_done}/{total_comps} nodes={self._mp_graph.number_of_nodes()} edges={self._mp_graph.number_of_edges()}"
+                    )
+                    _comp_last_t = now_t2
+            except Exception:
+                pass
+
         if LRAA_Globals.DEBUG:
             component_descr_ofh.close()
 
-        logger.info(f"[{self._contig_acc}{self._contig_strand}] DONE building MultiPathGraph")
+        try:
+            _elapsed = None
+            if _build_start_t is not None:
+                _elapsed = _time_mod.time() - _build_start_t
+            etxt = f" elapsed={_elapsed:.2f}s" if _elapsed is not None else ""
+        except Exception:
+            etxt = ""
+        logger.info(
+            f"[{self._contig_acc}{self._contig_strand}] DONE building MultiPathGraph: nodes={self._mp_graph.number_of_nodes()} edges={self._mp_graph.number_of_edges()}{etxt}"
+        )
 
         return
 
