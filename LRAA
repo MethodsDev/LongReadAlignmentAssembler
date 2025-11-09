@@ -27,7 +27,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.10.0-postdev1"
+VERSION = "v0.11.0-predev1"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -612,6 +612,7 @@ def _contig_job_runner(job):
                     for _h in _root_logger.handlers:
                         try:
                             import logging as _logging_mod
+
                             if isinstance(_h, _logging_mod.StreamHandler):
                                 try:
                                     _h.flush()
@@ -633,7 +634,10 @@ def _contig_job_runner(job):
                 pass
             try:
                 faulthandler.enable(file=err_fh, all_threads=True)
-                for _sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+                for _sig in (
+                    getattr(signal, "SIGTERM", None),
+                    getattr(signal, "SIGINT", None),
+                ):
                     if _sig is not None:
                         try:
                             faulthandler.register(_sig, file=err_fh, all_threads=True)
@@ -1821,7 +1825,9 @@ def main():
 
     # community clustering config
     # community clustering config
-    LRAA_Globals.config["use_community_clustering"] = not bool(args.no_use_community_clustering)
+    LRAA_Globals.config["use_community_clustering"] = not bool(
+        args.no_use_community_clustering
+    )
     LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
     LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
 
@@ -1974,6 +1980,7 @@ def main():
             have_stream = False
             for h in list(root_logger.handlers):
                 import logging as _lm
+
                 if isinstance(h, _lm.StreamHandler):
                     have_stream = True
                     try:
