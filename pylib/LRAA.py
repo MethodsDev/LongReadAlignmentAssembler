@@ -317,16 +317,8 @@ class LRAA:
                 )
 
                 if USE_MULTIPROCESSOR:
-                    logger.info("[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS", self._contig_acc, self._contig_strand)
-                    num_failures = mpm.wait_for_remaining_processes()
-                    logger.info("[%s%s] %s", self._contig_acc, self._contig_strand, mpm.summarize_status())
-                    if num_failures:
-                        raise RuntimeError(
-                            "Error, {} component failures encountered".format(num_failures)
-                        )
-
-                    queue_contents = mpm.retrieve_queue_contents()
-                    for entry in queue_contents:
+                    queue_entries = mpm.retrieve_queue_contents(clear=True)
+                    for entry in queue_entries:
                         all_reconstructed_transcripts.extend(entry)
         except KeyboardInterrupt:
             # Ensure all spawned component workers are pruned before bubbling up
@@ -338,6 +330,27 @@ class LRAA:
                 except Exception:
                     pass
             raise
+
+        if USE_MULTIPROCESSOR and mpm is not None:
+            logger.info(
+                "[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS",
+                self._contig_acc,
+                self._contig_strand,
+            )
+            num_failures = mpm.wait_for_remaining_processes()
+            logger.info(
+                "[%s%s] %s",
+                self._contig_acc,
+                self._contig_strand,
+                mpm.summarize_status(),
+            )
+            queue_entries = mpm.retrieve_queue_contents(clear=True)
+            for entry in queue_entries:
+                all_reconstructed_transcripts.extend(entry)
+            if num_failures:
+                raise RuntimeError(
+                    "Error, {} component failures encountered".format(num_failures)
+                )
 
         logger.info(
             "[%s%s] Finished round of isoform reconstruction",
