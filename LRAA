@@ -49,9 +49,962 @@ prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
 
 
-# -------------------------
-# Small helpers to declutter main() decision tree
-# -------------------------
+
+def main():
+    # CLI: define arguments and groups
+    parser = argparse.ArgumentParser(
+        description="LRAA: Long-read RNA isoform discovery and quantification",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Primary inputs and run mode
+    primary = parser.add_argument_group("primary inputs")
+    primary.add_argument(
+        "--bam", type=str, default=None, help="input BAM of aligned reads"
+    )
+    primary.add_argument(
+        "--bam_list",
+        type=str,
+        default=None,
+        help="file listing cluster-specific BAMs (lines: '<cluster_id> <bam>' or '<bam>'); supported only with --quant_only; splice graph is built once from the union of all BAMs, then each cluster is quantified separately",
+    )
+    primary.add_argument(
+        "--genome", type=str, required=True, help="reference genome FASTA"
+    )
+    primary.add_argument(
+        "--gtf",
+        type=str,
+        default=None,
+        help="reference transcripts GTF (required with --quant_only; optional to guide discovery)",
+    )
+    primary.add_argument(
+        "--output_prefix",
+        "-o",
+        type=str,
+        default="LRAA",
+        help="output prefix for generated files",
+    )
+    primary.add_argument(
+        "--quant_only",
+        action="store_true",
+        default=False,
+        help="quantify only against provided --gtf (no isoform discovery)",
+    )
+    primary.add_argument(
+        "--tag_bam",
+        action="store_true",
+        default=False,
+        help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
+    )
+    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
+    primary.add_argument(
+        "--oversimplify",
+        type=str,
+        default=None,
+        help=(
+            "comma/space-separated contig names to treat with simplified best-overlap assignment (quant-only with --gtf only); "
+            "on these contigs, reads are assigned to the single best-overlapping reference transcript and EM is bypassed"
+        ),
+    )
+    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
+    primary.add_argument(
+        "--no_norm",
+        action="store_true",
+        default=False,
+        help="disable pre-assembly depth normalization",
+    )
+    primary.add_argument(
+        "--normalize_max_cov_level",
+        type=int,
+        default=LRAA_Globals.config["normalize_max_cov_level"],
+        help="normalize BAM so per-base coverage is capped at this value prior to assembly (0 disables)",
+    )
+    primary.add_argument(
+        "--single_best_only",
+        action="store_true",
+        default=False,
+        help="during assembly, keep only the single best isoform per gene",
+    )
+    primary.add_argument(
+        "--CPU", type=int, default=num_threads, help="maximum CPU cores to use"
+    )
+    primary.add_argument(
+        "--ME_only",
+        action="store_true",
+        default=False,
+        help="restrict to multi-exon isoforms only",
+    )
+    primary.add_argument(
+        "--SE_only",
+        action="store_true",
+        default=False,
+        help="restrict to single-exon isoforms only",
+    )
+    primary.add_argument(
+        "--no_EM",
+        action="store_true",
+        default=False,
+        help="do not run EM; divide ambiguous read support equally among assigned isoforms",
+    )
+
+    parser.add_argument(
+        "--HiFi",
+        action="store_true",
+        default=False,
+        help="high fidelity mode (more stringent): min_per_id: 98, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
+    )
+    # Backward compatibility: accept deprecated --LowFi flag (now default); no-op with warning
+    parser.add_argument(
+        "--LowFi",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "--include_prelim_transcripts",
+        action="store_true",
+        default=False,
+        help="write preliminary pre-filtered transcripts gtf and quant files",
+    )
+
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        default=False,
+        help="display version: {}".format(VERSION),
+    )
+
+    # Parallelization strategy
+    parser.add_argument(
+        "--no_parallelize_contigs",
+        action="store_true",
+        default=False,
+        help="disable contig/strand-level parallelization; use --CPU for within-contig/component multithreading",
+    )
+
+    parser.add_argument(
+        "--no_resume_parallel",
+        action="store_true",
+        default=False,
+        help="do not reuse existing per-(contig,strand) temp outputs in contig-parallel runs; always recompute",
+    )
+
+    parser.add_argument(
+        "--clean_parallel_tmp",
+        action="store_true",
+        default=False,
+        help="after merging, remove per-(contig,strand) temp outputs (.quant.expr/.tracking/.gtf/.ok)",
+    )
+
+    parser.add_argument(
+        "--no_cleanup",
+        action="store_true",
+        default=False,
+        help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
+    )
+
+    ## debug params
+
+    debug_group = parser.add_argument_group("debug settings")
+
+    debug_group.add_argument(
+        "--debug",
+        "-d",
+        action="store_true",
+        default=False,
+        help="debug mode, more verbose",
+    )
+
+    debug_group.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="force all logging to terminal (stdout/stderr) even during parallel contig processing; disables per-contig stderr redirection",
+    )
+
+    debug_group.add_argument(
+        "--mpm_monitor", action="store_true", default=False
+    )  # multiprocessing monitor
+
+    debug_group.add_argument(
+        "--no_filter_isoforms",
+        action="store_true",
+        default=False,
+        help="do not filter any initially resolved isoforms",
+    )
+
+    ## config settings
+
+    config_group = parser.add_argument_group("config settings")
+
+    # disabling spacers for now - important for illumina or dirty long reads
+    # config_group.add_argument("--allow_spacers", action='store_true', default=False)
+
+    config_group.add_argument(
+        "--num_total_reads",
+        "-N",
+        type=int,
+        default=None,
+        help="total number of reads for use in TPM calculations",
+    )
+
+    config_group.add_argument(
+        "--min_path_score",
+        type=float,
+        default=LRAA_Globals.config["min_path_score"],
+        help="minimum score for an isoform to be reported. default({})".format(
+            LRAA_Globals.config["min_path_score"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--min_per_id",
+        type=float,
+        default=LRAA_Globals.config["min_per_id"],
+        help="min per_id for pacbio read alignments. default: ({})".format(
+            LRAA_Globals.config["min_per_id"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+        help="maximum allowable intron length. default: ({})".format(
+            LRAA_Globals.config["max_intron_length"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--min_mapping_quality",
+        type=int,
+        default=LRAA_Globals.config["min_mapping_quality"],
+        help="minimum read alignment mapping quality (default: {})".format(
+            LRAA_Globals.config["min_mapping_quality"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--min_isoform_fraction",
+        type=float,
+        default=LRAA_Globals.config["min_isoform_fraction"],
+        help="exclude reconstructed isoforms that have read support less than this fraction of all isoforms at each gene (no impact on --quant_only). default: ({})".format(
+            LRAA_Globals.config["min_isoform_fraction"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--no_infer_TSS", action="store_true", default=False, help="do not infer TSS"
+    )
+    config_group.add_argument(
+        "--no_infer_PolyA",
+        action="store_true",
+        default=False,
+        help="do not infer_PolyA",
+    )
+
+    config_group.add_argument(
+        "--min_monoexonic_TPM",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["min_monoexonic_TPM"],
+        help="minimum TPM for mono-exonic isoforms (default: {})".format(
+            LRAA_Globals.config["min_monoexonic_TPM"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--no_filter_internal_priming",
+        action="store_true",
+        default=False,
+        help="do not filter isoforms that appear to derive from internal priming events",
+    )
+
+    config_group.add_argument(
+        "--no_weight_reads_by_3prime_agreement",
+        action="store_true",
+        default=False,
+        help="do not weight ambiguous read assignments by agreement of the read 3' end with the transcript 3' end",
+    )
+
+    config_group.add_argument(
+        "--ref_trans_filter_mode",
+        default="retain_expressed",
+        choices=["retain_expressed", "retain_filtered"],
+        help="logic around retaining input reference transcripts in guided ID mode",
+    )
+
+    # Community clustering (Leiden) settings
+    config_group.add_argument(
+        "--no_use_community_clustering",
+        action="store_true",
+        default=False,
+        help="Disable Leiden community clustering for transcript→gene assignment (enabled by default).",
+    )
+    config_group.add_argument(
+        "--community_resolution",
+        type=float,
+        default=LRAA_Globals.config.get("community_resolution", 1.0),
+        help="Leiden resolution parameter (higher → more communities).",
+    )
+    config_group.add_argument(
+        "--community_random_seed",
+        type=int,
+        default=LRAA_Globals.config.get("community_random_seed", 42),
+        help="Random seed for Leiden community clustering.",
+    )
+
+    # Storage/backend settings for disk-backed read tracking stores
+    config_group.add_argument(
+        "--store_backend",
+        default=LRAA_Globals.config.get("store_backend", "auto"),
+        choices=["auto", "lmdb", "sqlite"],
+        help=(
+            "disk-backed storage backend for read tracking (ReadNameStore/MpReadIdStore):\n"
+            "  auto: prefer lmdb if installed, otherwise sqlite;\n"
+            "  lmdb: require python-lmdb (fast, read-scalable);\n"
+            "  sqlite: maximum portability (built-in)."
+        ),
+    )
+
+    ## EM settings
+    config_group_EM = parser.add_argument_group("EM settings")
+
+    # config_group_EM.add_argument(
+    #    "--EM_implementation",
+    #    default="CGPT",
+    #    choices=["CGPT", "BJH"],
+    #    help="implementation of the EM alg to use.",
+    # )
+
+    config_group_EM.add_argument(
+        "--EM_alpha",
+        type=float,
+        default=0.01,
+        required=False,
+        help="regularization factor EM_alpha * num_ambigous_reads for each transcript",
+    )
+
+    ## alt splice settings
+
+    config_group_altsplice = parser.add_argument_group("alt splice settings")
+
+    # TODO:// mv splice defaults to globals.config
+    config_group_altsplice.add_argument(
+        "--min_alt_splice_freq",
+        type=float,
+        default=LRAA_Globals.config["min_alt_splice_freq"],
+        help="min fraction required for alt splicing at an exon boundary (default: {})".format(
+            LRAA_Globals.config["min_alt_splice_freq"]
+        ),
+    )
+
+    config_group_altsplice.add_argument(
+        "--min_alt_unspliced_freq",
+        type=float,
+        default=LRAA_Globals.config["min_alt_unspliced_freq"],
+        help="min fraction required for retained intron at splice boundary (default: {})".format(
+            LRAA_Globals.config["min_alt_unspliced_freq"]
+        ),
+    )
+
+    ## single cell settings
+    config_group_single_cell = parser.add_argument_group("Single cell settings")
+
+    config_group_single_cell.add_argument(
+        "--cell_barcode_tag",
+        type=str,
+        default=LRAA_Globals.config["cell_barcode_tag"],
+        help="bam tag for cell barcode",
+    )
+
+    config_group_single_cell.add_argument(
+        "--read_umi_tag",
+        type=str,
+        default=LRAA_Globals.config["read_umi_tag"],
+        help="bam tag for read umi",
+    )
+
+    ## restrict to contig and optionally region of contig
+
+    contig_group_setting = parser.add_argument_group(
+        "target specific contig (or region of contig)"
+    )
+
+    contig_group_setting.add_argument(
+        "--contig", type=str, default=None, help="restrict run to single contig"
+    )
+    contig_group_setting.add_argument(
+        "--region",
+        type=str,
+        default=None,
+        help="restrict to region on contig chr\\d+[+-]?:\\d+-\\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
+    )
+
+    ## generic config update via json
+    parser.add_argument(
+        "--config_update",
+        type=str,
+        required=False,
+        help="JSON file containing key:value pairs to override entries in LRAA_Globals.config after other CLI options are processed",
+    )
+
+    # resource monitoring
+    monitor_group = parser.add_argument_group("resource monitoring")
+    monitor_group.add_argument(
+        "--no_monitor_resources",
+        action="store_true",
+        default=False,
+        help="disable resource usage monitoring (enabled by default); if enabled, writes <output_prefix>.resources.tsv and per-worker logs in parallel mode",
+    )
+    monitor_group.add_argument(
+        "--monitor_interval",
+        type=float,
+        default=LRAA_Globals.config["resource_monitor_interval"],
+        help="resource sampling interval in seconds (default: {})".format(
+            LRAA_Globals.config["resource_monitor_interval"]
+        ),
+    )
+    monitor_group.add_argument(
+        "--monitor_children",
+        action="store_true",
+        default=LRAA_Globals.config["resource_monitor_include_children"],
+        help="include child processes in aggregate resource metrics",
+    )
+
+    if "--version" in sys.argv:
+        print("LRAA VERSION: {}".format(VERSION))
+        if len(sys.argv) == 2:
+            sys.exit(0)
+
+    args = parser.parse_args()
+
+    # (deprecated flags removed; no back-compat mapping)
+
+    # require a BAM source
+    if not args.bam and not args.bam_list:
+        sys.exit("Error: Must specify --bam or --bam_list")
+
+    if args.ME_only and args.SE_only:
+        sys.exit("Error: Cannot specify both --ME_only and --SE_only")
+
+    genome_fasta_filename = args.genome
+    bam_filename = args.bam
+    output_prefix = args.output_prefix
+    # ensure global vars used by helper functions are updated
+    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS
+    single_best_only = args.single_best_only
+    CPU = args.CPU
+    QUANT_ONLY = args.quant_only
+    TAG_BAM = args.tag_bam
+    input_gtf = args.gtf
+    # oversimplify setup (minimal: strategy is fixed to best-overlap; only contig list provided via CLI)
+    oversimplify_contigs = []
+    if args.oversimplify:
+        toks = re.split(r"[\s,]+", args.oversimplify.strip())
+        oversimplify_contigs = [t for t in toks if t]
+        if oversimplify_contigs:
+            LRAA_Globals.config["oversimplify_enabled"] = True
+            LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
+    NO_NORM = args.no_norm
+    min_isoform_fraction = args.min_isoform_fraction
+    run_EM = not args.no_EM
+    ME_only = args.ME_only
+    SE_only = args.SE_only
+
+    NO_FILTER_ISOFORMS = args.no_filter_isoforms
+    INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
+    # By default, parallelize contigs; allow explicit opt-out
+    CONTIG_PARALLEL = not args.no_parallelize_contigs
+    NO_RESUME_PARALLEL = args.no_resume_parallel
+    CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
+    NO_CLEANUP = args.no_cleanup
+    MONITOR_RESOURCES = not args.no_monitor_resources
+
+    # if args.collapse:
+    #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
+
+    if args.quant_only and input_gtf is None:
+        sys.exit(
+            "If running --quant_only, must specify --gtf corresponding to targets of quantification"
+        )
+
+    # multi-cluster quant-only support
+    MULTI_CLUSTER_BAMS = False
+    cluster_bams = []  # list of dicts: {id, bam}
+    if args.bam_list:
+        if not args.quant_only:
+            sys.exit("Error: --bam_list is supported only with --quant_only mode")
+        if not os.path.exists(args.bam_list):
+            sys.exit(f"Error, --bam_list file not found: {args.bam_list}")
+        if args.num_total_reads is not None:
+            sys.exit(
+                "Error: --num_total_reads cannot be used with --bam_list; per-cluster read counts are always derived from each BAM."
+            )
+
+        def _sanitize_cluster_id(s):
+            # keep alnum, underscore, dash, dot
+            return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
+
+        with open(args.bam_list, "rt") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = re.split(r"\s+", line)
+                if len(parts) == 1:
+                    bam_path = parts[0]
+                    cluster_id = os.path.basename(bam_path)
+                    cluster_id = re.sub(r"\.bam$", "", cluster_id)
+                else:
+                    cluster_id, bam_path = parts[0], parts[1]
+                cluster_id = _sanitize_cluster_id(cluster_id)
+                cluster_bams.append({"id": cluster_id, "bam": bam_path})
+        if not cluster_bams:
+            sys.exit("Error: --bam_list contains no BAM entries")
+        MULTI_CLUSTER_BAMS = True
+
+    ###############
+    # update config
+    LRAA_Globals.config["min_path_score"] = args.min_path_score
+    LRAA_Globals.config["min_per_id"] = args.min_per_id
+    LRAA_Globals.config["max_intron_length"] = args.max_intron_length
+    LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
+    LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
+    # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
+    # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
+    LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
+    LRAA_Globals.config["run_EM"] = run_EM
+    LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
+    LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
+        not args.no_weight_reads_by_3prime_agreement
+    )
+    # Deprecated: EM implementation selection removed; rely on current Quantify defaults
+    LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
+
+    # community clustering config
+    # community clustering config
+    LRAA_Globals.config["use_community_clustering"] = not bool(
+        args.no_use_community_clustering
+    )
+    LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
+    LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
+
+    quant_EM_alpha = args.EM_alpha
+    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
+
+    # resource monitor config
+    LRAA_Globals.config["resource_monitor_enabled"] = MONITOR_RESOURCES
+    LRAA_Globals.config["resource_monitor_interval"] = float(args.monitor_interval)
+    LRAA_Globals.config["resource_monitor_include_children"] = bool(
+        args.monitor_children
+    )
+
+    LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
+    LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
+
+    # choose disk-backed store backend early (before spawning workers or instantiating stores)
+    LRAA_Globals.config["store_backend"] = args.store_backend
+    # Map CLI to environment knob used by ReadNameStore/MpReadIdStore
+    resolved_backend = (args.store_backend or "auto").lower()
+    if resolved_backend == "sqlite":
+        # force sqlite
+        try:
+            os.environ["LRAA_READSTORE_BACKEND"] = "sqlite"
+        except Exception:
+            pass
+    else:
+        # clear override so stores follow their default: prefer LMDB when available
+        try:
+            os.environ.pop("LRAA_READSTORE_BACKEND", None)
+        except Exception:
+            pass
+        if resolved_backend == "lmdb":
+            # Validate lmdb availability up front if explicitly requested
+            try:
+                import lmdb  # type: ignore  # noqa: F401
+            except Exception:
+                sys.exit(
+                    "Error: --store_backend lmdb requested but python-lmdb is not installed."
+                )
+    logger.info(f"read-store backend: {resolved_backend}")
+
+    # low-memory behavior is always on (externalized read-name store; spans always tracked)
+
+    if args.LowFi:
+        sys.exit(
+            "Error: --LowFi has been removed. Defaults are now tuned for LowFi reads. Use --HiFi to enable the more stringent HiFi parameters."
+        )
+
+    if args.HiFi:
+        # Override defaults with stringent HiFi settings
+        # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
+        LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
+        LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
+        LRAA_Globals.config["min_per_id"] = 98.0
+        LRAA_Globals.config["max_exon_spur_length"] = 13
+        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
+        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
+        # HiFi-specific splice frequency threshold
+        LRAA_Globals.config["min_alt_splice_freq"] = 0.01
+        # Ensure splice-graph params derive the HiFi value if user didn't explicitly override
+        # If user did not pass --min_alt_splice_freq, argparse will have set it to the parser default,
+        # which was computed before we overrode config. Force HiFi value unless user provided a value.
+        default_min_alt = parser.get_default("min_alt_splice_freq")
+        if args.min_alt_splice_freq == default_min_alt:
+            args.min_alt_splice_freq = 0.01
+
+    # apply generic config overrides last so they take precedence
+    if args.config_update:
+        cfg_file = args.config_update
+        if not os.path.exists(cfg_file):
+            sys.exit(f"Error, --config_update file not found: {cfg_file}")
+        try:
+            with open(cfg_file, "rt") as fh:
+                user_cfg = json.load(fh)
+        except Exception as e:
+            sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
+
+        if not isinstance(user_cfg, dict):
+            sys.exit(
+                f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
+            )
+
+        def _cast_value(orig_val, new_val):
+            # attempt gentle casting to preserve expected primitive types
+            try:
+                if isinstance(orig_val, bool):
+                    if isinstance(new_val, bool):
+                        return new_val
+                    if isinstance(new_val, (int, float)):
+                        return bool(new_val)
+                    if isinstance(new_val, str):
+                        if new_val.lower() in ("true", "t", "1", "yes", "y"):
+                            return True
+                        if new_val.lower() in ("false", "f", "0", "no", "n"):
+                            return False
+                if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
+                    if isinstance(new_val, str):
+                        if re.match(r"^-?\\d+$", new_val):
+                            return int(new_val)
+                        if re.match(r"^-?\\d+\\.0+$", new_val):
+                            return int(float(new_val))
+                    if isinstance(new_val, float) and new_val.is_integer():
+                        return int(new_val)
+                    if isinstance(new_val, int):
+                        return new_val
+                if isinstance(orig_val, float) and isinstance(
+                    new_val, (int, float, str)
+                ):
+                    if isinstance(new_val, str) and re.match(
+                        r"^-?\\d+(\\.\\d+)?$", new_val
+                    ):
+                        return float(new_val)
+                    if isinstance(new_val, (int, float)):
+                        return float(new_val)
+            except Exception:
+                pass
+            # fallback raw
+            return new_val
+
+        applied_keys = []
+        skipped_keys = []
+        for k, v in user_cfg.items():
+            if k not in LRAA_Globals.config:
+                logger.warning(f"--config_update ignoring unknown config key: {k}")
+                skipped_keys.append(k)
+                continue
+            orig = LRAA_Globals.config[k]
+            newv = _cast_value(orig, v)
+            LRAA_Globals.config[k] = newv
+            applied_keys.append(k)
+        logger.info(
+            f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
+        )
+        if skipped_keys:
+            logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
+
+    if args.mpm_monitor:
+        mpm.set_debug()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        LRAA_Globals.DEBUG = True
+
+    # --verbose: force console logging even when running multiple workers
+    VERBOSE = bool(getattr(args, "verbose", False))
+    if VERBOSE:
+        try:
+            root_logger = logging.getLogger()
+            have_stream = False
+            for h in list(root_logger.handlers):
+                import logging as _lm
+
+                if isinstance(h, _lm.StreamHandler):
+                    have_stream = True
+                    try:
+                        h.flush()
+                    except Exception:
+                        pass
+                    h.stream = sys.stderr
+            if not have_stream:
+                sh = logging.StreamHandler(stream=sys.stderr)
+                sh.setFormatter(logging.Formatter(FORMAT))
+                sh.setLevel(root_logger.level or logging.INFO)
+                root_logger.addHandler(sh)
+            logger.info("--verbose enabled: forcing terminal logging for all workers")
+        except Exception:
+            pass
+        try:
+            LRAA_Globals.config["verbose_logging"] = True
+        except Exception:
+            pass
+
+    allow_spacers = False
+    # allow_spacers = args.allow_spacers
+
+    if MULTI_CLUSTER_BAMS:
+        # ensure each BAM has an index
+        for cb in cluster_bams:
+            bam_p = cb["bam"]
+            if not os.path.exists(bam_p + ".bai"):
+                logger.info(f"-missing index for bam {bam_p}, will try to make it...")
+                subprocess.check_call("samtools index " + bam_p, shell=True)
+    else:
+        if not os.path.exists(bam_filename + ".bai"):
+            logger.info(
+                "-missing index for bam {}, will try to make it...".format(bam_filename)
+            )
+            subprocess.check_call("samtools index " + bam_filename, shell=True)
+
+    ## perform normalization prior to assembly
+    pre_norm_bam_filename = bam_filename
+
+    bam_file_for_quant = pre_norm_bam_filename
+    bam_file_for_sg = pre_norm_bam_filename
+
+    if not MULTI_CLUSTER_BAMS:
+        if args.num_total_reads is None:
+            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
+                bam_file_for_quant
+            )
+            logger.info(
+                "total number of reads counted from {} as: {}".format(
+                    bam_file_for_quant, LRAA_Globals.config["num_total_reads"]
+                )
+            )
+
+        else:
+            LRAA_Globals.config["num_total_reads"] = args.num_total_reads
+            logger.info(
+                "using total number of reads as: {}".format(args.num_total_reads)
+            )
+            if args.num_total_reads == 0:
+                raise RuntimeError("Error, number of total reads is set to zero.")
+
+    if (not QUANT_ONLY) and (not NO_NORM) and (args.normalize_max_cov_level > 0):
+
+        SS_bamsifter_prog = os.path.sep.join(
+            [
+                UTILDIR,
+                "normalize_bam_by_strand.py",
+            ]
+        )
+
+        norm_bam_filename = (
+            os.path.basename(bam_filename) + f".norm_{args.normalize_max_cov_level}.bam"
+        )
+
+        cmd = " ".join(
+            [
+                SS_bamsifter_prog,
+                f" --input_bam {bam_filename}",
+                f" --normalize_max_cov_level {args.normalize_max_cov_level} ",
+                f" --output_bam {norm_bam_filename} ",
+            ]
+        )
+
+        norm_bam_checkpoint = norm_bam_filename + ".ok"
+        if not os.path.exists(norm_bam_checkpoint):
+            logger.info("generating normalized bam file")
+            logger.info(cmd)
+            subprocess.check_call(cmd, shell=True)
+
+            subprocess.check_call(f"touch {norm_bam_checkpoint}", shell=True)
+
+        bam_file_for_sg = norm_bam_filename
+
+    ###########################################
+    ## on to isoform discovery / reconstruction
+
+    splice_graph_params_dict = {
+        "read_aln_gap_merge_int": 10,
+        "inter_exon_segment_merge_dist": 50,
+        "max_genomic_contig_length": 1e10,
+        "min_alt_splice_freq": args.min_alt_splice_freq,
+        "min_alt_unspliced_freq": args.min_alt_unspliced_freq,
+        "max_intron_length_for_exon_segment_filtering": 10000,
+        "min_intron_support": 2,
+        "min_terminal_splice_exon_anchor_length": 15,
+        "remove_unspliced_introns": False,
+    }
+    # TODO:// put above settings into the config and add to cmd line interface
+
+    Splice_graph.init_sg_params(splice_graph_params_dict)
+
+    # data structures want:
+    # ultimately exons and introns
+    # build from reads.
+    # define coverage intervals and introns as graph components.
+
+    restricted_contig = None
+    restrict_to_contig_orient = None
+
+    if args.contig:
+        restricted_contig = args.contig
+        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
+        if m is not None:
+            restricted_contig = m.group(1)
+            restrict_to_contig_orient = m.group(2)
+
+        genome_contigs_list = [restricted_contig]
+    else:
+        genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
+
+    restrict_region_lend, restrict_region_rend = None, None
+    if args.region:
+        args.region = args.region.replace(",", "")
+        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?:(\\d+)-(\\d+)$", args.region)
+        if m is None:
+            raise RuntimeError(
+                "Error, could not parse region range: {}".format(args.region)
+            )
+
+        restricted_contig = m.group(1)
+
+        genome_contigs_list = [restricted_contig]
+
+        restrict_to_contig_orient = m.group(2)
+        if restrict_to_contig_orient not in ("+", "-"):
+            restrict_to_contig_orient = None
+
+        restrict_region_lend = m.group(3)
+        restrict_region_rend = m.group(4)
+
+        restrict_region_lend = int(restrict_region_lend)
+        restrict_region_rend = int(restrict_region_rend)
+        assert (
+            restrict_region_lend < restrict_region_rend
+        ), f"Error, {args.region} invalid range"
+
+        print(
+            "{}\t{}\t{}\t{}".format(
+                restricted_contig,
+                restrict_to_contig_orient,
+                restrict_region_lend,
+                restrict_region_rend,
+            )
+        )
+
+    if LRAA_Globals.DEBUG:
+        if not os.path.exists(prereconstruct_info_dir):
+            os.makedirs(prereconstruct_info_dir)
+
+    # No preload of input transcripts; parse per (contig,strand) uniformly in both serial and parallel paths
+
+    ##----------------------------------------------
+    ## Begin, target each contig separately
+
+    # Special branch: multi-cluster quantification with shared splice graph evidence across all BAMs
+    if MULTI_CLUSTER_BAMS and QUANT_ONLY:
+        _execute_multi_cluster_quant_only(
+            cluster_bams=cluster_bams,
+            genome_contigs_list=genome_contigs_list,
+            genome_fasta_filename=genome_fasta_filename,
+            restrict_to_contig_orient=restrict_to_contig_orient,
+            restrict_region_lend=restrict_region_lend,
+            restrict_region_rend=restrict_region_rend,
+            input_gtf=input_gtf,
+            run_EM=run_EM,
+            single_best_only=single_best_only,
+            NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+            min_isoform_fraction=min_isoform_fraction,
+            quant_EM_alpha=quant_EM_alpha,
+            prereconstruct_info_dir=prereconstruct_info_dir,
+            ME_only=ME_only,
+            SE_only=SE_only,
+            output_prefix=output_prefix,
+            TAG_BAM=TAG_BAM,
+            CONTIG_PARALLEL=CONTIG_PARALLEL,
+            CPU=CPU,
+            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+            NO_CLEANUP=NO_CLEANUP,
+            DEBUG=LRAA_Globals.DEBUG,
+            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+            VERBOSE=VERBOSE,
+            splice_graph_params_dict=splice_graph_params_dict,
+        )
+
+    else:
+
+        # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
+        jobs = []
+        for contig_acc in genome_contigs_list:
+            for contig_strand in ("+", "-"):
+                if (
+                    restrict_to_contig_orient is not None
+                    and restrict_to_contig_orient != contig_strand
+                ):
+                    continue
+                jobs.append(
+                    dict(
+                        contig_acc=contig_acc,
+                        contig_strand=contig_strand,
+                        genome_fasta_filename=genome_fasta_filename,
+                        bam_file_for_sg=bam_file_for_sg,
+                        bam_file_for_quant=bam_file_for_quant,
+                        restrict_region_lend=restrict_region_lend,
+                        restrict_region_rend=restrict_region_rend,
+                        input_gtf=input_gtf,
+                        config_overrides=dict(LRAA_Globals.config),
+                        splice_graph_params=splice_graph_params_dict,
+                        run_EM=run_EM,
+                        single_best_only=single_best_only,
+                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+                        min_isoform_fraction=min_isoform_fraction,
+                        quant_EM_alpha=quant_EM_alpha,
+                        prereconstruct_info_dir=prereconstruct_info_dir,
+                        ME_only=ME_only,
+                        SE_only=SE_only,
+                        output_prefix=output_prefix,
+                        QUANT_ONLY=QUANT_ONLY,
+                        DEBUG=LRAA_Globals.DEBUG,
+                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                        skip=False,
+                    )
+                )
+
+        # Execute unified path for general (single BAM or discovery) case
+        _run_jobs_schedule_and_merge(
+            jobs=jobs,
+            output_prefix=output_prefix,
+            quant_only=QUANT_ONLY,
+            tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
+            CONTIG_PARALLEL=CONTIG_PARALLEL,
+            CPU=CPU,
+            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+            NO_CLEANUP=NO_CLEANUP,
+            DEBUG=LRAA_Globals.DEBUG,
+            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+            VERBOSE=VERBOSE,
+        )
+
+    return
+
+
 
 
 def _append_without_first_line(src_path, dst_fh):
@@ -933,6 +1886,103 @@ def _contig_job_runner(job):
     return
 
 
+def _execute_multi_cluster_quant_only(
+    cluster_bams,
+    genome_contigs_list,
+    genome_fasta_filename,
+    restrict_to_contig_orient,
+    restrict_region_lend,
+    restrict_region_rend,
+    input_gtf,
+    run_EM,
+    single_best_only,
+    NO_FILTER_ISOFORMS,
+    min_isoform_fraction,
+    quant_EM_alpha,
+    prereconstruct_info_dir,
+    ME_only,
+    SE_only,
+    output_prefix,
+    TAG_BAM,
+    CONTIG_PARALLEL,
+    CPU,
+    NO_RESUME_PARALLEL,
+    CLEAN_PARALLEL_TMP,
+    NO_CLEANUP,
+    DEBUG,
+    INCLUDE_PRELIM_TRANSCRIPTS,
+    VERBOSE,
+    splice_graph_params_dict,
+):
+    """Run quant-only jobs for each cluster while reusing a shared splice-graph evidence set."""
+
+    union_bams_for_sg = [cb["bam"] for cb in cluster_bams]
+
+    for cb in cluster_bams:
+        cluster_id = cb["id"]
+        cluster_bam = cb["bam"]
+
+        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(cluster_bam)
+        logger.info(
+            f"[{cluster_id}] total number of reads counted from {cluster_bam} as: {LRAA_Globals.config['num_total_reads']}"
+        )
+
+        output_prefix_cluster = f"{output_prefix}.{cluster_id}"
+
+        jobs = []
+        for contig_acc in genome_contigs_list:
+            for contig_strand in ("+", "-"):
+                if (
+                    restrict_to_contig_orient is not None
+                    and restrict_to_contig_orient != contig_strand
+                ):
+                    continue
+                jobs.append(
+                    dict(
+                        contig_acc=contig_acc,
+                        contig_strand=contig_strand,
+                        genome_fasta_filename=genome_fasta_filename,
+                        bam_file_for_sg=union_bams_for_sg,
+                        bam_file_for_quant=cluster_bam,
+                        restrict_region_lend=restrict_region_lend,
+                        restrict_region_rend=restrict_region_rend,
+                        input_gtf=input_gtf,
+                        config_overrides=dict(LRAA_Globals.config),
+                        splice_graph_params=splice_graph_params_dict,
+                        run_EM=run_EM,
+                        single_best_only=single_best_only,
+                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+                        min_isoform_fraction=min_isoform_fraction,
+                        quant_EM_alpha=quant_EM_alpha,
+                        prereconstruct_info_dir=prereconstruct_info_dir,
+                        ME_only=ME_only,
+                        SE_only=SE_only,
+                        output_prefix=output_prefix_cluster,
+                        QUANT_ONLY=True,
+                        DEBUG=DEBUG,
+                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                        skip=False,
+                    )
+                )
+
+        _run_jobs_schedule_and_merge(
+            jobs=jobs,
+            output_prefix=output_prefix_cluster,
+            quant_only=True,
+            tag_bam_path=(cluster_bam if TAG_BAM else None),
+            CONTIG_PARALLEL=CONTIG_PARALLEL,
+            CPU=CPU,
+            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+            NO_CLEANUP=NO_CLEANUP,
+            DEBUG=DEBUG,
+            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+            VERBOSE=VERBOSE,
+        )
+
+    return
+
+
 def _run_oversimplify_best_overlap(
     contig_acc,
     contig_strand,
@@ -1287,1003 +2337,6 @@ def _run_oversimplify_aggregate(
     logger.info(
         f"[{contig_acc}{contig_strand}] oversimplify-aggregate: span {lend}-{rend}, reads {uniq_reads}"
     )
-    return
-
-
-def main():
-    # CLI: define arguments and groups
-    parser = argparse.ArgumentParser(
-        description="LRAA: Long-read RNA isoform discovery and quantification",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-
-    # Primary inputs and run mode
-    primary = parser.add_argument_group("primary inputs")
-    primary.add_argument(
-        "--bam", type=str, default=None, help="input BAM of aligned reads"
-    )
-    primary.add_argument(
-        "--bam_list",
-        type=str,
-        default=None,
-        help="file listing cluster-specific BAMs (lines: '<cluster_id> <bam>' or '<bam>'); supported only with --quant_only; splice graph is built once from the union of all BAMs, then each cluster is quantified separately",
-    )
-    primary.add_argument(
-        "--genome", type=str, required=True, help="reference genome FASTA"
-    )
-    primary.add_argument(
-        "--gtf",
-        type=str,
-        default=None,
-        help="reference transcripts GTF (required with --quant_only; optional to guide discovery)",
-    )
-    primary.add_argument(
-        "--output_prefix",
-        "-o",
-        type=str,
-        default="LRAA",
-        help="output prefix for generated files",
-    )
-    primary.add_argument(
-        "--quant_only",
-        action="store_true",
-        default=False,
-        help="quantify only against provided --gtf (no isoform discovery)",
-    )
-    primary.add_argument(
-        "--tag_bam",
-        action="store_true",
-        default=False,
-        help="annotate BAM reads with assigned isoform info (writes a tagged BAM)",
-    )
-    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
-    primary.add_argument(
-        "--oversimplify",
-        type=str,
-        default=None,
-        help=(
-            "comma/space-separated contig names to treat with simplified best-overlap assignment (quant-only with --gtf only); "
-            "on these contigs, reads are assigned to the single best-overlapping reference transcript and EM is bypassed"
-        ),
-    )
-    # --low_memory_quant removed: low-memory behavior is now default (externalized read-name store and always-on spans)
-    primary.add_argument(
-        "--no_norm",
-        action="store_true",
-        default=False,
-        help="disable pre-assembly depth normalization",
-    )
-    primary.add_argument(
-        "--normalize_max_cov_level",
-        type=int,
-        default=LRAA_Globals.config["normalize_max_cov_level"],
-        help="normalize BAM so per-base coverage is capped at this value prior to assembly (0 disables)",
-    )
-    primary.add_argument(
-        "--single_best_only",
-        action="store_true",
-        default=False,
-        help="during assembly, keep only the single best isoform per gene",
-    )
-    primary.add_argument(
-        "--CPU", type=int, default=num_threads, help="maximum CPU cores to use"
-    )
-    primary.add_argument(
-        "--ME_only",
-        action="store_true",
-        default=False,
-        help="restrict to multi-exon isoforms only",
-    )
-    primary.add_argument(
-        "--SE_only",
-        action="store_true",
-        default=False,
-        help="restrict to single-exon isoforms only",
-    )
-    primary.add_argument(
-        "--no_EM",
-        action="store_true",
-        default=False,
-        help="do not run EM; divide ambiguous read support equally among assigned isoforms",
-    )
-
-    parser.add_argument(
-        "--HiFi",
-        action="store_true",
-        default=False,
-        help="high fidelity mode (more stringent): min_per_id: 98, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
-    )
-    # Backward compatibility: accept deprecated --LowFi flag (now default); no-op with warning
-    parser.add_argument(
-        "--LowFi",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-
-    parser.add_argument(
-        "--include_prelim_transcripts",
-        action="store_true",
-        default=False,
-        help="write preliminary pre-filtered transcripts gtf and quant files",
-    )
-
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        default=False,
-        help="display version: {}".format(VERSION),
-    )
-
-    # Parallelization strategy
-    parser.add_argument(
-        "--no_parallelize_contigs",
-        action="store_true",
-        default=False,
-        help="disable contig/strand-level parallelization; use --CPU for within-contig/component multithreading",
-    )
-
-    parser.add_argument(
-        "--no_resume_parallel",
-        action="store_true",
-        default=False,
-        help="do not reuse existing per-(contig,strand) temp outputs in contig-parallel runs; always recompute",
-    )
-
-    parser.add_argument(
-        "--clean_parallel_tmp",
-        action="store_true",
-        default=False,
-        help="after merging, remove per-(contig,strand) temp outputs (.quant.expr/.tracking/.gtf/.ok)",
-    )
-
-    parser.add_argument(
-        "--no_cleanup",
-        action="store_true",
-        default=False,
-        help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
-    )
-
-    ## debug params
-
-    debug_group = parser.add_argument_group("debug settings")
-
-    debug_group.add_argument(
-        "--debug",
-        "-d",
-        action="store_true",
-        default=False,
-        help="debug mode, more verbose",
-    )
-
-    debug_group.add_argument(
-        "--verbose",
-        action="store_true",
-        default=False,
-        help="force all logging to terminal (stdout/stderr) even during parallel contig processing; disables per-contig stderr redirection",
-    )
-
-    debug_group.add_argument(
-        "--mpm_monitor", action="store_true", default=False
-    )  # multiprocessing monitor
-
-    debug_group.add_argument(
-        "--no_filter_isoforms",
-        action="store_true",
-        default=False,
-        help="do not filter any initially resolved isoforms",
-    )
-
-    ## config settings
-
-    config_group = parser.add_argument_group("config settings")
-
-    # disabling spacers for now - important for illumina or dirty long reads
-    # config_group.add_argument("--allow_spacers", action='store_true', default=False)
-
-    config_group.add_argument(
-        "--num_total_reads",
-        "-N",
-        type=int,
-        default=None,
-        help="total number of reads for use in TPM calculations",
-    )
-
-    config_group.add_argument(
-        "--min_path_score",
-        type=float,
-        default=LRAA_Globals.config["min_path_score"],
-        help="minimum score for an isoform to be reported. default({})".format(
-            LRAA_Globals.config["min_path_score"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--min_per_id",
-        type=float,
-        default=LRAA_Globals.config["min_per_id"],
-        help="min per_id for pacbio read alignments. default: ({})".format(
-            LRAA_Globals.config["min_per_id"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--max_intron_length",
-        type=int,
-        default=LRAA_Globals.config["max_intron_length"],
-        help="maximum allowable intron length. default: ({})".format(
-            LRAA_Globals.config["max_intron_length"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--min_mapping_quality",
-        type=int,
-        default=LRAA_Globals.config["min_mapping_quality"],
-        help="minimum read alignment mapping quality (default: {})".format(
-            LRAA_Globals.config["min_mapping_quality"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--min_isoform_fraction",
-        type=float,
-        default=LRAA_Globals.config["min_isoform_fraction"],
-        help="exclude reconstructed isoforms that have read support less than this fraction of all isoforms at each gene (no impact on --quant_only). default: ({})".format(
-            LRAA_Globals.config["min_isoform_fraction"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--no_infer_TSS", action="store_true", default=False, help="do not infer TSS"
-    )
-    config_group.add_argument(
-        "--no_infer_PolyA",
-        action="store_true",
-        default=False,
-        help="do not infer_PolyA",
-    )
-
-    config_group.add_argument(
-        "--min_monoexonic_TPM",
-        type=float,
-        required=False,
-        default=LRAA_Globals.config["min_monoexonic_TPM"],
-        help="minimum TPM for mono-exonic isoforms (default: {})".format(
-            LRAA_Globals.config["min_monoexonic_TPM"]
-        ),
-    )
-
-    config_group.add_argument(
-        "--no_filter_internal_priming",
-        action="store_true",
-        default=False,
-        help="do not filter isoforms that appear to derive from internal priming events",
-    )
-
-    config_group.add_argument(
-        "--no_weight_reads_by_3prime_agreement",
-        action="store_true",
-        default=False,
-        help="do not weight ambiguous read assignments by agreement of the read 3' end with the transcript 3' end",
-    )
-
-    config_group.add_argument(
-        "--ref_trans_filter_mode",
-        default="retain_expressed",
-        choices=["retain_expressed", "retain_filtered"],
-        help="logic around retaining input reference transcripts in guided ID mode",
-    )
-
-    # Community clustering (Leiden) settings
-    config_group.add_argument(
-        "--no_use_community_clustering",
-        action="store_true",
-        default=False,
-        help="Disable Leiden community clustering for transcript→gene assignment (enabled by default).",
-    )
-    config_group.add_argument(
-        "--community_resolution",
-        type=float,
-        default=LRAA_Globals.config.get("community_resolution", 1.0),
-        help="Leiden resolution parameter (higher → more communities).",
-    )
-    config_group.add_argument(
-        "--community_random_seed",
-        type=int,
-        default=LRAA_Globals.config.get("community_random_seed", 42),
-        help="Random seed for Leiden community clustering.",
-    )
-
-    # Storage/backend settings for disk-backed read tracking stores
-    config_group.add_argument(
-        "--store_backend",
-        default=LRAA_Globals.config.get("store_backend", "auto"),
-        choices=["auto", "lmdb", "sqlite"],
-        help=(
-            "disk-backed storage backend for read tracking (ReadNameStore/MpReadIdStore):\n"
-            "  auto: prefer lmdb if installed, otherwise sqlite;\n"
-            "  lmdb: require python-lmdb (fast, read-scalable);\n"
-            "  sqlite: maximum portability (built-in)."
-        ),
-    )
-
-    ## EM settings
-    config_group_EM = parser.add_argument_group("EM settings")
-
-    # config_group_EM.add_argument(
-    #    "--EM_implementation",
-    #    default="CGPT",
-    #    choices=["CGPT", "BJH"],
-    #    help="implementation of the EM alg to use.",
-    # )
-
-    config_group_EM.add_argument(
-        "--EM_alpha",
-        type=float,
-        default=0.01,
-        required=False,
-        help="regularization factor EM_alpha * num_ambigous_reads for each transcript",
-    )
-
-    ## alt splice settings
-
-    config_group_altsplice = parser.add_argument_group("alt splice settings")
-
-    # TODO:// mv splice defaults to globals.config
-    config_group_altsplice.add_argument(
-        "--min_alt_splice_freq",
-        type=float,
-        default=LRAA_Globals.config["min_alt_splice_freq"],
-        help="min fraction required for alt splicing at an exon boundary (default: {})".format(
-            LRAA_Globals.config["min_alt_splice_freq"]
-        ),
-    )
-
-    config_group_altsplice.add_argument(
-        "--min_alt_unspliced_freq",
-        type=float,
-        default=LRAA_Globals.config["min_alt_unspliced_freq"],
-        help="min fraction required for retained intron at splice boundary (default: {})".format(
-            LRAA_Globals.config["min_alt_unspliced_freq"]
-        ),
-    )
-
-    ## single cell settings
-    config_group_single_cell = parser.add_argument_group("Single cell settings")
-
-    config_group_single_cell.add_argument(
-        "--cell_barcode_tag",
-        type=str,
-        default=LRAA_Globals.config["cell_barcode_tag"],
-        help="bam tag for cell barcode",
-    )
-
-    config_group_single_cell.add_argument(
-        "--read_umi_tag",
-        type=str,
-        default=LRAA_Globals.config["read_umi_tag"],
-        help="bam tag for read umi",
-    )
-
-    ## restrict to contig and optionally region of contig
-
-    contig_group_setting = parser.add_argument_group(
-        "target specific contig (or region of contig)"
-    )
-
-    contig_group_setting.add_argument(
-        "--contig", type=str, default=None, help="restrict run to single contig"
-    )
-    contig_group_setting.add_argument(
-        "--region",
-        type=str,
-        default=None,
-        help="restrict to region on contig chr\\d+[+-]?:\\d+-\\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
-    )
-
-    ## generic config update via json
-    parser.add_argument(
-        "--config_update",
-        type=str,
-        required=False,
-        help="JSON file containing key:value pairs to override entries in LRAA_Globals.config after other CLI options are processed",
-    )
-
-    # resource monitoring
-    monitor_group = parser.add_argument_group("resource monitoring")
-    monitor_group.add_argument(
-        "--no_monitor_resources",
-        action="store_true",
-        default=False,
-        help="disable resource usage monitoring (enabled by default); if enabled, writes <output_prefix>.resources.tsv and per-worker logs in parallel mode",
-    )
-    monitor_group.add_argument(
-        "--monitor_interval",
-        type=float,
-        default=LRAA_Globals.config["resource_monitor_interval"],
-        help="resource sampling interval in seconds (default: {})".format(
-            LRAA_Globals.config["resource_monitor_interval"]
-        ),
-    )
-    monitor_group.add_argument(
-        "--monitor_children",
-        action="store_true",
-        default=LRAA_Globals.config["resource_monitor_include_children"],
-        help="include child processes in aggregate resource metrics",
-    )
-
-    if "--version" in sys.argv:
-        print("LRAA VERSION: {}".format(VERSION))
-        if len(sys.argv) == 2:
-            sys.exit(0)
-
-    args = parser.parse_args()
-
-    # (deprecated flags removed; no back-compat mapping)
-
-    # require a BAM source
-    if not args.bam and not args.bam_list:
-        sys.exit("Error: Must specify --bam or --bam_list")
-
-    if args.ME_only and args.SE_only:
-        sys.exit("Error: Cannot specify both --ME_only and --SE_only")
-
-    genome_fasta_filename = args.genome
-    bam_filename = args.bam
-    output_prefix = args.output_prefix
-    # ensure global vars used by helper functions are updated
-    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS
-    single_best_only = args.single_best_only
-    CPU = args.CPU
-    QUANT_ONLY = args.quant_only
-    TAG_BAM = args.tag_bam
-    input_gtf = args.gtf
-    # oversimplify setup (minimal: strategy is fixed to best-overlap; only contig list provided via CLI)
-    oversimplify_contigs = []
-    if args.oversimplify:
-        toks = re.split(r"[\s,]+", args.oversimplify.strip())
-        oversimplify_contigs = [t for t in toks if t]
-        if oversimplify_contigs:
-            LRAA_Globals.config["oversimplify_enabled"] = True
-            LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
-    NO_NORM = args.no_norm
-    min_isoform_fraction = args.min_isoform_fraction
-    run_EM = not args.no_EM
-    ME_only = args.ME_only
-    SE_only = args.SE_only
-
-    NO_FILTER_ISOFORMS = args.no_filter_isoforms
-    INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
-    # By default, parallelize contigs; allow explicit opt-out
-    CONTIG_PARALLEL = not args.no_parallelize_contigs
-    NO_RESUME_PARALLEL = args.no_resume_parallel
-    CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
-    NO_CLEANUP = args.no_cleanup
-    MONITOR_RESOURCES = not args.no_monitor_resources
-
-    # if args.collapse:
-    #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
-
-    if args.quant_only and input_gtf is None:
-        sys.exit(
-            "If running --quant_only, must specify --gtf corresponding to targets of quantification"
-        )
-
-    # multi-cluster quant-only support
-    MULTI_CLUSTER_BAMS = False
-    cluster_bams = []  # list of dicts: {id, bam}
-    if args.bam_list:
-        if not args.quant_only:
-            sys.exit("Error: --bam_list is supported only with --quant_only mode")
-        if not os.path.exists(args.bam_list):
-            sys.exit(f"Error, --bam_list file not found: {args.bam_list}")
-        if args.num_total_reads is not None:
-            sys.exit(
-                "Error: --num_total_reads cannot be used with --bam_list; per-cluster read counts are always derived from each BAM."
-            )
-
-        def _sanitize_cluster_id(s):
-            # keep alnum, underscore, dash, dot
-            return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
-
-        with open(args.bam_list, "rt") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = re.split(r"\s+", line)
-                if len(parts) == 1:
-                    bam_path = parts[0]
-                    cluster_id = os.path.basename(bam_path)
-                    cluster_id = re.sub(r"\.bam$", "", cluster_id)
-                else:
-                    cluster_id, bam_path = parts[0], parts[1]
-                cluster_id = _sanitize_cluster_id(cluster_id)
-                cluster_bams.append({"id": cluster_id, "bam": bam_path})
-        if not cluster_bams:
-            sys.exit("Error: --bam_list contains no BAM entries")
-        MULTI_CLUSTER_BAMS = True
-
-    ###############
-    # update config
-    LRAA_Globals.config["min_path_score"] = args.min_path_score
-    LRAA_Globals.config["min_per_id"] = args.min_per_id
-    LRAA_Globals.config["max_intron_length"] = args.max_intron_length
-    LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
-    LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
-    # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
-    # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
-    LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
-    LRAA_Globals.config["run_EM"] = run_EM
-    LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
-    LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
-        not args.no_weight_reads_by_3prime_agreement
-    )
-    # Deprecated: EM implementation selection removed; rely on current Quantify defaults
-    LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
-
-    # community clustering config
-    # community clustering config
-    LRAA_Globals.config["use_community_clustering"] = not bool(
-        args.no_use_community_clustering
-    )
-    LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
-    LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
-
-    quant_EM_alpha = args.EM_alpha
-    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
-
-    # resource monitor config
-    LRAA_Globals.config["resource_monitor_enabled"] = MONITOR_RESOURCES
-    LRAA_Globals.config["resource_monitor_interval"] = float(args.monitor_interval)
-    LRAA_Globals.config["resource_monitor_include_children"] = bool(
-        args.monitor_children
-    )
-
-    LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
-    LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
-
-    # choose disk-backed store backend early (before spawning workers or instantiating stores)
-    LRAA_Globals.config["store_backend"] = args.store_backend
-    # Map CLI to environment knob used by ReadNameStore/MpReadIdStore
-    resolved_backend = (args.store_backend or "auto").lower()
-    if resolved_backend == "sqlite":
-        # force sqlite
-        try:
-            os.environ["LRAA_READSTORE_BACKEND"] = "sqlite"
-        except Exception:
-            pass
-    else:
-        # clear override so stores follow their default: prefer LMDB when available
-        try:
-            os.environ.pop("LRAA_READSTORE_BACKEND", None)
-        except Exception:
-            pass
-        if resolved_backend == "lmdb":
-            # Validate lmdb availability up front if explicitly requested
-            try:
-                import lmdb  # type: ignore  # noqa: F401
-            except Exception:
-                sys.exit(
-                    "Error: --store_backend lmdb requested but python-lmdb is not installed."
-                )
-    logger.info(f"read-store backend: {resolved_backend}")
-
-    # low-memory behavior is always on (externalized read-name store; spans always tracked)
-
-    if args.LowFi:
-        sys.exit(
-            "Error: --LowFi has been removed. Defaults are now tuned for LowFi reads. Use --HiFi to enable the more stringent HiFi parameters."
-        )
-
-    if args.HiFi:
-        # Override defaults with stringent HiFi settings
-        # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
-        LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
-        LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
-        LRAA_Globals.config["min_per_id"] = 98.0
-        LRAA_Globals.config["max_exon_spur_length"] = 13
-        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
-        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
-        # HiFi-specific splice frequency threshold
-        LRAA_Globals.config["min_alt_splice_freq"] = 0.01
-        # Ensure splice-graph params derive the HiFi value if user didn't explicitly override
-        # If user did not pass --min_alt_splice_freq, argparse will have set it to the parser default,
-        # which was computed before we overrode config. Force HiFi value unless user provided a value.
-        default_min_alt = parser.get_default("min_alt_splice_freq")
-        if args.min_alt_splice_freq == default_min_alt:
-            args.min_alt_splice_freq = 0.01
-
-    # apply generic config overrides last so they take precedence
-    if args.config_update:
-        cfg_file = args.config_update
-        if not os.path.exists(cfg_file):
-            sys.exit(f"Error, --config_update file not found: {cfg_file}")
-        try:
-            with open(cfg_file, "rt") as fh:
-                user_cfg = json.load(fh)
-        except Exception as e:
-            sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
-
-        if not isinstance(user_cfg, dict):
-            sys.exit(
-                f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
-            )
-
-        def _cast_value(orig_val, new_val):
-            # attempt gentle casting to preserve expected primitive types
-            try:
-                if isinstance(orig_val, bool):
-                    if isinstance(new_val, bool):
-                        return new_val
-                    if isinstance(new_val, (int, float)):
-                        return bool(new_val)
-                    if isinstance(new_val, str):
-                        if new_val.lower() in ("true", "t", "1", "yes", "y"):
-                            return True
-                        if new_val.lower() in ("false", "f", "0", "no", "n"):
-                            return False
-                if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
-                    if isinstance(new_val, str):
-                        if re.match(r"^-?\\d+$", new_val):
-                            return int(new_val)
-                        if re.match(r"^-?\\d+\\.0+$", new_val):
-                            return int(float(new_val))
-                    if isinstance(new_val, float) and new_val.is_integer():
-                        return int(new_val)
-                    if isinstance(new_val, int):
-                        return new_val
-                if isinstance(orig_val, float) and isinstance(
-                    new_val, (int, float, str)
-                ):
-                    if isinstance(new_val, str) and re.match(
-                        r"^-?\\d+(\\.\\d+)?$", new_val
-                    ):
-                        return float(new_val)
-                    if isinstance(new_val, (int, float)):
-                        return float(new_val)
-            except Exception:
-                pass
-            # fallback raw
-            return new_val
-
-        applied_keys = []
-        skipped_keys = []
-        for k, v in user_cfg.items():
-            if k not in LRAA_Globals.config:
-                logger.warning(f"--config_update ignoring unknown config key: {k}")
-                skipped_keys.append(k)
-                continue
-            orig = LRAA_Globals.config[k]
-            newv = _cast_value(orig, v)
-            LRAA_Globals.config[k] = newv
-            applied_keys.append(k)
-        logger.info(
-            f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
-        )
-        if skipped_keys:
-            logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
-
-    if args.mpm_monitor:
-        mpm.set_debug()
-
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-        LRAA_Globals.DEBUG = True
-
-    # --verbose: force console logging even when running multiple workers
-    VERBOSE = bool(getattr(args, "verbose", False))
-    if VERBOSE:
-        try:
-            root_logger = logging.getLogger()
-            have_stream = False
-            for h in list(root_logger.handlers):
-                import logging as _lm
-
-                if isinstance(h, _lm.StreamHandler):
-                    have_stream = True
-                    try:
-                        h.flush()
-                    except Exception:
-                        pass
-                    h.stream = sys.stderr
-            if not have_stream:
-                sh = logging.StreamHandler(stream=sys.stderr)
-                sh.setFormatter(logging.Formatter(FORMAT))
-                sh.setLevel(root_logger.level or logging.INFO)
-                root_logger.addHandler(sh)
-            logger.info("--verbose enabled: forcing terminal logging for all workers")
-        except Exception:
-            pass
-        try:
-            LRAA_Globals.config["verbose_logging"] = True
-        except Exception:
-            pass
-
-    allow_spacers = False
-    # allow_spacers = args.allow_spacers
-
-    if MULTI_CLUSTER_BAMS:
-        # ensure each BAM has an index
-        for cb in cluster_bams:
-            bam_p = cb["bam"]
-            if not os.path.exists(bam_p + ".bai"):
-                logger.info(f"-missing index for bam {bam_p}, will try to make it...")
-                subprocess.check_call("samtools index " + bam_p, shell=True)
-    else:
-        if not os.path.exists(bam_filename + ".bai"):
-            logger.info(
-                "-missing index for bam {}, will try to make it...".format(bam_filename)
-            )
-            subprocess.check_call("samtools index " + bam_filename, shell=True)
-
-    ## perform normalization prior to assembly
-    pre_norm_bam_filename = bam_filename
-
-    bam_file_for_quant = pre_norm_bam_filename
-    bam_file_for_sg = pre_norm_bam_filename
-
-    if not MULTI_CLUSTER_BAMS:
-        if args.num_total_reads is None:
-            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-                bam_file_for_quant
-            )
-            logger.info(
-                "total number of reads counted from {} as: {}".format(
-                    bam_file_for_quant, LRAA_Globals.config["num_total_reads"]
-                )
-            )
-
-        else:
-            LRAA_Globals.config["num_total_reads"] = args.num_total_reads
-            logger.info(
-                "using total number of reads as: {}".format(args.num_total_reads)
-            )
-            if args.num_total_reads == 0:
-                raise RuntimeError("Error, number of total reads is set to zero.")
-
-    if (not QUANT_ONLY) and (not NO_NORM) and (args.normalize_max_cov_level > 0):
-
-        SS_bamsifter_prog = os.path.sep.join(
-            [
-                UTILDIR,
-                "normalize_bam_by_strand.py",
-            ]
-        )
-
-        norm_bam_filename = (
-            os.path.basename(bam_filename) + f".norm_{args.normalize_max_cov_level}.bam"
-        )
-
-        cmd = " ".join(
-            [
-                SS_bamsifter_prog,
-                f" --input_bam {bam_filename}",
-                f" --normalize_max_cov_level {args.normalize_max_cov_level} ",
-                f" --output_bam {norm_bam_filename} ",
-            ]
-        )
-
-        norm_bam_checkpoint = norm_bam_filename + ".ok"
-        if not os.path.exists(norm_bam_checkpoint):
-            logger.info("generating normalized bam file")
-            logger.info(cmd)
-            subprocess.check_call(cmd, shell=True)
-
-            subprocess.check_call(f"touch {norm_bam_checkpoint}", shell=True)
-
-        bam_file_for_sg = norm_bam_filename
-
-    ###########################################
-    ## on to isoform discovery / reconstruction
-
-    splice_graph_params_dict = {
-        "read_aln_gap_merge_int": 10,
-        "inter_exon_segment_merge_dist": 50,
-        "max_genomic_contig_length": 1e10,
-        "min_alt_splice_freq": args.min_alt_splice_freq,
-        "min_alt_unspliced_freq": args.min_alt_unspliced_freq,
-        "max_intron_length_for_exon_segment_filtering": 10000,
-        "min_intron_support": 2,
-        "min_terminal_splice_exon_anchor_length": 15,
-        "remove_unspliced_introns": False,
-    }
-    # TODO:// put above settings into the config and add to cmd line interface
-
-    Splice_graph.init_sg_params(splice_graph_params_dict)
-
-    # data structures want:
-    # ultimately exons and introns
-    # build from reads.
-    # define coverage intervals and introns as graph components.
-
-    restricted_contig = None
-    restrict_to_contig_orient = None
-
-    if args.contig:
-        restricted_contig = args.contig
-        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
-        if m is not None:
-            restricted_contig = m.group(1)
-            restrict_to_contig_orient = m.group(2)
-
-        genome_contigs_list = [restricted_contig]
-    else:
-        genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
-
-    restrict_region_lend, restrict_region_rend = None, None
-    if args.region:
-        args.region = args.region.replace(",", "")
-        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?:(\\d+)-(\\d+)$", args.region)
-        if m is None:
-            raise RuntimeError(
-                "Error, could not parse region range: {}".format(args.region)
-            )
-
-        restricted_contig = m.group(1)
-
-        genome_contigs_list = [restricted_contig]
-
-        restrict_to_contig_orient = m.group(2)
-        if restrict_to_contig_orient not in ("+", "-"):
-            restrict_to_contig_orient = None
-
-        restrict_region_lend = m.group(3)
-        restrict_region_rend = m.group(4)
-
-        restrict_region_lend = int(restrict_region_lend)
-        restrict_region_rend = int(restrict_region_rend)
-        assert (
-            restrict_region_lend < restrict_region_rend
-        ), f"Error, {args.region} invalid range"
-
-        print(
-            "{}\t{}\t{}\t{}".format(
-                restricted_contig,
-                restrict_to_contig_orient,
-                restrict_region_lend,
-                restrict_region_rend,
-            )
-        )
-
-    if LRAA_Globals.DEBUG:
-        if not os.path.exists(prereconstruct_info_dir):
-            os.makedirs(prereconstruct_info_dir)
-
-    # No preload of input transcripts; parse per (contig,strand) uniformly in both serial and parallel paths
-
-    ##----------------------------------------------
-    ## Begin, target each contig separately
-
-    # Special branch: multi-cluster quantification with shared splice graph evidence across all BAMs
-    if MULTI_CLUSTER_BAMS and QUANT_ONLY:
-        # build union of BAMs used for SG construction
-        union_bams_for_sg = [cb["bam"] for cb in cluster_bams]
-
-        # Pre-parse input transcripts in serial mode already done above
-
-        # process each cluster independently
-        for cb in cluster_bams:
-            cluster_id = cb["id"]
-            cluster_bam = cb["bam"]
-
-            # set per-cluster total reads for TPM (always from BAM in bam_list mode)
-            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(cluster_bam)
-            logger.info(
-                f"[{cluster_id}] total number of reads counted from {cluster_bam} as: {LRAA_Globals.config['num_total_reads']}"
-            )
-
-            output_prefix_cluster = f"{output_prefix}.{cluster_id}"
-
-            # Build contig/strand jobs for this cluster; scheduler will decide pool size
-            jobs = []
-            for contig_acc in genome_contigs_list:
-                for contig_strand in ("+", "-"):
-                    if (
-                        restrict_to_contig_orient is not None
-                        and restrict_to_contig_orient != contig_strand
-                    ):
-                        continue
-                    jobs.append(
-                        dict(
-                            contig_acc=contig_acc,
-                            contig_strand=contig_strand,
-                            genome_fasta_filename=genome_fasta_filename,
-                            bam_file_for_sg=union_bams_for_sg,
-                            bam_file_for_quant=cluster_bam,
-                            restrict_region_lend=restrict_region_lend,
-                            restrict_region_rend=restrict_region_rend,
-                            input_gtf=input_gtf,
-                            config_overrides=dict(LRAA_Globals.config),
-                            splice_graph_params=splice_graph_params_dict,
-                            run_EM=run_EM,
-                            single_best_only=single_best_only,
-                            NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                            min_isoform_fraction=min_isoform_fraction,
-                            quant_EM_alpha=quant_EM_alpha,
-                            prereconstruct_info_dir=prereconstruct_info_dir,
-                            ME_only=ME_only,
-                            SE_only=SE_only,
-                            output_prefix=output_prefix_cluster,
-                            QUANT_ONLY=True,
-                            DEBUG=LRAA_Globals.DEBUG,
-                            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                            skip=False,
-                        )
-                    )
-
-            # Unified schedule/merge/cleanup/tagging for this cluster
-            _run_jobs_schedule_and_merge(
-                jobs=jobs,
-                output_prefix=output_prefix_cluster,
-                quant_only=True,
-                tag_bam_path=(cluster_bam if TAG_BAM else None),
-                CONTIG_PARALLEL=CONTIG_PARALLEL,
-                CPU=CPU,
-                NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
-                CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
-                NO_CLEANUP=NO_CLEANUP,
-                DEBUG=LRAA_Globals.DEBUG,
-                INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                VERBOSE=VERBOSE,
-            )
-
-    else:
-
-        # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
-        jobs = []
-        for contig_acc in genome_contigs_list:
-            for contig_strand in ("+", "-"):
-                if (
-                    restrict_to_contig_orient is not None
-                    and restrict_to_contig_orient != contig_strand
-                ):
-                    continue
-                jobs.append(
-                    dict(
-                        contig_acc=contig_acc,
-                        contig_strand=contig_strand,
-                        genome_fasta_filename=genome_fasta_filename,
-                        bam_file_for_sg=bam_file_for_sg,
-                        bam_file_for_quant=bam_file_for_quant,
-                        restrict_region_lend=restrict_region_lend,
-                        restrict_region_rend=restrict_region_rend,
-                        input_gtf=input_gtf,
-                        config_overrides=dict(LRAA_Globals.config),
-                        splice_graph_params=splice_graph_params_dict,
-                        run_EM=run_EM,
-                        single_best_only=single_best_only,
-                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                        min_isoform_fraction=min_isoform_fraction,
-                        quant_EM_alpha=quant_EM_alpha,
-                        prereconstruct_info_dir=prereconstruct_info_dir,
-                        ME_only=ME_only,
-                        SE_only=SE_only,
-                        output_prefix=output_prefix,
-                        QUANT_ONLY=QUANT_ONLY,
-                        DEBUG=LRAA_Globals.DEBUG,
-                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                        skip=False,
-                    )
-                )
-
-        # Execute unified path for general (single BAM or discovery) case
-        _run_jobs_schedule_and_merge(
-            jobs=jobs,
-            output_prefix=output_prefix,
-            quant_only=QUANT_ONLY,
-            tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
-            CONTIG_PARALLEL=CONTIG_PARALLEL,
-            CPU=CPU,
-            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
-            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
-            NO_CLEANUP=NO_CLEANUP,
-            DEBUG=LRAA_Globals.DEBUG,
-            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-            VERBOSE=VERBOSE,
-        )
-
     return
 
 
