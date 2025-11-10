@@ -35,6 +35,9 @@ class MultiPath:
         self._splice_graph = splice_graph
 
         self._simple_path = self._merge_paths_to_simple_multi_path(paths_list)
+        self._simple_path_trimmed_tuple = tuple(
+            Simple_path_utils.trim_terminal_spacers(self._simple_path.copy())
+        )
 
         # print(str(self._simple_path))
 
@@ -80,9 +83,18 @@ class MultiPath:
         return self._id
 
     def get_simple_path(self):
-        simple_path = self._simple_path.copy()  # send a copy
-        simple_path = Simple_path_utils.trim_terminal_spacers(simple_path)
-        return simple_path
+        if self._simple_path_trimmed_tuple is None:
+            self._simple_path_trimmed_tuple = tuple(
+                Simple_path_utils.trim_terminal_spacers(self._simple_path.copy())
+            )
+        return list(self._simple_path_trimmed_tuple)
+
+    def get_simple_path_tuple(self):
+        if self._simple_path_trimmed_tuple is None:
+            self._simple_path_trimmed_tuple = tuple(
+                Simple_path_utils.trim_terminal_spacers(self._simple_path.copy())
+            )
+        return self._simple_path_trimmed_tuple
 
     def get_exon_segments(self):
         return self._exon_segments.copy()

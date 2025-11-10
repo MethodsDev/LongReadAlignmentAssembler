@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-import sys, os, re
+import sys, os
 from collections import defaultdict
 import LRAA_Globals
 from LRAA_Globals import SPACER
@@ -164,7 +164,7 @@ def count_exons_in_simple_path(simple_path):
     num_exons = 0
 
     for node_id in simple_path:
-        if re.match("E:", node_id):
+        if node_id.startswith("E:"):
             num_exons += 1
 
     return num_exons
@@ -686,7 +686,7 @@ def refine_TSS_simple_path(splice_graph, simple_path):
 
     TSS_indices = list()
     for i, node_w_coords in enumerate(nodes_with_coords_list):
-        if re.match("TSS:", node_w_coords[0]):
+        if node_w_coords[0].startswith("TSS:"):
             TSS_indices.append(i)
 
     if len(TSS_indices) == 0:
@@ -750,7 +750,7 @@ def refine_TSS_simple_path(splice_graph, simple_path):
         idx_high = len(nodes_with_coords_list) - 2
 
     for i in range(idx_high, idx_low - 1, -1):
-        if re.match("TSS:", nodes_with_coords_list[i][0]):
+        if nodes_with_coords_list[i][0].startswith("TSS:"):
             nodes_with_coords_list.pop(i)
 
     # regenerate the simple path
@@ -774,7 +774,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
 
     polyA_indices = list()
     for i, node_w_coords in enumerate(nodes_with_coords_list):
-        if re.match("POLYA:", node_w_coords[0]):
+        if node_w_coords[0].startswith("POLYA:"):
             polyA_indices.append(i)
 
     if len(polyA_indices) == 0:
@@ -841,7 +841,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
         idx_high = len(nodes_with_coords_list) - 1
 
     for i in range(idx_high, idx_low - 1, -1):
-        if re.match("POLYA:", nodes_with_coords_list[i][0]):
+        if nodes_with_coords_list[i][0].startswith("POLYA:"):
             nodes_with_coords_list.pop(i)
 
     # print(nodes_with_coords_list)
@@ -866,19 +866,19 @@ def trim_TSS_and_PolyA(simple_path, strand):
     polyA_id = None
 
     if strand == "+":
-        if re.match("TSS:", simple_path[0]):
+        if simple_path[0].startswith("TSS:"):
             TSS_id = simple_path[0]
             simple_path = simple_path[1:]
-        if re.match("POLYA:", simple_path[-1]):
+        if simple_path[-1].startswith("POLYA:"):
             polyA_id = simple_path[-1]
             simple_path = simple_path[0:-1]
 
     else:
         # - strand
-        if re.match("POLYA:", simple_path[0]):
+        if simple_path[0].startswith("POLYA:"):
             polyA_id = simple_path[0]
             simple_path = simple_path[1:]
-        if re.match("TSS:", simple_path[-1]):
+        if simple_path[-1].startswith("TSS:"):
             TSS_id = simple_path[-1]
             simple_path = simple_path[0:-1]
 
@@ -935,7 +935,7 @@ def simple_paths_have_identical_intron_representation(
 def get_simple_path_introns(simple_path: list) -> set:
     introns = set()
     for node in simple_path:
-        if re.match("I:", node):
+        if node.startswith("I:"):
             introns.add(node)
 
     return introns
@@ -956,11 +956,11 @@ def read_intron_sequence_is_consecutive_subsequence_of_transcript(
     """
 
     # Extract ordered intron IDs
-    read_introns = [node for node in read_simple_path if re.match("^I:", node)]
+    read_introns = [node for node in read_simple_path if node.startswith("I:")]
     if len(read_introns) == 0:
         return False
 
-    tx_introns = [node for node in transcript_simple_path if re.match("^I:", node)]
+    tx_introns = [node for node in transcript_simple_path if node.startswith("I:")]
 
     # Anchor on first read intron occurrence in transcript intron list
     try:
@@ -986,7 +986,7 @@ def read_introns_match_transcript_introns_overlapping_read_span(
     This ensures no extra transcript introns overlap the read span and that order matches.
     """
     # ordered read introns
-    read_introns = [node for node in read_simple_path if re.match("^I:", node)]
+    read_introns = [node for node in read_simple_path if node.startswith("I:")]
 
     # determine read span using first/last non-SPACER nodes
     trimmed = trim_terminal_spacers(read_simple_path.copy())
@@ -1000,7 +1000,7 @@ def read_introns_match_transcript_introns_overlapping_read_span(
     # ordered transcript introns overlapping read span
     tx_introns_in_span = []
     for node in transcript_simple_path:
-        if re.match("^I:", node):
+        if node.startswith("I:"):
             i_lend, i_rend = sg.get_node_obj_via_id(node).get_coords()
             if i_lend < read_rend and i_rend > read_lend:
                 tx_introns_in_span.append(node)

@@ -1130,12 +1130,26 @@ class LRAA:
         if SPACER in path:
             path = Simple_path_utils.trim_terminal_spacers(path)
 
-        if refine_TSS_simple_path:
+        if (
+            refine_TSS_simple_path
+            and any(
+                isinstance(node, str) and node != SPACER and node.startswith("TSS:")
+                for node in path
+            )
+        ):
             path = Simple_path_utils.refine_TSS_simple_path(
                 self.get_splice_graph(), path
             )
 
-        if refine_PolyA_simple_path:
+        if (
+            refine_PolyA_simple_path
+            and any(
+                isinstance(node, str)
+                and node != SPACER
+                and node.startswith("POLYA:")
+                for node in path
+            )
+        ):
             path = Simple_path_utils.refine_PolyA_simple_path(
                 self.get_splice_graph(), path
             )

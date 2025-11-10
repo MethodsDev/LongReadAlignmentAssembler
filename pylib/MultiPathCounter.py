@@ -75,7 +75,7 @@ class MultiPathCounter:
         assert multipath_obj.get_read_count() > 0
 
         assert type(multipath_obj) == MultiPath.MultiPath
-        multipath_key = str(multipath_obj.get_simple_path())
+        multipath_key = multipath_obj.get_simple_path_tuple()
 
         if multipath_key in self._multipath_counter:
             orig_mp_count_pair = self._multipath_counter[multipath_key]
