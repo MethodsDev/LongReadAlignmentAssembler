@@ -1,3 +1,10 @@
+
+v0.12.0, ********
+- caching initially constructed splice graphs for reuse in downstream quants to avoid reconstruction effort.
+- all splice graphs for all steps leverage the normalized read coverage (not just isoform ID)
+
+
+
 v0.11.0, November 10, 2025
 - LRAA wdls to scatter over the chromosome/strand combo
 - improved multithreading within contigs
