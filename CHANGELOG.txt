@@ -1,3 +1,12 @@
+v0.11.0, November 10, 2025
+- LRAA wdls to scatter over the chromosome/strand combo
+- improved multithreading within contigs
+- more logging and progress monitoring for long running parts
+- using Leiden alg for isoform-to-gene clustering and adjustments for large clusters to avoid runtime performance issues
+- added --verbose to force direct logging to the terminal. When running in default parallel contig mode, all logging info is written to the corresponding chr/strand err log
+
+
+    
 v0.10.0 November 2, 2025
 - Defaults now tuned for non-HiFi long reads (e.g., ONT). Replaced --LowFi flag with --HiFi to enable more stringent PacBio HiFi parameters.
 - HiFi mode sets: min_per_id=98, infer_TSS/PolyA enabled, max_exon_spur_length=13, no splice-boundary aggregation, and fractures splice graph at input transcript bounds.
