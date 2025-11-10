@@ -6,6 +6,9 @@ import pysam
 import argparse
 import subprocess
 import json
+import hashlib
+import pickle
+import tempfile
 from multiprocessing import Process
 from collections import defaultdict, deque
 import random
@@ -50,104 +53,7 @@ prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
 
 
-def _safe_token(token):
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
-
-
-def _normalize_bam_for_splice_graph(
-    input_bam,
-    normalize_max_cov_level,
-    cache_dir,
-    label=None,
-):
-    if normalize_max_cov_level <= 0:
-        return input_bam
-
-    input_path = Path(input_bam).resolve()
-    cache_path = Path(cache_dir).resolve()
-    cache_path.mkdir(parents=True, exist_ok=True)
-
-    base_root = input_path.name
-    if base_root.endswith(".bam"):
-        base_root = base_root[: -len(".bam")]
-    base_root = _safe_token(base_root)
-    if label:
-        base_root = f"{base_root}.{_safe_token(label)}"
-
-    normalized_path = cache_path / f"{base_root}.norm_{normalize_max_cov_level}.bam"
-    checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
-    work_dir = cache_path / f"work_{base_root}"
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    if not checkpoint_path.exists():
-        cmd = [
-            os.path.join(UTILDIR, "normalize_bam_by_strand.py"),
-            "--input_bam",
-            str(input_path),
-            "--normalize_max_cov_level",
-            str(normalize_max_cov_level),
-            "--output_bam",
-            str(normalized_path),
-        ]
-        logger.info(
-            "normalizing BAM for splice-graph construction: %s", input_path.name
-        )
-        logger.debug("Normalization command: %s", " ".join(cmd))
-        subprocess.check_call(cmd, cwd=str(work_dir))
-        checkpoint_path.touch()
-
-    return str(normalized_path)
-
-
-def _merge_bams_for_union(bam_paths, cache_dir, merge_label=None):
-    if not bam_paths:
-        raise RuntimeError("No BAM paths provided for merging")
-    if len(bam_paths) == 1:
-        return bam_paths[0]
-
-    cache_path = Path(cache_dir).resolve()
-    cache_path.mkdir(parents=True, exist_ok=True)
-    merge_label = _safe_token(merge_label or "union")
-    merged_path = cache_path / f"{merge_label}.merged.bam"
-    checkpoint_path = merged_path.parent / (merged_path.name + ".ok")
-
-    if not checkpoint_path.exists():
-        cmd = ["samtools", "merge", "-f", str(merged_path)]
-        cmd.extend(str(Path(p).resolve()) for p in bam_paths)
-        logger.info(
-            "merging normalized BAM files for splice-graph construction: %s",
-            " ".join(cmd),
-        )
-        subprocess.check_call(cmd, cwd=str(cache_path))
-        subprocess.check_call(["samtools", "index", str(merged_path)], cwd=str(cache_path))
-        checkpoint_path.touch()
-
-    return str(merged_path)
-
-
-def _prepare_cluster_union_bam(
-    cluster_bams,
-    normalize_max_cov_level,
-    cache_dir,
-    output_prefix,
-):
-    normalized_inputs = []
-    for cb in cluster_bams:
-        cluster_label = f"cluster_{cb['id']}"
-        normalized_inputs.append(
-            _normalize_bam_for_splice_graph(
-                cb["bam"], normalize_max_cov_level, cache_dir, label=cluster_label
-            )
-        )
-
-    merge_label = f"{_safe_token(output_prefix)}.cluster_union"
-    merged_bam = _merge_bams_for_union(normalized_inputs, cache_dir, merge_label)
-    final_norm = _normalize_bam_for_splice_graph(
-        merged_bam, normalize_max_cov_level, cache_dir
-    )
-    return final_norm
-
-
+# keep main() at the top
 def main():
     # CLI: define arguments and groups
     parser = argparse.ArgumentParser(
@@ -1016,6 +922,11 @@ def main():
 
     # No preload of input transcripts; parse per (contig,strand) uniformly in both serial and parallel paths
 
+    splice_graph_cache_root = os.path.join(
+        os.getcwd(), f"__{_safe_token(output_prefix)}.sgcache"
+    )
+    _register_splice_graph_cache_dir(splice_graph_cache_root)
+
     ##----------------------------------------------
     ## Begin, target each contig separately
 
@@ -1049,6 +960,7 @@ def main():
             INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
             VERBOSE=VERBOSE,
             splice_graph_params_dict=splice_graph_params_dict,
+            splice_graph_cache_root=splice_graph_cache_root,
         )
 
     else:
@@ -1086,6 +998,7 @@ def main():
                         QUANT_ONLY=QUANT_ONLY,
                         DEBUG=LRAA_Globals.DEBUG,
                         INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                        splice_graph_cache_dir=splice_graph_cache_root,
                         skip=False,
                     )
                 )
@@ -1106,7 +1019,334 @@ def main():
             VERBOSE=VERBOSE,
         )
 
+    _cleanup_registered_splice_graph_caches(
+        debug_mode=LRAA_Globals.DEBUG, no_cleanup=NO_CLEANUP
+    )
+
     return
+
+
+
+
+def _safe_token(token):
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
+
+
+SPLICE_GRAPH_CACHE_VERSION = 1
+_REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
+_SPLICE_GRAPH_CONFIG_KEYS = [
+    "min_alt_splice_freq",
+    "min_alt_unspliced_freq",
+    "min_feature_frac_overlap",
+    "max_exon_spur_length",
+    "aggregate_adjacent_splice_boundaries",
+    "aggregate_splice_boundary_dist",
+    "fracture_splice_graph_at_input_transcript_bounds",
+    "max_path_nodes_per_component",
+    "infer_TSS",
+    "max_dist_between_alt_TSS_sites",
+    "min_alignments_define_TSS_site",
+    "max_soft_clip_at_TSS",
+    "min_TSS_iso_fraction",
+    "TSS_window_read_enrich_len",
+    "TSS_window_read_enrich_factor",
+    "infer_PolyA",
+    "max_dist_between_alt_polyA_sites",
+    "min_alignments_define_polyA_site",
+    "min_frac_alignments_define_polyA_site",
+    "min_PolyA_ident_length",
+    "min_PolyA_iso_fraction",
+    "max_soft_clip_at_PolyA",
+    "min_soft_clip_PolyA_base_frac_for_conversion",
+]
+
+
+
+
+
+
+def _register_splice_graph_cache_dir(path):
+    if not path:
+        return
+    _REGISTERED_SPLICE_GRAPH_CACHE_DIRS.add(os.path.abspath(path))
+
+
+def _cleanup_registered_splice_graph_caches(debug_mode=False, no_cleanup=False):
+    if debug_mode or no_cleanup:
+        return
+    for root in sorted(_REGISTERED_SPLICE_GRAPH_CACHE_DIRS):
+        try:
+            abs_root = os.path.abspath(root)
+            if os.path.isdir(abs_root):
+                shutil.rmtree(abs_root)
+        except Exception as exc:
+            logger.warning("failed to remove splice-graph cache directory %s: %s", root, exc)
+
+
+def _normalize_for_digest(value):
+    if isinstance(value, dict):
+        return {k: _normalize_for_digest(value[k]) for k in sorted(value.keys())}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_for_digest(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _stable_digest_for_obj(obj):
+    normalized = _normalize_for_digest(obj)
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _splice_graph_config_digest():
+    subset = {k: LRAA_Globals.config.get(k) for k in _SPLICE_GRAPH_CONFIG_KEYS}
+    return _stable_digest_for_obj(subset)
+
+
+def _snapshot_splice_graph_params():
+    return {
+        "read_aln_gap_merge_int": getattr(Splice_graph, "_read_aln_gap_merge_int", None),
+        "inter_exon_segment_merge_dist": getattr(
+            Splice_graph, "_inter_exon_segment_merge_dist", None
+        ),
+        "max_genomic_contig_length": getattr(Splice_graph, "_max_genomic_contig_length", None),
+        "min_alt_splice_freq": getattr(Splice_graph, "_min_alt_splice_freq", None),
+        "min_alt_unspliced_freq": getattr(Splice_graph, "_min_alt_unspliced_freq", None),
+        "max_intron_length_for_exon_segment_filtering": getattr(
+            Splice_graph, "_max_intron_length_for_exon_segment_filtering", None
+        ),
+        "min_intron_support": getattr(Splice_graph, "_min_intron_support", None),
+        "min_terminal_splice_exon_anchor_length": getattr(
+            Splice_graph, "_min_terminal_splice_exon_anchor_length", None
+        ),
+        "remove_unspliced_introns": getattr(Splice_graph, "_remove_unspliced_introns", None),
+    }
+
+
+def _compute_splice_graph_cache_entry(
+    contig_acc,
+    contig_strand,
+    bam_file_for_sg,
+    restrict_region_lend,
+    restrict_region_rend,
+    transcripts,
+    quant_mode,
+):
+    sg_params = _snapshot_splice_graph_params()
+    if isinstance(bam_file_for_sg, (list, tuple, set)):
+        bam_value = sorted([os.path.realpath(str(x)) for x in bam_file_for_sg])
+    elif bam_file_for_sg is None:
+        bam_value = None
+    else:
+        bam_value = os.path.realpath(str(bam_file_for_sg))
+    signature = {
+        "contig": contig_acc,
+        "strand": contig_strand,
+        "bam": bam_value,
+        "region": [restrict_region_lend, restrict_region_rend],
+        "config_digest": _splice_graph_config_digest(),
+        "sg_params": sg_params,
+    }
+    cache_key = hashlib.sha256(
+        json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return cache_key, signature
+
+
+def _splice_graph_cache_path(cache_dir, cache_key, signature):
+    cache_dir = os.path.abspath(cache_dir)
+    contig_token = _safe_token(str(signature.get("contig") or "contig"))
+    strand_token = signature.get("strand") or "NA"
+    digest_prefix = cache_key[:16]
+    filename = f"{contig_token}.{strand_token}.{digest_prefix}.pkl"
+    return os.path.join(cache_dir, filename)
+
+
+def _load_splice_graph_from_cache(cache_dir, cache_key, signature):
+    try:
+        cache_path = _splice_graph_cache_path(cache_dir, cache_key, signature)
+        if not os.path.exists(cache_path):
+            return None
+        with open(cache_path, "rb") as fh:
+            payload = pickle.load(fh)
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("version") != SPLICE_GRAPH_CACHE_VERSION:
+            return None
+        if payload.get("signature") != signature:
+            return None
+        sg_obj = payload.get("splice_graph")
+        if not isinstance(sg_obj, Splice_graph):
+            return None
+        logger.info(
+            "[cache] reuse splice graph %s (%s, strand=%s) : %s",
+            cache_key[:12],
+            signature.get("contig"),
+            signature.get("strand"),
+            cache_path
+        )
+        return sg_obj
+    except Exception as exc:
+        logger.warning("failed to load cached splice graph (%s): %s", cache_key[:12], exc)
+        return None
+
+
+def _store_splice_graph_in_cache(cache_dir, cache_key, signature, splice_graph_obj):
+    try:
+        cache_path = _splice_graph_cache_path(cache_dir, cache_key, signature)
+        target_dir = os.path.dirname(cache_path)
+        os.makedirs(target_dir, exist_ok=True)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "rb") as fh:
+                    payload = pickle.load(fh)
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("version") == SPLICE_GRAPH_CACHE_VERSION
+                    and payload.get("signature") == signature
+                ):
+                    logger.info(
+                        "[cache] already stored splice graph %s (%s, strand=%s)",
+                        cache_key[:12],
+                        signature.get("contig"),
+                        signature.get("strand"),
+                    )
+                    return cache_path
+            except Exception:
+                pass
+            try:
+                os.remove(cache_path)
+                logger.info(
+                    "[cache] replacing stale splice graph %s (%s, strand=%s)",
+                    cache_key[:12],
+                    signature.get("contig"),
+                    signature.get("strand"),
+                )
+            except Exception:
+                pass
+        payload = {
+            "version": SPLICE_GRAPH_CACHE_VERSION,
+            "signature": signature,
+            "splice_graph": splice_graph_obj,
+        }
+        fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix=f"{cache_key}.", suffix=".tmp")
+        os.close(fd)
+        try:
+            with open(tmp_path, "wb") as fh:
+                pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, cache_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        logger.info(
+            "[cache] stored splice graph %s (%s, strand=%s) at %s",
+            cache_key[:12],
+            signature.get("contig"),
+            signature.get("strand"),
+            cache_path,
+        )
+        return cache_path
+    except Exception as exc:
+        logger.warning("failed to store splice graph cache (%s): %s", cache_key[:12], exc)
+        return None
+
+
+def _normalize_bam_for_splice_graph(
+    input_bam,
+    normalize_max_cov_level,
+    cache_dir,
+    label=None,
+):
+    if normalize_max_cov_level <= 0:
+        return input_bam
+
+    input_path = Path(input_bam).resolve()
+    cache_path = Path(cache_dir).resolve()
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    base_root = input_path.name
+    if base_root.endswith(".bam"):
+        base_root = base_root[: -len(".bam")]
+    base_root = _safe_token(base_root)
+    if label:
+        base_root = f"{base_root}.{_safe_token(label)}"
+
+    normalized_path = cache_path / f"{base_root}.norm_{normalize_max_cov_level}.bam"
+    checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
+    work_dir = cache_path / f"work_{base_root}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    if not checkpoint_path.exists():
+        cmd = [
+            os.path.join(UTILDIR, "normalize_bam_by_strand.py"),
+            "--input_bam",
+            str(input_path),
+            "--normalize_max_cov_level",
+            str(normalize_max_cov_level),
+            "--output_bam",
+            str(normalized_path),
+        ]
+        logger.info(
+            "normalizing BAM for splice-graph construction: %s", input_path.name
+        )
+        logger.debug("Normalization command: %s", " ".join(cmd))
+        subprocess.check_call(cmd, cwd=str(work_dir))
+        checkpoint_path.touch()
+
+    return str(normalized_path)
+
+
+def _merge_bams_for_union(bam_paths, cache_dir, merge_label=None):
+    if not bam_paths:
+        raise RuntimeError("No BAM paths provided for merging")
+    if len(bam_paths) == 1:
+        return bam_paths[0]
+
+    cache_path = Path(cache_dir).resolve()
+    cache_path.mkdir(parents=True, exist_ok=True)
+    merge_label = _safe_token(merge_label or "union")
+    merged_path = cache_path / f"{merge_label}.merged.bam"
+    checkpoint_path = merged_path.parent / (merged_path.name + ".ok")
+
+    if not checkpoint_path.exists():
+        cmd = ["samtools", "merge", "-f", str(merged_path)]
+        cmd.extend(str(Path(p).resolve()) for p in bam_paths)
+        logger.info(
+            "merging normalized BAM files for splice-graph construction: %s",
+            " ".join(cmd),
+        )
+        subprocess.check_call(cmd, cwd=str(cache_path))
+        subprocess.check_call(["samtools", "index", str(merged_path)], cwd=str(cache_path))
+        checkpoint_path.touch()
+
+    return str(merged_path)
+
+
+def _prepare_cluster_union_bam(
+    cluster_bams,
+    normalize_max_cov_level,
+    cache_dir,
+    output_prefix,
+):
+    normalized_inputs = []
+    for cb in cluster_bams:
+        cluster_label = f"cluster_{cb['id']}"
+        normalized_inputs.append(
+            _normalize_bam_for_splice_graph(
+                cb["bam"], normalize_max_cov_level, cache_dir, label=cluster_label
+            )
+        )
+
+    merge_label = f"{_safe_token(output_prefix)}.cluster_union"
+    merged_bam = _merge_bams_for_union(normalized_inputs, cache_dir, merge_label)
+    final_norm = _normalize_bam_for_splice_graph(
+        merged_bam, normalize_max_cov_level, cache_dir
+    )
+    return final_norm
 
 
 
@@ -1649,6 +1889,8 @@ def _contig_job_runner(job):
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
+    splice_graph_cache_dir = job.get("splice_graph_cache_dir")
+
     # Establish a persistent per-worker error log and route stderr to it ONLY when requested.
     # If REDIRECT_STDERR is False (no parallel contig processing), keep stderr on terminal for interactive clarity.
     err_log_path = f"{tmp_prefix}.err.log"
@@ -1897,6 +2139,7 @@ def _contig_job_runner(job):
                     job["run_EM"],
                     job["prereconstruct_info_dir"],
                     report_quants=True,
+                    splice_graph_cache_dir=splice_graph_cache_dir,
                 )
             else:
                 run_transcript_assembly(
@@ -1920,6 +2163,7 @@ def _contig_job_runner(job):
                     job["prereconstruct_info_dir"],
                     job["ME_only"],
                     job["SE_only"],
+                    splice_graph_cache_dir=splice_graph_cache_dir,
                 )
 
         ofh_quant.close()
@@ -2018,6 +2262,7 @@ def _execute_multi_cluster_quant_only(
     INCLUDE_PRELIM_TRANSCRIPTS,
     VERBOSE,
     splice_graph_params_dict,
+    splice_graph_cache_root,
 ):
     """Run quant-only jobs for each cluster while reusing a shared splice-graph evidence set."""
 
@@ -2064,6 +2309,7 @@ def _execute_multi_cluster_quant_only(
                         QUANT_ONLY=True,
                         DEBUG=DEBUG,
                         INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                        splice_graph_cache_dir=splice_graph_cache_root,
                         skip=False,
                     )
                 )
@@ -2560,6 +2806,8 @@ def run_quant_only(
     run_EM,
     prereconstruct_info_dir,
     report_quants=True,
+    prebuilt_splice_graph=None,
+    splice_graph_cache_dir=None,
 ):
 
     # get path assignments for the input transcripts
@@ -2572,25 +2820,57 @@ def run_quant_only(
         # continue
         return
 
-    sg = Splice_graph()
+    cache_key = None
+    cache_signature = None
+    sg = prebuilt_splice_graph
 
-    # for quant only, build sg only based on the input gtf and not the alignments in the bam
-    sg.build_splice_graph_for_contig(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        input_transcripts,
-        quant_mode=True,
-        restrict_splice_type=None,
-    )
+    if splice_graph_cache_dir:
+        cache_key, cache_signature = _compute_splice_graph_cache_entry(
+            contig_acc,
+            contig_strand,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            input_transcripts,
+            quant_mode=True,
+        )
+        if sg is None:
+            sg = _load_splice_graph_from_cache(
+                splice_graph_cache_dir, cache_key, cache_signature
+            )
+
+    built_new_graph = False
+    if sg is None:
+        sg = Splice_graph()
+        sg.build_splice_graph_for_contig(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            input_transcripts,
+            quant_mode=True,
+            restrict_splice_type=None,
+        )
+        built_new_graph = True
+    elif prebuilt_splice_graph is not None:
+        built_new_graph = True
 
     if sg.is_empty():
         logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
         # continue
         return
+
+    if (
+        splice_graph_cache_dir
+        and cache_key
+        and cache_signature
+        and built_new_graph
+    ):
+        _store_splice_graph_in_cache(
+            splice_graph_cache_dir, cache_key, cache_signature, sg
+        )
 
     if LRAA_Globals.DEBUG:
         sg.write_intron_exon_splice_graph_bed_files(
@@ -2704,6 +2984,7 @@ def run_transcript_assembly(
     prereconstruct_info_dir,
     ME_only,
     SE_only,
+    splice_graph_cache_dir=None,
 ):
 
     ##---------------------
@@ -2772,8 +3053,6 @@ def run_transcript_assembly(
         return
 
     ## Build final Splice Graph
-    sg_all = Splice_graph()
-    logger.info(f"\n// -building splice graph for {contig_acc}")
     transcripts_incl_in_graph = list(all_transcripts)
     if input_transcripts is not None:
         # include only those input transcripts consistent with ME/SE restrictions
@@ -2788,17 +3067,46 @@ def run_transcript_assembly(
         else:
             transcripts_incl_in_graph += input_transcripts
 
-    sg_all.build_splice_graph_for_contig(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_sg,
-        restrict_region_lend,
-        restrict_region_rend,
-        transcripts_incl_in_graph,
-        quant_mode=False,
-        restrict_splice_type=None,
-    )
+    sg_all = None
+    cache_key = None
+    cache_signature = None
+    if splice_graph_cache_dir and transcripts_incl_in_graph:
+        cache_key, cache_signature = _compute_splice_graph_cache_entry(
+            contig_acc,
+            contig_strand,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            transcripts_incl_in_graph,
+            quant_mode=False,
+        )
+        sg_all = _load_splice_graph_from_cache(
+            splice_graph_cache_dir, cache_key, cache_signature
+        )
+
+    if sg_all is None:
+        logger.info(f"\n// -building splice graph for {contig_acc}")
+        sg_all = Splice_graph()
+        sg_all.build_splice_graph_for_contig(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_sg,
+            restrict_region_lend,
+            restrict_region_rend,
+            transcripts_incl_in_graph,
+            quant_mode=False,
+            restrict_splice_type=None,
+        )
+        if (
+            splice_graph_cache_dir
+            and cache_key
+            and cache_signature
+            and not sg_all.is_empty()
+        ):
+            _store_splice_graph_in_cache(
+                splice_graph_cache_dir, cache_key, cache_signature, sg_all
+            )
 
     lraa_all_obj = LRAA(sg_all, CPU)
 
@@ -3109,6 +3417,7 @@ def run_transcript_assembly(
         run_EM,
         prereconstruct_info_dir,
         report_quants=False,
+        splice_graph_cache_dir=splice_graph_cache_dir,
     )
 
     # reset
