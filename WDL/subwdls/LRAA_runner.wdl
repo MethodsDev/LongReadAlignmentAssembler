@@ -14,6 +14,7 @@ task LRAA_runner_task {
     # Optional: disable contig-level parallelization inside LRAA.
     # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
     Boolean no_parallelize_contigs = false
+        String? contig
         
         Int? num_total_reads
         Float? min_per_id
@@ -51,7 +52,8 @@ task LRAA_runner_task {
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
-                                ~{"--region " + region} \
+                                 ~{if defined(contig) then "--contig " + contig else ""} \
+                                 ~{if defined(region) then "--region " + region else ""} \
                                 ~{"--oversimplify " + oversimplify} \
                                  ~{"--min_per_id " + min_per_id} \
                                  ~{no_norm_flag} \
@@ -120,6 +122,7 @@ workflow LRAA_runner {
         String? oversimplify
         # Expose toggle to workflow as well; default false here and override to true from scatter callers.
         Boolean no_parallelize_contigs = false
+        String? contig
         
         Int? num_total_reads
         Float? min_per_id
@@ -153,6 +156,7 @@ workflow LRAA_runner {
             HiFi = HiFi,
             oversimplify = oversimplify,
             no_parallelize_contigs = no_parallelize_contigs,
+            contig = contig,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
