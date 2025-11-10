@@ -9,6 +9,7 @@ import json
 from multiprocessing import Process
 from collections import defaultdict, deque
 import random
+from pathlib import Path
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "pylib"])
@@ -48,6 +49,103 @@ single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
 
+
+def _safe_token(token):
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
+
+
+def _normalize_bam_for_splice_graph(
+    input_bam,
+    normalize_max_cov_level,
+    cache_dir,
+    label=None,
+):
+    if normalize_max_cov_level <= 0:
+        return input_bam
+
+    input_path = Path(input_bam).resolve()
+    cache_path = Path(cache_dir).resolve()
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    base_root = input_path.name
+    if base_root.endswith(".bam"):
+        base_root = base_root[: -len(".bam")]
+    base_root = _safe_token(base_root)
+    if label:
+        base_root = f"{base_root}.{_safe_token(label)}"
+
+    normalized_path = cache_path / f"{base_root}.norm_{normalize_max_cov_level}.bam"
+    checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
+    work_dir = cache_path / f"work_{base_root}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    if not checkpoint_path.exists():
+        cmd = [
+            os.path.join(UTILDIR, "normalize_bam_by_strand.py"),
+            "--input_bam",
+            str(input_path),
+            "--normalize_max_cov_level",
+            str(normalize_max_cov_level),
+            "--output_bam",
+            str(normalized_path),
+        ]
+        logger.info(
+            "normalizing BAM for splice-graph construction: %s", input_path.name
+        )
+        logger.debug("Normalization command: %s", " ".join(cmd))
+        subprocess.check_call(cmd, cwd=str(work_dir))
+        checkpoint_path.touch()
+
+    return str(normalized_path)
+
+
+def _merge_bams_for_union(bam_paths, cache_dir, merge_label=None):
+    if not bam_paths:
+        raise RuntimeError("No BAM paths provided for merging")
+    if len(bam_paths) == 1:
+        return bam_paths[0]
+
+    cache_path = Path(cache_dir).resolve()
+    cache_path.mkdir(parents=True, exist_ok=True)
+    merge_label = _safe_token(merge_label or "union")
+    merged_path = cache_path / f"{merge_label}.merged.bam"
+    checkpoint_path = merged_path.parent / (merged_path.name + ".ok")
+
+    if not checkpoint_path.exists():
+        cmd = ["samtools", "merge", "-f", str(merged_path)]
+        cmd.extend(str(Path(p).resolve()) for p in bam_paths)
+        logger.info(
+            "merging normalized BAM files for splice-graph construction: %s",
+            " ".join(cmd),
+        )
+        subprocess.check_call(cmd, cwd=str(cache_path))
+        subprocess.check_call(["samtools", "index", str(merged_path)], cwd=str(cache_path))
+        checkpoint_path.touch()
+
+    return str(merged_path)
+
+
+def _prepare_cluster_union_bam(
+    cluster_bams,
+    normalize_max_cov_level,
+    cache_dir,
+    output_prefix,
+):
+    normalized_inputs = []
+    for cb in cluster_bams:
+        cluster_label = f"cluster_{cb['id']}"
+        normalized_inputs.append(
+            _normalize_bam_for_splice_graph(
+                cb["bam"], normalize_max_cov_level, cache_dir, label=cluster_label
+            )
+        )
+
+    merge_label = f"{_safe_token(output_prefix)}.cluster_union"
+    merged_bam = _merge_bams_for_union(normalized_inputs, cache_dir, merge_label)
+    final_norm = _normalize_bam_for_splice_graph(
+        merged_bam, normalize_max_cov_level, cache_dir
+    )
+    return final_norm
 
 
 def main():
@@ -634,7 +732,7 @@ def main():
 
     if args.LowFi:
         sys.exit(
-            "Error: --LowFi has been removed. Defaults are now tuned for LowFi reads. Use --HiFi to enable the more stringent HiFi parameters."
+            "Error: --LowFi has been removed. Use --HiFi to enable the more stringent HiFi parameters."
         )
 
     if args.HiFi:
@@ -778,11 +876,48 @@ def main():
             )
             subprocess.check_call("samtools index " + bam_filename, shell=True)
 
-    ## perform normalization prior to assembly
-    pre_norm_bam_filename = bam_filename
+    normalization_enabled = (not NO_NORM) and (args.normalize_max_cov_level > 0)
+    normalization_cache_dir = None
+    if normalization_enabled:
+        normalization_cache_dir = os.path.join(
+            os.getcwd(), f"__{_safe_token(output_prefix)}.norm_cache"
+        )
+        Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
 
-    bam_file_for_quant = pre_norm_bam_filename
-    bam_file_for_sg = pre_norm_bam_filename
+    bam_file_for_quant = None
+    bam_file_for_sg = None
+
+    if MULTI_CLUSTER_BAMS:
+        if normalization_enabled:
+            bam_file_for_sg = _prepare_cluster_union_bam(
+                cluster_bams,
+                args.normalize_max_cov_level,
+                normalization_cache_dir,
+                output_prefix,
+            )
+            logger.info(
+                "splice-graph evidence will use normalized cluster union: %s",
+                bam_file_for_sg,
+            )
+        else:
+            bam_file_for_sg = [cb["bam"] for cb in cluster_bams]
+            logger.info(
+                "splice-graph evidence will use raw cluster union of %d BAMs",
+                len(bam_file_for_sg),
+            )
+    else:
+        bam_file_for_quant = bam_filename
+        if normalization_enabled:
+            bam_file_for_sg = _normalize_bam_for_splice_graph(
+                bam_filename,
+                args.normalize_max_cov_level,
+                normalization_cache_dir,
+            )
+            logger.info(
+                "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
+            )
+        else:
+            bam_file_for_sg = bam_filename
 
     if not MULTI_CLUSTER_BAMS:
         if args.num_total_reads is None:
@@ -802,38 +937,6 @@ def main():
             )
             if args.num_total_reads == 0:
                 raise RuntimeError("Error, number of total reads is set to zero.")
-
-    if (not QUANT_ONLY) and (not NO_NORM) and (args.normalize_max_cov_level > 0):
-
-        SS_bamsifter_prog = os.path.sep.join(
-            [
-                UTILDIR,
-                "normalize_bam_by_strand.py",
-            ]
-        )
-
-        norm_bam_filename = (
-            os.path.basename(bam_filename) + f".norm_{args.normalize_max_cov_level}.bam"
-        )
-
-        cmd = " ".join(
-            [
-                SS_bamsifter_prog,
-                f" --input_bam {bam_filename}",
-                f" --normalize_max_cov_level {args.normalize_max_cov_level} ",
-                f" --output_bam {norm_bam_filename} ",
-            ]
-        )
-
-        norm_bam_checkpoint = norm_bam_filename + ".ok"
-        if not os.path.exists(norm_bam_checkpoint):
-            logger.info("generating normalized bam file")
-            logger.info(cmd)
-            subprocess.check_call(cmd, shell=True)
-
-            subprocess.check_call(f"touch {norm_bam_checkpoint}", shell=True)
-
-        bam_file_for_sg = norm_bam_filename
 
     ###########################################
     ## on to isoform discovery / reconstruction
@@ -931,6 +1034,7 @@ def main():
             NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
             min_isoform_fraction=min_isoform_fraction,
             quant_EM_alpha=quant_EM_alpha,
+            cluster_union_bam_for_sg=bam_file_for_sg,
             prereconstruct_info_dir=prereconstruct_info_dir,
             ME_only=ME_only,
             SE_only=SE_only,
@@ -1899,6 +2003,7 @@ def _execute_multi_cluster_quant_only(
     NO_FILTER_ISOFORMS,
     min_isoform_fraction,
     quant_EM_alpha,
+    cluster_union_bam_for_sg,
     prereconstruct_info_dir,
     ME_only,
     SE_only,
@@ -1915,8 +2020,6 @@ def _execute_multi_cluster_quant_only(
     splice_graph_params_dict,
 ):
     """Run quant-only jobs for each cluster while reusing a shared splice-graph evidence set."""
-
-    union_bams_for_sg = [cb["bam"] for cb in cluster_bams]
 
     for cb in cluster_bams:
         cluster_id = cb["id"]
@@ -1942,7 +2045,7 @@ def _execute_multi_cluster_quant_only(
                         contig_acc=contig_acc,
                         contig_strand=contig_strand,
                         genome_fasta_filename=genome_fasta_filename,
-                        bam_file_for_sg=union_bams_for_sg,
+                        bam_file_for_sg=cluster_union_bam_for_sg,
                         bam_file_for_quant=cluster_bam,
                         restrict_region_lend=restrict_region_lend,
                         restrict_region_rend=restrict_region_rend,
