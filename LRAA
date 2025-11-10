@@ -31,7 +31,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.11.0-predev1"
+VERSION = "v0.11.0-predev2"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -1026,8 +1026,6 @@ def main():
     return
 
 
-
-
 def _safe_token(token):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
 
@@ -1061,10 +1059,6 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
 ]
 
 
-
-
-
-
 def _register_splice_graph_cache_dir(path):
     if not path:
         return
@@ -1080,7 +1074,9 @@ def _cleanup_registered_splice_graph_caches(debug_mode=False, no_cleanup=False):
             if os.path.isdir(abs_root):
                 shutil.rmtree(abs_root)
         except Exception as exc:
-            logger.warning("failed to remove splice-graph cache directory %s: %s", root, exc)
+            logger.warning(
+                "failed to remove splice-graph cache directory %s: %s", root, exc
+            )
 
 
 def _normalize_for_digest(value):
@@ -1106,13 +1102,19 @@ def _splice_graph_config_digest():
 
 def _snapshot_splice_graph_params():
     return {
-        "read_aln_gap_merge_int": getattr(Splice_graph, "_read_aln_gap_merge_int", None),
+        "read_aln_gap_merge_int": getattr(
+            Splice_graph, "_read_aln_gap_merge_int", None
+        ),
         "inter_exon_segment_merge_dist": getattr(
             Splice_graph, "_inter_exon_segment_merge_dist", None
         ),
-        "max_genomic_contig_length": getattr(Splice_graph, "_max_genomic_contig_length", None),
+        "max_genomic_contig_length": getattr(
+            Splice_graph, "_max_genomic_contig_length", None
+        ),
         "min_alt_splice_freq": getattr(Splice_graph, "_min_alt_splice_freq", None),
-        "min_alt_unspliced_freq": getattr(Splice_graph, "_min_alt_unspliced_freq", None),
+        "min_alt_unspliced_freq": getattr(
+            Splice_graph, "_min_alt_unspliced_freq", None
+        ),
         "max_intron_length_for_exon_segment_filtering": getattr(
             Splice_graph, "_max_intron_length_for_exon_segment_filtering", None
         ),
@@ -1120,7 +1122,9 @@ def _snapshot_splice_graph_params():
         "min_terminal_splice_exon_anchor_length": getattr(
             Splice_graph, "_min_terminal_splice_exon_anchor_length", None
         ),
-        "remove_unspliced_introns": getattr(Splice_graph, "_remove_unspliced_introns", None),
+        "remove_unspliced_introns": getattr(
+            Splice_graph, "_remove_unspliced_introns", None
+        ),
     }
 
 
@@ -1184,11 +1188,13 @@ def _load_splice_graph_from_cache(cache_dir, cache_key, signature):
             cache_key[:12],
             signature.get("contig"),
             signature.get("strand"),
-            cache_path
+            cache_path,
         )
         return sg_obj
     except Exception as exc:
-        logger.warning("failed to load cached splice graph (%s): %s", cache_key[:12], exc)
+        logger.warning(
+            "failed to load cached splice graph (%s): %s", cache_key[:12], exc
+        )
         return None
 
 
@@ -1230,7 +1236,9 @@ def _store_splice_graph_in_cache(cache_dir, cache_key, signature, splice_graph_o
             "signature": signature,
             "splice_graph": splice_graph_obj,
         }
-        fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix=f"{cache_key}.", suffix=".tmp")
+        fd, tmp_path = tempfile.mkstemp(
+            dir=target_dir, prefix=f"{cache_key}.", suffix=".tmp"
+        )
         os.close(fd)
         try:
             with open(tmp_path, "wb") as fh:
@@ -1251,7 +1259,9 @@ def _store_splice_graph_in_cache(cache_dir, cache_key, signature, splice_graph_o
         )
         return cache_path
     except Exception as exc:
-        logger.warning("failed to store splice graph cache (%s): %s", cache_key[:12], exc)
+        logger.warning(
+            "failed to store splice graph cache (%s): %s", cache_key[:12], exc
+        )
         return None
 
 
@@ -1320,7 +1330,9 @@ def _merge_bams_for_union(bam_paths, cache_dir, merge_label=None):
             " ".join(cmd),
         )
         subprocess.check_call(cmd, cwd=str(cache_path))
-        subprocess.check_call(["samtools", "index", str(merged_path)], cwd=str(cache_path))
+        subprocess.check_call(
+            ["samtools", "index", str(merged_path)], cwd=str(cache_path)
+        )
         checkpoint_path.touch()
 
     return str(merged_path)
@@ -1347,8 +1359,6 @@ def _prepare_cluster_union_bam(
         merged_bam, normalize_max_cov_level, cache_dir
     )
     return final_norm
-
-
 
 
 def _append_without_first_line(src_path, dst_fh):
@@ -2862,12 +2872,7 @@ def run_quant_only(
         # continue
         return
 
-    if (
-        splice_graph_cache_dir
-        and cache_key
-        and cache_signature
-        and built_new_graph
-    ):
+    if splice_graph_cache_dir and cache_key and cache_signature and built_new_graph:
         _store_splice_graph_in_cache(
             splice_graph_cache_dir, cache_key, cache_signature, sg
         )
