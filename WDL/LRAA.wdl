@@ -57,45 +57,48 @@ workflow LRAA_wf {
             }
      
                   
-        scatter (i in range(length(splitByChr.chromosomeBAMs))) {
-            String contig_name = basename(splitByChr.chromosomeBAMs[i], ".bam")
-            scatter (strand in target_strands) {
-                # Run LRAA separately per chromosome/strand combination by forwarding --contig <chr><strand>
-                Int strand_index = if (strand == "+") then 0 else 1
-                Int shard_index = i * length(target_strands) + strand_index
-                call LRAA_runner.LRAA_runner as LRAA_scatter {
-                    input:
-                        sample_id = sample_id,
-                        shardno = shard_index,
-                        inputBAM = splitByChr.chromosomeBAMs[i],
-                        genome_fasta = splitByChr.chromosomeFASTAs[i],
-                        annot_gtf = splitByChr.chromosomeGTFs[i],
-                        oversimplify = oversimplify,
-                        # In scatter mode, disable contig-level parallelism inside each shard to prevent double-parallelization
-                        no_parallelize_contigs = true,
-                        contig = contig_name + strand,
-                        num_total_reads = count_bam.count,
-                        min_per_id = min_per_id,
-                        quant_only = quant_only,
-                        HiFi = HiFi,
-                        no_norm = no_norm,
-                        no_EM = no_EM,
-                        cell_barcode_tag = cell_barcode_tag,
-                        read_umi_tag = read_umi_tag,
-                        numThreads = numThreads,
-                        min_mapping_quality = min_mapping_quality,
-                        docker = docker,
-                        memoryGB = memoryGB,
-                        diskSizeGB = diskSizeGB
-                }
+        Int num_chromosomes = length(splitByChr.chromosomeBAMs)
+        Int num_strands = length(target_strands)
+        Array[Int] shard_indices = range(num_chromosomes * num_strands)
+
+        scatter (shard_index in shard_indices) {
+            Int contig_index = shard_index / num_strands
+            Int strand_index = shard_index - contig_index * num_strands
+            String strand = target_strands[strand_index]
+            String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
+            # Run LRAA separately per chromosome/strand combination by forwarding --contig <chr><strand>
+            call LRAA_runner.LRAA_runner as LRAA_scatter {
+                input:
+                    sample_id = sample_id,
+                    shardno = shard_index,
+                    inputBAM = splitByChr.chromosomeBAMs[contig_index],
+                    genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
+                    annot_gtf = splitByChr.chromosomeGTFs[contig_index],
+                    oversimplify = oversimplify,
+                    # In scatter mode, disable contig-level parallelism inside each shard to prevent double-parallelization
+                    no_parallelize_contigs = true,
+                    contig = contig_name + strand,
+                    num_total_reads = count_bam.count,
+                    min_per_id = min_per_id,
+                    quant_only = quant_only,
+                    HiFi = HiFi,
+                    no_norm = no_norm,
+                    no_EM = no_EM,
+                    cell_barcode_tag = cell_barcode_tag,
+                    read_umi_tag = read_umi_tag,
+                    numThreads = numThreads,
+                    min_mapping_quality = min_mapping_quality,
+                    docker = docker,
+                    memoryGB = memoryGB,
+                    diskSizeGB = diskSizeGB
             }
         }
 
         # Always merge quant outputs regardless of quant_only
         call mergeQuantResults {
             input:
-                quantExprFiles = flatten(LRAA_scatter.LRAA_quant_expr),
-                quantTrackingFiles = flatten(LRAA_scatter.LRAA_quant_tracking),
+                quantExprFiles = LRAA_scatter.LRAA_quant_expr,
+                quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
                 outputFilePrefix = sample_id + ".LRAA",
                 docker = docker,
         }
@@ -104,7 +107,7 @@ workflow LRAA_wf {
         if (!quant_only) {
             call merge_GTFs {
                 input:
-                    gtfFiles = select_all(flatten(LRAA_scatter.LRAA_gtf)),
+                    gtfFiles = select_all(LRAA_scatter.LRAA_gtf),
                     outputFilePrefix = sample_id + ".LRAA",
                     docker = docker,
             }
