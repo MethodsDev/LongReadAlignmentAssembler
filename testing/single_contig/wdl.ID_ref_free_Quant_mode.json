@@ -2,5 +2,6 @@
     "LRAA_wf.sample_id" : "test.ID_ref_free_Quant_mode",
     "LRAA_wf.inputBAM" : "pacbio.PBLR.small.bam",
     "LRAA_wf.referenceGenome" : "ref_genome.fa",
+    "LRAA_wf.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing"
 
 }
