@@ -20,12 +20,15 @@ workflow LRAA_cell_cluster_guided {
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
+        Int numThreadsPerWorker = 2
+        Int numThreadsPerWorkerScattered = 9
+        Int num_parallel_contigs = 7
         Int numThreadsPerLRAA = 4
         Int memoryGBperLRAA = 16
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
         Int memoryGBscSparseMatrices = 16
-        Int diskSizeGB = 128
+        Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Boolean quant_only_cluster_guided = false
 
@@ -71,7 +74,9 @@ workflow LRAA_cell_cluster_guided {
                     oversimplify = oversimplify,
                     main_chromosomes = main_chromosomes,
                     quant_only = false,
-                    numThreads = numThreadsPerLRAA,
+                    numThreadsPerWorker = numThreadsPerWorker,
+                    numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
+                    num_parallel_contigs = num_parallel_contigs,
                     memoryGB  = memoryGBperLRAA,
                     docker = docker
             }
