@@ -37,6 +37,8 @@ task LRAA_runner_task {
         Int numThreadsPerWorker
         Int memoryGB = 32
         Int diskSizeGB = 128
+        Int progress_report_interval_seconds = 300
+        Int progress_tail_lines = 20
     }
 
     String no_norm_flag = if (no_norm && !quant_only) then "--no_norm" else ""
@@ -50,6 +52,22 @@ task LRAA_runner_task {
 
         set -ex
 
+        : > command_output.log
+
+        progress_reporter() {
+            while sleep ~{progress_report_interval_seconds}; do
+                if [[ -s command_output.log ]]; then
+                    echo "----- LRAA progress $(date) -----" >&2
+                    tail -n ~{progress_tail_lines} command_output.log >&2 || true
+                    echo "----- end progress -----" >&2
+                fi
+            done
+        }
+
+        progress_reporter &
+        progress_pid=$!
+
+        set +e
         (        
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
@@ -75,12 +93,19 @@ task LRAA_runner_task {
                                  ~{if defined(num_parallel_contigs) then "--num_parallel_contigs " + num_parallel_contigs else ""} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
-        ) || {
-             echo "Command failed with exit code $?" >&2
-             echo "Last 100 lines of output:" >&2
-             tail -n 100 command_output.log >&2
-             exit 1
-        }
+        )
+        cmd_status=$?
+        set -e
+
+        kill $progress_pid 2>/dev/null || true
+        wait $progress_pid 2>/dev/null || true
+
+        if [[ $cmd_status -ne 0 ]]; then
+            echo "Command failed with exit code $cmd_status" >&2
+            echo "Last 100 lines of output:" >&2
+            tail -n 100 command_output.log >&2 || true
+            exit $cmd_status
+        fi
 
         if [[ -f ~{output_prefix_use}.~{output_suffix}.quant.tracking ]]; then
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
@@ -149,6 +174,8 @@ workflow LRAA_runner {
     
         Int memoryGB = 32
         Int diskSizeGB = 128
+        Int progress_report_interval_seconds = 300
+        Int progress_tail_lines = 20
     }
 
     call LRAA_runner_task {
@@ -179,8 +206,10 @@ workflow LRAA_runner {
             docker=docker,
             numThreadsPerWorker=numThreadsPerWorker,
             memoryGB=memoryGB,
-            diskSizeGB=diskSizeGB,
-            region=region
+         diskSizeGB=diskSizeGB,
+         region=region,
+         progress_report_interval_seconds=progress_report_interval_seconds,
+         progress_tail_lines=progress_tail_lines
      }
 
      output {

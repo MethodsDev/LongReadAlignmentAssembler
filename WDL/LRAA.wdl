@@ -29,10 +29,10 @@ workflow LRAA_wf {
         # CPU cores to allocate per contig worker (--num_threads_per_worker) for non-scattered runs
         Int numThreadsPerWorker = 2
         # CPU cores to allocate per contig worker when the workflow scatters over contigs/strands
-        Int numThreadsPerWorkerScattered = 9
+        Int numThreadsPerWorkerScattered = 5
         # Number of concurrent contig workers (--num_parallel_contigs)
-        Int num_parallel_contigs = 7
-        Int memoryGB = 32
+        Int num_parallel_contigs = 3
+        Int memoryGB = 64
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         
