@@ -91,24 +91,22 @@ class MultiPathCounter:
                 incoming_ids = set()
 
             if incoming_ids:
-                try:
-                    existing_ids = orig_mp.get_read_ids()
-                except Exception:
-                    existing_ids = set()
-                new_unique_ids = incoming_ids - existing_ids
-                # merge provenance IDs first
+                # merge provenance IDs first and learn how many were genuinely new
                 try:
                     if hasattr(orig_mp, "merge_read_ids"):
-                        orig_mp.merge_read_ids(incoming_ids)
+                        newly_added = orig_mp.merge_read_ids(incoming_ids)
+                    else:
+                        newly_added = 0
                 except Exception:
-                    pass
+                    newly_added = 0
+
                 # increment count only by truly new unique IDs
-                if len(new_unique_ids) > 0:
-                    orig_mp_count_pair.increment(len(new_unique_ids))
+                if newly_added and newly_added > 0:
+                    orig_mp_count_pair.increment(newly_added)
 
                 # DEBUG guardrail: ensure count equals number of unique IDs
                 if LRAA_Globals.DEBUG:
-                    unique_ct = len(orig_mp.get_read_ids())
+                    unique_ct = orig_mp.get_read_id_count()
                     if unique_ct != orig_mp_count_pair.get_count():
                         raise RuntimeError(
                             f"MultiPathCounter invariant violated: count={orig_mp_count_pair.get_count()} != unique_ids={unique_ct} for path {multipath_key}"

@@ -578,18 +578,27 @@ class MultiPath:
     def merge_read_ids(self, read_ids):
         """
         Merge a collection of compact read IDs into this MultiPath without adjusting read_count.
-        IDs are coerced to int; invalid values are ignored.
+        Returns the number of *new* unique IDs added so the caller can keep external
+        counters in sync without having to materialize the existing ID set (which can be large).
         """
         if read_ids is None:
-            return
+            return 0
+
+        added = 0
         try:
             for rid in read_ids:
                 try:
-                    self._read_ids.add(int(rid))
+                    rid_int = int(rid)
                 except Exception:
                     continue
+
+                if rid_int not in self._read_ids:
+                    self._read_ids.add(rid_int)
+                    added += 1
         except Exception:
-            pass
+            return added
+
+        return added
 
 
 def __get_dummy_splice_graph():
