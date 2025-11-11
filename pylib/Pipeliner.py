@@ -9,6 +9,7 @@ import subprocess
 import shlex
 import shutil
 import time
+import random
 from inspect import getframeinfo, stack
 import threading
 
@@ -196,15 +197,20 @@ class ParallelCommandList(object):
 
         ## run parallel command series, no more than _num_threads simultaneously.
 
+        # shuffle commands to avoid front-loading large jobs (uses stable ids for checkpoints)
+        indexed_cmds = list(enumerate(self._cmdlist))
+        random.shuffle(indexed_cmds)
+
         cmd_idx = 0
-        while cmd_idx < len(self._cmdlist):
+        total_cmds = len(indexed_cmds)
+        while cmd_idx < total_cmds:
 
             if self._num_running < self._num_threads:
 
-                cmdstr = self._cmdlist[cmd_idx]
+                orig_idx, cmdstr = indexed_cmds[cmd_idx]
 
                 checkpoint_file = "{}.tid-{}".format(
-                    parallel_job_checkpoint_file, cmd_idx
+                    parallel_job_checkpoint_file, orig_idx
                 )
 
                 cmdobj = Command(cmdstr, checkpoint_file, ignore_error=True)
