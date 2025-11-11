@@ -713,8 +713,10 @@ class LRAA:
             SE_read_encapsulation_mask=SE_read_encapsulation_mask,
         )
 
-        # must redo base coverage and exon coverage assignments
-        self._splice_graph.reset_exon_coverage_via_pretty_alignments(pretty_alignments)
+
+        # actually not using the updated base coverage, so can skip for now.
+        #  - disabling # must redo base coverage and exon coverage assignments
+        # - disabling # self._splice_graph.reset_exon_coverage_via_pretty_alignments(pretty_alignments)
 
         # grouping read alignments according to read pairings (for illumina PE data):
         # group alignments:  grouped_alignments['read_name'] = list(read1_pretty_alignment, read2_pretty_alignment, ...)
