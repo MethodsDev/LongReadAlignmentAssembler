@@ -15,8 +15,8 @@ test_parallel:
 # Quick timing harness to compare serial vs parallelized contig processing
 # Produces: bench.summary.tsv with real/user/sys times for both modes
 bench: bench_clean
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup ) 2> serial.time.txt
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --CPU 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup ) 2> parallel.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --num_threads_per_worker 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup ) 2> serial.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --num_threads_per_worker 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup ) 2> parallel.time.txt
 	@echo -e "mode\tCPU\treal\tuser\tsys" > bench.summary.tsv
 	@SER_REAL=`grep '^real' serial.time.txt | awk '{print $$2}'`; \
 	 SER_USER=`grep '^user' serial.time.txt | awk '{print $$2}'`; \

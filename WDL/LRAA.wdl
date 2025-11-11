@@ -26,7 +26,10 @@ workflow LRAA_wf {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
-        Int numThreads = 4
+        # CPU cores to allocate per contig worker (--num_threads_per_worker)
+        Int numThreadsPerWorker = 1
+        # Number of concurrent contig workers (--num_parallel_contigs)
+        Int num_parallel_contigs = 4
         Int memoryGB = 32
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
@@ -86,7 +89,7 @@ workflow LRAA_wf {
                     no_EM = no_EM,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    numThreads = numThreads,
+                    numThreadsPerWorker = numThreadsPerWorker,
                     min_mapping_quality = min_mapping_quality,
                     docker = docker,
                     memoryGB = memoryGB,
@@ -131,7 +134,8 @@ workflow LRAA_wf {
                 no_EM = no_EM,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
-                numThreads = numThreads,
+                numThreadsPerWorker = numThreadsPerWorker,
+                num_parallel_contigs = num_parallel_contigs,
                 min_mapping_quality = min_mapping_quality,
                 docker = docker,
                 memoryGB = memoryGB,

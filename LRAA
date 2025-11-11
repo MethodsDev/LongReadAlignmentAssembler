@@ -45,8 +45,8 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
-num_threads = 4
-CPU = num_threads
+default_threads_per_worker = 1
+CPU = default_threads_per_worker  # legacy global name retained for compatibility
 allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
@@ -104,7 +104,7 @@ def main():
     primary.add_argument(
         "--oversimplify",
         type=str,
-        default=None,
+        default="chrM,M",
         help=(
             "comma/space-separated contig names to treat with simplified best-overlap assignment (quant-only with --gtf only); "
             "on these contigs, reads are assigned to the single best-overlapping reference transcript and EM is bypassed"
@@ -130,7 +130,18 @@ def main():
         help="during assembly, keep only the single best isoform per gene",
     )
     primary.add_argument(
-        "--CPU", type=int, default=num_threads, help="maximum CPU cores to use"
+        "--num_threads_per_worker",
+        type=int,
+        default=default_threads_per_worker,
+        help="CPU cores to dedicate to each contig/strand worker",
+    )
+    # Backward compatibility: accept legacy --CPU flag without advertising it
+    primary.add_argument(
+        "--CPU",
+        type=int,
+        dest="num_threads_per_worker",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     primary.add_argument(
         "--ME_only",
@@ -184,7 +195,14 @@ def main():
         "--no_parallelize_contigs",
         action="store_true",
         default=False,
-        help="disable contig/strand-level parallelization; use --CPU for within-contig/component multithreading",
+        help="disable contig/strand-level parallelization (overrides --num_parallel_contigs); use --CPU for within-contig/component multithreading",
+    )
+
+    parser.add_argument(
+        "--num_parallel_contigs",
+        type=int,
+        default=4,
+        help="maximum number of contig/strand workers to launch concurrently (default: 4)",
     )
 
     parser.add_argument(
@@ -499,7 +517,12 @@ def main():
     # ensure global vars used by helper functions are updated
     global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS
     single_best_only = args.single_best_only
-    CPU = args.CPU
+    CPU = args.num_threads_per_worker
+    if CPU < 1:
+        sys.exit("Error: --num_threads_per_worker must be at least 1")
+    NUM_PARALLEL_CONTIGS = args.num_parallel_contigs
+    if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS < 1:
+        sys.exit("Error: --num_parallel_contigs must be at least 1")
     QUANT_ONLY = args.quant_only
     TAG_BAM = args.tag_bam
     input_gtf = args.gtf
@@ -521,6 +544,12 @@ def main():
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
     # By default, parallelize contigs; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
+    if not CONTIG_PARALLEL:
+        if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS != 1:
+            logger.info(
+                "--no_parallelize_contigs specified; forcing --num_parallel_contigs to 1"
+            )
+        NUM_PARALLEL_CONTIGS = 1
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
@@ -952,6 +981,7 @@ def main():
             output_prefix=output_prefix,
             TAG_BAM=TAG_BAM,
             CONTIG_PARALLEL=CONTIG_PARALLEL,
+            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
             CPU=CPU,
             NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
             CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
@@ -1010,6 +1040,7 @@ def main():
             quant_only=QUANT_ONLY,
             tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
             CONTIG_PARALLEL=CONTIG_PARALLEL,
+            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
             CPU=CPU,
             NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
             CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
@@ -1483,6 +1514,7 @@ def _run_jobs_schedule_and_merge(
     quant_only,
     tag_bam_path,
     CONTIG_PARALLEL,
+    NUM_PARALLEL_CONTIGS,
     CPU,
     NO_RESUME_PARALLEL,
     CLEAN_PARALLEL_TMP,
@@ -1491,7 +1523,14 @@ def _run_jobs_schedule_and_merge(
     INCLUDE_PRELIM_TRANSCRIPTS,
     VERBOSE=False,
 ):
-    """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging."""
+    """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging.
+
+    Respects NUM_PARALLEL_CONTIGS for worker concurrency; each worker receives the full --num_threads_per_worker allotment.
+    """
+
+    if not jobs:
+        logger.info("No contig/strand jobs to run; skipping scheduler")
+        return
 
     # Warn if debug/prelim with parallelism due to artifact clobbering
     if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
@@ -1517,27 +1556,42 @@ def _run_jobs_schedule_and_merge(
         pass
 
     # Determine pool size and cores per worker
+    threads_per_worker = CPU if CPU and CPU > 0 else 1
+
     if CONTIG_PARALLEL:
-        requested_pool = max(1, min(CPU, len(jobs)))
-        pool_size = requested_pool
+        if NUM_PARALLEL_CONTIGS is not None:
+            pool_target = max(1, NUM_PARALLEL_CONTIGS)
+        else:
+            pool_target = 1
+            if len(jobs) > 1:
+                logger.info(
+                    "--num_parallel_contigs not set; defaulting to sequential contig processing (set flag to enable parallel workers)."
+                )
+        pool_size = min(pool_target, len(jobs))
+        pool_size = max(1, pool_size)
         if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
             pool_size = 1
-        CPU_inner = 1 if pool_size > 1 else max(1, CPU)
     else:
         pool_size = 1
-        CPU_inner = max(1, CPU)
 
     # Set per-job CPU and whether worker should redirect stderr to per-contig log
     # We only redirect when running multiple workers concurrently; unless --verbose is set, in which case keep terminal output.
     redirect_stderr = True if (pool_size > 1 and not VERBOSE) else False
     for j in jobs:
-        j["CPU_inner"] = CPU_inner
+        j["CPU_inner"] = threads_per_worker
         j["REDIRECT_STDERR"] = redirect_stderr
         j["VERBOSE"] = VERBOSE
 
     logger.info(
-        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; per-job inner CPU={CPU_inner} (CPU cap={CPU}; {'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
+        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; threads per worker={threads_per_worker} (mode={'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
     )
+    if pool_size > 1:
+        try:
+            logger.info(
+                f"Estimated total cores in use (workers × threads per worker): {pool_size * threads_per_worker}"
+            )
+        except Exception:
+            pass
     # Explicitly report how logs will be routed for this run
     try:
         logger.info(
@@ -2264,6 +2318,7 @@ def _execute_multi_cluster_quant_only(
     output_prefix,
     TAG_BAM,
     CONTIG_PARALLEL,
+    NUM_PARALLEL_CONTIGS,
     CPU,
     NO_RESUME_PARALLEL,
     CLEAN_PARALLEL_TMP,
@@ -2330,6 +2385,7 @@ def _execute_multi_cluster_quant_only(
             quant_only=True,
             tag_bam_path=(cluster_bam if TAG_BAM else None),
             CONTIG_PARALLEL=CONTIG_PARALLEL,
+            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
             CPU=CPU,
             NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
             CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,

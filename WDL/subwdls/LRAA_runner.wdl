@@ -11,10 +11,11 @@ task LRAA_runner_task {
         Boolean HiFi = false
         String? region
         String? oversimplify
-    # Optional: disable contig-level parallelization inside LRAA.
-    # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
-    Boolean no_parallelize_contigs = false
+        # Optional: disable contig-level parallelization inside LRAA.
+        # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
+        Boolean no_parallelize_contigs = false
         String? contig
+        Int? num_parallel_contigs
         
         Int? num_total_reads
         Float? min_per_id
@@ -32,7 +33,8 @@ task LRAA_runner_task {
 
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-        Int numThreads
+        # CPU cores per contig worker (passed to --num_threads_per_worker)
+        Int numThreadsPerWorker
         Int memoryGB = 32
         Int diskSizeGB = 128
     }
@@ -54,22 +56,23 @@ task LRAA_runner_task {
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
                                  ~{if defined(contig) then "--contig " + contig else ""} \
                                  ~{if defined(region) then "--region " + region else ""} \
-                                ~{"--oversimplify " + oversimplify} \
-                                 ~{"--min_per_id " + min_per_id} \
+                                 ~{if defined(oversimplify) then "--oversimplify " + oversimplify else ""} \
+                                 ~{if defined(min_per_id) then "--min_per_id " + min_per_id else ""} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
-                                 --CPU ~{numThreads} \
-                                 ~{"--min_mapping_quality " + min_mapping_quality } \
-                                 ~{"--min_isoform_fraction " + min_isoform_fraction} \
-                                 ~{"--min_monoexonic_TPM " + min_monoexonic_TPM} \
+                                 --num_threads_per_worker ~{numThreadsPerWorker} \
+                                 ~{if defined(min_mapping_quality) then "--min_mapping_quality " + min_mapping_quality else ""} \
+                                 ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
+                                 ~{if defined(min_monoexonic_TPM) then "--min_monoexonic_TPM " + min_monoexonic_TPM else ""} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
-                                 ~{"--min_alt_splice_freq " + min_alt_splice_freq} \
-                                 ~{"--min_alt_unspliced_freq " + min_alt_unspliced_freq} \
-                                 ~{"--gtf " + annot_gtf} \
-                                 ~{"--num_total_reads " + num_total_reads} \
+                                 ~{if defined(min_alt_splice_freq) then "--min_alt_splice_freq " + min_alt_splice_freq else ""} \
+                                 ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \
+                                 ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
+                                 ~{if defined(num_total_reads) then "--num_total_reads " + num_total_reads else ""} \
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
+                                 ~{if defined(num_parallel_contigs) then "--num_parallel_contigs " + num_parallel_contigs else ""} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
         ) || {
@@ -101,7 +104,7 @@ task LRAA_runner_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 30
-        cpu: "~{numThreads}"
+        cpu: "~{numThreadsPerWorker}"
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{diskSizeGB} HDD"
     }
@@ -123,6 +126,7 @@ workflow LRAA_runner {
         # Expose toggle to workflow as well; default false here and override to true from scatter callers.
         Boolean no_parallelize_contigs = false
         String? contig
+        Int? num_parallel_contigs
         
         Int? num_total_reads
         Float? min_per_id
@@ -140,7 +144,8 @@ workflow LRAA_runner {
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-        Int numThreads
+        # CPU cores per contig worker (passed to --num_threads_per_worker)
+        Int numThreadsPerWorker
     
         Int memoryGB = 32
         Int diskSizeGB = 128
@@ -157,6 +162,7 @@ workflow LRAA_runner {
             oversimplify = oversimplify,
             no_parallelize_contigs = no_parallelize_contigs,
             contig = contig,
+            num_parallel_contigs = num_parallel_contigs,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
             no_EM=no_EM, 
@@ -171,7 +177,7 @@ workflow LRAA_runner {
             read_umi_tag = read_umi_tag,
             shardno=shardno,
             docker=docker,
-            numThreads=numThreads,
+            numThreadsPerWorker=numThreadsPerWorker,
             memoryGB=memoryGB,
             diskSizeGB=diskSizeGB,
             region=region
