@@ -22,9 +22,12 @@ workflow LRAA_singlecell_wf {
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
 
     # Resources and docker (propagated to subcalls where applicable)
-    Int numThreads = 4
-    Int memoryGB = 32
-    Int diskSizeGB = 128
+    Int numThreadsPerWorker = 2
+    Int numThreadsPerWorkerScattered = 5
+    Int num_parallel_contigs = 3
+    Int numThreadsPerLRAA = 4
+    Int memoryGB = 64
+    Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
     # Seurat clustering parameters (forwarded to Seurat subworkflow)
@@ -49,7 +52,9 @@ workflow LRAA_singlecell_wf {
       oversimplify = oversimplify,
       main_chromosomes = main_chromosomes,
       region = region,
-      numThreads = numThreads,
+      numThreadsPerWorker = numThreadsPerWorker,
+      numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
+      num_parallel_contigs = num_parallel_contigs,
       memoryGB = memoryGB,
       diskSizeGB = diskSizeGB,
       docker = docker
@@ -92,7 +97,10 @@ workflow LRAA_singlecell_wf {
       HiFi = HiFi,
       oversimplify = oversimplify,
       main_chromosomes = main_chromosomes,
-      numThreadsPerLRAA = numThreads,
+      numThreadsPerWorker = numThreadsPerWorker,
+      numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
+      num_parallel_contigs = num_parallel_contigs,
+      numThreadsPerLRAA = numThreadsPerLRAA,
       memoryGBperLRAA = 16,
       memoryGBmergeGTFs = 32,
       memoryGBquantFinal = 32,
@@ -116,8 +124,8 @@ workflow LRAA_singlecell_wf {
     File seurat_cluster_assignments = cluster_cells.cluster_assignments_tsv
 
     # Final cluster-guided outputs (main deliverables)
-  File? final_gtf = cluster_guided.LRAA_final_gtf
-  File? final_gtf_tracking = cluster_guided.LRAA_final_gtf_tracking
+    File? final_gtf = cluster_guided.LRAA_final_gtf
+    File? final_gtf_tracking = cluster_guided.LRAA_final_gtf_tracking
     File final_tracking = cluster_guided.LRAA_final_tracking
     File final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz

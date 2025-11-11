@@ -28,8 +28,9 @@ workflow LRAA_wf {
 
         # CPU cores to allocate per contig worker (--num_threads_per_worker) for non-scattered runs
         Int numThreadsPerWorker = 2
-        # CPU cores to allocate per contig worker when the workflow scatters over contigs/strands
+        # CPU cores to allocate per contig worker when the workflow scatters over chromosomes
         Int numThreadsPerWorkerScattered = 5
+        Int memoryGBPerWorkerScattered = 32
         # Number of concurrent contig workers (--num_parallel_contigs)
         Int num_parallel_contigs = 3
         Int memoryGB = 64
@@ -40,7 +41,6 @@ workflow LRAA_wf {
     }
 
     Boolean run_without_splitting = (main_chromosomes == "" || defined(region))
-    Array[String] target_strands = ["+", "-"]
     
     if (!run_without_splitting) {
 
@@ -63,26 +63,20 @@ workflow LRAA_wf {
      
                   
         Int num_chromosomes = length(splitByChr.chromosomeBAMs)
-        Int num_strands = length(target_strands)
-        Array[Int] shard_indices = range(num_chromosomes * num_strands)
 
-        scatter (shard_index in shard_indices) {
-            Int contig_index = shard_index / num_strands
-            Int strand_index = shard_index - contig_index * num_strands
-            String strand = target_strands[strand_index]
+        scatter (contig_index in range(num_chromosomes)) {
             String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
-            # Run LRAA separately per chromosome/strand combination by forwarding --contig <chr><strand>
+            # Run LRAA separately per chromosome while keeping contig-level parallelism enabled within each shard
             call LRAA_runner.LRAA_runner as LRAA_scatter {
                 input:
                     sample_id = sample_id,
-                    shardno = shard_index,
+                    shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
                     genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,
-                    # In scatter mode, disable contig-level parallelism inside each shard to prevent double-parallelization
-                    no_parallelize_contigs = true,
-                    contig = contig_name + strand,
+                    contig = contig_name,
+                    num_parallel_contigs = num_parallel_contigs,
                     num_total_reads = count_bam.count,
                     min_per_id = min_per_id,
                     quant_only = quant_only,
