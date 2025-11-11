@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Disk-backed read-name registry mapping long read names <-> compact integer IDs.
+Persistent (disk-backed) or in-memory read-name registry mapping long read names <-> compact integer IDs.
 
 Primary backend: LMDB (if available). Fallback: SQLite3 (bundled with Python).
 
@@ -35,9 +35,19 @@ class ReadNameStore:
         """
         # Allow forcing backend via env var for portability/debugging
         force_backend = os.environ.get("LRAA_READSTORE_BACKEND", "").lower()
-        self._use_lmdb = _HAS_LMDB and (force_backend not in ("sqlite", "sql", "s"))
+        self._use_memory = force_backend in {"memory", "mem", "ram", "inmemory"}
+        self._use_lmdb = (
+            not self._use_memory
+            and _HAS_LMDB
+            and (force_backend not in ("sqlite", "sql", "s"))
+        )
         self._closed = False
-        if self._use_lmdb:
+        if self._use_memory:
+            self._path = None
+            self._name_to_id = {}
+            self._id_to_name = {}
+            self._next_id = 1
+        elif self._use_lmdb:
             # LMDB expects a directory; create if not exists
             self._path = db_path_base if os.path.isdir(db_path_base) else db_path_base + ".lmdb"
             os.makedirs(self._path, exist_ok=True)
@@ -124,6 +134,15 @@ class ReadNameStore:
             self._ops_since_commit += 1
             self._commit_wtxn_if_needed(False)
             return new_id
+        elif self._use_memory:
+            existing = self._name_to_id.get(name)
+            if existing is not None:
+                return existing
+            rid = self._next_id
+            self._next_id += 1
+            self._name_to_id[name] = rid
+            self._id_to_name[rid] = name
+            return rid
         else:
             cur = self._conn.cursor()
             try:
@@ -144,6 +163,8 @@ class ReadNameStore:
             with self._env.begin(db=self._db_name2id) as txn:
                 val = txn.get(key_name)
                 return int(val.decode("ascii")) if val is not None else None
+        elif self._use_memory:
+            return self._name_to_id.get(name)
         else:
             cur = self._conn.cursor()
             cur.execute("SELECT id FROM read_names WHERE name=?", (name,))
@@ -156,6 +177,8 @@ class ReadNameStore:
             with self._env.begin(db=self._db_id2name) as txn:
                 val = txn.get(key_id)
                 return val.decode("utf-8") if val is not None else None
+        elif self._use_memory:
+            return self._id_to_name.get(int(rid))
         else:
             cur = self._conn.cursor()
             cur.execute("SELECT name FROM read_names WHERE id=?", (int(rid),))
@@ -174,7 +197,7 @@ class ReadNameStore:
                 except Exception:
                     pass
                 self._env.close()
-            else:
+            elif not self._use_memory:
                 self._conn.close()
         except Exception:
             pass
@@ -185,7 +208,7 @@ class ReadNameStore:
             if self._use_lmdb:
                 self._commit_wtxn_if_needed(True)
             else:
-                # noop for sqlite
+                # noop for sqlite/memory backends
                 pass
         except Exception:
             pass

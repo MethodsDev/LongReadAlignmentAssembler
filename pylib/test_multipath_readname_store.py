@@ -22,7 +22,7 @@ def build_minimal_sg():
 
 
 def test_multipath_external_store_read_names_and_count(tmp_path):
-    # Initialize external stores (will use SQLite fallback by default)
+    # Initialize external stores (default backend is in-memory)
     base = tmp_path / "readstore"
     os.makedirs(base, exist_ok=True)
     LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
@@ -54,3 +54,30 @@ def test_multipath_external_store_read_names_and_count(tmp_path):
     if LG.MP_READ_ID_STORE is not None:
         LG.MP_READ_ID_STORE.close()
         LG.MP_READ_ID_STORE = None
+
+
+def test_memory_backend_roundtrip(monkeypatch):
+    monkeypatch.setenv("LRAA_READSTORE_BACKEND", "memory")
+    try:
+        name_store = ReadNameStore("unused")
+        rid_a = name_store.get_or_add("readA")
+        rid_b = name_store.get_or_add("readB")
+        assert rid_a != rid_b
+        assert name_store.get_or_add("readA") == rid_a
+        assert name_store.get_id("readB") == rid_b
+        assert name_store.get_name(rid_a) == "readA"
+
+        mp_store = MpReadIdStore("unused")
+        mp_store.append("mp1", rid_a)
+        mp_store.append("mp1", rid_b)
+        mp_store.append("mp1", rid_a)
+
+        assert mp_store.count("mp1") == 3
+        streamed = list(mp_store.iter_read_ids("mp1"))
+        assert streamed.count(rid_a) == 2
+        assert streamed.count(rid_b) == 1
+
+        name_store.close()
+        mp_store.close()
+    finally:
+        monkeypatch.delenv("LRAA_READSTORE_BACKEND", raising=False)

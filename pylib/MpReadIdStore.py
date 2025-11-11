@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Disk-backed mapping from MultiPath IDs -> stream of read IDs (ints).
+Persistent (disk-backed) or in-memory mapping from MultiPath IDs -> stream of read IDs (ints).
 
 Primary backend: LMDB (if available). Fallback: SQLite3.
 
@@ -31,9 +31,17 @@ except Exception:
 class MpReadIdStore:
     def __init__(self, db_path_base: str):
         force_backend = os.environ.get("LRAA_READSTORE_BACKEND", "").lower()
-        self._use_lmdb = _HAS_LMDB and (force_backend not in ("sqlite", "sql", "s"))
+        self._use_memory = force_backend in {"memory", "mem", "ram", "inmemory"}
+        self._use_lmdb = (
+            not self._use_memory
+            and _HAS_LMDB
+            and (force_backend not in ("sqlite", "sql", "s"))
+        )
         self._closed = False
-        if self._use_lmdb:
+        if self._use_memory:
+            self._path = None
+            self._mp_to_reads = {}
+        elif self._use_lmdb:
             self._path = db_path_base if os.path.isdir(db_path_base) else db_path_base + ".lmdb"
             os.makedirs(self._path, exist_ok=True)
             relaxed = os.environ.get("LRAA_LMDB_RELAXED", "1").lower() not in ("0", "false", "no")
@@ -102,6 +110,9 @@ class MpReadIdStore:
             txn.put(key, str(int(read_id)).encode("ascii"), db=self._db_pairs)
             self._ops_since_commit += 1
             self._commit_wtxn_if_needed(False)
+        elif self._use_memory:
+            bucket = self._mp_to_reads.setdefault(mp_id, [])
+            bucket.append(int(read_id))
         else:
             self._conn.execute(
                 "INSERT INTO mp_reads(mp_id, read_id) VALUES (?, ?)", (mp_id, int(read_id))
@@ -123,6 +134,9 @@ class MpReadIdStore:
                                 continue
                     else:
                         return
+        elif self._use_memory:
+            for rid in self._mp_to_reads.get(mp_id, ()):  # empty tuple avoids branch
+                yield int(rid)
         else:
             cur = self._conn.cursor()
             cur.execute("SELECT read_id FROM mp_reads WHERE mp_id=?", (mp_id,))
@@ -133,6 +147,8 @@ class MpReadIdStore:
         if self._use_lmdb:
             # Count by iterating; sufficient for reporting
             return sum(1 for _ in self.iter_read_ids(mp_id))
+        elif self._use_memory:
+            return len(self._mp_to_reads.get(mp_id, ()))
         else:
             cur = self._conn.cursor()
             cur.execute("SELECT COUNT(1) FROM mp_reads WHERE mp_id=?", (mp_id,))
@@ -150,7 +166,7 @@ class MpReadIdStore:
                 except Exception:
                     pass
                 self._env.close()
-            else:
+            elif not self._use_memory:
                 self._conn.close()
         except Exception:
             pass
@@ -160,7 +176,7 @@ class MpReadIdStore:
             if self._use_lmdb:
                 self._commit_wtxn_if_needed(True)
             else:
-                # noop for sqlite
+                # noop for sqlite/memory backends
                 pass
         except Exception:
             pass

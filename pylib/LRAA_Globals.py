@@ -186,9 +186,9 @@ config = {
     "mp_prune_progress_every_n": 10000,
     ######
     # disk-backed storage backend for read tracking stores
-    # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite'
-    # default changed to 'sqlite' for robustness on diverse filesystems
-    "store_backend": "sqlite",
+    # choices: 'auto' (prefer lmdb if available, else sqlite), 'lmdb', 'sqlite', 'memory'
+    # default changed to 'memory' for faster runs when persistence is unnecessary
+    "store_backend": "memory",
     ######
     # oversimplify (best-overlap) mode
     # When enabled via CLI --oversimplify <contig[,contig2,...]>, specified contigs in quant-only runs

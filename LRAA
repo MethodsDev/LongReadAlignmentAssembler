@@ -381,12 +381,13 @@ def main():
     config_group.add_argument(
         "--store_backend",
         default=LRAA_Globals.config.get("store_backend", "auto"),
-        choices=["auto", "lmdb", "sqlite"],
+        choices=["auto", "lmdb", "sqlite", "memory"],
         help=(
-            "disk-backed storage backend for read tracking (ReadNameStore/MpReadIdStore):\n"
+            "storage backend for read tracking (ReadNameStore/MpReadIdStore, default: memory):\n"
             "  auto: prefer lmdb if installed, otherwise sqlite;\n"
             "  lmdb: require python-lmdb (fast, read-scalable);\n"
-            "  sqlite: maximum portability (built-in)."
+            "  sqlite: maximum portability (built-in);\n"
+            "  memory: hold stores in RAM (fastest, not persisted)."
         ),
     )
 
@@ -645,6 +646,11 @@ def main():
         # force sqlite
         try:
             os.environ["LRAA_READSTORE_BACKEND"] = "sqlite"
+        except Exception:
+            pass
+    elif resolved_backend == "memory":
+        try:
+            os.environ["LRAA_READSTORE_BACKEND"] = "memory"
         except Exception:
             pass
     else:
