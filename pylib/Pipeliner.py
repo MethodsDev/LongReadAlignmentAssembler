@@ -171,7 +171,7 @@ class ParallelCommandThread(threading.Thread):
 
 class ParallelCommandList(object):
 
-    def __init__(self, cmdlist, checkpoint, num_threads, ignore_error=False):
+    def __init__(self, cmdlist, checkpoint, num_threads, ignore_error=False, shuffle=False):
 
         self._cmdlist = cmdlist
         self._checkpoint = checkpoint
@@ -179,6 +179,7 @@ class ParallelCommandList(object):
         self._ignore_error = ignore_error
         self._num_running = 0
         self._num_errors = 0
+        self._shuffle = shuffle
 
     def run(self, checkpoint_dir):
 
@@ -197,9 +198,10 @@ class ParallelCommandList(object):
 
         ## run parallel command series, no more than _num_threads simultaneously.
 
-        # shuffle commands to avoid front-loading large jobs (uses stable ids for checkpoints)
+        # Optionally randomize execution order to avoid front-loading heavy jobs
         indexed_cmds = list(enumerate(self._cmdlist))
-        random.shuffle(indexed_cmds)
+        if self._shuffle:
+            random.shuffle(indexed_cmds)
 
         cmd_idx = 0
         total_cmds = len(indexed_cmds)

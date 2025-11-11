@@ -225,6 +225,12 @@ def main():
         default=False,
         help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
     )
+    parser.add_argument(
+        "--no_shuffle_parallel_jobs",
+        action="store_true",
+        default=False,
+        help="preserve contig/strand job submission order (shuffling is enabled by default)",
+    )
 
     ## debug params
 
@@ -555,6 +561,7 @@ def main():
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
     MONITOR_RESOURCES = not args.no_monitor_resources
+    SHUFFLE_PARALLEL_JOBS = not args.no_shuffle_parallel_jobs
 
     # if args.collapse:
     #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
@@ -997,6 +1004,7 @@ def main():
             VERBOSE=VERBOSE,
             splice_graph_params_dict=splice_graph_params_dict,
             splice_graph_cache_root=splice_graph_cache_root,
+            SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
         )
 
     else:
@@ -1054,6 +1062,7 @@ def main():
             DEBUG=LRAA_Globals.DEBUG,
             INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
             VERBOSE=VERBOSE,
+            SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
         )
 
     _cleanup_registered_splice_graph_caches(
@@ -1528,6 +1537,7 @@ def _run_jobs_schedule_and_merge(
     DEBUG,
     INCLUDE_PRELIM_TRANSCRIPTS,
     VERBOSE=False,
+    SHUFFLE_JOBS=False,
 ):
     """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging.
 
@@ -1632,6 +1642,14 @@ def _run_jobs_schedule_and_merge(
             logger.info(
                 f"Resuming {resumed} completed contig/strand jobs from previous run"
             )
+
+    if SHUFFLE_JOBS and pool_size > 1:
+        random.shuffle(jobs)
+        logger.info(
+            "Shuffled contig/strand job order for load balancing ({} jobs)".format(
+                len(jobs)
+            )
+        )
 
     # Launch jobs via rolling scheduler
     logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
@@ -2334,6 +2352,7 @@ def _execute_multi_cluster_quant_only(
     VERBOSE,
     splice_graph_params_dict,
     splice_graph_cache_root,
+    SHUFFLE_JOBS=False,
 ):
     """Run quant-only jobs for each cluster while reusing a shared splice-graph evidence set."""
 
@@ -2399,6 +2418,7 @@ def _execute_multi_cluster_quant_only(
             DEBUG=DEBUG,
             INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
             VERBOSE=VERBOSE,
+            SHUFFLE_JOBS=SHUFFLE_JOBS,
         )
 
     return
