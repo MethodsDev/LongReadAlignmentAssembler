@@ -47,6 +47,7 @@ UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
 default_threads_per_worker = 1
 CPU = default_threads_per_worker  # legacy global name retained for compatibility
+TOTAL_THREADS_FOR_SINGLETON_STAGE = None  # computed after CLI parsing
 allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
@@ -522,7 +523,7 @@ def main():
     bam_filename = args.bam
     output_prefix = args.output_prefix
     # ensure global vars used by helper functions are updated
-    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS
+    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
     single_best_only = args.single_best_only
     CPU = args.num_threads_per_worker
     if CPU < 1:
@@ -557,6 +558,29 @@ def main():
                 "--no_parallelize_contigs specified; forcing --num_parallel_contigs to 1"
             )
         NUM_PARALLEL_CONTIGS = 1
+
+    # Compute total threads available when performing single-shot pre-run tasks (e.g., BAM counting)
+    workers_for_singleton = NUM_PARALLEL_CONTIGS if CONTIG_PARALLEL else 1
+    if workers_for_singleton is None:
+        workers_for_singleton = 1
+    try:
+        workers_for_singleton = int(workers_for_singleton)
+    except Exception:
+        workers_for_singleton = 1
+    if workers_for_singleton < 1:
+        workers_for_singleton = 1
+    try:
+        TOTAL_THREADS_FOR_SINGLETON_STAGE = max(1, int(CPU)) * workers_for_singleton
+    except Exception:
+        TOTAL_THREADS_FOR_SINGLETON_STAGE = workers_for_singleton
+    if TOTAL_THREADS_FOR_SINGLETON_STAGE < 1:
+        TOTAL_THREADS_FOR_SINGLETON_STAGE = 1
+    logger.debug(
+        "Pre-run tasks will use up to %d threads (workers=%d, threads_per_worker=%s)",
+        TOTAL_THREADS_FOR_SINGLETON_STAGE,
+        workers_for_singleton,
+        CPU,
+    )
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
@@ -3631,10 +3655,39 @@ def count_reads_from_bam(bam_filename):
 
     read_count_file = os.path.basename(bam_filename) + ".count"
     if not os.path.exists(read_count_file):
-        subprocess.check_call(
-            f"samtools view -c {bam_filename} > {read_count_file}.tmp", shell=True
+        tmp_path = f"{read_count_file}.tmp"
+        threads = 1
+        try:
+            total_threads = (
+                TOTAL_THREADS_FOR_SINGLETON_STAGE
+                if TOTAL_THREADS_FOR_SINGLETON_STAGE
+                else CPU
+            )
+            threads = int(total_threads)
+        except Exception:
+            threads = 1
+        if threads < 1:
+            threads = 1
+        try:
+            max_hw_threads = os.cpu_count()
+            if max_hw_threads:
+                threads = min(threads, max_hw_threads)
+        except Exception:
+            pass
+        samtools_cmd = [
+            "samtools",
+            "view",
+            "-@",
+            str(threads),
+            "-c",
+            bam_filename,
+        ]
+        logger.debug(
+            "Counting reads in %s with samtools (threads=%d)", bam_filename, threads
         )
-        os.rename(f"{read_count_file}.tmp", read_count_file)
+        with open(tmp_path, "wt") as tmp_fh:
+            subprocess.check_call(samtools_cmd, stdout=tmp_fh)
+        os.rename(tmp_path, read_count_file)
 
     with open(read_count_file, "rt") as fh:
         count = next(fh)
