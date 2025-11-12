@@ -8,10 +8,13 @@ task partition_by_chromosome_task {
     String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
     String docker
+    Int samtools_threads = 4
     }
 
     command <<<
         set -euo pipefail
+
+        export PARTITION_SAMTOOLS_THREADS=~{samtools_threads}
 
         partition_data_by_chromosome.py \
             ~{if defined(inputBAM) then "--input-bam " + inputBAM else ""} \
@@ -32,7 +35,7 @@ task partition_by_chromosome_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 30
-        cpu: 4
+        cpu: samtools_threads
         memory: "8 GiB"
         disks: "local-disk " + ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 5) + " SSD"
     }
@@ -46,6 +49,7 @@ workflow partition_by_chromosome {
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+                Int samtools_threads = 4
     }
 
     call partition_by_chromosome_task {
@@ -54,7 +58,8 @@ workflow partition_by_chromosome {
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,
-          docker = docker
+                    docker = docker,
+                    samtools_threads = samtools_threads
 
       
     }
