@@ -245,7 +245,7 @@ task count_bam {
   >>>
   runtime {
     docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-    disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " HDD"
+    disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " SSD"
     cpu: 1
     memory: "4G"
   }
