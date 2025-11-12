@@ -4,12 +4,19 @@ task partition_by_chromosome_task {
     input {
         File? inputBAM
         File? genome_fasta
-    File? annot_gtf
-    String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
+        File? annot_gtf
+        String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
-    String docker
-    Int samtools_threads = 16
+        String docker
+        Int samtools_threads = 16
     }
+
+    Float bam_size_gb = if defined(inputBAM) then size(inputBAM, "GB") else 0.0
+    Float fasta_size_gb = if defined(genome_fasta) then size(genome_fasta, "GB") else 0.0
+    Float gtf_size_gb = if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0
+    Float estimated_disk = ceil((bam_size_gb + fasta_size_gb + gtf_size_gb) * 2.2 + 20.0)
+    Float disk_gb = if estimated_disk > 150.0 then estimated_disk else 150.0
+    Int disk_gb_int = ceil(disk_gb)
 
     command <<<
         set -euo pipefail
@@ -41,31 +48,29 @@ task partition_by_chromosome_task {
         cpu: samtools_threads
         memory: "24 GiB"
         preemptible: 0
-        disks: "local-disk " + (if ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 20) > 150 then ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 20) else 150) + " SSD"
+        disks: "local-disk " + disk_gb_int + " SSD"
     }
 }
 
 
 workflow partition_by_chromosome {
-  input {
+    input {
         File? inputBAM
         File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-            Int samtools_threads = 16
+        Int samtools_threads = 16
     }
 
     call partition_by_chromosome_task {
         input:
-          inputBAM=inputBAM,
-          genome_fasta=genome_fasta,
-          annot_gtf=annot_gtf,
-          chromosomes_want_partitioned=chromosomes_want_partitioned,
-                    docker = docker,
-                    samtools_threads = samtools_threads
-
-      
+            inputBAM = inputBAM,
+            genome_fasta = genome_fasta,
+            annot_gtf = annot_gtf,
+            chromosomes_want_partitioned = chromosomes_want_partitioned,
+            docker = docker,
+            samtools_threads = samtools_threads
     }
 
     output {
