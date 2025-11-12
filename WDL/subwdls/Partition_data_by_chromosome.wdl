@@ -44,9 +44,11 @@ task partition_by_chromosome_task {
 
     runtime {
         docker: docker
+        bootDiskSizeGb: 50
         cpu: samtools_threads
+        memory: "24 GiB"
+        preemptible: 0
         disks: "local-disk " + disk_gb_int + " SSD"
-        memory: "24G"
     }
 }
 
