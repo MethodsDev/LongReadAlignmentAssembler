@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Split BAM/FASTA/GTF inputs into per-chromosome files in a single pass."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import os
+import sys
+from typing import Dict, Iterable, List, Optional
+
+import pysam
+
+
+def _write_empty_bam(path: str, chromosomes: List[str]) -> None:
+    header = {"HD": {"VN": "1.0"}, "SQ": [{"SN": chrom, "LN": 1} for chrom in chromosomes]}
+    with pysam.AlignmentFile(path, "wb", header=header):
+        pass
+
+
+def _normalize_path(path: Optional[str]) -> Optional[str]:
+    if path is None:
+        return None
+    trimmed = path.strip()
+    if not trimmed or trimmed.lower() in {"none", "null"}:
+        return None
+    return trimmed
+
+
+def _unique_ordered(items: Iterable[str]) -> List[str]:
+    seen = set()
+    ordered: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def _clean_output_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+    for entry in os.scandir(path):
+        if entry.is_file():
+            os.remove(entry.path)
+
+
+def _maybe_index_bam(bam_path: str) -> None:
+    if not os.path.exists(bam_path):
+        raise FileNotFoundError(f"BAM not found: {bam_path}")
+    bai_candidates = [bam_path + ".bai", os.path.splitext(bam_path)[0] + ".bai"]
+    if any(os.path.exists(p) for p in bai_candidates):
+        return
+    pysam.index(bam_path)
+
+
+def _ensure_fasta_index(fasta_path: str) -> None:
+    if not os.path.exists(fasta_path):
+        raise FileNotFoundError(f"FASTA not found: {fasta_path}")
+    fai_path = fasta_path + ".fai"
+    if os.path.exists(fai_path):
+        return
+    pysam.faidx(fasta_path)
+
+
+def _collect_chromosomes_from_bam(bam_path: str) -> List[str]:
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        return list(bam.references)
+
+
+def _collect_chromosomes_from_fasta(fasta_path: str) -> List[str]:
+    _ensure_fasta_index(fasta_path)
+    with pysam.FastaFile(fasta_path) as fasta:
+        return list(fasta.references)
+
+
+def _collect_chromosomes_from_gtf(gtf_path: str) -> List[str]:
+    chroms: List[str] = []
+    open_fn = gzip.open if gtf_path.endswith(".gz") else open
+    with open_fn(gtf_path, "rt") as handle:
+        for line in handle:
+            if not line or line.startswith("#"):
+                continue
+            chrom = line.split("\t", 1)[0].strip()
+            if chrom:
+                chroms.append(chrom)
+    return chroms
+
+
+def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+    _clean_output_dir(out_dir)
+    if bam_path is None or not os.path.exists(bam_path):
+        for chrom in chromosomes:
+            _write_empty_bam(os.path.join(out_dir, f"{chrom}.bam"), [chrom])
+        return
+
+    _maybe_index_bam(bam_path)
+
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        header_dict = bam.header.to_dict()
+        sq_entries = header_dict.setdefault("SQ", [])
+        seen_refs = {entry.get("SN") for entry in sq_entries}
+        for chrom in chromosomes:
+            if chrom not in seen_refs:
+                sq_entries.append({"SN": chrom, "LN": 1})
+        writers = {
+            chrom: pysam.AlignmentFile(
+                os.path.join(out_dir, f"{chrom}.bam"), "wb", header=header_dict
+            )
+            for chrom in chromosomes
+        }
+        has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+
+        for read in bam:
+            if read.is_unmapped:
+                continue
+            chrom_name = bam.get_reference_name(read.reference_id)
+            writer = writers.get(chrom_name)
+            if writer is None:
+                continue
+            writer.write(read)
+            has_records[chrom_name] = True
+
+        for writer in writers.values():
+            writer.close()
+
+
+def _write_fasta_record(handle, chrom: str, sequence: str) -> None:
+    handle.write(f">{chrom}\n")
+    for idx in range(0, len(sequence), 60):
+        handle.write(sequence[idx : idx + 60] + "\n")
+
+
+def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+    _clean_output_dir(out_dir)
+    if fasta_path is None or not os.path.exists(fasta_path):
+        for chrom in chromosomes:
+            with open(os.path.join(out_dir, f"{chrom}.genome.fasta"), "wt") as handle:
+                handle.write(f">{chrom}\n")
+        return
+
+    _ensure_fasta_index(fasta_path)
+
+    with pysam.FastaFile(fasta_path) as fasta:
+        references = set(fasta.references)
+        for chrom in chromosomes:
+            out_path = os.path.join(out_dir, f"{chrom}.genome.fasta")
+            with open(out_path, "wt") as handle:
+                if chrom in references:
+                    sequence = fasta.fetch(chrom)
+                    _write_fasta_record(handle, chrom, sequence)
+                else:
+                    handle.write(f">{chrom}\n")
+
+
+def _partition_gtf(gtf_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+    _clean_output_dir(out_dir)
+
+    outputs = {
+        chrom: open(os.path.join(out_dir, f"{chrom}.annot.gtf"), "wt")
+        for chrom in chromosomes
+    }
+    has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+
+    if gtf_path is not None:
+        if not os.path.exists(gtf_path):
+            raise FileNotFoundError(f"GTF not found: {gtf_path}")
+        open_fn = gzip.open if gtf_path.endswith(".gz") else open
+        with open_fn(gtf_path, "rt") as handle:
+            for line in handle:
+                if not line or line.startswith("#"):
+                    continue
+                chrom = line.split("\t", 1)[0].strip()
+                sink = outputs.get(chrom)
+                if sink is not None:
+                    sink.write(line)
+                    has_records[chrom] = True
+
+    for chrom, handle in outputs.items():
+        if not has_records[chrom]:
+            handle.write("# no gtf records\n")
+        handle.close()
+
+
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Partition BAM/FASTA/GTF by chromosome")
+    parser.add_argument("--input-bam", dest="input_bam", type=str, default=None)
+    parser.add_argument("--genome-fasta", dest="genome_fasta", type=str, default=None)
+    parser.add_argument("--annot-gtf", dest="annot_gtf", type=str, default=None)
+    parser.add_argument("--chromosomes", nargs="*", help="Ordered chromosome list", default=None)
+    parser.add_argument("--bam-out-dir", default="split_bams")
+    parser.add_argument("--fasta-out-dir", default="split_fastas")
+    parser.add_argument("--gtf-out-dir", default="split_gtfs")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parse_args(argv)
+
+    input_bam = _normalize_path(args.input_bam)
+    genome_fasta = _normalize_path(args.genome_fasta)
+    annot_gtf = _normalize_path(args.annot_gtf)
+
+    chromosome_inputs: List[str] = []
+    if args.chromosomes:
+        for entry in args.chromosomes:
+            chromosome_inputs.extend(part for part in entry.replace(",", " ").split() if part)
+
+    chromosomes: List[str]
+    if chromosome_inputs:
+        chromosomes = _unique_ordered(chromosome_inputs)
+    else:
+        collected: List[str] = []
+        if input_bam:
+            collected.extend(_collect_chromosomes_from_bam(input_bam))
+        if genome_fasta:
+            collected.extend(_collect_chromosomes_from_fasta(genome_fasta))
+        if annot_gtf:
+            collected.extend(_collect_chromosomes_from_gtf(annot_gtf))
+        chromosomes = _unique_ordered(collected)
+
+    if not chromosomes:
+        raise ValueError("No chromosomes supplied or detected.")
+
+    _partition_bam(input_bam, chromosomes, args.bam_out_dir)
+    _partition_fasta(genome_fasta, chromosomes, args.fasta_out_dir)
+    _partition_gtf(annot_gtf, chromosomes, args.gtf_out_dir)
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # pragma: no cover - surface friendly message
+        print(f"partition_data_by_chromosome: {exc}", file=sys.stderr)
+        raise

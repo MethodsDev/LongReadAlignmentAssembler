@@ -4,42 +4,23 @@ task partition_by_chromosome_task {
     input {
         File? inputBAM
         File? genome_fasta
-        File? annot_gtf
-        String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
+    File? annot_gtf
+    String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
-        String docker
+    String docker
     }
 
     command <<<
-        set -ex
-        set -o pipefail
+        set -euo pipefail
 
-        mkdir -p split_bams
-        mkdir -p split_fastas
-        mkdir -p split_gtfs
-      
-        if [ -f  "~{inputBAM}" ] && [ ! -f "~{inputBAM}.bai" ]; then
-            samtools index ~{inputBAM}
-        fi
-        
-        for chr in ~{chromosomes_want_partitioned}; do
-
-            if [ -f "~{inputBAM}" ]; then
-                samtools view -b ~{inputBAM} $chr > split_bams/$chr.bam
-            fi
-
-            if [ -f "~{genome_fasta}" ]; then
-                samtools faidx ~{genome_fasta} $chr > split_fastas/$chr.genome.fasta
-            fi
-        
-            if [ -f "~{annot_gtf}" ]; then
-                cat ~{annot_gtf} | perl -lane 'if ($F[0] eq "'$chr'") { print; }' > split_gtfs/$chr.annot.gtf
-            else        
-                echo "# no gtf records" > split_gtfs/$chr.annot.gtf
-            fi
-        
-        done
-        
+        partition_data_by_chromosome.py \
+            ~{if defined(inputBAM) then "--input-bam " + inputBAM else ""} \
+            ~{if defined(genome_fasta) then "--genome-fasta " + genome_fasta else ""} \
+            ~{if defined(annot_gtf) then "--annot-gtf " + annot_gtf else ""} \
+            --chromosomes ~{chromosomes_want_partitioned} \
+            --bam-out-dir split_bams \
+            --fasta-out-dir split_fastas \
+            --gtf-out-dir split_gtfs
     >>>
 
     output {
@@ -63,11 +44,12 @@ workflow partition_by_chromosome {
         File? inputBAM
         File? genome_fasta
         File? annot_gtf
-        String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
+                String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
         Int memoryGB = 32
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+                File partition_script = "../../util/partition_data_by_chromosome.py"
 
     }
 
@@ -77,7 +59,8 @@ workflow partition_by_chromosome {
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,
-          docker = docker
+                    docker = docker,
+                    partition_script = partition_script
       
     }
 
