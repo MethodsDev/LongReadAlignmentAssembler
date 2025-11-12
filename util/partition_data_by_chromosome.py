@@ -21,7 +21,10 @@ if not logging.getLogger().handlers:
 LOGGER = logging.getLogger(__name__)
 
 
-def _samtools_threads() -> int:
+def _samtools_threads(cli_value: Optional[int] = None) -> int:
+    if cli_value is not None:
+        return max(1, cli_value)
+
     env_value = os.environ.get("PARTITION_SAMTOOLS_THREADS")
     if env_value:
         try:
@@ -136,7 +139,12 @@ def _collect_chromosomes_from_gtf(gtf_path: str) -> List[str]:
     return chroms
 
 
-def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+def _partition_bam(
+    bam_path: Optional[str],
+    chromosomes: List[str],
+    out_dir: str,
+    samtools_threads: Optional[int] = None,
+) -> None:
     _clean_output_dir(out_dir)
     if bam_path is None or not os.path.exists(bam_path):
         for chrom in chromosomes:
@@ -150,7 +158,7 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
         chrom_lengths = dict(zip(bam.references, bam.lengths))
 
     mapped_counts = _collect_mapped_counts(bam_path)
-    threads = _samtools_threads()
+    threads = _samtools_threads(samtools_threads)
 
     for chrom in chromosomes:
         out_path = os.path.join(out_dir, f"{chrom}.bam")
@@ -210,7 +218,11 @@ def _write_fasta_record(handle, chrom: str, sequence: str) -> None:
         handle.write(sequence[idx : idx + 60] + "\n")
 
 
-def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+def _partition_fasta(
+    fasta_path: Optional[str],
+    chromosomes: List[str],
+    out_dir: str,
+) -> None:
     _clean_output_dir(out_dir)
     if fasta_path is None or not os.path.exists(fasta_path):
         for chrom in chromosomes:
@@ -248,7 +260,11 @@ def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir:
             handle.close()
 
 
-def _partition_gtf(gtf_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
+def _partition_gtf(
+    gtf_path: Optional[str],
+    chromosomes: List[str],
+    out_dir: str,
+) -> None:
     _clean_output_dir(out_dir)
 
     outputs = {
@@ -290,6 +306,12 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--bam-out-dir", default="split_bams")
     parser.add_argument("--fasta-out-dir", default="split_fastas")
     parser.add_argument("--gtf-out-dir", default="split_gtfs")
+    parser.add_argument(
+        "--samtools-threads",
+        type=int,
+        default=None,
+        help="Threads to use for samtools view (default pulls from PARTITION_SAMTOOLS_THREADS or 1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -322,7 +344,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise ValueError("No chromosomes supplied or detected.")
 
     partition_jobs = (
-        ("BAM", _partition_bam, (input_bam, chromosomes, args.bam_out_dir)),
+        ("BAM", _partition_bam, (input_bam, chromosomes, args.bam_out_dir, args.samtools_threads)),
         ("FASTA", _partition_fasta, (genome_fasta, chromosomes, args.fasta_out_dir)),
         ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
     )

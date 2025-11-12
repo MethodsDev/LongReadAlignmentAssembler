@@ -21,6 +21,7 @@ task partition_by_chromosome_task {
             ~{if defined(genome_fasta) then "--genome-fasta " + genome_fasta else ""} \
             ~{if defined(annot_gtf) then "--annot-gtf " + annot_gtf else ""} \
             --chromosomes ~{chromosomes_want_partitioned} \
+            --samtools-threads ~{samtools_threads} \
             --bam-out-dir split_bams \
             --fasta-out-dir split_fastas \
             --gtf-out-dir split_gtfs
