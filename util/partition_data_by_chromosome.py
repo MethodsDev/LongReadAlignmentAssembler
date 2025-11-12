@@ -7,6 +7,7 @@ import argparse
 import gzip
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Iterable, List, Optional
 
 import pysam
@@ -140,16 +141,28 @@ def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir:
 
     _ensure_fasta_index(fasta_path)
 
-    with pysam.FastaFile(fasta_path) as fasta:
-        references = set(fasta.references)
-        for chrom in chromosomes:
-            out_path = os.path.join(out_dir, f"{chrom}.genome.fasta")
-            with open(out_path, "wt") as handle:
-                if chrom in references:
-                    sequence = fasta.fetch(chrom)
-                    _write_fasta_record(handle, chrom, sequence)
-                else:
-                    handle.write(f">{chrom}\n")
+    outputs = {
+        chrom: open(os.path.join(out_dir, f"{chrom}.genome.fasta"), "wt")
+        for chrom in chromosomes
+    }
+    try:
+        seen: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+
+        # Stream through the FASTA once to avoid repeated random-access fetches.
+        with pysam.FastxFile(fasta_path) as fasta_handle:
+            for entry in fasta_handle:
+                chrom_name = entry.name.split()[0]
+                if chrom_name not in outputs or seen.get(chrom_name):
+                    continue
+                _write_fasta_record(outputs[chrom_name], chrom_name, entry.sequence)
+                seen[chrom_name] = True
+
+        for chrom, handle in outputs.items():
+            if not seen[chrom]:
+                handle.write(f">{chrom}\n")
+    finally:
+        for handle in outputs.values():
+            handle.close()
 
 
 def _partition_gtf(gtf_path: Optional[str], chromosomes: List[str], out_dir: str) -> None:
@@ -221,9 +234,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not chromosomes:
         raise ValueError("No chromosomes supplied or detected.")
 
-    _partition_bam(input_bam, chromosomes, args.bam_out_dir)
-    _partition_fasta(genome_fasta, chromosomes, args.fasta_out_dir)
-    _partition_gtf(annot_gtf, chromosomes, args.gtf_out_dir)
+    partition_jobs = (
+        ("BAM", _partition_bam, (input_bam, chromosomes, args.bam_out_dir)),
+        ("FASTA", _partition_fasta, (genome_fasta, chromosomes, args.fasta_out_dir)),
+        ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
+    )
+
+    with ThreadPoolExecutor(max_workers=len(partition_jobs)) as executor:
+        future_to_name = {
+            executor.submit(func, *func_args): job_name for job_name, func, func_args in partition_jobs
+        }
+        for future, job_name in future_to_name.items():
+            try:
+                future.result()
+            except Exception as exc:
+                raise RuntimeError(f"{job_name} partition step failed") from exc
 
     return 0
 

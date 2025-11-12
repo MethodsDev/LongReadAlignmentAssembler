@@ -32,8 +32,8 @@ task partition_by_chromosome_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 30
-        cpu: 1
-        memory: "4 GiB"
+        cpu: 4
+        memory: "8 GiB"
         disks: "local-disk " + ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 5) + " SSD"
     }
 }
