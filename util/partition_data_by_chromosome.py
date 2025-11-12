@@ -8,6 +8,7 @@ import gzip
 import logging
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Optional
 
@@ -18,6 +19,8 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(processName)s] %(levelname)s: %(message)s")
 
 LOGGER = logging.getLogger(__name__)
+
+_BAM_PROGRESS_INTERVAL = 500_000
 
 
 def _write_empty_bam(path: str, chromosomes: List[str]) -> None:
@@ -118,6 +121,8 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
         }
         has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
         logged_chroms: set[str] = set()
+        processed_alignments = 0
+        start_time = time.time()
 
         for read in bam:
             if read.is_unmapped:
@@ -131,9 +136,27 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
                 logged_chroms.add(chrom_name)
             writer.write(read)
             has_records[chrom_name] = True
+            processed_alignments += 1
+            if processed_alignments % _BAM_PROGRESS_INTERVAL == 0:
+                elapsed = time.time() - start_time
+                rate = processed_alignments / (elapsed / 60.0) if elapsed > 0 else 0.0
+                LOGGER.info(
+                    "BAM partition: processed %d alignments (%.1f alignments/min)",
+                    processed_alignments,
+                    rate,
+                )
 
         for writer in writers.values():
             writer.close()
+
+        elapsed_total = time.time() - start_time
+        final_rate = processed_alignments / (elapsed_total / 60.0) if elapsed_total > 0 else 0.0
+        LOGGER.info(
+            "BAM partition: completed %d alignments in %.2f minutes (%.1f alignments/min)",
+            processed_alignments,
+            elapsed_total / 60.0,
+            final_rate,
+        )
 
 
 def _write_fasta_record(handle, chrom: str, sequence: str) -> None:
