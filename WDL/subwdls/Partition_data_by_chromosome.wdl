@@ -44,13 +44,8 @@ workflow partition_by_chromosome {
         File? inputBAM
         File? genome_fasta
         File? annot_gtf
-                String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
-
-        Int memoryGB = 32
-        Int diskSizeGB = 128
+        String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-
-
     }
 
     call partition_by_chromosome_task {
@@ -59,7 +54,7 @@ workflow partition_by_chromosome {
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,
-                    docker = docker
+          docker = docker
 
       
     }
