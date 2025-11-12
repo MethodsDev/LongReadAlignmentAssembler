@@ -133,8 +133,8 @@ RUN python -m pip install \
         
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.12.0-predev9"
-ENV LRAA_CO=c295504aac2ea6240290fc3e4dd64e6e316816da
+ENV LRAA_VERSION="v0.12.0-predev10"
+ENV LRAA_CO=18eb0978aeee899c1f2137214d21e27984e846cc
 
 
 # update VERSION and LRAA_CO files with version info and checkout
