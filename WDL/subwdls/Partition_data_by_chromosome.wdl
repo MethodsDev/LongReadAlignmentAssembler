@@ -41,7 +41,7 @@ task partition_by_chromosome_task {
         cpu: samtools_threads
         memory: "24 GiB"
         preemptible: 0
-        disks: "local-disk " + max(150, ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 20)) + " SSD"
+        disks: "local-disk " + (if ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 20) > 150 then ceil((size(inputBAM, "GB") + size(genome_fasta, "GB") + size(annot_gtf, "GB")) * 2.2 + 20) else 150) + " SSD"
     }
 }
 
