@@ -36,6 +36,7 @@ workflow LRAA_wf {
         Int memoryGB = 64
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        Int countBamThreads = 16
         
         
     }
@@ -46,7 +47,8 @@ workflow LRAA_wf {
 
         call count_bam {
             input:
-              bam = inputBAM
+          bam = inputBAM,
+          samtools_threads = countBamThreads
         }
 
         
@@ -236,18 +238,25 @@ task mergeQuantResults {
 task count_bam {
   input {
     File bam
+        Int samtools_threads = 16
   }
+
+    Float bam_size_gb = size(bam, "GB")
+    Float estimated_disk = ceil(bam_size_gb * 2.2 + 20.0)
+    Float disk_gb = if estimated_disk > 150.0 then estimated_disk else 150.0
+    Int disk_gb_int = ceil(disk_gb)
 
   command <<<
     set -ex
-    samtools view -c ~{bam}
+        samtools view -@ ~{samtools_threads} -c ~{bam}
 
   >>>
+
   runtime {
-    docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-    disks: "local-disk " + ceil(2 * size(bam, "GB") ) + " SSD"
-    cpu: 1
-    memory: "4G"
+        docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        disks: "local-disk " + disk_gb_int + " SSD"
+        cpu: samtools_threads
+        memory: "8G"
   }
   output {
     Int count = read_int(stdout())
