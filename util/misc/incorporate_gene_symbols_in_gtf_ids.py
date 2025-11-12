@@ -3,8 +3,22 @@
 import sys, os, re
 import logging
 import argparse
-import gzip
-import subprocess
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = (
+    os.path.dirname(os.path.dirname(SCRIPT_DIR))
+    if os.path.basename(SCRIPT_DIR) == "misc"
+    else os.path.dirname(SCRIPT_DIR)
+)
+PYLIB_DIR = os.path.join(ROOT_DIR, "pylib")
+if PYLIB_DIR not in sys.path:
+    sys.path.insert(0, PYLIB_DIR)
+
+from gene_symbol_utils import (
+    get_ref_gene_names,
+    parse_gffcompare_mappings,
+    resolve_gene_symbol,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,7 +63,7 @@ def main():
 
     ref_id_to_gene_name = get_ref_gene_names(ref_gtf_filename)
 
-    gff_compare_target_id_to_REF_id_mapping = parse_GFFcompare_mappings(
+    gff_compare_target_id_to_REF_id_mapping = parse_gffcompare_mappings(
         gffcompare_tracking_filename
     )
 
@@ -82,11 +96,20 @@ def update_gtf_feature_ids(
                 gene_id = m.group(1)
                 transcript_id = m.group(2)
 
-                gene_name = None
-                if gene_id in gff_compare_target_id_to_REF_id_mapping:
-                    ref_gene_id = gff_compare_target_id_to_REF_id_mapping[gene_id][0]
-                    if ref_gene_id in ref_id_to_gene_name:
-                        gene_name = ref_id_to_gene_name[ref_gene_id]
+                gene_name = resolve_gene_symbol(
+                    transcript_id,
+                    ref_id_to_gene_name,
+                    gff_compare_target_id_to_REF_id_mapping,
+                    prefer_transcript_first=True,
+                )
+
+                if gene_name is None:
+                    gene_name = resolve_gene_symbol(
+                        gene_id,
+                        ref_id_to_gene_name,
+                        gff_compare_target_id_to_REF_id_mapping,
+                        prefer_transcript_first=False,
+                    )
 
                 if gene_name is not None:
                     new_gene_id = gene_name + "^" + gene_id
@@ -115,72 +138,6 @@ def update_gtf_feature_ids(
         sys.exit(1)
 
     return
-
-
-def parse_GFFcompare_mappings(gffcompare_tracking_filename):
-
-    logger.info("-parsing gffcompare output: {}".format(gffcompare_tracking_filename))
-
-    gff_compare_mappings = dict()
-
-    with open(gffcompare_tracking_filename, "rt") as fh:
-        for line in fh:
-            line = line.rstrip()
-            tcons, xloc, ref_info, compare_code, target_info = line.split("\t")
-
-            if ref_info == "-":
-                continue
-
-            ensg_id, enst_id = ref_info.split("|")
-
-            target_info = ":".join(
-                target_info.split(":")[1:]
-            )  # get rid of first q1 token
-
-            target_vals = target_info.split("|")
-            target_gene_id = target_vals[0]
-            target_trans_id = target_vals[1]
-
-            gff_compare_mappings[target_gene_id] = [ensg_id, enst_id]
-            gff_compare_mappings[target_trans_id] = [ensg_id, enst_id]
-
-    return gff_compare_mappings
-
-
-def get_ref_gene_names(ref_gtf):
-
-    logger.info(
-        "-extracting gene_names and identifiers from reference gtf: {}".format(ref_gtf)
-    )
-
-    ref_id_to_gene_name = dict()
-
-    with open(ref_gtf, "rt") as fh:
-        for line in fh:
-            vals = line.split("\t")
-            if len(vals) < 8:
-                continue
-            info = vals[8]
-
-            if vals[2] != "transcript":
-                continue
-
-            m = re.search(
-                'gene_id \\"([^\\"]+)\\";.*transcript_id \\"([^\\"]+)\\";', info
-            )
-            if m:
-                gene_id = m.group(1)
-                transcript_id = m.group(2)
-                gene_name = gene_id
-
-                m2 = re.search(' gene_name "([^\\"]+)\\";', info)
-                if m2:
-                    gene_name = m2.group(1)
-
-                    ref_id_to_gene_name[transcript_id] = gene_name
-                    ref_id_to_gene_name[gene_id] = gene_name
-
-    return ref_id_to_gene_name
 
 
 if __name__ == "__main__":
