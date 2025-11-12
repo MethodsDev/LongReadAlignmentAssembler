@@ -20,11 +20,33 @@ if not logging.getLogger().handlers:
 
 LOGGER = logging.getLogger(__name__)
 
-_BAM_PROGRESS_INTERVAL = 500_000
+
+def _samtools_threads() -> int:
+    env_value = os.environ.get("PARTITION_SAMTOOLS_THREADS")
+    if env_value:
+        try:
+            return max(1, int(env_value))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid PARTITION_SAMTOOLS_THREADS value %r; falling back to 1 thread",
+                env_value,
+            )
+    return 1
 
 
-def _write_empty_bam(path: str, chromosomes: List[str]) -> None:
-    header = {"HD": {"VN": "1.0"}, "SQ": [{"SN": chrom, "LN": 1} for chrom in chromosomes]}
+def _write_empty_bam(
+    path: str, chromosomes: List[str], lengths: Optional[Dict[str, int]] = None
+) -> None:
+    header = {
+        "HD": {"VN": "1.0"},
+        "SQ": [
+            {
+                "SN": chrom,
+                "LN": max(1, int(lengths.get(chrom, 1))) if lengths else 1,
+            }
+            for chrom in chromosomes
+        ],
+    }
     with pysam.AlignmentFile(path, "wb", header=header):
         pass
 
@@ -73,6 +95,23 @@ def _ensure_fasta_index(fasta_path: str) -> None:
     pysam.faidx(fasta_path)
 
 
+def _collect_mapped_counts(bam_path: str) -> Dict[str, int]:
+    stats_output = pysam.idxstats(bam_path)
+    counts: Dict[str, int] = {}
+    for line in stats_output.strip().splitlines():
+        fields = line.split("\t")
+        if len(fields) != 4:
+            continue
+        chrom, _length, mapped, _unmapped = fields
+        if chrom == "*":
+            continue
+        try:
+            counts[chrom] = int(mapped)
+        except ValueError:
+            counts[chrom] = 0
+    return counts
+
+
 def _collect_chromosomes_from_bam(bam_path: str) -> List[str]:
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         return list(bam.references)
@@ -107,55 +146,61 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
     _maybe_index_bam(bam_path)
 
     with pysam.AlignmentFile(bam_path, "rb") as bam:
-        header_dict = bam.header.to_dict()
-        sq_entries = header_dict.setdefault("SQ", [])
-        seen_refs = {entry.get("SN") for entry in sq_entries}
-        for chrom in chromosomes:
-            if chrom not in seen_refs:
-                sq_entries.append({"SN": chrom, "LN": 1})
-        writers = {
-            chrom: pysam.AlignmentFile(
-                os.path.join(out_dir, f"{chrom}.bam"), "wb", header=header_dict
-            )
-            for chrom in chromosomes
-        }
-        has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
-        logged_chroms: set[str] = set()
-        processed_alignments = 0
-        start_time = time.time()
+        references = set(bam.references)
+        chrom_lengths = dict(zip(bam.references, bam.lengths))
 
-        for read in bam:
-            if read.is_unmapped:
-                continue
-            chrom_name = bam.get_reference_name(read.reference_id)
-            writer = writers.get(chrom_name)
-            if writer is None:
-                continue
-            if chrom_name not in logged_chroms:
-                LOGGER.info("BAM partition: encountered chromosome %s", chrom_name)
-                logged_chroms.add(chrom_name)
-            writer.write(read)
-            has_records[chrom_name] = True
-            processed_alignments += 1
-            if processed_alignments % _BAM_PROGRESS_INTERVAL == 0:
-                elapsed = time.time() - start_time
-                rate = processed_alignments / (elapsed / 60.0) if elapsed > 0 else 0.0
-                LOGGER.info(
-                    "BAM partition: processed %d alignments (%.1f alignments/min)",
-                    processed_alignments,
-                    rate,
-                )
+    mapped_counts = _collect_mapped_counts(bam_path)
+    threads = _samtools_threads()
 
-        for writer in writers.values():
-            writer.close()
+    for chrom in chromosomes:
+        out_path = os.path.join(out_dir, f"{chrom}.bam")
+        if chrom not in references:
+            LOGGER.info("BAM partition: chromosome %s missing from BAM header; writing empty stub", chrom)
+            _write_empty_bam(out_path, [chrom], chrom_lengths)
+            continue
 
-        elapsed_total = time.time() - start_time
-        final_rate = processed_alignments / (elapsed_total / 60.0) if elapsed_total > 0 else 0.0
+        mapped = mapped_counts.get(chrom, 0)
+        if mapped == 0:
+            LOGGER.info("BAM partition: chromosome %s has no mapped reads; writing empty stub", chrom)
+            _write_empty_bam(out_path, [chrom], chrom_lengths)
+            continue
+
         LOGGER.info(
-            "BAM partition: completed %d alignments in %.2f minutes (%.1f alignments/min)",
-            processed_alignments,
-            elapsed_total / 60.0,
-            final_rate,
+            "BAM partition: extracting chromosome %s with %d mapped alignments using %d thread(s)",
+            chrom,
+            mapped,
+            threads,
+        )
+        start_time = time.time()
+        try:
+            pysam.view(
+                "-@",
+                str(threads),
+                "-h",
+                "-b",
+                "-o",
+                out_path,
+                bam_path,
+                chrom,
+                catch_stdout=False,
+            )
+        except pysam.SamtoolsError as exc:  # pragma: no cover - htslib surface error
+            LOGGER.warning(
+                "BAM partition: samtools view failed for %s (%s); writing empty stub",
+                chrom,
+                exc,
+            )
+            _write_empty_bam(out_path, [chrom], chrom_lengths)
+            continue
+
+        elapsed = time.time() - start_time
+        rate = mapped / (elapsed / 60.0) if elapsed > 0 else 0.0
+        LOGGER.info(
+            "BAM partition: wrote %s with %d alignments in %.2f minutes (%.1f alignments/min)",
+            chrom,
+            mapped,
+            elapsed / 60.0,
+            rate,
         )
 
 
