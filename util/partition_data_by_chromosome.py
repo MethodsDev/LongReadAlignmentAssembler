@@ -7,7 +7,7 @@ import argparse
 import gzip
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Optional
 
 import pysam
@@ -240,11 +240,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
     )
 
-    with ThreadPoolExecutor(max_workers=len(partition_jobs)) as executor:
+    with ProcessPoolExecutor(max_workers=len(partition_jobs)) as executor:
         future_to_name = {
             executor.submit(func, *func_args): job_name for job_name, func, func_args in partition_jobs
         }
-        for future, job_name in future_to_name.items():
+        for future in as_completed(future_to_name):
+            job_name = future_to_name[future]
             try:
                 future.result()
             except Exception as exc:
