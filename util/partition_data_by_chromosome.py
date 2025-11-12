@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import logging
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Optional
 
 import pysam
+
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(processName)s] %(levelname)s: %(message)s")
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _write_empty_bam(path: str, chromosomes: List[str]) -> None:
@@ -110,6 +117,7 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
             for chrom in chromosomes
         }
         has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+        logged_chroms: set[str] = set()
 
         for read in bam:
             if read.is_unmapped:
@@ -118,6 +126,9 @@ def _partition_bam(bam_path: Optional[str], chromosomes: List[str], out_dir: str
             writer = writers.get(chrom_name)
             if writer is None:
                 continue
+            if chrom_name not in logged_chroms:
+                LOGGER.info("BAM partition: encountered chromosome %s", chrom_name)
+                logged_chroms.add(chrom_name)
             writer.write(read)
             has_records[chrom_name] = True
 
@@ -147,6 +158,7 @@ def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir:
     }
     try:
         seen: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+        logged_chroms: set[str] = set()
 
         # Stream through the FASTA once to avoid repeated random-access fetches.
         with pysam.FastxFile(fasta_path) as fasta_handle:
@@ -154,6 +166,9 @@ def _partition_fasta(fasta_path: Optional[str], chromosomes: List[str], out_dir:
                 chrom_name = entry.name.split()[0]
                 if chrom_name not in outputs or seen.get(chrom_name):
                     continue
+                if chrom_name not in logged_chroms:
+                    LOGGER.info("FASTA partition: encountered chromosome %s", chrom_name)
+                    logged_chroms.add(chrom_name)
                 _write_fasta_record(outputs[chrom_name], chrom_name, entry.sequence)
                 seen[chrom_name] = True
 
@@ -173,6 +188,7 @@ def _partition_gtf(gtf_path: Optional[str], chromosomes: List[str], out_dir: str
         for chrom in chromosomes
     }
     has_records: Dict[str, bool] = {chrom: False for chrom in chromosomes}
+    logged_chroms: set[str] = set()
 
     if gtf_path is not None:
         if not os.path.exists(gtf_path):
@@ -185,6 +201,9 @@ def _partition_gtf(gtf_path: Optional[str], chromosomes: List[str], out_dir: str
                 chrom = line.split("\t", 1)[0].strip()
                 sink = outputs.get(chrom)
                 if sink is not None:
+                    if chrom not in logged_chroms:
+                        LOGGER.info("GTF partition: encountered chromosome %s", chrom)
+                        logged_chroms.add(chrom)
                     sink.write(line)
                     has_records[chrom] = True
 
