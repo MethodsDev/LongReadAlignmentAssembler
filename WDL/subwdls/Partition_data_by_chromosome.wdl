@@ -49,7 +49,7 @@ workflow partition_by_chromosome {
         Int memoryGB = 32
         Int diskSizeGB = 128
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
-                File partition_script = "../../util/partition_data_by_chromosome.py"
+
 
     }
 
@@ -59,8 +59,8 @@ workflow partition_by_chromosome {
           genome_fasta=genome_fasta,
           annot_gtf=annot_gtf,
           chromosomes_want_partitioned=chromosomes_want_partitioned,
-                    docker = docker,
-                    partition_script = partition_script
+                    docker = docker
+
       
     }
 
