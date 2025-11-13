@@ -26,14 +26,16 @@ workflow LRAA_wf {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
-        # CPU cores to allocate per contig worker (--num_threads_per_worker) for non-scattered runs
-        Int numThreadsPerWorker = 2
-        # CPU cores to allocate per contig worker when the workflow scatters over chromosomes
+        #  non-scattered runs
+        Int numThreadsPerWorker = 5
+        Int memoryGB = 64
+        Int num_parallel_contigs = 3
+
+        # scattered runs
         Int numThreadsPerWorkerScattered = 5
         Int memoryGBPerWorkerScattered = 32
-        # Number of concurrent contig workers (--num_parallel_contigs)
-        Int num_parallel_contigs = 3
-        Int memoryGB = 64
+        
+        
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Int countBamThreads = 16
@@ -90,7 +92,7 @@ workflow LRAA_wf {
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
                     min_mapping_quality = min_mapping_quality,
                     docker = docker,
-                    memoryGB = memoryGB,
+                    memoryGB = memoryGBPerWorkerScattered,
                     diskSizeGB = diskSizeGB
             }
         }

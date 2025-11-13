@@ -23,11 +23,12 @@ workflow LRAA_singlecell_wf {
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
 
     # Resources and docker (propagated to subcalls where applicable)
-    Int numThreadsPerWorker = 2
+    Int numThreadsPerWorker = 5
     Int numThreadsPerWorkerScattered = 5
     Int num_parallel_contigs = 3
     Int numThreadsPerLRAA = 4
     Int memoryGB = 64
+    Int memoryGBPerWorkerScattered = 32
     Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -57,6 +58,7 @@ workflow LRAA_singlecell_wf {
       numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
       num_parallel_contigs = num_parallel_contigs,
       memoryGB = memoryGB,
+      memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
       diskSizeGB = diskSizeGB,
       docker = docker
   }
@@ -102,7 +104,8 @@ workflow LRAA_singlecell_wf {
       numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
       num_parallel_contigs = num_parallel_contigs,
       numThreadsPerLRAA = numThreadsPerLRAA,
-      memoryGBperLRAA = 16,
+      memoryGB = memoryGB,
+      memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
       memoryGBmergeGTFs = 32,
       memoryGBquantFinal = 32,
       memoryGBscSparseMatrices = 16,

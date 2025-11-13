@@ -24,8 +24,8 @@ workflow LRAA_cell_cluster_guided {
         Int numThreadsPerWorkerScattered = 9
         Int num_parallel_contigs = 3
         Int numThreadsPerLRAA = 5
-        Int memoryGBperLRAA = 64
-        Int memoryGBperLRAAScattered = 16
+        Int memoryGB = 64
+        Int memoryGBPerWorkerScattered = 32
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
         Int memoryGBscSparseMatrices = 16
@@ -78,7 +78,8 @@ workflow LRAA_cell_cluster_guided {
                     numThreadsPerWorker = numThreadsPerWorker,
                     numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
                     num_parallel_contigs = num_parallel_contigs,
-                    memoryGB  = memoryGBperLRAAScattered,
+                    memoryGB = memoryGB,
+                    memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
                     docker = docker
             }
         }
@@ -174,7 +175,7 @@ workflow LRAA_cell_cluster_guided {
      output {
          # final outputs
          File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
-        File? LRAA_final_gtf_tracking = lraa_merge_gtf_task.mergedTracking
+         File? LRAA_final_gtf_tracking = lraa_merge_gtf_task.mergedTracking
          # partitioned cluster BAMs (always produced)
          File LRAA_partitioned_cluster_bams_tar = tar_partitioned_cluster_bams.tar_gz
          # cluster-level final quant outputs (per-cluster/partition) packaged
