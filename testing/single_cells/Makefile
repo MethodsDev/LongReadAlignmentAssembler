@@ -1,4 +1,4 @@
-DIRS = sc_cluster_guided_pipe  sc_full_pipe  sc_most_basic
+DIRS = sc_most_basic  sc_add_gene_symbols sc_cluster_guided_pipe  sc_full_pipe
 
 
 test:
