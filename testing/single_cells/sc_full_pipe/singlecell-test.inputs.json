@@ -1,9 +1,9 @@
 {
   "LRAA_singlecell_wf.sample_id": "test_sc_wdl",
-  "LRAA_singlecell_wf.referenceGenome": "../data/chr19.genome.fa",
-  "LRAA_singlecell_wf.inputBAM": "../data/chr19.bam",
+    "LRAA_singlecell_wf.referenceGenome": "data/chr19.genome.2M.fa",
+  "LRAA_singlecell_wf.inputBAM": "data/chr19.2M.bam",
 
-  "LRAA_singlecell_wf.initial_annot_gtf": null,
+  "LRAA_singlecell_wf.initial_annot_gtf": "data/chr19.2M.annot.gtf.gz",
   
   "LRAA_singlecell_wf.HiFi": true,
   "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing",
