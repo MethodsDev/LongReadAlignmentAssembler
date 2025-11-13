@@ -3,6 +3,7 @@ version 1.0
 import "LRAA.wdl" as LRAA
 import "subwdls/LRAA-build_sparse_matrices_from_tracking.wdl" as BuildMatrices
 import "subwdls/LRAA-gene_sparseM_to_seurat_clusters.wdl" as Seurat
+import "subwdls/Incorporate_gene_symbols.wdl" as GeneSymbols
 import "LRAA-cell_cluster_guided.wdl" as ClusterGuided
 
 workflow LRAA_singlecell_wf {
@@ -110,6 +111,20 @@ workflow LRAA_singlecell_wf {
       quant_only_cluster_guided = false
   }
 
+  if (defined(cluster_guided.LRAA_final_gtf) && defined(initial_annot_gtf)) {
+    call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
+      input:
+        sample_id = sample_id,
+        reference_gtf = select_first([initial_annot_gtf]),
+        final_gtf = select_first([cluster_guided.LRAA_final_gtf]),
+        final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz,
+        final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz,
+        final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz,
+        final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping,
+        docker = docker
+    }
+  }
+
   output {
     # Initial discovery outputs
     File init_quant_expr = LRAA_init.mergedQuantExpr
@@ -120,6 +135,7 @@ workflow LRAA_singlecell_wf {
     File init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz
     File init_sc_isoform_sparse_tar_gz = build_sc_from_init_tracking.isoform_sparse_dir_tgz
     File init_sc_splice_pattern_sparse_tar_gz = build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
+    File init_sc_gene_transcript_splicehash_mapping = build_sc_from_init_tracking.mapping_file
     File seurat_umap_pdf = cluster_cells.umap_pdf
     File seurat_cluster_assignments = cluster_cells.cluster_assignments_tsv
 
@@ -130,6 +146,7 @@ workflow LRAA_singlecell_wf {
     File final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
     File final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
+    File final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping
 
     # Convenience tarballs and matrices from the cluster-guided phase
     File partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar
@@ -140,5 +157,13 @@ workflow LRAA_singlecell_wf {
     File cluster_isoform_counts_matrix = cluster_guided.cluster_isoform_counts_matrix
     File cluster_isoform_TPM_matrix = cluster_guided.cluster_isoform_TPM_matrix
     File cluster_isoform_counts_forDiffIsoUsage = cluster_guided.cluster_isoform_counts_forDiffIsoUsage
+
+    File? incl_gene_symbols_gffcompare_tracking = add_gene_symbols.gffcompare_tracking
+    File? incl_gene_symbols_gffcompare_stats = add_gene_symbols.gffcompare_stats
+    File? incl_gene_symbols_updated_gtf = add_gene_symbols.updated_gtf_with_gene_symbols
+    File? incl_gene_symbols_updated_id_mappings = add_gene_symbols.updated_id_mappings
+    File? incl_gene_symbols_gene_sparse_tar_gz = add_gene_symbols.updated_gene_sparse_tar_gz
+    File? incl_gene_symbols_isoform_sparse_tar_gz = add_gene_symbols.updated_isoform_sparse_tar_gz
+    File? incl_gene_symbols_splice_pattern_sparse_tar_gz = add_gene_symbols.updated_splice_pattern_sparse_tar_gz
   }
 }
