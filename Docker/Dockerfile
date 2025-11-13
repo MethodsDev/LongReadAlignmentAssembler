@@ -89,6 +89,16 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
     ./configure && make && make install
 
 
+## gffcompare
+ENV GFFCOMPARE_VERSION=0.12.6
+RUN cd $SRC && \
+    git clone --depth 1 --branch v${GFFCOMPARE_VERSION} --recurse-submodules https://github.com/gpertea/gffcompare.git && \
+    cd gffcompare && \
+    make release && \
+    cp release/gffcompare /usr/local/bin/ && \
+    cd $SRC && rm -rf gffcompare
+
+
 
 ## R-stuff
 RUN apt-get install -y r-base r-base-dev
