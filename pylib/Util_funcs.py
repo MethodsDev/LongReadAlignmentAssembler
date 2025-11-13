@@ -5,6 +5,7 @@ import sys, os, re
 import subprocess
 import logging
 import string
+import time
 import pysam
 import LRAA_Globals
 from hashlib import blake2s
@@ -17,11 +18,32 @@ logger = logging.getLogger(__name__)
 def retrieve_contig_seq_from_fasta_file(contig_acc, fasta_filename):
 
     # samtools faidx <fasta> <region>
-    contig_seq_str = subprocess.check_output(
-        "samtools faidx {} {}".format(fasta_filename, contig_acc),
-        shell=True,
-        encoding="utf-8",
-    )
+    attempts = 3
+    contig_seq_str = None
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            contig_seq_str = subprocess.check_output(
+                "samtools faidx {} {}".format(fasta_filename, contig_acc),
+                shell=True,
+                encoding="utf-8",
+            )
+            break
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            logger.warning(
+                "samtools faidx failed for %s (attempt %d/%d): %s",
+                contig_acc,
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt < attempts:
+                time.sleep(1 * attempt)
+
+    if contig_seq_str is None:
+        raise last_error
 
     contig_seq_str = contig_seq_str.upper()
     contig_seq_str = contig_seq_str.split("\n")
