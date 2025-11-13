@@ -128,7 +128,8 @@ task incorporate_gene_symbols_sc {
   String updated_mapping_out = "~{sample_id}.gene_transcript_splicehashcode.withGeneSymbols.tsv"
 
   command <<<
-    set -euox pipefail
+  set -euo pipefail
+  set -x
 
     # Ensure reference GTF is plain text
     if [[ "~{reference_gtf}" == *.gz ]]; then
@@ -171,12 +172,13 @@ task incorporate_gene_symbols_sc {
       --LRAA_gtf final.gtf \
       --gffcompare_tracking ~{gffcompare_tracking}
 
-    mv id_mappings.tsv.wAnnotIDs "${updated_mapping_out}"
-    mv final.gtf.updated.gtf "${updated_gtf_out}"
+    mv id_mappings.tsv.wAnnotIDs "~{updated_mapping_out}"
+    mv final.gtf.updated.gtf "~{updated_gtf_out}"
 
-    tar -zcf "${gene_sparse_tar_out}" "${gene_dir}"
-    tar -zcf "${isoform_sparse_tar_out}" "${isoform_dir}"
-    tar -zcf "${splice_sparse_tar_out}" "${splice_dir}"
+    tar -zcf "~{gene_sparse_tar_out}" "${gene_dir}"
+    tar -zcf "~{isoform_sparse_tar_out}" "${isoform_dir}"
+    tar -zcf "~{splice_sparse_tar_out}" "${splice_dir}"
+
   >>>
 
   output {
