@@ -58,6 +58,37 @@ task LRAA_runner_task {
             while sleep ~{progress_report_interval_seconds}; do
                 if [[ -s command_output.log ]]; then
                     echo "----- LRAA progress $(date) -----" >&2
+
+                    if [[ -r /proc/meminfo ]]; then
+                        local mem_stats
+                        mem_stats=$(awk '
+                            /MemTotal:/ {total=$2}
+                            /MemAvailable:/ {avail=$2}
+                            /MemFree:/ {free=$2}
+                            END {
+                                if (!avail && free) avail = free
+                                if (total && avail) printf "%d %d\n", total, avail
+                            }
+                        ' /proc/meminfo) || mem_stats=""
+
+                        if [[ -n "$mem_stats" ]]; then
+                            local mem_total_kb mem_available_kb
+                            read -r mem_total_kb mem_available_kb <<< "$mem_stats"
+
+                            if [[ -n "$mem_total_kb" && -n "$mem_available_kb" ]]; then
+                                local mem_used_kb=$((mem_total_kb - mem_available_kb))
+                                local mem_total_mb=$((mem_total_kb / 1024))
+                                local mem_used_mb=$((mem_used_kb / 1024))
+                                if (( mem_total_kb > 0 )); then
+                                    local mem_pct=$((mem_used_kb * 100 / mem_total_kb))
+                                    echo "RAM usage: ${mem_used_mb} MiB / ${mem_total_mb} MiB (${mem_pct}%)" >&2
+                                else
+                                    echo "RAM usage: ${mem_used_mb} MiB" >&2
+                                fi
+                            fi
+                        fi
+                    fi
+
                     tail -n ~{progress_tail_lines} command_output.log >&2 || true
                     echo "----- end progress -----" >&2
                 fi
