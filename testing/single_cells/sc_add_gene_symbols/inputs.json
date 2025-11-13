@@ -1,0 +1,10 @@
+{
+    "Incorporate_gene_symbols.sample_id" : "test_sc",
+    "Incorporate_gene_symbols.reference_gtf" : "data/reference.gtf",
+    "Incorporate_gene_symbols.final_gtf" : "data/final.gtf",
+    "Incorporate_gene_symbols.final_sc_gene_sparse_tar_gz" : "data/gene_sparse.tar.gz",
+    "Incorporate_gene_symbols.final_sc_isoform_sparse_tar_gz" : "data/isoform_sparse.tar.gz",
+    "Incorporate_gene_symbols.final_sc_splice_pattern_sparse_tar_gz" : "data/splice_sparse.tar.gz",
+    "Incorporate_gene_symbols.final_sc_gene_transcript_splicehash_mapping" : "data/sc.gene_transcript_splicehashcode.tsv",
+    "Incorporate_gene_symbols.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing"
+}
