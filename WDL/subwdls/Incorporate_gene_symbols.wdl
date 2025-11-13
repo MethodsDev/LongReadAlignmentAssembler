@@ -128,7 +128,7 @@ task incorporate_gene_symbols_sc {
   String updated_mapping_out = "~{sample_id}.gene_transcript_splicehashcode.withGeneSymbols.tsv"
 
   command <<<
-    set -euo pipefail
+    set -euox pipefail
 
     # Ensure reference GTF is plain text
     if [[ "~{reference_gtf}" == *.gz ]]; then
@@ -149,9 +149,11 @@ task incorporate_gene_symbols_sc {
     cp ~{isoform_sparse_tar_gz} isoform_sparse.tar.gz
     cp ~{splice_pattern_sparse_tar_gz} splice_sparse.tar.gz
 
+    set +o pipefail  # allow tar|head probing without SIGPIPE failures under pipefail
     gene_dir=$(tar -tzf gene_sparse.tar.gz | head -1 | cut -d/ -f1 | sed 's@^\./@@')
     isoform_dir=$(tar -tzf isoform_sparse.tar.gz | head -1 | cut -d/ -f1 | sed 's@^\./@@')
     splice_dir=$(tar -tzf splice_sparse.tar.gz | head -1 | cut -d/ -f1 | sed 's@^\./@@')
+    set -o pipefail
 
     tar -xzf gene_sparse.tar.gz
     tar -xzf isoform_sparse.tar.gz
