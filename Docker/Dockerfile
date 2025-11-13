@@ -89,16 +89,6 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
     ./configure && make && make install
 
 
-## gffcompare
-ENV GFFCOMPARE_VERSION=0.12.6
-RUN cd $SRC && \
-    git clone --depth 1 --branch v${GFFCOMPARE_VERSION} --recurse-submodules https://github.com/gpertea/gffcompare.git && \
-    cd gffcompare && \
-    make release && \
-    cp release/gffcompare /usr/local/bin/ && \
-    cd $SRC && rm -rf gffcompare
-
-
 
 ## R-stuff
 RUN apt-get install -y r-base r-base-dev
@@ -143,8 +133,21 @@ RUN python -m pip install \
         
 WORKDIR $SRC
 
-ENV LRAA_VERSION="v0.12.0-predev11"
-ENV LRAA_CO=4df3252255bd3afc3fd02467a7fe6c8b57f00936
+## gffcompare
+ENV GFFCOMPARE_VERSION=0.12.6
+RUN cd $SRC && \
+    git clone --depth 1 --branch v${GFFCOMPARE_VERSION} --recurse-submodules https://github.com/gpertea/gffcompare.git && \
+    cd gffcompare && \
+    make release && \
+    cp gffcompare trmap /usr/local/bin/ && \
+    cd $SRC && rm -rf gffcompare
+
+
+WORKDIR $SRC
+
+    
+ENV LRAA_VERSION="v0.12.0-predev12"
+ENV LRAA_CO=8b4f3ae75211472866485471adc54229044345a6
 
 
 # update VERSION and LRAA_CO files with version info and checkout
