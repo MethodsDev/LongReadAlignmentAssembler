@@ -50,7 +50,7 @@ task LRAA_runner_task {
     
     command <<<
 
-        set -ex
+        set -e
 
         : > command_output.log
 
