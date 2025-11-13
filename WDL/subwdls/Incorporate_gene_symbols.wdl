@@ -84,12 +84,16 @@ task run_gffcompare {
       tail -n 200 gffcompare.log >&2
       exit 1
     }
+
+    mv ~{output_prefix} ~{output_prefix}.stats
+    mv gffcompare.log ~{output_prefix}.gffcompare.log
+    
   >>>
 
   output {
     File tracking = "~{output_prefix}.tracking"
     File stats = "~{output_prefix}.stats"
-    File log = "gffcompare.log"
+    File log = "~{output_prefix}.gffcompare.log"
   }
 
   runtime {
