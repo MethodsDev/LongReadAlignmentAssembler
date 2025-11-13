@@ -1,13 +1,10 @@
-
 v0.12.0, ********
 - caching initially constructed splice graphs for reuse in downstream quants to avoid reconstruction effort.
 - all splice graphs for all steps leverage the normalized read coverage (not just isoform ID)
 - added --num_parallel_contigs to control contig-level concurrency (default 4 workers); --num_threads_per_worker (legacy --CPU alias) specifies cores allocated per contig/strand worker (default 1 core)
 - default --oversimplify now targets mitochondrial contigs ("chrM,M")
 - wdls optimized for splitting data per chromosome
-- chromosome/strand subjobs shuffled for improved load balancing
-
-
+- scatter runs per chromosome only (strand-level splitting removed) with subjobs shuffled for improved load balancing
 
 v0.11.0, November 10, 2025
 - LRAA wdls to scatter over the chromosome/strand combo

@@ -70,7 +70,7 @@ workflow LRAA_wf {
 
         scatter (contig_index in range(num_chromosomes)) {
             String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
-            # Run LRAA separately per chromosome while keeping contig-level parallelism enabled within each shard
+            # Run LRAA separately per chromosome
             call LRAA_runner.LRAA_runner as LRAA_scatter {
                 input:
                     sample_id = sample_id,

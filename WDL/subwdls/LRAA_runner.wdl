@@ -206,10 +206,10 @@ workflow LRAA_runner {
             docker=docker,
             numThreadsPerWorker=numThreadsPerWorker,
             memoryGB=memoryGB,
-         diskSizeGB=diskSizeGB,
-         region=region,
-         progress_report_interval_seconds=progress_report_interval_seconds,
-         progress_tail_lines=progress_tail_lines
+            diskSizeGB=diskSizeGB,
+            region=region,
+            progress_report_interval_seconds=progress_report_interval_seconds,
+            progress_tail_lines=progress_tail_lines
      }
 
      output {
