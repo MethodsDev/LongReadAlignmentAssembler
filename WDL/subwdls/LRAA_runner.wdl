@@ -55,6 +55,12 @@ task LRAA_runner_task {
         : > command_output.log
 
         progress_reporter() {
+            local contig_prefix="~{output_prefix_use}.~{output_suffix}"
+            local -a contig_tmp_dirs=(
+                "__${contig_prefix}.contigtmp"
+                "${contig_prefix}.contigtmp"
+            )
+
             while sleep ~{progress_report_interval_seconds}; do
                 if [[ -s command_output.log ]]; then
                     echo "----- LRAA progress $(date) -----" >&2
@@ -87,6 +93,41 @@ task LRAA_runner_task {
                                 fi
                             fi
                         fi
+                    fi
+
+                    local printed_worker_progress=0
+                    local contig_tmp_dir
+                    for contig_tmp_dir in "${contig_tmp_dirs[@]}"; do
+                        if [[ ! -d "$contig_tmp_dir" ]]; then
+                            continue
+                        fi
+
+                        local nullglob_restore="shopt -u nullglob"
+                        nullglob_restore=$(shopt -p nullglob 2>/dev/null) || nullglob_restore="shopt -u nullglob"
+                        shopt -s nullglob
+                        local -a err_logs=("$contig_tmp_dir"/*/*/*.err.log)
+                        eval "$nullglob_restore"
+
+                        if (( ${#err_logs[@]} == 0 )); then
+                            continue
+                        fi
+
+                        if (( !printed_worker_progress )); then
+                            echo "----- contig worker progress -----" >&2
+                            printed_worker_progress=1
+                        fi
+
+                        local err_log
+                        for err_log in "${err_logs[@]}"; do
+                            echo "=== ${err_log} ===" >&2
+                            tail -n ~{progress_tail_lines} "$err_log" >&2 || true
+                        done
+
+                        break
+                    done
+
+                    if (( printed_worker_progress )); then
+                        echo "----- end contig worker progress -----" >&2
                     fi
 
                     tail -n ~{progress_tail_lines} command_output.log >&2 || true
