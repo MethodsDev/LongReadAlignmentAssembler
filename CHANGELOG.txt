@@ -1,10 +1,12 @@
-v0.12.0, ********
+v0.12.0, November 14, 2025
 - caching initially constructed splice graphs for reuse in downstream quants to avoid reconstruction effort.
 - all splice graphs for all steps leverage the normalized read coverage (not just isoform ID)
 - added --num_parallel_contigs to control contig-level concurrency (default 4 workers); --num_threads_per_worker (legacy --CPU alias) specifies cores allocated per contig/strand worker (default 1 core)
 - default --oversimplify now targets mitochondrial contigs ("chrM,M")
 - wdls optimized for splitting data per chromosome
 - scatter runs per chromosome only (strand-level splitting removed) with subjobs shuffled for improved load balancing
+- including ref-annot gene symbol integration into single cell pipeline
+
 
 v0.11.0, November 10, 2025
 - LRAA wdls to scatter over the chromosome/strand combo
@@ -12,7 +14,6 @@ v0.11.0, November 10, 2025
 - more logging and progress monitoring for long running parts
 - using Leiden alg for isoform-to-gene clustering and adjustments for large clusters to avoid runtime performance issues
 - added --verbose to force direct logging to the terminal. When running in default parallel contig mode, all logging info is written to the corresponding chr/strand err log
-
 
     
 v0.10.0 November 2, 2025
