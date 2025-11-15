@@ -22,6 +22,10 @@ workflow LRAA_singlecell_wf {
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
 
+  # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
+    File? precomputed_init_quant_tracking
+    File? precomputed_init_gtf
+
     # Resources and docker (propagated to subcalls where applicable)
     Int numThreadsPerWorker = 5
     Int numThreadsPerWorkerScattered = 5
@@ -48,31 +52,41 @@ workflow LRAA_singlecell_wf {
     Int seed = 1
   }
 
-  # 1) Initial transcript discovery + quantification on the full BAM
-  call LRAA.LRAA_wf as LRAA_init {
-    input:
-      sample_id = sample_id,
-      referenceGenome = referenceGenome,
-      inputBAM = inputBAM,
-      annot_gtf = initial_annot_gtf,
-      HiFi = HiFi,
-      oversimplify = oversimplify,
-      main_chromosomes = main_chromosomes,
-      region = region,
-      numThreadsPerWorker = numThreadsPerWorker,
-      numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-      num_parallel_contigs = num_parallel_contigs,
-      memoryGB = memoryGB,
-      memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
-      diskSizeGB = diskSizeGB,
-      docker = docker
+  # Only skip the initial discovery call when the downstream-critical artifacts are provided
+  Boolean has_precomputed_init = defined(precomputed_init_quant_tracking) && defined(precomputed_init_gtf)
+  Boolean run_initial_phase = !has_precomputed_init
+
+  # 1) Initial transcript discovery + quantification on the full BAM (skipped when precomputed inputs are provided)
+  if (run_initial_phase) {
+    call LRAA.LRAA_wf as LRAA_init {
+      input:
+        sample_id = sample_id,
+        referenceGenome = referenceGenome,
+        inputBAM = inputBAM,
+        annot_gtf = initial_annot_gtf,
+        HiFi = HiFi,
+        oversimplify = oversimplify,
+        main_chromosomes = main_chromosomes,
+        region = region,
+        numThreadsPerWorker = numThreadsPerWorker,
+        numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
+        num_parallel_contigs = num_parallel_contigs,
+        memoryGB = memoryGB,
+        memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+        diskSizeGB = diskSizeGB,
+        docker = docker
+    }
   }
+
+  File? init_quant_expr_file = if (run_initial_phase) then select_first([LRAA_init.mergedQuantExpr]) else None
+  File init_quant_tracking_file = if (has_precomputed_init) then select_first([precomputed_init_quant_tracking]) else select_first([LRAA_init.mergedQuantTracking])
+  File? init_gtf_file = if (has_precomputed_init) then select_first([precomputed_init_gtf]) else LRAA_init.mergedGTF
 
   # 2) Build single-cell sparse matrices from the initial tracking
   call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
     input:
       sample_id = sample_id,
-      tracking_file = LRAA_init.mergedQuantTracking,
+      tracking_file = init_quant_tracking_file,
       docker = docker,
       memoryGB = memoryGBbuildSparseMatrices
   }
@@ -101,7 +115,7 @@ workflow LRAA_singlecell_wf {
       referenceGenome = referenceGenome,
       inputBAM = inputBAM,
       cell_clusters_info = cluster_cells.cluster_assignments_tsv,
-      annot_gtf = LRAA_init.mergedGTF,
+      annot_gtf = init_gtf_file,
       HiFi = HiFi,
       oversimplify = oversimplify,
       main_chromosomes = main_chromosomes,
@@ -135,9 +149,9 @@ workflow LRAA_singlecell_wf {
 
   output {
     # Initial discovery outputs
-    File init_quant_expr = LRAA_init.mergedQuantExpr
-    File init_quant_tracking = LRAA_init.mergedQuantTracking
-    File? init_gtf = LRAA_init.mergedGTF
+    File? init_quant_expr = init_quant_expr_file
+    File? init_quant_tracking = if (run_initial_phase) then init_quant_tracking_file else None
+    File? init_gtf = if (run_initial_phase) then init_gtf_file else None
 
     # Initial single-cell matrices and clustering inputs/outputs
     File init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz
