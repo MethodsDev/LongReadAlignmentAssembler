@@ -29,6 +29,11 @@ workflow LRAA_singlecell_wf {
     Int numThreadsPerLRAA = 4
     Int memoryGB = 64
     Int memoryGBPerWorkerScattered = 32
+    Int memoryGBbuildSparseMatrices = 32
+    Int memoryGBSeurat = 32
+    Int memoryGBmergeGTFs = 32
+    Int memoryGBquantFinal = 32
+    Int memoryGBscSparseMatrices = 32
     Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -69,7 +74,7 @@ workflow LRAA_singlecell_wf {
       sample_id = sample_id,
       tracking_file = LRAA_init.mergedQuantTracking,
       docker = docker,
-      memoryGB = 16
+      memoryGB = memoryGBbuildSparseMatrices
   }
 
   # 3) Cluster cells from the gene-level sparse matrix
@@ -78,7 +83,7 @@ workflow LRAA_singlecell_wf {
       sample_id = sample_id,
       gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz,
       docker = docker,
-      memoryGB = 32,
+      memoryGB = memoryGBSeurat,
       min_cells = min_cells,
       min_features = min_features,
       percent_mt_max = percent_mt_max,
@@ -106,9 +111,9 @@ workflow LRAA_singlecell_wf {
       numThreadsPerLRAA = numThreadsPerLRAA,
       memoryGB = memoryGB,
       memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
-      memoryGBmergeGTFs = 32,
-      memoryGBquantFinal = 32,
-      memoryGBscSparseMatrices = 16,
+      memoryGBmergeGTFs = memoryGBmergeGTFs,
+      memoryGBquantFinal = memoryGBquantFinal,
+      memoryGBscSparseMatrices = memoryGBscSparseMatrices,
       diskSizeGB = diskSizeGB,
       docker = docker,
       quant_only_cluster_guided = false
