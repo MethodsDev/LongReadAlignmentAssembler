@@ -11,6 +11,7 @@ import Splice_graph
 import intervaltree as itree
 from Bam_alignment_extractor import Bam_alignment_extractor
 import pickle
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
@@ -148,14 +149,13 @@ class Pretty_alignment_manager:
             else:
                 alignment_cache_file = SE_masked_alignment_cache_file
 
-        if use_cache and os.path.exists(alignment_cache_file):
+        if use_cache and self._cache_ready(alignment_cache_file):
             logger.info(
                 "[%s%s] reusing earlier-generated pretty alignments",
                 contig_acc,
                 contig_strand,
             )
-            with open(alignment_cache_file, "rb") as f:
-                pretty_alignments = pickle.load(f)
+            pretty_alignments = self._load_pickle_cache(alignment_cache_file)
             try:
                 cache_sz_mb = os.path.getsize(alignment_cache_file) / (1024.0 * 1024.0)
             except Exception:
@@ -241,25 +241,24 @@ class Pretty_alignment_manager:
             pretty_alignments = [x.lighten() for x in pretty_alignments]
             self._log_mem("after lighten", extra={"n": len(pretty_alignments)})
             if use_cache:
-                with open(all_alignment_cache_file, "wb") as f:
-                    pickle.dump(pretty_alignments, f)
+                self._write_pickle_cache(all_alignment_cache_file, pretty_alignments)
+                logger.info(
+                    "[%s%s] Saved %d alignments to cache: %s",
+                    contig_acc,
+                    contig_strand,
+                    len(pretty_alignments),
+                    all_alignment_cache_file,
+                )
+                try:
+                    cache_sz_mb = os.path.getsize(all_alignment_cache_file) / (1024.0 * 1024.0)
                     logger.info(
-                        "[%s%s] Saved %d alignments to cache: %s",
+                        "[%s%s] Cache file size (all): %.1f MB",
                         contig_acc,
                         contig_strand,
-                        len(pretty_alignments),
-                        all_alignment_cache_file,
+                        cache_sz_mb,
                     )
-                    try:
-                        cache_sz_mb = os.path.getsize(all_alignment_cache_file) / (1024.0 * 1024.0)
-                        logger.info(
-                            "[%s%s] Cache file size (all): %.1f MB",
-                            contig_acc,
-                            contig_strand,
-                            cache_sz_mb,
-                        )
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
 
             # Define SE and ME alignments and cache them separately when requested
@@ -277,45 +276,43 @@ class Pretty_alignment_manager:
 
                 if use_cache:
                     # store the ME and SE alignments
-                    with open(ME_alignment_cache_file, "wb") as f:
-                        pickle.dump(ME_alignments, f)
+                    self._write_pickle_cache(ME_alignment_cache_file, ME_alignments)
+                    logger.info(
+                        "[%s%s] Saved %d alignments to cache: %s",
+                        contig_acc,
+                        contig_strand,
+                        len(ME_alignments),
+                        ME_alignment_cache_file,
+                    )
+                    try:
+                        cache_sz_mb = os.path.getsize(ME_alignment_cache_file) / (1024.0 * 1024.0)
                         logger.info(
-                            "[%s%s] Saved %d alignments to cache: %s",
+                            "[%s%s] Cache file size (ME): %.1f MB",
                             contig_acc,
                             contig_strand,
-                            len(ME_alignments),
-                            ME_alignment_cache_file,
+                            cache_sz_mb,
                         )
-                        try:
-                            cache_sz_mb = os.path.getsize(ME_alignment_cache_file) / (1024.0 * 1024.0)
-                            logger.info(
-                                "[%s%s] Cache file size (ME): %.1f MB",
-                                contig_acc,
-                                contig_strand,
-                                cache_sz_mb,
-                            )
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
 
-                    with open(SE_alignment_cache_file, "wb") as f:
-                        pickle.dump(SE_alignments, f)
+                    self._write_pickle_cache(SE_alignment_cache_file, SE_alignments)
+                    logger.info(
+                        "[%s%s] Saved %d alignments to cache: %s",
+                        contig_acc,
+                        contig_strand,
+                        len(SE_alignments),
+                        SE_alignment_cache_file,
+                    )
+                    try:
+                        cache_sz_mb = os.path.getsize(SE_alignment_cache_file) / (1024.0 * 1024.0)
                         logger.info(
-                            "[%s%s] Saved %d alignments to cache: %s",
+                            "[%s%s] Cache file size (SE): %.1f MB",
                             contig_acc,
                             contig_strand,
-                            len(SE_alignments),
-                            SE_alignment_cache_file,
+                            cache_sz_mb,
                         )
-                        try:
-                            cache_sz_mb = os.path.getsize(SE_alignment_cache_file) / (1024.0 * 1024.0)
-                            logger.info(
-                                "[%s%s] Cache file size (SE): %.1f MB",
-                                contig_acc,
-                                contig_strand,
-                                cache_sz_mb,
-                            )
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
 
                 if restrict_splice_type == "ME":
                     pretty_alignments = ME_alignments
@@ -326,14 +323,13 @@ class Pretty_alignment_manager:
         if SE_read_encapsulation_mask is not None:
             assert restrict_splice_type == "SE"
 
-            if use_cache and os.path.exists(SE_masked_alignment_cache_file):
+            if use_cache and self._cache_ready(SE_masked_alignment_cache_file):
                 logger.info(
                     "[%s%s] reusing earlier-generated pretty alignments",
                     contig_acc,
                     contig_strand,
                 )
-                with open(SE_masked_alignment_cache_file, "rb") as f:
-                    pretty_alignments = pickle.load(f)
+                pretty_alignments = self._load_pickle_cache(SE_masked_alignment_cache_file)
                 self._log_mem("loaded SE masked alignments from cache", extra={"n": len(pretty_alignments)})
             else:
                 # apply ME mask of encapsulated SEs
@@ -342,14 +338,13 @@ class Pretty_alignment_manager:
                 self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
                 
                 if use_cache:
-                    with open(SE_masked_alignment_cache_file, "wb") as f:
-                        pickle.dump(pretty_alignments, f)
-                        logger.info(
-                            "[%s%s] Saved corrected alignments to cache: %s",
-                            contig_acc,
-                            contig_strand,
-                            SE_masked_alignment_cache_file,
-                        )
+                    self._write_pickle_cache(SE_masked_alignment_cache_file, pretty_alignments)
+                    logger.info(
+                        "[%s%s] Saved corrected alignments to cache: %s",
+                        contig_acc,
+                        contig_strand,
+                        SE_masked_alignment_cache_file,
+                    )
 
         self._log_mem("end retrieve_pretty_alignments", extra={"n": len(pretty_alignments), "sec": f"{(time.time()-t_start):.2f}"})
         return pretty_alignments                
@@ -395,4 +390,50 @@ class Pretty_alignment_manager:
                 non_encapsulated_pretty_alignments.append(pretty_alignment)
 
         return(non_encapsulated_pretty_alignments)
-        
+
+    # --- cache helpers ---
+
+    def _cache_ready(self, cache_path: str) -> bool:
+        """Return True when the pickle cache and its OK marker exist."""
+        if not os.path.exists(cache_path):
+            return False
+        ok_path = self._cache_ok_path(cache_path)
+        if not os.path.exists(ok_path):
+            logger.warning("Cache file present but OK marker missing: %s", cache_path)
+            return False
+        return True
+
+    def _load_pickle_cache(self, cache_path: str):
+        with open(cache_path, "rb") as handle:
+            return pickle.load(handle)
+
+    def _write_pickle_cache(self, cache_path: str, payload: Any) -> None:
+        """Atomically write a pickle cache and create its OK marker."""
+        tmp_path = f"{cache_path}.tmp"
+        ok_path = self._cache_ok_path(cache_path)
+        try:
+            try:
+                if os.path.exists(ok_path):
+                    os.remove(ok_path)
+            except Exception:
+                pass
+            with open(tmp_path, "wb") as handle:
+                pickle.dump(payload, handle)
+            os.replace(tmp_path, cache_path)
+            with open(ok_path, "w", encoding="utf-8") as marker:
+                marker.write("ok\n")
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(ok_path):
+                    os.remove(ok_path)
+            except Exception:
+                pass
+            raise
+
+    def _cache_ok_path(self, cache_path: str) -> str:
+        return f"{cache_path}.ok"
