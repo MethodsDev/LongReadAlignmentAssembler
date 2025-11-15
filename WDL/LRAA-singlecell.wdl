@@ -22,7 +22,7 @@ workflow LRAA_singlecell_wf {
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
 
-  # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
+    # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
     File? precomputed_init_gtf
 
@@ -78,9 +78,11 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  File? init_quant_expr_file = if (run_initial_phase) then select_first([LRAA_init.mergedQuantExpr]) else None
-  File init_quant_tracking_file = if (has_precomputed_init) then select_first([precomputed_init_quant_tracking]) else select_first([LRAA_init.mergedQuantTracking])
-  File? init_gtf_file = if (has_precomputed_init) then select_first([precomputed_init_gtf]) else LRAA_init.mergedGTF
+  File? init_quant_expr_file = LRAA_init.mergedQuantExpr
+  File? init_quant_tracking_generated = LRAA_init.mergedQuantTracking
+  File init_quant_tracking_file = if (!run_initial_phase && defined(precomputed_init_quant_tracking)) then select_first([precomputed_init_quant_tracking]) else select_first([init_quant_tracking_generated])
+  File? init_gtf_generated = LRAA_init.mergedGTF
+  File? init_gtf_file = if (!run_initial_phase && defined(precomputed_init_gtf)) then select_first([precomputed_init_gtf]) else init_gtf_generated
 
   # 2) Build single-cell sparse matrices from the initial tracking
   call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
@@ -149,9 +151,9 @@ workflow LRAA_singlecell_wf {
 
   output {
     # Initial discovery outputs
-    File? init_quant_expr = init_quant_expr_file
-    File? init_quant_tracking = if (run_initial_phase) then init_quant_tracking_file else None
-    File? init_gtf = if (run_initial_phase) then init_gtf_file else None
+  File? init_quant_expr = init_quant_expr_file
+  File? init_quant_tracking = init_quant_tracking_generated
+  File? init_gtf = init_gtf_generated
 
     # Initial single-cell matrices and clustering inputs/outputs
     File init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz
