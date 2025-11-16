@@ -1,9 +1,38 @@
 #!/usr/bin/env python3
-import argparse, os, sys, gzip
+import argparse, os, sys, gzip, logging
 import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
 from collections import defaultdict
+try:
+    import psutil
+except ImportError:  # pragma: no cover - psutil might be missing in minimal envs
+    psutil = None
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is UNIX-only
+    resource = None
+
+logger = logging.getLogger(__name__)
+
+
+def _rss_bytes():
+    if psutil is not None:
+        return psutil.Process(os.getpid()).memory_info().rss
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss = usage.ru_maxrss
+        if sys.platform == "darwin":
+            return rss
+        return rss * 1024
+    return 0
+
+
+def format_rss():
+    rss = _rss_bytes()
+    if rss <= 0:
+        return "unknown"
+    return f"{rss / (1024 ** 2):.1f} MiB"
 
 def count_lines(filename):
     """Count lines in file (for progress estimation)."""
@@ -31,13 +60,18 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
     rows_processed = 0
 
     with opener(filename, "rt") as f:
-        reader = pd.read_csv(f, sep="\t", chunksize=chunksize,
-                             usecols=["read_name", feature_col, "frac_assigned"])
+        reader = pd.read_csv(
+            f,
+            sep="\t",
+            chunksize=chunksize,
+            usecols=["read_name", feature_col, "frac_assigned"],
+            engine="c",  # enforce the C engine; pyarrow backend has triggered segfaults in Terra runtime
+        )
         for i, chunk in enumerate(reader, 1):
             rows_processed += len(chunk)
             pct = (rows_processed / total_data_lines) * 100
-            sys.stderr.write(f"\r  [chunk {i}] processed ~{pct:.1f}% of rows")
-            sys.stderr.flush()
+            logger.info("[chunk %s] processed ~%.1f%% of rows (RSS %s)",
+                        i, pct, format_rss())
 
             # split read_name into cell_barcode
             split = chunk["read_name"].str.split("^", n=2, expand=True)
@@ -47,7 +81,7 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
             for (feat, bc), val in grouped.items():
                 agg[(feat, bc)] += val
 
-    sys.stderr.write("\r  finished 100.0%\n")
+    logger.info("finished 100.0%% of rows (RSS %s)", format_rss())
 
     # convert dict → dataframe
     feature_ids, barcodes, counts = zip(*((f, c, v) for (f, c), v in agg.items()))
@@ -56,7 +90,8 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
                          "UMI_counts": counts})
 
 def make_sparse_matrix_outputs(counts_data, outdirname):
-    print(f"-making sparse matrix outputs for: {outdirname}")
+    logger.info("making sparse matrix outputs for: %s (RSS %s)",
+                outdirname, format_rss())
     os.makedirs(outdirname, exist_ok=True)
 
     features = counts_data["feature_id"].astype("category")
@@ -86,7 +121,7 @@ def make_sparse_matrix_outputs(counts_data, outdirname):
         with open(path, "rb") as f_in, gzip.open(path + ".gz", "wb") as f_out:
             f_out.writelines(f_in)
         os.remove(path)
-    print(f"done with {outdirname}")
+    logger.info("done with %s (RSS %s)", outdirname, format_rss())
 
 def main():
     parser = argparse.ArgumentParser()
@@ -95,6 +130,12 @@ def main():
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        stream=sys.stderr,
+    )
 
     # mapping file (small)
     opener = gzip.open if args.tracking.endswith(".gz") else open
@@ -106,12 +147,12 @@ def main():
     for label, col in [("gene", "gene_id"),
                        ("isoform", "transcript_id"),
                        ("splice_pattern", "transcript_splice_hash_code")]:
-        print(f"-processing {label} level counts")
+        logger.info("processing %s level counts (RSS %s)", label, format_rss())
         counts = stream_group_counts(args.tracking, col, chunksize=args.chunksize)
         counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
         make_sparse_matrix_outputs(counts, f"{args.output_prefix}^{label}-sparseM")
 
-    print("all done.")
+    logger.info("all done (RSS %s)", format_rss())
 
 if __name__ == "__main__":
     main()
