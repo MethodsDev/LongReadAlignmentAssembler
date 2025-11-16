@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, os, sys, gzip, logging
+import argparse, os, sys, gzip, logging, faulthandler
 import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
@@ -130,6 +130,8 @@ def main():
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
     args = parser.parse_args()
+
+    faulthandler.enable()
 
     logging.basicConfig(
         level=logging.INFO,
