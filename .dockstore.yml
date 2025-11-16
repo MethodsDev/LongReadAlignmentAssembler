@@ -36,3 +36,9 @@ workflows:
      authors:
          - name: Brian Haas & chatgpt
            email: bhaas@broadinstitute.org
+   - name: LRAA-build_sparse_matrices_from_tracking
+     subclass: WDL
+     primaryDescriptorPath: /WDL/subwdls/LRAA-build_sparse_matrices_from_tracking.wdl
+     authors:
+         - name: Brian Haas & chatgpt
+           email: bhaas@broadinstitute.org
