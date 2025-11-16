@@ -6,15 +6,15 @@ sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"])
 )
 
-from Splice_graph import Splice_graph
-from Transcript import Transcript, GTF_contig_to_transcripts
-from LRAA import LRAA
-import LRAA_Globals
+from Splice_graph import Splice_graph  # type: ignore
+from Transcript import Transcript, GTF_contig_to_transcripts  # type: ignore
+from LRAA import LRAA  # type: ignore
+import LRAA_Globals  # type: ignore
 import logging
 import traceback
 import argparse
 from collections import defaultdict
-import Util_funcs
+import Util_funcs  # type: ignore
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -130,6 +130,16 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--store_backend",
+        default=LRAA_Globals.config.get("store_backend", "memory"),
+        choices=["auto", "lmdb", "sqlite", "memory"],
+        help=(
+            "Storage backend for read tracking stores (ReadNameStore/MpReadIdStore). "
+            "Choices: auto (prefer lmdb, fallback sqlite), lmdb, sqlite, memory."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -138,6 +148,27 @@ def main():
         logger.debug("Debug logging enabled for merge script.")
 
     LRAA_Globals.LRAA_MODE = "MERGE"
+
+    # Set store backend behavior and propagate to env so helpers honor it
+    resolved_backend = (args.store_backend or "memory").lower()
+    LRAA_Globals.config["store_backend"] = resolved_backend
+    try:
+        if resolved_backend == "memory":
+            os.environ["LRAA_READSTORE_BACKEND"] = "memory"
+        elif resolved_backend == "sqlite":
+            os.environ["LRAA_READSTORE_BACKEND"] = "sqlite"
+        elif resolved_backend == "lmdb":
+            os.environ["LRAA_READSTORE_BACKEND"] = "lmdb"
+            try:
+                import lmdb  # type: ignore  # noqa: F401
+            except Exception:
+                sys.exit("Error: --store_backend lmdb requested but python-lmdb is not installed.")
+        else:  # auto
+            os.environ.pop("LRAA_READSTORE_BACKEND", None)
+    except Exception:
+        pass
+
+    logger.info("merge store backend: %s", resolved_backend)
 
     # Map community clustering flags into global config
     try:

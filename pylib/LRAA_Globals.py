@@ -1,3 +1,5 @@
+import os
+
 ## global vars / constants
 
 SPACER = "???"
@@ -196,6 +198,13 @@ config = {
     "oversimplify_enabled": False,
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
 }
+
+# Default read-store backend: favor in-memory unless caller overrides later (CLI/env).
+if "LRAA_READSTORE_BACKEND" not in os.environ:
+    try:
+        os.environ["LRAA_READSTORE_BACKEND"] = str(config.get("store_backend", "memory"))
+    except Exception:
+        pass
 
 # Global, per-run external stores for read tracking (set at runtime by entry script)
 # When set, MultiPath.get_read_names() can stream read names via these stores even when

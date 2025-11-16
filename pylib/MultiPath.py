@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re
+import hashlib
 from collections import defaultdict
 from LRAA_Globals import SPACER
 import Simple_path_utils
@@ -74,6 +75,11 @@ class MultiPath:
             self._read_count = int(read_count)
         else:
             self._read_count = len(self._read_ids)
+            if self._read_count == 0 and read_names is not None:
+                try:
+                    self._read_count = len(read_names)
+                except Exception:
+                    self._read_count = 0
 
         self._exon_segments = Simple_path_utils.merge_adjacent_segments(exon_segments)
 
@@ -569,6 +575,9 @@ class MultiPath:
                         return int(name_store.get_or_add(value))
                 except Exception:
                     return None
+                # fall back to deterministic hash-based identifier when no store is available
+                digest = hashlib.sha1(value.encode("utf-8", "ignore")).hexdigest()
+                return int(digest[:16], 16)
         except Exception:
             return None
         return None
