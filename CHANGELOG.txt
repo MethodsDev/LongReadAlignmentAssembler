@@ -1,3 +1,8 @@
+v0.12.1, November 16, 2025
+- merge_LRAA script allows for alternative backends but defaults to in-memory
+- bugfix: MultiPath assumed every read name could be resolved to a compact ID via READ_NAME_STORE. On Terra’s merge job that store failed to initialize, so the fake provenance names for input transcripts never mapped to IDs, _read_count stayed zero, and MultiPathCounter.add tripped assert multipath_obj.get_read_count() > 0. We hardened MultiPath to fall back to deterministic hash-based IDs when the store is unavailable and to seed the count from the provided read_names, so the counter always sees a positive weight even in store-less merge mode.
+
+
 v0.12.0, November 14, 2025
 - caching initially constructed splice graphs for reuse in downstream quants to avoid reconstruction effort.
 - all splice graphs for all steps leverage the normalized read coverage (not just isoform ID)
