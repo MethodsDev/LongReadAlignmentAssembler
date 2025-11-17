@@ -147,7 +147,7 @@ WORKDIR $SRC
 
 
 ENV LRAA_VERSION="v0.12.2"
-ENV LRAA_CO=581e0b4c8bd24e0f29cdceb6345de034ae2bf9bd
+ENV LRAA_CO=ec3b6fc88dc4afd4291fcde47485137f7db1eaea
 
 
 # update VERSION and LRAA_CO files with version info and checkout
