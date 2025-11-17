@@ -23,7 +23,6 @@ workflow LRAA_cell_cluster_guided {
         Int numThreadsPerWorker = 2
         Int numThreadsPerWorkerScattered = 9
         Int num_parallel_contigs = 3
-        Int numThreadsPerLRAA = 5
         Int memoryGB = 64
         Int memoryGBPerWorkerScattered = 32
         Int memoryGBmergeGTFs = 32
@@ -127,7 +126,8 @@ workflow LRAA_cell_cluster_guided {
             bam_files = partition_bam_by_cell_cluster.partitioned_bams,
             HiFi = HiFi,
             oversimplify = oversimplify,
-            numThreads = numThreadsPerLRAA,
+            num_parallel_contigs = num_parallel_contigs,
+            num_threads_per_worker = numThreadsPerWorker,
             memoryGB = memoryGBquantFinal,
             docker = docker
     }
@@ -405,12 +405,15 @@ task LRAA_quant_bam_list {
         String? oversimplify
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
-        Int numThreads = 4
+        Int num_parallel_contigs = 3
+        Int num_threads_per_worker = 2
         Int memoryGB = 32
         Int progress_report_interval_seconds = 300
         Int progress_tail_lines = 20
         String docker
     }
+
+    Int numThreads = num_parallel_contigs * num_threads_per_worker
 
     Int disksize = 50 + ceil(2 * size(bam_files, "GB"))
 
@@ -477,7 +480,8 @@ task LRAA_quant_bam_list {
                --bam_list bam_list.txt \
                --gtf ~{annot_gtf} \
                --quant_only \
-               --CPU ~{numThreads} \
+              --num_parallel_contigs ~{num_parallel_contigs} \
+              --num_threads_per_worker ~{num_threads_per_worker} \
          ~{"--oversimplify " + oversimplify} \
                ~{true="--HiFi" false='' HiFi} \
                --cell_barcode_tag ~{cell_barcode_tag} --read_umi_tag ~{read_umi_tag} \
