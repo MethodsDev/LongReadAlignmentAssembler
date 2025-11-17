@@ -42,6 +42,43 @@ def count_lines(filename):
             pass
     return i
 
+
+def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
+    """Write the gene/transcript/splice hash crosswalk without loading entire file."""
+
+    columns = [
+        "gene_id",
+        "transcript_id",
+        "transcript_splice_hash_code",
+    ]
+
+    opener = gzip.open if tracking_path.endswith(".gz") else open
+    unique_entries = set()
+
+    with opener(tracking_path, "rt") as handle:
+        reader = pd.read_csv(
+            handle,
+            sep="\t",
+            chunksize=chunksize,
+            usecols=columns,
+            engine=engine,
+        )
+        for chunk in reader:
+            chunk = chunk.fillna("")
+            for entry in chunk.itertuples(index=False, name=None):
+                unique_entries.add(entry)
+
+    if unique_entries:
+        mapping_df = pd.DataFrame(sorted(unique_entries), columns=columns)
+    else:
+        mapping_df = pd.DataFrame(columns=columns)
+
+    mapping_df.to_csv(
+        f"{output_prefix}.gene_transcript_splicehashcode.tsv",
+        sep="\t",
+        index=False,
+    )
+
 def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="python"):
     """
     Stream the tracking file in chunks and aggregate frac_assigned
@@ -195,18 +232,18 @@ def main():
         stream=sys.stderr,
     )
 
-    # mapping file (small)
-    opener = gzip.open if args.tracking.endswith(".gz") else open
-    ids = pd.read_csv(opener(args.tracking, "rt"), sep="\t",
-                      usecols=["gene_id","transcript_id","transcript_splice_hash_code"])
-    ids.drop_duplicates().to_csv(f"{args.output_prefix}.gene_transcript_splicehashcode.tsv",
-                                 sep="\t", index=False)
+    write_mapping_file(
+        args.tracking,
+        args.output_prefix,
+        chunksize=args.chunksize,
+        engine=args.csv_engine,
+    )
 
     for label, col in [
-        ("splice_pattern", "transcript_splice_hash_code"),
         ("gene", "gene_id"),
-        ("isoform", "transcript_id")
-                       ]:
+        ("isoform", "transcript_id"),
+        ("splice_pattern", "transcript_splice_hash_code"),
+    ]:
         logger.info("processing %s level counts (RSS %s)", label, format_rss())
         counts, matrix, feature_labels, barcode_labels = stream_group_counts(
             args.tracking, col, chunksize=args.chunksize, engine=args.csv_engine
