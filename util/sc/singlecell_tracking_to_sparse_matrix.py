@@ -42,7 +42,7 @@ def count_lines(filename):
             pass
     return i
 
-def stream_group_counts(filename, feature_col, chunksize=1_000_000):
+def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="python"):
     """
     Stream the tracking file in chunks and aggregate frac_assigned
     by (feature_id, cell_barcode), with progress monitoring.
@@ -73,7 +73,7 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
             sep="\t",
             chunksize=chunksize,
             usecols=["read_name", feature_col, "frac_assigned"],
-            engine="c",  # enforce the C engine; pyarrow backend has triggered segfaults in Terra runtime
+            engine=engine,
         )
         for i, chunk in enumerate(reader, 1):
             rows_processed += len(chunk)
@@ -183,6 +183,8 @@ def main():
     parser.add_argument("--output_prefix", required=True, help="output prefix")
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
+    parser.add_argument("--csv_engine", choices=["python", "c"], default="python",
+                        help="pandas CSV engine to use (default python to avoid C-engine segfaults)")
     args = parser.parse_args()
 
     faulthandler.enable()
@@ -200,12 +202,14 @@ def main():
     ids.drop_duplicates().to_csv(f"{args.output_prefix}.gene_transcript_splicehashcode.tsv",
                                  sep="\t", index=False)
 
-    for label, col in [("gene", "gene_id"),
-                       ("isoform", "transcript_id"),
-                       ("splice_pattern", "transcript_splice_hash_code")]:
+    for label, col in [
+        ("splice_pattern", "transcript_splice_hash_code"),
+        ("gene", "gene_id"),
+        ("isoform", "transcript_id")
+                       ]:
         logger.info("processing %s level counts (RSS %s)", label, format_rss())
         counts, matrix, feature_labels, barcode_labels = stream_group_counts(
-            args.tracking, col, chunksize=args.chunksize
+            args.tracking, col, chunksize=args.chunksize, engine=args.csv_engine
         )
         counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
         make_sparse_matrix_outputs(
