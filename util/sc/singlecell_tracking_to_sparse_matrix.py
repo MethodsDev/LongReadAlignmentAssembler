@@ -3,7 +3,7 @@ import argparse, os, sys, gzip, logging, faulthandler
 import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
-from collections import defaultdict
+import numpy as np
 try:
     import psutil
 except ImportError:  # pragma: no cover - psutil might be missing in minimal envs
@@ -47,13 +47,21 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
     Stream the tracking file in chunks and aggregate frac_assigned
     by (feature_id, cell_barcode), with progress monitoring.
     Works for .gz or plain text.
+    Returns the aggregated COO matrix plus ordered feature and barcode labels.
     """
-    agg = defaultdict(float)
+
+    feature_to_index = {}
+    feature_labels = []
+    barcode_to_index = {}
+    barcode_labels = []
+
+    row_chunks = []
+    col_chunks = []
+    val_chunks = []
 
     is_gz = filename.endswith(".gz")
     opener = gzip.open if is_gz else open
 
-    # count lines for progress estimation
     total_lines = count_lines(filename)
     header_lines = 1
     total_data_lines = max(1, total_lines - header_lines)
@@ -73,45 +81,91 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000):
             logger.info("[chunk %s] processed ~%.1f%% of rows (RSS %s)",
                         i, pct, format_rss())
 
-            # split read_name into cell_barcode
             split = chunk["read_name"].str.split("^", n=2, expand=True)
             chunk["cell_barcode"] = split[0]
 
-            grouped = chunk.groupby([feature_col, "cell_barcode"], observed=True)["frac_assigned"].sum()
-            for (feat, bc), val in grouped.items():
-                agg[(feat, bc)] += val
+            feature_values = chunk[feature_col]
+            for feat in pd.unique(feature_values):
+                if feat not in feature_to_index:
+                    feature_to_index[feat] = len(feature_labels)
+                    feature_labels.append(feat)
+            chunk["feature_idx"] = feature_values.map(feature_to_index)
+
+            barcode_values = chunk["cell_barcode"]
+            for bc in pd.unique(barcode_values):
+                if bc not in barcode_to_index:
+                    barcode_to_index[bc] = len(barcode_labels)
+                    barcode_labels.append(bc)
+            chunk["barcode_idx"] = barcode_values.map(barcode_to_index)
+
+            grouped = chunk.groupby(["feature_idx", "barcode_idx"], observed=True)["frac_assigned"].sum()
+            if not grouped.empty:
+                row_chunks.append(grouped.index.get_level_values(0).to_numpy(dtype=np.int64))
+                col_chunks.append(grouped.index.get_level_values(1).to_numpy(dtype=np.int64))
+                val_chunks.append(grouped.to_numpy(dtype=np.float32))
+
+            del chunk
 
     logger.info("finished 100.0%% of rows (RSS %s)", format_rss())
 
-    # convert dict → dataframe
-    feature_ids, barcodes, counts = zip(*((f, c, v) for (f, c), v in agg.items()))
-    return pd.DataFrame({"feature_id": feature_ids,
-                         "cell_barcode": barcodes,
-                         "UMI_counts": counts})
+    if row_chunks:
+        rows = np.concatenate(row_chunks)
+        cols = np.concatenate(col_chunks)
+        vals = np.concatenate(val_chunks)
+    else:
+        rows = np.array([], dtype=np.int64)
+        cols = np.array([], dtype=np.int64)
+        vals = np.array([], dtype=np.float32)
 
-def make_sparse_matrix_outputs(counts_data, outdirname):
+    matrix = sparse.coo_matrix(
+        (vals, (rows, cols)),
+        shape=(len(feature_labels), len(barcode_labels)),
+    )
+
+    if matrix.nnz:
+        matrix.sum_duplicates()
+
+    matrix = matrix.tocsr()
+
+    feature_arr = np.array(feature_labels, dtype=object)
+    barcode_arr = np.array(barcode_labels, dtype=object)
+
+    if feature_arr.size:
+        feature_order = np.argsort(feature_arr)
+        matrix = matrix[feature_order]
+        feature_arr = feature_arr[feature_order]
+
+    if barcode_arr.size:
+        barcode_order = np.argsort(barcode_arr)
+        matrix = matrix[:, barcode_order]
+        barcode_arr = barcode_arr[barcode_order]
+
+    matrix = matrix.tocoo()
+
+    if matrix.nnz:
+        counts_df = pd.DataFrame({
+            "feature_id": feature_arr[matrix.row],
+            "cell_barcode": barcode_arr[matrix.col],
+            "UMI_counts": matrix.data.astype(float),
+        })
+    else:
+        counts_df = pd.DataFrame(columns=["feature_id", "cell_barcode", "UMI_counts"])
+
+    return counts_df, matrix, feature_arr, barcode_arr
+
+def make_sparse_matrix_outputs(matrix, feature_labels, barcode_labels, outdirname):
     logger.info("making sparse matrix outputs for: %s (RSS %s)",
                 outdirname, format_rss())
     os.makedirs(outdirname, exist_ok=True)
 
-    features = counts_data["feature_id"].astype("category")
-    barcodes = counts_data["cell_barcode"].astype("category")
-
-    rows = features.cat.codes.to_numpy()
-    cols = barcodes.cat.codes.to_numpy()
-    vals = counts_data["UMI_counts"].to_numpy()
-
-    sparseM = sparse.coo_matrix((vals, (rows, cols)),
-                                shape=(features.cat.categories.size,
-                                       barcodes.cat.categories.size))
+    sparseM = matrix.tocoo()
 
     mmwrite(os.path.join(outdirname, "matrix.mtx"), sparseM)
 
-    # Write single-column features.tsv and barcodes.tsv (first column used by Read10X)
-    features.cat.categories.to_series().to_csv(
+    pd.Series(feature_labels).to_csv(
         os.path.join(outdirname, "features.tsv"), index=False, header=False
     )
-    barcodes.cat.categories.to_series().to_csv(
+    pd.Series(barcode_labels).to_csv(
         os.path.join(outdirname, "barcodes.tsv"), index=False, header=False
     )
 
@@ -150,9 +204,16 @@ def main():
                        ("isoform", "transcript_id"),
                        ("splice_pattern", "transcript_splice_hash_code")]:
         logger.info("processing %s level counts (RSS %s)", label, format_rss())
-        counts = stream_group_counts(args.tracking, col, chunksize=args.chunksize)
+        counts, matrix, feature_labels, barcode_labels = stream_group_counts(
+            args.tracking, col, chunksize=args.chunksize
+        )
         counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
-        make_sparse_matrix_outputs(counts, f"{args.output_prefix}^{label}-sparseM")
+        make_sparse_matrix_outputs(
+            matrix,
+            feature_labels,
+            barcode_labels,
+            f"{args.output_prefix}^{label}-sparseM",
+        )
 
     logger.info("all done (RSS %s)", format_rss())
 
