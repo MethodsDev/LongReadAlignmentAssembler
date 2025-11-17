@@ -407,6 +407,8 @@ task LRAA_quant_bam_list {
         String read_umi_tag = "XM"
         Int numThreads = 4
         Int memoryGB = 32
+        Int progress_report_interval_seconds = 300
+        Int progress_tail_lines = 20
         String docker
     }
 
@@ -423,6 +425,53 @@ task LRAA_quant_bam_list {
             echo "$f" >> bam_list.txt
         done
 
+    : > command_output.log
+
+        progress_reporter() {
+            while sleep ~{progress_report_interval_seconds}; do
+                if [[ -s command_output.log ]]; then
+                    echo "----- LRAA quant progress $(date) -----" >&2
+
+                    if [[ -r /proc/meminfo ]]; then
+                        local mem_stats
+                        mem_stats=$(awk '
+                            /MemTotal:/ {total=$2}
+                            /MemAvailable:/ {avail=$2}
+                            /MemFree:/ {free=$2}
+                            END {
+                                if (!avail && free) avail = free
+                                if (total && avail) printf "%d %d\n", total, avail
+                            }
+                        ' /proc/meminfo) || mem_stats=""
+
+                        if [[ -n "$mem_stats" ]]; then
+                            local mem_total_kb mem_available_kb
+                            read -r mem_total_kb mem_available_kb <<< "$mem_stats"
+
+                            if [[ -n "$mem_total_kb" && -n "$mem_available_kb" ]]; then
+                                local mem_used_kb=$((mem_total_kb - mem_available_kb))
+                                local mem_total_mb=$((mem_total_kb / 1024))
+                                local mem_used_mb=$((mem_used_kb / 1024))
+                                if (( mem_total_kb > 0 )); then
+                                    local mem_pct=$((mem_used_kb * 100 / mem_total_kb))
+                                    echo "RAM usage: ${mem_used_mb} MiB / ${mem_total_mb} MiB (${mem_pct}%)" >&2
+                                else
+                                    echo "RAM usage: ${mem_used_mb} MiB" >&2
+                                fi
+                            fi
+                        fi
+                    fi
+
+                    tail -n ~{progress_tail_lines} command_output.log >&2 || true
+                    echo "----- end progress -----" >&2
+                fi
+            done
+        }
+
+        progress_reporter &
+        progress_pid=$!
+
+        set +e
         (
           LRAA --genome ~{referenceGenome} \
                --bam_list bam_list.txt \
@@ -433,12 +482,19 @@ task LRAA_quant_bam_list {
                ~{true="--HiFi" false='' HiFi} \
                --cell_barcode_tag ~{cell_barcode_tag} --read_umi_tag ~{read_umi_tag} \
                --output_prefix ~{output_prefix} > command_output.log 2>&1
-        ) || {
-             echo "Command failed with exit code $?" >&2
+        )
+        cmd_status=$?
+        set -e
+
+        kill $progress_pid 2>/dev/null || true
+        wait $progress_pid 2>/dev/null || true
+
+        if [[ $cmd_status -ne 0 ]]; then
+             echo "Command failed with exit code $cmd_status" >&2
              echo "Last 100 lines of output:" >&2
-             tail -n 100 command_output.log >&2
-             exit 1
-        }
+             tail -n 100 command_output.log >&2 || true
+             exit $cmd_status
+        fi
 
         # gzip any per-cluster tracking files produced (handle zero or many)
         shopt -s nullglob
