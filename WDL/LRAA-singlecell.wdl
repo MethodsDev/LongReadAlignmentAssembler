@@ -30,7 +30,6 @@ workflow LRAA_singlecell_wf {
     Int numThreadsPerWorker = 5
     Int numThreadsPerWorkerScattered = 5
     Int num_parallel_contigs = 3
-    Int numThreadsPerLRAA = 4
     Int memoryGB = 64
     Int memoryGBPerWorkerScattered = 32
     Int memoryGBbuildSparseMatrices = 32
@@ -124,7 +123,6 @@ workflow LRAA_singlecell_wf {
       numThreadsPerWorker = numThreadsPerWorker,
       numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
       num_parallel_contigs = num_parallel_contigs,
-      numThreadsPerLRAA = numThreadsPerLRAA,
       memoryGB = memoryGB,
       memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
       memoryGBmergeGTFs = memoryGBmergeGTFs,
