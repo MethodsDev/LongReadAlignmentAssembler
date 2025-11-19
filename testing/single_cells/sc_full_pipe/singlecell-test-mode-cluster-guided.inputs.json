@@ -1,6 +1,6 @@
 {
     "LRAA_singlecell_wf.sample_id": "test_sc_wdl",
-    "LRAA_single_cell_wf.single_cell_pipe_mode" : "cluster-guided",
+    "LRAA_singlecell_wf.single_cell_pipe_mode" : "cluster-guided",
     
     "LRAA_singlecell_wf.referenceGenome": "data/chr19.genome.2M.fa",
   "LRAA_singlecell_wf.inputBAM": "data/chr19.2M.bam",
