@@ -74,6 +74,12 @@ def main():
         help="file listing cluster-specific BAMs (lines: '<cluster_id> <bam>' or '<bam>'); supported only with --quant_only; splice graph is built once from the union of all BAMs, then each cluster is quantified separately",
     )
     primary.add_argument(
+        "--bam_for_sg",
+        type=str,
+        default=None,
+        help="use this BAM file for splice-graph evidence instead of constructing/merging one (optional)",
+    )
+    primary.add_argument(
         "--genome", type=str, required=True, help="reference genome FASTA"
     )
     primary.add_argument(
@@ -855,41 +861,87 @@ def main():
             os.getcwd(), f"__{_safe_token(output_prefix)}.norm_cache"
         )
         Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
+    # allow user to explicitly provide a BAM to use for splice-graph evidence
+    bam_for_sg_cli = getattr(args, "bam_for_sg", None)
 
     bam_file_for_quant = None
     bam_file_for_sg = None
 
     if MULTI_CLUSTER_BAMS:
-        if normalization_enabled:
-            bam_file_for_sg = _prepare_cluster_union_bam(
-                cluster_bams,
-                args.normalize_max_cov_level,
-                normalization_cache_dir,
-                output_prefix,
-            )
-            logger.info(
-                "splice-graph evidence will use normalized cluster union: %s",
-                bam_file_for_sg,
+        if bam_for_sg_cli:
+            if not os.path.exists(bam_for_sg_cli):
+                sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
+            if normalization_enabled:
+                bam_file_for_sg = _normalize_bam_for_splice_graph(
+                    bam_for_sg_cli,
+                    args.normalize_max_cov_level,
+                    normalization_cache_dir,
+                    label="user_bam_for_sg",
+                )
+                logger.info(
+                    "splice-graph evidence will use normalized user-supplied BAM: %s",
+                    bam_file_for_sg,
+                )
+            else:
+                bam_file_for_sg = bam_for_sg_cli
+                logger.info(
+                    "splice-graph evidence will use user-supplied BAM: %s",
+                    bam_file_for_sg,
+                )
+            logger.warning(
+                "--bam_for_sg provided with --bam_list; cluster union/merge will be skipped for splice-graph construction"
             )
         else:
-            bam_file_for_sg = [cb["bam"] for cb in cluster_bams]
-            logger.info(
-                "splice-graph evidence will use raw cluster union of %d BAMs",
-                len(bam_file_for_sg),
-            )
+            if normalization_enabled:
+                bam_file_for_sg = _prepare_cluster_union_bam(
+                    cluster_bams,
+                    args.normalize_max_cov_level,
+                    normalization_cache_dir,
+                    output_prefix,
+                )
+                logger.info(
+                    "splice-graph evidence will use normalized cluster union: %s",
+                    bam_file_for_sg,
+                )
+            else:
+                bam_file_for_sg = [cb["bam"] for cb in cluster_bams]
+                logger.info(
+                    "splice-graph evidence will use raw cluster union of %d BAMs",
+                    len(bam_file_for_sg),
+                )
     else:
         bam_file_for_quant = bam_filename
-        if normalization_enabled:
-            bam_file_for_sg = _normalize_bam_for_splice_graph(
-                bam_filename,
-                args.normalize_max_cov_level,
-                normalization_cache_dir,
-            )
-            logger.info(
-                "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
-            )
+        if bam_for_sg_cli:
+            if not os.path.exists(bam_for_sg_cli):
+                sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
+            if normalization_enabled:
+                bam_file_for_sg = _normalize_bam_for_splice_graph(
+                    bam_for_sg_cli,
+                    args.normalize_max_cov_level,
+                    normalization_cache_dir,
+                )
+                logger.info(
+                    "splice-graph evidence will use normalized user-supplied BAM: %s",
+                    bam_file_for_sg,
+                )
+            else:
+                bam_file_for_sg = bam_for_sg_cli
+                logger.info(
+                    "splice-graph evidence will use user-supplied BAM: %s",
+                    bam_file_for_sg,
+                )
         else:
-            bam_file_for_sg = bam_filename
+            if normalization_enabled:
+                bam_file_for_sg = _normalize_bam_for_splice_graph(
+                    bam_filename,
+                    args.normalize_max_cov_level,
+                    normalization_cache_dir,
+                )
+                logger.info(
+                    "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
+                )
+            else:
+                bam_file_for_sg = bam_filename
 
     if not MULTI_CLUSTER_BAMS:
         if args.num_total_reads is None:
