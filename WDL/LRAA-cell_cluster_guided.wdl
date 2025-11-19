@@ -415,7 +415,7 @@ task LRAA_quant_bam_list {
 
     Int numThreads = num_parallel_contigs * num_threads_per_worker
 
-    Int disksize = 50 + ceil(2 * size(bam_files, "GB"))
+    Int disksize = 256 + ceil(5 * size(bam_files, "GB"))
 
     String output_prefix = "~{sample_id}.LRAA.quant-only.clusters"
 
