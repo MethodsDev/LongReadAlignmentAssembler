@@ -16,6 +16,9 @@ workflow LRAA_singlecell_wf {
     # Optional: guide initial discovery with an annotation
     File? initial_annot_gtf
 
+    # Single-cell pipeline mode: 'basic' or 'cluster-guided'
+    String single_cell_pipe_mode = "basic"
+
     # Platform/options
     Boolean HiFi = false
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
@@ -54,6 +57,7 @@ workflow LRAA_singlecell_wf {
   # Only skip the initial discovery call when the downstream-critical artifacts are provided
   Boolean has_precomputed_init = defined(precomputed_init_quant_tracking) && defined(precomputed_init_gtf)
   Boolean run_initial_phase = !has_precomputed_init
+  Boolean run_cluster_guided = single_cell_pipe_mode == "cluster-guided"
 
   # 1) Initial transcript discovery + quantification on the full BAM (skipped when precomputed inputs are provided)
   if (run_initial_phase) {
@@ -109,49 +113,60 @@ workflow LRAA_singlecell_wf {
       seed = seed
   }
 
-  # 4) Cluster-guided reconstruction + final single-cell matrices
-  call ClusterGuided.LRAA_cell_cluster_guided as cluster_guided {
-    input:
-      sample_id = sample_id,
-      referenceGenome = referenceGenome,
-      inputBAM = inputBAM,
-      cell_clusters_info = cluster_cells.cluster_assignments_tsv,
-      annot_gtf = init_gtf_file,
-      HiFi = HiFi,
-      oversimplify = oversimplify,
-      main_chromosomes = main_chromosomes,
-      numThreadsPerWorker = numThreadsPerWorker,
-      numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-      num_parallel_contigs = num_parallel_contigs,
-      memoryGB = memoryGB,
-      memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
-      memoryGBmergeGTFs = memoryGBmergeGTFs,
-      memoryGBquantFinal = memoryGBquantFinal,
-      memoryGBscSparseMatrices = memoryGBscSparseMatrices,
-      diskSizeGB = diskSizeGB,
-      docker = docker,
-      quant_only_cluster_guided = false
-  }
-
-  if (defined(cluster_guided.LRAA_final_gtf) && defined(initial_annot_gtf)) {
-    call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
+  # 4) Cluster-guided reconstruction + final single-cell matrices (only if mode is 'cluster-guided')
+  if (run_cluster_guided) {
+    call ClusterGuided.LRAA_cell_cluster_guided as cluster_guided {
       input:
         sample_id = sample_id,
-        reference_gtf = select_first([initial_annot_gtf]),
-        final_gtf = select_first([cluster_guided.LRAA_final_gtf]),
-        final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz,
-        final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz,
-        final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz,
-        final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping,
-        docker = docker
+        referenceGenome = referenceGenome,
+        inputBAM = inputBAM,
+        cell_clusters_info = cluster_cells.cluster_assignments_tsv,
+        annot_gtf = init_gtf_file,
+        HiFi = HiFi,
+        oversimplify = oversimplify,
+        main_chromosomes = main_chromosomes,
+        numThreadsPerWorker = numThreadsPerWorker,
+        numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
+        num_parallel_contigs = num_parallel_contigs,
+        memoryGB = memoryGB,
+        memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+        memoryGBmergeGTFs = memoryGBmergeGTFs,
+        memoryGBquantFinal = memoryGBquantFinal,
+        memoryGBscSparseMatrices = memoryGBscSparseMatrices,
+        diskSizeGB = diskSizeGB,
+        docker = docker,
+        quant_only_cluster_guided = false
+    }
+  }
+
+  # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use initial outputs
+  if (defined(initial_annot_gtf)) {
+    File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
+    File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else build_sc_from_init_tracking.gene_sparse_dir_tgz
+    File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else build_sc_from_init_tracking.isoform_sparse_dir_tgz
+    File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
+    File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
+
+    if (defined(gtf_for_symbols)) {
+      call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
+        input:
+          sample_id = sample_id,
+          reference_gtf = select_first([initial_annot_gtf]),
+          final_gtf = select_first([gtf_for_symbols]),
+          final_sc_gene_sparse_tar_gz = select_first([gene_sparse_for_symbols]),
+          final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
+          final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
+          final_sc_gene_transcript_splicehash_mapping = select_first([mapping_for_symbols]),
+          docker = docker
+      }
     }
   }
 
   output {
     # Initial discovery outputs
-  File? init_quant_expr = init_quant_expr_file
-  File? init_quant_tracking = init_quant_tracking_generated
-  File? init_gtf = init_gtf_generated
+    File? init_quant_expr = init_quant_expr_file
+    File? init_quant_tracking = init_quant_tracking_generated
+    File? init_gtf = init_gtf_generated
 
     # Initial single-cell matrices and clustering inputs/outputs
     File init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz
