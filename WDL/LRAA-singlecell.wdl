@@ -179,21 +179,21 @@ workflow LRAA_singlecell_wf {
     # Final cluster-guided outputs (main deliverables)
     File? final_gtf = cluster_guided.LRAA_final_gtf
     File? final_gtf_tracking = cluster_guided.LRAA_final_gtf_tracking
-    File final_tracking = cluster_guided.LRAA_final_tracking
-    File final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
-    File final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
-    File final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
-    File final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping
+    File? final_tracking = cluster_guided.LRAA_final_tracking
+    File? final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
+    File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
+    File? final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
+    File? final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping
 
     # Convenience tarballs and matrices from the cluster-guided phase
-    File partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar
-    File final_cluster_exprs_tar = cluster_guided.LRAA_final_cluster_exprs_tar
-    File final_cluster_trackings_tar = cluster_guided.LRAA_final_cluster_trackings_tar
-    File cluster_gene_counts_matrix = cluster_guided.cluster_gene_counts_matrix
-    File cluster_gene_TPM_matrix = cluster_guided.cluster_gene_TPM_matrix
-    File cluster_isoform_counts_matrix = cluster_guided.cluster_isoform_counts_matrix
-    File cluster_isoform_TPM_matrix = cluster_guided.cluster_isoform_TPM_matrix
-    File cluster_isoform_counts_forDiffIsoUsage = cluster_guided.cluster_isoform_counts_forDiffIsoUsage
+    File? partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar
+    File? final_cluster_exprs_tar = cluster_guided.LRAA_final_cluster_exprs_tar
+    File? final_cluster_trackings_tar = cluster_guided.LRAA_final_cluster_trackings_tar
+    File? cluster_gene_counts_matrix = cluster_guided.cluster_gene_counts_matrix
+    File? cluster_gene_TPM_matrix = cluster_guided.cluster_gene_TPM_matrix
+    File? cluster_isoform_counts_matrix = cluster_guided.cluster_isoform_counts_matrix
+    File? cluster_isoform_TPM_matrix = cluster_guided.cluster_isoform_TPM_matrix
+    File? cluster_isoform_counts_forDiffIsoUsage = cluster_guided.cluster_isoform_counts_forDiffIsoUsage
 
     File? incl_gene_symbols_gffcompare_tracking = add_gene_symbols.gffcompare_tracking
     File? incl_gene_symbols_gffcompare_stats = add_gene_symbols.gffcompare_stats
