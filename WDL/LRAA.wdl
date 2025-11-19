@@ -10,6 +10,7 @@ workflow LRAA_wf {
                  
         File referenceGenome 
         File inputBAM
+        File? bam_for_sg
         File? annot_gtf
         Boolean HiFi = false
          
@@ -76,6 +77,7 @@ workflow LRAA_wf {
                     sample_id = sample_id,
                     shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
+                    bam_for_sg = bam_for_sg,
                     genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,
@@ -123,6 +125,7 @@ workflow LRAA_wf {
             input:
                 sample_id = sample_id,
                 inputBAM = inputBAM,
+                bam_for_sg = bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 region = region,

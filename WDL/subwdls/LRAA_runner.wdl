@@ -5,6 +5,7 @@ task LRAA_runner_task {
         String sample_id
         File genome_fasta
         File inputBAM
+        File? bam_for_sg
 
         File? annot_gtf
         Boolean quant_only
@@ -143,6 +144,7 @@ task LRAA_runner_task {
         (        
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
+                                 ~{if defined(bam_for_sg) then "--bam_for_sg " + bam_for_sg else ""} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
                                  ~{if defined(contig) then "--contig " + contig else ""} \
                                  ~{if defined(region) then "--region " + region else ""} \
@@ -214,6 +216,7 @@ workflow LRAA_runner {
         String sample_id
         File genome_fasta
         File inputBAM
+        File? bam_for_sg
 
         File? annot_gtf
         Boolean quant_only
@@ -255,6 +258,7 @@ workflow LRAA_runner {
             sample_id=sample_id,
             genome_fasta=genome_fasta,
             inputBAM=inputBAM,
+            bam_for_sg=bam_for_sg,
             annot_gtf=annot_gtf,
             quant_only=quant_only,
             HiFi = HiFi,

@@ -1,6 +1,7 @@
 version 1.0
 
 import "LRAA.wdl" as LRAA
+import "subwdls/LRAA_quant_by_cluster.wdl" as LRAA_quant_by_cluster
 
 
 
@@ -20,6 +21,9 @@ workflow LRAA_cell_cluster_guided {
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
+        String cell_barcode_tag = "CB"
+        String read_umi_tag = "XM"
+        
         Int numThreadsPerWorker = 2
         Int numThreadsPerWorkerScattered = 9
         Int num_parallel_contigs = 3
@@ -27,6 +31,9 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBPerWorkerScattered = 32
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
+        Int memoryGBquantNormalize = 16
+        Int memoryGBquantMerge = 16
+        Int normalize_max_cov_level = 1000
         Int memoryGBscSparseMatrices = 16
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
@@ -117,8 +124,8 @@ workflow LRAA_cell_cluster_guided {
     }
 
      
-    # Final quantification (single call): prefer merged GTF if produced, else use provided annot_gtf
-    call LRAA_quant_bam_list as LRAA_quant_final_bamlist {
+    # Final quantification using new cluster-based parallelization workflow
+    call LRAA_quant_by_cluster.LRAA_quant_by_cluster as LRAA_quant_final_bamlist {
         input:
             sample_id = sample_id,
             referenceGenome = referenceGenome,
@@ -126,9 +133,17 @@ workflow LRAA_cell_cluster_guided {
             bam_files = partition_bam_by_cell_cluster.partitioned_bams,
             HiFi = HiFi,
             oversimplify = oversimplify,
-            num_parallel_contigs = num_parallel_contigs,
+            normalize_max_cov_level = normalize_max_cov_level,
+            main_chromosomes = main_chromosomes,
+            cell_barcode_tag = cell_barcode_tag,
+            read_umi_tag = read_umi_tag,
             num_threads_per_worker = numThreadsPerWorker,
-            memoryGB = memoryGBquantFinal,
+            num_threads_per_worker_scattered = numThreadsPerWorkerScattered,
+            num_parallel_contigs = num_parallel_contigs,
+            memoryGB_normalize = memoryGBquantNormalize,
+            memoryGB_merge = memoryGBquantMerge,
+            memoryGB_quant = memoryGBquantFinal,
+            memoryGB_quant_scattered = memoryGBPerWorkerScattered,
             docker = docker
     }
 
@@ -205,6 +220,14 @@ workflow LRAA_cell_cluster_guided {
          File cluster_isoform_counts_matrix = build_cluster_pseudobulk.cluster_isoform_counts_matrix
          File cluster_isoform_TPM_matrix = build_cluster_pseudobulk.cluster_isoform_TPM_matrix
          File cluster_isoform_counts_forDiffIsoUsage = build_cluster_pseudobulk.cluster_isoform_counts_forDiffIsoUsage
+
+         # normalized BAM intermediate outputs (for debugging/reuse)
+         Array[File] normalized_cluster_bams = LRAA_quant_final_bamlist.normalized_cluster_bams
+         Array[File] normalized_cluster_bais = LRAA_quant_final_bamlist.normalized_cluster_bais
+         File merged_normalized_bam = LRAA_quant_final_bamlist.merged_bam
+         File merged_normalized_bai = LRAA_quant_final_bamlist.merged_bai
+         File final_normalized_merged_bam = LRAA_quant_final_bamlist.normalized_merged_bam
+         File final_normalized_merged_bai = LRAA_quant_final_bamlist.normalized_merged_bai
     
      }
      
@@ -392,134 +415,6 @@ task partition_bam_by_cell_cluster {
         disks: "local-disk ~{disksize} HDD"
     }
 
-}
-
-
-task LRAA_quant_bam_list {
-    input {
-        String sample_id
-        File referenceGenome
-        File annot_gtf
-        Array[File] bam_files
-    Boolean HiFi = false
-        String? oversimplify
-        String cell_barcode_tag = "CB"
-        String read_umi_tag = "XM"
-        Int num_parallel_contigs = 3
-        Int num_threads_per_worker = 2
-        Int memoryGB = 32
-        Int progress_report_interval_seconds = 300
-        Int progress_tail_lines = 20
-        String docker
-    }
-
-    Int numThreads = num_parallel_contigs * num_threads_per_worker
-
-    Int disksize = 256 + ceil(5 * size(bam_files, "GB"))
-
-    String output_prefix = "~{sample_id}.LRAA.quant-only.clusters"
-
-    command <<<
-        set -ex
-
-        # build bam list file
-        : > bam_list.txt
-        for f in ~{sep=' ' bam_files}; do
-            echo "$f" >> bam_list.txt
-        done
-
-    : > command_output.log
-
-        progress_reporter() {
-            while sleep ~{progress_report_interval_seconds}; do
-                if [[ -s command_output.log ]]; then
-                    echo "----- LRAA quant progress $(date) -----" >&2
-
-                    if [[ -r /proc/meminfo ]]; then
-                        local mem_stats
-                        mem_stats=$(awk '
-                            /MemTotal:/ {total=$2}
-                            /MemAvailable:/ {avail=$2}
-                            /MemFree:/ {free=$2}
-                            END {
-                                if (!avail && free) avail = free
-                                if (total && avail) printf "%d %d\n", total, avail
-                            }
-                        ' /proc/meminfo) || mem_stats=""
-
-                        if [[ -n "$mem_stats" ]]; then
-                            local mem_total_kb mem_available_kb
-                            read -r mem_total_kb mem_available_kb <<< "$mem_stats"
-
-                            if [[ -n "$mem_total_kb" && -n "$mem_available_kb" ]]; then
-                                local mem_used_kb=$((mem_total_kb - mem_available_kb))
-                                local mem_total_mb=$((mem_total_kb / 1024))
-                                local mem_used_mb=$((mem_used_kb / 1024))
-                                if (( mem_total_kb > 0 )); then
-                                    local mem_pct=$((mem_used_kb * 100 / mem_total_kb))
-                                    echo "RAM usage: ${mem_used_mb} MiB / ${mem_total_mb} MiB (${mem_pct}%)" >&2
-                                else
-                                    echo "RAM usage: ${mem_used_mb} MiB" >&2
-                                fi
-                            fi
-                        fi
-                    fi
-
-                    tail -n ~{progress_tail_lines} command_output.log >&2 || true
-                    echo "----- end progress -----" >&2
-                fi
-            done
-        }
-
-        progress_reporter &
-        progress_pid=$!
-
-        set +e
-        (
-          LRAA --genome ~{referenceGenome} \
-               --bam_list bam_list.txt \
-               --gtf ~{annot_gtf} \
-               --quant_only \
-              --num_parallel_contigs ~{num_parallel_contigs} \
-              --num_threads_per_worker ~{num_threads_per_worker} \
-         ~{"--oversimplify " + oversimplify} \
-               ~{true="--HiFi" false='' HiFi} \
-               --cell_barcode_tag ~{cell_barcode_tag} --read_umi_tag ~{read_umi_tag} \
-               --output_prefix ~{output_prefix} > command_output.log 2>&1
-        )
-        cmd_status=$?
-        set -e
-
-        kill $progress_pid 2>/dev/null || true
-        wait $progress_pid 2>/dev/null || true
-
-        if [[ $cmd_status -ne 0 ]]; then
-             echo "Command failed with exit code $cmd_status" >&2
-             echo "Last 100 lines of output:" >&2
-             tail -n 100 command_output.log >&2 || true
-             exit $cmd_status
-        fi
-
-        # gzip any per-cluster tracking files produced (handle zero or many)
-        shopt -s nullglob
-        for f in ~{output_prefix}*.quant.tracking; do
-            gzip "$f"
-        done
-        shopt -u nullglob
-    >>>
-
-    output {
-        # Capture either single merged outputs (~{output_prefix}.quant.*) or per-cluster/partition outputs (~{output_prefix}.*.quant.*)
-        Array[File] quant_exprs = glob("~{output_prefix}*.quant.expr")
-        Array[File] quant_trackings = glob("~{output_prefix}*.quant.tracking*")
-    }
-
-    runtime {
-        docker: docker
-        cpu: "~{numThreads}"
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
-    }
 }
 
 
