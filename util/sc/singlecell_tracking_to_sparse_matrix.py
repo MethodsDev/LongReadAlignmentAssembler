@@ -18,15 +18,23 @@ logger = logging.getLogger(__name__)
 
 
 def _rss_bytes():
+    global peak_rss_bytes
     if psutil is not None:
-        return psutil.Process(os.getpid()).memory_info().rss
-    if resource is not None:
+        current_rss = psutil.Process(os.getpid()).memory_info().rss
+    elif resource is not None:
         usage = resource.getrusage(resource.RUSAGE_SELF)
         rss = usage.ru_maxrss
         if sys.platform == "darwin":
-            return rss
-        return rss * 1024
-    return 0
+            current_rss = rss
+        else:
+            current_rss = rss * 1024
+    else:
+        current_rss = 0
+    
+    if current_rss > peak_rss_bytes:
+        peak_rss_bytes = current_rss
+    
+    return current_rss
 
 
 def format_rss():
@@ -34,6 +42,11 @@ def format_rss():
     if rss <= 0:
         return "unknown"
     return f"{rss / (1024 ** 2):.1f} MiB"
+
+def format_peak_rss():
+    if peak_rss_bytes <= 0:
+        return "unknown"
+    return f"{peak_rss_bytes / (1024 ** 2):.1f} MiB"
 
 def count_lines(filename):
     """Count lines in file (for progress estimation)."""
@@ -319,7 +332,7 @@ def main():
                 f"{args.output_prefix}^{label}-sparseM",
             )
 
-    logger.info("all done (RSS %s)", format_rss())
+    logger.info("all done (current RSS %s, peak RSS %s)", format_rss(), format_peak_rss())
 
 if __name__ == "__main__":
     main()
