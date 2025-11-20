@@ -31,7 +31,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.12.7"
+VERSION = "v0.13.0-predev1"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -862,9 +862,7 @@ def main():
 
     else:
         LRAA_Globals.config["num_total_reads"] = args.num_total_reads
-        logger.info(
-            "using total number of reads as: {}".format(args.num_total_reads)
-        )
+        logger.info("using total number of reads as: {}".format(args.num_total_reads))
         if args.num_total_reads == 0:
             raise RuntimeError("Error, number of total reads is set to zero.")
 
