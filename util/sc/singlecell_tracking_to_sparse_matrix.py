@@ -46,6 +46,7 @@ def count_lines(filename):
 
 def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
     """Write the gene/transcript/splice hash crosswalk without loading entire file."""
+    logger.info("writing mapping file from %s (RSS %s)", tracking_path, format_rss())
 
     columns = [
         "gene_id",
@@ -55,6 +56,7 @@ def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
 
     opener = gzip.open if tracking_path.endswith(".gz") else open
     unique_entries = set()
+    chunk_count = 0
 
     with opener(tracking_path, "rt") as handle:
         reader = pd.read_csv(
@@ -65,20 +67,26 @@ def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
             engine=engine,
         )
         for chunk in reader:
+            chunk_count += 1
             chunk = chunk.fillna("")
             for entry in chunk.itertuples(index=False, name=None):
                 unique_entries.add(entry)
+            if chunk_count % 10 == 0:
+                logger.info("  mapping file: processed %d chunks, %d unique entries (RSS %s)",
+                            chunk_count, len(unique_entries), format_rss())
+
+    logger.info("  mapping file: processed %d chunks total, %d unique entries (RSS %s)",
+                chunk_count, len(unique_entries), format_rss())
 
     if unique_entries:
         mapping_df = pd.DataFrame(sorted(unique_entries), columns=columns)
     else:
         mapping_df = pd.DataFrame(columns=columns)
 
-    mapping_df.to_csv(
-        f"{output_prefix}.gene_transcript_splicehashcode.tsv",
-        sep="\t",
-        index=False,
-    )
+    output_file = f"{output_prefix}.gene_transcript_splicehashcode.tsv"
+    mapping_df.to_csv(output_file, sep="\t", index=False)
+    logger.info("wrote mapping file: %s with %d entries (RSS %s)",
+                output_file, len(mapping_df), format_rss())
 
 def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="python"):
     """
@@ -87,6 +95,8 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
     Works for .gz or plain text.
     Returns the aggregated COO matrix plus ordered feature and barcode labels.
     """
+    logger.info("starting stream_group_counts for feature_col=%s from %s (RSS %s)",
+                feature_col, filename, format_rss())
 
     feature_to_index = {}
     feature_labels = []
@@ -144,7 +154,7 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
 
             del chunk
 
-    logger.info("finished 100.0%% of rows (RSS %s)", format_rss())
+    logger.info("finished 100.0%% of rows, aggregating data (RSS %s)", format_rss())
 
     if row_chunks:
         rows = np.concatenate(row_chunks)
@@ -159,10 +169,13 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
         (vals, (rows, cols)),
         shape=(len(feature_labels), len(barcode_labels)),
     )
+    logger.info("created sparse matrix: %d features x %d barcodes, %d non-zero entries (RSS %s)",
+                len(feature_labels), len(barcode_labels), matrix.nnz, format_rss())
 
     if matrix.nnz:
         matrix.sum_duplicates()
 
+    logger.info("converting to CSR and sorting (RSS %s)", format_rss())
     matrix = matrix.tocsr()
 
     feature_arr = np.array(feature_labels, dtype=object)
@@ -180,6 +193,7 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
 
     matrix = matrix.tocoo()
 
+    logger.info("creating counts dataframe (RSS %s)", format_rss())
     if matrix.nnz:
         counts_df = pd.DataFrame({
             "feature_id": feature_arr[matrix.row],
@@ -189,6 +203,8 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
     else:
         counts_df = pd.DataFrame(columns=["feature_id", "cell_barcode", "UMI_counts"])
 
+    logger.info("stream_group_counts complete: %d rows in counts_df (RSS %s)",
+                len(counts_df), format_rss())
     return counts_df, matrix, feature_arr, barcode_arr
 
 def make_sparse_matrix_outputs(matrix, feature_labels, barcode_labels, outdirname):
@@ -255,6 +271,16 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         stream=sys.stderr,
     )
+
+    logger.info("=" * 60)
+    logger.info("Starting single-cell tracking to sparse matrix conversion")
+    logger.info("Input: %s", args.tracking)
+    logger.info("Output prefix: %s", args.output_prefix)
+    logger.info("Chunksize: %s rows", args.chunksize)
+    logger.info("CSV engine: %s", args.csv_engine)
+    logger.info("Parallel mode: %s", args.parallel)
+    logger.info("Initial RSS: %s", format_rss())
+    logger.info("=" * 60)
 
     write_mapping_file(
         args.tracking,
