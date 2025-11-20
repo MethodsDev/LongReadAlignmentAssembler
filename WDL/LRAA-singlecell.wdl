@@ -52,6 +52,8 @@ workflow LRAA_singlecell_wf {
     Float resolution = 0.6
     Int n_variable_features = 2000
     Int seed = 1
+
+    File? ref_annot_gtf_source_gene_symbols # used as source for gene symbol assignment at the end.
   }
 
   # Only skip the initial discovery call when the downstream-critical artifacts are provided
@@ -147,11 +149,11 @@ workflow LRAA_singlecell_wf {
     File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
     File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
 
-    if (defined(gtf_for_symbols)) {
+    if (defined(gtf_for_symbols) && defined(ref_annot_gtf_source_gene_symbols)) {
       call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
         input:
           sample_id = sample_id,
-          reference_gtf = select_first([initial_annot_gtf]),
+          reference_gtf = select_first([ref_annot_gtf_source_gene_symbols]),
           final_gtf = select_first([gtf_for_symbols]),
           final_sc_gene_sparse_tar_gz = select_first([gene_sparse_for_symbols]),
           final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),

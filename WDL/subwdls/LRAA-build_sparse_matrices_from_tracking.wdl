@@ -34,7 +34,7 @@ task sc_build_sparse_matrices_from_tracking {
     String sample_id
     File tracking_file
     String docker
-    Int memoryGB = 16
+    Int memoryGB = 32
   }
 
   Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
@@ -46,7 +46,8 @@ task sc_build_sparse_matrices_from_tracking {
 
     singlecell_tracking_to_sparse_matrix.py \
       --tracking ~{tracking_file} \
-      --output_prefix ~{output_prefix}
+      --output_prefix ~{output_prefix} \
+      --parallel
 
     # Tar the generated sparse matrix directories for compact output
     tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
@@ -67,7 +68,7 @@ task sc_build_sparse_matrices_from_tracking {
 
   runtime {
     docker: docker
-    cpu: 2
+    cpu: 3
     memory: "~{memoryGB} GiB"
     disks: "local-disk ~{disksize} HDD"
   }
