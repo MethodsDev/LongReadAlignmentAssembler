@@ -377,10 +377,12 @@ task partition_bam_by_cell_cluster {
         File cell_clusters_info
         File inputBAM
         String docker
+        Int cpu = 8
+        Int memoryGB = 16
     }
 
 
-    Int disksize = ceil(4 * size(inputBAM, "GB") )
+    Int disksize = ceil(5 * size(inputBAM, "GB") )
     
     command <<<
          set -ex
@@ -391,7 +393,8 @@ task partition_bam_by_cell_cluster {
         (
          partition_bam_by_cell_cluster.py --bam ~{inputBAM} \
                                           --cell_clusters ~{cell_clusters_info} \
-                                          --output_prefix ~{sample_id} > command_output.log 2>&1
+                                          --output_prefix ~{sample_id} \
+                                          --threads ~{cpu} > command_output.log 2>&1
         ) || {
           echo "Command failed with exit code $?" >&2
           echo "Last 100 lines of output:" >&2
@@ -410,8 +413,8 @@ task partition_bam_by_cell_cluster {
 
     runtime {
         docker: docker
-        cpu: 1
-        memory: "8 GiB"
+        cpu: cpu
+        memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} HDD"
     }
 

@@ -37,16 +37,24 @@ def main():
         help="cell cluster file, format: cell_barcode (tab) cluster_name",
     )
 
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=4,
+        help="number of threads for BAM compression/decompression",
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.bam
     output_prefix = args.output_prefix
     cell_clusters_filename = args.cell_clusters
+    num_threads = args.threads
 
     #########
     ### begin
 
-    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb", check_sq=False)
+    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb", check_sq=False, threads=num_threads)
 
     # get cell cluster info
     cell_barcode_to_cluster = dict()
@@ -65,7 +73,7 @@ def main():
     def bam_opener(cluster_name):
         bam_output_filename = output_prefix + "." + cluster_name + ".bam"
         bamfile_writer = pysam.AlignmentFile(
-            bam_output_filename, "wb", template=bamfile_reader
+            bam_output_filename, "wb", template=bamfile_reader, threads=num_threads
         )
         cell_cluster_to_ofh[cluster_name] = bamfile_writer
 
