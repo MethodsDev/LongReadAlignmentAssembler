@@ -68,12 +68,6 @@ def main():
         "--bam", type=str, default=None, help="input BAM of aligned reads"
     )
     primary.add_argument(
-        "--bam_list",
-        type=str,
-        default=None,
-        help="file listing cluster-specific BAMs (lines: '<cluster_id> <bam>' or '<bam>'); supported only with --quant_only; splice graph is built once from the union of all BAMs, then each cluster is quantified separately",
-    )
-    primary.add_argument(
         "--bam_for_sg",
         type=str,
         default=None,
@@ -519,8 +513,8 @@ def main():
     # (deprecated flags removed; no back-compat mapping)
 
     # require a BAM source
-    if not args.bam and not args.bam_list:
-        sys.exit("Error: Must specify --bam or --bam_list")
+    if not args.bam:
+        sys.exit("Error: Must specify --bam")
 
     if args.ME_only and args.SE_only:
         sys.exit("Error: Cannot specify both --ME_only and --SE_only")
@@ -600,41 +594,6 @@ def main():
         sys.exit(
             "If running --quant_only, must specify --gtf corresponding to targets of quantification"
         )
-
-    # multi-cluster quant-only support
-    MULTI_CLUSTER_BAMS = False
-    cluster_bams = []  # list of dicts: {id, bam}
-    if args.bam_list:
-        if not args.quant_only:
-            sys.exit("Error: --bam_list is supported only with --quant_only mode")
-        if not os.path.exists(args.bam_list):
-            sys.exit(f"Error, --bam_list file not found: {args.bam_list}")
-        if args.num_total_reads is not None:
-            sys.exit(
-                "Error: --num_total_reads cannot be used with --bam_list; per-cluster read counts are always derived from each BAM."
-            )
-
-        def _sanitize_cluster_id(s):
-            # keep alnum, underscore, dash, dot
-            return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
-
-        with open(args.bam_list, "rt") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = re.split(r"\s+", line)
-                if len(parts) == 1:
-                    bam_path = parts[0]
-                    cluster_id = os.path.basename(bam_path)
-                    cluster_id = re.sub(r"\.bam$", "", cluster_id)
-                else:
-                    cluster_id, bam_path = parts[0], parts[1]
-                cluster_id = _sanitize_cluster_id(cluster_id)
-                cluster_bams.append({"id": cluster_id, "bam": bam_path})
-        if not cluster_bams:
-            sys.exit("Error: --bam_list contains no BAM entries")
-        MULTI_CLUSTER_BAMS = True
 
     ###############
     # update config
@@ -840,19 +799,11 @@ def main():
     allow_spacers = False
     # allow_spacers = args.allow_spacers
 
-    if MULTI_CLUSTER_BAMS:
-        # ensure each BAM has an index
-        for cb in cluster_bams:
-            bam_p = cb["bam"]
-            if not os.path.exists(bam_p + ".bai"):
-                logger.info(f"-missing index for bam {bam_p}, will try to make it...")
-                subprocess.check_call("samtools index " + bam_p, shell=True)
-    else:
-        if not os.path.exists(bam_filename + ".bai"):
-            logger.info(
-                "-missing index for bam {}, will try to make it...".format(bam_filename)
-            )
-            subprocess.check_call("samtools index " + bam_filename, shell=True)
+    if not os.path.exists(bam_filename + ".bai"):
+        logger.info(
+            "-missing index for bam {}, will try to make it...".format(bam_filename)
+        )
+        subprocess.check_call("samtools index " + bam_filename, shell=True)
 
     normalization_enabled = (not NO_NORM) and (args.normalize_max_cov_level > 0)
     normalization_cache_dir = None
@@ -864,103 +815,58 @@ def main():
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
 
-    bam_file_for_quant = None
+    bam_file_for_quant = bam_filename
     bam_file_for_sg = None
 
-    if MULTI_CLUSTER_BAMS:
-        if bam_for_sg_cli:
-            if not os.path.exists(bam_for_sg_cli):
-                sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
-            if normalization_enabled:
-                bam_file_for_sg = _normalize_bam_for_splice_graph(
-                    bam_for_sg_cli,
-                    args.normalize_max_cov_level,
-                    normalization_cache_dir,
-                    label="user_bam_for_sg",
-                )
-                logger.info(
-                    "splice-graph evidence will use normalized user-supplied BAM: %s",
-                    bam_file_for_sg,
-                )
-            else:
-                bam_file_for_sg = bam_for_sg_cli
-                logger.info(
-                    "splice-graph evidence will use user-supplied BAM: %s",
-                    bam_file_for_sg,
-                )
-            logger.warning(
-                "--bam_for_sg provided with --bam_list; cluster union/merge will be skipped for splice-graph construction"
+    if bam_for_sg_cli:
+        if not os.path.exists(bam_for_sg_cli):
+            sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
+        if normalization_enabled:
+            bam_file_for_sg = _normalize_bam_for_splice_graph(
+                bam_for_sg_cli,
+                args.normalize_max_cov_level,
+                normalization_cache_dir,
+            )
+            logger.info(
+                "splice-graph evidence will use normalized user-supplied BAM: %s",
+                bam_file_for_sg,
             )
         else:
-            if normalization_enabled:
-                bam_file_for_sg = _prepare_cluster_union_bam(
-                    cluster_bams,
-                    args.normalize_max_cov_level,
-                    normalization_cache_dir,
-                    output_prefix,
-                )
-                logger.info(
-                    "splice-graph evidence will use normalized cluster union: %s",
-                    bam_file_for_sg,
-                )
-            else:
-                bam_file_for_sg = [cb["bam"] for cb in cluster_bams]
-                logger.info(
-                    "splice-graph evidence will use raw cluster union of %d BAMs",
-                    len(bam_file_for_sg),
-                )
+            bam_file_for_sg = bam_for_sg_cli
+            logger.info(
+                "splice-graph evidence will use user-supplied BAM: %s",
+                bam_file_for_sg,
+            )
     else:
-        bam_file_for_quant = bam_filename
-        if bam_for_sg_cli:
-            if not os.path.exists(bam_for_sg_cli):
-                sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
-            if normalization_enabled:
-                bam_file_for_sg = _normalize_bam_for_splice_graph(
-                    bam_for_sg_cli,
-                    args.normalize_max_cov_level,
-                    normalization_cache_dir,
-                )
-                logger.info(
-                    "splice-graph evidence will use normalized user-supplied BAM: %s",
-                    bam_file_for_sg,
-                )
-            else:
-                bam_file_for_sg = bam_for_sg_cli
-                logger.info(
-                    "splice-graph evidence will use user-supplied BAM: %s",
-                    bam_file_for_sg,
-                )
-        else:
-            if normalization_enabled:
-                bam_file_for_sg = _normalize_bam_for_splice_graph(
-                    bam_filename,
-                    args.normalize_max_cov_level,
-                    normalization_cache_dir,
-                )
-                logger.info(
-                    "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
-                )
-            else:
-                bam_file_for_sg = bam_filename
-
-    if not MULTI_CLUSTER_BAMS:
-        if args.num_total_reads is None:
-            LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-                bam_file_for_quant
+        if normalization_enabled:
+            bam_file_for_sg = _normalize_bam_for_splice_graph(
+                bam_filename,
+                args.normalize_max_cov_level,
+                normalization_cache_dir,
             )
             logger.info(
-                "total number of reads counted from {} as: {}".format(
-                    bam_file_for_quant, LRAA_Globals.config["num_total_reads"]
-                )
+                "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
             )
-
         else:
-            LRAA_Globals.config["num_total_reads"] = args.num_total_reads
-            logger.info(
-                "using total number of reads as: {}".format(args.num_total_reads)
+            bam_file_for_sg = bam_filename
+
+    if args.num_total_reads is None:
+        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
+            bam_file_for_quant
+        )
+        logger.info(
+            "total number of reads counted from {} as: {}".format(
+                bam_file_for_quant, LRAA_Globals.config["num_total_reads"]
             )
-            if args.num_total_reads == 0:
-                raise RuntimeError("Error, number of total reads is set to zero.")
+        )
+
+    else:
+        LRAA_Globals.config["num_total_reads"] = args.num_total_reads
+        logger.info(
+            "using total number of reads as: {}".format(args.num_total_reads)
+        )
+        if args.num_total_reads == 0:
+            raise RuntimeError("Error, number of total reads is set to zero.")
 
     ###########################################
     ## on to isoform discovery / reconstruction
@@ -1048,98 +954,61 @@ def main():
     ##----------------------------------------------
     ## Begin, target each contig separately
 
-    # Special branch: multi-cluster quantification with shared splice graph evidence across all BAMs
-    if MULTI_CLUSTER_BAMS and QUANT_ONLY:
-        _execute_multi_cluster_quant_only(
-            cluster_bams=cluster_bams,
-            genome_contigs_list=genome_contigs_list,
-            genome_fasta_filename=genome_fasta_filename,
-            restrict_to_contig_orient=restrict_to_contig_orient,
-            restrict_region_lend=restrict_region_lend,
-            restrict_region_rend=restrict_region_rend,
-            input_gtf=input_gtf,
-            run_EM=run_EM,
-            single_best_only=single_best_only,
-            NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-            min_isoform_fraction=min_isoform_fraction,
-            quant_EM_alpha=quant_EM_alpha,
-            cluster_union_bam_for_sg=bam_file_for_sg,
-            prereconstruct_info_dir=prereconstruct_info_dir,
-            ME_only=ME_only,
-            SE_only=SE_only,
-            output_prefix=output_prefix,
-            TAG_BAM=TAG_BAM,
-            CONTIG_PARALLEL=CONTIG_PARALLEL,
-            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
-            CPU=CPU,
-            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
-            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
-            NO_CLEANUP=NO_CLEANUP,
-            DEBUG=LRAA_Globals.DEBUG,
-            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-            VERBOSE=VERBOSE,
-            splice_graph_params_dict=splice_graph_params_dict,
-            splice_graph_cache_root=splice_graph_cache_root,
-            SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
-        )
-
-    else:
-
-        # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
-        jobs = []
-        for contig_acc in genome_contigs_list:
-            for contig_strand in ("+", "-"):
-                if (
-                    restrict_to_contig_orient is not None
-                    and restrict_to_contig_orient != contig_strand
-                ):
-                    continue
-                jobs.append(
-                    dict(
-                        contig_acc=contig_acc,
-                        contig_strand=contig_strand,
-                        genome_fasta_filename=genome_fasta_filename,
-                        bam_file_for_sg=bam_file_for_sg,
-                        bam_file_for_quant=bam_file_for_quant,
-                        restrict_region_lend=restrict_region_lend,
-                        restrict_region_rend=restrict_region_rend,
-                        input_gtf=input_gtf,
-                        config_overrides=dict(LRAA_Globals.config),
-                        splice_graph_params=splice_graph_params_dict,
-                        run_EM=run_EM,
-                        single_best_only=single_best_only,
-                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                        min_isoform_fraction=min_isoform_fraction,
-                        quant_EM_alpha=quant_EM_alpha,
-                        prereconstruct_info_dir=prereconstruct_info_dir,
-                        ME_only=ME_only,
-                        SE_only=SE_only,
-                        output_prefix=output_prefix,
-                        QUANT_ONLY=QUANT_ONLY,
-                        DEBUG=LRAA_Globals.DEBUG,
-                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                        splice_graph_cache_dir=splice_graph_cache_root,
-                        skip=False,
-                    )
+    # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
+    jobs = []
+    for contig_acc in genome_contigs_list:
+        for contig_strand in ("+", "-"):
+            if (
+                restrict_to_contig_orient is not None
+                and restrict_to_contig_orient != contig_strand
+            ):
+                continue
+            jobs.append(
+                dict(
+                    contig_acc=contig_acc,
+                    contig_strand=contig_strand,
+                    genome_fasta_filename=genome_fasta_filename,
+                    bam_file_for_sg=bam_file_for_sg,
+                    bam_file_for_quant=bam_file_for_quant,
+                    restrict_region_lend=restrict_region_lend,
+                    restrict_region_rend=restrict_region_rend,
+                    input_gtf=input_gtf,
+                    config_overrides=dict(LRAA_Globals.config),
+                    splice_graph_params=splice_graph_params_dict,
+                    run_EM=run_EM,
+                    single_best_only=single_best_only,
+                    NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
+                    min_isoform_fraction=min_isoform_fraction,
+                    quant_EM_alpha=quant_EM_alpha,
+                    prereconstruct_info_dir=prereconstruct_info_dir,
+                    ME_only=ME_only,
+                    SE_only=SE_only,
+                    output_prefix=output_prefix,
+                    QUANT_ONLY=QUANT_ONLY,
+                    DEBUG=LRAA_Globals.DEBUG,
+                    INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+                    splice_graph_cache_dir=splice_graph_cache_root,
+                    skip=False,
                 )
+            )
 
-        # Execute unified path for general (single BAM or discovery) case
-        _run_jobs_schedule_and_merge(
-            jobs=jobs,
-            output_prefix=output_prefix,
-            quant_only=QUANT_ONLY,
-            tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
-            CONTIG_PARALLEL=CONTIG_PARALLEL,
-            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
-            CPU=CPU,
-            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
-            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
-            NO_CLEANUP=NO_CLEANUP,
-            DEBUG=LRAA_Globals.DEBUG,
-            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-            VERBOSE=VERBOSE,
-            SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
-        )
+    # Execute unified path for general (single BAM or discovery) case
+    _run_jobs_schedule_and_merge(
+        jobs=jobs,
+        output_prefix=output_prefix,
+        quant_only=QUANT_ONLY,
+        tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
+        CONTIG_PARALLEL=CONTIG_PARALLEL,
+        NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
+        CPU=CPU,
+        NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
+        CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
+        NO_CLEANUP=NO_CLEANUP,
+        DEBUG=LRAA_Globals.DEBUG,
+        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
+        VERBOSE=VERBOSE,
+        SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
+    )
 
     _cleanup_registered_splice_graph_caches(
         debug_mode=LRAA_Globals.DEBUG, no_cleanup=NO_CLEANUP
@@ -1430,57 +1299,6 @@ def _normalize_bam_for_splice_graph(
         checkpoint_path.touch()
 
     return str(normalized_path)
-
-
-def _merge_bams_for_union(bam_paths, cache_dir, merge_label=None):
-    if not bam_paths:
-        raise RuntimeError("No BAM paths provided for merging")
-    if len(bam_paths) == 1:
-        return bam_paths[0]
-
-    cache_path = Path(cache_dir).resolve()
-    cache_path.mkdir(parents=True, exist_ok=True)
-    merge_label = _safe_token(merge_label or "union")
-    merged_path = cache_path / f"{merge_label}.merged.bam"
-    checkpoint_path = merged_path.parent / (merged_path.name + ".ok")
-
-    if not checkpoint_path.exists():
-        cmd = ["samtools", "merge", "-f", str(merged_path)]
-        cmd.extend(str(Path(p).resolve()) for p in bam_paths)
-        logger.info(
-            "merging normalized BAM files for splice-graph construction: %s",
-            " ".join(cmd),
-        )
-        subprocess.check_call(cmd, cwd=str(cache_path))
-        subprocess.check_call(
-            ["samtools", "index", str(merged_path)], cwd=str(cache_path)
-        )
-        checkpoint_path.touch()
-
-    return str(merged_path)
-
-
-def _prepare_cluster_union_bam(
-    cluster_bams,
-    normalize_max_cov_level,
-    cache_dir,
-    output_prefix,
-):
-    normalized_inputs = []
-    for cb in cluster_bams:
-        cluster_label = f"cluster_{cb['id']}"
-        normalized_inputs.append(
-            _normalize_bam_for_splice_graph(
-                cb["bam"], normalize_max_cov_level, cache_dir, label=cluster_label
-            )
-        )
-
-    merge_label = f"{_safe_token(output_prefix)}.cluster_union"
-    merged_bam = _merge_bams_for_union(normalized_inputs, cache_dir, merge_label)
-    final_norm = _normalize_bam_for_splice_graph(
-        merged_bam, normalize_max_cov_level, cache_dir
-    )
-    return final_norm
 
 
 def _append_without_first_line(src_path, dst_fh):
@@ -2394,108 +2212,6 @@ def _contig_job_runner(job):
                         pass
             except Exception:
                 pass
-
-    return
-
-
-def _execute_multi_cluster_quant_only(
-    cluster_bams,
-    genome_contigs_list,
-    genome_fasta_filename,
-    restrict_to_contig_orient,
-    restrict_region_lend,
-    restrict_region_rend,
-    input_gtf,
-    run_EM,
-    single_best_only,
-    NO_FILTER_ISOFORMS,
-    min_isoform_fraction,
-    quant_EM_alpha,
-    cluster_union_bam_for_sg,
-    prereconstruct_info_dir,
-    ME_only,
-    SE_only,
-    output_prefix,
-    TAG_BAM,
-    CONTIG_PARALLEL,
-    NUM_PARALLEL_CONTIGS,
-    CPU,
-    NO_RESUME_PARALLEL,
-    CLEAN_PARALLEL_TMP,
-    NO_CLEANUP,
-    DEBUG,
-    INCLUDE_PRELIM_TRANSCRIPTS,
-    VERBOSE,
-    splice_graph_params_dict,
-    splice_graph_cache_root,
-    SHUFFLE_JOBS=False,
-):
-    """Run quant-only jobs for each cluster while reusing a shared splice-graph evidence set."""
-
-    for cb in cluster_bams:
-        cluster_id = cb["id"]
-        cluster_bam = cb["bam"]
-
-        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(cluster_bam)
-        logger.info(
-            f"[{cluster_id}] total number of reads counted from {cluster_bam} as: {LRAA_Globals.config['num_total_reads']}"
-        )
-
-        output_prefix_cluster = f"{output_prefix}.{cluster_id}"
-
-        jobs = []
-        for contig_acc in genome_contigs_list:
-            for contig_strand in ("+", "-"):
-                if (
-                    restrict_to_contig_orient is not None
-                    and restrict_to_contig_orient != contig_strand
-                ):
-                    continue
-                jobs.append(
-                    dict(
-                        contig_acc=contig_acc,
-                        contig_strand=contig_strand,
-                        genome_fasta_filename=genome_fasta_filename,
-                        bam_file_for_sg=cluster_union_bam_for_sg,
-                        bam_file_for_quant=cluster_bam,
-                        restrict_region_lend=restrict_region_lend,
-                        restrict_region_rend=restrict_region_rend,
-                        input_gtf=input_gtf,
-                        config_overrides=dict(LRAA_Globals.config),
-                        splice_graph_params=splice_graph_params_dict,
-                        run_EM=run_EM,
-                        single_best_only=single_best_only,
-                        NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                        min_isoform_fraction=min_isoform_fraction,
-                        quant_EM_alpha=quant_EM_alpha,
-                        prereconstruct_info_dir=prereconstruct_info_dir,
-                        ME_only=ME_only,
-                        SE_only=SE_only,
-                        output_prefix=output_prefix_cluster,
-                        QUANT_ONLY=True,
-                        DEBUG=DEBUG,
-                        INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-                        splice_graph_cache_dir=splice_graph_cache_root,
-                        skip=False,
-                    )
-                )
-
-        _run_jobs_schedule_and_merge(
-            jobs=jobs,
-            output_prefix=output_prefix_cluster,
-            quant_only=True,
-            tag_bam_path=(cluster_bam if TAG_BAM else None),
-            CONTIG_PARALLEL=CONTIG_PARALLEL,
-            NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
-            CPU=CPU,
-            NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
-            CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
-            NO_CLEANUP=NO_CLEANUP,
-            DEBUG=DEBUG,
-            INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
-            VERBOSE=VERBOSE,
-            SHUFFLE_JOBS=SHUFFLE_JOBS,
-        )
 
     return
 
