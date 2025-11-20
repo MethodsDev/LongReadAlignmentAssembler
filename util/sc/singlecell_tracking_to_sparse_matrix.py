@@ -16,6 +16,9 @@ except ImportError:  # pragma: no cover - resource is UNIX-only
 
 logger = logging.getLogger(__name__)
 
+# Global peak memory tracker
+peak_rss_bytes = 0
+
 
 def _rss_bytes():
     global peak_rss_bytes
