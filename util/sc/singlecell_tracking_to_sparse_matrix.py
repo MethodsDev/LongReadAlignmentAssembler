@@ -4,6 +4,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
 import numpy as np
+from multiprocessing import Pool
 try:
     import psutil
 except ImportError:  # pragma: no cover - psutil might be missing in minimal envs
@@ -214,6 +215,27 @@ def make_sparse_matrix_outputs(matrix, feature_labels, barcode_labels, outdirnam
         os.remove(path)
     logger.info("done with %s (RSS %s)", outdirname, format_rss())
 
+def process_level(args_tuple):
+    """Worker function for parallel processing of a single level (gene/isoform/splice_pattern)."""
+    label, col, tracking_path, output_prefix, chunksize, engine = args_tuple
+    
+    # Configure logging for this worker
+    worker_logger = logging.getLogger(__name__)
+    worker_logger.info("processing %s level counts (RSS %s)", label, format_rss())
+    
+    counts, matrix, feature_labels, barcode_labels = stream_group_counts(
+        tracking_path, col, chunksize=chunksize, engine=engine
+    )
+    counts.to_csv(f"{output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
+    make_sparse_matrix_outputs(
+        matrix,
+        feature_labels,
+        barcode_labels,
+        f"{output_prefix}^{label}-sparseM",
+    )
+    worker_logger.info("completed %s level counts (RSS %s)", label, format_rss())
+    return label
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tracking", required=True, help="input data file quant.tracking[.gz]")
@@ -222,6 +244,8 @@ def main():
                         help="rows per chunk (default 1e6)")
     parser.add_argument("--csv_engine", choices=["python", "c"], default="python",
                         help="pandas CSV engine to use (default python to avoid C-engine segfaults)")
+    parser.add_argument("--parallel", action="store_true",
+                        help="process gene/isoform/splice_pattern levels in parallel (requires more RAM)")
     args = parser.parse_args()
 
     faulthandler.enable()
@@ -239,22 +263,35 @@ def main():
         engine=args.csv_engine,
     )
 
-    for label, col in [
+    levels = [
         ("gene", "gene_id"),
         ("isoform", "transcript_id"),
         ("splice_pattern", "transcript_splice_hash_code"),
-    ]:
-        logger.info("processing %s level counts (RSS %s)", label, format_rss())
-        counts, matrix, feature_labels, barcode_labels = stream_group_counts(
-            args.tracking, col, chunksize=args.chunksize, engine=args.csv_engine
-        )
-        counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
-        make_sparse_matrix_outputs(
-            matrix,
-            feature_labels,
-            barcode_labels,
-            f"{args.output_prefix}^{label}-sparseM",
-        )
+    ]
+
+    if args.parallel:
+        logger.info("using parallel processing for %d levels", len(levels))
+        # Prepare arguments for each worker
+        worker_args = [
+            (label, col, args.tracking, args.output_prefix, args.chunksize, args.csv_engine)
+            for label, col in levels
+        ]
+        with Pool(processes=len(levels)) as pool:
+            results = pool.map(process_level, worker_args)
+        logger.info("parallel processing completed for: %s", ", ".join(results))
+    else:
+        for label, col in levels:
+            logger.info("processing %s level counts (RSS %s)", label, format_rss())
+            counts, matrix, feature_labels, barcode_labels = stream_group_counts(
+                args.tracking, col, chunksize=args.chunksize, engine=args.csv_engine
+            )
+            counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
+            make_sparse_matrix_outputs(
+                matrix,
+                feature_labels,
+                barcode_labels,
+                f"{args.output_prefix}^{label}-sparseM",
+            )
 
     logger.info("all done (RSS %s)", format_rss())
 
