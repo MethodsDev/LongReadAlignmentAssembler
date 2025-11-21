@@ -1,7 +1,8 @@
 version 1.0
 
 import "LRAA.wdl" as LRAA
-import "subwdls/LRAA_quant_by_cluster.wdl" as LRAA_quant_by_cluster
+import "LRAA_quant_by_cluster.wdl" as LRAA_quant_by_cluster
+import "subwdls/partition_bam_by_cell_cluster.wdl" as PartitionBam
 
 
 
@@ -42,7 +43,7 @@ workflow LRAA_cell_cluster_guided {
      }
 
       
-     call partition_bam_by_cell_cluster {
+     call PartitionBam.partition_bam_by_cell_cluster {
          input:
             sample_id = sample_id,
             cell_clusters_info = cell_clusters_info,
@@ -365,57 +366,6 @@ task lraa_merge_gtf_task {
         cpu: 1
         memory: "~{memoryGB} GiB"
         disks: "local-disk 200 HDD"
-    }
-
-}
-
-
-task partition_bam_by_cell_cluster {
-
-    input {
-        String sample_id
-        File cell_clusters_info
-        File inputBAM
-        String docker
-        Int cpu = 8
-        Int memoryGB = 16
-    }
-
-
-    Int disksize = ceil(5 * size(inputBAM, "GB") )
-    
-    command <<<
-         set -ex
-
-         mkdir partitioned_bams
-         cd partitioned_bams/
-
-        (
-         partition_bam_by_cell_cluster.py --bam ~{inputBAM} \
-                                          --cell_clusters ~{cell_clusters_info} \
-                                          --output_prefix ~{sample_id} \
-                                          --threads ~{cpu} > command_output.log 2>&1
-        ) || {
-          echo "Command failed with exit code $?" >&2
-          echo "Last 100 lines of output:" >&2
-          tail -n 100 command_output.log >&2
-          exit 1
-        }
-      
-        ls -1 *.bam
-        
-         
-    >>>
-     
-    output {
-         Array[File] partitioned_bams = glob("partitioned_bams/*.bam") 
-    }
-
-    runtime {
-        docker: docker
-        cpu: cpu
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
     }
 
 }

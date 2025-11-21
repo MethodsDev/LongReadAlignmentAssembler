@@ -1,7 +1,8 @@
 version 1.0
 
-import "Normalize_bam.wdl" as NormBam
-import "../LRAA.wdl" as LRAA
+import "subwdls/Normalize_bam.wdl" as NormBam
+import "subwdls/partition_bam_by_cell_cluster.wdl" as PartitionBam
+import "LRAA.wdl" as LRAA
 
 # LRAA_quant_by_cluster.wdl
 # Workflow for cluster-specific quantification with normalized splice graph
@@ -17,7 +18,11 @@ workflow LRAA_quant_by_cluster {
         String sample_id
         File referenceGenome
         File annot_gtf
-        Array[File] bam_files
+        
+        # Either provide bam_files directly OR provide inputBAM + cell_clusters_info to partition
+        Array[File]? bam_files
+        File? inputBAM
+        File? cell_clusters_info
         
         Boolean HiFi = false
         String? oversimplify
@@ -40,13 +45,28 @@ workflow LRAA_quant_by_cluster {
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
     }
 
+    # If bam_files not provided, partition the input BAM by cell clusters
+    if (!defined(bam_files)) {
+        call PartitionBam.partition_bam_by_cell_cluster {
+            input:
+                sample_id = sample_id,
+                cell_clusters_info = select_first([cell_clusters_info]),
+                inputBAM = select_first([inputBAM]),
+                docker = docker,
+                memoryGB = memoryGB_normalize
+        }
+    }
+
+    # Select the BAM files to use: either provided or partitioned
+    Array[File] cluster_bams = select_first([bam_files, partition_bam_by_cell_cluster.partitioned_bams])
+
     # Step 1: Normalize each input BAM in parallel
-    scatter (i in range(length(bam_files))) {
-        String cluster_label = basename(bam_files[i], ".bam")
+    scatter (i in range(length(cluster_bams))) {
+        String cluster_label = basename(cluster_bams[i], ".bam")
         
         call NormBam.normalize_bam_by_strand as normalize_cluster_bam {
             input:
-                input_bam = bam_files[i],
+                input_bam = cluster_bams[i],
                 normalize_max_cov_level = normalize_max_cov_level,
                 label = cluster_label,
                 docker = docker,
@@ -74,14 +94,14 @@ workflow LRAA_quant_by_cluster {
     }
 
     # Step 4: Quantify each original BAM in parallel using normalized merged BAM for splice graph
-    scatter (i in range(length(bam_files))) {
-        String cluster_sample_id = basename(bam_files[i], ".bam")
+    scatter (i in range(length(cluster_bams))) {
+        String cluster_sample_id = basename(cluster_bams[i], ".bam")
         
         call LRAA.LRAA_wf as LRAA_quant_cluster {
             input:
                 sample_id = cluster_sample_id,
                 referenceGenome = referenceGenome,
-                inputBAM = bam_files[i],
+                inputBAM = cluster_bams[i],
                 bam_for_sg = normalize_merged_bam.normalized_bam,
                 annot_gtf = annot_gtf,
                 quant_only = true,
@@ -107,6 +127,7 @@ workflow LRAA_quant_by_cluster {
         Array[File] quant_trackings = LRAA_quant_cluster.mergedQuantTracking
         
         # Intermediate outputs (for debugging/reuse)
+        Array[File]? partitioned_bams = partition_bam_by_cell_cluster.partitioned_bams
         Array[File] normalized_cluster_bams = normalize_cluster_bam.normalized_bam
         Array[File] normalized_cluster_bais = normalize_cluster_bam.normalized_bai
         File merged_bam = merge_bams.merged_bam
