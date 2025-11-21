@@ -142,25 +142,23 @@ workflow LRAA_singlecell_wf {
   }
 
   # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use initial outputs
-  if (defined(initial_annot_gtf)) {
-    File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
-    File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else build_sc_from_init_tracking.gene_sparse_dir_tgz
-    File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else build_sc_from_init_tracking.isoform_sparse_dir_tgz
-    File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
-    File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
+  File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
+  File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else build_sc_from_init_tracking.gene_sparse_dir_tgz
+  File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else build_sc_from_init_tracking.isoform_sparse_dir_tgz
+  File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
+  File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
 
-    if (defined(gtf_for_symbols) && defined(ref_annot_gtf_source_gene_symbols)) {
-      call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
-        input:
-          sample_id = sample_id,
-          reference_gtf = select_first([ref_annot_gtf_source_gene_symbols]),
-          final_gtf = select_first([gtf_for_symbols]),
-          final_sc_gene_sparse_tar_gz = select_first([gene_sparse_for_symbols]),
-          final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
-          final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
-          final_sc_gene_transcript_splicehash_mapping = select_first([mapping_for_symbols]),
-          docker = docker
-      }
+  if (defined(gtf_for_symbols) && defined(ref_annot_gtf_source_gene_symbols)) {
+    call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
+      input:
+        sample_id = sample_id,
+        reference_gtf = select_first([ref_annot_gtf_source_gene_symbols]),
+        final_gtf = select_first([gtf_for_symbols]),
+        final_sc_gene_sparse_tar_gz = select_first([gene_sparse_for_symbols]),
+        final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
+        final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
+        final_sc_gene_transcript_splicehash_mapping = select_first([mapping_for_symbols]),
+        docker = docker
     }
   }
 
