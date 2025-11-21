@@ -42,7 +42,7 @@ task LRAA_runner_task {
         Int progress_tail_lines = 20
     }
 
-    String no_norm_flag = if (no_norm && !quant_only) then "--no_norm" else ""
+    String no_norm_flag = if (no_norm) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
 
     String output_prefix_use = if defined(shardno) then "${sample_id}.shardno-${shardno}" else sample_id
