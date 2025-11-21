@@ -60,6 +60,7 @@ workflow LRAA_wf {
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
                 inputBAM = inputBAM,
+                bam_for_sg = bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = main_chromosomes,
@@ -71,13 +72,13 @@ workflow LRAA_wf {
 
         scatter (contig_index in range(num_chromosomes)) {
             String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
-            # Run LRAA separately per chromosome
+            # Run LRAA separately per chromosome  
             call LRAA_runner.LRAA_runner as LRAA_scatter {
                 input:
                     sample_id = sample_id,
                     shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
-                    bam_for_sg = bam_for_sg,
+                    bam_for_sg = if defined(bam_for_sg) then select_first([splitByChr.chromosomeBAMsForSG])[contig_index] else bam_for_sg,
                     genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,

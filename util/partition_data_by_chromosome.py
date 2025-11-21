@@ -300,10 +300,12 @@ def _partition_gtf(
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Partition BAM/FASTA/GTF by chromosome")
     parser.add_argument("--input-bam", dest="input_bam", type=str, default=None)
+    parser.add_argument("--bam-for-sg", dest="bam_for_sg", type=str, default=None)
     parser.add_argument("--genome-fasta", dest="genome_fasta", type=str, default=None)
     parser.add_argument("--annot-gtf", dest="annot_gtf", type=str, default=None)
     parser.add_argument("--chromosomes", nargs="*", help="Ordered chromosome list", default=None)
     parser.add_argument("--bam-out-dir", default="split_bams")
+    parser.add_argument("--bam-for-sg-out-dir", dest="bam_for_sg_out_dir", default="split_bams_for_sg")
     parser.add_argument("--fasta-out-dir", default="split_fastas")
     parser.add_argument("--gtf-out-dir", default="split_gtfs")
     parser.add_argument(
@@ -319,6 +321,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
 
     input_bam = _normalize_path(args.input_bam)
+    bam_for_sg = _normalize_path(args.bam_for_sg)
     genome_fasta = _normalize_path(args.genome_fasta)
     annot_gtf = _normalize_path(args.annot_gtf)
 
@@ -345,6 +348,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     partition_jobs = (
         ("BAM", _partition_bam, (input_bam, chromosomes, args.bam_out_dir, args.samtools_threads)),
+        ("BAM_FOR_SG", _partition_bam, (bam_for_sg, chromosomes, args.bam_for_sg_out_dir, args.samtools_threads)),
         ("FASTA", _partition_fasta, (genome_fasta, chromosomes, args.fasta_out_dir)),
         ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
     )
