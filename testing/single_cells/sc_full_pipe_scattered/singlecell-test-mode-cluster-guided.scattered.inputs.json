@@ -1,0 +1,26 @@
+{
+    "LRAA_singlecell_wf.sample_id": "test_sc_scattered_wdl",
+    "LRAA_singlecell_wf.single_cell_pipe_mode" : "cluster-guided",
+    
+    "LRAA_singlecell_wf.referenceGenome": "data/chr1_2_3_M.mini.genome.fa",
+    "LRAA_singlecell_wf.inputBAM": "data/chr1_2_3_M.PBMCs.mini.bam",
+
+    "LRAA_singlecell_wf.initial_annot_gtf": "data/chr1_2_3_M.mini.gtf.gz",
+  
+    "LRAA_singlecell_wf.HiFi": true,
+    "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing",
+
+    "LRAA_singlecell_wf.main_chromosomes" : "chr1 chr2 chr3 chrM",
+    
+    "LRAA_singlecell_wf.memoryGB" : 8,
+    "LRAA_singlecell_wf.memoryGBPerWorkerScattered" : 8,
+
+    
+    "LRAA_singlecell_wf.min_cells": 1, #just_for_small_testing
+    "LRAA_singlecell_wf.min_features": 1, #just_for_small_testing
+    "LRAA_singlecell_wf.percent_mt_max": 20.0,
+    "LRAA_singlecell_wf.mt_pattern": "^MT-",
+    "LRAA_singlecell_wf.npcs": 12,
+    "LRAA_singlecell_wf.resolution": 0.6,
+    "LRAA_singlecell_wf.n_variable_features": 2000
+}
