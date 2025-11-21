@@ -31,7 +31,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.13.0-predev3"
+VERSION = "v0.13.0-predev4"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -823,7 +823,9 @@ def main():
             sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
         if not os.path.exists(bam_for_sg_cli + ".bai"):
             logger.info(
-                "-missing index for bam {}, will try to make it...".format(bam_for_sg_cli)
+                "-missing index for bam {}, will try to make it...".format(
+                    bam_for_sg_cli
+                )
             )
             subprocess.check_call("samtools index " + bam_for_sg_cli, shell=True)
 
