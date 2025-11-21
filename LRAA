@@ -821,6 +821,12 @@ def main():
     if bam_for_sg_cli:
         if not os.path.exists(bam_for_sg_cli):
             sys.exit(f"Error: --bam_for_sg file not found: {bam_for_sg_cli}")
+        if not os.path.exists(bam_for_sg_cli + ".bai"):
+            logger.info(
+                "-missing index for bam {}, will try to make it...".format(bam_for_sg_cli)
+            )
+            subprocess.check_call("samtools index " + bam_for_sg_cli, shell=True)
+
         if normalization_enabled:
             bam_file_for_sg = _normalize_bam_for_splice_graph(
                 bam_for_sg_cli,
