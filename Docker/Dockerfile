@@ -146,8 +146,8 @@ RUN cd $SRC && \
 WORKDIR $SRC
 
 
-ENV LRAA_VERSION="v0.13.0-predev4"
-ENV LRAA_CO=50770d59090f67866e13c3a3e0416e32b408538c
+ENV LRAA_VERSION="v0.13.0-predev5"
+ENV LRAA_CO=31125cfd61622f0b94de7422a3bcc4822b083125
 
 
 # update VERSION and LRAA_CO files with version info and checkout
