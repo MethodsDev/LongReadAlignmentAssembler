@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Note: Explicitly specifying dtypes in pd.read_csv() is critical to avoid
+# segmentation faults during type inference on large chunked datasets.
 import argparse, os, sys, gzip, logging, faulthandler
 import pandas as pd
 from scipy import sparse
@@ -74,12 +76,21 @@ def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
     unique_entries = set()
     chunk_count = 0
 
+    # Explicitly specify dtypes to avoid pandas type inference (which can segfault)
+    dtype_spec = {
+        "gene_id": str,
+        "transcript_id": str,
+        "transcript_splice_hash_code": str,
+    }
+
     with opener(tracking_path, "rt") as handle:
         reader = pd.read_csv(
             handle,
             sep="\t",
             chunksize=chunksize,
             usecols=columns,
+            dtype=dtype_spec,
+            low_memory=False,
             engine=engine,
         )
         for chunk in reader:
@@ -126,6 +137,13 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
     is_gz = filename.endswith(".gz")
     opener = gzip.open if is_gz else open
 
+    # Explicitly specify dtypes to avoid pandas type inference (which can segfault)
+    dtype_spec = {
+        "read_name": str,
+        feature_col: str,
+        "frac_assigned": np.float32,
+    }
+
     total_lines = count_lines(filename)
     header_lines = 1
     total_data_lines = max(1, total_lines - header_lines)
@@ -137,6 +155,8 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
             sep="\t",
             chunksize=chunksize,
             usecols=["read_name", feature_col, "frac_assigned"],
+            dtype=dtype_spec,
+            low_memory=False,
             engine=engine,
         )
         for i, chunk in enumerate(reader, 1):
