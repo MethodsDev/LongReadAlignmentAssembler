@@ -1,3 +1,9 @@
+v0.13.0, November 22, 2025
+- restructured WDLs for single cell pipeline, introducing 'basic' vs. 'cluster-guided' modes, removed the --bam_list from LRAA and relying on wdl pipe for orchestration of cluster-based quants
+- improved logging and mulithreading in workflows
+
+
+
 v0.12.7, November 18, 2025
 - merge_LRAA script allows for alternative backends but defaults to in-memory
 - bugfix: MultiPath assumed every read name could be resolved to a compact ID via READ_NAME_STORE. On Terra’s merge job that store failed to initialize, so the fake provenance names for input transcripts never mapped to IDs, _read_count stayed zero, and MultiPathCounter.add tripped assert multipath_obj.get_read_count() > 0. We hardened MultiPath to fall back to deterministic hash-based IDs when the store is unavailable and to seed the count from the provided read_names, so the counter always sees a positive weight even in store-less merge mode.
