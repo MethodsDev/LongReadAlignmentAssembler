@@ -31,7 +31,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.13.0-predev5"
+VERSION = "v0.13.0"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -910,12 +910,14 @@ def main():
     allowed_chromosomes = None
     if args.restrict_to_chromosomes:
         # Split by spaces and/or commas
-        chrom_tokens = re.split(r'[\s,]+', args.restrict_to_chromosomes.strip())
+        chrom_tokens = re.split(r"[\s,]+", args.restrict_to_chromosomes.strip())
         allowed_chromosomes = set(tok for tok in chrom_tokens if tok)
         if allowed_chromosomes:
             logger.info(f"Restricting to chromosomes: {sorted(allowed_chromosomes)}")
         else:
-            logger.warning("--restrict_to_chromosomes provided but no valid chromosome names found")
+            logger.warning(
+                "--restrict_to_chromosomes provided but no valid chromosome names found"
+            )
             allowed_chromosomes = None
 
     if args.contig:
@@ -931,9 +933,13 @@ def main():
         # Filter by allowed chromosomes if specified
         if allowed_chromosomes is not None:
             original_count = len(genome_contigs_list)
-            genome_contigs_list = [c for c in genome_contigs_list if c in allowed_chromosomes]
+            genome_contigs_list = [
+                c for c in genome_contigs_list if c in allowed_chromosomes
+            ]
             filtered_count = len(genome_contigs_list)
-            logger.info(f"Filtered genome contigs from {original_count} to {filtered_count} based on --restrict_to_chromosomes")
+            logger.info(
+                f"Filtered genome contigs from {original_count} to {filtered_count} based on --restrict_to_chromosomes"
+            )
 
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
