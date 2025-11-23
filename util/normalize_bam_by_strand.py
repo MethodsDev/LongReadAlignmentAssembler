@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--output_bam", type=str, required=True, help="output for normalied bam file")
     parser.add_argument("--normalize_max_cov_level", type=int, default=1000, help="normalize to max read coverage level before assembly (default: 1000)")
     parser.add_argument("--read_start_bin_size", type=int, default=100, help="group alignments by start positions every --read_start_bin_size number of bases along the genome")
+    parser.add_argument("--random_seed", type=int, default=42, help="random seed for reproducible sampling (default: 42)")
 
     args = parser.parse_args()
     
@@ -32,6 +33,11 @@ def main():
     output_bam_filename = args.output_bam
     normalize_max_cov_level = args.normalize_max_cov_level
     read_start_bin_size = args.read_start_bin_size
+    random_seed = args.random_seed
+
+    # Set random seed for reproducible sampling
+    random.seed(random_seed)
+    logger.info(f"Using random seed: {random_seed}")
 
     
     pipeliner = Pipeliner("__chckpts")
