@@ -471,6 +471,12 @@ def main():
         default=None,
         help="restrict to region on contig chr\\d+[+-]?:\\d+-\\d+  ex. chr2:12345-56789 or chr2+:12345-56789 to restrict to the top strand",
     )
+    contig_group_setting.add_argument(
+        "--restrict_to_chromosomes",
+        type=str,
+        default=None,
+        help="space or comma-separated list of chromosome names to process; chromosomes not in this list will be skipped (ex: 'chr1 chr2 chr3' or 'chr1,chr2,chr3')",
+    )
 
     ## generic config update via json
     parser.add_argument(
@@ -900,6 +906,18 @@ def main():
     restricted_contig = None
     restrict_to_contig_orient = None
 
+    # Parse chromosome restriction list if provided
+    allowed_chromosomes = None
+    if args.restrict_to_chromosomes:
+        # Split by spaces and/or commas
+        chrom_tokens = re.split(r'[\s,]+', args.restrict_to_chromosomes.strip())
+        allowed_chromosomes = set(tok for tok in chrom_tokens if tok)
+        if allowed_chromosomes:
+            logger.info(f"Restricting to chromosomes: {sorted(allowed_chromosomes)}")
+        else:
+            logger.warning("--restrict_to_chromosomes provided but no valid chromosome names found")
+            allowed_chromosomes = None
+
     if args.contig:
         restricted_contig = args.contig
         m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
@@ -910,6 +928,12 @@ def main():
         genome_contigs_list = [restricted_contig]
     else:
         genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
+        # Filter by allowed chromosomes if specified
+        if allowed_chromosomes is not None:
+            original_count = len(genome_contigs_list)
+            genome_contigs_list = [c for c in genome_contigs_list if c in allowed_chromosomes]
+            filtered_count = len(genome_contigs_list)
+            logger.info(f"Filtered genome contigs from {original_count} to {filtered_count} based on --restrict_to_chromosomes")
 
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
