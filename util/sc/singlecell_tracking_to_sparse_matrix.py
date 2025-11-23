@@ -84,15 +84,19 @@ def write_mapping_file(tracking_path, output_prefix, chunksize, engine):
     }
 
     with opener(tracking_path, "rt") as handle:
-        reader = pd.read_csv(
-            handle,
-            sep="\t",
-            chunksize=chunksize,
-            usecols=columns,
-            dtype=dtype_spec,
-            low_memory=False,
-            engine=engine,
-        )
+        read_csv_kwargs = {
+            "sep": "\t",
+            "chunksize": chunksize,
+            "usecols": columns,
+            "dtype": dtype_spec,
+        }
+        if engine == "c":
+            read_csv_kwargs["low_memory"] = False
+            read_csv_kwargs["engine"] = engine
+        elif engine == "python":
+            read_csv_kwargs["engine"] = engine
+        
+        reader = pd.read_csv(handle, **read_csv_kwargs)
         for chunk in reader:
             chunk_count += 1
             chunk = chunk.fillna("")
@@ -150,15 +154,19 @@ def stream_group_counts(filename, feature_col, chunksize=1_000_000, engine="pyth
     rows_processed = 0
 
     with opener(filename, "rt") as f:
-        reader = pd.read_csv(
-            f,
-            sep="\t",
-            chunksize=chunksize,
-            usecols=["read_name", feature_col, "frac_assigned"],
-            dtype=dtype_spec,
-            low_memory=False,
-            engine=engine,
-        )
+        read_csv_kwargs = {
+            "sep": "\t",
+            "chunksize": chunksize,
+            "usecols": ["read_name", feature_col, "frac_assigned"],
+            "dtype": dtype_spec,
+        }
+        if engine == "c":
+            read_csv_kwargs["low_memory"] = False
+            read_csv_kwargs["engine"] = engine
+        elif engine == "python":
+            read_csv_kwargs["engine"] = engine
+        
+        reader = pd.read_csv(f, **read_csv_kwargs)
         for i, chunk in enumerate(reader, 1):
             rows_processed += len(chunk)
             pct = (rows_processed / total_data_lines) * 100
