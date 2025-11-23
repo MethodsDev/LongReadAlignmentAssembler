@@ -1,4 +1,4 @@
-v0.13.0, November 22, 2025
+v0.13.0, November 23, 2025
 - restructured WDLs for single cell pipeline, introducing 'basic' vs. 'cluster-guided' modes, removed the --bam_list from LRAA and relying on wdl pipe for orchestration of cluster-based quants
 - improved logging and mulithreading in workflows
 
