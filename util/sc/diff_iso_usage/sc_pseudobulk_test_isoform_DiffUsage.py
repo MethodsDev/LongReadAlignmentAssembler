@@ -27,6 +27,96 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def process_cluster_pair(params):
+    """
+    Worker function to process a single cluster pair comparison.
+    Must be at module level for multiprocessing pickling.
+    
+    Args:
+        params: tuple of (cluster_i, cluster_j, counts_big_df, fraction_big_df, 
+                         group_by_feature, min_reads_per_gene, min_delta_pi, 
+                         top_isoforms_each, reciprocal_delta_pi, min_reads_DTU_isoform,
+                         save_annot, min_cell_fraction)
+    
+    Returns:
+        tuple: (test_df_results, annotated_subset)
+    """
+    (cluster_i, cluster_j, counts_big_df, fraction_big_df, group_by_feature,
+     min_reads_per_gene, min_delta_pi, top_isoforms_each, reciprocal_delta_pi,
+     min_reads_DTU_isoform, save_annot, min_cell_fraction) = params
+    
+    logger.info("Testing pair: {} vs {}".format(cluster_i, cluster_j))
+    test_df = counts_big_df[
+        ["gene_id", "transcript_id", "splice_hashcode", cluster_i, cluster_j]
+    ].copy()
+    test_df.rename(
+        columns={cluster_i: "count_A", cluster_j: "count_B"}, inplace=True
+    )
+
+    test_df = test_df.loc[((test_df["count_A"] > 0) | (test_df["count_B"] > 0))]
+
+    # Build pairwise fraction dataframe when available
+    pair_fraction_df = None
+    if (
+        fraction_big_df is not None
+        and cluster_i in fraction_big_df.columns
+        and cluster_j in fraction_big_df.columns
+    ):
+        frac_subset = fraction_big_df[["gene_id", "transcript_id", cluster_i, cluster_j]].copy()
+        # Rename cluster-specific fraction columns to new descriptive names (fraction of cells expressing isoform)
+        frac_subset.rename(columns={cluster_i: "cell_detect_frac_A", cluster_j: "cell_detect_frac_B"}, inplace=True)
+        # Provide legacy column names for backward compatibility
+        frac_subset["frac_A"] = frac_subset["cell_detect_frac_A"]
+        frac_subset["frac_B"] = frac_subset["cell_detect_frac_B"]
+        test_df = test_df.merge(
+            frac_subset, on=["gene_id", "transcript_id"], how="left"
+        )
+        # Provide the pairwise fraction dataframe to downstream testing (annotation only)
+        pair_fraction_df = frac_subset[["gene_id", "transcript_id", "cell_detect_frac_A", "cell_detect_frac_B", "frac_A", "frac_B"]].copy()
+        # fraction reporting and filtering handled in differential_isoform_tests
+
+    # Run DTU tests for this pair
+    test_df_results = None
+    annotated_df = None
+    ditsu_return = differential_isoform_tests(
+        df=test_df,
+        group_by_token=group_by_feature,
+        min_reads_per_gene=min_reads_per_gene,
+        min_delta_pi=min_delta_pi,
+        top_isoforms_each=top_isoforms_each,
+        reciprocal_delta_pi=reciprocal_delta_pi,
+        min_reads_DTU_isoform=min_reads_DTU_isoform,
+        fraction_df=pair_fraction_df,
+        return_annotated_df=save_annot,
+        min_cell_fraction=min_cell_fraction,
+    )
+    if save_annot:
+        # ditsu_return is a tuple (results_df or None, annotated_df)
+        test_df_results, annotated_df = ditsu_return
+    else:
+        test_df_results = ditsu_return
+
+    if test_df_results is not None:
+        test_df_results["cluster_A"] = cluster_i
+        test_df_results["cluster_B"] = cluster_j
+
+    # Handle annotated isoforms (collect even if no significant test rows produced)
+    annotated_subset = None
+    if save_annot and annotated_df is not None:
+        annotated_subset = annotated_df.copy()
+        annotated_subset["cluster_A"] = cluster_i
+        annotated_subset["cluster_B"] = cluster_j
+        # Keep ALL isoforms (even if not tested) for complete transparency.
+        # Make grouping_id unique per cluster comparison by appending cluster pair.
+        if "grouping_id" in annotated_subset.columns:
+            annotated_subset["grouping_id"] = (
+                annotated_subset["grouping_id"].astype(str).fillna("NA")
+                + f"|{cluster_i}|{cluster_j}"
+            )
+    
+    return test_df_results, annotated_subset
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="run single cell cluster isoform DE usage tests via pseudobulk chi-square",
@@ -374,79 +464,6 @@ def main():
     ## pairwise compare clusters for diff isoform usage analysis
     ############################################################
 
-    def process_cluster_pair(cluster_i, cluster_j):
-        """Worker function to process a single cluster pair comparison."""
-        logger.info("Testing pair: {} vs {}".format(cluster_i, cluster_j))
-        test_df = counts_big_df[
-            ["gene_id", "transcript_id", "splice_hashcode", cluster_i, cluster_j]
-        ].copy()
-        test_df.rename(
-            columns={cluster_i: "count_A", cluster_j: "count_B"}, inplace=True
-        )
-
-        test_df = test_df.loc[((test_df["count_A"] > 0) | (test_df["count_B"] > 0))]
-
-        # Build pairwise fraction dataframe when available
-        pair_fraction_df = None
-        if (
-            fraction_big_df is not None
-            and cluster_i in fraction_big_df.columns
-            and cluster_j in fraction_big_df.columns
-        ):
-            frac_subset = fraction_big_df[["gene_id", "transcript_id", cluster_i, cluster_j]].copy()
-            # Rename cluster-specific fraction columns to new descriptive names (fraction of cells expressing isoform)
-            frac_subset.rename(columns={cluster_i: "cell_detect_frac_A", cluster_j: "cell_detect_frac_B"}, inplace=True)
-            # Provide legacy column names for backward compatibility
-            frac_subset["frac_A"] = frac_subset["cell_detect_frac_A"]
-            frac_subset["frac_B"] = frac_subset["cell_detect_frac_B"]
-            test_df = test_df.merge(
-                frac_subset, on=["gene_id", "transcript_id"], how="left"
-            )
-            # Provide the pairwise fraction dataframe to downstream testing (annotation only)
-            pair_fraction_df = frac_subset[["gene_id", "transcript_id", "cell_detect_frac_A", "cell_detect_frac_B", "frac_A", "frac_B"]].copy()
-            # fraction reporting and filtering handled in differential_isoform_tests
-
-        # Run DTU tests for this pair
-        test_df_results = None
-        annotated_df = None
-        ditsu_return = differential_isoform_tests(
-            df=test_df,
-            group_by_token=group_by_feature,
-            min_reads_per_gene=min_reads_per_gene,
-            min_delta_pi=min_delta_pi,
-            top_isoforms_each=top_isoforms_each,
-            reciprocal_delta_pi=args.reciprocal_delta_pi,
-            min_reads_DTU_isoform=args.min_reads_DTU_isoform,
-            fraction_df=pair_fraction_df,
-            return_annotated_df=save_annot,
-            min_cell_fraction=min_cell_fraction,
-        )
-        if save_annot:
-            # ditsu_return is a tuple (results_df or None, annotated_df)
-            test_df_results, annotated_df = ditsu_return
-        else:
-            test_df_results = ditsu_return
-
-        if test_df_results is not None:
-            test_df_results["cluster_A"] = cluster_i
-            test_df_results["cluster_B"] = cluster_j
-
-        # Handle annotated isoforms (collect even if no significant test rows produced)
-        annotated_subset = None
-        if save_annot and annotated_df is not None:
-            annotated_subset = annotated_df.copy()
-            annotated_subset["cluster_A"] = cluster_i
-            annotated_subset["cluster_B"] = cluster_j
-            # Keep ALL isoforms (even if not tested) for complete transparency.
-            # Make grouping_id unique per cluster comparison by appending cluster pair.
-            if "grouping_id" in annotated_subset.columns:
-                annotated_subset["grouping_id"] = (
-                    annotated_subset["grouping_id"].astype(str).fillna("NA")
-                    + f"|{cluster_i}|{cluster_j}"
-                )
-        
-        return test_df_results, annotated_subset
-
     # Generate list of cluster pairs to process
     cluster_pairs = []
     for i in range(len(cluster_names)):
@@ -460,11 +477,19 @@ def main():
     
     # Process cluster pairs with multiprocessing for true parallelism
     if args.CPU > 1:
+        # Prepare parameters for each cluster pair
+        params_list = [
+            (cluster_i, cluster_j, counts_big_df, fraction_big_df, group_by_feature,
+             min_reads_per_gene, min_delta_pi, top_isoforms_each, args.reciprocal_delta_pi,
+             args.min_reads_DTU_isoform, save_annot, min_cell_fraction)
+            for cluster_i, cluster_j in cluster_pairs
+        ]
+        
         with ProcessPoolExecutor(max_workers=args.CPU) as executor:
             # Submit all tasks
             future_to_pair = {
-                executor.submit(process_cluster_pair, cluster_i, cluster_j): (cluster_i, cluster_j)
-                for cluster_i, cluster_j in cluster_pairs
+                executor.submit(process_cluster_pair, params): (params[0], params[1])
+                for params in params_list
             }
             
             # Collect results as they complete
@@ -488,7 +513,10 @@ def main():
     else:
         # Single-threaded mode (original behavior)
         for cluster_i, cluster_j in cluster_pairs:
-            test_df_results, annotated_subset = process_cluster_pair(cluster_i, cluster_j)
+            params = (cluster_i, cluster_j, counts_big_df, fraction_big_df, group_by_feature,
+                     min_reads_per_gene, min_delta_pi, top_isoforms_each, args.reciprocal_delta_pi,
+                     args.min_reads_DTU_isoform, save_annot, min_cell_fraction)
+            test_df_results, annotated_subset = process_cluster_pair(params)
             
             if test_df_results is not None:
                 if all_test_results is None:
