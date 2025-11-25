@@ -63,6 +63,7 @@ def main():
     # Define output file paths
     cluster_pseudobulk_matrix = os.path.join(output_dir, f"{sparseM_basename}.cluster_pseudobulk.matrix")
     cluster_pseudobulk_for_diff = os.path.join(output_dir, f"{sparseM_basename}.cluster_pseudobulk.matrix.for_diff_iso_usage")
+    cluster_pseudobulk_iso_fraction = os.path.join(output_dir, f"{sparseM_basename}.cluster_pseudobulk.matrix.for_diff_iso_usage.iso_fraction.matrix")
     cell_fractions_matrix = os.path.join(output_dir, f"{sparseM_basename}.cell_fractions_expressed.matrix")
     cell_fractions_for_diff = os.path.join(output_dir, f"{sparseM_basename}.cell_fractions_expressed.matrix.for_diff_iso_usage")
     
@@ -90,7 +91,15 @@ def main():
     )
     pipeliner.add_commands([Command(cmd, "prep_cluster_for_diff_iso.ok")])
     
-    # Step 3: Get cell fraction expressed matrix
+    # Step 3: Generate isoform fraction matrix from cluster pseudobulk counts
+    cmd = (
+        f"{os.path.join(util_sc_dir, 'cluster_pseudobulk_expr_matrix_to_gene_iso_fraction_matrix.py')} "
+        f"-i {cluster_pseudobulk_for_diff} "
+        f"-o {cluster_pseudobulk_iso_fraction}"
+    )
+    pipeliner.add_commands([Command(cmd, "cluster_iso_fraction.ok")])
+    
+    # Step 4: Get cell fraction expressed matrix
     cmd = (
         f"{os.path.join(util_sc_dir, 'sparse_matrix_to_cluster_pseudobulk_cell_fractions_expressed.R')} "
         f"--sparseM_dir {sparseM_dir} "
@@ -99,7 +108,7 @@ def main():
     )
     pipeliner.add_commands([Command(cmd, "cell_fractions_matrix.ok")])
     
-    # Step 4: Prep cell fractions matrix for diff iso usage
+    # Step 5: Prep cell fractions matrix for diff iso usage
     cmd = (
         f"{os.path.join(util_sc_dir, 'sparse_matrix_to_cluster_pseudobulk_matrix.prep_for_diff_iso_usage.py')} "
         f"-e {cell_fractions_matrix} "
@@ -115,6 +124,7 @@ def main():
     logger.info(f"Pipeline complete! Output files in: {output_dir}")
     logger.info(f"  - Cluster pseudobulk matrix: {cluster_pseudobulk_matrix}")
     logger.info(f"  - Cluster pseudobulk for diff iso: {cluster_pseudobulk_for_diff}")
+    logger.info(f"  - Cluster pseudobulk iso fraction matrix: {cluster_pseudobulk_iso_fraction}")
     logger.info(f"  - Cell fractions matrix: {cell_fractions_matrix}")
     logger.info(f"  - Cell fractions for diff iso: {cell_fractions_for_diff}")
     
