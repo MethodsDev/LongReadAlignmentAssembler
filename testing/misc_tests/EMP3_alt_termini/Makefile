@@ -7,3 +7,7 @@ test:
 clean:
 	rm -f ./LRAA* 
 	rm -rf ./__* 
+
+
+igv:
+	igv.sh -g data/EMP3.genome.fa LRAA.merged.gtf
