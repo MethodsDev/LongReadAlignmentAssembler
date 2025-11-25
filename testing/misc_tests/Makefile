@@ -1,4 +1,4 @@
-DIRS = internal_priming_removal LRAA_to_ORFs merge_LRAA_GTFs
+DIRS = internal_priming_removal LRAA_to_ORFs merge_LRAA_GTFs EMP3_alt_termini
 
 test:
 	@for i in $(DIRS); do \
