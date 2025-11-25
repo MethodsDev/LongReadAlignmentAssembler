@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import chi2_contingency
 from statsmodels.stats.multitest import multipletests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 sys.path.insert(
@@ -173,7 +173,7 @@ def main():
         "--CPU",
         type=int,
         default=1,
-        help="number of threads to use for parallel cluster comparisons (default: 1)",
+        help="number of processes to use for parallel cluster comparisons (default: 1)",
     )
 
     parser.add_argument(
@@ -453,14 +453,14 @@ def main():
         for j in range(i + 1, len(cluster_names)):
             cluster_pairs.append((cluster_names[i], cluster_names[j]))
     
-    logger.info(f"Processing {len(cluster_pairs)} cluster pairs using {args.CPU} thread(s)")
+    logger.info(f"Processing {len(cluster_pairs)} cluster pairs using {args.CPU} process(es)")
     
     all_test_results = None
     all_annotated_isoforms = []  # collect annotated per-pair if requested
     
-    # Process cluster pairs with multithreading
+    # Process cluster pairs with multiprocessing for true parallelism
     if args.CPU > 1:
-        with ThreadPoolExecutor(max_workers=args.CPU) as executor:
+        with ProcessPoolExecutor(max_workers=args.CPU) as executor:
             # Submit all tasks
             future_to_pair = {
                 executor.submit(process_cluster_pair, cluster_i, cluster_j): (cluster_i, cluster_j)
