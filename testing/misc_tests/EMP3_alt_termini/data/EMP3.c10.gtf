@@ -1,0 +1,17 @@
+chr19	LRAA	transcript	1402	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4"; PolyA "True"; TSS "True"; InternalPriming "True";
+chr19	LRAA	exon	1402	1460	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4";
+chr19	LRAA	exon	2680	2772	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4";
+chr19	LRAA	exon	3371	3473	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4";
+chr19	LRAA	exon	5202	5342	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4";
+chr19	LRAA	exon	6151	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-4";
+chr19	LRAA	transcript	1207	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5"; PolyA "True"; TSS "True"; InternalPriming "True";
+chr19	LRAA	exon	1207	1460	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5";
+chr19	LRAA	exon	2680	2772	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5";
+chr19	LRAA	exon	3371	3473	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5";
+chr19	LRAA	exon	5202	5342	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5";
+chr19	LRAA	exon	6151	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-5";
+chr19	LRAA	transcript	1402	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-7"; PolyA "True"; TSS "True"; InternalPriming "True";
+chr19	LRAA	exon	1402	1460	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-7";
+chr19	LRAA	exon	3371	3473	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-7";
+chr19	LRAA	exon	5202	5342	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-7";
+chr19	LRAA	exon	6151	6403	.	+	.	gene_id "g:chr19:+:comp-1005"; transcript_id "t:chr19:+:comp-1005:iso-7";
