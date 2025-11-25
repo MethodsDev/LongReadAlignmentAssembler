@@ -200,6 +200,12 @@ workflow LRAA_singlecell_wf {
     File? partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar
     File? final_cluster_exprs_tar = cluster_guided.LRAA_final_cluster_exprs_tar
     File? final_cluster_trackings_tar = cluster_guided.LRAA_final_cluster_trackings_tar
+    
+    # Preliminary intermediate outputs from cluster-guided discovery phase
+    File? prelim_cluster_gtfs = cluster_guided.LRAA_prelim_cluster_gtfs
+    File? prelim_cluster_read_trackings = cluster_guided.LRAA_prelim_cluster_read_trackings
+    File? prelim_cluster_pseudobulk_exprs = cluster_guided.LRAA_prelim_cluster_pseudobulk_exprs
+    
     File? cluster_gene_counts_matrix = cluster_guided.cluster_gene_counts_matrix
     File? cluster_gene_TPM_matrix = cluster_guided.cluster_gene_TPM_matrix
     File? cluster_isoform_counts_matrix = cluster_guided.cluster_isoform_counts_matrix

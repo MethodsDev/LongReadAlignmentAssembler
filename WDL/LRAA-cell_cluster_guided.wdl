@@ -119,6 +119,7 @@ workflow LRAA_cell_cluster_guided {
                 sample_id = sample_id,
                 LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
                 referenceGenome = referenceGenome,
+                HiFi = HiFi,
                 docker = docker,
                 memoryGB = memoryGBmergeGTFs ,
         }
@@ -332,6 +333,7 @@ task lraa_merge_gtf_task {
         String sample_id
         Array[File] LRAA_cell_cluster_gtfs
         File referenceGenome
+        Boolean HiFi = false
         String docker
         Int memoryGB
     }
@@ -344,6 +346,7 @@ task lraa_merge_gtf_task {
       (
       
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
+                           ~{if HiFi then "--HiFi" else ""} \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
       ) || {

@@ -1,5 +1,25 @@
 #!/usr/bin/env python3
 
+"""
+merge_LRAA_GTFs.py - Merge multiple LRAA GTF outputs into a unified annotation
+
+This script merges LRAA GTF files by:
+1. Reading input transcripts from multiple GTF files
+2. Building a splice graph for each contig/strand
+3. Reconstructing a merged set of isoforms
+4. Optionally applying Leiden community clustering for gene assignment
+
+Important modes:
+  --HiFi: Enables TSS/PolyA boundary recognition during merge. Use this when
+          merging GTFs from HiFi/PacBio data that have TSS/PolyA annotations.
+          Without this flag, TSS/PolyA boundaries are ignored (LowFi/ONT mode).
+
+The output includes:
+  - <output>.gtf: Merged transcript annotations
+  - <output>.gtf.tracking.tsv: Provenance tracking linking merged transcripts
+    back to their source GTF files and original transcript IDs
+"""
+
 import sys, os, re
 
 sys.path.insert(
@@ -140,12 +160,33 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--HiFi",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable HiFi mode: respect TSS/PolyA annotations from input GTFs during merge. "
+            "Without this flag, TSS/PolyA boundaries are ignored (LowFi/ONT mode)."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.debug:
         LRAA_Globals.DEBUG = True
         _configure_logging(debug=True)
         logger.debug("Debug logging enabled for merge script.")
+
+    # Apply HiFi mode if requested (enables TSS/PolyA boundary recognition during merge)
+    if args.HiFi:
+        LRAA_Globals.config["infer_TSS"] = True
+        LRAA_Globals.config["infer_PolyA"] = True
+        logger.info("HiFi mode enabled: TSS/PolyA annotations from input GTFs will be respected during merge.")
+    else:
+        # Explicitly set to False to ensure LowFi/ONT behavior (ignore TSS/PolyA)
+        LRAA_Globals.config["infer_TSS"] = False
+        LRAA_Globals.config["infer_PolyA"] = False
+        logger.info("LowFi/ONT mode: TSS/PolyA annotations will be ignored during merge. Use --HiFi to enable.")
 
     LRAA_Globals.LRAA_MODE = "MERGE"
 
