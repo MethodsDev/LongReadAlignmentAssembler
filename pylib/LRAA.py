@@ -1000,11 +1000,41 @@ class LRAA:
                 segments, refine_TSS_simple_path=True, refine_PolyA_simple_path=True
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
-            assert (
-                path is not None
-            ), "Error, input transcript {} has no path in graph.".format(
-                transcript.get_transcript_id()
-            )
+            
+            # Enhanced diagnostic message when path mapping fails
+            if path is None:
+                error_msg = (
+                    f"Error, input transcript {transcript.get_transcript_id()} has no path in graph.\n"
+                    f"  Transcript: {transcript}\n"
+                    f"  Segments: {segments}\n"
+                    f"  Contig: {self._splice_graph.get_contig_acc()}\n"
+                    f"  Strand: {self._splice_graph.get_contig_strand()}\n"
+                    f"  TSS/PolyA mode: infer_TSS={LRAA_Globals.config.get('infer_TSS', False)}, "
+                    f"infer_PolyA={LRAA_Globals.config.get('infer_PolyA', False)}\n"
+                    f"  min_feature_frac_overlap: {LRAA_Globals.config.get('min_feature_frac_overlap', 0.50)}\n"
+                )
+                # Try to get overlapping exons for diagnostics
+                if segments:
+                    try:
+                        first_seg = segments[0]
+                        overlapping_exons = self._splice_graph.get_overlapping_exon_segments(
+                            first_seg[0], first_seg[1]
+                        )
+                        error_msg += f"  Overlapping exons for first segment {first_seg}: {len(overlapping_exons)} found\n"
+                        if overlapping_exons:
+                            error_msg += f"    First 5: {[str(e) for e in overlapping_exons[:5]]}\n"
+                        else:
+                            error_msg += "  No overlapping exons found - transcript coordinates may not match splice graph.\n"
+                    except Exception as e:
+                        error_msg += f"  Could not query overlapping exons: {e}\n"
+                
+                if LRAA_Globals.LRAA_MODE == "MERGE":
+                    error_msg += (
+                        "\n  SUGGESTION: In MERGE mode, try lowering --min_feature_frac_overlap (e.g., --min_feature_frac_overlap 0.10)\n"
+                        "  to be more tolerant of coordinate variations between input GTF files.\n"
+                    )
+                
+                assert False, error_msg
 
             assert (
                 SPACER not in path
