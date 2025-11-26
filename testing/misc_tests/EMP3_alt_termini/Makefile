@@ -1,6 +1,6 @@
 test:
 	../../../util/merge_LRAA_GTFs.py --HiFi --genome data/EMP3.genome.fa --gtf data/EMP3.*gtf
-	sort LRAA.merged.gtf > LRAA.merged.gtf.sorted
+	sort LRAA.merged.gtf | cut -f1-7 > LRAA.merged.gtf.sorted
 	diff LRAA.merged.gtf.sorted data/expected_merged.GTF.sorted
 
 

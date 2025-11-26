@@ -940,6 +940,11 @@ class LRAA:
         return mp_counter
 
     def assign_transcripts_paths_in_graph(self, transcripts):
+        """
+        Assigns paths in the splice graph to input transcripts.
+        Returns a filtered list containing only transcripts that were successfully mapped.
+        Transcripts that cannot be mapped are logged as warnings and excluded from the result.
+        """
 
         splice_graph = self.get_splice_graph()
         contig_acc = splice_graph.get_contig_acc() if splice_graph else "?"
@@ -959,7 +964,7 @@ class LRAA:
                 contig_acc,
                 contig_strand,
             )
-            return
+            return []  # Return empty list instead of None
 
         show_progress = LRAA_Globals.config.get(
             "show_progress_assign_transcripts", True
@@ -992,6 +997,9 @@ class LRAA:
 
         prev_time = time.time()
         last_time_update = prev_time
+        
+        skipped_transcript_ids = []  # track IDs of transcripts that failed to map
+        successfully_mapped = []  # track transcripts that were successfully mapped
 
         for idx, transcript in enumerate(transcripts, 1):
             logger.debug("-mapping transcript to graph: {}".format(transcript))
@@ -1001,10 +1009,10 @@ class LRAA:
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
             
-            # Enhanced diagnostic message when path mapping fails
+            # Handle transcripts that fail to map to the splice graph
             if path is None:
                 error_msg = (
-                    f"Error, input transcript {transcript.get_transcript_id()} has no path in graph.\n"
+                    f"Warning: Input transcript {transcript.get_transcript_id()} has no path in graph - skipping.\n"
                     f"  Transcript: {transcript}\n"
                     f"  Segments: {segments}\n"
                     f"  Contig: {self._splice_graph.get_contig_acc()}\n"
@@ -1028,15 +1036,25 @@ class LRAA:
                     except Exception as e:
                         error_msg += f"  Could not query overlapping exons: {e}\n"
                 
-                assert False, error_msg
+                if LRAA_Globals.LRAA_MODE == "MERGE":
+                    error_msg += (
+                        "  This can occur when merging GTFs with coordinate variations. "
+                        "The transcript will be skipped.\n"
+                    )
+                
+                logger.warning(error_msg)
+                skipped_transcript_ids.append(transcript.get_transcript_id())
+                continue  # Skip this transcript and move to the next
 
-            assert (
-                SPACER not in path
-            ), "Error, found SPACER in input transcript {} with path {}".format(
-                transcript.get_transcript_id(), str(path)
-            )
+            if SPACER in path:
+                logger.warning(
+                    f"Warning: Found SPACER in input transcript {transcript.get_transcript_id()} with path {path} - skipping."
+                )
+                skipped_transcript_ids.append(transcript.get_transcript_id())
+                continue  # Skip this transcript too
 
             transcript.set_simple_path(path)
+            successfully_mapped.append(transcript)  # Add to successfully mapped list
 
             if pbar is not None:
                 try:
@@ -1075,14 +1093,26 @@ class LRAA:
             except Exception:
                 pass
 
+        # Report summary if any transcripts were skipped
+        if skipped_transcript_ids:
+            logger.warning(
+                "[%s%s] Skipped %d transcript(s) that could not be mapped to splice graph: %s",
+                contig_acc,
+                contig_strand,
+                len(skipped_transcript_ids),
+                ", ".join(skipped_transcript_ids[:10]) + ("..." if len(skipped_transcript_ids) > 10 else "")
+            )
+
         logger.info(
-            "[%s%s] -done: assigning transcript paths in graph; total=%d",
+            "[%s%s] -done: assigning transcript paths in graph; total=%d, mapped=%d, skipped=%d",
             contig_acc,
             contig_strand,
             total_transcripts,
+            len(successfully_mapped),
+            len(skipped_transcript_ids),
         )
 
-        return
+        return successfully_mapped  # Return only successfully mapped transcripts
 
     def _group_alignments_by_read_name(self, pretty_alignments):
 

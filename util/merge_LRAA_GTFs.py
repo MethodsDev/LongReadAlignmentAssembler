@@ -315,7 +315,8 @@ def main():
 
         lraa_obj = LRAA(sg)
 
-        lraa_obj.assign_transcripts_paths_in_graph(transcript_list)
+        # Assign paths and filter out transcripts that couldn't be mapped
+        transcript_list = lraa_obj.assign_transcripts_paths_in_graph(transcript_list)
 
         lraa_obj.build_multipath_graph(
             contig_acc,
