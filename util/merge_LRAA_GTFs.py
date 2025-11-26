@@ -170,6 +170,16 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--contig",
+        type=str,
+        default=None,
+        help=(
+            "Restrict merge to specific contig. Can be chromosome name (e.g., 'chr2') "
+            "or chromosome with strand (e.g., 'chr2+' or 'chr2-'). Reduces memory usage."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -233,6 +243,21 @@ def main():
     if len(gtf_list) < 2 and not LRAA_Globals.DEBUG:
         exit("Error, need at least two gtf files to merge")
 
+    # Parse --contig parameter to determine chromosome and strand restrictions
+    chr_restrict = None
+    strand_restrict = None
+    if args.contig:
+        if args.contig.endswith(('+', '-')):
+            # Chromosome with strand: e.g., 'chr2+' or 'chr2-'
+            chr_restrict = args.contig[:-1]
+            strand_restrict = args.contig[-1]
+            logger.info(f"Restricting merge to contig={chr_restrict}, strand={strand_restrict}")
+        else:
+            # Chromosome only: e.g., 'chr2' (both strands)
+            chr_restrict = args.contig
+            strand_restrict = None
+            logger.info(f"Restricting merge to contig={chr_restrict} (both strands)")
+
     ofh = open(output_gtf, "wt")
     tracking_records = []  # accumulate provenance rows across contigs/strands
 
@@ -241,7 +266,11 @@ def main():
     for gtf_file in gtf_list:
         logger.info(f"-capturing input transcripts from gtf {gtf_file}")
         contig_to_input_transcripts = (
-            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(gtf_file)
+            GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
+                gtf_file,
+                chr_restrict=chr_restrict,
+                strand_restrict=strand_restrict
+            )
         )
         for contig, transcript_obj_list in contig_to_input_transcripts.items():
             for transcript in transcript_obj_list:
