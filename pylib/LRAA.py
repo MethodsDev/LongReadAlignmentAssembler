@@ -1028,12 +1028,6 @@ class LRAA:
                     except Exception as e:
                         error_msg += f"  Could not query overlapping exons: {e}\n"
                 
-                if LRAA_Globals.LRAA_MODE == "MERGE":
-                    error_msg += (
-                        "\n  SUGGESTION: In MERGE mode, try lowering --min_feature_frac_overlap (e.g., --min_feature_frac_overlap 0.10)\n"
-                        "  to be more tolerant of coordinate variations between input GTF files.\n"
-                    )
-                
                 assert False, error_msg
 
             assert (
