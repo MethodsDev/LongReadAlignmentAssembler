@@ -185,6 +185,8 @@ workflow LRAA_singlecell_wf {
     File? init_sc_splice_pattern_sparse_tar_gz = build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
     File? init_sc_gene_transcript_splicehash_mapping = build_sc_from_init_tracking.mapping_file
     File? seurat_umap_pdf = cluster_cells.umap_pdf
+    File? seurat_umap_with_clusters_tsv = cluster_cells.umap_with_clusters_tsv
+    File? seurat_rds = cluster_cells.seurat_rds
     File? seurat_cluster_assignments = cluster_assignments_generated
 
     # Final cluster-guided outputs (main deliverables)
