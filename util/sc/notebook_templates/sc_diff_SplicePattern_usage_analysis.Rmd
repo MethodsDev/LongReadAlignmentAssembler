@@ -14,19 +14,23 @@ library(pheatmap)
 
 
 # define inputs
+
 ```{r}
 
-sample_name = "PBMCs_LRAA-isoforms"
+source("iso_plot_funcs.R")
 
-sparse_matrix_data_dir = "../../LRAA_sc_PBMCs^isoform-sparseM/"
 
-umap_cluster_file = "../../LRAA_sc_PBMCs.genes-cell_cluster_assignments.wUMAP.wCAS.tsv"
+sample_name = "PBMCs_LRAA-splicepatterns"
 
-cluster_pseudobulk_matrix_filename = "LRAA_sc_PBMCs^isoform-sparseM.clusters_pseudobulk.matrix"
+sparse_matrix_data_dir = "../pbmcs_refGuided/pbmcs_refGuided_sc_cluster_guided/scg_splice_collapsed/PBMCs_pbio.LRAA.sc^splice_pattern-sparseM/"
 
-gtf_filename = "../../PBMCs_pbio.LRAA.sc_merged.gtf.updated.gtf.segmented.gtf"
+umap_cluster_file = "../pbmcs_refGuided/data/PBMCs_pbio.genes-cell_cluster_assignments.wUMAP.tsv"
 
-diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_delta_pi.diff_iso.tsv.signif_only"
+cluster_pseudobulk_matrix_filename = "../pbmcs_refGuided/pbmcs_refGuided_sc_cluster_guided/scg_splice_collapsed/PBMCs_pbio.LRAA.sc^splice_pattern-sparseM.resources/PBMCs_pbio.LRAA.sc^splice_pattern-sparseM.cluster_pseudobulk.matrix"
+
+gtf_filename = "../pbmcs_refGuided/pbmcs_refGuided_sc_cluster_guided/scg_splice_collapsed/LRAA.pbmcs.sc-cluster-guided.refGuided.sp_collapsed.segmented.gtf"
+
+diff_iso_usage_stats_filename = "../pbmcs_refGuided/pbmcs_refGuided_sc_cluster_guided/scg_splice_collapsed/PBMCs_pbio.LRAA.sc^splice_pattern.top_only_w_recip_delta_pi.minCF0.05.diff_iso.tsv"
 
 
 ```
@@ -37,448 +41,13 @@ diff_iso_usage_stats_filename = "LRAA_sc_PBMCs^isoform-sparseM.top_only_w_recip_
 
 ```{r}
 
-isoform_expr_data = Read10X(data.dir=sparse_matrix_data_dir,
-               gene.column = 1,
-               cell.column = 2,
-               unique.features = TRUE,
-               strip.suffix = FALSE)
 
-```
-
-
-
-```{r}
-
-umap_df = read.csv(umap_cluster_file, header=T, sep="\t")
-
-umap_df %>% head()
-
-```
-
-
-```{r}
-
-cluster_counts_matrix = read.csv(cluster_pseudobulk_matrix_filename, header=T, row.names=1, sep="\t")
-
-cluster_counts_matrix %>% head()
-
-```
-
-```{r}
-
-cluster_CPM_matrix = sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
-
-head(cluster_CPM_matrix)
-
-```
-
-
-
-```{r}
-
-gtf_parsed_file = "gtf_parsed.rds"
-
-if (file.exists(gtf_parsed_file)) {
-  
-  gtf_parsed = readRDS(gtf_parsed_file)
-  
-} else {
-
-  # Read the GTF file
-  gtf_parsed <- read_tsv( gtf_filename,
-                          comment = "#", 
-                          col_names = FALSE, 
-                          col_types = cols(.default = "c"))
-  
-  # Assign standard GTF column names
-  colnames(gtf_parsed)[1:9] <- c("seqname", "source", "feature", "start", "end", 
-                                 "score", "strand", "frame", "attribute")
-  
-  # Function to parse attributes into a named list
-  parse_attributes <- function(attr_str) {
-    attrs <- str_split(attr_str, ";\\s*")[[1]]
-    kv_pairs <- str_match(attrs, '^(\\S+)\\s+"([^"]+)"')
-    kv_pairs <- kv_pairs[!is.na(kv_pairs[, 1]), , drop = FALSE]
-    if (nrow(kv_pairs) == 0) return(named(list()))
-    set_names(kv_pairs[, 3], kv_pairs[, 2])
-  }
-  
-  # Safely parse attributes
-  gtf_parsed$attr_list <- map(gtf_parsed$attribute, parse_attributes)
-  
-  # Turn the named list column into separate columns
-  gtf_parsed <- gtf_parsed %>% unnest_wider(attr_list)
-  saveRDS(object = gtf_parsed, file="gtf_parsed.rds")
-  
-}
-
-```
-
-
-
-# utilty functions
-
-```{r}
-
-################
-## UMAP display
-################
-
-get_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
-  
-  
-  if (! is.null(restrict_to_transcript_ids)) {
-     transcript_expr_data = data.frame(isoform_expr_data[
-       rownames(isoform_expr_data) %in% restrict_to_transcript_ids,])
-  } else {
-  
-    transcript_expr_data = data.frame(isoform_expr_data[grepl(gene_of_interest, rownames(isoform_expr_data)),])
-  }
-  
-   transcript_expr_data$transcript_id = rownames(transcript_expr_data)
-   transcript_expr_data = transcript_expr_data %>% gather(key=cell_barcode, value=read_count, -transcript_id)
-  
-   umap_df_w_expr_data = right_join(umap_df, transcript_expr_data,
-                                   by='cell_barcode')
-   
-   return(umap_df_w_expr_data)
-}
-
-
-base_umap = umap_df %>% ggplot(aes(x=umap_1, y=umap_2)) + geom_point(color='gray', alpha=0.1)
-
-plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL) {
-  
-  isoform_umap = get_isoform_umap(gene_of_interest, restrict_to_transcript_ids)
-  
-  #isoform_umap =  isoform_umap %>% filter(read_count > 0) %>% mutate(log_read_count = log1p(read_count)) 
-  
-  
-  isoform_umap =  isoform_umap %>% filter(read_count > 0) 
-  
-  # Calculate 95th percentile for color scale
-  max_color_value = quantile(isoform_umap$read_count, 0.95, na.rm = TRUE)
-  
-  base_umap + geom_point(data=isoform_umap, aes(color=read_count)) +
-    facet_wrap(~transcript_id) +
-    theme_bw() +
-    ggtitle(gene_of_interest)  +
-     theme(legend.position="none") +
-     scale_color_viridis_c(limits = c(0, max_color_value), oob = scales::squish) +
-    geom_text(data = umap_df %>% 
-              group_by(seurat_clusters) %>% 
-              summarise(umap_1 = mean(umap_1), 
-                       umap_2 = mean(umap_2)), 
-            aes(label = seurat_clusters), 
-            size = 5,
-            color = 'purple',
-            fontface = "bold") 
-  
-}
-
-
-```
-
-
-
-```{r}
-
-#####################################
-# Gene structure and heatmap display
-#####################################
-
-get_gene_structure_matrix = function(gene_of_interest) {
- # Filter to exons only
-  exon_df <- gtf_parsed %>%
-    filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>%
-    filter(feature == "exon") %>%
-    mutate(
-      start = as.integer(start),
-      end = as.integer(end),
-      exon_coords = paste0(start, "-", end)
-    )
-  
-  # Sort exon coordinates by start position
-  exon_levels <- exon_df %>%
-    distinct(exon_coords, start) %>%
-    arrange(start) %>%
-    pull(exon_coords)
-  
-  # Build binary presence matrix (long format)
-  exon_binary_df <- exon_df %>%
-    select(transcript_id, exon_coords) %>%
-    distinct() %>%
-    mutate(present = 1)
-  
-  # Set factor levels for exon coordinates (x-axis)
-  exon_binary_df$exon_coords <- factor(exon_binary_df$exon_coords, levels = exon_levels)
-  
-  
-  # Ensure binary_df is a regular data frame (not grouped or list-columned)
-  exon_binary_df <- exon_binary_df %>% ungroup()
-  
-  # Count number of exons per transcript using tally() and sort by num exons
-  transcript_levels <- exon_binary_df %>%
-    filter(present == 1) %>%
-    group_by(transcript_id) %>%
-    tally(name = "n_exons") %>%
-    arrange(desc(n_exons)) %>%
-    pull(transcript_id)
-  
-  # Set transcript_id factor levels accordingly
-  exon_binary_df$transcript_id <- factor(exon_binary_df$transcript_id, levels = transcript_levels)
-  
-  return(exon_binary_df)
-    
-}
-
-gene_structure_heatmap = function(gene_of_interest) {
-
-  exon_binary_df = get_gene_structure_matrix(gene_of_interest)
-  
-  # Plot heatmap
-  p = ggplot(exon_binary_df, aes(x = exon_coords, y = transcript_id, fill = factor(present))) +
-    geom_tile(color = "grey80") +
-    scale_fill_manual(values = c("1" = "black"), guide = "none") +
-    labs(
-      title = "Transcript Exon Usage Heatmap",
-      x = "Exon Coordinates (start-end)",
-      y = "Transcript ID"
-    ) +
-    theme_minimal(base_size = 10) +
-    theme(
-      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-      panel.grid = element_blank()
-    )
-  
-  return(p)
-
-}
-
-
-get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
-
-  transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest)  %>% 
-    filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
-  
-  isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
-  
-  # Load expression matrix
-  expr_mat <- as.matrix(isoform_expr)
-  
-  # Log transform if desired
-  log_expr <- log2(expr_mat + 1)
-  
-  # Load exon structure info (from earlier script)
-  # binary_df has transcript_id, exon_coords, and present (1/0)
-  # Ensure transcript IDs match (e.g., same format)
-  
-  exon_binary_df = get_gene_structure_matrix(gene_of_interest)
-  
-  # Create exon structure annotation matrix (transcripts x exon_coords)
-  exon_mat <- exon_binary_df %>%
-    filter(present == 1) %>%
-    select(transcript_id, exon_coords) %>%
-    mutate(value = "●") %>%
-    pivot_wider(names_from = exon_coords, values_from = value, values_fill = "") %>%
-    column_to_rownames("transcript_id") %>%
-    as.data.frame()
-  
-  
-  
-  # Get exon column names and sort by numeric start coordinate
-  sorted_exon_cols <- exon_mat %>%
-    colnames() %>%
-    as_tibble() %>%
-    dplyr::rename(coord = value) %>%
-    mutate(start = as.integer(str_extract(coord, "^\\d+"))) %>%
-    arrange(start) %>%
-    pull(coord)
-  
-  # Reorder the exon matrix columns
-  exon_mat_sorted <- exon_mat[, rev(sorted_exon_cols)]
-  
-  
-  # If exon presence is encoded as "●" and "" or 1/0
-  # Convert to "yes"/"no" to be explicit
-  exon_mat_color <- exon_mat_sorted %>%
-    mutate(across(everything(), ~ ifelse(. != "", "yes", "no")))  # or . == 1
-  
-  # Make all columns factors
-  exon_mat_color <- exon_mat_color %>%
-    mutate(across(everything(), as.factor))
-  
-  # Build color mapping for all exon annotation columns
-  annotation_colors <- list()
-  
-  for (col in colnames(exon_mat_color)) {
-    annotation_colors[[col]] <- c("yes" = "black", "no" = "white")
-  }
-  
-  # Filter so exon_mat rows match log_expr
-  common_ids <- intersect(rownames(log_expr), rownames(exon_mat))
-  log_expr <- log_expr[common_ids, ]
-  exon_mat_sorted <- exon_mat_sorted[common_ids, ]
-  
-  
-  # Generate heatmap with exon structure annotations as row labels
-  pheatmap(log_expr,
-           show_rownames = TRUE,
-           show_colnames = TRUE,
-           cluster_rows = TRUE,
-           cluster_cols = TRUE,
-           annotation_row = exon_mat_color,
-           annotation_colors = annotation_colors,
-           fontsize_row = 6,
-           main = "Transcript Expression with Exon Structure",
-           annotation_legend = FALSE,
-  )
-  
-}
-
-```
-
-
-```{r}
-
-diff_iso_usage_stats = read.csv(diff_iso_usage_stats_filename, sep="\t", header=T)
-
-diff_iso_usage_stats %>% head()
-
-
-```
-
-```{r}
-
-# how many genes identified with DTU?
-
-diff_iso_usage_stats %>% select(gene_id) %>% unique() %>% nrow()
-
-```
-
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs = diff_iso_usage_stats %>% 
-                                      dplyr::filter(significant == "True") %>% 
-                                      dplyr::select(gene_id, cluster_A, cluster_B) %>%
-                                      unique() %>%
-                                      group_by(cluster_A, cluster_B) %>%
-                                      tally()
-
-diff_iso_usage_cluster_count_pairs
-
-```
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs$cluster_A = str_replace(diff_iso_usage_cluster_count_pairs$cluster_A, "Cluster_", "")
-
-diff_iso_usage_cluster_count_pairs$cluster_B = str_replace(diff_iso_usage_cluster_count_pairs$cluster_B, "Cluster_", "")
-
-diff_iso_usage_cluster_count_pairs$cluster_A = as.integer(diff_iso_usage_cluster_count_pairs$cluster_A)
-diff_iso_usage_cluster_count_pairs$cluster_B = as.integer(diff_iso_usage_cluster_count_pairs$cluster_B)
-
-```
-
-
-```{r}
-
-diff_iso_usage_cluster_count_pairs %>% 
-  ggplot(aes(x=factor(cluster_A), y=factor(cluster_B), fill=n)) + 
-  geom_tile() +
-  geom_text(aes(label = n), color = "white", size = 4) +
-  theme_bw() +   
-  ggtitle("Counts of genes with isoform switching events detected")
-
-```
-
-```{r}
-
-dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
-  # Create a complete matrix (assuming it's symmetric)
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  # Remove duplicates if any
-  distinct() %>%
-  # Pivot to wide format
-  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
-  # Convert to matrix
-  column_to_rownames("cluster_A") %>%
-  as.matrix()
-
-
-
-# Convert to distance object (you might want to transform the values)
-# Since higher 'n' values likely mean closer clusters, you might want to invert:
-dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
-
-# Create dendrogram
-hc <- hclust(dist_obj)
-plot(hc, main = "Dendrogram based on counts of Iso-switching genes", xlab = "Clusters", ylab = "Distance")
-
-
-```
-
-
-
-```{r}
-
-# order clusters by dendrogram
-
-library(dplyr)
-library(ggplot2)
-
-# First, create the distance matrix and dendrogram (as before)
-dist_matrix <- diff_iso_usage_cluster_count_pairs %>%
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  distinct() %>%
-  pivot_wider(names_from = cluster_B, values_from = n, values_fill = 0) %>%
-  column_to_rownames("cluster_A") %>%
-  as.matrix()
-
-# Convert to distance object and create dendrogram
-dist_obj <- as.dist(max(dist_matrix) - dist_matrix)
-hc <- hclust(dist_obj)
-cluster_order <- rownames(dist_matrix)[hc$order]
-
-# Make the data symmetrical and filter for triangle
-symmetric_data <- diff_iso_usage_cluster_count_pairs %>%
-  bind_rows(
-    .,
-    data.frame(cluster_A = .$cluster_B, cluster_B = .$cluster_A, n = .$n)
-  ) %>%
-  distinct() %>%
-  # Convert to factors with dendrogram order
-  mutate(
-    cluster_A = factor(cluster_A, levels = cluster_order),
-    cluster_B = factor(cluster_B, levels = cluster_order)
-  ) %>%
-  # Keep only upper triangle (where numeric cluster_A <= cluster_B)
-  filter(as.numeric(cluster_A) <= as.numeric(cluster_B))
-
-```
-
-
-```{r}
-
-# Create the triangular plot
-symmetric_data %>%
-  ggplot(aes(x = cluster_A, y = cluster_B, fill = n)) + 
-  geom_tile() +
-  geom_text(aes(label = n), color = "white", size = 4) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(x = "Cluster A", y = "Cluster B") +
-  ggtitle("Counts of genes with isoform switching events detected - dendro ordered") + 
-  scale_fill_distiller(palette = "RdYlBu")
+parse_inputs(sample_name,
+             sparse_matrix_data_dir,
+             umap_cluster_file,
+             cluster_pseudobulk_matrix_filename,
+             gtf_filename,
+             diff_iso_usage_stats_filename)
 
 ```
 
@@ -493,235 +62,25 @@ diff_iso_usage_stats = diff_iso_usage_stats %>% arrange(pvalue, desc(abs(delta_p
 diff_iso_usage_stats %>% head()
 ```
 
+
+
 ```{r}
 
 my_gene_of_interest = diff_iso_usage_stats$gene_id[1]
 
 
-get_expression_pheatmap_w_exon_structures(my_gene_of_interest)
+get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest)
 
 
 ````
 
 
 
-```{r}
-
-get_expression_ggplot2_heatmap_w_exon_structures = function(
-    gene_of_interest, 
-    min_isoform_frac_expr_any_cluster = 0,
-    ignore_unspliced = FALSE,
-    transcript_ids = NULL) {
-
-  library(patchwork)
-  library(ggdendro)
-  
-  message("Transcript_ids: ", transcript_ids)
-  
-  if (is.null(transcript_ids)) {
-    transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
-      filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
-    
-    if (ignore_unspliced) {
-      transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
-    }
-  }
-  
-  message("Transcript_ids: ", transcript_ids)
-  
-  isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
-  
-  isoform_frac_expr <- sweep(isoform_expr, 2, colSums(isoform_expr), "/")
-  isoform_frac_expr[is.na(isoform_frac_expr)] = 0
-  
-  if (min_isoform_frac_expr_any_cluster > 0) {
-    
-    transcript_ids = names(which(rowSums(isoform_frac_expr >= min_isoform_frac_expr_any_cluster) > 0))
-     
-    if (length(transcript_ids) < 2) {
-       stop("Too few isoforms left after filtering based on min isoform fraction") 
-    }
-    
-    isoform_expr = isoform_expr[rownames(isoform_expr) %in% transcript_ids,]
-    
-    isoform_frac_expr = isoform_frac_expr[rownames(isoform_frac_expr) %in% transcript_ids,]
-    
-  }
-  
-  
-  # Load expression matrix
-  expr_mat <- as.matrix(isoform_expr)
-  
-  # Log transform if desired
-  log_expr <- log2(expr_mat + 1)
-
-  
-  col_order <- hclust(dist(t(log_expr)))$order
-  ordered_clusters <- colnames(log_expr)[col_order]
-
-  # Convert to long format
-  expr_long <- as.data.frame(log_expr) %>%
-    rownames_to_column("transcript_id") %>%
-    pivot_longer(-transcript_id, names_to = "cluster", values_to = "expression")
-  
-  frac_expr_long = isoform_frac_expr %>%
-    rownames_to_column("transcript_id") %>%
-    pivot_longer(-transcript_id, names_to = "cluster", values_to = "expression")
-  
-
-  expr_long$cluster <- factor(expr_long$cluster, levels = ordered_clusters)
-  frac_expr_long$cluster <- factor(frac_expr_long$cluster, levels = ordered_clusters)
-
-  
-  # Cluster rows using base hclust on Euclidean distances
-  row_order <- hclust(dist(log_expr))$order
-  expr_long$transcript_id <- factor(expr_long$transcript_id, 
-                                    levels = rownames(log_expr)[row_order])
-  
-  frac_expr_long$transcript_id <- factor(frac_expr_long$transcript_id, 
-                                    levels = rownames(log_expr)[row_order])
-  
-  
-  exon_binary_df = get_gene_structure_matrix(gene_of_interest)
-  
-  exon_binary_df = exon_binary_df %>% filter(transcript_id %in% transcript_ids)
-  
-  # Create exon structure annotation matrix (transcripts x exon_coords)
-  exon_mat <- exon_binary_df %>%
-    filter(present == 1) %>%
-    select(transcript_id, exon_coords) %>%
-    mutate(value = "●") %>%
-    pivot_wider(names_from = exon_coords, values_from = value, values_fill = "") %>%
-    column_to_rownames("transcript_id") %>%
-    as.data.frame()
-  
-  
-  
-  # Long format for exon annotations
-  exon_anno_long <- exon_mat %>%
-    rownames_to_column("transcript_id") %>%
-    pivot_longer(-transcript_id, names_to = "exon_coords", values_to = "present") %>%
-    filter(present != "")  # keep only present exons
-  
-  # Ensure same transcript order as clustering
-  exon_anno_long$transcript_id <- factor(exon_anno_long$transcript_id, 
-                                         levels = levels(expr_long$transcript_id))
-  
-  
-
-  
-  # Get dendrogram data
-  row_dend <- hclust(dist(log_expr))
-  dend <- as.dendrogram(row_dend)
-  ddata <- dendro_data(dend, type = "rectangle")
-  
-  # Get row order for consistency
-  row_order <- row_dend$order
-  transcript_order <- rownames(log_expr)[row_order]
-  
-  # Create mapping from x (numeric position) to label
-  label_map <- ddata$labels %>%
-    mutate(leaf_position = row_number()) %>%
-    select(leaf_position, label)
-  
-  # Create a factor for labels ordered to match heatmap transcript_id
-  label_map <- label_map %>%
-    mutate(transcript_id = factor(label, levels = transcript_order),
-           new_pos = as.numeric(transcript_id))
-  
-  # Replace x and xend in segments using leaf positions
-  segments_fixed <- ddata$segments %>%
-    left_join(label_map %>% select(leaf_position, new_pos), by = c("x" = "leaf_position")) %>%
-    mutate(x = ifelse(!is.na(new_pos), new_pos, x)) %>%
-    select(-new_pos) %>%
-    left_join(label_map %>% select(leaf_position, new_pos), by = c("xend" = "leaf_position")) %>%
-    mutate(xend = ifelse(!is.na(new_pos), new_pos, xend)) %>%
-    select(-new_pos)
-  
-  p_dend <- ggplot(segments_fixed) +
-    geom_segment(aes(x = y, xend = yend, y = x, yend = xend)) +
-    scale_x_reverse() +  # ← This flips the tree so root is on the left
-    theme_void() +
-    theme(plot.margin = margin(t = 10, r = 5, b = 10, l = 10))
-  
-  
-  # Expression heatmap
-  p_expr <- ggplot(expr_long, aes(x = cluster, y = transcript_id, fill = expression)) +
-    geom_tile() +
-    scale_fill_viridis_c() +
-    theme_minimal() +
-    labs(title = "Iso Expression", x = "Cluster", y = NULL) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1),
-          axis.text.y = element_blank(),
-          axis.ticks.y = element_blank())
-  
-  p_frac_expr = ggplot(frac_expr_long, aes(x = cluster, y = transcript_id, fill = expression)) +
-    geom_tile() +
-    scale_fill_viridis_c() +
-    theme_minimal() +
-    labs(title = "Iso Fraction", x = "Cluster", y = NULL) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1),
-          axis.text.y = element_blank(),
-          axis.ticks.y = element_blank())
-  
-  
-  # remove legends
-  p_expr <- p_expr + theme(legend.position = "none")
-  p_frac_expr <- p_frac_expr + theme(legend.position = "none")
-
-  
-  
-  
-  # Exon structure tile map
-  p_exon <- ggplot(exon_anno_long, aes(x = exon_coords, y = transcript_id)) +
-    geom_tile(fill = "black") +
-    theme_minimal() +
-    labs(title = "Exon Structure", x = "Exon (start-end)", y = NULL) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1),
-          axis.text.y = element_text(size = 6),
-          plot.margin = margin(t = 10, r = 10, b = 10, l = 0))
-  
-  
-  
-  g_dend <- ggplotGrob(p_dend)
-  g_exon <- ggplotGrob(p_exon)
-  g_expr <- ggplotGrob(p_expr)
-  g_frac_expr <- ggplotGrob(p_frac_expr)
-  
-  
-  common_heights <- grid::unit.pmax(g_dend$heights,
-                                    g_exon$heights,
-                                    g_expr$heights,
-                                    g_frac_expr$heights)
-  
-  g_dend$heights <- common_heights
-  g_exon$heights <- common_heights
-  g_expr$heights <- common_heights
-  g_frac_expr$heights <- common_heights
-  
-
-  
-  combined_plot <- 
-    wrap_elements(g_dend) +
-    wrap_elements(g_exon) +
-    wrap_elements(g_expr) +
-    wrap_elements(g_frac_expr) +
-    plot_layout(ncol = 4, widths = c(0.5, 1.2, 0.5, 0.5))
-  
-  return(list(
-    plot = combined_plot, 
-    transcript_ids = transcript_ids)
-    )
-  
-}
-
-```
-
 
 ```{r}
 
 gene_exon_heatmap_plot = get_expression_ggplot2_heatmap_w_exon_structures(my_gene_of_interest, 
-                                                                0.1, ignore_unspliced=F)
+                                                                0.4, ignore_unspliced=T)
 
 p_exon_expr = gene_exon_heatmap_plot$plot
 
@@ -737,42 +96,12 @@ p_umap
 
 ```
 
-```{r}
 
-library(cowplot)
-
-p_both = plot_grid(p_exon_expr, p_umap, ncol=1)
-
-ggsave(p_both, 
-       file=paste0(my_gene_of_interest, ".pdf"),
-       width=12, 
-       height=12
-       )
-
-
-```
 
 ```{r}
 
-library(cowplot)
 
-make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0, ignore_unspliced=FALSE,
-                                             transcript_ids=NULL) {
-  
-  p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction, 
-                                                                      ignore_unspliced, transcript_ids)
-  
-  p_exon_expr = p_exon_expr_info$plot
-  
-  p_umap = plot_isoform_umap(gene_of_interest, p_exon_expr_info$transcript_ids)
-  
-  p_both = plot_grid(p_exon_expr, p_umap, ncol=1)
-  
-  return(p_both)
-  
-}
-
-p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest, 0.1, F)
+p_my_gene_of_interest = make_diff_iso_usage_compound_plot(my_gene_of_interest, 0.4, T)
 
 ggsave(p_my_gene_of_interest, 
        file=paste0(my_gene_of_interest, ".pdf"),
@@ -782,56 +111,6 @@ ggsave(p_my_gene_of_interest,
 
 p_my_gene_of_interest
 
-```
-
-#############################
-# Make plots for top examples
-
-
-```{r}
-# get top candidates.
-
-num_top_diff_iso_usage_plots = 200
-MIN_DELTA_PI = 0.3
-
-top_diff_iso_usage_genes = diff_iso_usage_stats %>% filter(significant == "True" & abs(delta_pi) >= MIN_DELTA_PI) %>% 
-  group_by(gene_id) %>% 
-      # get top entry per gene
-      arrange(adj_pvalue, desc(abs(delta_pi))) %>% filter(row_number() == 1) %>% ungroup() %>%
-  arrange(adj_pvalue, desc(abs(delta_pi))) %>%
-  head(num_top_diff_iso_usage_plots)
-
-top_diff_iso_usage_genes
-
-```
-
-```{r}
-
-test_gene = top_diff_iso_usage_genes$gene_id[1]
-transcript_ids_use = c(top_diff_iso_usage_genes$dominant_transcript_ids[1],
-                       top_diff_iso_usage_genes$alternate_transcript_ids[1])
-
-
-test_plot_info = get_expression_ggplot2_heatmap_w_exon_structures(test_gene, 0.2, 
-                                                                  ignore_unspliced=F, 
-                                                                  transcript_ids=transcript_ids_use)
-test_plot_info$plot
-
-```
-
-```{r}
-
-p = plot_isoform_umap(test_gene, test_plot_info$transcript_ids)
-
-plot(p)
-
-```
-
-```{r}
-
-p = make_diff_iso_usage_compound_plot(test_gene, MIN_DELTA_PI, ignore_unspliced = F)
-
-plot(p)
 ```
 
 
@@ -965,7 +244,6 @@ if (TRUE) { # only run on demand
 
 
 ```
-
 
 
 
