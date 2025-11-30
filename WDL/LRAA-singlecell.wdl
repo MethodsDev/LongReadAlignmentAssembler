@@ -60,7 +60,7 @@ workflow LRAA_singlecell_wf {
   }
 
   # Only skip the initial discovery call when the downstream-critical artifacts are provided
-  Boolean has_precomputed_init = defined(precomputed_init_quant_tracking) && defined(precomputed_init_gtf)
+  Boolean has_precomputed_init = defined(precomputed_init_gtf) && (defined(precomputed_init_quant_tracking) || defined(precomputed_cluster_assignments_tsv))
   Boolean has_precomputed_clusters = defined(precomputed_cluster_assignments_tsv)
   Boolean run_initial_phase = !has_precomputed_init
   Boolean run_clustering_phase = !has_precomputed_clusters
