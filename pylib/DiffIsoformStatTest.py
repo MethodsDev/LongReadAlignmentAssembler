@@ -258,19 +258,32 @@ def differential_isoform_tests(
                 annotated_df.loc[group.index, "skip_reason"] = "alternate_isoform_low_reads"
             continue
 
-        # Cell-detection fraction gating (dominant in A; if reciprocal also alternate in B)
+        # Cell-detection fraction gating: check dominant isoforms in the condition where they're enriched
         if have_fraction_data and min_cell_fraction > 0:
-            # Evaluate dominant cell-detection fractions in A cluster/condition
             def _collect_frac(ids_str, lookup):
                 if not ids_str:
                     return []
                 return [lookup.get(t, np.nan) for t in ids_str.split(",") if t]
-            dominant_cell_fracs_A = _collect_frac(dominant_transcript_ids_str, frac_lookup_A)
-            pass_cell_frac = any([not pd.isna(v) and v >= min_cell_fraction for v in dominant_cell_fracs_A])
+            
+            # Dominant isoforms should be checked in the condition where they have higher pi
+            # If dominant_delta_pi > 0, dominant isoforms are enriched in B (pi_B > pi_A)
+            # If dominant_delta_pi < 0, dominant isoforms are enriched in A (pi_A > pi_B)
+            if dominant_delta_pi > 0:
+                dominant_cell_fracs = _collect_frac(dominant_transcript_ids_str, frac_lookup_B)
+            else:
+                dominant_cell_fracs = _collect_frac(dominant_transcript_ids_str, frac_lookup_A)
+            
+            pass_cell_frac = any([not pd.isna(v) and v >= min_cell_fraction for v in dominant_cell_fracs])
+            
             alt_cell_frac_ok = True
             if reciprocal_delta_pi:
-                alternate_cell_fracs_B = _collect_frac(alternate_transcript_ids_str, frac_lookup_B)
-                alt_cell_frac_ok = any([not pd.isna(v) and v >= min_cell_fraction for v in alternate_cell_fracs_B])
+                # Alternate isoforms should be checked in the opposite condition
+                if alternate_delta_pi > 0:
+                    alternate_cell_fracs = _collect_frac(alternate_transcript_ids_str, frac_lookup_B)
+                else:
+                    alternate_cell_fracs = _collect_frac(alternate_transcript_ids_str, frac_lookup_A)
+                alt_cell_frac_ok = any([not pd.isna(v) and v >= min_cell_fraction for v in alternate_cell_fracs])
+            
             if not (pass_cell_frac and alt_cell_frac_ok):
                 if return_annotated_df:
                     annotated_df.loc[group.index, "skip_reason"] = "cell_fraction_fail"
