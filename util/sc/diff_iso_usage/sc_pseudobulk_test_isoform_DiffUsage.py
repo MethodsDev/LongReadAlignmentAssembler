@@ -46,9 +46,13 @@ def process_cluster_pair(params):
      min_reads_DTU_isoform, save_annot, min_cell_fraction) = params
     
     logger.info("Testing pair: {} vs {}".format(cluster_i, cluster_j))
-    test_df = counts_big_df[
-        ["gene_id", "transcript_id", "splice_hashcode", cluster_i, cluster_j]
-    ].copy()
+    # Build column list: always include gene_id, transcript_id, splice_hashcode, and cluster columns
+    cols_to_select = ["gene_id", "transcript_id", "splice_hashcode", cluster_i, cluster_j]
+    # Add gene_symbol if it exists in the dataframe
+    if "gene_symbol" in counts_big_df.columns:
+        cols_to_select.insert(2, "gene_symbol")  # Insert after gene_id and transcript_id
+    
+    test_df = counts_big_df[cols_to_select].copy()
     test_df.rename(
         columns={cluster_i: "count_A", cluster_j: "count_B"}, inplace=True
     )
