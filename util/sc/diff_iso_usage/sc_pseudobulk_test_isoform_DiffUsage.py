@@ -171,8 +171,8 @@ def main():
     parser.add_argument(
         "--group_by_feature",
         default="gene_id",
-        choices=["gene_id", "splice_hashcode"],
-        help="organize groupings according to gene_id or splice_hashcode",
+        choices=["gene_id", "splice_hashcode", "gene_symbol"],
+        help="organize groupings according to gene_id, splice_hashcode, or gene_symbol (extracted from gene_id by splitting on '^')",
     )
 
     parser.add_argument(
@@ -446,6 +446,12 @@ def main():
     counts_big_df["splice_hashcode"] = counts_big_df["transcript_id"].map(
         sp_hash_mapping
     )
+
+    # Extract gene_symbol if needed for grouping
+    if group_by_feature == "gene_symbol":
+        logger.info("-extracting gene_symbol from gene_id by splitting on '^'")
+        counts_big_df["gene_symbol"] = counts_big_df["gene_id"].str.split("^").str[0]
+        logger.info(f"Extracted {counts_big_df['gene_symbol'].nunique()} unique gene symbols")
 
     #########
     ## Exclude unspliced if indicated
