@@ -463,12 +463,23 @@ def main():
 
     if args.ignore_unspliced:
         logger.info("-pruning unspliced isoforms")
-        logger.info("before pruning, have {} rows".format(counts_big_df.shape[0]))
+        logger.info("before pruning counts matrix, have {} rows".format(counts_big_df.shape[0]))
         mask_to_exclude = (
             counts_big_df["splice_hashcode"].astype(str).str.contains(":iso-", na=False)
         )
         counts_big_df = counts_big_df[~mask_to_exclude]
-        logger.info("after pruning, have {} rows".format(counts_big_df.shape[0]))
+        logger.info("after pruning counts matrix, have {} rows".format(counts_big_df.shape[0]))
+        
+        # Also prune unspliced from fraction matrix if present
+        if fraction_big_df is not None:
+            logger.info("before pruning fraction matrix, have {} rows".format(fraction_big_df.shape[0]))
+            # Add splice_hashcode to fraction_big_df for filtering
+            fraction_big_df["splice_hashcode"] = fraction_big_df["transcript_id"].map(sp_hash_mapping)
+            mask_to_exclude_frac = (
+                fraction_big_df["splice_hashcode"].astype(str).str.contains(":iso-", na=False)
+            )
+            fraction_big_df = fraction_big_df[~mask_to_exclude_frac]
+            logger.info("after pruning fraction matrix, have {} rows".format(fraction_big_df.shape[0]))
 
     ############################################################
     ## pairwise compare clusters for diff isoform usage analysis
