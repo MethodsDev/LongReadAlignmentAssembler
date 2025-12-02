@@ -37,6 +37,7 @@ workflow GeneSparseM_To_SeuratClusters {
   }
 
   output {
+    File seurat_rds_initial = run_seurat.seurat_rds_initial
     File seurat_rds = run_seurat.seurat_rds
     File umap_pdf = run_seurat.umap_pdf
     File umap_with_clusters_tsv = run_seurat.umap_with_clusters_tsv
@@ -91,6 +92,7 @@ task run_seurat_from_gene_sparseM {
   >>>
 
   output {
+    File seurat_rds_initial = "~{output_prefix}-seurat_obj.initial.rds"
     File seurat_rds = "~{output_prefix}-seurat_obj.rds"
     File umap_pdf = "~{output_prefix}-umap.pdf"
     File umap_with_clusters_tsv = "~{output_prefix}-cell_cluster_assignments.wUMAP.tsv"

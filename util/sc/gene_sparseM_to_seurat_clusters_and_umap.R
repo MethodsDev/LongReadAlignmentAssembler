@@ -71,9 +71,17 @@ seurat_obj <- CreateSeuratObject(
 # Compute percent.mt and filter cells
 seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = mt_pattern)
 
+
+# Save initial Seurat object (before filtering/normalization/clustering)
+initial_seurat_rds <- paste0(output_prefix, "-seurat_obj.initial.rds")
+saveRDS(seurat_obj, file = initial_seurat_rds)
+message("- Wrote initial Seurat object: ", initial_seurat_rds)
+
 message("- Cells before mt-filtering: ", ncol(seurat_obj))
 seurat_obj <- subset(seurat_obj, subset = percent.mt < percent_mt_max)
 message("- Cells after  mt-filtering: ", ncol(seurat_obj))
+
+
 
 message("[3/7] Normalizing and selecting variable features (", n_variable_features, ")")
 seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
@@ -91,10 +99,10 @@ message("[6/7] UMAP embedding (dims = 1:", npcs, ")")
 seurat_obj <- RunUMAP(seurat_obj, dims = 1:npcs, verbose = FALSE)
 
 message("[7/7] Writing outputs")
-# 1) Seurat object RDS
+# 1) Final Seurat object RDS (with clustering and UMAP)
 seurat_rds <- paste0(output_prefix, "-seurat_obj.rds")
 saveRDS(seurat_obj, file = seurat_rds)
-message("- Wrote Seurat object: ", seurat_rds)
+message("- Wrote final Seurat object: ", seurat_rds)
 
 # 2) UMAP plot (PDF)
 umap_pdf <- paste0(output_prefix, "-umap.pdf")

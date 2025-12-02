@@ -53,4 +53,16 @@ This repo implements LRAA: isoform discovery and/or quantification from long-rea
 - Splice-graph heuristics: prefer class-level tunables in `Splice_graph` and make them controllable via config.
 - Maintain logging style (`logging` module) and avoid broad refactors; many types are shared across modules.
 
-If anything above is unclear or you need deeper examples (e.g., trellis details, EM tuning, or testing specific scenarios), ask and we’ll refine this guide.
+## WDL workflow development guidelines
+When modifying or creating WDL files in `WDL/` or `WDL/subwdls/`:
+- **ALWAYS run `miniwdl check <file.wdl>`** after making changes to validate syntax and catch errors early.
+- **WDL does NOT support `None` as a value**. Do not use `None` in conditionals or assignments (e.g., `else None` is invalid).
+- **Optional outputs (`File?`) don't require existence checks**: If a file path is declared as optional (`File?`) in the output section, it's valid for the file not to exist. The WDL runtime handles this gracefully without needing conditional logic.
+- **Avoid glob() for simple optional outputs**: For straightforward optional file outputs, use `File?` directly rather than arrays with glob patterns.
+- **Common WDL patterns**:
+  - Use `select_first([optional_var])` to unwrap optional values when you know they're defined.
+  - Use `if defined(var) then select_first([var]) else default_value` for optional inputs with defaults.
+  - Use `~{if defined(optional_param) then "--flag " + optional_param else ""}` for conditional CLI arguments in bash commands.
+- **Testing WDL workflows**: The `WDL/` directory contains the main workflows; `miniwdl` is available for validation and local testing. Check existing workflows for examples of proper optional handling and conditional execution.
+
+If anything above is unclear or you need deeper examples (e.g., trellis details, EM tuning, or testing specific scenarios), ask and we'll refine this guide.

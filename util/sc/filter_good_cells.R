@@ -15,6 +15,14 @@ parser$add_argument("--fdr_threshold", type="double", default=0.01,
                     help="FDR threshold for emptyDrops (default: 0.01)")
 parser$add_argument("--lower", type="integer", default=NULL, 
                     help="Lower UMI count threshold for emptyDrops (default: auto)")
+parser$add_argument("--isoform_matrix_dir", default=NULL, 
+                    help="Optional: Input directory for isoform sparse matrix to filter with same cells")
+parser$add_argument("--isoform_output_dir", default=NULL, 
+                    help="Optional: Output directory for filtered isoform matrix")
+parser$add_argument("--splice_pattern_matrix_dir", default=NULL, 
+                    help="Optional: Input directory for splice pattern sparse matrix to filter with same cells")
+parser$add_argument("--splice_pattern_output_dir", default=NULL, 
+                    help="Optional: Output directory for filtered splice pattern matrix")
 args <- parser$parse_args()
 
 # Extract arguments
@@ -22,6 +30,10 @@ matrix_dir <- args$matrix_dir
 output_dir <- args$output_dir
 fdr_threshold <- args$fdr_threshold
 lower_threshold <- args$lower
+isoform_matrix_dir <- args$isoform_matrix_dir
+isoform_output_dir <- args$isoform_output_dir
+splice_pattern_matrix_dir <- args$splice_pattern_matrix_dir
+splice_pattern_output_dir <- args$splice_pattern_output_dir
 
 # Validate input directory
 if (!dir.exists(matrix_dir)) {
@@ -146,3 +158,102 @@ message("\nFiltering Summary:")
 print(summary_stats)
 
 message("\nFiltering complete!")
+
+# Helper function to filter additional sparse matrices using the same good cell barcodes
+filter_additional_matrix <- function(input_dir, output_dir, good_barcodes) {
+  message("\n--- Filtering additional sparse matrix ---")
+  message("Input directory: ", input_dir)
+  message("Output directory: ", output_dir)
+  
+  # Read matrix files
+  matrix_file <- file.path(input_dir, "matrix.mtx.gz")
+  features_file <- file.path(input_dir, "features.tsv.gz")
+  barcodes_file <- file.path(input_dir, "barcodes.tsv.gz")
+  
+  # Check if files exist (try without .gz extension if not found)
+  if (!file.exists(matrix_file)) {
+    matrix_file <- file.path(input_dir, "matrix.mtx")
+    if (!file.exists(matrix_file)) {
+      stop("matrix.mtx or matrix.mtx.gz not found in: ", input_dir)
+    }
+  }
+  if (!file.exists(features_file)) {
+    features_file <- file.path(input_dir, "features.tsv")
+    if (!file.exists(features_file)) {
+      stop("features.tsv or features.tsv.gz not found in: ", input_dir)
+    }
+  }
+  if (!file.exists(barcodes_file)) {
+    barcodes_file <- file.path(input_dir, "barcodes.tsv")
+    if (!file.exists(barcodes_file)) {
+      stop("barcodes.tsv or barcodes.tsv.gz not found in: ", input_dir)
+    }
+  }
+  
+  # Read the sparse matrix
+  sparse_matrix <- readMM(matrix_file)
+  features <- readLines(features_file)
+  barcodes <- readLines(barcodes_file)
+  
+  # Set dimension names
+  rownames(sparse_matrix) <- features
+  colnames(sparse_matrix) <- barcodes
+  
+  message("Loaded matrix: ", nrow(sparse_matrix), " features x ", ncol(sparse_matrix), " barcodes")
+  
+  # Find indices of good cells in this matrix
+  good_cells_idx <- which(barcodes %in% good_barcodes)
+  
+  if (length(good_cells_idx) == 0) {
+    warning("No matching good cell barcodes found in this matrix!")
+    return(NULL)
+  }
+  
+  message("Found ", length(good_cells_idx), " matching good cells in this matrix")
+  
+  # Filter the sparse matrix to keep only good cells
+  filtered_matrix <- sparse_matrix[, good_cells_idx]
+  filtered_barcodes <- barcodes[good_cells_idx]
+  
+  message("Filtered matrix: ", nrow(filtered_matrix), " features x ", ncol(filtered_matrix), " barcodes")
+  
+  # Create output directory
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+    message("Created output directory: ", output_dir)
+  }
+  
+  # Write filtered matrix
+  message("Writing filtered matrix to: ", output_dir)
+  writeMM(obj = filtered_matrix, file = file.path(output_dir, "matrix.mtx"))
+  write(features, file = file.path(output_dir, "features.tsv"))
+  write(filtered_barcodes, file = file.path(output_dir, "barcodes.tsv"))
+  
+  # Compress output files
+  message("Compressing output files...")
+  system(paste0("gzip -f ", file.path(output_dir, "matrix.mtx")))
+  system(paste0("gzip -f ", file.path(output_dir, "features.tsv")))
+  system(paste0("gzip -f ", file.path(output_dir, "barcodes.tsv")))
+  
+  message("Additional matrix filtering complete!")
+}
+
+# Filter isoform matrix if provided
+if (!is.null(isoform_matrix_dir) && !is.null(isoform_output_dir)) {
+  message("\n========================================")
+  message("Filtering isoform sparse matrix")
+  message("========================================")
+  filter_additional_matrix(isoform_matrix_dir, isoform_output_dir, filtered_barcodes)
+}
+
+# Filter splice pattern matrix if provided
+if (!is.null(splice_pattern_matrix_dir) && !is.null(splice_pattern_output_dir)) {
+  message("\n========================================")
+  message("Filtering splice pattern sparse matrix")
+  message("========================================")
+  filter_additional_matrix(splice_pattern_matrix_dir, splice_pattern_output_dir, filtered_barcodes)
+}
+
+message("\n========================================")
+message("All filtering operations complete!")
+message("========================================")
