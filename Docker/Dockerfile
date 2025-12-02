@@ -119,6 +119,8 @@ RUN R -e 'remotes::install_github("satijalab/seurat", "seurat5", quiet = FALSE)'
 
 RUN R -e 'BiocManager::install("clustermole")'
 
+RUN R -e 'BiocManager::install("DropletUtils")'
+
 RUN pip install numpy --break-system-packages
 
 RUN pip install pytest --break-system-packages
