@@ -145,6 +145,7 @@ def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
         str: Path to the converted matrix directory
     """
     logging.info("Converting LRAA matrix format to CAS-compatible format...")
+    logging.info("Output directory will be: %s", output_dir)
     
     os.makedirs(output_dir, exist_ok=True)
     
