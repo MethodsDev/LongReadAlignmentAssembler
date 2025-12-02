@@ -129,22 +129,27 @@ fi
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
+# Determine the base directory to mount (parent of matrix dir)
+MATRIX_BASE_DIR=$(dirname "$MATRIX_DIR")
+MATRIX_SUBDIR=$(basename "$MATRIX_DIR")
+
 # Build Docker command
 DOCKER_CMD="docker run --rm"
 
-# Mount the matrix directory (read-only)
-DOCKER_CMD="$DOCKER_CMD -v ${MATRIX_DIR}:/data/matrix:ro"
-
-# Mount the output directory (read-write)
-DOCKER_CMD="$DOCKER_CMD -v ${OUTPUT_DIR}:/data/output"
+# Mount the base directory containing the matrix (read-write so .for_CAS can be created)
+DOCKER_CMD="$DOCKER_CMD -v ${MATRIX_BASE_DIR}:/data"
 
 # Add the Docker image
 DOCKER_CMD="$DOCKER_CMD ${DOCKER_IMAGE}"
 
 # Add required arguments (ENTRYPOINT handles the script invocation)
-DOCKER_CMD="$DOCKER_CMD --matrix-dir /data/matrix"
+DOCKER_CMD="$DOCKER_CMD --matrix-dir /data/${MATRIX_SUBDIR}"
 DOCKER_CMD="$DOCKER_CMD --api-token ${API_TOKEN}"
-DOCKER_CMD="$DOCKER_CMD --output-prefix /data/output/${OUTPUT_BASE}"
+
+# Compute relative path from matrix base dir to output prefix
+OUTPUT_PREFIX_REL=$(realpath --relative-to="$MATRIX_BASE_DIR" "$OUTPUT_PREFIX" 2>/dev/null || \
+                    python3 -c "import os.path; print(os.path.relpath('$OUTPUT_PREFIX', '$MATRIX_BASE_DIR'))")
+DOCKER_CMD="$DOCKER_CMD --output-prefix /data/${OUTPUT_PREFIX_REL}"
 
 # Add optional arguments
 if [[ -n "$CAS_MODEL_NAME" ]]; then
@@ -166,5 +171,5 @@ eval $DOCKER_CMD
 
 echo ""
 echo "Done! Output files:"
-echo "  ${OUTPUT_DIR}/${OUTPUT_BASE}.h5ad"
-echo "  ${OUTPUT_DIR}/${OUTPUT_BASE}.tsv"
+echo "  ${OUTPUT_PREFIX}.h5ad"
+echo "  ${OUTPUT_PREFIX}.tsv"
