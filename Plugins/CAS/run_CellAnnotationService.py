@@ -123,6 +123,30 @@ def is_cas_compatible_format(matrix_dir):
     return False
 
 
+def _find_file(directory, base_name):
+    """
+    Find a file in directory, checking both compressed and uncompressed versions.
+    
+    Args:
+        directory: Directory to search in
+        base_name: Base filename (e.g., "barcodes.tsv")
+    
+    Returns:
+        tuple: (file_path, is_compressed) or raises FileNotFoundError
+    """
+    compressed_path = os.path.join(directory, f"{base_name}.gz")
+    uncompressed_path = os.path.join(directory, base_name)
+    
+    if os.path.exists(compressed_path):
+        return compressed_path, True
+    elif os.path.exists(uncompressed_path):
+        return uncompressed_path, False
+    else:
+        raise FileNotFoundError(
+            f"Could not find {base_name} or {base_name}.gz in {directory}"
+        )
+
+
 def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
     """
     Convert LRAA-formatted matrix to CAS-compatible format.
@@ -149,94 +173,60 @@ def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. Convert barcodes.tsv.gz -> barcodes.tsv
-    barcodes_in = os.path.join(lraa_matrix_dir, "barcodes.tsv.gz")
+    # 1. Convert barcodes.tsv[.gz] -> barcodes.tsv
+    barcodes_in, is_compressed = _find_file(lraa_matrix_dir, "barcodes.tsv")
     barcodes_out = os.path.join(output_dir, "barcodes.tsv")
     
-    if os.path.exists(barcodes_in):
-        logging.info("Converting barcodes.tsv.gz...")
-        with gzip.open(barcodes_in, "rt") as f_in:
-            with open(barcodes_out, "w") as f_out:
-                f_out.write(f_in.read())
-    else:
-        # Try uncompressed version
-        barcodes_in_uncompressed = os.path.join(lraa_matrix_dir, "barcodes.tsv")
-        if os.path.exists(barcodes_in_uncompressed):
-            shutil.copy(barcodes_in_uncompressed, barcodes_out)
-        else:
-            raise FileNotFoundError(f"Could not find barcodes.tsv or barcodes.tsv.gz in {lraa_matrix_dir}")
+    logging.info("Converting %s...", os.path.basename(barcodes_in))
+    open_func = gzip.open if is_compressed else open
+    mode_in = "rt" if is_compressed else "r"
+    with open_func(barcodes_in, mode_in) as f_in:
+        with open(barcodes_out, "w") as f_out:
+            f_out.write(f_in.read())
     
-    # 2. Convert features.tsv.gz -> genes.tsv
-    features_in = os.path.join(lraa_matrix_dir, "features.tsv.gz")
+    # 2. Convert features.tsv[.gz] -> genes.tsv
+    features_in, is_compressed = _find_file(lraa_matrix_dir, "features.tsv")
     genes_out = os.path.join(output_dir, "genes.tsv")
     
-    if os.path.exists(features_in):
-        logging.info("Converting features.tsv.gz to genes.tsv...")
-        with gzip.open(features_in, "rt") as f_in:
-            with open(genes_out, "w") as f_out:
-                for line in f_in:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    # Parse SYMBOL^ENSG00000000000.version format
-                    if "^" in line:
-                        parts = line.split("^")
-                        if len(parts) == 2:
-                            symbol = parts[0]
-                            ensg_with_version = parts[1]
-                            
-                            # Remove version number (e.g., ENSG00000000000.15 -> ENSG00000000000)
-                            ensg = re.sub(r"\.\d+$", "", ensg_with_version)
-                            
-                            # Write in CAS format: ENSG SYMBOL
-                            f_out.write(f"{ensg}\t{symbol}\n")
-                        else:
-                            logging.warning("Unexpected features.tsv format: %s", line)
-                    else:
-                        logging.warning("Line does not contain '^' separator: %s", line)
-    else:
-        # Try uncompressed version
-        features_in_uncompressed = os.path.join(lraa_matrix_dir, "features.tsv")
-        if os.path.exists(features_in_uncompressed):
-            logging.info("Converting features.tsv to genes.tsv...")
-            with open(features_in_uncompressed, "r") as f_in:
-                with open(genes_out, "w") as f_out:
-                    for line in f_in:
-                        line = line.strip()
-                        if not line:
-                            continue
+    logging.info("Converting %s to genes.tsv...", os.path.basename(features_in))
+    open_func = gzip.open if is_compressed else open
+    mode_in = "rt" if is_compressed else "r"
+    with open_func(features_in, mode_in) as f_in:
+        with open(genes_out, "w") as f_out:
+            for line in f_in:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse SYMBOL^ENSG00000000000.version format
+                if "^" in line:
+                    parts = line.split("^")
+                    if len(parts) == 2:
+                        symbol = parts[0]
+                        ensg_with_version = parts[1]
                         
-                        if "^" in line:
-                            parts = line.split("^")
-                            if len(parts) == 2:
-                                symbol = parts[0]
-                                ensg_with_version = parts[1]
-                                ensg = re.sub(r"\.\d+$", "", ensg_with_version)
-                                f_out.write(f"{ensg}\t{symbol}\n")
-                            else:
-                                logging.warning("Unexpected features.tsv format: %s", line)
-                        else:
-                            logging.warning("Line does not contain '^' separator: %s", line)
-        else:
-            raise FileNotFoundError(f"Could not find features.tsv or features.tsv.gz in {lraa_matrix_dir}")
+                        # Remove version number (e.g., ENSG00000000000.15 -> ENSG00000000000)
+                        ensg = re.sub(r"\.\d+$", "", ensg_with_version)
+                        
+                        # Write in CAS format: ENSG SYMBOL
+                        f_out.write(f"{ensg}\t{symbol}\n")
+                    else:
+                        logging.warning("Unexpected features.tsv format: %s", line)
+                else:
+                    # No '^' separator, treat the full token as both symbol and gene ID
+                    token = re.sub(r"\.\d+$", "", line)
+                    f_out.write(f"{token}\t{token}\n")
     
-    # 3. Convert matrix.mtx.gz -> matrix.mtx
-    matrix_in = os.path.join(lraa_matrix_dir, "matrix.mtx.gz")
+    # 3. Convert matrix.mtx[.gz] -> matrix.mtx
+    matrix_in, is_compressed = _find_file(lraa_matrix_dir, "matrix.mtx")
     matrix_out = os.path.join(output_dir, "matrix.mtx")
     
-    if os.path.exists(matrix_in):
-        logging.info("Converting matrix.mtx.gz...")
-        with gzip.open(matrix_in, "rt") as f_in:
-            with open(matrix_out, "w") as f_out:
-                f_out.write(f_in.read())
-    else:
-        # Try uncompressed version
-        matrix_in_uncompressed = os.path.join(lraa_matrix_dir, "matrix.mtx")
-        if os.path.exists(matrix_in_uncompressed):
-            shutil.copy(matrix_in_uncompressed, matrix_out)
-        else:
-            raise FileNotFoundError(f"Could not find matrix.mtx or matrix.mtx.gz in {lraa_matrix_dir}")
+    logging.info("Converting %s...", os.path.basename(matrix_in))
+    open_func = gzip.open if is_compressed else open
+    mode_in = "rt" if is_compressed else "r"
+    with open_func(matrix_in, mode_in) as f_in:
+        with open(matrix_out, "w") as f_out:
+            f_out.write(f_in.read())
     
     logging.info("Conversion complete. CAS-compatible matrix saved to: %s", output_dir)
     return output_dir
