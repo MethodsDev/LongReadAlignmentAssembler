@@ -4,7 +4,7 @@ workflow Incorporate_gene_symbols {
   input {
     String sample_id
     File reference_gtf
-    File final_gtf
+    File? final_gtf
     File final_sc_gene_sparse_tar_gz
     File final_sc_isoform_sparse_tar_gz
     File final_sc_splice_pattern_sparse_tar_gz
@@ -14,13 +14,15 @@ workflow Incorporate_gene_symbols {
     Int integrate_memoryGB = 16
   }
 
-  call run_gffcompare {
-    input:
-      sample_id = sample_id,
-      reference_gtf = reference_gtf,
-      query_gtf = final_gtf,
-      docker = docker,
-      memoryGB = gffcompare_memoryGB
+  if (defined(final_gtf)) {
+    call run_gffcompare {
+      input:
+        sample_id = sample_id,
+        reference_gtf = reference_gtf,
+        query_gtf = select_first([final_gtf]),
+        docker = docker,
+        memoryGB = gffcompare_memoryGB
+    }
   }
 
   call incorporate_gene_symbols_sc as integrate_symbols {
@@ -38,10 +40,10 @@ workflow Incorporate_gene_symbols {
   }
 
   output {
-    File gffcompare_tracking = run_gffcompare.tracking
-    File gffcompare_stats = run_gffcompare.stats
+    File? gffcompare_tracking = run_gffcompare.tracking
+    File? gffcompare_stats = run_gffcompare.stats
     
-    File updated_gtf_with_gene_symbols = integrate_symbols.updated_gtf
+    File? updated_gtf_with_gene_symbols = integrate_symbols.updated_gtf
     File updated_id_mappings = integrate_symbols.annotated_id_mappings
     File updated_gene_sparse_tar_gz = integrate_symbols.annotated_gene_sparse_tar_gz
     File updated_isoform_sparse_tar_gz = integrate_symbols.annotated_isoform_sparse_tar_gz
@@ -109,12 +111,12 @@ task incorporate_gene_symbols_sc {
   input {
     String sample_id
     File reference_gtf
-    File final_gtf
+    File? final_gtf
     File gene_sparse_tar_gz
     File isoform_sparse_tar_gz
     File splice_pattern_sparse_tar_gz
     File id_mappings_tsv
-    File gffcompare_tracking
+    File? gffcompare_tracking
     String docker
     Int memoryGB = 16
   }
@@ -138,12 +140,14 @@ task incorporate_gene_symbols_sc {
       cp ~{reference_gtf} reference.gtf
     fi
 
-    # Ensure final GTF is plain text and work on a local copy
-    if [[ "~{final_gtf}" == *.gz ]]; then
-      gunzip -c ~{final_gtf} > final.gtf
-    else
-      cp ~{final_gtf} final.gtf
-    fi
+    ~{if defined(final_gtf) then 
+      "# Ensure final GTF is plain text and work on a local copy\n" +
+      "    if [[ \"~{final_gtf}\" == *.gz ]]; then\n" +
+      "      gunzip -c ~{final_gtf} > final.gtf\n" +
+      "    else\n" +
+      "      cp ~{final_gtf} final.gtf\n" +
+      "    fi"
+      else ""}
 
     cp ~{id_mappings_tsv} id_mappings.tsv
     cp ~{gene_sparse_tar_gz} gene_sparse.tar.gz
@@ -165,15 +169,19 @@ task incorporate_gene_symbols_sc {
       exit 1
     fi
 
-    incorporate_gene_symbols_in_sc_features.py  \
+    incorporate_gene_symbols_in_sc_features.py \
       --ref_gtf reference.gtf \
       --id_mappings id_mappings.tsv \
       --sparseM_dirs "${gene_dir}" "${isoform_dir}" "${splice_dir}" \
-      --LRAA_gtf final.gtf \
-      --gffcompare_tracking ~{gffcompare_tracking}
+      ~{if defined(final_gtf) then "--LRAA_gtf final.gtf" else ""} \
+      ~{if defined(gffcompare_tracking) then "--gffcompare_tracking " + gffcompare_tracking else ""}
 
     mv id_mappings.tsv.wAnnotIDs "~{updated_mapping_out}"
-    mv final.gtf.updated.gtf "~{updated_gtf_out}"
+    
+    # Only move updated GTF if final_gtf was provided
+    if ~{defined(final_gtf)}; then
+      mv final.gtf.updated.gtf "~{updated_gtf_out}"
+    fi
 
     tar -zcf "~{gene_sparse_tar_out}" "${gene_dir}"
     tar -zcf "~{isoform_sparse_tar_out}" "${isoform_dir}"
@@ -182,7 +190,7 @@ task incorporate_gene_symbols_sc {
   >>>
 
   output {
-    File updated_gtf = "~{updated_gtf_out}"
+    File? updated_gtf = "~{updated_gtf_out}"
     File annotated_id_mappings = "~{updated_mapping_out}"
     File annotated_gene_sparse_tar_gz = "~{gene_sparse_tar_out}"
     File annotated_isoform_sparse_tar_gz = "~{isoform_sparse_tar_out}"

@@ -18,6 +18,9 @@ workflow LRAA_singlecell_wf {
 
     # Single-cell pipeline mode: 'basic' or 'cluster-guided'
     String single_cell_pipe_mode = "basic"
+    
+    # Quantification-only mode: skip discovery, requires initial_annot_gtf
+    Boolean quant_only = false
 
     # Platform/options
     Boolean HiFi = false
@@ -84,7 +87,8 @@ workflow LRAA_singlecell_wf {
         memoryGB = memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
         diskSizeGB = diskSizeGB,
-        docker = docker
+        docker = docker,
+        quant_only = quant_only
     }
   }
 
@@ -134,7 +138,7 @@ workflow LRAA_singlecell_wf {
         referenceGenome = referenceGenome,
         inputBAM = inputBAM,
         cell_clusters_info = cluster_assignments_file,
-        annot_gtf = init_gtf_file,
+        annot_gtf = if quant_only then initial_annot_gtf else init_gtf_file,
         HiFi = HiFi,
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
@@ -148,23 +152,24 @@ workflow LRAA_singlecell_wf {
         memoryGBscSparseMatrices = memoryGBscSparseMatrices,
         diskSizeGB = diskSizeGB,
         docker = docker,
-        quant_only_cluster_guided = false
+        quant_only_cluster_guided = quant_only
     }
   }
 
   # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use initial outputs
+  # In quant_only mode, these GTF values will naturally be undefined since discovery doesn't produce them
   File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
   File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else build_sc_from_init_tracking.gene_sparse_dir_tgz
   File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else build_sc_from_init_tracking.isoform_sparse_dir_tgz
   File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
   File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
 
-  if (defined(gtf_for_symbols) && defined(ref_annot_gtf_source_gene_symbols)) {
+  if (defined(ref_annot_gtf_source_gene_symbols)) {
     call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
       input:
         sample_id = sample_id,
         reference_gtf = select_first([ref_annot_gtf_source_gene_symbols]),
-        final_gtf = select_first([gtf_for_symbols]),
+        final_gtf = gtf_for_symbols,
         final_sc_gene_sparse_tar_gz = select_first([gene_sparse_for_symbols]),
         final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
         final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
