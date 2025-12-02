@@ -21,7 +21,7 @@ Optional arguments:
   --min-acceptable-score <f>   Minimum acceptable evidence score (default: 0.2)
   --top-k <int>                Top-k CAS cell type calls per cell (default: 3)
   --obs-prefix <string>        Prefix for CAS cell type columns (default: cas_cell_type)
-  --docker-image <image>       Docker image to use (default: us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest)
+  --docker-image <image>       Docker image to use (default: us-central1-docker.pkg.dev/methods-dev-lab/lraa/cas)
   --help                       Show this help message
 
 Example:
@@ -39,7 +39,7 @@ EOF
 }
 
 # Default values
-DOCKER_IMAGE="us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+DOCKER_IMAGE="us-central1-docker.pkg.dev/methods-dev-lab/lraa/cas"
 MATRIX_DIR=""
 API_TOKEN=""
 OUTPUT_PREFIX=""
@@ -141,10 +141,7 @@ DOCKER_CMD="$DOCKER_CMD -v ${OUTPUT_DIR}:/data/output"
 # Add the Docker image
 DOCKER_CMD="$DOCKER_CMD ${DOCKER_IMAGE}"
 
-# Add the Python script
-DOCKER_CMD="$DOCKER_CMD python /usr/local/src/LRAA/Plugins/CAS/run_CellAnnotationService.py"
-
-# Add required arguments
+# Add required arguments (ENTRYPOINT handles the script invocation)
 DOCKER_CMD="$DOCKER_CMD --matrix-dir /data/matrix"
 DOCKER_CMD="$DOCKER_CMD --api-token ${API_TOKEN}"
 DOCKER_CMD="$DOCKER_CMD --output-prefix /data/output/${OUTPUT_BASE}"
