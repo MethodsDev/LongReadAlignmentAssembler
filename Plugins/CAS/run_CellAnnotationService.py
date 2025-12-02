@@ -13,9 +13,13 @@ This script:
 """
 
 import argparse
+import gzip
 import logging
 import os
+import re
+import shutil
 import sys
+import tempfile
 
 import scanpy as sc
 from cellarium.cas.client import CASClient
@@ -74,6 +78,170 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_cas_compatible_format(matrix_dir):
+    """
+    Check if the matrix directory is already in CAS-compatible format.
+    
+    CAS expects:
+      - barcodes.tsv (or .tsv.gz)
+      - genes.tsv (or .tsv.gz)
+      - matrix.mtx (or .mtx.gz)
+    
+    And genes.tsv should be formatted as:
+      ENSG00000000003 TSPAN6
+      ENSG00000000419 DPM1
+      ...
+    
+    Returns:
+        bool: True if compatible, False if it needs conversion
+    """
+    # Check for genes.tsv or genes.tsv.gz
+    genes_file = None
+    if os.path.exists(os.path.join(matrix_dir, "genes.tsv")):
+        genes_file = os.path.join(matrix_dir, "genes.tsv")
+    elif os.path.exists(os.path.join(matrix_dir, "genes.tsv.gz")):
+        genes_file = os.path.join(matrix_dir, "genes.tsv.gz")
+    else:
+        # No genes.tsv, probably features.tsv format
+        return False
+    
+    # Check first line format
+    try:
+        if genes_file.endswith(".gz"):
+            with gzip.open(genes_file, "rt") as f:
+                first_line = f.readline().strip()
+        else:
+            with open(genes_file, "r") as f:
+                first_line = f.readline().strip()
+        
+        # Expected format: "ENSG00000000003 TSPAN6" or "ENSG00000000003\tTSPAN6"
+        parts = first_line.split()
+        if len(parts) == 2 and parts[0].startswith("ENSG"):
+            return True
+    except Exception as e:
+        logging.warning("Could not check genes file format: %s", e)
+    
+    return False
+
+
+def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
+    """
+    Convert LRAA-formatted matrix to CAS-compatible format.
+    
+    LRAA format:
+      - barcodes.tsv.gz
+      - features.tsv.gz (format: SYMBOL^ENSG00000000000.version)
+      - matrix.mtx.gz
+    
+    CAS format:
+      - barcodes.tsv
+      - genes.tsv (format: ENSG00000000000 SYMBOL)
+      - matrix.mtx
+    
+    Args:
+        lraa_matrix_dir: Path to LRAA-formatted matrix directory
+        output_dir: Path to output CAS-compatible directory
+    
+    Returns:
+        str: Path to the converted matrix directory
+    """
+    logging.info("Converting LRAA matrix format to CAS-compatible format...")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 1. Convert barcodes.tsv.gz -> barcodes.tsv
+    barcodes_in = os.path.join(lraa_matrix_dir, "barcodes.tsv.gz")
+    barcodes_out = os.path.join(output_dir, "barcodes.tsv")
+    
+    if os.path.exists(barcodes_in):
+        logging.info("Converting barcodes.tsv.gz...")
+        with gzip.open(barcodes_in, "rt") as f_in:
+            with open(barcodes_out, "w") as f_out:
+                f_out.write(f_in.read())
+    else:
+        # Try uncompressed version
+        barcodes_in_uncompressed = os.path.join(lraa_matrix_dir, "barcodes.tsv")
+        if os.path.exists(barcodes_in_uncompressed):
+            shutil.copy(barcodes_in_uncompressed, barcodes_out)
+        else:
+            raise FileNotFoundError(f"Could not find barcodes.tsv or barcodes.tsv.gz in {lraa_matrix_dir}")
+    
+    # 2. Convert features.tsv.gz -> genes.tsv
+    features_in = os.path.join(lraa_matrix_dir, "features.tsv.gz")
+    genes_out = os.path.join(output_dir, "genes.tsv")
+    
+    if os.path.exists(features_in):
+        logging.info("Converting features.tsv.gz to genes.tsv...")
+        with gzip.open(features_in, "rt") as f_in:
+            with open(genes_out, "w") as f_out:
+                for line in f_in:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Parse SYMBOL^ENSG00000000000.version format
+                    if "^" in line:
+                        parts = line.split("^")
+                        if len(parts) == 2:
+                            symbol = parts[0]
+                            ensg_with_version = parts[1]
+                            
+                            # Remove version number (e.g., ENSG00000000000.15 -> ENSG00000000000)
+                            ensg = re.sub(r"\.\d+$", "", ensg_with_version)
+                            
+                            # Write in CAS format: ENSG SYMBOL
+                            f_out.write(f"{ensg}\t{symbol}\n")
+                        else:
+                            logging.warning("Unexpected features.tsv format: %s", line)
+                    else:
+                        logging.warning("Line does not contain '^' separator: %s", line)
+    else:
+        # Try uncompressed version
+        features_in_uncompressed = os.path.join(lraa_matrix_dir, "features.tsv")
+        if os.path.exists(features_in_uncompressed):
+            logging.info("Converting features.tsv to genes.tsv...")
+            with open(features_in_uncompressed, "r") as f_in:
+                with open(genes_out, "w") as f_out:
+                    for line in f_in:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        if "^" in line:
+                            parts = line.split("^")
+                            if len(parts) == 2:
+                                symbol = parts[0]
+                                ensg_with_version = parts[1]
+                                ensg = re.sub(r"\.\d+$", "", ensg_with_version)
+                                f_out.write(f"{ensg}\t{symbol}\n")
+                            else:
+                                logging.warning("Unexpected features.tsv format: %s", line)
+                        else:
+                            logging.warning("Line does not contain '^' separator: %s", line)
+        else:
+            raise FileNotFoundError(f"Could not find features.tsv or features.tsv.gz in {lraa_matrix_dir}")
+    
+    # 3. Convert matrix.mtx.gz -> matrix.mtx
+    matrix_in = os.path.join(lraa_matrix_dir, "matrix.mtx.gz")
+    matrix_out = os.path.join(output_dir, "matrix.mtx")
+    
+    if os.path.exists(matrix_in):
+        logging.info("Converting matrix.mtx.gz...")
+        with gzip.open(matrix_in, "rt") as f_in:
+            with open(matrix_out, "w") as f_out:
+                f_out.write(f_in.read())
+    else:
+        # Try uncompressed version
+        matrix_in_uncompressed = os.path.join(lraa_matrix_dir, "matrix.mtx")
+        if os.path.exists(matrix_in_uncompressed):
+            shutil.copy(matrix_in_uncompressed, matrix_out)
+        else:
+            raise FileNotFoundError(f"Could not find matrix.mtx or matrix.mtx.gz in {lraa_matrix_dir}")
+    
+    logging.info("Conversion complete. CAS-compatible matrix saved to: %s", output_dir)
+    return output_dir
+
+
 def main():
     args = parse_args()
 
@@ -93,53 +261,73 @@ def main():
         logging.error("Matrix directory does not exist: %s", matrix_dir)
         sys.exit(1)
 
-    # 1) Read 10x matrix
-    logging.info("Reading 10x matrix...")
-    adata = sc.read_10x_mtx(matrix_dir, var_names="gene_symbols", cache=True)
-    logging.info("Loaded AnnData: %d cells × %d genes", adata.n_obs, adata.n_vars)
+    # Check if matrix is already CAS-compatible or needs conversion
+    cas_matrix_dir = matrix_dir
+    temp_dir = None
+    
+    if is_cas_compatible_format(matrix_dir):
+        logging.info("Matrix directory is already in CAS-compatible format.")
+    else:
+        logging.info("Matrix directory appears to be in LRAA format. Converting to CAS format...")
+        # Create a temporary directory for the converted matrix
+        temp_dir = tempfile.mkdtemp(prefix="cas_matrix_")
+        cas_matrix_dir = convert_lraa_matrix_to_cas_format(matrix_dir, temp_dir)
+        logging.info("Using converted matrix from: %s", cas_matrix_dir)
 
-    # 2) CAS client
-    logging.info("Initializing CAS client...")
-    cas = CASClient(api_token=token)
+    try:
+        # 1) Read 10x matrix
+        logging.info("Reading 10x matrix...")
+        adata = sc.read_10x_mtx(cas_matrix_dir, var_names="gene_symbols", cache=True)
+        logging.info("Loaded AnnData: %d cells × %d genes", adata.n_obs, adata.n_vars)
 
-    # 3) CAS annotation request
-    logging.info("Submitting to CAS ...")
-    cas_response = cas.annotate_matrix_cell_type_ontology_aware_strategy(
-        matrix=adata,
-        chunk_size=args.chunk_size,
-        feature_ids_column_name="gene_ids",
-        feature_names_column_name="index",
-        cas_model_name=args.cas_model_name,
-    )
-    logging.info("CAS response received with %d entries.", len(cas_response.data))
+        # 2) CAS client
+        logging.info("Initializing CAS client...")
+        cas = CASClient(api_token=token)
 
-    # 4) Insert CAS response into AnnData
-    logging.info("Integrating CAS response into AnnData...")
-    insert_cas_ontology_aware_response_into_adata(cas_response, adata)
+        # 3) CAS annotation request
+        logging.info("Submitting to CAS ...")
+        cas_response = cas.annotate_matrix_cell_type_ontology_aware_strategy(
+            matrix=adata,
+            chunk_size=args.chunk_size,
+            feature_ids_column_name="gene_ids",
+            feature_names_column_name="index",
+            cas_model_name=args.cas_model_name,
+        )
+        logging.info("CAS response received with %d entries.", len(cas_response.data))
 
-    # 5) Ontology
-    logging.info("Loading Cell Ontology Cache...")
-    cl = CellOntologyCache()
+        # 4) Insert CAS response into AnnData
+        logging.info("Integrating CAS response into AnnData...")
+        insert_cas_ontology_aware_response_into_adata(cas_response, adata)
 
-    logging.info("Computing most granular top-%d calls...", args.top_k)
-    pp.compute_most_granular_top_k_calls_single(
-        adata=adata,
-        cl=cl,
-        min_acceptable_score=args.min_acceptable_score,
-        top_k=args.top_k,
-        obs_prefix=args.obs_prefix,
-    )
+        # 5) Ontology
+        logging.info("Loading Cell Ontology Cache...")
+        cl = CellOntologyCache()
 
-    # 6) Save outputs
-    logging.info("Writing AnnData to %s", out_h5ad)
-    adata.write(out_h5ad)
+        logging.info("Computing most granular top-%d calls...", args.top_k)
+        pp.compute_most_granular_top_k_calls_single(
+            adata=adata,
+            cl=cl,
+            min_acceptable_score=args.min_acceptable_score,
+            top_k=args.top_k,
+            obs_prefix=args.obs_prefix,
+        )
 
-    logging.info("Writing cell-type table to %s", out_tsv)
-    adata.obs.to_csv(out_tsv, sep="\t", index=True, index_label="cell_barcode")
+        # 6) Save outputs
+        logging.info("Writing AnnData to %s", out_h5ad)
+        adata.write(out_h5ad)
 
-    logging.info("Done!")
-    logging.info("  H5AD: %s", out_h5ad)
-    logging.info("  TSV : %s", out_tsv)
+        logging.info("Writing cell-type table to %s", out_tsv)
+        adata.obs.to_csv(out_tsv, sep="\t", index=True, index_label="cell_barcode")
+
+        logging.info("Done!")
+        logging.info("  H5AD: %s", out_h5ad)
+        logging.info("  TSV : %s", out_tsv)
+    
+    finally:
+        # Clean up temporary directory if created
+        if temp_dir and os.path.exists(temp_dir):
+            logging.info("Cleaning up temporary directory: %s", temp_dir)
+            shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":
