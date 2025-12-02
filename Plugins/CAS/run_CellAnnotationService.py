@@ -19,7 +19,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 
 import scanpy as sc
 from cellarium.cas.client import CASClient
@@ -263,71 +262,65 @@ def main():
 
     # Check if matrix is already CAS-compatible or needs conversion
     cas_matrix_dir = matrix_dir
-    temp_dir = None
     
     if is_cas_compatible_format(matrix_dir):
         logging.info("Matrix directory is already in CAS-compatible format.")
     else:
         logging.info("Matrix directory appears to be in LRAA format. Converting to CAS format...")
-        # Create a temporary directory for the converted matrix
-        temp_dir = tempfile.mkdtemp(prefix="cas_matrix_")
-        cas_matrix_dir = convert_lraa_matrix_to_cas_format(matrix_dir, temp_dir)
+        # Create output directory in same location as input with .for_CAS extension
+        matrix_basename = os.path.basename(os.path.normpath(matrix_dir))
+        matrix_parent = os.path.dirname(os.path.normpath(matrix_dir))
+        cas_output_dir = os.path.join(matrix_parent, f"{matrix_basename}.for_CAS")
+        cas_matrix_dir = convert_lraa_matrix_to_cas_format(matrix_dir, cas_output_dir)
         logging.info("Using converted matrix from: %s", cas_matrix_dir)
 
-    try:
-        # 1) Read 10x matrix
-        logging.info("Reading 10x matrix...")
-        adata = sc.read_10x_mtx(cas_matrix_dir, var_names="gene_symbols", cache=True)
-        logging.info("Loaded AnnData: %d cells × %d genes", adata.n_obs, adata.n_vars)
+    # 1) Read 10x matrix
+    logging.info("Reading 10x matrix...")
+    adata = sc.read_10x_mtx(cas_matrix_dir, var_names="gene_symbols", cache=True)
+    logging.info("Loaded AnnData: %d cells × %d genes", adata.n_obs, adata.n_vars)
 
-        # 2) CAS client
-        logging.info("Initializing CAS client...")
-        cas = CASClient(api_token=token)
+    # 2) CAS client
+    logging.info("Initializing CAS client...")
+    cas = CASClient(api_token=token)
 
-        # 3) CAS annotation request
-        logging.info("Submitting to CAS ...")
-        cas_response = cas.annotate_matrix_cell_type_ontology_aware_strategy(
-            matrix=adata,
-            chunk_size=args.chunk_size,
-            feature_ids_column_name="gene_ids",
-            feature_names_column_name="index",
-            cas_model_name=args.cas_model_name,
-        )
-        logging.info("CAS response received with %d entries.", len(cas_response.data))
+    # 3) CAS annotation request
+    logging.info("Submitting to CAS ...")
+    cas_response = cas.annotate_matrix_cell_type_ontology_aware_strategy(
+        matrix=adata,
+        chunk_size=args.chunk_size,
+        feature_ids_column_name="gene_ids",
+        feature_names_column_name="index",
+        cas_model_name=args.cas_model_name,
+    )
+    logging.info("CAS response received with %d entries.", len(cas_response.data))
 
-        # 4) Insert CAS response into AnnData
-        logging.info("Integrating CAS response into AnnData...")
-        insert_cas_ontology_aware_response_into_adata(cas_response, adata)
+    # 4) Insert CAS response into AnnData
+    logging.info("Integrating CAS response into AnnData...")
+    insert_cas_ontology_aware_response_into_adata(cas_response, adata)
 
-        # 5) Ontology
-        logging.info("Loading Cell Ontology Cache...")
-        cl = CellOntologyCache()
+    # 5) Ontology
+    logging.info("Loading Cell Ontology Cache...")
+    cl = CellOntologyCache()
 
-        logging.info("Computing most granular top-%d calls...", args.top_k)
-        pp.compute_most_granular_top_k_calls_single(
-            adata=adata,
-            cl=cl,
-            min_acceptable_score=args.min_acceptable_score,
-            top_k=args.top_k,
-            obs_prefix=args.obs_prefix,
-        )
+    logging.info("Computing most granular top-%d calls...", args.top_k)
+    pp.compute_most_granular_top_k_calls_single(
+        adata=adata,
+        cl=cl,
+        min_acceptable_score=args.min_acceptable_score,
+        top_k=args.top_k,
+        obs_prefix=args.obs_prefix,
+    )
 
-        # 6) Save outputs
-        logging.info("Writing AnnData to %s", out_h5ad)
-        adata.write(out_h5ad)
+    # 6) Save outputs
+    logging.info("Writing AnnData to %s", out_h5ad)
+    adata.write(out_h5ad)
 
-        logging.info("Writing cell-type table to %s", out_tsv)
-        adata.obs.to_csv(out_tsv, sep="\t", index=True, index_label="cell_barcode")
+    logging.info("Writing cell-type table to %s", out_tsv)
+    adata.obs.to_csv(out_tsv, sep="\t", index=True, index_label="cell_barcode")
 
-        logging.info("Done!")
-        logging.info("  H5AD: %s", out_h5ad)
-        logging.info("  TSV : %s", out_tsv)
-    
-    finally:
-        # Clean up temporary directory if created
-        if temp_dir and os.path.exists(temp_dir):
-            logging.info("Cleaning up temporary directory: %s", temp_dir)
-            shutil.rmtree(temp_dir)
+    logging.info("Done!")
+    logging.info("  H5AD: %s", out_h5ad)
+    logging.info("  TSV : %s", out_tsv)
 
 
 if __name__ == "__main__":
