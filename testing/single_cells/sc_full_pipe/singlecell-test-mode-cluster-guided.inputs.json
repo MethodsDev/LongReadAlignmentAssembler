@@ -6,7 +6,9 @@
   "LRAA_singlecell_wf.inputBAM": "data/chr19.2M.bam",
 
   "LRAA_singlecell_wf.initial_annot_gtf": "data/chr19.2M.annot.gtf.gz",
-  
+    "LRAA_singlecell_wf.ref_annot_gtf_source_gene_symbols" : "data/chr19.2M.annot.gtf.gz",
+
+    
   "LRAA_singlecell_wf.HiFi": true,
   "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing",
 

@@ -1,0 +1,29 @@
+{
+    "LRAA_singlecell_wf.sample_id": "test_sc_wdl_Qonly",
+    "LRAA_singlecell_wf.single_cell_pipe_mode" : "basic",
+
+    
+    "LRAA_singlecell_wf.referenceGenome": "data/chr19.genome.2M.fa",
+    "LRAA_singlecell_wf.inputBAM": "data/chr19.2M.bam",
+
+    "LRAA_singlecell_wf.initial_annot_gtf": "data/chr19.2M.annot.gtf.gz",
+
+    "LRAA_singlecell_wf.ref_annot_gtf_source_gene_symbols" : "data/chr19.2M.annot.gtf.gz",
+    
+    "LRAA_singlecell_wf.quant_only" : true,
+    
+    "LRAA_singlecell_wf.HiFi": true,
+    "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing",
+    
+    "LRAA_singlecell_wf.memoryGB" : 8,
+    "LRAA_singlecell_wf.memoryGBPerWorkerScattered" : 8,
+    
+    
+    "LRAA_singlecell_wf.min_cells": 1, #just_for_small_testing
+    "LRAA_singlecell_wf.min_features": 1, #just_for_small_testing
+    "LRAA_singlecell_wf.percent_mt_max": 20.0,
+    "LRAA_singlecell_wf.mt_pattern": "^MT-",
+    "LRAA_singlecell_wf.npcs": 12,
+    "LRAA_singlecell_wf.resolution": 0.6,
+    "LRAA_singlecell_wf.n_variable_features": 2000
+}
