@@ -325,22 +325,28 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
             filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
 
     all_expr_for_gene = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% all_transcript_ids_for_gene, ]
-    all_isoform_frac_expr =  sweep(all_expr_for_gene, 2, colSums(all_expr_for_gene), "/")
 
+    # Determine the transcript set to use for computing isoform fractions (denominator)
+    fraction_basis_transcript_ids = all_transcript_ids_for_gene
+    if (ignore_unspliced) {
+        fraction_basis_transcript_ids = fraction_basis_transcript_ids[ ! grepl(":iso-", fraction_basis_transcript_ids)]
+    }
+    
+    # Calculate isoform fractions based on all (or all spliced) transcripts
+    fraction_basis_expr = all_expr_for_gene[rownames(all_expr_for_gene) %in% fraction_basis_transcript_ids, ]
+    all_isoform_frac_expr <- sweep(fraction_basis_expr, 2, colSums(fraction_basis_expr), "/")
+    all_isoform_frac_expr[is.na(all_isoform_frac_expr)] = 0
     
     
     if (is.null(transcript_ids)) {
-        transcript_ids = all_transcript_ids_for_gene
-        
-        if (ignore_unspliced) {
-            transcript_ids = transcript_ids[ ! grepl(":iso-", transcript_ids)]
-        }
+        transcript_ids = fraction_basis_transcript_ids
     }
         
     message("Transcript_ids: ", transcript_ids)
     
     isoform_expr = all_expr_for_gene[rownames(all_expr_for_gene) %in% transcript_ids,]
     
+    # Extract isoform fractions for the transcripts we're displaying
     isoform_frac_expr <- all_isoform_frac_expr[rownames(all_isoform_frac_expr) %in% transcript_ids, ]
     isoform_frac_expr[is.na(isoform_frac_expr)] = 0
     
@@ -354,6 +360,7 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
         
         isoform_expr = isoform_expr[rownames(isoform_expr) %in% transcript_ids,]
         
+        # Filter isoform_frac_expr to match (but don't recalculate - keep original denominators)
         isoform_frac_expr = isoform_frac_expr[rownames(isoform_frac_expr) %in% transcript_ids,]
         
     }
