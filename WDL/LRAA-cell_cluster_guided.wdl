@@ -82,6 +82,8 @@ workflow LRAA_cell_cluster_guided {
                     oversimplify = oversimplify,
                     main_chromosomes = main_chromosomes,
                     quant_only = false,
+                    cell_barcode_tag = cell_barcode_tag,
+                    read_umi_tag = read_umi_tag,
                     numThreadsPerWorker = numThreadsPerWorker,
                     numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
                     num_parallel_contigs = num_parallel_contigs,

@@ -36,6 +36,10 @@ workflow LRAA_singlecell_wf {
     # Optional: provide precomputed cluster assignments to skip steps 1-3
     File? precomputed_cluster_assignments_tsv
 
+    # Single-cell barcode and UMI tags
+    String cell_barcode_tag = "CB"
+    String read_umi_tag = "XM"
+
     # Resources and docker (propagated to subcalls where applicable)
     Int numThreadsPerWorker = 5
     Int numThreadsPerWorkerScattered = 5
@@ -87,6 +91,8 @@ workflow LRAA_singlecell_wf {
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
         region = region,
+        cell_barcode_tag = cell_barcode_tag,
+        read_umi_tag = read_umi_tag,
         numThreadsPerWorker = numThreadsPerWorker,
         numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
         num_parallel_contigs = num_parallel_contigs,
@@ -161,6 +167,8 @@ workflow LRAA_singlecell_wf {
         HiFi = HiFi,
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
+        cell_barcode_tag = cell_barcode_tag,
+        read_umi_tag = read_umi_tag,
         numThreadsPerWorker = numThreadsPerWorker,
         numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
         num_parallel_contigs = num_parallel_contigs,
