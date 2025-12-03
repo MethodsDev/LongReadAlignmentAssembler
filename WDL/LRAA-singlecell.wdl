@@ -66,6 +66,7 @@ workflow LRAA_singlecell_wf {
     Int seed = 1
 
     # Filter good cells parameters
+    Boolean enable_filter_good_cells = true
     Float fdr_threshold = 0.01
     Int? lower_threshold
 
@@ -120,24 +121,28 @@ workflow LRAA_singlecell_wf {
         memoryGB = memoryGBbuildSparseMatrices
     }
 
-    # 2.5) Filter good cells from the gene-level sparse matrix
-    call FilterCells.FilterGoodCells as filter_good_cells {
-      input:
-        sample_id = sample_id,
-        gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz,
-        isoform_sparse_tar_gz = build_sc_from_init_tracking.isoform_sparse_dir_tgz,
-        splice_pattern_sparse_tar_gz = build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz,
-        docker = docker,
-        memoryGB = memoryGBFilterCells,
-        fdr_threshold = fdr_threshold,
-        lower_threshold = lower_threshold
+    # 2.5) Filter good cells from the gene-level sparse matrix (optional)
+    if (enable_filter_good_cells) {
+      call FilterCells.FilterGoodCells as filter_good_cells {
+        input:
+          sample_id = sample_id,
+          gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz,
+          isoform_sparse_tar_gz = build_sc_from_init_tracking.isoform_sparse_dir_tgz,
+          splice_pattern_sparse_tar_gz = build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz,
+          docker = docker,
+          memoryGB = memoryGBFilterCells,
+          fdr_threshold = fdr_threshold,
+          lower_threshold = lower_threshold
+      }
     }
 
-    # 3) Cluster cells from the filtered gene-level sparse matrix
+    # 3) Cluster cells from the gene-level sparse matrix (filtered or unfiltered)
+    File gene_sparse_for_clustering = if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_sparse_tar_gz]) else build_sc_from_init_tracking.gene_sparse_dir_tgz
+    
     call Seurat.GeneSparseM_To_SeuratClusters as cluster_cells {
       input:
         sample_id = sample_id,
-        gene_sparse_tar_gz = filter_good_cells.filtered_gene_sparse_tar_gz,
+        gene_sparse_tar_gz = gene_sparse_for_clustering,
         docker = docker,
         memoryGB = memoryGBSeurat,
         min_cells = min_cells,
@@ -183,12 +188,12 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use filtered good cell outputs
+  # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use filtered (if enabled) or unfiltered good cell outputs
   # In quant_only mode, these GTF values will naturally be undefined since discovery doesn't produce them
   File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
-  File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else filter_good_cells.filtered_gene_sparse_tar_gz
-  File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else filter_good_cells.filtered_isoform_sparse_tar_gz
-  File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else filter_good_cells.filtered_splice_pattern_sparse_tar_gz
+  File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_gene_sparse_tar_gz else build_sc_from_init_tracking.gene_sparse_dir_tgz)
+  File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_isoform_sparse_tar_gz else build_sc_from_init_tracking.isoform_sparse_dir_tgz)
+  File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz)
   File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
 
   if (defined(ref_annot_gtf_source_gene_symbols)) {
