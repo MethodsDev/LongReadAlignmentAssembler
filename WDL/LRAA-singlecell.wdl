@@ -100,7 +100,7 @@ workflow LRAA_singlecell_wf {
 
   File? init_quant_expr_file = LRAA_init.mergedQuantExpr
   File? init_quant_tracking_generated = LRAA_init.mergedQuantTracking
-  File init_quant_tracking_file = if (!run_initial_phase && defined(precomputed_init_quant_tracking)) then select_first([precomputed_init_quant_tracking]) else select_first([init_quant_tracking_generated])
+  File? init_quant_tracking_file = if (!run_initial_phase && defined(precomputed_init_quant_tracking)) then select_first([precomputed_init_quant_tracking]) else init_quant_tracking_generated
   File? init_gtf_generated = LRAA_init.mergedGTF
   File? init_gtf_file = if (!run_initial_phase && defined(precomputed_init_gtf)) then select_first([precomputed_init_gtf]) else init_gtf_generated
 
@@ -109,7 +109,7 @@ workflow LRAA_singlecell_wf {
     call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
       input:
         sample_id = sample_id,
-        tracking_file = init_quant_tracking_file,
+        tracking_file = select_first([init_quant_tracking_file]),
         docker = docker,
         memoryGB = memoryGBbuildSparseMatrices
     }
