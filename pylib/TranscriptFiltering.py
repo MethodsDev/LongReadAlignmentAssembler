@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     transcripts_retained = list()
+    hifi_mode = LRAA_Globals.config.get("HiFi", False)
+    
+    if hifi_mode:
+        logger.info("HiFi mode: single-exon transcripts must have TSS or PolyA annotation to be retained")
 
     for transcript in transcripts:
         tpm = transcript.get_TPM()
@@ -33,11 +37,19 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
             continue
 
         # regular filter logic
-        if transcript.is_monoexonic() and tpm < min_TPM:
-            # gbye
-            pass
+        if transcript.is_monoexonic():
+            # In HiFi mode, require TSS or PolyA annotation for single-exon transcripts
+            if hifi_mode and not (transcript.has_TSS() or transcript.has_PolyA()):
+                # filter out: single-exon without boundary annotation in HiFi mode
+                pass
+            elif tpm < min_TPM:
+                # filter out: below TPM threshold
+                pass
+            else:
+                # keep: meets all criteria
+                transcripts_retained.append(transcript)
         else:
-            # keep
+            # keep: multi-exonic
             transcripts_retained.append(transcript)
 
     return transcripts_retained

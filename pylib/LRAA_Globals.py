@@ -11,6 +11,7 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 config = {
     #########################
     # read alignment criteria
+    "HiFi": False,  # set to True when --HiFi is used; enables HiFi-specific filtering
     "min_per_id": 80,
     "min_mapping_quality": 1,
     "try_correct_alignments": True,

@@ -5,7 +5,7 @@ test: test_ref_free_ID test_quant test_ref_guided_ID
 
 test_ref_free_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs --config_update SIRVs.LRAA_config_update.json
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.gtf.refmap
 	diff gffcompare.LRAA.gtf.refmap.full.summary.tsv data/latest_summary.tsv

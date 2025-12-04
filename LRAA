@@ -680,6 +680,7 @@ def main():
 
     if args.HiFi:
         # Override defaults with stringent HiFi settings
+        LRAA_Globals.config["HiFi"] = True
         # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
         LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
         LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
