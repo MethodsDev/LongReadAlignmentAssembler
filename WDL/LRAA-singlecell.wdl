@@ -1,5 +1,105 @@
 version 1.0
 
+##########################################################################################
+# LRAA Single-Cell RNA-seq Workflow
+##########################################################################################
+#
+# This workflow performs isoform discovery and/or quantification on single-cell long-read
+# RNA-seq data with two primary execution modes and multiple optimization paths.
+#
+# ===== EXECUTION MODES =====
+#
+# 1. BASIC MODE (single_cell_pipe_mode = "basic")
+#    - Runs initial discovery on the full BAM to generate a preliminary GTF
+#    - Builds single-cell sparse matrices (gene, isoform, splice pattern) from read tracking
+#    - Optionally filters good cells from empty droplets
+#    - Clusters cells using Seurat on gene-level expression
+#    - Outputs: initial GTF, single-cell matrices, cluster assignments, UMAP visualizations
+#    - Use when: You want a quick initial analysis without per-cluster refinement
+#
+# 2. CLUSTER-GUIDED MODE (single_cell_pipe_mode = "cluster-guided")
+#    - Performs all basic mode steps PLUS:
+#    - Partitions BAM by cell clusters
+#    - Re-runs LRAA discovery independently on each cluster's reads
+#    - Merges cluster-specific GTFs into a refined final GTF
+#    - Re-quantifies all cells against the final GTF
+#    - Builds final single-cell sparse matrices with improved isoform definitions
+#    - Outputs: refined final GTF, improved single-cell matrices, per-cluster pseudobulk data
+#    - Use when: You want the highest quality isoform definitions tailored to cell types
+#
+# ===== QUANTIFICATION-ONLY MODE =====
+#
+# Set quant_only = true to skip isoform discovery and quantify against a known annotation:
+#    - In BASIC mode with quant_only = true:
+#      * Requires: initial_annot_gtf (the annotation to quantify against)
+#      * Skips: Initial discovery phase
+#      * Runs: Quantification, matrix building, cell filtering, clustering
+#      * Outputs: Single-cell matrices and clusters based on the provided annotation
+#
+#    - In CLUSTER-GUIDED mode with quant_only = true:
+#      * Requires: initial_annot_gtf
+#      * Skips: Both initial discovery AND per-cluster discovery
+#      * Runs: Clustering (if not precomputed), per-cluster quantification only
+#      * Outputs: Single-cell matrices from cluster-guided quantification
+#
+# ===== PRECOMPUTED INPUTS (OPTIMIZATION PATHS) =====
+#
+# You can skip expensive computation steps by providing precomputed files from prior runs:
+#
+# 1. Skip Initial Discovery:
+#    - Provide: precomputed_init_gtf + precomputed_init_quant_tracking
+#    - Effect: Skips LRAA_init, uses your GTF and tracking files directly
+#    - Use case: Re-run clustering with different parameters without re-discovering isoforms
+#
+# 2. Skip Initial Discovery + Matrix Building + Clustering:
+#    - Provide: precomputed_init_gtf + precomputed_cluster_assignments_tsv
+#    - Effect: Jumps directly to cluster-guided refinement (if mode = "cluster-guided")
+#             or just outputs the precomputed results (if mode = "basic")
+#    - Use case: Test cluster-guided refinement with different discovery parameters
+#
+# 3. Kickstart Cluster-Guided Mode:
+#    - Provide: precomputed_init_gtf + precomputed_cluster_assignments_tsv
+#    - Set: single_cell_pipe_mode = "cluster-guided"
+#    - Flow: Uses precomputed GTF as the annotation for cluster-guided discovery
+#            (passed as annot_gtf to guide per-cluster LRAA runs)
+#    - Use case: You have initial results and want refined cluster-specific isoforms
+#               without re-running the expensive initial discovery
+#
+# 4. Cluster-Guided Quantification-Only:
+#    - Provide: precomputed_cluster_assignments_tsv + initial_annot_gtf
+#    - Set: single_cell_pipe_mode = "cluster-guided", quant_only = true
+#    - Flow: Skips all discovery, quantifies each cluster against initial_annot_gtf
+#    - Use case: Quantify known isoforms with cluster-aware quantification
+#
+# ===== GENE SYMBOL INCORPORATION =====
+#
+# Optionally provide ref_annot_gtf_source_gene_symbols to incorporate gene symbols:
+#    - Runs gffcompare between LRAA GTF and reference annotation
+#    - Updates all single-cell matrices with gene symbols from matched loci
+#    - Only runs when: All required sparse matrices are available (from either basic or
+#                      cluster-guided mode, and not skipped due to missing precomputed inputs)
+#
+# ===== TYPICAL WORKFLOWS =====
+#
+# Quick exploration:
+#   single_cell_pipe_mode = "basic"
+#   → Get initial GTF, matrices, and clusters quickly
+#
+# High-quality production run:
+#   single_cell_pipe_mode = "cluster-guided"
+#   → Full pipeline with cluster-specific isoform refinement
+#
+# Iterative refinement:
+#   1st run: mode = "basic" (save init GTF and cluster assignments)
+#   2nd run: mode = "cluster-guided" + precomputed files
+#   → Skip expensive initial phase, focus on cluster-specific refinement
+#
+# Quantify known annotation:
+#   quant_only = true + initial_annot_gtf
+#   → Fast quantification without discovery
+#
+##########################################################################################
+
 import "LRAA.wdl" as LRAA
 import "subwdls/LRAA-build_sparse_matrices_from_tracking.wdl" as BuildMatrices
 import "subwdls/LRAA-filter_good_cells.wdl" as FilterCells
@@ -196,7 +296,7 @@ workflow LRAA_singlecell_wf {
   File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz)
   File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else build_sc_from_init_tracking.mapping_file
 
-  if (defined(ref_annot_gtf_source_gene_symbols)) {
+  if (defined(ref_annot_gtf_source_gene_symbols) && defined(gene_sparse_for_symbols) && defined(isoform_sparse_for_symbols) && defined(splice_pattern_sparse_for_symbols) && defined(mapping_for_symbols)) {
     call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
       input:
         sample_id = sample_id,
