@@ -114,7 +114,7 @@ def main():
             all_transcripts.extend(result_transcripts)
     
     # Sort all transcripts by chromosome and position for output
-    all_transcripts.sort(key=lambda x: (x.get_contig(), x._exon_segments[0][0]))
+    all_transcripts.sort(key=lambda x: (x.get_contig_acc(), x._exon_segments[0][0]))
     
     # Write output
     for transcript_obj in all_transcripts:
