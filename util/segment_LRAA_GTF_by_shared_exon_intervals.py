@@ -74,12 +74,13 @@ def main():
 
         transcripts_to_output = list()
 
-        gene_id_to_transcripts = defaultdict(list)
+        # Group by strand to segment all overlapping exons on the same strand
+        strand_to_transcripts = defaultdict(list)
 
         for transcript_obj in transcript_obj_list:
-            gene_id_to_transcripts[transcript_obj.get_gene_id()].append(transcript_obj)
+            strand_to_transcripts[transcript_obj.get_orient()].append(transcript_obj)
 
-        for transcript_list in gene_id_to_transcripts.values():
+        for transcript_list in strand_to_transcripts.values():
 
             if len(transcript_list) == 1:
                 transcripts_to_output.extend(transcript_list)
