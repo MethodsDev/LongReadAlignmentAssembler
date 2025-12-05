@@ -109,14 +109,14 @@ def segment_transcript_coordinates(transcript_list):
         transcript_id = transcript_obj.get_transcript_id()
         transcript_id_to_obj[transcript_id] = transcript_obj
         exon_segments = transcript_obj.get_exon_segments()
-
-        all_transcript_exon_patterns[transcript_id] = exon_segments
+        # Sort intervals for each transcript for efficient searching
+        all_transcript_exon_patterns[transcript_id] = sorted(exon_segments)
 
     partitioned = partition_intervals(all_transcript_exon_patterns)
 
     for transcript_id, partitioned_segments in partitioned.items():
         transcript_obj = transcript_id_to_obj[transcript_id]
-        transcript_obj._exon_segments = partitioned_segments.copy()
+        transcript_obj._exon_segments = partitioned_segments
 
     return transcript_list
 
@@ -143,20 +143,32 @@ def build_disjoint_segments(boundaries):
 def segment_membership(segments, intervals_by_set):
     """
     For each disjoint segment, identify which input sets it belongs to.
+    Uses binary search for efficiency.
     """
     membership = defaultdict(list)
+    
     for set_name, intervals in intervals_by_set.items():
-        for seg in segments:
-            seg_start, seg_end = seg
-            for int_start, int_end in intervals:
-                if seg_end < int_start:
-                    break
-                if seg_start > int_end:
-                    continue
+        # intervals are already sorted from segment_transcript_coordinates
+        for seg_start, seg_end in segments:
+            # Binary search to find the first interval that might contain this segment
+            left, right = 0, len(intervals)
+            while left < right:
+                mid = (left + right) // 2
+                if intervals[mid][1] < seg_start:
+                    left = mid + 1
+                else:
+                    right = mid
+            
+            # Check intervals starting from the found position
+            for i in range(left, len(intervals)):
+                int_start, int_end = intervals[i]
+                if int_start > seg_end:
+                    break  # No more intervals can contain this segment
                 # segment must be fully contained within the interval
                 if int_start <= seg_start and seg_end <= int_end:
-                    membership[set_name].append(seg)
+                    membership[set_name].append((seg_start, seg_end))
                     break
+    
     return membership
 
 
@@ -165,12 +177,12 @@ def partition_intervals(intervals_by_set):
     segments = build_disjoint_segments(boundaries)
     membership = segment_membership(segments, intervals_by_set)
 
-    # Reconstruct new intervals per set
+    # Reconstruct new intervals per set - use membership dict directly
     partitioned = defaultdict(list)
-    for seg in segments:
-        for set_name in intervals_by_set:
-            if seg in membership[set_name]:
-                partitioned[set_name].append(list(seg))
+    for set_name, seg_list in membership.items():
+        # seg_list already contains the segments for this transcript
+        partitioned[set_name] = [[start, end] for start, end in seg_list]
+    
     return partitioned
 
 
