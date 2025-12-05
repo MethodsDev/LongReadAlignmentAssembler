@@ -152,8 +152,8 @@ def segment_membership(segments, intervals_by_set):
                     break
                 if seg_start > int_end:
                     continue
-                # overlap exists
-                if int_start <= seg_end and int_end >= seg_start:
+                # segment must be fully contained within the interval
+                if int_start <= seg_start and seg_end <= int_end:
                     membership[set_name].append(seg)
                     break
     return membership
