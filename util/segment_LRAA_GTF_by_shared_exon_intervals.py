@@ -102,88 +102,66 @@ def main():
 
 
 def segment_transcript_coordinates(transcript_list):
-
-    transcript_id_to_obj = dict()
-    all_transcript_exon_patterns = dict()
+    """
+    Fast segmentation using sweep-line algorithm:
+    1. Collect all exons from all transcripts
+    2. Sort by coordinates and find overlapping regions
+    3. Break overlaps into unique segments
+    4. Map each transcript's exons to the new segments
+    """
+    
+    # Step 1: Collect all exons with transcript tracking
+    all_exons = []
     for transcript_obj in transcript_list:
         transcript_id = transcript_obj.get_transcript_id()
-        transcript_id_to_obj[transcript_id] = transcript_obj
-        exon_segments = transcript_obj.get_exon_segments()
-        # Sort intervals for each transcript for efficient searching
-        all_transcript_exon_patterns[transcript_id] = sorted(exon_segments)
-
-    partitioned = partition_intervals(all_transcript_exon_patterns)
-
-    for transcript_id, partitioned_segments in partitioned.items():
-        transcript_obj = transcript_id_to_obj[transcript_id]
-        transcript_obj._exon_segments = partitioned_segments
-
-    return transcript_list
-
-
-def flatten_intervals(intervals_by_set):
-    """
-    Collect all interval boundaries from all sets and flatten into sorted unique positions.
-    """
-    boundaries = set()
-    for intervals in intervals_by_set.values():
-        for start, end in intervals:
-            boundaries.add(start)
-            boundaries.add(end + 1)  # use end+1 to make it half-open for clarity
-    return sorted(boundaries)
-
-
-def build_disjoint_segments(boundaries):
-    """
-    Create disjoint segments from sorted unique boundaries.
-    """
-    return [(boundaries[i], boundaries[i + 1] - 1) for i in range(len(boundaries) - 1)]
-
-
-def segment_membership(segments, intervals_by_set):
-    """
-    For each disjoint segment, identify which input sets it belongs to.
-    Uses binary search for efficiency.
-    """
-    membership = defaultdict(list)
+        for exon_start, exon_end in transcript_obj.get_exon_segments():
+            all_exons.append((exon_start, exon_end, transcript_id))
     
-    for set_name, intervals in intervals_by_set.items():
-        # intervals are already sorted from segment_transcript_coordinates
-        for seg_start, seg_end in segments:
-            # Binary search to find the first interval that might contain this segment
-            left, right = 0, len(intervals)
-            while left < right:
-                mid = (left + right) // 2
-                if intervals[mid][1] < seg_start:
-                    left = mid + 1
-                else:
-                    right = mid
+    # Step 2: Sort exons by start coordinate
+    all_exons.sort(key=lambda x: (x[0], x[1]))
+    
+    # Step 3: Build unique segments from overlapping exons using sweep-line
+    segment_boundaries = set()
+    for exon_start, exon_end, _ in all_exons:
+        segment_boundaries.add(exon_start)
+        segment_boundaries.add(exon_end + 1)  # +1 for half-open intervals
+    
+    segment_boundaries = sorted(segment_boundaries)
+    unique_segments = [(segment_boundaries[i], segment_boundaries[i + 1] - 1) 
+                       for i in range(len(segment_boundaries) - 1)]
+    
+    # Step 4: For each transcript, find which segments fall within its exons
+    transcript_to_segments = defaultdict(list)
+    
+    for transcript_obj in transcript_list:
+        transcript_id = transcript_obj.get_transcript_id()
+        exon_segments = sorted(transcript_obj.get_exon_segments())
+        
+        # Use two pointers to efficiently match segments to exons
+        seg_idx = 0
+        for exon_start, exon_end in exon_segments:
+            # Skip segments that end before this exon starts
+            while seg_idx < len(unique_segments) and unique_segments[seg_idx][1] < exon_start:
+                seg_idx += 1
             
-            # Check intervals starting from the found position
-            for i in range(left, len(intervals)):
-                int_start, int_end = intervals[i]
-                if int_start > seg_end:
-                    break  # No more intervals can contain this segment
-                # segment must be fully contained within the interval
-                if int_start <= seg_start and seg_end <= int_end:
-                    membership[set_name].append((seg_start, seg_end))
-                    break
+            # Collect all segments that fall within this exon
+            temp_idx = seg_idx
+            while temp_idx < len(unique_segments):
+                seg_start, seg_end = unique_segments[temp_idx]
+                if seg_start > exon_end:
+                    break  # Past this exon
+                # Check if segment is fully contained in exon
+                if seg_start >= exon_start and seg_end <= exon_end:
+                    transcript_to_segments[transcript_id].append([seg_start, seg_end])
+                temp_idx += 1
     
-    return membership
-
-
-def partition_intervals(intervals_by_set):
-    boundaries = flatten_intervals(intervals_by_set)
-    segments = build_disjoint_segments(boundaries)
-    membership = segment_membership(segments, intervals_by_set)
-
-    # Reconstruct new intervals per set - use membership dict directly
-    partitioned = defaultdict(list)
-    for set_name, seg_list in membership.items():
-        # seg_list already contains the segments for this transcript
-        partitioned[set_name] = [[start, end] for start, end in seg_list]
+    # Step 5: Update transcript objects with new segmented exons
+    for transcript_obj in transcript_list:
+        transcript_id = transcript_obj.get_transcript_id()
+        if transcript_id in transcript_to_segments:
+            transcript_obj._exon_segments = transcript_to_segments[transcript_id]
     
-    return partitioned
+    return transcript_list
 
 
 if __name__ == "__main__":
