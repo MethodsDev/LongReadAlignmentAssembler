@@ -14,6 +14,8 @@ import logging
 import argparse
 from collections import defaultdict
 import Util_funcs
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -52,6 +54,13 @@ def main():
         help="debug mode, more verbose",
     )
 
+    parser.add_argument(
+        "--CPU",
+        type=int,
+        default=4,
+        help="number of parallel threads to use",
+    )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -68,37 +77,67 @@ def main():
         input_gtf
     )
 
+    # Prepare jobs: each contig/strand combination is a separate job
+    jobs = []
     for contig, transcript_obj_list in contig_to_input_transcripts.items():
-
-        logger.info("-processing {}".format(contig))
-
-        transcripts_to_output = list()
-
-        # Group by strand to segment all overlapping exons on the same strand
+        # Group by strand
         strand_to_transcripts = defaultdict(list)
-
         for transcript_obj in transcript_obj_list:
             strand_to_transcripts[transcript_obj.get_orient()].append(transcript_obj)
-
-        for transcript_list in strand_to_transcripts.values():
-
-            if len(transcript_list) == 1:
-                transcripts_to_output.extend(transcript_list)
-
-            else:
-                modified_transcripts = segment_transcript_coordinates(transcript_list)
-                transcripts_to_output.extend(modified_transcripts)
-
-        transcripts_to_output = sorted(
-            transcripts_to_output, key=lambda x: x._exon_segments[0][0]
-        )
-
-        for transcript_obj in transcripts_to_output:
-            ofh.write(transcript_obj.to_GTF_format(include_TPM=False) + "\n")
-
+        
+        for strand, transcript_list in strand_to_transcripts.items():
+            jobs.append((contig, strand, transcript_list))
+    
+    logger.info(f"Processing {len(jobs)} contig/strand combinations using {args.CPU} threads")
+    
+    # Process jobs in parallel
+    all_transcripts = []
+    if args.CPU > 1:
+        with ProcessPoolExecutor(max_workers=args.CPU) as executor:
+            future_to_job = {executor.submit(process_contig_strand, contig, strand, transcript_list): (contig, strand) 
+                           for contig, strand, transcript_list in jobs}
+            
+            for future in as_completed(future_to_job):
+                contig, strand = future_to_job[future]
+                try:
+                    result_transcripts = future.result()
+                    all_transcripts.extend(result_transcripts)
+                    logger.info(f"Completed {contig}:{strand}")
+                except Exception as exc:
+                    logger.error(f"{contig}:{strand} generated an exception: {exc}")
+                    raise
+    else:
+        # Single-threaded execution
+        for contig, strand, transcript_list in jobs:
+            logger.info(f"-processing {contig}:{strand}")
+            result_transcripts = process_contig_strand(contig, strand, transcript_list)
+            all_transcripts.extend(result_transcripts)
+    
+    # Sort all transcripts by chromosome and position for output
+    all_transcripts.sort(key=lambda x: (x.get_contig(), x._exon_segments[0][0]))
+    
+    # Write output
+    for transcript_obj in all_transcripts:
+        ofh.write(transcript_obj.to_GTF_format(include_TPM=False) + "\n")
+    
+    ofh.close()
     logger.info("Done.")
 
     sys.exit(0)
+
+
+def process_contig_strand(contig, strand, transcript_list):
+    """
+    Process a single contig/strand combination.
+    This function is designed to be called in parallel.
+    """
+    if len(transcript_list) == 1:
+        return transcript_list
+    else:
+        modified_transcripts = segment_transcript_coordinates(transcript_list)
+        # Sort by position
+        modified_transcripts.sort(key=lambda x: x._exon_segments[0][0])
+        return modified_transcripts
 
 
 def segment_transcript_coordinates(transcript_list):
