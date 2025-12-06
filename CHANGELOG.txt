@@ -1,3 +1,14 @@
+v0.14.0, December 6, 2025
+- in HiFi mode, only retain single-exon transcripts if they have TSS or PolyA annotated
+- incorporating filtering of good cells via DropletUtils and revised sparse matrices limited to good cells, and made filtering good cells optional
+- support quant-only mode for the single cell workflow
+- CAS integration as plugin for cell type annotations
+- bugfix for DTU anlysis taking into account cell fractions: enforce the min cell fraction requirement on the higher delta pi value cluster for the isoform. Also, if excluding unspliced, remove them from contributing to the isoform fraction dataframe too
+- include the umap and seurat objects as wdl outputs in the single cell pipe
+- under LRAA merge mode, report problematic transcripts that dont have paths in the splice graph, no longer a fatal error.
+
+
+
 v0.13.0, November 23, 2025
 - restructured WDLs for single cell pipeline, introducing 'basic' vs. 'cluster-guided' modes, removed the --bam_list from LRAA and relying on wdl pipe for orchestration of cluster-based quants
 - improved logging and mulithreading in workflows
