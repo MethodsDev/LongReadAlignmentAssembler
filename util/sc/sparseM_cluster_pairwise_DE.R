@@ -199,7 +199,7 @@ perform_pairwise_de <- function(seurat_obj, group_by,
   return(all_results)
 }
 
-# Run the analysis
+# Run the pairwise analysis
 pairwise_de_results <- perform_pairwise_de(
   seurat_obj, 
   group_by = "cluster_id",
@@ -210,10 +210,28 @@ pairwise_de_results <- perform_pairwise_de(
 )
 
 # -----------------------------------------------
+# 5b. Perform one-vs-all cluster DE analysis
+# -----------------------------------------------
+message("- Running one-vs-all cluster DE analysis")
+
+# FindAllMarkers performs each cluster vs all other cells
+one_vs_all_markers <- FindAllMarkers(
+  seurat_obj,
+  test.use = test_use,
+  min.pct = min_pct,
+  logfc.threshold = logfc_threshold,
+  only.pos = only_pos
+)
+
+# Add gene column
+one_vs_all_markers$gene <- rownames(one_vs_all_markers)
+
+# -----------------------------------------------
 # 6. Save results
 # -----------------------------------------------
 message("[6/6] Saving results")
 
+# --- Pairwise DE results ---
 # Combine all results into a single data frame
 combined_results <- do.call(rbind, lapply(names(pairwise_de_results), function(x) {
   df <- pairwise_de_results[[x]]
@@ -225,14 +243,14 @@ combined_results <- do.call(rbind, lapply(names(pairwise_de_results), function(x
 all_results_file <- paste0(output_prefix, ".cluster_pairwise_DE_results.all.tsv")
 write.table(combined_results, file = all_results_file, sep = "\t", 
             quote = FALSE, row.names = FALSE)
-message("- Wrote all DE results: ", all_results_file)
+message("- Wrote all pairwise DE results: ", all_results_file)
 
 # Write filtered results (significant only)
 filtered_results <- combined_results %>% filter(p_val_adj <= pval_adj_cutoff)
 filtered_results_file <- paste0(output_prefix, ".cluster_pairwise_DE_results.sig.tsv")
 write.table(filtered_results, file = filtered_results_file, sep = "\t", 
             quote = FALSE, row.names = FALSE)
-message("- Wrote significant DE results (p_val_adj <= ", pval_adj_cutoff, "): ", 
+message("- Wrote significant pairwise DE results (p_val_adj <= ", pval_adj_cutoff, "): ", 
         filtered_results_file)
 message("  - ", nrow(filtered_results), " significant DE results")
 
@@ -246,7 +264,7 @@ DE_df_counts <- combined_results %>%
 summary_file <- paste0(output_prefix, ".cluster_pairwise_DE_summary.tsv")
 write.table(DE_df_counts, file = summary_file, sep = "\t", 
             quote = FALSE, row.names = FALSE)
-message("- Wrote DE summary: ", summary_file)
+message("- Wrote pairwise DE summary: ", summary_file)
 
 # Generate heatmap plot of DE counts
 heatmap_pdf <- paste0(output_prefix, ".cluster_pairwise_DE_counts_heatmap.pdf")
@@ -267,7 +285,39 @@ p <- ggplot(DE_df_counts, aes(x = factor(cluster1), y = factor(cluster2), fill =
   )
 
 ggsave(filename = heatmap_pdf, plot = p, width = 8, height = 7)
-message("- Wrote DE counts heatmap: ", heatmap_pdf)
+message("- Wrote pairwise DE counts heatmap: ", heatmap_pdf)
+
+# --- One-vs-all DE results ---
+# Write all one-vs-all markers
+one_vs_all_all_file <- paste0(output_prefix, ".cluster_one_vs_all_markers.all.tsv")
+write.table(one_vs_all_markers, file = one_vs_all_all_file, sep = "\t", 
+            quote = FALSE, row.names = FALSE)
+message("- Wrote all one-vs-all markers: ", one_vs_all_all_file)
+
+# Write filtered one-vs-all markers (significant only)
+one_vs_all_sig <- one_vs_all_markers %>% filter(p_val_adj <= pval_adj_cutoff)
+one_vs_all_sig_file <- paste0(output_prefix, ".cluster_one_vs_all_markers.sig.tsv")
+write.table(one_vs_all_sig, file = one_vs_all_sig_file, sep = "\t", 
+            quote = FALSE, row.names = FALSE)
+message("- Wrote significant one-vs-all markers (p_val_adj <= ", pval_adj_cutoff, "): ", 
+        one_vs_all_sig_file)
+message("  - ", nrow(one_vs_all_sig), " significant markers")
+
+# Generate one-vs-all summary
+one_vs_all_summary <- one_vs_all_markers %>%
+  group_by(cluster) %>%
+  summarise(
+    n_markers_total = n(),
+    n_markers_sig = sum(p_val_adj <= pval_adj_cutoff),
+    mean_log2FC = mean(avg_log2FC),
+    max_log2FC = max(avg_log2FC)
+  ) %>%
+  arrange(cluster)
+
+one_vs_all_summary_file <- paste0(output_prefix, ".cluster_one_vs_all_summary.tsv")
+write.table(one_vs_all_summary, file = one_vs_all_summary_file, sep = "\t", 
+            quote = FALSE, row.names = FALSE)
+message("- Wrote one-vs-all summary: ", one_vs_all_summary_file)
 
 message("Done.")
 
