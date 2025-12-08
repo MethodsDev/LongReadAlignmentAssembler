@@ -131,6 +131,23 @@ seurat_rds <- paste0(output_prefix, "-seurat_obj.rds")
 saveRDS(seurat_obj, file = seurat_rds)
 message("- Wrote Seurat object: ", seurat_rds)
 
+# Generate and save input data summary
+input_summary <- seurat_obj@meta.data %>%
+  group_by(cluster_id) %>%
+  summarise(
+    n_cells = n(),
+    mean_genes_per_cell = mean(nFeature_RNA),
+    median_genes_per_cell = median(nFeature_RNA),
+    mean_counts_per_cell = mean(nCount_RNA),
+    median_counts_per_cell = median(nCount_RNA)
+  ) %>%
+  arrange(cluster_id)
+
+input_summary_file <- paste0(output_prefix, ".input_data_summary.tsv")
+write.table(input_summary, file = input_summary_file, sep = "\t", 
+            quote = FALSE, row.names = FALSE)
+message("- Wrote input data summary: ", input_summary_file)
+
 # -----------------------------------------------
 # 5. Perform pairwise DE analysis
 # -----------------------------------------------
