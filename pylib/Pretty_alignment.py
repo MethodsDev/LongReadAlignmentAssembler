@@ -515,6 +515,238 @@ class Pretty_alignment:
         )
         return
 
+    def to_corrected_pysam_alignment(self, orig_alignment=None):
+        """
+        Convert corrected pretty alignment segments back to a pysam AlignmentSegment.
+        
+        This creates a new pysam record with updated CIGAR and position based on
+        the corrected _pretty_alignment_segments. Preserves all other SAM fields
+        from the original alignment.
+        
+        Args:
+            orig_alignment: Original pysam.AlignmentSegment. If None, uses self._pysam_alignment
+            
+        Returns:
+            pysam.AlignmentSegment with corrected CIGAR and position
+            
+        Raises:
+            RuntimeError: If no pysam alignment is available
+        """
+        if orig_alignment is None:
+            orig_alignment = self._pysam_alignment
+            
+        if orig_alignment is None:
+            raise RuntimeError(
+                "Cannot convert to pysam alignment: no original pysam record available. "
+                "Pretty_alignment may have been lightened."
+            )
+        
+        # Create new alignment by copying the original
+        import copy
+        corrected_aln = copy.deepcopy(orig_alignment)
+        
+        # Build new CIGAR from corrected segments, passing original read for validation
+        new_cigar, new_pos = self._segments_to_cigar_and_pos(
+            self._pretty_alignment_segments,
+            orig_alignment
+        )
+        
+        # Update alignment with corrected values
+        corrected_aln.cigartuples = new_cigar
+        corrected_aln.reference_start = new_pos
+        
+        return corrected_aln
+    
+    def _segments_to_cigar_and_pos(self, segments, orig_alignment=None):
+        """
+        Convert corrected alignment segments to CIGAR, preserving original CIGAR for unchanged regions.
+        
+        Correction extends alignment into previously soft-clipped regions. We detect which end
+        was corrected (left/right/both) and:
+          - Build new CIGAR for the corrected end (reduced clip + new match + new intron)
+          - Preserve the original CIGAR for the unchanged middle section
+        
+        This ensures indels in the unchanged region are maintained.
+        
+        Args:
+            segments: List of [lend, rend] genomic coordinate pairs (1-based, inclusive)
+            orig_alignment: Original pysam alignment (required)
+            
+        Returns:
+            tuple: (cigar_tuples, reference_start)
+                cigar_tuples: List of (operation, length) tuples for pysam
+                reference_start: 0-based reference start position
+        """
+        if not segments or len(segments) == 0:
+            raise ValueError("Cannot create CIGAR from empty segments")
+        
+        if orig_alignment is None:
+            raise ValueError("Original alignment required for CIGAR construction")
+        
+        # Original alignment range (1-based, inclusive)
+        orig_ref_start_1based = orig_alignment.reference_start + 1
+        orig_ref_end_1based = orig_alignment.reference_end  # reference_end is exclusive, so this becomes inclusive in 1-based
+        
+        # Corrected alignment range
+        corrected_ref_start_1based = segments[0][0]
+        corrected_ref_end_1based = segments[-1][1]
+        
+        # Detect which end was corrected
+        left_corrected = (corrected_ref_start_1based < orig_ref_start_1based)
+        right_corrected = (corrected_ref_end_1based > orig_ref_end_1based)
+        
+        cigar_tuples = []
+        reference_start = corrected_ref_start_1based - 1  # 0-based for pysam
+        
+        #logger.debug(
+        #    f"Building CIGAR for {orig_alignment.query_name}: "
+        #    f"orig_range=[{orig_ref_start_1based}, {orig_ref_end_1based}], "
+        #    f"corrected_range=[{corrected_ref_start_1based}, {corrected_ref_end_1based}], "
+        #    f"left_corrected={left_corrected}, right_corrected={right_corrected}"
+        #)
+        
+        if left_corrected:
+            # Left end was corrected: first segment is new
+            # Calculate new left soft clip
+            new_exon_lend, new_exon_rend = segments[0]
+            new_exon_len = new_exon_rend - new_exon_lend + 1
+            new_left_clip = self.left_soft_clipping - new_exon_len
+            
+            if new_left_clip > 0:
+                cigar_tuples.append((4, new_left_clip))  # Reduced soft clip
+            
+            # Match for the new exon
+            cigar_tuples.append((0, new_exon_len))
+            
+            # Intron to the original alignment
+            junction_lend, junction_rend = segments[1]
+            intron_len = junction_lend - new_exon_rend - 1
+            if intron_len > 0:
+                cigar_tuples.append((3, intron_len))
+            
+            # Now extract original CIGAR starting from junction_lend
+            # We need to find where in the original CIGAR this position appears
+            orig_cigar = list(orig_alignment.cigartuples)
+            orig_ref_pos = orig_alignment.reference_start + 1  # 1-based
+            orig_cigar_idx = 0
+            found_junction = False
+            
+            # Skip leading soft clip from original
+            if orig_cigar[0][0] == 4:  # Soft clip
+                orig_cigar_idx += 1
+            
+            # Find the position in original CIGAR that corresponds to junction_lend
+            while orig_cigar_idx < len(orig_cigar) and not found_junction:
+                op, length = orig_cigar[orig_cigar_idx]
+                if op in (0, 7, 8):  # Match/equal/mismatch
+                    if orig_ref_pos <= junction_lend <= orig_ref_pos + length - 1:
+                        # Junction is within this match operation
+                        # Skip the part before junction, keep the rest
+                        offset = junction_lend - orig_ref_pos
+                        if offset > 0:
+                            # Part of this match is before the junction, skip it
+                            remaining = length - offset
+                            if remaining > 0:
+                                cigar_tuples.append((op, remaining))
+                        else:
+                            cigar_tuples.append((op, length))
+                        found_junction = True
+                        orig_cigar_idx += 1
+                    else:
+                        orig_ref_pos += length
+                        orig_cigar_idx += 1
+                elif op == 2:  # Deletion
+                    orig_ref_pos += length
+                    if orig_ref_pos > junction_lend:
+                        # Junction is within this deletion, keep part of it
+                        kept_del = orig_ref_pos - junction_lend
+                        if kept_del > 0:
+                            cigar_tuples.append((op, kept_del))
+                        found_junction = True
+                    orig_cigar_idx += 1
+                elif op == 3:  # Intron
+                    orig_ref_pos += length
+                    orig_cigar_idx += 1
+                else:  # Insertion/clip - doesn't consume reference
+                    cigar_tuples.append((op, length))
+                    orig_cigar_idx += 1
+            
+            # Copy remaining original CIGAR operations (excluding trailing soft clip if right wasn't corrected)
+            while orig_cigar_idx < len(orig_cigar):
+                op, length = orig_cigar[orig_cigar_idx]
+                if not right_corrected and op == 4 and orig_cigar_idx == len(orig_cigar) - 1:
+                    # Keep trailing soft clip only if right wasn't corrected
+                    cigar_tuples.append((op, length))
+                elif op != 4 or orig_cigar_idx < len(orig_cigar) - 1:
+                    # Not a trailing soft clip, or right was corrected
+                    cigar_tuples.append((op, length))
+                orig_cigar_idx += 1
+            
+        if right_corrected:
+            # Right end was corrected: last segment is new
+            if not left_corrected:
+                # Start with original CIGAR
+                orig_cigar = list(orig_alignment.cigartuples)
+                # Find where the original alignment ends relative to the new junction
+                junction_rend = segments[-2][1]  # End of second-to-last segment
+                
+                # Copy original CIGAR up to the junction point
+                orig_ref_pos = orig_alignment.reference_start + 1
+                for op, length in orig_cigar:
+                    if op == 4 and len(cigar_tuples) == 0:
+                        # Leading soft clip
+                        cigar_tuples.append((op, length))
+                    elif op in (0, 7, 8):  # Match
+                        if orig_ref_pos + length - 1 <= junction_rend:
+                            # Entirely before junction
+                            cigar_tuples.append((op, length))
+                            orig_ref_pos += length
+                        else:
+                            # Crosses or after junction
+                            kept = max(0, junction_rend - orig_ref_pos + 1)
+                            if kept > 0:
+                                cigar_tuples.append((op, kept))
+                            break
+                    elif op == 2:  # Deletion
+                        if orig_ref_pos + length - 1 <= junction_rend:
+                            cigar_tuples.append((op, length))
+                            orig_ref_pos += length
+                        else:
+                            kept = max(0, junction_rend - orig_ref_pos + 1)
+                            if kept > 0:
+                                cigar_tuples.append((op, kept))
+                            break
+                    elif op == 3:  # Intron
+                        if orig_ref_pos + length - 1 <= junction_rend:
+                            cigar_tuples.append((op, length))
+                            orig_ref_pos += length
+                        else:
+                            break
+                    elif op == 1:  # Insertion
+                        cigar_tuples.append((op, length))
+            
+            # Add intron to new exon
+            new_exon_lend, new_exon_rend = segments[-1]
+            prev_exon_rend = segments[-2][1]
+            intron_len = new_exon_lend - prev_exon_rend - 1
+            if intron_len > 0:
+                cigar_tuples.append((3, intron_len))
+            
+            # Match for new exon
+            new_exon_len = new_exon_rend - new_exon_lend + 1
+            cigar_tuples.append((0, new_exon_len))
+            
+            # New right soft clip
+            new_right_clip = self.right_soft_clipping - new_exon_len
+            if new_right_clip > 0:
+                cigar_tuples.append((4, new_right_clip))
+        
+        elif not left_corrected:
+            # No correction - just copy original CIGAR
+            cigar_tuples = list(orig_alignment.cigartuples)
+        
+        return cigar_tuples, reference_start
+
     @classmethod
     def get_pretty_alignment(cls, pysam_read_alignment):
 
