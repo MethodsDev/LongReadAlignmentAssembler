@@ -13,7 +13,7 @@ parser <- ArgumentParser(description = "Pairwise DE analysis across clusters fro
 parser$add_argument("--sparseM_dir", required = TRUE,
                     help = "Path to sparse matrix directory (10x style: matrix.mtx(.gz), features.tsv(.gz), barcodes.tsv(.gz))")
 parser$add_argument("--cell_clusters", required = TRUE,
-                    help = "Path to cell_clusters.txt file with columns: cell_barcode, cluster_id")
+                    help = "Path to cell_clusters.txt file (tab-delimited, no header: cell_barcode<tab>cluster_id)")
 parser$add_argument("--output_prefix", required = TRUE,
                     help = "Prefix for output files")
 
@@ -52,13 +52,11 @@ min_features     <- args$min_features
 # 1. Load cell cluster assignments
 # -----------------------------------------------
 message("[1/6] Loading cell cluster assignments from: ", cell_clusters_file)
-cell_clusters_df <- read.table(cell_clusters_file, header = TRUE, sep = "\t", 
+cell_clusters_df <- read.table(cell_clusters_file, header = FALSE, sep = "\t", 
                                stringsAsFactors = FALSE)
 
-# Verify expected columns
-if (!all(c("cell_barcode", "cluster_id") %in% colnames(cell_clusters_df))) {
-  stop("Error: cell_clusters file must contain columns 'cell_barcode' and 'cluster_id'")
-}
+# Assign column names
+colnames(cell_clusters_df) <- c("cell_barcode", "cluster_id")
 
 message("- Found ", nrow(cell_clusters_df), " cells with cluster assignments")
 message("- Number of clusters: ", length(unique(cell_clusters_df$cluster_id)))
