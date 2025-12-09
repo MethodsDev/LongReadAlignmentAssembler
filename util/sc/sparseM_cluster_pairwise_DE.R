@@ -256,10 +256,17 @@ message("  - ", nrow(filtered_results), " significant DE results")
 
 # Generate summary statistics
 DE_df_counts <- combined_results %>% 
-  select(cluster1, cluster2, gene) %>% 
-  unique() %>%
-  group_by(cluster1, cluster2) %>% 
-  tally()
+  group_by(cluster1, cluster2) %>%
+  summarise(
+    n_markers_total = n(),
+    n_markers_sig = sum(p_val_adj <= pval_adj_cutoff),
+    mean_log2FC = mean(avg_log2FC),
+    max_log2FC = max(avg_log2FC),
+    mean_pct1 = mean(pct.1),
+    mean_pct2 = mean(pct.2),
+    .groups = 'drop'
+  ) %>%
+  arrange(cluster1, cluster2)
 
 summary_file <- paste0(output_prefix, ".cluster_pairwise_DE_summary.tsv")
 write.table(DE_df_counts, file = summary_file, sep = "\t", 
@@ -268,16 +275,16 @@ message("- Wrote pairwise DE summary: ", summary_file)
 
 # Generate heatmap plot of DE counts
 heatmap_pdf <- paste0(output_prefix, ".cluster_pairwise_DE_counts_heatmap.pdf")
-p <- ggplot(DE_df_counts, aes(x = factor(cluster1), y = factor(cluster2), fill = n)) + 
+p <- ggplot(DE_df_counts, aes(x = factor(cluster1), y = factor(cluster2), fill = n_markers_sig)) + 
   geom_tile() +
-  geom_text(aes(label = n), color = "white", size = 3) +
+  geom_text(aes(label = n_markers_sig), color = "white", size = 3) +
   scale_fill_gradient(low = "lightblue", high = "darkblue") +
   theme_bw() +
   labs(
     x = "Cluster 1 (upregulated)",
     y = "Cluster 2 (downregulated)",
-    fill = "# DE genes",
-    title = "Pairwise DE gene counts across clusters"
+    fill = "# DE genes\n(significant)",
+    title = "Pairwise DE significant gene counts across clusters"
   ) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
