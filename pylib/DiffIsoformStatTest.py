@@ -153,6 +153,23 @@ def differential_isoform_tests(
         top_countB = group.nlargest(top_isoforms_each, "count_B")
         filtered_group = pd.concat([top_countA, top_countB]).drop_duplicates()
 
+        # Ensure we have at least one isoform from each delta_pi direction for reciprocal testing
+        # If filtered_group lacks diversity, expand it to include top isoforms by delta_pi magnitude
+        if reciprocal_delta_pi and len(group) >= 2:  # Only if gene has at least 2 isoforms total
+            has_positive = (filtered_group["delta_pi"] > 0).any()
+            has_negative = (filtered_group["delta_pi"] < 0).any()
+            
+            if not (has_positive and has_negative):
+                # Missing one direction - add top isoform(s) from the missing direction
+                if not has_positive and (group["delta_pi"] > 0).any():
+                    # Add top positive delta_pi isoform(s) from full gene
+                    positive_isoforms = group[group["delta_pi"] > 0].nlargest(1, "delta_pi")
+                    filtered_group = pd.concat([filtered_group, positive_isoforms]).drop_duplicates()
+                if not has_negative and (group["delta_pi"] < 0).any():
+                    # Add top negative delta_pi isoform(s) from full gene (most negative)
+                    negative_isoforms = group[group["delta_pi"] < 0].nsmallest(1, "delta_pi")
+                    filtered_group = pd.concat([filtered_group, negative_isoforms]).drop_duplicates()
+
         filtered_group["total"] = filtered_group["count_A"] + filtered_group["count_B"]
         filtered_group = filtered_group.sort_values("total", ascending=False).head(10)
 
@@ -166,6 +183,7 @@ def differential_isoform_tests(
 
         # Fraction-based gating disabled; we only annotate fractions now.
 
+        # Perform delta_pi test using filtered_group (which now ensures diversity for reciprocal testing)
         filtered_delta_pi = filtered_group["delta_pi"]
 
         positive_indices = filtered_delta_pi[filtered_delta_pi > 0].sort_values(ascending=False).index[:2]

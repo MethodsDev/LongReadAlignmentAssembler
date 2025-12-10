@@ -337,6 +337,81 @@ class TestDifferentialIsoformTests:
         assert len(caplog.records) > 0
         assert "Running differential_isoform_tests()" in caplog.text
 
+    def test_top_isoforms_each_1_with_reciprocal(self):
+        """Test that filtered_group is expanded to ensure diversity when top_isoforms_each=1.
+        
+        This reproduces the STMN2 scenario where:
+        - Gene has 2 isoforms with reciprocal delta_pi changes
+        - Same isoform is top in both conditions with top_isoforms_each=1
+        - Diversity expansion adds the missing direction's top isoform to filtered_group
+        """
+        data = [
+            # STMN2-like gene: iso1 is top in both conditions, but iso2 shows reciprocal change
+            ["STMN2", "iso1", "transcript1", 148.003, 542.993],  # Top in both, delta_pi = +0.21
+            ["STMN2", "iso2", "transcript2", 94.000, 117.992],   # Not top in either, delta_pi = -0.21
+        ]
+        df = pd.DataFrame(data, columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"])
+        
+        # With top_isoforms_each=1 and reciprocal_delta_pi=True
+        # OLD behavior: Would fail delta_pi test because filtered_group only has 1 isoform
+        # NEW behavior: Should PASS because diversity expansion adds iso2 to filtered_group
+        results = differential_isoform_tests(
+            df,
+            group_by_token="gene_id",
+            min_reads_per_gene=25,
+            min_delta_pi=0.1,
+            top_isoforms_each=1,  # Key parameter - causes filtering
+            reciprocal_delta_pi=True,  # Requires both directions
+            min_reads_DTU_isoform=25,
+            show_progress_monitor=False
+        )
+        
+        # Should have 1 result (gene passes the test)
+        assert len(results) == 1, "Gene should pass delta_pi test using full gene data"
+        
+        result = results.iloc[0]
+        assert result["gene_id"] == "STMN2"  # Column name is the group_by_token
+        
+        # The dominant isoform should be iso1 (only one in filtered_group)
+        assert "transcript1" in result["dominant_transcript_ids"]
+        
+        # Pvalue should be calculated
+        assert not pd.isna(result["pvalue"])
+        
+    def test_top_isoforms_each_1_with_reciprocal_annotated(self):
+        """Test annotated output for the same scenario."""
+        data = [
+            ["STMN2", "iso1", "transcript1", 148.003, 542.993],
+            ["STMN2", "iso2", "transcript2", 94.000, 117.992],
+        ]
+        df = pd.DataFrame(data, columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"])
+        
+        results, annotated = differential_isoform_tests(
+            df,
+            group_by_token="gene_id",
+            min_reads_per_gene=25,
+            min_delta_pi=0.1,
+            top_isoforms_each=1,
+            reciprocal_delta_pi=True,
+            min_reads_DTU_isoform=25,
+            show_progress_monitor=False,
+            return_annotated_df=True
+        )
+        
+        # Check that both isoforms are in annotated output
+        assert len(annotated) == 2
+        
+        # Check that gene_tested is True for both isoforms (gene passed the test)
+        assert annotated["gene_tested"].all(), "Both isoforms should be marked as gene_tested=True"
+        
+        # Check that skip_reason is "." (no skip) for both
+        assert (annotated["skip_reason"] == ".").all(), "skip_reason should be '.' (passed)"
+        
+        # Check that delta_pi values are correct (calculated from full gene)
+        delta_pis = annotated.sort_values("transcript_id")["delta_pi"].values
+        assert abs(delta_pis[0] - 0.21) < 0.01, "First isoform delta_pi should be ~0.21"
+        assert abs(delta_pis[1] - (-0.21)) < 0.01, "Second isoform delta_pi should be ~-0.21"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
