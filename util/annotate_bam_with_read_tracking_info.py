@@ -27,6 +27,12 @@ def main():
     parser.add_argument(
         "--tracking", type=str, required=True, help="LRAA tracking file"
     )
+    parser.add_argument(
+        "--force_overwrite_tags",
+        action="store_true",
+        default=False,
+        help="force overwrite existing XG, XI, XF tags if present",
+    )
 
     args = parser.parse_args()
 
@@ -45,7 +51,7 @@ def main():
 
     output_bam_file = bam_file + ".tagged.bam"
     annotate_bam_with_read_tracking_info(
-        bam_file, quant_read_tracking_lmdb_filename, output_bam_file
+        bam_file, quant_read_tracking_lmdb_filename, output_bam_file, args.force_overwrite_tags
     )
 
     sys.exit(0)
@@ -109,7 +115,7 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
 
 
 def annotate_bam_with_read_tracking_info(
-    bam_file, quant_read_tracking_lmdb_filename, output_bam_file
+    bam_file, quant_read_tracking_lmdb_filename, output_bam_file, force_overwrite_tags=False
 ):
 
     logger.info("-writing bam file with read tracking annotations.")
@@ -135,10 +141,20 @@ def annotate_bam_with_read_tracking_info(
                 print(f"\r[{read_counter}] ", file=sys.stderr, end="")
 
             read_name = read.query_name
+            
+            # Remove existing tags if force_overwrite_tags is set
+            if force_overwrite_tags:
+                if read.has_tag("XG"):
+                    read.set_tag("XG", None)
+                if read.has_tag("XI"):
+                    read.set_tag("XI", None)
+                if read.has_tag("XF"):
+                    read.set_tag("XF", None)
+            
             data = txn.get(read_name.encode("utf-8"))
             if data:
                 row = data.decode("utf-8").split(",")
-                if read.has_tag("XG") or read.has_tag("XI"):
+                if not force_overwrite_tags and (read.has_tag("XG") or read.has_tag("XI")):
                     raise ValueError(
                         "Error, read already has XG or XI tag, so cannot set them without overwriting"
                     )
