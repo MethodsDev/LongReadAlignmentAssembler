@@ -592,3 +592,122 @@ get_gene_umap = function(gene_symbol_val, gene_component) {
 
   return(p_gene)
 }
+
+
+###################3
+# plot cluster pairs where transcripts show significant DTU, plotting delta_pi according to cell clusters
+
+plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
+  
+  # 1) Subset to the transcript pair in either orientation
+  pair_df <- DTU_results %>%
+    filter(
+      (dominant_transcript_ids == tx_dom & alternate_transcript_ids == tx_alt) |
+      (dominant_transcript_ids == tx_alt & alternate_transcript_ids == tx_dom)
+    ) %>%
+    select(
+      dominant_transcript_ids,
+      alternate_transcript_ids,
+      cluster_A, cluster_B,
+      delta_pi, alternate_delta_pi
+    )
+  
+  if (nrow(pair_df) == 0) {
+    stop("No rows found in DTU_results for the supplied transcript pair.")
+  }
+  
+  # 2) Rows where dominant == tx_dom & alternate == tx_alt
+  forward <- pair_df %>%
+    filter(dominant_transcript_ids == tx_dom,
+           alternate_transcript_ids == tx_alt)
+  
+  # A->B tiles (tx_dom -> tx_alt): delta_pi at (cluster_A, cluster_B)
+  ab_forward <- forward %>%
+    transmute(
+      cluster_x = cluster_A,
+      cluster_y = cluster_B,
+      value     = delta_pi
+    )
+  
+  # B->A tiles (tx_alt -> tx_dom): alternate_delta_pi at (cluster_B, cluster_A)
+  ba_forward <- forward %>%
+    transmute(
+      cluster_x = cluster_B,
+      cluster_y = cluster_A,
+      value     = alternate_delta_pi
+    )
+  
+  # 3) Rows where dominant == tx_alt & alternate == tx_dom
+  reverse <- pair_df %>%
+    filter(dominant_transcript_ids == tx_alt,
+           alternate_transcript_ids == tx_dom)
+  
+  # In these rows, cluster_A is for tx_alt, cluster_B is for tx_dom.
+  # We still want x = clusters for tx_dom, y = clusters for tx_alt.
+  
+  # A->B (tx_dom -> tx_alt) here is alternate_delta_pi at (cluster_B, cluster_A)
+  ab_reverse <- reverse %>%
+    transmute(
+      cluster_x = cluster_B,
+      cluster_y = cluster_A,
+      value     = alternate_delta_pi
+    )
+  
+  # B->A (tx_alt -> tx_dom) here is delta_pi at (cluster_A, cluster_B)
+  ba_reverse <- reverse %>%
+    transmute(
+      cluster_x = cluster_A,
+      cluster_y = cluster_B,
+      value     = delta_pi
+    )
+  
+  # 4) Combine everything
+  heat_df <- bind_rows(ab_forward, ba_forward, ab_reverse, ba_reverse)
+  
+  # 5) Build unified cluster ordering (numeric order)
+  all_clusters <- unique(c(as.character(heat_df$cluster_x),
+                           as.character(heat_df$cluster_y)))
+  
+  cluster_levels <- all_clusters %>%
+    gsub("^Cluster_", "", .) %>%   # strip prefix
+    as.integer() %>%
+    sort() %>%
+    paste0("Cluster_", .)          # rebuild ordered names
+  
+  heat_df <- heat_df %>%
+    mutate(
+      cluster_x = factor(cluster_x, levels = cluster_levels),
+      cluster_y = factor(cluster_y, levels = cluster_levels)
+    )
+  
+  # 6) Diagonal coordinates
+  diag_df <- data.frame(
+    cluster_x = factor(cluster_levels, levels = cluster_levels),
+    cluster_y = factor(cluster_levels, levels = cluster_levels)
+  )
+  
+  # 7) Plot
+  p <- ggplot(heat_df, aes(x = cluster_x, y = cluster_y, fill = value)) +
+    geom_tile(color = "grey80") +
+    geom_path(
+      data = diag_df,
+      aes(x = cluster_x, y = cluster_y, group = 1),
+      inherit.aes = FALSE,
+      color = "black",
+      linewidth = 1.2,
+      lineend = "round"
+    ) +
+    coord_fixed() +
+    scale_fill_viridis_c(name = expression(Delta*pi)) +
+    labs(
+      x = paste0("Clusters for ", tx_dom),
+      y = paste0("Clusters for ", tx_alt)
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+  
+  return(p)
+}
