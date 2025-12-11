@@ -61,7 +61,9 @@ parse_gtf_file = function(gtf_filename) {
 
     gtf_parsed_file = paste0(gtf_filename, ".rds")
     
-    if (file.exists(gtf_parsed_file)) {
+    # Check if cached file exists and is newer than source GTF
+    if (file.exists(gtf_parsed_file) && 
+        file.mtime(gtf_parsed_file) > file.mtime(gtf_filename)) {
         
         gtf_parsed = readRDS(gtf_parsed_file)
         
