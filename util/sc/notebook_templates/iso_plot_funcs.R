@@ -161,10 +161,19 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
 #####################################
 
 get_gene_structure_matrix = function(gene_of_interest) {
-    # Filter to exons only
+    # Filter to exons only - prioritize exact match, fall back to pattern match
     exon_df <- gtf_parsed %>%
-        filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>%
-        filter(feature == "exon") %>%
+        filter(gene_id == gene_of_interest) %>%
+        filter(feature == "exon")
+    
+    # If no exact match found, try pattern matching
+    if (nrow(exon_df) == 0) {
+        exon_df <- gtf_parsed %>%
+            filter(grepl(gene_of_interest, gene_id)) %>%
+            filter(feature == "exon")
+    }
+    
+    exon_df <- exon_df %>%
         mutate(
             start = as.integer(start),
             end = as.integer(end),
@@ -231,8 +240,15 @@ gene_structure_heatmap = function(gene_of_interest) {
 
 get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
     
-    transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest)  %>% 
+    # Prioritize exact match, fall back to pattern match
+    transcript_ids = gtf_parsed %>% filter(gene_id == gene_of_interest) %>% 
         filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+    
+    # If no exact match found, try pattern matching
+    if (length(transcript_ids) == 0) {
+        transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+            filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+    }
     
     isoform_expr = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% transcript_ids,]
     
@@ -321,8 +337,15 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     
     message("Transcript_ids: ", transcript_ids)
 
-    all_transcript_ids_for_gene = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id) | gene_id == gene_of_interest) %>% 
+    # Prioritize exact match, fall back to pattern match
+    all_transcript_ids_for_gene = gtf_parsed %>% filter(gene_id == gene_of_interest) %>% 
             filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+    
+    # If no exact match found, try pattern matching
+    if (length(all_transcript_ids_for_gene) == 0) {
+        all_transcript_ids_for_gene = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+                filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
+    }
 
     all_expr_for_gene = cluster_CPM_matrix[rownames(cluster_CPM_matrix) %in% all_transcript_ids_for_gene, ]
 
