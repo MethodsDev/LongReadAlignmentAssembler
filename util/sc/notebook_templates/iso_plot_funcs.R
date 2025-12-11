@@ -169,7 +169,7 @@ get_gene_structure_matrix = function(gene_of_interest) {
     # If no exact match found, try pattern matching
     if (nrow(exon_df) == 0) {
         exon_df <- gtf_parsed %>%
-            filter(grepl(gene_of_interest, gene_id)) %>%
+            filter(grepl(paste0("^", gene_of_interest, "($|[^A-Za-z0-9_])"), gene_id)) %>%
             filter(feature == "exon")
     }
     
@@ -246,7 +246,7 @@ get_expression_pheatmap_w_exon_structures = function(gene_of_interest) {
     
     # If no exact match found, try pattern matching
     if (length(transcript_ids) == 0) {
-        transcript_ids = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+        transcript_ids = gtf_parsed %>% filter(grepl(paste0("^", gene_of_interest, "($|[^A-Za-z0-9_])"), gene_id)) %>% 
             filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
     }
     
@@ -343,7 +343,7 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     
     # If no exact match found, try pattern matching
     if (length(all_transcript_ids_for_gene) == 0) {
-        all_transcript_ids_for_gene = gtf_parsed %>% filter(grepl(gene_of_interest, gene_id)) %>% 
+        all_transcript_ids_for_gene = gtf_parsed %>% filter(grepl(paste0("^", gene_of_interest, "($|[^A-Za-z0-9_])"), gene_id)) %>% 
                 filter(feature == "transcript") %>% select(transcript_id) %>% unique() %>% pull(transcript_id)
     }
 
