@@ -31,7 +31,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.14.0"
+VERSION = "v0.15.0-predev1"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -636,7 +636,9 @@ def main():
         not args.no_weight_reads_by_3prime_agreement
     )
     LRAA_Globals.config["terminal_boundary_method"] = args.terminal_boundary_method
-    LRAA_Globals.config["terminal_boundary_percentile"] = args.terminal_boundary_percentile
+    LRAA_Globals.config["terminal_boundary_percentile"] = (
+        args.terminal_boundary_percentile
+    )
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
 
