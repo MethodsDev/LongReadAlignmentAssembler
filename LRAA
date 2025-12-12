@@ -337,9 +337,18 @@ def main():
         "--terminal_boundary_method",
         type=str,
         default=LRAA_Globals.config["terminal_boundary_method"],
-        choices=["extreme", "mean", "median", "quartile"],
-        help="method for defining terminal coordinates when TSS/PolyA not annotated: 'extreme' (min/max), 'mean', 'median', or 'quartile' (Q1/Q3) (default: {})".format(
+        choices=["extreme", "mean", "median", "quartile", "percentile"],
+        help="method for defining terminal coordinates when TSS/PolyA not annotated: 'extreme' (min/max), 'mean', 'median', 'quartile' (Q1/Q3), or 'percentile' (default: {})".format(
             LRAA_Globals.config["terminal_boundary_method"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--terminal_boundary_percentile",
+        type=float,
+        default=LRAA_Globals.config["terminal_boundary_percentile"],
+        help="when using --terminal_boundary_method percentile, this value defines the percentile (e.g., 90 uses 10th percentile for left boundary and 90th percentile for right boundary) (default: {})".format(
+            LRAA_Globals.config["terminal_boundary_percentile"]
         ),
     )
 
@@ -627,6 +636,7 @@ def main():
         not args.no_weight_reads_by_3prime_agreement
     )
     LRAA_Globals.config["terminal_boundary_method"] = args.terminal_boundary_method
+    LRAA_Globals.config["terminal_boundary_percentile"] = args.terminal_boundary_percentile
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
 

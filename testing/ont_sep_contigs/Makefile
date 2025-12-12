@@ -5,6 +5,10 @@ test:
 	diff gffcmp.tracking.codes data/gffcmp.tracking.codes.expected || \
 	(echo "Output does not match any expected result" && exit 1)
 
+igv:
+	igv.sh -g minigenome.fa minigenome.gtf,LRAA.bed,ONT_sim_alignments.mm2.bam
+
+
 clean:
 	rm -rf ./__*
 	rm -rf ./LRAA.* ./gffcmp.* ./ONT_sim_alignments.mm2.bam.count ./ONT_sim_alignments.mm2.bam.SS* ./ONT_sim_alignments.mm2.bam.norm* ./run.log

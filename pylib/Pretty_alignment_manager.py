@@ -353,13 +353,17 @@ class Pretty_alignment_manager:
     def apply_SE_read_encapsulation_mask(self, pretty_alignments, SE_read_encapsulation_mask):
 
         # apply the SE read encapsulation mask
-        # exclude those alignments that are fully contained within exons of multi-exon isoforms.
+        # exclude those SE alignments that have substantial overlap with exons of multi-exon isoforms.
+        # Uses percentage-based overlap: if >= min_SE_read_ME_exon_overlap_pct of the SE read length
+        # overlaps with any ME exon, the SE read is filtered out.
+
+        import LRAA_Globals
 
         exon_itree = itree.IntervalTree()
 
-        FUZZDIST = 10 # allow slight extension from exon boundaries
+        min_overlap_pct = LRAA_Globals.config["min_SE_read_ME_exon_overlap_pct"]
 
-        non_encapsulated_pretty_alignments = list()
+        non_overlapping_pretty_alignments = list()
 
         for transcript in SE_read_encapsulation_mask:
             exon_segments = transcript.get_exon_segments()
@@ -372,24 +376,35 @@ class Pretty_alignment_manager:
             # only evaluate single-exon (SE) alignments; keep others unchanged
             if hasattr(pretty_alignment, "get_pretty_alignment_segments"):
                 segs = pretty_alignment.get_pretty_alignment_segments()
-                assert len(segs) == 1, "Error, should only apply mask to SE alignment introns: {}".format(pretty_alignment)
+                assert len(segs) == 1, "Error, should only apply mask to SE alignments: {}".format(pretty_alignment)
 
             align_lend, align_rend = pretty_alignment.get_alignment_span()
-            encapsulated = False
+            align_len = align_rend - align_lend + 1
+            
+            should_filter = False
             # intervaltree expects either a point lookup tree[point] or a slice tree[start:stop]
             # Here we want all exons overlapping the alignment span
             for exon_interval in exon_itree[align_lend:align_rend + 1]:
                 exon_lend = exon_interval.begin
                 exon_rend = exon_interval.end - 1  # convert from half-open to inclusive
-                if (align_lend >= (exon_lend - FUZZDIST) and
-                        align_rend <= (exon_rend + FUZZDIST)):
-                    encapsulated = True
-                    logger.debug("Excluding SE alignment as encapsulated: {}".format(pretty_alignment))
+                
+                # Calculate overlap length
+                overlap_lend = max(align_lend, exon_lend)
+                overlap_rend = min(align_rend, exon_rend)
+                overlap_len = max(0, overlap_rend - overlap_lend + 1)
+                
+                # Calculate percentage of SE read covered by this ME exon
+                overlap_pct = (overlap_len / align_len) * 100.0
+                
+                if overlap_pct >= min_overlap_pct:
+                    should_filter = True
+                    logger.debug("Excluding SE alignment with {:.1f}% overlap with ME exon: {}".format(overlap_pct, pretty_alignment))
                     break
-            if not encapsulated:
-                non_encapsulated_pretty_alignments.append(pretty_alignment)
+            
+            if not should_filter:
+                non_overlapping_pretty_alignments.append(pretty_alignment)
 
-        return(non_encapsulated_pretty_alignments)
+        return(non_overlapping_pretty_alignments)
 
     # --- cache helpers ---
 

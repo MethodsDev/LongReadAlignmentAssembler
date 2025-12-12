@@ -664,6 +664,18 @@ class LRAA:
                 else:
                     q1 = min(left_terminal_spans)
                 candidate_first_lend = max(exon_left_limit, q1)
+            elif boundary_method == "percentile" and len(left_terminal_spans) >= min_reads_threshold:
+                import statistics
+                # Use lower percentile for left boundary (e.g., if percentile=90, use 10th)
+                percentile_value = LRAA_Globals.config.get("terminal_boundary_percentile", 90)
+                lower_percentile = 100 - percentile_value
+                if len(left_terminal_spans) >= 2:
+                    # quantiles function with n=100 gives percentiles
+                    sorted_spans = sorted(left_terminal_spans)
+                    pct_val = int(statistics.quantiles(sorted_spans, n=100)[int(lower_percentile) - 1])
+                else:
+                    pct_val = min(left_terminal_spans)
+                candidate_first_lend = max(exon_left_limit, pct_val)
             elif boundary_method == "extreme" and left_terminal_spans:
                 # Use min of reads terminating in first exon (consistent with mean/median filtering)
                 candidate_first_lend = max(exon_left_limit, min(left_terminal_spans))
@@ -685,6 +697,17 @@ class LRAA:
                 else:
                     q3 = max(right_terminal_spans)
                 candidate_last_rend = min(exon_right_limit, q3)
+            elif boundary_method == "percentile" and len(right_terminal_spans) >= min_reads_threshold:
+                import statistics
+                # Use upper percentile for right boundary (e.g., if percentile=90, use 90th)
+                percentile_value = LRAA_Globals.config.get("terminal_boundary_percentile", 90)
+                if len(right_terminal_spans) >= 2:
+                    # quantiles function with n=100 gives percentiles
+                    sorted_spans = sorted(right_terminal_spans)
+                    pct_val = int(statistics.quantiles(sorted_spans, n=100)[int(percentile_value) - 1])
+                else:
+                    pct_val = max(right_terminal_spans)
+                candidate_last_rend = min(exon_right_limit, pct_val)
             elif boundary_method == "extreme" and right_terminal_spans:
                 # Use max of reads terminating in last exon (consistent with mean/median filtering)
                 candidate_last_rend = min(exon_right_limit, max(right_terminal_spans))

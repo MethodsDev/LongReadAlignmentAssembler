@@ -25,6 +25,7 @@ config = {
     #
     ####################################
     # splice graph construction criteria
+    "min_SE_read_ME_exon_overlap_pct": 50,  # min % of SE read length that must overlap with ME exon to filter out SE read
     # default tuned for not HiFi (e.g., ONT); HiFi mode overrides to 0.01 via --HiFi
     "min_alt_splice_freq": 0.03,
     "min_alt_unspliced_freq": 0.01,
@@ -74,8 +75,9 @@ config = {
     #
     ####################
     ## Terminal boundary definition
-    "terminal_boundary_method": "extreme",  # choices: "extreme" (min/max), "mean", "median", "quartile" (Q1/Q3) - method for defining terminal coords when TSS/PolyA not annotated
-    "min_reads_for_terminal_adjustment": 7,  # minimum number of reads terminating in terminal exon required for mean/median/quartile adjustment (falls back to extreme if below threshold)
+    "terminal_boundary_method": "percentile",  # choices: "extreme" (min/max), "mean", "median", "quartile" (Q1/Q3), "percentile" - method for defining terminal coords when TSS/PolyA not annotated
+    "terminal_boundary_percentile": 90,  # when terminal_boundary_method is "percentile", use this percentile (e.g., 90 means 10th percentile for left, 90th for right)
+    "min_reads_for_terminal_adjustment": 7,  # minimum number of reads terminating in terminal exon required for mean/median/quartile/percentile adjustment (falls back to extreme if below threshold)
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
