@@ -564,6 +564,11 @@ class LRAA:
         #
         #
 
+        logger.info(
+            f"[{contig_acc}{contig_strand}] Adjusting terminal coordinates for {len(transcripts)} transcripts "
+            f"using method: {LRAA_Globals.config.get('terminal_boundary_method', 'mean')}"
+        )
+
         def _adjust_transcript_terminals_from_reads(transcript):
             # Gather all read names that supported this transcript
             read_names = set()
@@ -577,49 +582,115 @@ class LRAA:
                     continue
                 if rn in self._read_name_to_span:
                     spans.append(self._read_name_to_span[rn])
+            
+            logger.info(f"DEBUG_TEST: Processing {transcript.get_transcript_id()}, found {len(read_names)} reads, {len(spans)} spans")
+            
             if not spans:
+                logger.info(f"  No spans found for {transcript.get_transcript_id()}, returning without adjustment")
                 return  # nothing to adjust
-
-            min_lend = min(l for l, _ in spans)
-            max_rend = max(r for _, r in spans)
 
             exons = transcript.get_exon_segments()
             if not exons:
                 return
 
-            # Determine allowable terminal exon bounds from splice graph nodes
-            sg = self.get_splice_graph()
-            sp = transcript.get_simple_path()
-
-            # find first and last exon node objects
-            first_exon_bounds = None
-            last_exon_bounds = None
-            for nid in sp:
-                if isinstance(nid, str) and nid.startswith("E:"):
-                    node = sg.get_node_obj_via_id(nid)
-                    if node is not None:
-                        first_exon_bounds = list(node.get_coords())
-                        break
-            for nid in reversed(sp):
-                if isinstance(nid, str) and nid.startswith("E:"):
-                    node = sg.get_node_obj_via_id(nid)
-                    if node is not None:
-                        last_exon_bounds = list(node.get_coords())
-                        break
-
-            # Fallback to current exon bounds if node lookup fails
+            # Define terminal exon bounds using the transcript’s own exon coords
+            # (instead of splice-graph node bounds which can be narrower/shifted).
             first_lend, first_rend = exons[0]
             last_lend, last_rend = exons[-1]
-            if first_exon_bounds is None:
-                first_exon_bounds = [first_lend, first_rend]
-            if last_exon_bounds is None:
-                last_exon_bounds = [last_lend, last_rend]
+            first_exon_bounds = [first_lend, first_rend]
+            last_exon_bounds = [last_lend, last_rend]
 
-            # Adjust toward farthest read bounds but clip to exon node extents
+            # Filter reads by terminal exon overlap - only consider reads terminating in terminal exons
+            left_terminal_spans = []   # reads with 5' end in first exon
+            right_terminal_spans = []  # reads with 3' end in last exon
+            
+            first_exon_lend, first_exon_rend = first_exon_bounds
+            last_exon_lend, last_exon_rend = last_exon_bounds
+            
+            for span_lend, span_rend in spans:
+                # Check if read's 5' end is in first exon
+                if first_exon_lend <= span_lend <= first_exon_rend:
+                    left_terminal_spans.append(span_lend)
+                
+                # Check if read's 3' end is in last exon
+                if last_exon_lend <= span_rend <= last_exon_rend:
+                    right_terminal_spans.append(span_rend)
+            
+            # Calculate boundaries using configured method
+            boundary_method = LRAA_Globals.config.get("terminal_boundary_method", "mean")
+            min_reads_threshold = LRAA_Globals.config.get("min_reads_for_terminal_adjustment", 7)
             exon_left_limit = first_exon_bounds[0]
             exon_right_limit = last_exon_bounds[1]
-            candidate_first_lend = max(exon_left_limit, min_lend)
-            candidate_last_rend = min(exon_right_limit, max_rend)
+            
+            # Debug logging
+            logger.debug(
+                f"Terminal adjustment for {transcript.get_transcript_id()}: "
+                f"method={boundary_method}, min_reads={min_reads_threshold}, "
+                f"left_terminal_spans={len(left_terminal_spans)}, "
+                f"right_terminal_spans={len(right_terminal_spans)}, "
+                f"first_exon_bounds={first_exon_bounds}, "
+                f"last_exon_bounds={last_exon_bounds}"
+            )
+            if left_terminal_spans:
+                import statistics
+                logger.debug(
+                    f"  Left spans: min={min(left_terminal_spans)}, "
+                    f"Q1={int(statistics.quantiles(left_terminal_spans, n=4)[0]) if len(left_terminal_spans) >= 2 else min(left_terminal_spans)}, "
+                    f"mean={int(statistics.mean(left_terminal_spans))}, "
+                    f"median={int(statistics.median(left_terminal_spans))}, "
+                    f"max={max(left_terminal_spans)}"
+                )
+            if right_terminal_spans:
+                import statistics
+                logger.debug(
+                    f"  Right spans: min={min(right_terminal_spans)}, "
+                    f"mean={int(statistics.mean(right_terminal_spans))}, "
+                    f"median={int(statistics.median(right_terminal_spans))}, "
+                    f"Q3={int(statistics.quantiles(right_terminal_spans, n=4)[2]) if len(right_terminal_spans) >= 2 else max(right_terminal_spans)}, "
+                    f"max={max(right_terminal_spans)}"
+                )
+            
+            if boundary_method == "mean" and len(left_terminal_spans) >= min_reads_threshold:
+                import statistics
+                candidate_first_lend = max(exon_left_limit, int(statistics.mean(left_terminal_spans)))
+            elif boundary_method == "median" and len(left_terminal_spans) >= min_reads_threshold:
+                import statistics
+                candidate_first_lend = max(exon_left_limit, int(statistics.median(left_terminal_spans)))
+            elif boundary_method == "quartile" and len(left_terminal_spans) >= min_reads_threshold:
+                import statistics
+                # Use Q1 (lower quartile) for left boundary
+                if len(left_terminal_spans) >= 2:
+                    q1 = int(statistics.quantiles(left_terminal_spans, n=4)[0])
+                else:
+                    q1 = min(left_terminal_spans)
+                candidate_first_lend = max(exon_left_limit, q1)
+            elif boundary_method == "extreme" and left_terminal_spans:
+                # Use min of reads terminating in first exon (consistent with mean/median filtering)
+                candidate_first_lend = max(exon_left_limit, min(left_terminal_spans))
+            else:
+                # Fallback if no reads terminate in first exon or unknown method
+                candidate_first_lend = first_lend
+            
+            if boundary_method == "mean" and len(right_terminal_spans) >= min_reads_threshold:
+                import statistics
+                candidate_last_rend = min(exon_right_limit, int(statistics.mean(right_terminal_spans)))
+            elif boundary_method == "median" and len(right_terminal_spans) >= min_reads_threshold:
+                import statistics
+                candidate_last_rend = min(exon_right_limit, int(statistics.median(right_terminal_spans)))
+            elif boundary_method == "quartile" and len(right_terminal_spans) >= min_reads_threshold:
+                import statistics
+                # Use Q3 (upper quartile) for right boundary
+                if len(right_terminal_spans) >= 2:
+                    q3 = int(statistics.quantiles(right_terminal_spans, n=4)[2])
+                else:
+                    q3 = max(right_terminal_spans)
+                candidate_last_rend = min(exon_right_limit, q3)
+            elif boundary_method == "extreme" and right_terminal_spans:
+                # Use max of reads terminating in last exon (consistent with mean/median filtering)
+                candidate_last_rend = min(exon_right_limit, max(right_terminal_spans))
+            else:
+                # Fallback if no reads terminate in last exon or unknown method
+                candidate_last_rend = last_rend
 
             # Only adjust ends lacking explicit annotation: TSS and PolyA
             has_TSS = transcript.has_TSS()
@@ -632,11 +703,35 @@ class LRAA:
             adjust_left = (strand == "+" and not has_TSS) or (strand == "-" and not has_PolyA)
             adjust_right = (strand == "+" and not has_PolyA) or (strand == "-" and not has_TSS)
 
+            logger.info(
+                f"  {transcript.get_transcript_id()}: strand={strand}, TSS={has_TSS}, PolyA={has_PolyA}, "
+                f"adjust_L={adjust_left}, adjust_R={adjust_right}, "
+                f"left_spans={len(left_terminal_spans)}, right_spans={len(right_terminal_spans)}"
+            )
+
+            # Debug logging
+            logger.debug(
+                f"  Transcript {transcript.get_transcript_id()}: "
+                f"strand={strand}, has_TSS={has_TSS}, has_PolyA={has_PolyA}, "
+                f"adjust_left={adjust_left}, adjust_right={adjust_right}"
+            )
+            logger.debug(
+                f"  Current coords: first=[{first_lend}, {first_rend}], last=[{last_lend}, {last_rend}]"
+            )
+            logger.debug(
+                f"  Candidate coords: first_lend={candidate_first_lend}, last_rend={candidate_last_rend}"
+            )
+
             new_first_lend = candidate_first_lend if adjust_left else first_lend
             new_last_rend = candidate_last_rend if adjust_right else last_rend
 
             # Sanity: ensure we don't invert exons
             if new_first_lend > first_rend or new_last_rend < last_lend:
+                logger.debug(
+                    f"  SKIPPED adjustment - would invert exon: "
+                    f"new_first_lend={new_first_lend} > first_rend={first_rend} or "
+                    f"new_last_rend={new_last_rend} < last_lend={last_lend}"
+                )
                 return
 
             if new_first_lend != first_lend or new_last_rend != last_rend:
@@ -649,6 +744,19 @@ class LRAA:
                 transcript._lend = exons[0][0]
                 transcript._rend = exons[-1][1]
                 transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
+                
+                logger.info(
+                    f"  ADJUSTED {transcript.get_transcript_id()}: "
+                    f"first [{first_lend}-{first_rend}]->[{new_first_lend}-{first_rend}], "
+                    f"last [{last_lend}-{last_rend}]->[{last_lend}-{new_last_rend}]"
+                )
+                logger.debug(
+                    f"  APPLIED adjustment: "
+                    f"first exon: [{first_lend}, {first_rend}] -> [{new_first_lend}, {first_rend}], "
+                    f"last exon: [{last_lend}, {last_rend}] -> [{last_lend}, {new_last_rend}]"
+                )
+            else:
+                logger.debug(f"  NO adjustment needed - coordinates unchanged")
 
         for transcript in transcripts:
             _adjust_transcript_terminals_from_reads(transcript)

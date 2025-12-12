@@ -414,6 +414,15 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                             )
                             subsume_J = True
 
+                        # no TSS on j and shares same PolyA as i - prune as redundant 5' truncation
+                        elif j_TSS_id is None and j_polyA_id is not None and j_polyA_id == i_polyA_id:
+                            logger.debug(
+                                "compatible/contained {} being pruned as lacking TSS and sharing PolyA with {}".format(
+                                    transcript_j_id, transcript_i_id
+                                )
+                            )
+                            subsume_J = True
+
                         elif (
                             frac_gene_expression_j_of_i_and_j
                             < LRAA_Globals.config[
@@ -649,14 +658,22 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                     transcript_i_id
                 )
 
-                logger.debug(
-                    "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
-                        transcript_i,
-                        transcript_i.get_TPM(),
-                        transcript_j,
-                        transcript_j.get_TPM(),
+                try:
+                    logger.info(
+                        f"{_prefix}splice-compatible: {transcript_j_id} (TPM={transcript_j.get_TPM():.3f}, "
+                        f"iso_frac={transcript_j.get_isoform_fraction():.3f}) contained by "
+                        f"{transcript_i_id} (TPM={transcript_i.get_TPM():.3f}, "
+                        f"iso_frac={transcript_i.get_isoform_fraction():.3f})"
                     )
-                )
+                except Exception:
+                    logger.debug(
+                        "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
+                            transcript_i,
+                            transcript_i.get_TPM(),
+                            transcript_j,
+                            transcript_j.get_TPM(),
+                        )
+                    )
 
             if len(transcript_i_introns - transcript_j_introns) == 0:
 
@@ -667,14 +684,22 @@ def evaluate_splice_compatible_alt_isoforms(transcripts):
                     transcript_j_id
                 )
 
-                logger.debug(
-                    "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
-                        transcript_j,
-                        transcript_j.get_TPM(),
-                        transcript_i,
-                        transcript_i.get_TPM(),
+                try:
+                    logger.info(
+                        f"{_prefix}splice-compatible: {transcript_i_id} (TPM={transcript_i.get_TPM():.3f}, "
+                        f"iso_frac={transcript_i.get_isoform_fraction():.3f}) contained by "
+                        f"{transcript_j_id} (TPM={transcript_j.get_TPM():.3f}, "
+                        f"iso_frac={transcript_j.get_isoform_fraction():.3f})"
                     )
-                )
+                except Exception:
+                    logger.debug(
+                        "Splice compatible isoforms: {} expr: {} splice compatible with {} expr: {}".format(
+                            transcript_j,
+                            transcript_j.get_TPM(),
+                            transcript_i,
+                            transcript_i.get_TPM(),
+                        )
+                    )
 
     return (
         transcript_id_to_splice_compatible_containments,

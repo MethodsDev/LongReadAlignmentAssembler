@@ -334,6 +334,16 @@ def main():
     )
 
     config_group.add_argument(
+        "--terminal_boundary_method",
+        type=str,
+        default=LRAA_Globals.config["terminal_boundary_method"],
+        choices=["extreme", "mean", "median", "quartile"],
+        help="method for defining terminal coordinates when TSS/PolyA not annotated: 'extreme' (min/max), 'mean', 'median', or 'quartile' (Q1/Q3) (default: {})".format(
+            LRAA_Globals.config["terminal_boundary_method"]
+        ),
+    )
+
+    config_group.add_argument(
         "--min_monoexonic_TPM",
         type=float,
         required=False,
@@ -616,6 +626,7 @@ def main():
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
     )
+    LRAA_Globals.config["terminal_boundary_method"] = args.terminal_boundary_method
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
 
@@ -771,7 +782,11 @@ def main():
         mpm.set_debug()
 
     if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        # Also update all handlers to DEBUG level
+        for handler in root_logger.handlers:
+            handler.setLevel(logging.DEBUG)
         LRAA_Globals.DEBUG = True
 
     # --verbose: force console logging even when running multiple workers
@@ -3416,10 +3431,29 @@ def remove_low_isoform_fraction_transcripts_final_attempt(
     transcripts_kept = list()
     transcripts_removed = list()
 
+    # Build prefix for logging context
+    try:
+        _t = transcripts[0] if transcripts else None
+        _ca = _t.get_contig_acc() if _t else None
+        _cs = _t.get_strand() if _t else None
+        _prefix = f"[{_ca}{_cs}] " if _ca and _cs else ""
+    except Exception:
+        _prefix = ""
+
     for transcript in transcripts:
-        if transcript.get_isoform_fraction() < min_isoform_fraction:
+        iso_frac = transcript.get_isoform_fraction()
+        tpm = transcript.get_TPM()
+        if iso_frac < min_isoform_fraction:
+            logger.info(
+                f"{_prefix}FILTER isoform_fraction<{min_isoform_fraction}: "
+                f"{transcript.get_transcript_id()} (iso_frac={iso_frac:.4f}, TPM={tpm:.3f}, reads={transcript.get_read_counts_assigned():.1f})"
+            )
             transcripts_removed.append(transcript)
         else:
+            logger.info(
+                f"{_prefix}KEEP isoform_fraction>={min_isoform_fraction}: "
+                f"{transcript.get_transcript_id()} (iso_frac={iso_frac:.4f}, TPM={tpm:.3f}, reads={transcript.get_read_counts_assigned():.1f})"
+            )
             transcripts_kept.append(transcript)
 
     return transcripts_kept, transcripts_removed

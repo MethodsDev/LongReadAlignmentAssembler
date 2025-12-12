@@ -72,6 +72,11 @@ config = {
     "max_soft_clip_at_PolyA": 0,  # max amount of softclipping allowed at the end of an alignment to mark it as a candidate boundary
     "min_soft_clip_PolyA_base_frac_for_conversion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
     #
+    ####################
+    ## Terminal boundary definition
+    "terminal_boundary_method": "extreme",  # choices: "extreme" (min/max), "mean", "median", "quartile" (Q1/Q3) - method for defining terminal coords when TSS/PolyA not annotated
+    "min_reads_for_terminal_adjustment": 7,  # minimum number of reads terminating in terminal exon required for mean/median/quartile adjustment (falls back to extreme if below threshold)
+    #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
     #
