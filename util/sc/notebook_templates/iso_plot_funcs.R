@@ -678,11 +678,11 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
       value     = alternate_delta_pi
     )
   
-  # B->A (tx_alt -> tx_dom) here is delta_pi at (cluster_A, cluster_B)
+  # B->A (tx_alt -> tx_dom) here is delta_pi at (cluster_B, cluster_A)
   ba_reverse <- reverse %>%
     transmute(
-      cluster_x = cluster_A,
-      cluster_y = cluster_B,
+      cluster_x = cluster_B,
+      cluster_y = cluster_A,
       value     = delta_pi
     )
   
