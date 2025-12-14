@@ -723,7 +723,13 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
       lineend = "round"
     ) +
     coord_fixed() +
-    scale_fill_viridis_c(name = expression(Delta*pi)) +
+    scale_fill_gradient2(
+      low = "purple",
+      mid = "black",
+      high = "yellow",
+      midpoint = 0,
+      name = expression(Delta*pi)
+    ) +
     labs(
       x = paste0("Clusters for ", tx_dom),
       y = paste0("Clusters for ", tx_alt)
