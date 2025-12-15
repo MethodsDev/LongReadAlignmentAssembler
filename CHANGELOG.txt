@@ -1,3 +1,8 @@
+
+v0.15.0, December 14, 2025
+- using 90th percentile for trimming non-TSS and non-PolyA termini based on read boundaries
+
+
 v0.14.0, December 6, 2025
 - in HiFi mode, only retain single-exon transcripts if they have TSS or PolyA annotated
 - incorporating filtering of good cells via DropletUtils and revised sparse matrices limited to good cells, and made filtering good cells optional
@@ -8,11 +13,9 @@ v0.14.0, December 6, 2025
 - under LRAA merge mode, report problematic transcripts that dont have paths in the splice graph, no longer a fatal error.
 
 
-
 v0.13.0, November 23, 2025
 - restructured WDLs for single cell pipeline, introducing 'basic' vs. 'cluster-guided' modes, removed the --bam_list from LRAA and relying on wdl pipe for orchestration of cluster-based quants
 - improved logging and mulithreading in workflows
-
 
 
 v0.12.7, November 18, 2025
