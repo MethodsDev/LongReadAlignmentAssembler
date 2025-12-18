@@ -2,7 +2,7 @@
 
 ## Overview
 
-We developed LongReadAlignmentAssembler (LRAA), a reference-guided method for transcript isoform discovery and quantification from long-read RNA sequencing data. LRAA reconstructs full-length transcript isoforms by constructing a splice graph from read-supported exons and introns, enumerating read-consistent paths through this graph, and selecting high-confidence isoforms via iterative best-path extraction. Isoform abundances are estimated using an expectation-maximization algorithm that resolves ambiguous read assignments.
+We developed LongReadAlignmentAssembler (LRAA) as a method for transcript isoform discovery and quantification from long-read RNA sequencing data. LRAA reconstructs full-length transcript isoforms by constructing a splice graph from read-supported exons and introns, enumerating read-consistent paths through this graph, and selecting high-confidence isoforms via iterative best-path extraction. Isoform abundances are estimated using an expectation-maximization algorithm that resolves ambiguous read assignments.
 
 LRAA operates in three modes: (1) annotation-free isoform discovery and quantification, requiring only aligned reads and a reference genome; (2) reference annotation-guided isoform discovery and quantification, where known gene models inform splice-graph construction and filtering; and (3) quantification-only mode, where isoform discovery is bypassed and reads are directly assigned to provided reference isoforms for abundance estimation via EM.
 
