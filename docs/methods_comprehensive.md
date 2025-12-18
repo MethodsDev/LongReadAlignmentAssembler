@@ -4,7 +4,10 @@
 
 We developed LongReadAlignmentAssembler (LRAA), a reference-guided method for transcript isoform discovery and quantification from long-read RNA sequencing data. LRAA reconstructs full-length transcript isoforms by constructing a splice graph from read-supported exons and introns, enumerating read-consistent paths through this graph, and selecting high-confidence isoforms via iterative best-path extraction. Isoform abundances are estimated using an expectation-maximization algorithm that resolves ambiguous read assignments.
 
+LRAA operates in three modes: (1) annotation-free isoform discovery and quantification, requiring only aligned reads and a reference genome; (2) reference annotation-guided isoform discovery and quantification, where known gene models inform splice-graph construction and filtering; and (3) quantification-only mode, where isoform discovery is bypassed and reads are directly assigned to provided reference isoforms for abundance estimation via EM.
+
 LRAA was primarily developed for PacBio HiFi data, which provides high base accuracy (>99%) and enables precise inference of transcription start sites (TSS) and polyadenylation (PolyA) sites from read termini. The method operates in HiFi mode (`--HiFi` flag) for PacBio datasets, activating stringent filtering parameters optimized for high-accuracy reads. LRAA also supports Oxford Nanopore (ONT) data in default mode, which relaxes filtering thresholds to accommodate higher sequencing error rates. Unless otherwise noted, parameter values and algorithmic decisions described below reflect HiFi mode configuration.
+
 
 ## Input and Preprocessing
 
@@ -101,8 +104,3 @@ where $n_r$ is the read count for labeled read path $r$.
 
 Iteration continues until the relative change in log-likelihood falls below $10^{-6}$ or maximum iterations are reached (250 for quantification-only mode, 1000 during assembly). From the final proportions, unique read counts (reads assigned to a single isoform with $\gamma_{ri} \geq 0.9999$), total fractional read counts, isoform fractions, and TPM are computed.
 
-## Outputs
-
-LRAA produces reconstructed transcripts in GTF format with gene and transcript identifiers, exon coordinates, and metadata including TSS/PolyA boundary flags, internal priming status, and novel isoform indicators. Expression quantification tables provide per-isoform metrics including unique and total read counts, isoform fraction within gene, and TPM. Read-to-transcript assignment tracking enables downstream analyses requiring read-level resolution such as differential transcript usage or allele-specific expression. Optional BED format output facilitates genome browser visualization.
-
-When known transcript annotations are available and isoform discovery is unnecessary, LRAA can operate in quantification-only mode where splice-graph construction and isoform reconstruction are bypassed, reads are directly assigned to reference transcripts, and EM is applied per-gene to resolve ambiguous assignments.
