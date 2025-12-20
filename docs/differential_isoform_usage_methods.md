@@ -4,6 +4,8 @@
 
 Differential isoform usage (DIU) analysis identifies genes where the relative proportions of isoforms change between conditions or cell populations, even when overall gene expression remains constant. LRAA provides a pseudobulk chi-squared testing framework specifically designed for single-cell long-read RNA-seq data to detect reciprocal isoform switching events between cell clusters.
 
+Our approach was inspired by methods described in Jogelkar et al. (2021), "A spatially resolved brain region- and cell type-specific isoform atlas of the postnatal mouse brain" (Nature Communications, volume 12, Article number: 463; https://www.nature.com/articles/s41467-020-20343-5). We incorporated extensions including reciprocal delta-π testing to identify symmetric isoform switches, cell detection fraction filtering to ensure isoforms are broadly expressed within clusters, and additional quality control criteria for read depth and effect size thresholds.
+
 ## Pseudobulk Aggregation
 
 Read counts for each isoform are aggregated across all cells within each cluster to generate pseudobulk count matrices. This aggregation strategy increases statistical power by pooling sparse single-cell observations while preserving biological variability at the cluster level. Pairwise comparisons are performed between all cluster combinations to comprehensively assess DIU across the cellular landscape.

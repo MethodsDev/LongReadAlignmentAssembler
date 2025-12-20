@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+## Differential isoform usage testing methods inspired by:
+## Jogelkar et al. (2021) "A spatially resolved brain region- and cell type-specific isoform 
+## atlas of the postnatal mouse brain"
+## Nature Communications, volume 12, Article number: 463
+## https://www.nature.com/articles/s41467-020-20343-5
+## Extended with reciprocal delta-pi testing, cell detection fraction filtering, and 
+## additional quality control criteria.
+
 import os, sys, logging
 import pandas as pd
 import numpy as np
