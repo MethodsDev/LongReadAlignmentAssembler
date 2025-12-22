@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run ORF prediction pipeline with Pipeliner"
+        description="Run ORF prediction pipeline with Pipeliner. "
+        "Optionally performs blastp homology search between LongOrfs and Predict steps."
     )
     parser.add_argument("--genome", required=True, help="Genome fasta file")
     parser.add_argument("--gtf", required=True, help="Input GTF file")
@@ -47,6 +48,34 @@ def main():
         help="minimum protein length to be considered",
     )
 
+    parser.add_argument(
+        "--blastp_db",
+        type=str,
+        default=None,
+        help="Path to blastp database (e.g., uniprot_sprot.fasta). If provided, blastp search will be performed",
+    )
+
+    parser.add_argument(
+        "--blastp_evalue",
+        type=float,
+        default=1e-5,
+        help="E-value threshold for blastp search (default: 1e-5)",
+    )
+
+    parser.add_argument(
+        "--blastp_max_target_seqs",
+        type=int,
+        default=1,
+        help="Maximum number of target sequences for blastp (default: 1)",
+    )
+
+    parser.add_argument(
+        "--blastp_num_threads",
+        type=int,
+        default=1,
+        help="Number of threads for blastp (default: 1)",
+    )
+
     args = parser.parse_args()
 
     utildir = args.td_dir + "/util"
@@ -67,10 +96,27 @@ def main():
         cmd += " --complete_orfs_only "
     pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
 
+    # Step 3b: (optional) run blastp search if database is provided
+    blastp_outfile = None
+    if args.blastp_db:
+        blastp_outfile = f"{args.output_prefix}.blastp.outfmt6"
+        cmd = (
+            f"blastp -query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
+            f"-db {args.blastp_db} "
+            f"-max_target_seqs {args.blastp_max_target_seqs} "
+            f"-outfmt 6 "
+            f"-evalue {args.blastp_evalue} "
+            f"-num_threads {args.blastp_num_threads} "
+            f"> {blastp_outfile}"
+        )
+        pipeliner.add_commands([Command(cmd, "blastp.ok")])
+
     # Step 4: predict likely ORFs
     cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta --no_refine_starts "
     if args.single_best_only:
         cmd += " --single_best_only"
+    if blastp_outfile:
+        cmd += f" --retain_blastp_hits {blastp_outfile}"
 
     pipeliner.add_commands([Command(cmd, "transdecoder_predict.ok")])
 
