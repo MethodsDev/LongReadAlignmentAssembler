@@ -52,28 +52,36 @@ def main():
         "--blastp_db",
         type=str,
         default=None,
-        help="Path to blastp database (e.g., uniprot_sprot.fasta). If provided, blastp search will be performed",
+        help="Path to blastp/diamond database (e.g., uniprot_sprot.fasta or uniprot_sprot.dmnd). If provided, homology search will be performed",
     )
 
     parser.add_argument(
         "--blastp_evalue",
         type=float,
         default=1e-5,
-        help="E-value threshold for blastp search (default: 1e-5)",
+        help="E-value threshold for blastp/diamond search (default: 1e-5)",
     )
 
     parser.add_argument(
         "--blastp_max_target_seqs",
         type=int,
         default=1,
-        help="Maximum number of target sequences for blastp (default: 1)",
+        help="Maximum number of target sequences for blastp/diamond (default: 1)",
     )
 
     parser.add_argument(
         "--blastp_num_threads",
         type=int,
         default=1,
-        help="Number of threads for blastp (default: 1)",
+        help="Number of threads for blastp/diamond (default: 1)",
+    )
+
+    parser.add_argument(
+        "--search_method",
+        type=str,
+        choices=["diamond", "blastp"],
+        default="diamond",
+        help="Homology search method to use: diamond (default, faster) or blastp (slower, NCBI blast+)",
     )
 
     args = parser.parse_args()
@@ -96,19 +104,69 @@ def main():
         cmd += " --complete_orfs_only "
     pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
 
-    # Step 3b: (optional) run blastp search if database is provided
+    # Step 3b: (optional) run blastp or diamond search if database is provided
     blastp_outfile = None
     if args.blastp_db:
         blastp_outfile = f"{args.output_prefix}.blastp.outfmt6"
-        cmd = (
-            f"blastp -query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
-            f"-db {args.blastp_db} "
-            f"-max_target_seqs {args.blastp_max_target_seqs} "
-            f"-outfmt 6 "
-            f"-evalue {args.blastp_evalue} "
-            f"-num_threads {args.blastp_num_threads} "
-            f"> {blastp_outfile}"
-        )
+        
+        if args.search_method == "diamond":
+            # Check if diamond database is indexed, if not create it
+            if not os.path.exists(args.blastp_db):
+                # Database doesn't exist, try to create it from fasta
+                fasta_db = args.blastp_db.replace('.dmnd', '.fasta')
+                if not fasta_db.endswith('.fasta'):
+                    fasta_db = args.blastp_db + '.fasta'
+                
+                if os.path.exists(fasta_db):
+                    logger.info(f"Diamond database {args.blastp_db} not found. Creating from {fasta_db}")
+                    cmd = f"diamond makedb --in {fasta_db} --db {args.blastp_db.replace('.dmnd', '')}"
+                    pipeliner.add_commands([Command(cmd, "diamond_makedb.ok")])
+                else:
+                    raise FileNotFoundError(
+                        f"Diamond database {args.blastp_db} not found and cannot find source fasta: {fasta_db}"
+                    )
+            
+            # Use diamond blastp (much faster)
+            cmd = (
+                f"diamond blastp "
+                f"--query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
+                f"--db {args.blastp_db} "
+                f"--max-target-seqs {args.blastp_max_target_seqs} "
+                f"--outfmt 6 "
+                f"--evalue {args.blastp_evalue} "
+                f"--threads {args.blastp_num_threads} "
+                f"--out {blastp_outfile}"
+            )
+        else:  # blastp
+            # Check if NCBI blast database is indexed
+            # NCBI blast creates multiple index files (.phr, .pin, .psq, etc.)
+            db_indexed = all(
+                os.path.exists(f"{args.blastp_db}.{ext}") 
+                for ext in ['phr', 'pin', 'psq']
+            )
+            
+            if not db_indexed:
+                # Check if the fasta file exists
+                if os.path.exists(args.blastp_db):
+                    logger.info(f"NCBI blast database {args.blastp_db} not indexed. Creating index.")
+                    cmd = f"makeblastdb -in {args.blastp_db} -dbtype prot"
+                    pipeliner.add_commands([Command(cmd, "makeblastdb.ok")])
+                else:
+                    raise FileNotFoundError(
+                        f"Blast database {args.blastp_db} not found and cannot be indexed"
+                    )
+            
+            # Use NCBI blastp
+            cmd = (
+                f"blastp -query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
+                f"-db {args.blastp_db} "
+                f"-max_target_seqs {args.blastp_max_target_seqs} "
+                f"-outfmt 6 "
+                f"-evalue {args.blastp_evalue} "
+                f"-num_threads {args.blastp_num_threads} "
+                f"> {blastp_outfile}"
+            )
+        
         pipeliner.add_commands([Command(cmd, "blastp.ok")])
 
     # Step 4: predict likely ORFs
