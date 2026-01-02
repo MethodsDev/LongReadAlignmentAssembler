@@ -14,11 +14,11 @@ Read counts for each isoform are aggregated across all cells within each cluster
 
 For each gene, isoform expression fractions (π) are calculated within each cluster as the proportion of the gene's total read counts attributed to each isoform:
 
-π<sub>isoform</sub> = count<sub>isoform</sub> / Σ count<sub>all isoforms in gene</sub>
+$$\pi_{\text{isoform}} = \frac{\text{count}_{\text{isoform}}}{\sum \text{count}_{\text{all isoforms in gene}}}$$
 
 The change in isoform usage between clusters is quantified using delta-π (Δπ), representing the difference in isoform expression fractions:
 
-Δπ = π<sub>cluster B</sub> - π<sub>cluster A</sub>
+$$\Delta \pi = \pi_{\text{cluster B}} - \pi_{\text{cluster A}}$$
 
 Positive Δπ values indicate increased isoform usage in cluster B relative to cluster A, while negative values indicate decreased usage.
 
@@ -47,7 +47,7 @@ Genes are tested for DIU only if they meet stringent quality and biological rele
 ### Cell Detection Fraction
 Cell detection fraction quantifies the proportion of cells within a cluster where an isoform is detected (has non-zero read count). This metric distinguishes broadly-expressed isoforms from those present in only a small subset of cells.
 
-For DIU testing, the dominant isoform set must be detected in at least a minimum fraction of cells (e.g., 5%) in the cluster where it is enriched (higher π value). When reciprocal testing is enabled, the alternate isoform set must also meet this criterion in its enriched cluster. This filter ensures that detected DIU events are driven by consistent isoform expression patterns across the cell population rather than stochastic detection in rare cells.
+For DIU testing, the dominant isoform set must be detected in at least a minimum fraction of cells (e.g., $$5\%$$) in the cluster where it is enriched (higher $$\pi$$ value). When reciprocal testing is enabled, the alternate isoform set must also meet this criterion in its enriched cluster. This filter ensures that detected DIU events are driven by consistent isoform expression patterns across the cell population rather than stochastic detection in rare cells. If the pseudobulk resources lack a cell detection fraction matrix, this filter is skipped automatically, and the detection-fraction columns in the output remain empty.
 
 ### Transcript Selection
 To focus analysis on major isoform switches and reduce computational burden, only the most highly-expressed isoforms from each cluster are considered. The `--top_isoforms_each` parameter controls how many top-ranked isoforms (by read count) per cluster enter the comparison. Setting this to 1 restricts testing to the single most abundant isoform from each cluster, identifying dominant isoform switches while excluding minor variants.
@@ -71,8 +71,8 @@ The test statistic follows a chi-squared distribution with (rows-1) × (columns-
 Because DIU testing is performed for potentially thousands of genes across multiple cluster pairs, raw p-values are adjusted for multiple testing using the Benjamini-Hochberg false discovery rate (FDR) procedure. This controls the expected proportion of false discoveries among rejected null hypotheses.
 
 Genes are considered significantly differentially used if they meet both statistical and effect size criteria:
-- FDR-adjusted p-value < 0.001 (default threshold)
-- |Δπ| ≥ 0.1 for the dominant isoform set
+- FDR-adjusted $$p$$-value < $$0.001$$ (default threshold)
+- $$|\Delta \pi| \geq 0.1$$ for the dominant isoform set
 
 ## Grouping and Annotation
 
@@ -141,3 +141,23 @@ This command:
 - Excludes unspliced isoforms
 - Requires ≥5% cell detection fraction for tested isoform sets
 - Runs pairwise comparisons across 11 parallel processes
+
+## Manuscript Methods Text for DIU
+
+Differential isoform usage (DIU) was assessed by aggregating isoform-level read counts across all cells within each cluster to form pseudobulk matrices, followed by pairwise comparisons across every cluster pair; unspliced transcripts were excluded from all analyses. For splicing-focused analyses, isoforms sharing the same ordered intron chain were collapsed via splice-pattern hashcodes, summing their counts per cluster before DIU testing so that splice-junction usage changes are measured independently of transcript termini. For termini-focused analyses, isoforms were tested individually, and significant results were filtered to retain pairs that share splice patterns but differ in transcription start and/or end sites, isolating alternative start/stop usage.
+
+Within each analysis mode, isoform (or splice-pattern group) usage fractions for a given gene were computed as
+
+$$
+\pi_i = \frac{c_i}{\sum_j c_j},
+$$
+
+where $$c_i$$ is the pseudobulk read count for isoform (or group) $$i$$. Usage differences between clusters A and B were summarized as
+
+$$
+\Delta \pi_i = \pi_{i,B} - \pi_{i,A}.
+$$
+
+Isoforms were partitioned into dominant and alternate sets based on the magnitude and sign of $$\Delta \pi_i$$, enabling detection of reciprocal isoform switches in which one set increases while the other decreases.
+
+This framework adapts the pseudobulk strategy of Jogelkar et al. (2021) with several extensions: (1) reciprocal $$\Delta \pi$$ testing that requires both dominant and alternate sets to exceed effect-size thresholds (default $$|\Delta \pi| \ge 0.1$$); (2) optional filtering on cell detection fraction so that, when a cell-fraction matrix is provided, each enriched isoform set must be detected in at least a specified fraction of cells (default 5%) in its enriched cluster; and (3) additional quality-control filters on minimum gene-level and isoform-set read depths (default ≥25 reads per cluster and per set). Genes passing these filters were evaluated by chi-squared contingency tests on 2×$$N$$ pseudobulk count tables, where rows correspond to clusters and columns to the tested isoforms/sets. P-values were adjusted with the Benjamini–Hochberg procedure, and DIU calls required both the FDR criterion (default FDR < $$0.001$$) and the effect-size thresholds described above.
