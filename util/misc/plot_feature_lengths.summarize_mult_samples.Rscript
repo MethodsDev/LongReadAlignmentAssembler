@@ -25,8 +25,12 @@ main = function () {
     
 	all_stats_df = NULL
 
-	for (tsv_file in sample_iso_cats_files) {
-    	df = read.csv(tsv_file, header=T, sep="\t")
+    for (tsv_file in sample_iso_cats_files) {
+        df = readr::read_tsv(
+            tsv_file,
+            col_types = readr::cols(.default = readr::col_guess()),
+            col_select = c(-tidyselect::any_of("structure"))
+        )
     
     	sample_name = str_split(basename(tsv_file), "\\.")[[1]][1]
     
