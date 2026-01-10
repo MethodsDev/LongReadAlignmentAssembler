@@ -71,6 +71,23 @@ class TestDifferentialIsoformTests:
             columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"],
         )
 
+    @staticmethod
+    def _parse_transcript_ids(value):
+        if pd.isna(value) or value is None:
+            return []
+        return sorted([tok for tok in value.split(",") if tok])
+
+    @classmethod
+    def _normalize_partition(cls, dominant_ids, alternate_ids):
+        partitions = []
+        dom = cls._parse_transcript_ids(dominant_ids)
+        alt = cls._parse_transcript_ids(alternate_ids)
+        if dom:
+            partitions.append(tuple(sorted(dom)))
+        if alt:
+            partitions.append(tuple(sorted(alt)))
+        return sorted(partitions)
+
     def test_basic_functionality_reciprocal_false(self, basic_data):
         """Test basic functionality with reciprocal_delta_pi=False."""
         results = differential_isoform_tests(
@@ -306,6 +323,110 @@ class TestDifferentialIsoformTests:
             # Status should be either "OK" or "failed"
             valid_statuses = {"OK", "failed"}
             assert all(status in valid_statuses for status in results["status"])
+
+    def test_cluster_order_invariance(self):
+        """Swapping cluster order (count_A/count_B) should not change test decisions."""
+        data = [
+            ["geneA", "iso1", "tx1", 80, 20],  # Enriched in condition A
+            ["geneA", "iso2", "tx2", 20, 80],  # Enriched in condition B
+            ["geneA", "iso3", "tx3", 10, 10],
+            ["geneB", "iso1", "tx4", 50, 120],
+            ["geneB", "iso2", "tx5", 120, 40],
+            ["geneB", "iso3", "tx6", 15, 15],
+        ]
+        df = pd.DataFrame(
+            data,
+            columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"],
+        )
+
+        kwargs = dict(
+            reciprocal_delta_pi=True,
+            min_reads_per_gene=50,
+            min_reads_DTU_isoform=30,
+            min_delta_pi=0.1,
+            top_isoforms_each=2,
+            show_progress_monitor=False,
+        )
+
+        results_ab = differential_isoform_tests(df, **kwargs)
+
+        swapped_df = df.copy()
+        swapped_df[["count_A", "count_B"]] = swapped_df[["count_B", "count_A"]]
+        results_ba = differential_isoform_tests(swapped_df, **kwargs)
+
+        assert results_ab is not None and results_ba is not None
+
+        ab_sorted = results_ab.sort_values("gene_id").reset_index(drop=True)
+        ba_sorted = results_ba.sort_values("gene_id").reset_index(drop=True)
+
+        assert list(ab_sorted["gene_id"]) == list(ba_sorted["gene_id"])
+        assert np.allclose(ab_sorted["pvalue"], ba_sorted["pvalue"], equal_nan=True)
+        assert np.allclose(ab_sorted["delta_pi"].abs(), ba_sorted["delta_pi"].abs())
+        for _, row_ab in ab_sorted.iterrows():
+            row_ba = ba_sorted[ba_sorted["gene_id"] == row_ab["gene_id"]].iloc[0]
+            assert self._normalize_partition(
+                row_ab["dominant_transcript_ids"], row_ab["alternate_transcript_ids"]
+            ) == self._normalize_partition(
+                row_ba["dominant_transcript_ids"], row_ba["alternate_transcript_ids"]
+            )
+
+    def test_cluster_order_invariance_randomized(self):
+        """Randomized stress test for cluster order symmetry."""
+        rng = np.random.default_rng(1337)
+        for iteration in range(15):
+            num_genes = int(rng.integers(3, 8))
+            records = []
+            for gi in range(num_genes):
+                gene_id = f"gene{iteration}_{gi}"
+                num_isoforms = int(rng.integers(2, 6))
+                for iso in range(num_isoforms):
+                    count_A = int(rng.integers(0, 400))
+                    count_B = int(rng.integers(0, 400))
+                    records.append(
+                        [
+                            gene_id,
+                            f"iso{iso}",
+                            f"tx{iteration}_{gi}_{iso}",
+                            count_A,
+                            count_B,
+                        ]
+                    )
+
+            df = pd.DataFrame(
+                records,
+                columns=["gene_id", "isoform_id", "transcript_id", "count_A", "count_B"],
+            )
+
+            kwargs = dict(
+                reciprocal_delta_pi=bool(rng.integers(0, 2)),
+                min_reads_per_gene=int(rng.integers(30, 180)),
+                min_reads_DTU_isoform=int(rng.integers(20, 120)),
+                min_delta_pi=float(rng.uniform(0.05, 0.35)),
+                top_isoforms_each=int(rng.integers(1, 4)),
+                show_progress_monitor=False,
+            )
+
+            results_ab = differential_isoform_tests(df, **kwargs)
+            swapped_df = df.copy()
+            swapped_df[["count_A", "count_B"]] = swapped_df[["count_B", "count_A"]]
+            results_ba = differential_isoform_tests(swapped_df, **kwargs)
+
+            if results_ab is None or results_ab.empty:
+                assert results_ba is None or results_ba.empty
+                continue
+
+            assert results_ba is not None and not results_ba.empty
+
+            ab_sorted = results_ab.sort_values("gene_id").reset_index(drop=True)
+            ba_sorted = results_ba.sort_values("gene_id").reset_index(drop=True)
+
+            assert list(ab_sorted["gene_id"]) == list(ba_sorted["gene_id"])
+            assert np.allclose(ab_sorted["pvalue"], ba_sorted["pvalue"], equal_nan=True)
+            assert np.allclose(ab_sorted["delta_pi"].abs(), ba_sorted["delta_pi"].abs())
+            assert list(ab_sorted["status"]) == list(ba_sorted["status"])
+
+            # No further assertions: differing dominant/alternate membership is acceptable
+            # so long as p-values and |delta_pi| values are invariant.
 
     @pytest.mark.parametrize("reciprocal_delta_pi", [True, False])
     def test_reciprocal_parameter_consistency(self, basic_data, reciprocal_delta_pi):
