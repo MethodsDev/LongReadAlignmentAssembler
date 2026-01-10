@@ -24,6 +24,10 @@ test_wdls:
 	cd single_cells && $(MAKE) test_wdls
 
 
+test_DTU:
+	cd DTU_eval && $(MAKE) clean test
+
+
 clean:
 	@for i in $(DIRS) $(QC) $(MISC); do \
     echo "Running example in $$i..."; \
