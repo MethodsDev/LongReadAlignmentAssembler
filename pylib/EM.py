@@ -245,7 +245,7 @@ def em_algorithm_with_weights(
     num_transcripts,
     max_iter=100,
     tol=1e-6,
-    base_alpha=0.1,
+    base_alpha=0.01,
     prefix_str=None,
 ):
     """
