@@ -42,3 +42,8 @@ workflows:
      authors:
          - name: Brian Haas & chatgpt
            email: bhaas@broadinstitute.org
+   - name: Cell-Annotation-Service
+     subclass: WDL
+     primaryDescriptorPath: /Plugins/CAS/run_CellAnnotationService.wdl
+     authors:
+         - name: Brian Haas & chatgpt
