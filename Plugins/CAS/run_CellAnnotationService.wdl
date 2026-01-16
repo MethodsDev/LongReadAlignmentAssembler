@@ -75,7 +75,6 @@ task RunCAS {
   input {
     File matrix_dir_tarball
     String? matrix_dir_subpath
-    String matrix_dir_subpath_value = if defined(matrix_dir_subpath) then select_first([matrix_dir_subpath]) else ""
     String api_token
     String output_prefix_basename
     Int chunk_size
@@ -83,8 +82,6 @@ task RunCAS {
     Int top_k
     String obs_prefix
     String? cas_model_name
-    String cas_model_name_value = if defined(cas_model_name) then select_first([cas_model_name]) else ""
-    String cas_model_arg = if cas_model_name_value != "" then "--cas-model-name \"" + cas_model_name_value + "\"" else ""
     String docker_image
   }
 
@@ -94,8 +91,8 @@ task RunCAS {
     MATRIX_ROOT=$(mktemp -d cas_matrix.XXXX)
     tar -xzf "~{matrix_dir_tarball}" -C "$MATRIX_ROOT"
 
-    if [[ -n "~{matrix_dir_subpath_value}" ]]; then
-      CAS_MATRIX_DIR="$MATRIX_ROOT/~{matrix_dir_subpath_value}"
+    if [[ -n "~{matrix_dir_subpath}" ]]; then
+      CAS_MATRIX_DIR="$MATRIX_ROOT/~{matrix_dir_subpath}"
     else
       subdir_count=$(find "$MATRIX_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
       file_count=$(find "$MATRIX_ROOT" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
@@ -114,7 +111,7 @@ task RunCAS {
       --min-acceptable-score ~{min_acceptable_score} \
       --top-k ~{top_k} \
       --obs-prefix "~{obs_prefix}" \
-      ~{cas_model_arg}
+      ~{if defined(cas_model_name) then "--cas-model-name " + cas_model_name else ""}
   >>>
 
   runtime {
