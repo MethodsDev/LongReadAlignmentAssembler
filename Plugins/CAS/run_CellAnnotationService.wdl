@@ -75,7 +75,7 @@ task RunCAS {
   input {
     File matrix_dir_tarball
     String? matrix_dir_subpath
-    String matrix_dir_subpath_value = select_first([matrix_dir_subpath, ""])
+    String matrix_dir_subpath_value = if defined(matrix_dir_subpath) then select_first([matrix_dir_subpath]) else ""
     String api_token
     String output_prefix_basename
     Int chunk_size
@@ -83,7 +83,7 @@ task RunCAS {
     Int top_k
     String obs_prefix
     String? cas_model_name
-    String cas_model_name_value = select_first([cas_model_name, ""])
+    String cas_model_name_value = if defined(cas_model_name) then select_first([cas_model_name]) else ""
     String cas_model_arg = if cas_model_name_value != "" then "--cas-model-name \"" + cas_model_name_value + "\"" else ""
     String docker_image
   }
