@@ -42,7 +42,7 @@ ITER = 0
 
 class LRAA:
 
-    min_transcript_length = LRAA_Globals.config["min_transcript_length"]
+    # Removed min_transcript_length as class variable - now referenced from LRAA_Globals.config at runtime
     min_mpgn_read_count = 1
 
     max_contained_to_be_a_pasa_vertex = 10
@@ -173,15 +173,16 @@ class LRAA:
         if LRAA_Globals.DEBUG:
             mpg.write_mp_graph_nodes_to_gtf("__mpgns.pre.gtf")
 
+        min_transcript_length = LRAA_Globals.config["min_transcript_length"]
         mpg_components = mpg.remove_small_components(
-            mpg_components, LRAA.min_transcript_length
+            mpg_components, min_transcript_length
         )
         logger.info(
             "[%s%s] %d components surviving the min length %d criterion.",
             self._contig_acc,
             self._contig_strand,
             len(mpg_components),
-            LRAA.min_transcript_length,
+            min_transcript_length,
         )
 
         if LRAA_Globals.DEBUG:

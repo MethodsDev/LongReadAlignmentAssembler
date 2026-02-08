@@ -606,9 +606,13 @@ class MultiPathGraph:
         surviving_components = list()
 
         for mpgn_list in mpg_components:
+            # Find the maximum length among all nodes in this component
+            # (each node represents a different path/isoform possibility)
             max_seq_len = 0
             for mpgn in mpgn_list:
-                max_seq_len += mpgn.get_seq_length()
+                node_len = mpgn.get_seq_length()
+                if node_len > max_seq_len:
+                    max_seq_len = node_len
             if max_seq_len < min_transcript_length:
                 # component is too small to generate a sufficiently large transcript
                 self._mp_graph.remove_nodes_from(mpgn_list)
