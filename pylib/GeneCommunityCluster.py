@@ -108,7 +108,8 @@ def partition_with_leiden(transcripts: List, contig_acc: str, contig_strand: str
 
     # thresholds from config
     shorter_thr = float(LRAA_Globals.config.get("min_recluster_overlap_shorter_iso_frac", 0.50))
-    longer_thr = float(LRAA_Globals.config.get("min_recluster_overlap_longer_iso_frac", 0.20))
+    # Note: longer_thr removed - requiring both shorter AND longer thresholds was too stringent
+    # and prevented legitimate alternative isoforms from clustering together
 
     n = len(transcripts)
     if n == 0:
@@ -128,15 +129,11 @@ def partition_with_leiden(transcripts: List, contig_acc: str, contig_strand: str
                 continue
             len_j = tj.get_cdna_len()
             shorter = min(len_i, len_j)
-            longer = max(len_i, len_j)
             # containment or overlap criteria
             contained = (ov == shorter and shorter > 0)
-            if contained or (
-                shorter > 0
-                and longer > 0
-                and (ov / shorter) >= shorter_thr
-                and (ov / longer) >= longer_thr
-            ):
+            # Only require shorter_frac threshold - if >=50% of the shorter transcript overlaps,
+            # they should be considered related regardless of what fraction of the longer one it covers
+            if contained or (shorter > 0 and (ov / shorter) >= shorter_thr):
                 edges.append((i, j))
 
     # If no edges, each transcript becomes its own community
