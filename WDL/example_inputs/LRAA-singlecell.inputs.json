@@ -1,26 +1,18 @@
 {
-  "LRAA_singlecell_wf.sample_id": "PBMC10k",
-  "LRAA_singlecell_wf.referenceGenome": "gs://path/to/genome.fa",
-  "LRAA_singlecell_wf.inputBAM": "gs://path/to/reads.bam",
+    "LRAA_singlecell_wf.HiFi":true,
+    "LRAA_singlecell_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest",
 
-  "LRAA_singlecell_wf.initial_annot_gtf": null,
+    // ref-guided mode
+    "LRAA_singlecell_wf.sample_id":"${this.sample_id}",
+    "LRAA_singlecell_wf.initial_annot_gtf":"gs://mdl-refs/GRCh38/GTEx_Resources_GENCODE47/human.refdata-gex-GRCh38-GENCODE47.gtf",
+    "LRAA_singlecell_wf.inputBAM":"${this.inputBAM}",
+    "LRAA_singlecell_wf.referenceGenome":"${this.referenceGenome}",
+    
+    "LRAA_singlecell_wf.main_chromosomes":"chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM",
+    "LRAA_singlecell_wf.oversimplify":"chrM",
+    "LRAA_singlecell_wf.ref_annot_gtf_source_gene_symbols":"gs://mdl-refs/GRCh38/GTEx_Resources_GENCODE47/human.refdata-gex-GRCh38-GENCODE47.gtf",
 
-  "LRAA_singlecell_wf.HiFi": false,
-  "LRAA_singlecell_wf.oversimplify": null,
-  "LRAA_singlecell_wf.main_chromosomes": "",
-  "LRAA_singlecell_wf.region": null,
-
-  "LRAA_singlecell_wf.numThreads": 8,
-  "LRAA_singlecell_wf.memoryGB": 64,
-  "LRAA_singlecell_wf.diskSizeGB": 256,
-  "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest",
-
-  "LRAA_singlecell_wf.min_cells": 10,
-  "LRAA_singlecell_wf.min_features": 1000,
-  "LRAA_singlecell_wf.percent_mt_max": 20.0,
-  "LRAA_singlecell_wf.mt_pattern": "^MT-",
-  "LRAA_singlecell_wf.npcs": 12,
-  "LRAA_singlecell_wf.resolution": 0.6,
-  "LRAA_singlecell_wf.n_variable_features": 2000,
-  "LRAA_singlecell_wf.seed": 1
+    // cell cluster-guided mode
+    "LRAA_singlecell_wf.single_cell_pipe_mode":"cluster-guided"
 }
+
