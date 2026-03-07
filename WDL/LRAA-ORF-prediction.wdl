@@ -13,7 +13,7 @@ workflow LRAA_ORF_prediction_wf {
 
         # Optional blastp/diamond parameters
         File? blastp_db
-        Float blastp_evalue = 1e-5
+        Float blastp_evalue = 0.00001
         Int blastp_max_target_seqs = 1
         Int blastp_num_threads = 4
         String search_method = "diamond"  # "diamond" or "blastp"
