@@ -88,10 +88,26 @@ RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSI
     cd samtools-${SAMTOOLS_VERSION} && \
     ./configure && make && make install
 
+## HTSlib (for tabix and bgzip)
+ENV HTSLIB_VERSION=1.13
+RUN wget https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2 && \
+    tar xvf htslib-${HTSLIB_VERSION}.tar.bz2 && \
+    cd htslib-${HTSLIB_VERSION} && \
+    ./configure && make && make install
+
 
 
 ## R-stuff
-RUN apt-get install -y r-base r-base-dev
+# Install R >= 4.5.0 from CRAN to meet ggrepel/Seurat requirements
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    dirmngr \
+    gnupg \
+    ca-certificates && \
+    wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc && \
+    add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/" && \
+    apt-get update && \
+    apt-get install -y r-base r-base-dev
 
 RUN R -e 'install.packages("BiocManager", repos="http://cran.us.r-project.org")'
 
@@ -144,6 +160,34 @@ RUN cd $SRC && \
     cp gffcompare trmap /usr/local/bin/ && \
     cd $SRC && rm -rf gffcompare
 
+
+WORKDIR $SRC
+
+## Diamond (for fast protein homology search)
+ENV DIAMOND_VERSION=2.1.8
+RUN wget https://github.com/bbuchfink/diamond/releases/download/v${DIAMOND_VERSION}/diamond-linux64.tar.gz && \
+    tar xzf diamond-linux64.tar.gz && \
+    mv diamond /usr/local/bin/ && \
+    rm diamond-linux64.tar.gz
+
+## NCBI BLAST+ (alternative to Diamond)
+ENV BLAST_VERSION=2.14.0
+RUN wget https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/${BLAST_VERSION}/ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz && \
+    tar xzf ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz && \
+    cp ncbi-blast-${BLAST_VERSION}+/bin/* /usr/local/bin/ && \
+    rm -rf ncbi-blast-${BLAST_VERSION}+ ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz
+
+## TransDecoder (for ORF prediction)
+ENV TRANSDECODER_VERSION=5.7.1
+RUN wget https://github.com/TransDecoder/TransDecoder/archive/TransDecoder-v${TRANSDECODER_VERSION}.tar.gz && \
+    tar xzf TransDecoder-v${TRANSDECODER_VERSION}.tar.gz && \
+    mv TransDecoder-TransDecoder-v${TRANSDECODER_VERSION} /usr/local/src/TransDecoder && \
+    cd /usr/local/src/TransDecoder && \
+    make && \
+    rm -f $SRC/TransDecoder-v${TRANSDECODER_VERSION}.tar.gz
+
+ENV TRANSDECODER_DIR=/usr/local/src/TransDecoder
+ENV PATH="${TRANSDECODER_DIR}:${PATH}"
 
 WORKDIR $SRC
 
