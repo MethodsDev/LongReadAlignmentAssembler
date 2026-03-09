@@ -5,7 +5,7 @@ workflow RunCellAnnotationService {
     File matrix_dir_tarball
     String? matrix_dir_subpath
     String api_token
-    String output_prefix_basename
+    String sample_id
     Int chunk_size = 500
     Float min_acceptable_score = 0.2
     Int top_k = 3
@@ -19,7 +19,7 @@ workflow RunCellAnnotationService {
       matrix_dir_tarball = matrix_dir_tarball,
       matrix_dir_subpath = matrix_dir_subpath,
       api_token = api_token,
-      output_prefix_basename = output_prefix_basename,
+      sample_id = sample_id,
       chunk_size = chunk_size,
       min_acceptable_score = min_acceptable_score,
       top_k = top_k,
@@ -47,8 +47,8 @@ workflow RunCellAnnotationService {
     api_token: {
       description: "Cellarium CAS API token; store this securely in Terra (e.g., in a workspace secret)."
     }
-    output_prefix_basename: {
-      description: "Filename prefix for the generated outputs (without extension)."
+    sample_id: {
+      description: "Sample identifier; outputs will be named {sample_id}.CAS.h5ad and {sample_id}.CAS.tsv."
     }
     chunk_size: {
       description: "Number of cells per CAS chunk." 
@@ -76,7 +76,7 @@ task RunCAS {
     File matrix_dir_tarball
     String? matrix_dir_subpath
     String api_token
-    String output_prefix_basename
+    String sample_id
     Int chunk_size
     Float min_acceptable_score
     Int top_k
@@ -87,6 +87,8 @@ task RunCAS {
 
   command <<<
     set -euo pipefail
+
+    output_prefix_basename="~{sample_id}.CAS"
 
     MATRIX_ROOT=$(mktemp -d cas_matrix.XXXX)
     tar -xzf "~{matrix_dir_tarball}" -C "$MATRIX_ROOT"
@@ -106,12 +108,13 @@ task RunCAS {
     run_CellAnnotationService.py \
       --matrix-dir "$CAS_MATRIX_DIR" \
       --api-token "~{api_token}" \
-      --output-prefix "~{output_prefix_basename}" \
+      --output-prefix "$output_prefix_basename" \
       --chunk-size ~{chunk_size} \
       --min-acceptable-score ~{min_acceptable_score} \
       --top-k ~{top_k} \
       --obs-prefix "~{obs_prefix}" \
       ~{if defined(cas_model_name) then "--cas-model-name " + cas_model_name else ""}
+
   >>>
 
   runtime {
@@ -122,8 +125,8 @@ task RunCAS {
   }
 
   output {
-    File cas_h5ad = output_prefix_basename + ".h5ad"
-    File cas_tsv = output_prefix_basename + ".tsv"
+    File cas_h5ad = sample_id + ".CAS.h5ad"
+    File cas_tsv = sample_id + ".CAS.tsv"
   }
 
   meta {
@@ -140,8 +143,8 @@ task RunCAS {
     api_token: {
       description: "Cellarium CAS API token (sensitive)."
     }
-    output_prefix_basename: {
-      description: "Prefix used for the generated .h5ad and .tsv outputs."
+    sample_id: {
+      description: "Sample identifier used to construct output filenames."
     }
     chunk_size: {
       description: "Number of cells sent to CAS per chunk."
