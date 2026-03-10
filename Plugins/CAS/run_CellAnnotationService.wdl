@@ -31,6 +31,7 @@ workflow RunCellAnnotationService {
   output {
     File cas_h5ad = RunCAS.cas_h5ad
     File cas_tsv = RunCAS.cas_tsv
+    File cas_input_matrix = RunCAS.cas_input_matrix
   }
 
   meta {
@@ -67,6 +68,15 @@ workflow RunCellAnnotationService {
     }
     docker_image: {
       description: "Docker image containing run_CellAnnotationService.py and dependencies."
+    }
+    cas_h5ad: {
+      description: "Output AnnData file containing CAS cell type annotations."
+    }
+    cas_tsv: {
+      description: "Output TSV file with cell barcodes and all observation columns."
+    }
+    cas_input_matrix: {
+      description: "Tar.gz archive of the CAS-formatted matrix that was submitted to CAS (converted from LRAA format if needed)."
     }
   }
 }
@@ -115,6 +125,16 @@ task RunCAS {
       --obs-prefix "~{obs_prefix}" \
       ~{if defined(cas_model_name) then "--cas-model-name " + cas_model_name else ""}
 
+    # Archive the CAS-formatted matrix that was submitted to CAS
+    # The Python script may have converted it from LRAA format to CAS format
+    if [[ -d "${CAS_MATRIX_DIR}.for_CAS" ]]; then
+      # Conversion happened, archive the converted matrix
+      tar -czf "~{sample_id}.CAS_input_matrix.tgz" -C "$(dirname ${CAS_MATRIX_DIR}.for_CAS)" "$(basename ${CAS_MATRIX_DIR}.for_CAS)"
+    else
+      # No conversion, archive the original matrix
+      tar -czf "~{sample_id}.CAS_input_matrix.tgz" -C "$(dirname $CAS_MATRIX_DIR)" "$(basename $CAS_MATRIX_DIR)"
+    fi
+
   >>>
 
   runtime {
@@ -127,6 +147,7 @@ task RunCAS {
   output {
     File cas_h5ad = sample_id + ".CAS.h5ad"
     File cas_tsv = sample_id + ".CAS.tsv"
+    File cas_input_matrix = sample_id + ".CAS_input_matrix.tgz"
   }
 
   meta {
