@@ -77,6 +77,60 @@ def parse_args():
     return parser.parse_args()
 
 
+def load_symbol_to_ensg_mapping(mapping_file):
+    """
+    Load SYMBOL -> ENSG mapping from a TSV file.
+
+    Format: ENSG_ID \t SYMBOL
+
+    For symbols that map to multiple ENSG IDs, keeps the first occurrence
+    and logs a warning.
+
+    Args:
+        mapping_file: Path to mapping file (can be .gz compressed)
+
+    Returns:
+        dict: {SYMBOL: ENSG_ID}
+    """
+    symbol_to_ensg = {}
+    duplicate_symbols = {}
+
+    open_func = gzip.open if mapping_file.endswith('.gz') else open
+    mode = 'rt' if mapping_file.endswith('.gz') else 'r'
+
+    with open_func(mapping_file, mode) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split('\t')
+            if len(parts) != 2:
+                continue
+
+            ensg, symbol = parts
+
+            if symbol in symbol_to_ensg:
+                # Track duplicates
+                if symbol not in duplicate_symbols:
+                    duplicate_symbols[symbol] = [symbol_to_ensg[symbol]]
+                duplicate_symbols[symbol].append(ensg)
+            else:
+                symbol_to_ensg[symbol] = ensg
+
+    if duplicate_symbols:
+        logging.warning(
+            "Found %d symbols mapping to multiple ENSG IDs (using first occurrence)",
+            len(duplicate_symbols)
+        )
+        # Show first 5 examples
+        for symbol, ensg_list in list(duplicate_symbols.items())[:5]:
+            logging.warning("  %s -> %s", symbol, ', '.join(ensg_list))
+
+    logging.info("Loaded %d unique symbol->ENSG mappings", len(symbol_to_ensg))
+    return symbol_to_ensg
+
+
 def is_cas_compatible_format(matrix_dir):
     """
     Check if the matrix directory is already in CAS-compatible format.
@@ -147,24 +201,25 @@ def _find_file(directory, base_name):
         )
 
 
-def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
+def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir, symbol_to_ensg_mapping=None):
     """
     Convert LRAA-formatted matrix to CAS-compatible format.
-    
+
     LRAA format:
       - barcodes.tsv.gz
-      - features.tsv.gz (format: SYMBOL^ENSG00000000000.version)
+      - features.tsv.gz (format: SYMBOL^ENSG00000000000.version or SYMBOL^LRAA_gene_id)
       - matrix.mtx.gz
-    
+
     CAS format:
       - barcodes.tsv
       - genes.tsv (format: ENSG00000000000 SYMBOL)
       - matrix.mtx
-    
+
     Args:
         lraa_matrix_dir: Path to LRAA-formatted matrix directory
         output_dir: Path to output CAS-compatible directory
-    
+        symbol_to_ensg_mapping: Optional dict mapping gene symbols to ENSG IDs
+
     Returns:
         str: Path to the converted matrix directory
     """
@@ -187,8 +242,15 @@ def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
     # 2. Convert features.tsv[.gz] -> genes.tsv
     features_in, is_compressed = _find_file(lraa_matrix_dir, "features.tsv")
     genes_out = os.path.join(output_dir, "genes.tsv")
-    
+
     logging.info("Converting %s to genes.tsv...", os.path.basename(features_in))
+
+    # Track mapping statistics
+    total_features = 0
+    mapped_via_ensg = 0  # Already had ENSG
+    mapped_via_lookup = 0  # Mapped via symbol lookup
+    unmapped = 0  # Could not map
+
     open_func = gzip.open if is_compressed else open
     mode_in = "rt" if is_compressed else "r"
     with open_func(features_in, mode_in) as f_in:
@@ -197,25 +259,63 @@ def convert_lraa_matrix_to_cas_format(lraa_matrix_dir, output_dir):
                 line = line.strip()
                 if not line:
                     continue
-                
-                # Parse SYMBOL^ENSG00000000000.version format
+
+                total_features += 1
+
+                # Parse SYMBOL^GENE_ID format
                 if "^" in line:
                     parts = line.split("^")
                     if len(parts) == 2:
                         symbol = parts[0]
-                        ensg_with_version = parts[1]
-                        
-                        # Remove version number (e.g., ENSG00000000000.15 -> ENSG00000000000)
-                        ensg = re.sub(r"\.\d+$", "", ensg_with_version)
-                        
+                        gene_id = parts[1]
+
+                        # Check if gene_id is already ENSG format
+                        if gene_id.startswith("ENSG"):
+                            # Remove version number (e.g., ENSG00000000000.15 -> ENSG00000000000)
+                            ensg = re.sub(r"\.\d+$", "", gene_id)
+                            mapped_via_ensg += 1
+                        elif symbol_to_ensg_mapping and symbol in symbol_to_ensg_mapping:
+                            # Look up symbol in mapping
+                            ensg = symbol_to_ensg_mapping[symbol]
+                            mapped_via_lookup += 1
+                        else:
+                            # No mapping found, use gene_id as-is (for novel/LRAA genes)
+                            ensg = gene_id
+                            unmapped += 1
+
                         # Write in CAS format: ENSG SYMBOL
                         f_out.write(f"{ensg}\t{symbol}\n")
                     else:
                         logging.warning("Unexpected features.tsv format: %s", line)
                 else:
                     # No '^' separator, treat the full token as both symbol and gene ID
-                    token = re.sub(r"\.\d+$", "", line)
-                    f_out.write(f"{token}\t{token}\n")
+                    token = line
+
+                    # Check if it's an ENSG ID
+                    if token.startswith("ENSG"):
+                        ensg = re.sub(r"\.\d+$", "", token)
+                        mapped_via_ensg += 1
+                    elif symbol_to_ensg_mapping and token in symbol_to_ensg_mapping:
+                        ensg = symbol_to_ensg_mapping[token]
+                        mapped_via_lookup += 1
+                    else:
+                        ensg = token
+                        unmapped += 1
+
+                    f_out.write(f"{ensg}\t{token}\n")
+
+    # Log mapping statistics
+    logging.info("Feature mapping statistics:")
+    logging.info("  Total features: %d", total_features)
+    logging.info("  Already had ENSG ID: %d (%.1f%%)",
+                 mapped_via_ensg,
+                 100.0 * mapped_via_ensg / total_features if total_features > 0 else 0)
+    logging.info("  Mapped via symbol lookup: %d (%.1f%%)",
+                 mapped_via_lookup,
+                 100.0 * mapped_via_lookup / total_features if total_features > 0 else 0)
+    logging.info("  Unmapped (kept original ID): %d (%.1f%%)",
+                 unmapped,
+                 100.0 * unmapped / total_features if total_features > 0 else 0)
     
     # 3. Convert matrix.mtx[.gz] -> matrix.mtx
     matrix_in, is_compressed = _find_file(lraa_matrix_dir, "matrix.mtx")
@@ -251,9 +351,19 @@ def main():
         logging.error("Matrix directory does not exist: %s", matrix_dir)
         sys.exit(1)
 
+    # Load symbol to ENSG mapping
+    mapping_file = "/usr/local/share/cas/human.refdata-gex-GRCh38-GENCODE47.ENSG_to_SYMBOL.tsv.gz"
+    symbol_to_ensg = None
+    if os.path.exists(mapping_file):
+        logging.info("Loading gene symbol to ENSG mapping from %s", mapping_file)
+        symbol_to_ensg = load_symbol_to_ensg_mapping(mapping_file)
+    else:
+        logging.warning("Symbol to ENSG mapping file not found at %s", mapping_file)
+        logging.warning("Will only use ENSG IDs already present in features file")
+
     # Check if matrix is already CAS-compatible or needs conversion
     cas_matrix_dir = matrix_dir
-    
+
     if is_cas_compatible_format(matrix_dir):
         logging.info("Matrix directory is already in CAS-compatible format.")
     else:
@@ -262,7 +372,7 @@ def main():
         matrix_basename = os.path.basename(os.path.normpath(matrix_dir))
         matrix_parent = os.path.dirname(os.path.normpath(matrix_dir))
         cas_output_dir = os.path.join(matrix_parent, f"{matrix_basename}.for_CAS")
-        cas_matrix_dir = convert_lraa_matrix_to_cas_format(matrix_dir, cas_output_dir)
+        cas_matrix_dir = convert_lraa_matrix_to_cas_format(matrix_dir, cas_output_dir, symbol_to_ensg)
         logging.info("Using converted matrix from: %s", cas_matrix_dir)
 
     # 1) Read 10x matrix

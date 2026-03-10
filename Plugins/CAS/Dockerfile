@@ -27,5 +27,9 @@ WORKDIR /work
 COPY run_CellAnnotationService.py /usr/local/bin/run_CellAnnotationService.py
 RUN chmod +x /usr/local/bin/run_CellAnnotationService.py
 
+# Copy gene symbol to ENSG mapping file
+RUN mkdir -p /usr/local/share/cas
+COPY resources/human.refdata-gex-GRCh38-GENCODE47.ENSG_to_SYMBOL.tsv.gz /usr/local/share/cas/human.refdata-gex-GRCh38-GENCODE47.ENSG_to_SYMBOL.tsv.gz
+
 # By default, run the script; additional arguments can be passed via `docker run`
 ENTRYPOINT ["run_CellAnnotationService.py"]
