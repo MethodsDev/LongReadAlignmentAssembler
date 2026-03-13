@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 class Transcript(GenomeFeature):
 
     trans_id_counter = 0
-    meta_ignore = ["gene_id", "transcript_id", "TSS", "PolyA"]
+    meta_ignore = [
+        "gene_id",
+        "transcript_id",
+        "TSS",
+        "PolyA",
+        "TSS_read_count",
+        "PolyA_read_count",
+    ]
 
     def __init__(self, contig_acc, segment_coordinates_list, orient):
 
@@ -54,6 +61,8 @@ class Transcript(GenomeFeature):
         self._imported_TPM_val = None
         self._imported_has_TSS = None  # if parsed info from gtf, set True/False
         self._imported_has_POLYA = None
+        self._TSS_read_count = None
+        self._PolyA_read_count = None
 
         self._likely_internal_primed = None
 
@@ -225,6 +234,18 @@ class Transcript(GenomeFeature):
             return True
         else:
             return False
+
+    def set_TSS_read_count(self, count):
+        self._TSS_read_count = int(count) if count is not None else None
+
+    def get_TSS_read_count(self):
+        return self._TSS_read_count
+
+    def set_PolyA_read_count(self, count):
+        self._PolyA_read_count = int(count) if count is not None else None
+
+    def get_PolyA_read_count(self):
+        return self._PolyA_read_count
 
 
     def set_likely_internal_primed(self, TorF_boolean):
@@ -428,6 +449,14 @@ class Transcript(GenomeFeature):
 
         misc_transcript_features["PolyA"] = str(self.has_PolyA())
         misc_transcript_features["TSS"] = str(self.has_TSS())
+        if self.get_PolyA_read_count() is not None:
+            misc_transcript_features["PolyA_read_count"] = str(
+                self.get_PolyA_read_count()
+            )
+        if self.get_TSS_read_count() is not None:
+            misc_transcript_features["TSS_read_count"] = str(
+                self.get_TSS_read_count()
+            )
 
         # Internal priming annotation: prefer internal flag, else fallback to imported meta if present
         if self._likely_internal_primed is not None:
@@ -793,6 +822,14 @@ class GTF_contig_to_transcripts:
                 )
             else:
                 transcript_obj._imported_has_TSS = False
+
+            if "PolyA_read_count" in transcript_meta:
+                transcript_obj.set_PolyA_read_count(
+                    int(transcript_meta["PolyA_read_count"])
+                )
+
+            if "TSS_read_count" in transcript_meta:
+                transcript_obj.set_TSS_read_count(int(transcript_meta["TSS_read_count"]))
 
             if "TPM" in transcript_meta:
                 transcript_obj._imported_TPM_val = float(transcript_meta["TPM"])

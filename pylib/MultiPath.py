@@ -505,6 +505,25 @@ class MultiPath:
         transcript_obj._multipath = self
         transcript_obj._simplepath = self.get_simple_path()
 
+        simple_path = transcript_obj._simplepath
+        if simple_path is not None:
+            boundary_node_ids = [simple_path[0], simple_path[-1]]
+            seen_node_ids = set()
+            for node_id in boundary_node_ids:
+                if node_id in seen_node_ids:
+                    continue
+                seen_node_ids.add(node_id)
+                if not isinstance(node_id, str):
+                    continue
+                if node_id.startswith("TSS:"):
+                    transcript_obj.set_TSS_read_count(
+                        sg.get_node_obj_via_id(node_id).get_read_support()
+                    )
+                elif node_id.startswith("POLYA:"):
+                    transcript_obj.set_PolyA_read_count(
+                        sg.get_node_obj_via_id(node_id).get_read_support()
+                    )
+
         transcript_obj.add_multipaths_evidence_assigned(self)
         transcript_obj.set_multipaths_evidence_weights({self: 1.0})
 
