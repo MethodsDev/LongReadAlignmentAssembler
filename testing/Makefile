@@ -4,10 +4,15 @@ QC = read_to_isoform_class_assignments
 
 MISC = misc_tests
 
-test:
+.PHONY: test test_pytest test_QC test_docker test_wdls test_DTU clean
+
+test: test_pytest
 	@for i in $(DIRS) $(MISC); do \
     echo "Running example in $$i..."; \
     (cd $$i; $(MAKE) test) || exit $$?; done
+
+test_pytest:
+	cd .. && pytest -q pylib
 
 test_QC:
 	@for i in $(QC); do \

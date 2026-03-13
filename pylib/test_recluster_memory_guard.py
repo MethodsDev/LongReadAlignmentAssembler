@@ -6,15 +6,8 @@ import LRAA_Globals
 
 def make_mock_transcript(idx, lend, rend):
     # Minimal Transcript construction: emulate a monoexonic transcript
-    t = Transcript(
-        contig_acc="chrTEST",
-        lend=lend,
-        rend=rend,
-        orient="+",
-        exon_segments=[(lend, rend)],
-        simple_path=[idx],
-        scored_path_obj=None,
-    )
+    t = Transcript("chrTEST", [(lend, rend)], "+")
+    t.set_simple_path(["E:shared"])
     t.set_gene_id(f"g{idx}")
     t.set_transcript_id(f"t{idx}")
     return t
