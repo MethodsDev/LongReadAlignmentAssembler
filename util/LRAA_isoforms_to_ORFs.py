@@ -2,6 +2,7 @@
 import os, sys
 import argparse
 import logging
+import shlex
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"])
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(
         description="Run ORF prediction pipeline with Pipeliner. "
-        "Optionally performs blastp homology search between LongOrfs and Predict steps."
+        "Uses the TransDecoder v6 pipeline wrapper and optionally performs "
+        "homology search during ORF prediction."
     )
     parser.add_argument("--genome", required=True, help="Genome fasta file")
     parser.add_argument("--gtf", required=True, help="Input GTF file")
@@ -40,6 +42,12 @@ def main():
         default=False,
         help="single best orf per transcript only",
     )
+    parser.add_argument(
+        "--no_refine_starts",
+        action="store_true",
+        default=False,
+        help="Disable TransDecoder v6 start-codon refinement.",
+    )
 
     parser.add_argument(
         "-m",
@@ -49,14 +57,19 @@ def main():
     )
 
     parser.add_argument(
+        "--blast_search_pep",
         "--blastp_db",
+        dest="blast_search_pep",
         type=str,
         default=None,
-        help="Path to blastp/diamond database (e.g., uniprot_sprot.fasta or uniprot_sprot.dmnd). If provided, homology search will be performed",
+        help="Protein FASTA file for TransDecoder v6 homology search. "
+        "TransDecoder now builds the search database automatically.",
     )
 
     parser.add_argument(
+        "--blast_evalue",
         "--blastp_evalue",
+        dest="blast_evalue",
         type=float,
         default=1e-5,
         help="E-value threshold for blastp/diamond search (default: 1e-5)",
@@ -66,143 +79,161 @@ def main():
         "--blastp_max_target_seqs",
         type=int,
         default=1,
-        help="Maximum number of target sequences for blastp/diamond (default: 1)",
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
+        "--blast_threads",
         "--blastp_num_threads",
+        dest="blast_threads",
         type=int,
         default=1,
         help="Number of threads for blastp/diamond (default: 1)",
     )
 
     parser.add_argument(
+        "--blast_tool",
         "--search_method",
+        dest="blast_tool",
         type=str,
         choices=["diamond", "blastp"],
         default="diamond",
         help="Homology search method to use: diamond (default, faster) or blastp (slower, NCBI blast+)",
     )
 
+    parser.add_argument(
+        "--pfam_search_db",
+        "--pfam-search-db",
+        dest="pfam_search_db",
+        type=str,
+        default=None,
+        help="Pfam HMM database for TransDecoder v6 hmmsearch-based ORF retention.",
+    )
+
     args = parser.parse_args()
 
     utildir = args.td_dir + "/util"
+    transdecoder_exe = os.path.join(args.td_dir, "TransDecoder")
 
     pipeliner = Pipeliner("__chckpts")
 
-    # Step 1: generate alignment gff3 formatted output
-    cmd = f"{utildir}/gtf_to_alignment_gff3.pl {args.gtf} > {args.output_prefix}.input_converted.gff3"
-    pipeliner.add_commands([Command(cmd, "gtf_to_alignment_gff3.ok")])
+    if not os.path.exists(transdecoder_exe):
+        raise FileNotFoundError(
+            f"TransDecoder v6 wrapper not found at expected path: {transdecoder_exe}"
+        )
 
-    # Step 2: generate cdna fasta
-    cmd = f"{utildir}/gtf_genome_to_cdna_fasta.pl {args.gtf} {args.genome} > {args.output_prefix}.cdna.fasta"
-    pipeliner.add_commands([Command(cmd, "gtf_genome_to_cdna_fasta.ok")])
+    if args.blastp_max_target_seqs != 1:
+        logger.warning(
+            "--blastp_max_target_seqs=%s requested, but TransDecoder v6 uses the "
+            "single top target internally; proceeding with 1",
+            args.blastp_max_target_seqs,
+        )
 
-    # Step 3: extract the long ORFs
-    cmd = f"{args.td_dir}/TransDecoder.LongOrfs -t {args.output_prefix}.cdna.fasta -S -m {args.min_prot_length}"
+    # Step 1: run the full TransDecoder v6 pipeline wrapper
+    cmd_parts = [
+        shlex.quote(transdecoder_exe),
+        "--genome",
+        shlex.quote(args.genome),
+        "--gtf",
+        shlex.quote(args.gtf),
+        "-t",
+        shlex.quote(f"{args.output_prefix}.cdna.fasta"),
+        "-O",
+        shlex.quote("."),
+        "-S",
+        "-m",
+        shlex.quote(str(args.min_prot_length)),
+    ]
+
+    if args.no_refine_starts:
+        cmd_parts.append("--no_refine_starts")
+
     if args.complete_orfs_only:
-        cmd += " --complete_orfs_only "
-    pipeliner.add_commands([Command(cmd, "transdecoder_longorfs.ok")])
-
-    # Step 3b: (optional) run blastp or diamond search if database is provided
-    blastp_outfile = None
-    if args.blastp_db:
-        blastp_outfile = f"{args.output_prefix}.blastp.outfmt6"
-        
-        if args.search_method == "diamond":
-            # Check if diamond database is indexed, if not create it
-            if not os.path.exists(args.blastp_db):
-                # Database doesn't exist, try to create it from fasta
-                fasta_db = args.blastp_db.replace('.dmnd', '.fasta')
-                if not fasta_db.endswith('.fasta'):
-                    fasta_db = args.blastp_db + '.fasta'
-                
-                if os.path.exists(fasta_db):
-                    logger.info(f"Diamond database {args.blastp_db} not found. Creating from {fasta_db}")
-                    cmd = f"diamond makedb --in {fasta_db} --db {args.blastp_db.replace('.dmnd', '')}"
-                    pipeliner.add_commands([Command(cmd, "diamond_makedb.ok")])
-                else:
-                    raise FileNotFoundError(
-                        f"Diamond database {args.blastp_db} not found and cannot find source fasta: {fasta_db}"
-                    )
-            
-            # Use diamond blastp (much faster)
-            cmd = (
-                f"diamond blastp "
-                f"--query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
-                f"--db {args.blastp_db} "
-                f"--max-target-seqs {args.blastp_max_target_seqs} "
-                f"--outfmt 6 "
-                f"--evalue {args.blastp_evalue} "
-                f"--threads {args.blastp_num_threads} "
-                f"--out {blastp_outfile}"
-            )
-        else:  # blastp
-            # Check if NCBI blast database is indexed
-            # NCBI blast creates multiple index files (.phr, .pin, .psq, etc.)
-            db_indexed = all(
-                os.path.exists(f"{args.blastp_db}.{ext}") 
-                for ext in ['phr', 'pin', 'psq']
-            )
-            
-            if not db_indexed:
-                # Check if the fasta file exists
-                if os.path.exists(args.blastp_db):
-                    logger.info(f"NCBI blast database {args.blastp_db} not indexed. Creating index.")
-                    cmd = f"makeblastdb -in {args.blastp_db} -dbtype prot"
-                    pipeliner.add_commands([Command(cmd, "makeblastdb.ok")])
-                else:
-                    raise FileNotFoundError(
-                        f"Blast database {args.blastp_db} not found and cannot be indexed"
-                    )
-            
-            # Use NCBI blastp
-            cmd = (
-                f"blastp -query {args.output_prefix}.cdna.fasta.transdecoder_dir/longest_orfs.pep "
-                f"-db {args.blastp_db} "
-                f"-max_target_seqs {args.blastp_max_target_seqs} "
-                f"-outfmt 6 "
-                f"-evalue {args.blastp_evalue} "
-                f"-num_threads {args.blastp_num_threads} "
-                f"> {blastp_outfile}"
-            )
-        
-        pipeliner.add_commands([Command(cmd, "blastp.ok")])
-
-    # Step 4: predict likely ORFs
-    cmd = f"{args.td_dir}/TransDecoder.Predict -t {args.output_prefix}.cdna.fasta --no_refine_starts "
+        cmd_parts.append("--complete_orfs_only")
     if args.single_best_only:
-        cmd += " --single_best_only"
+        cmd_parts.append("--single_best_only")
+
+    blastp_outfile = None
+    if args.blast_search_pep:
+        if not os.path.exists(args.blast_search_pep):
+            raise FileNotFoundError(
+                f"Protein FASTA for homology search not found: {args.blast_search_pep}"
+            )
+        if args.blast_search_pep.endswith(".dmnd"):
+            raise ValueError(
+                "TransDecoder v6 expects --blast_search_pep to reference a protein FASTA, "
+                "not a prebuilt Diamond database (*.dmnd)."
+            )
+
+        blastp_outfile = f"{args.output_prefix}.blastp.outfmt6"
+        cmd_parts.extend(
+            [
+                "--blast_search_pep",
+                shlex.quote(args.blast_search_pep),
+                "--blast_tool",
+                shlex.quote(args.blast_tool),
+                "--blast_evalue",
+                shlex.quote(str(args.blast_evalue)),
+                "--blast_threads",
+                shlex.quote(str(args.blast_threads)),
+            ]
+        )
+
+    pfam_outfile = None
+    if args.pfam_search_db:
+        if not os.path.exists(args.pfam_search_db):
+            raise FileNotFoundError(
+                f"Pfam HMM database for ORF retention not found: {args.pfam_search_db}"
+            )
+
+        pfam_outfile = f"{args.output_prefix}.pfam.domtblout"
+        cmd_parts.extend(
+            [
+                "--pfam-search-db",
+                shlex.quote(args.pfam_search_db),
+            ]
+        )
+
+    cmd = " ".join(cmd_parts)
+    pipeliner.add_commands([Command(cmd, "transdecoder_pipeline.ok")])
+
+    # Step 2: keep blast output filename stable for downstream consumers
     if blastp_outfile:
-        cmd += f" --retain_blastp_hits {blastp_outfile}"
+        td_blastp_outfile = (
+            f"{args.output_prefix}.cdna.fasta.transdecoder_dir/blastp.outfmt6"
+        )
+        cmd = f"cp {shlex.quote(td_blastp_outfile)} {shlex.quote(blastp_outfile)}"
+        pipeliner.add_commands([Command(cmd, "copy_blastp_output.ok")])
 
-    pipeliner.add_commands([Command(cmd, "transdecoder_predict.ok")])
+    if pfam_outfile:
+        td_pfam_outfile = f"{args.output_prefix}.cdna.fasta.transdecoder_dir/pfam.domtblout"
+        cmd = f"cp {shlex.quote(td_pfam_outfile)} {shlex.quote(pfam_outfile)}"
+        pipeliner.add_commands([Command(cmd, "copy_pfam_output.ok")])
 
-    # Step 5: convert to genome coordinates
-    cmd = (
-        f"{utildir}/cdna_alignment_orf_to_genome_orf.pl "
-        f"{args.output_prefix}.cdna.fasta.transdecoder.gff3 "
-        f"{args.output_prefix}.input_converted.gff3 "
-        f"{args.output_prefix}.cdna.fasta "
-        f"> {args.output_prefix}.transcripts.fasta.transdecoder.genome.gff3"
-    )
-    pipeliner.add_commands([Command(cmd, "cdna_orf_to_genome_orf.ok")])
-
-    # Step 6a: gtf to bed
+    # Step 3a: gtf to bed
     cmd = (
         f"{utildir}/gtf_to_bed.pl {args.gtf} "
         f"| sort -k1,1 -k2,2g -k3,3g > {args.output_prefix}.input_converted.bed"
     )
     pipeliner.add_commands([Command(cmd, "gtf_to_bed.ok")])
 
-    # Step 6b: bgzip + tabix gtf bed
+    # Step 3b: bgzip + tabix gtf bed
     cmd = (
         f"bgzip -f {args.output_prefix}.input_converted.bed && "
         f"tabix -f {args.output_prefix}.input_converted.bed.gz"
     )
     pipeliner.add_commands([Command(cmd, "index_input_bed.ok")])
 
-    # Step 6c: genome-based gff3 to bed
+    # Step 3c: transcript-coordinate gff3 to bed
+    cmd = (
+        f"{utildir}/gff3_file_to_bed.pl "
+        f"{args.output_prefix}.cdna.fasta.transdecoder.gff3 "
+        f"| sort -k1,1 -k2,2g -k3,3g "
+        f"> {args.output_prefix}.cdna.fasta.transdecoder.bed"
+    )
+    pipeliner.add_commands([Command(cmd, "transdecoder_gff3_to_bed.ok")])
+
+    # Step 3d: genome-based gff3 to bed
     cmd = (
         f"{utildir}/gff3_file_to_bed.pl "
         f"{args.output_prefix}.transcripts.fasta.transdecoder.genome.gff3 "
@@ -211,7 +242,7 @@ def main():
     )
     pipeliner.add_commands([Command(cmd, "gff3_to_bed.ok")])
 
-    # Step 6d: bgzip + tabix genome bed
+    # Step 3e: bgzip + tabix genome bed
     cmd = (
         f"bgzip -f {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed && "
         f"tabix -f {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed.gz"

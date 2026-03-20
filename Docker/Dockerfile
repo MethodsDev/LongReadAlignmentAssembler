@@ -136,6 +136,7 @@ RUN R -e 'remotes::install_github("satijalab/seurat", "seurat5", quiet = FALSE)'
 RUN R -e 'BiocManager::install("clustermole")'
 
 RUN R -e 'BiocManager::install("DropletUtils")'
+RUN R -e 'BiocManager::install("seqLogo")'
 
 RUN pip install numpy --break-system-packages
 
@@ -178,7 +179,7 @@ RUN wget https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/${BLAST_VERSION}/
     rm -rf ncbi-blast-${BLAST_VERSION}+ ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz
 
 ## TransDecoder (for ORF prediction)
-ENV TRANSDECODER_VERSION=5.7.1
+ENV TRANSDECODER_VERSION=6.0.0
 RUN wget https://github.com/TransDecoder/TransDecoder/archive/TransDecoder-v${TRANSDECODER_VERSION}.tar.gz && \
     tar xzf TransDecoder-v${TRANSDECODER_VERSION}.tar.gz && \
     mv TransDecoder-TransDecoder-v${TRANSDECODER_VERSION} /usr/local/src/TransDecoder && \
@@ -205,5 +206,3 @@ RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembl
 
 
 ENV PATH="$SRC/LRAA/:$SRC/LRAA/util/:$SRC/LRAA/util/sc/:$SRC/LRAA/util/misc:${PATH}"
-
-
