@@ -324,6 +324,13 @@ def main():
     )
 
     config_group.add_argument(
+        "--min_reads_novel",
+        type=int,
+        default=2,
+        help="set both min_reads_novel_isoform and min_unique_reads_novel_isoform to this value",
+    )
+
+    config_group.add_argument(
         "--no_infer_TSS", action="store_true", default=False, help="do not infer TSS"
     )
     config_group.add_argument(
@@ -627,6 +634,8 @@ def main():
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
+    LRAA_Globals.config["min_reads_novel_isoform"] = args.min_reads_novel
+    LRAA_Globals.config["min_unique_reads_novel_isoform"] = args.min_reads_novel
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
