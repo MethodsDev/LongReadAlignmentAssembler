@@ -28,8 +28,8 @@ workflow LRAA_cell_cluster_guided {
         Int numThreadsPerWorker = 2
         Int numThreadsPerWorkerScattered = 9
         Int num_parallel_contigs = 3
-        Int memoryGB = 64
-        Int memoryGBPerWorkerScattered = 32
+        Int? memoryGB
+        Int? memoryGBPerWorkerScattered
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16

@@ -10,6 +10,7 @@ task partition_by_chromosome_task {
 
         String docker
         Int samtools_threads = 16
+        Int? memoryGB
     }
 
     Float bam_size_gb = if defined(inputBAM) then size(inputBAM, "GB") else 0.0
@@ -19,6 +20,11 @@ task partition_by_chromosome_task {
     Float estimated_disk = ceil((bam_size_gb + bam_for_sg_size_gb + fasta_size_gb + gtf_size_gb) * 2.2 + 20.0)
     Float disk_gb = if estimated_disk > 150.0 then estimated_disk else 150.0
     Int disk_gb_int = ceil(disk_gb)
+
+    # Dynamic memory: 0.5× (BAM + splice-graph BAM + FASTA), floor 24 GiB
+    Float mem_raw_partition = 0.5 * (bam_size_gb + bam_for_sg_size_gb + fasta_size_gb)
+    Int computed_memoryGB = if mem_raw_partition > 24.0 then ceil(mem_raw_partition) else 24
+    Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 
     command <<<
         set -euo pipefail
@@ -51,7 +57,7 @@ task partition_by_chromosome_task {
         docker: docker
         bootDiskSizeGb: 50
         cpu: samtools_threads
-        memory: "24 GiB"
+        memory: effective_memoryGB + " GiB"
         preemptible: 0
         disks: "local-disk " + disk_gb_int + " SSD"
     }

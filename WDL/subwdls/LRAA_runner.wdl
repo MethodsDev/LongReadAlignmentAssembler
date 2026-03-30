@@ -36,11 +36,18 @@ task LRAA_runner_task {
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         # CPU cores per contig worker (passed to --num_threads_per_worker)
         Int numThreadsPerWorker
-        Int memoryGB = 32
+        Int? memoryGB
         Int diskSizeGB = 128
         Int progress_report_interval_seconds = 300
         Int progress_tail_lines = 20
     }
+
+    # Dynamic memory: 4× the shard BAM size (tuned for per-chromosome shards), floor 32 GiB.
+    # For direct (non-scattered) runs the caller computes and passes memoryGB explicitly to override.
+    Float bam_size_gib = size(inputBAM, "GiB")
+    Float mem_raw = 4.0 * bam_size_gib
+    Int computed_memoryGB = if mem_raw > 32.0 then ceil(mem_raw) else 32
+    Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 
     String no_norm_flag = if (no_norm) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
@@ -204,7 +211,7 @@ task LRAA_runner_task {
         docker: docker
         bootDiskSizeGb: 30
         cpu: "~{numThreadsPerWorker}"
-        memory: "~{memoryGB} GiB"
+        memory: "~{effective_memoryGB} GiB"
         disks: "local-disk ~{diskSizeGB} HDD"
     }
 
@@ -247,7 +254,7 @@ workflow LRAA_runner {
         # CPU cores per contig worker (passed to --num_threads_per_worker)
         Int numThreadsPerWorker
     
-        Int memoryGB = 32
+        Int? memoryGB
         Int diskSizeGB = 128
         Int progress_report_interval_seconds = 300
         Int progress_tail_lines = 20

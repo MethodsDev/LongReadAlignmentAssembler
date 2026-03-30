@@ -29,12 +29,12 @@ workflow LRAA_wf {
 
         #  non-scattered runs
         Int numThreadsPerWorker = 5
-        Int memoryGB = 64
+        Int? memoryGB
         Int num_parallel_contigs = 3
 
         # scattered runs
         Int numThreadsPerWorkerScattered = 5
-        Int memoryGBPerWorkerScattered = 32
+        Int? memoryGBPerWorkerScattered
         
         
         Int diskSizeGB = 256
@@ -43,6 +43,15 @@ workflow LRAA_wf {
         
         
     }
+
+    # Dynamic memory defaults based on input BAM size.
+    # Direct (non-scattered) run: 1.5× full BAM size, floor 64 GiB.
+    # Scattered workers self-size from their shard BAM (see LRAA_runner_task); an optional
+    # memoryGBPerWorkerScattered override is passed through to the task when set.
+    Float inputBAMsizeGiB = size(inputBAM, "GiB")
+    Float mem_raw_direct = 1.5 * inputBAMsizeGiB
+    Int computed_memoryGB = if mem_raw_direct > 64.0 then ceil(mem_raw_direct) else 64
+    Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 
     Boolean run_without_splitting = (main_chromosomes == "" || defined(region))
     
@@ -95,7 +104,7 @@ workflow LRAA_wf {
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
                     min_mapping_quality = min_mapping_quality,
                     docker = docker,
-                    memoryGB = memoryGBPerWorkerScattered,
+                    memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes from shard BAM (4× size, floor 32 GiB)
                     diskSizeGB = diskSizeGB
             }
         }
@@ -142,10 +151,10 @@ workflow LRAA_wf {
                 num_parallel_contigs = num_parallel_contigs,
                 min_mapping_quality = min_mapping_quality,
                 docker = docker,
-                memoryGB = memoryGB,
+                memoryGB = effective_memoryGB,
                 diskSizeGB = diskSizeGB
         }
-        
+
     }
     
     output {

@@ -11,10 +11,16 @@ task partition_bam_by_cell_cluster {
         File inputBAM
         String docker
         Int cpu = 8
-        Int memoryGB = 16
+        Int? memoryGB
     }
 
     Int disksize = ceil(5 * size(inputBAM, "GB"))
+
+    # Dynamic memory: 0.3× BAM size, floor 16 GiB
+    Float bam_size_gib = size(inputBAM, "GiB")
+    Float mem_raw_cluster = 0.3 * bam_size_gib
+    Int computed_memoryGB = if mem_raw_cluster > 16.0 then ceil(mem_raw_cluster) else 16
+    Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
     
     command <<<
         set -ex
@@ -44,7 +50,7 @@ task partition_bam_by_cell_cluster {
     runtime {
         docker: docker
         cpu: cpu
-        memory: "~{memoryGB} GiB"
+        memory: "~{effective_memoryGB} GiB"
         disks: "local-disk ~{disksize} HDD"
     }
 }
