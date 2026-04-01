@@ -46,7 +46,7 @@ workflow LRAA_wf {
 
     # Dynamic memory defaults based on input BAM size.
     # Direct (non-scattered) run: 1.5× full BAM size, floor 64 GiB.
-    # Scattered workers self-size from their shard BAM (see LRAA_runner_task); an optional
+    # Scattered workers self-size at 20× their shard BAM (see LRAA_runner_task); an optional
     # memoryGBPerWorkerScattered override is passed through to the task when set.
     Float inputBAMsizeGiB = size(inputBAM, "GiB")
     Float mem_raw_direct = 1.5 * inputBAMsizeGiB
