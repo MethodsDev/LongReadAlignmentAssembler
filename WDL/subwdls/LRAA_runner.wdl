@@ -40,6 +40,7 @@ task LRAA_runner_task {
         Int diskSizeGB = 128
         Int progress_report_interval_seconds = 300
         Int progress_tail_lines = 20
+        Int progress_tail_chars = 5000
     }
 
     # Dynamic memory: 20× the shard BAM size (tuned for per-chromosome shards), floor 32 GiB.
@@ -70,6 +71,17 @@ task LRAA_runner_task {
                 "__${contig_prefix}.contigtmp"
                 "${contig_prefix}.contigtmp"
             )
+
+            emit_log_tail() {
+                local log_file="$1"
+                local tail_lines="$2"
+
+                if [[ ! -s "$log_file" ]]; then
+                    return 0
+                fi
+
+                tail -c ~{progress_tail_chars} "$log_file" | tr '\r' '\n' | tail -n "$tail_lines" >&2 || true
+            }
 
             while sleep ~{progress_report_interval_seconds}; do
                 if [[ -s command_output.log ]]; then
@@ -130,7 +142,7 @@ task LRAA_runner_task {
                         local err_log
                         for err_log in "${err_logs[@]}"; do
                             echo "=== ${err_log} ===" >&2
-                            tail -n ~{progress_tail_lines} "$err_log" >&2 || true
+                            emit_log_tail "$err_log" ~{progress_tail_lines}
                         done
 
                         break
@@ -140,7 +152,7 @@ task LRAA_runner_task {
                         echo "----- end contig worker progress -----" >&2
                     fi
 
-                    tail -n ~{progress_tail_lines} command_output.log >&2 || true
+                    emit_log_tail command_output.log ~{progress_tail_lines}
                     echo "----- end progress -----" >&2
                 fi
             done
@@ -186,7 +198,7 @@ task LRAA_runner_task {
         if [[ $cmd_status -ne 0 ]]; then
             echo "Command failed with exit code $cmd_status" >&2
             echo "Last 100 lines of output:" >&2
-            tail -n 100 command_output.log >&2 || true
+            emit_log_tail command_output.log 100
             exit $cmd_status
         fi
 
@@ -260,6 +272,7 @@ workflow LRAA_runner {
         Int diskSizeGB = 128
         Int progress_report_interval_seconds = 300
         Int progress_tail_lines = 20
+        Int progress_tail_chars = 5000
     }
 
     call LRAA_runner_task {
@@ -294,7 +307,8 @@ workflow LRAA_runner {
             diskSizeGB=diskSizeGB,
             region=region,
             progress_report_interval_seconds=progress_report_interval_seconds,
-            progress_tail_lines=progress_tail_lines
+            progress_tail_lines=progress_tail_lines,
+            progress_tail_chars=progress_tail_chars
      }
 
      output {
@@ -304,4 +318,3 @@ workflow LRAA_runner {
     }
 
 }
-
