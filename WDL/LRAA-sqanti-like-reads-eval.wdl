@@ -10,6 +10,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         File? input_GTF
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        Int? min_disk_GB
     }
 
 
@@ -20,7 +21,8 @@ workflow LRAA_sqanti_like_reads_eval_wf {
           input_BAM = input_BAM,
           input_BAI = input_BAI,
           input_GTF = input_GTF,
-          docker = docker
+          docker = docker,
+          min_disk_GB = min_disk_GB
     }
 
     output {
@@ -43,8 +45,9 @@ task LRAA_sqanti_like_reads_eval_task {
         File? input_GTF
 
         File ref_annot_GTF
-      
+
         String docker
+        Int? min_disk_GB
     }
 
     
@@ -77,7 +80,7 @@ task LRAA_sqanti_like_reads_eval_task {
 
   runtime {
     docker: docker
-    disks: "local-disk " + ceil( (4 * (if defined(input_BAM) then size(select_first([input_BAM]), "GB") else 0)) + (4 * (if defined(input_GTF) then size(select_first([input_GTF]), "GB") else 0)) + (4 * size(ref_annot_GTF, "GB")) + 50 ) + " HDD"
+    disks: "local-disk " + (if defined(min_disk_GB) && ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 ) < select_first([min_disk_GB]) then select_first([min_disk_GB]) else ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 )) + " HDD"
     memory: "32G"
   }
 
