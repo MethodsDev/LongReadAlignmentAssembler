@@ -38,7 +38,7 @@ test_oversimplify_refguided:
 
 ## WDLs
 
-test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only
+test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_ORF_prediction
 
 test_wdl_ID_ref_free: clean_miniwdl
 	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json --verbose --no-cache
@@ -48,6 +48,9 @@ test_wdl_ID_ref_guided: clean_miniwdl
 
 test_wdl_Quant_only: clean_miniwdl
 	miniwdl run ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json --verbose --no-cache
+
+test_wdl_ORF_prediction: clean_miniwdl
+	miniwdl run ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json --verbose --no-cache
 
 
 

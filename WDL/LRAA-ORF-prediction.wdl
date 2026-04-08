@@ -111,9 +111,9 @@ task LRAA_ORF_prediction_task {
 
     output {
         # Main genome-coordinate outputs
-        File genome_gff3 = "~{sample_id}.transcripts.fasta.transdecoder.genome.gff3"
-        File genome_bed_gz = "~{sample_id}.transcripts.fasta.transdecoder.genome.bed.gz"
-        File genome_bed_tbi = "~{sample_id}.transcripts.fasta.transdecoder.genome.bed.gz.tbi"
+        File genome_gff3 = "~{sample_id}.cdna.fasta.transdecoder.genome.gff3"
+        File genome_bed_gz = "~{sample_id}.cdna.fasta.transdecoder.genome.bed.gz"
+        File genome_bed_tbi = "~{sample_id}.cdna.fasta.transdecoder.genome.bed.gz.tbi"
 
         # TransDecoder transcript-coordinate outputs
         File transdecoder_gff3 = "~{sample_id}.cdna.fasta.transdecoder.gff3"

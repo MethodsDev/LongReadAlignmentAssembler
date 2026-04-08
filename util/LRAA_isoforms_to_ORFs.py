@@ -236,16 +236,16 @@ def main():
     # Step 3d: genome-based gff3 to bed
     cmd = (
         f"{utildir}/gff3_file_to_bed.pl "
-        f"{args.output_prefix}.transcripts.fasta.transdecoder.genome.gff3 "
+        f"{args.output_prefix}.cdna.fasta.transdecoder.genome.gff3 "
         f"| sort -k1,1 -k2,2g -k3,3g "
-        f"> {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed"
+        f"> {args.output_prefix}.cdna.fasta.transdecoder.genome.bed"
     )
     pipeliner.add_commands([Command(cmd, "gff3_to_bed.ok")])
 
     # Step 3e: bgzip + tabix genome bed
     cmd = (
-        f"bgzip -f {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed && "
-        f"tabix -f {args.output_prefix}.transcripts.fasta.transdecoder.genome.bed.gz"
+        f"bgzip -f {args.output_prefix}.cdna.fasta.transdecoder.genome.bed && "
+        f"tabix -f {args.output_prefix}.cdna.fasta.transdecoder.genome.bed.gz"
     )
     pipeliner.add_commands([Command(cmd, "index_genome_bed.ok")])
 
