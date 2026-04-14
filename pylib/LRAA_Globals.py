@@ -207,6 +207,15 @@ config = {
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
 }
 
+
+def resolve_min_polya_iso_fraction(
+    min_isoform_fraction, min_polya_iso_fraction_override=None
+):
+    if min_polya_iso_fraction_override is None:
+        return min_isoform_fraction
+
+    return min_polya_iso_fraction_override
+
 # Default read-store backend: favor in-memory unless caller overrides later (CLI/env).
 if "LRAA_READSTORE_BACKEND" not in os.environ:
     try:
@@ -219,4 +228,3 @@ if "LRAA_READSTORE_BACKEND" not in os.environ:
 # in-memory read name retention is disabled.
 READ_NAME_STORE = None  # type: ignore
 MP_READ_ID_STORE = None  # type: ignore
-

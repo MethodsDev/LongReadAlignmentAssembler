@@ -322,6 +322,12 @@ def main():
             LRAA_Globals.config["min_isoform_fraction"]
         ),
     )
+    config_group.add_argument(
+        "--min_PolyA_iso_fraction",
+        type=float,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
 
     config_group.add_argument(
         "--min_reads_novel",
@@ -634,6 +640,12 @@ def main():
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
+    LRAA_Globals.config["min_PolyA_iso_fraction"] = (
+        LRAA_Globals.resolve_min_polya_iso_fraction(
+            args.min_isoform_fraction,
+            getattr(args, "min_PolyA_iso_fraction", None),
+        )
+    )
     LRAA_Globals.config["min_reads_novel_isoform"] = args.min_reads_novel
     LRAA_Globals.config["min_unique_reads_novel_isoform"] = args.min_reads_novel
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
