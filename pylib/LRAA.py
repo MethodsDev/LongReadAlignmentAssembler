@@ -785,6 +785,11 @@ class LRAA:
         for transcript in transcripts:
             _adjust_transcript_terminals_from_reads(transcript)
 
+        # Terminal adjustment mutates exon coordinates but leaves the pre-adjustment
+        # simple path in place. Refresh transcript paths against the current splice
+        # graph so downstream filtering uses the adjusted terminal structure.
+        transcripts = self.assign_transcripts_paths_in_graph(transcripts)
+
         #
         ###################
 
@@ -1186,6 +1191,29 @@ class LRAA:
                 continue  # Skip this transcript too
 
             transcript.set_simple_path(path)
+            transcript.refresh_boundary_annotations_from_simple_path()
+
+            # Keep boundary counts synchronized with remapped graph paths.
+            # During quant-only / final-quant passes, a transcript can gain a
+            # TSS or PolyA boundary node when its coordinates are remapped to
+            # the current splice graph. Refresh the flags first so booleans and
+            # *_read_count fields both reflect the remapped path.
+            seen_node_ids = set()
+            for node_id in (path[0], path[-1]):
+                if node_id in seen_node_ids:
+                    continue
+                seen_node_ids.add(node_id)
+                if not isinstance(node_id, str):
+                    continue
+                if node_id.startswith("TSS:"):
+                    transcript.set_TSS_read_count(
+                        splice_graph.get_node_obj_via_id(node_id).get_read_support()
+                    )
+                elif node_id.startswith("POLYA:"):
+                    transcript.set_PolyA_read_count(
+                        splice_graph.get_node_obj_via_id(node_id).get_read_support()
+                    )
+
             successfully_mapped.append(transcript)  # Add to successfully mapped list
 
             if pbar is not None:

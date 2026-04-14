@@ -239,13 +239,68 @@ class Transcript(GenomeFeature):
         self._TSS_read_count = int(count) if count is not None else None
 
     def get_TSS_read_count(self):
-        return self._TSS_read_count
+        if self._TSS_read_count is not None:
+            return self._TSS_read_count
+
+        # Defensive fallback: if the transcript still carries a boundary TSS node
+        # on its simple path, recover the support count directly from the splice graph.
+        if self._simplepath is not None:
+            for node_id in (self._simplepath[0], self._simplepath[-1]):
+                if isinstance(node_id, str) and node_id.startswith("TSS:"):
+                    try:
+                        sg = self._multipath.get_splice_graph() if self._multipath is not None else None
+                        if sg is not None:
+                            node_obj = sg.get_node_obj_via_id(node_id)
+                            if node_obj is not None:
+                                self._TSS_read_count = int(node_obj.get_read_support())
+                                return self._TSS_read_count
+                    except Exception:
+                        pass
+
+        return None
 
     def set_PolyA_read_count(self, count):
         self._PolyA_read_count = int(count) if count is not None else None
 
     def get_PolyA_read_count(self):
-        return self._PolyA_read_count
+        if self._PolyA_read_count is not None:
+            return self._PolyA_read_count
+
+        # Defensive fallback mirroring get_TSS_read_count().
+        if self._simplepath is not None:
+            for node_id in (self._simplepath[0], self._simplepath[-1]):
+                if isinstance(node_id, str) and node_id.startswith("POLYA:"):
+                    try:
+                        sg = self._multipath.get_splice_graph() if self._multipath is not None else None
+                        if sg is not None:
+                            node_obj = sg.get_node_obj_via_id(node_id)
+                            if node_obj is not None:
+                                self._PolyA_read_count = int(node_obj.get_read_support())
+                                return self._PolyA_read_count
+                    except Exception:
+                        pass
+
+        return None
+
+    def refresh_boundary_annotations_from_simple_path(self):
+        """
+        After remapping a transcript onto the current splice graph, boundary
+        annotations should be derived from the mapped simple path rather than
+        stale imported flags or counts from an earlier representation.
+        """
+        if self._simplepath is None:
+            return
+
+        self._imported_has_TSS = None
+        self._imported_has_POLYA = None
+
+        if not self.has_TSS():
+            self._TSS_read_count = None
+
+        if not self.has_PolyA():
+            self._PolyA_read_count = None
+
+        return
 
 
     def set_likely_internal_primed(self, TorF_boolean):

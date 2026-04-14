@@ -385,7 +385,13 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 #  PolyA:
                 #    - "min_frac_alignments_define_polyA_site"
 
-                if SPU.path_A_contains_path_B(i_path_trimmed, j_path_trimmed):
+                paths_indicate_containment = SPU.path_A_contains_path_B(
+                    i_path_trimmed, j_path_trimmed
+                ) or SPU.are_overlapping_and_compatible_NO_gaps_in_overlap(
+                    i_path_trimmed, j_path_trimmed
+                )
+
+                if paths_indicate_containment:
 
                     logger.debug(
                         "splice compatible & contained transcript_j_id {} has frac gene expression: {}".format(
@@ -418,6 +424,15 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         elif j_TSS_id is None and j_polyA_id is not None and j_polyA_id == i_polyA_id:
                             logger.debug(
                                 "compatible/contained {} being pruned as lacking TSS and sharing PolyA with {}".format(
+                                    transcript_j_id, transcript_i_id
+                                )
+                            )
+                            subsume_J = True
+
+                        # no PolyA on j and shares same TSS as i - prune as redundant 3' truncation
+                        elif j_polyA_id is None and j_TSS_id is not None and j_TSS_id == i_TSS_id:
+                            logger.debug(
+                                "compatible/contained {} being pruned as lacking PolyA and sharing TSS with {}".format(
                                     transcript_j_id, transcript_i_id
                                 )
                             )
