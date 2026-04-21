@@ -40,6 +40,7 @@ RUN apt-get -qq update && apt-get -qq -y install \
     make \
     nano \
     perl \
+    pigz \
     pkg-config \
     python3 \
     python3-dev \

@@ -152,6 +152,8 @@ workflow LRAA_singlecell_wf {
     Int memoryGBmergeGTFs = 32
     Int memoryGBquantFinal = 32
     Int memoryGBscSparseMatrices = 32
+    String sparseMatrixCsvEngine = "c"
+    Int sparseMatrixGzipLevel = 1
     Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
 
@@ -218,7 +220,9 @@ workflow LRAA_singlecell_wf {
         sample_id = sample_id,
         tracking_file = select_first([init_quant_tracking_file]),
         docker = docker,
-        memoryGB = memoryGBbuildSparseMatrices
+        memoryGB = memoryGBbuildSparseMatrices,
+        csv_engine = sparseMatrixCsvEngine,
+        gzip_level = sparseMatrixGzipLevel
     }
 
     # 2.5) Filter good cells from the gene-level sparse matrix (optional)
@@ -282,6 +286,8 @@ workflow LRAA_singlecell_wf {
         memoryGBmergeGTFs = memoryGBmergeGTFs,
         memoryGBquantFinal = memoryGBquantFinal,
         memoryGBscSparseMatrices = memoryGBscSparseMatrices,
+        sparseMatrixCsvEngine = sparseMatrixCsvEngine,
+        sparseMatrixGzipLevel = sparseMatrixGzipLevel,
         diskSizeGB = diskSizeGB,
         docker = docker,
         quant_only_cluster_guided = quant_only

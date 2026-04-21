@@ -25,6 +25,8 @@ Optional:
 
 Resources (defaults reasonable for moderate datasets):
 - `numThreads` (4), `memoryGB` (32), `diskSizeGB` (128), `docker` (LRAA image)
+- Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`,
+  `sparseMatrixCsvEngine` (`c` by default), `sparseMatrixGzipLevel` (`1` by default for faster compression)
 
 Seurat clustering parameters (defaults mirror included R pipeline):
 - `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` ("^MT-")
@@ -68,4 +70,5 @@ miniwdl run WDL/LRAA-singlecell.wdl \
 Notes:
 - Ensure the reference FASTA is indexed (.fai) and the BAM is indexed (.bai). LRAA will attempt to index BAMs as needed.
 - The container image includes R/Seurat and LRAA utilities invoked by the subworkflows.
+- Sparse matrix construction now uses the single-pass Python implementation; the old `--parallel` mode is no longer used by the WDL tasks.
 - If you already have a cell-cluster assignment TSV, you can run `WDL/LRAA-cell_cluster_guided.wdl` directly by providing `cell_clusters_info` and an annotation GTF.

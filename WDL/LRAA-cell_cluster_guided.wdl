@@ -36,6 +36,8 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBquantMerge = 16
         Int normalize_max_cov_level = 1000
         Int memoryGBscSparseMatrices = 16
+        String sparseMatrixCsvEngine = "c"
+        Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Boolean quant_only_cluster_guided = false
@@ -184,11 +186,13 @@ workflow LRAA_cell_cluster_guided {
 
      # Build sparse matrices (Seurat-compatible) from the merged tracking
      call sc_build_sparse_matrices as build_sc_sparse_matrices {
-             input:
+         input:
                  sample_id = sample_id,
                  tracking_file = merge_cluster_trackings.merged_tracking,
                  docker = docker,
-                 memoryGB = memoryGBscSparseMatrices
+                 memoryGB = memoryGBscSparseMatrices,
+                 csv_engine = sparseMatrixCsvEngine,
+                 gzip_level = sparseMatrixGzipLevel
      }
 
      output {
@@ -419,6 +423,8 @@ task sc_build_sparse_matrices {
         File tracking_file
         String docker
         Int memoryGB = 32
+        String csv_engine = "c"
+        Int gzip_level = 1
     }
 
     Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
@@ -431,12 +437,19 @@ task sc_build_sparse_matrices {
         singlecell_tracking_to_sparse_matrix.py \
             --tracking ~{tracking_file} \
             --output_prefix ~{output_prefix} \
-            --parallel
+            --csv_engine ~{csv_engine} \
+            --gzip_level ~{gzip_level}
 
         # Tar the generated sparse matrix directories for compact output
-        tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
-        tar -zcvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
-        tar -zcvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
+        if command -v pigz >/dev/null 2>&1; then
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
+        else
+            tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
+            tar -zcvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
+            tar -zcvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
+        fi
     >>>
 
     output {
@@ -482,5 +495,4 @@ task require_annot_gtf {
 }
 
      
-
 
