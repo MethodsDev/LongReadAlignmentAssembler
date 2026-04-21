@@ -293,11 +293,11 @@ def main():
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
     parser.add_argument("--csv_engine", choices=["python", "c"], default="python",
-                        help="pandas CSV engine to use (default python to avoid C-engine segfaults)")
+                        help="pandas CSV engine to use (default python; C engine has segfaulted in production runs)")
     parser.add_argument("--parallel", action="store_true",
                         help="process gene/isoform/splice_pattern levels in parallel (requires more RAM)")
-    parser.add_argument("--gzip_level", type=int, choices=range(1, 10), default=6,
-                        help="gzip compression level for output files (default 6; lower is faster)")
+    parser.add_argument("--gzip_level", type=int, choices=range(1, 10), default=1,
+                        help="gzip compression level for output files (default 1 for faster compression)")
     args = parser.parse_args()
 
     faulthandler.enable()

@@ -152,7 +152,7 @@ workflow LRAA_singlecell_wf {
     Int memoryGBmergeGTFs = 32
     Int memoryGBquantFinal = 32
     Int memoryGBscSparseMatrices = 32
-    String sparseMatrixCsvEngine = "c"
+    String sparseMatrixCsvEngine = "python"
     Int sparseMatrixGzipLevel = 1
     Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"

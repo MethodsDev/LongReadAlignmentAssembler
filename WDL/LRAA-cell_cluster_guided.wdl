@@ -36,7 +36,7 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBquantMerge = 16
         Int normalize_max_cov_level = 1000
         Int memoryGBscSparseMatrices = 16
-        String sparseMatrixCsvEngine = "c"
+        String sparseMatrixCsvEngine = "python"
         Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
@@ -423,7 +423,7 @@ task sc_build_sparse_matrices {
         File tracking_file
         String docker
         Int memoryGB = 32
-        String csv_engine = "c"
+        String csv_engine = "python"
         Int gzip_level = 1
     }
 
@@ -495,4 +495,3 @@ task require_annot_gtf {
 }
 
      
-

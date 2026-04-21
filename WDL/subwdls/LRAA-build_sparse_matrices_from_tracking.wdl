@@ -6,7 +6,7 @@ workflow BuildSparseMatricesFromTracking {
     File tracking_file
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
     Int memoryGB = 16
-    String csv_engine = "c"
+    String csv_engine = "python"
     Int gzip_level = 1
   }
 
@@ -39,7 +39,7 @@ task sc_build_sparse_matrices_from_tracking {
     File tracking_file
     String docker
     Int memoryGB = 32
-    String csv_engine = "c"
+    String csv_engine = "python"
     Int gzip_level = 1
   }
 
