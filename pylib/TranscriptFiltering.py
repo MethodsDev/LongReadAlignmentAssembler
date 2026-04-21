@@ -540,8 +540,9 @@ def filter_internally_primed_transcripts(
         transcript.set_likely_internal_primed(looks_internally_primed)
 
         if restrict_filter_to_monoexonic and not transcript.is_monoexonic():
-            # In this special mode, we tag multi-exonic transcripts as internally primed (conservative) but retain them.
-            transcript.set_likely_internal_primed(looks_internally_primed or True)
+            # In this mode we retain multi-exonic transcripts but preserve the
+            # evaluated annotation state for downstream GTF export.
+            transcript.set_likely_internal_primed(looks_internally_primed)
             retained_transcripts.append(transcript)
             continue
 
