@@ -1,8 +1,7 @@
 {
-    "lraa_wf.genome_fa" : "data/SIRVs1-7.genome.fa",
-    "lraa_wf.aligned_reads_bam" : "data/sim.fasta.mm2.bam",
-    "lraa_wf.sample_id" : "sim_sirvs",
-    "lraa_wf.gtf_file" : "data/SIRVs1-7.annot.gtf",
-    "lraa_wf.quant_only" : true
+    "LRAA_wf.referenceGenome" : "data/SIRVs1-7.genome.fa",
+    "LRAA_wf.inputBAM" : "data/sim.fasta.mm2.bam",
+    "LRAA_wf.sample_id" : "sim_sirvs",
+    "LRAA_wf.annot_gtf" : "data/SIRVs1-7.annot.gtf",
+    "LRAA_wf.quant_only" : true
 }
-

@@ -110,34 +110,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get update && \
     apt-get install -y r-base r-base-dev
 
-RUN R -e 'install.packages("BiocManager", repos="http://cran.us.r-project.org")'
+RUN R -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
 
 RUN apt-get update && \
     apt-get install -y --fix-missing \
         libharfbuzz-dev \
+        libfontconfig1-dev \
+        libfreetype6-dev \
         libfribidi-dev \
-        libtiff5-dev
+        libgdal-dev \
+        libgeos-dev \
+        libglpk-dev \
+        libuv1-dev \
+        libproj-dev \
+        pandoc \
+        libtiff5-dev \
+        libudunits2-dev \
+        patch \
+        python3-venv
 
     
-RUN apt-get install -y libharfbuzz-dev libfribidi-dev libtiff5-dev 
-
-RUN R -e 'BiocManager::install("tidyverse")'
-RUN R -e 'BiocManager::install("cowplot")'
-RUN R -e 'BiocManager::install("argparse")'
-RUN R -e 'BiocManager::install("devtools")'
-RUN R -e 'BiocManager::install("Matrix")'
-RUN R -e 'BiocManager::install("FNN")'
-RUN R -e 'BiocManager::install("gtable")'
-RUN R -e 'BiocManager::install("pak")'
-RUN R -e 'pak::pak("igraph/rigraph")'
-RUN R -e 'BiocManager::install("leiden")'
-
-RUN R -e 'remotes::install_github("satijalab/seurat", "seurat5", quiet = FALSE)'
-
-RUN R -e 'BiocManager::install("clustermole")'
-
-RUN R -e 'BiocManager::install("DropletUtils")'
-RUN R -e 'BiocManager::install("seqLogo")'
+RUN echo 'options(repos = c(CRAN = "https://cloud.r-project.org"), Ncpus = 1)' >> /usr/lib/R/etc/Rprofile.site
+RUN Rscript --vanilla -e 'install.packages("tidyverse", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'install.packages("cowplot", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'install.packages("argparse", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'install.packages("devtools", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'install.packages("remotes", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'install.packages("FNN", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'BiocManager::install("DropletUtils", ask = FALSE, update = FALSE)'
+RUN Rscript --vanilla -e 'BiocManager::install("seqLogo", ask = FALSE, update = FALSE)'
+RUN Rscript --vanilla -e 'BiocManager::install("clustermole", ask = FALSE, update = FALSE)'
+RUN Rscript --vanilla -e 'install.packages("SeuratObject", repos="https://cloud.r-project.org")'
+RUN Rscript --vanilla -e 'remotes::install_github("satijalab/seurat", ref = "seurat5", quiet = FALSE, upgrade = "never", dependencies = TRUE); stopifnot("Seurat" %in% rownames(installed.packages())); suppressPackageStartupMessages(library(Seurat)); cat(as.character(packageVersion("Seurat")), "\n")'
 
 RUN pip install numpy --break-system-packages
 
@@ -194,8 +198,8 @@ ENV PATH="${TRANSDECODER_DIR}:${PATH}"
 WORKDIR $SRC
 
 
-ENV LRAA_VERSION="v0.15.0f"
-ENV LRAA_CO=2e7747e3332ac8e7b79ab9bb090529303e1e6647
+ENV LRAA_VERSION="v0.15.0g"
+ENV LRAA_CO=ce7559fae3c2bd1de3b9a2a65f0b7cb4e55b978a
 
 
 # update VERSION and LRAA_CO files with version info and checkout
