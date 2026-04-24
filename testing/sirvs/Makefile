@@ -13,7 +13,7 @@ test_ref_free_ID:
 test_quant:
 	make clean
 	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
-	diff LRAA.quant.expr data/latest_quant_info.tsv
+	./eval/validate_quant_expr.py LRAA.quant.expr data/latest_quant_info.tsv
 
 
 test_ref_guided_ID:
@@ -30,5 +30,4 @@ test_docker:
 
 clean:
 	rm -rf ./gffcompare* ./LRAA.* ./__* ./*_lraa_wf ./_LAST 
-
 

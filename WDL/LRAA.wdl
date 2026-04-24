@@ -209,14 +209,9 @@ task mergeQuantResults {
     command <<<
     set -eo pipefail
 
-    quant_expr_output="~{outputFilePrefix}.quant.expr"
-    for file in ~{sep=' ' quantExprFiles}; do
-        if [[ ! -f "$quant_expr_output" ]]; then
-            cp "$file" "$quant_expr_output"
-        else
-            tail -n +2 "$file" >> "$quant_expr_output"
-        fi
-    done
+    merge_LRAA_quant_expr.py \
+        --output "~{outputFilePrefix}.quant.expr" \
+        --quant_files ~{sep=' ' quantExprFiles}
 
     python <<CODE
     import json

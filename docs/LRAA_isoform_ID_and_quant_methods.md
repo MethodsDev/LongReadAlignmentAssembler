@@ -102,5 +102,4 @@ In the maximization step, isoform proportions are updated with Dirichlet smoothi
 $$p_i \leftarrow \frac{\sum_{r \in R_g} \gamma_{ri} \cdot n_r + \alpha_i}{\sum_{j=1}^K \left(\sum_{r \in R_g} \gamma_{rj} \cdot n_r + \alpha_j\right)}$$
 where $$n_r$$ is the total read count represented by RCC $$r$$ and $$\alpha_i = 0$$ when isoform $$i$$ has no ambiguous RCC support.
 
-Iteration continues until the relative change in log-likelihood falls below $$10^{-6}$$ or maximum iterations are reached (250 for quantification-only mode, 1000 during assembly). From the final proportions, unique read counts (RCCs assigned exclusively to a single isoform with $$\gamma_{ri} \geq 0.9999$$), total fractional read counts, isoform fractions, and TPM are computed.
-
+Iteration continues until the relative change in log-likelihood falls below $$10^{-6}$$ or maximum iterations are reached (250 for quantification-only mode, 1000 during assembly). From the final proportions, unique read counts (RCCs assigned exclusively to a single isoform with $$\gamma_{ri} \geq 0.9999$$), total fractional read counts, isoform fractions, and TPM are computed. In the final expression report, TPM is normalized over the final reported transcripts; the separate `RPM_total_reads` column preserves the whole-BAM-scaled read fraction.

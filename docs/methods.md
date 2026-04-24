@@ -96,7 +96,7 @@ LRAA partitions work by contig and by splice-graph components. Components exceed
 ## Outputs
 
 - Assembly: `LRAA.gtf` (and optional `.bed`), with one record per transcript isoform; boundaries mark TSS/PolyA when applicable.
-- Quantification: `LRAA.quant.expr` (per-transcript counts/TPM) and `LRAA.quant.tracking` (read-to-transcript compatibility/assignment details).
+- Quantification: `LRAA.quant.expr` (per-transcript counts, final-report TPM, and `RPM_total_reads`) and `LRAA.quant.tracking` (read-to-transcript compatibility/assignment details). The `TPM` column is normalized over final reported transcripts; `RPM_total_reads` preserves the whole-BAM-scaled read fraction.
 - Debug (optional): `__*` files including component descriptions and intermediate GTF/BEDs of MultiPath graphs and trellis selections.
 
 ## Implementation notes

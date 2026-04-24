@@ -6,6 +6,7 @@ import pysam
 import argparse
 import subprocess
 import json
+import csv
 import hashlib
 import pickle
 import tempfile
@@ -1399,6 +1400,44 @@ def _append_without_first_line(src_path, dst_fh):
             dst_fh.write(line)
 
 
+def _merge_quant_expr_files(src_paths, output_path, fieldnames):
+    rows = list()
+    total_reported_read_count = 0.0
+
+    for src_path in src_paths:
+        if src_path is None or not os.path.exists(src_path):
+            continue
+        with open(src_path, "rt") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                try:
+                    counts = float(row.get("all_reads", 0) or 0)
+                except ValueError:
+                    counts = 0.0
+                total_reported_read_count += counts
+                rows.append((row, counts))
+
+    with open(output_path, "wt", newline="") as ofh:
+        writer = csv.DictWriter(
+            ofh, fieldnames=fieldnames, delimiter="\t", lineterminator="\n"
+        )
+        writer.writeheader()
+        for row, counts in rows:
+            old_total_read_scaled_val = row.get("RPM_total_reads")
+            if old_total_read_scaled_val is None:
+                old_total_read_scaled_val = row.get("TPM", "0.000")
+
+            out_row = {field: row.get(field, "") for field in fieldnames}
+            tpm = (
+                counts / total_reported_read_count * 1e6
+                if total_reported_read_count > 0
+                else 0
+            )
+            out_row["TPM"] = f"{tpm:.3f}"
+            out_row["RPM_total_reads"] = old_total_read_scaled_val
+            writer.writerow(out_row)
+
+
 def _parse_input_transcripts_for_cs(
     input_gtf, contig_acc, contig_strand, restrict_region_lend, restrict_region_rend
 ):
@@ -1738,7 +1777,6 @@ def _run_jobs_schedule_and_merge(
     # Merge results
     quant_out_fn = f"{output_prefix}.quant.expr"
     track_out_fn = f"{output_prefix}.quant.tracking"
-    merged_quant_fh = open(quant_out_fn, "wt")
     merged_track_fh = open(track_out_fn, "wt")
 
     # Headers
@@ -1756,7 +1794,7 @@ def _run_jobs_schedule_and_merge(
     ]
     if not quant_only:
         quant_header_final += ["splice_compat_contained", "splice_contained_by"]
-    print("\t".join(quant_header_final), file=merged_quant_fh)
+    quant_header_final.append("RPM_total_reads")
 
     tracking_header_final = [
         "gene_id",
@@ -1770,6 +1808,7 @@ def _run_jobs_schedule_and_merge(
         tracking_header_final.append("read_weight")
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
+    quant_expr_tmp_paths = list()
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
         tmp_root_old = f"{j['output_prefix']}.contigtmp"
@@ -1778,10 +1817,10 @@ def _run_jobs_schedule_and_merge(
         pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
         pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
-        _append_without_first_line(f"{tmp_prefix}.quant.expr", merged_quant_fh)
+        quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
         _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
 
-    merged_quant_fh.close()
+    _merge_quant_expr_files(quant_expr_tmp_paths, quant_out_fn, quant_header_final)
     merged_track_fh.close()
 
     # Merge GTF and write BED in discovery mode
@@ -2081,6 +2120,7 @@ def _contig_job_runner(job):
     ]
     if not job["QUANT_ONLY"]:
         quant_header += ["splice_compat_contained", "splice_contained_by"]
+    quant_header.append("RPM_total_reads")
 
     tracking_header = [
         "gene_id",
@@ -2487,6 +2527,7 @@ def _run_oversimplify_best_overlap(
         key=lambda x: (x.get_read_counts_assigned(), x.get_transcript_id()),
         reverse=True,
     )
+    total_reported_read_count = sum(t.get_read_counts_assigned() for t in sorted_tx)
     for t in sorted_tx:
         gene_id = t.get_gene_id()
         tid = t.get_transcript_id()
@@ -2496,7 +2537,12 @@ def _run_oversimplify_best_overlap(
         uniq_reads = int(round(counts))
         gene_total = gene_totals.get(gene_id, 0.0)
         unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
-        tpm = t.get_TPM()
+        tpm = (
+            counts / total_reported_read_count * 1e6
+            if total_reported_read_count > 0
+            else 0
+        )
+        rpm_total_reads = t.get_TPM()
         splice_hash = (
             Util_funcs.get_hash_code(t.get_introns_string())
             if t.get_num_exon_segments() > 1
@@ -2514,6 +2560,7 @@ def _run_oversimplify_best_overlap(
             t.get_exons_string(),
             introns_str,
             splice_hash,
+            f"{rpm_total_reads:.3f}",
         ]
         print("\t".join(row), file=ofh_quant)
 
@@ -2632,7 +2679,8 @@ def _run_oversimplify_aggregate(
     uniq_reads = int(round(read_count))
     gene_total = read_count
     unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
-    tpm = t.get_TPM()
+    tpm = 1e6
+    rpm_total_reads = t.get_TPM()
     introns_str = t.get_introns_string() if t.get_num_exon_segments() > 1 else ""
     row = [
         gene_id,
@@ -2645,6 +2693,7 @@ def _run_oversimplify_aggregate(
         t.get_exons_string(),
         introns_str,
         splice_hash,
+        f"{rpm_total_reads:.3f}",
     ]
     print("\t".join(row), file=ofh_quant)
 

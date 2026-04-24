@@ -1312,10 +1312,12 @@ class Quantify:
 
         # first, get sum of reads per gene
         gene_to_read_count = defaultdict(int)
+        total_reported_read_count = 0
         for transcript in transcripts:
             gene_id = transcript.get_gene_id()
             counts = transcript.get_read_counts_assigned()
             gene_to_read_count[gene_id] += counts
+            total_reported_read_count += counts
 
         for transcript in transcripts:
             transcript_id = transcript.get_transcript_id()
@@ -1330,7 +1332,12 @@ class Quantify:
 
             multipaths = transcript.get_multipaths_evidence_assigned()
 
-            tpm = transcript.get_TPM()
+            tpm = (
+                counts / total_reported_read_count * 1e6
+                if total_reported_read_count > 0
+                else 0
+            )
+            rpm_total_reads = transcript.get_TPM()
 
             num_uniquely_assigned_reads = 0
 
@@ -1401,6 +1408,8 @@ class Quantify:
                     else ""
                 )
                 report_vals.append(splice_compat_contained_by_vals)
+
+            report_vals.append(f"{rpm_total_reads:.3f}")
 
             report_txt = "\t".join(report_vals)
 
