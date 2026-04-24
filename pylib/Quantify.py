@@ -1025,9 +1025,13 @@ class Quantify:
             sum_dists += sum_dist
 
         # determine relative weightings
+        # Pseudocount sized to the alt-PolyA aggregation window: sub-window distance
+        # differences should not drive any transcript's weight to zero.
         transcript_id_to_mp_weights = dict()
         sum_weights = 0.0
         num_transcripts_assigned = len(transcripts_assigned)
+        end_dist_pseudocount = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+        adj_sum_dists = sum_dists + num_transcripts_assigned * end_dist_pseudocount
         for transcript in transcripts_assigned:
             transcript_id = transcript.get_transcript_id()
             dist = transcript_id_to_sum_end_dists[transcript_id]
@@ -1036,7 +1040,11 @@ class Quantify:
                     transcript_id, dist, sum_dists
                 )
             )
-            weight = 1.0 - (dist / sum_dists) if sum_dists > 0 else 1.0
+            weight = (
+                1.0 - (dist + end_dist_pseudocount) / adj_sum_dists
+                if adj_sum_dists > 0
+                else 1.0
+            )
             transcript_id_to_mp_weights[transcript_id] = weight
             sum_weights += weight
 
