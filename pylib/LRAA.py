@@ -953,7 +953,10 @@ class LRAA:
                     read_type = pretty_alignment.get_read_type()
 
                 path = self._map_read_to_graph(
-                    pretty_alignment.get_pretty_alignment_segments()
+                    pretty_alignment.get_pretty_alignment_segments(),
+                    snap_nearby_boundary_features=True,
+                    left_soft_clipping=pretty_alignment.left_soft_clipping,
+                    right_soft_clipping=pretty_alignment.right_soft_clipping,
                 )
 
                 logger.debug(
@@ -1289,6 +1292,9 @@ class LRAA:
         alignment_segments,
         refine_TSS_simple_path=True,
         refine_PolyA_simple_path=True,
+        snap_nearby_boundary_features=False,
+        left_soft_clipping=None,
+        right_soft_clipping=None,
     ):
 
         logger.debug("incoming segments: {}".format(alignment_segments))
@@ -1341,6 +1347,11 @@ class LRAA:
                 if len(path) == 0 or path[-1] != SPACER:
                     path.append(SPACER)  # spacer
 
+        if snap_nearby_boundary_features:
+            path = self._snap_nearby_boundary_features_to_path(
+                alignment_segments, path, left_soft_clipping, right_soft_clipping
+            )
+
         # refine path
 
         if SPACER in path:
@@ -1385,6 +1396,122 @@ class LRAA:
         #    path = self._try_easy_fill_spacers(path)
 
         return path
+
+    def _snap_nearby_boundary_features_to_path(
+        self, alignment_segments, path, left_soft_clipping, right_soft_clipping
+    ):
+        if not alignment_segments or not path:
+            return path
+
+        contig_strand = self._splice_graph.get_contig_strand()
+
+        left_boundary = alignment_segments[0][0]
+        right_boundary = alignment_segments[-1][1]
+
+        if contig_strand == "+":
+            left_feature_type = TSS
+            left_max_dist = int(LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2)
+            left_soft_clip_ok = (
+                left_soft_clipping is not None
+                and left_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]
+            )
+            right_feature_type = PolyAsite
+            right_max_dist = int(
+                LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2
+            )
+            right_soft_clip_ok = (
+                right_soft_clipping is not None
+                and right_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]
+            )
+        else:
+            left_feature_type = PolyAsite
+            left_max_dist = int(
+                LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2
+            )
+            left_soft_clip_ok = (
+                left_soft_clipping is not None
+                and left_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]
+            )
+            right_feature_type = TSS
+            right_max_dist = int(LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2)
+            right_soft_clip_ok = (
+                right_soft_clipping is not None
+                and right_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]
+            )
+
+        path = path.copy()
+
+        if left_soft_clip_ok:
+            left_feature = self._get_nearby_boundary_feature(
+                left_boundary, left_feature_type, left_max_dist
+            )
+        else:
+            left_feature = None
+
+        if right_soft_clip_ok:
+            right_feature = self._get_nearby_boundary_feature(
+                right_boundary, right_feature_type, right_max_dist
+            )
+        else:
+            right_feature = None
+
+        if left_feature is not None and self._can_prepend_boundary_feature(
+            left_feature, path
+        ):
+            left_feature_id = left_feature.get_id()
+            if left_feature_id not in path:
+                path.insert(0, left_feature_id)
+
+        if right_feature is not None and self._can_append_boundary_feature(
+            right_feature, path
+        ):
+            right_feature_id = right_feature.get_id()
+            if right_feature_id not in path:
+                path.append(right_feature_id)
+
+        return path
+
+    def _can_prepend_boundary_feature(self, feature_node, path):
+        first_path_node = self._get_first_non_spacer_node(path)
+        if first_path_node is None:
+            return False
+        return first_path_node in self._splice_graph.get_successors(feature_node)
+
+    def _can_append_boundary_feature(self, feature_node, path):
+        last_path_node = self._get_last_non_spacer_node(path)
+        if last_path_node is None:
+            return False
+        return feature_node in self._splice_graph.get_successors(last_path_node)
+
+    def _get_first_non_spacer_node(self, path):
+        for node_id in path:
+            if node_id != SPACER:
+                return self._splice_graph.get_node_obj_via_id(node_id)
+        return None
+
+    def _get_last_non_spacer_node(self, path):
+        for node_id in reversed(path):
+            if node_id != SPACER:
+                return self._splice_graph.get_node_obj_via_id(node_id)
+        return None
+
+    def _get_nearby_boundary_feature(self, boundary_coord, feature_type, max_dist):
+        candidate_features = list()
+        for node in self._splice_graph.get_overlapping_exon_segments(
+            boundary_coord - max_dist, boundary_coord + max_dist
+        ):
+            if type(node) != feature_type:
+                continue
+            feature_coord, _ = node.get_coords()
+            dist = abs(boundary_coord - feature_coord)
+            if dist <= max_dist:
+                candidate_features.append((dist, -node.get_read_support(), node))
+
+        if not candidate_features:
+            return None
+
+        candidate_features.sort(key=lambda x: (x[0], x[1], x[2].get_id()))
+        return candidate_features[0][2]
 
     def _get_intron_node_id(self, prev_segment, next_segment):
 

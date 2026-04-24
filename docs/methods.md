@@ -40,6 +40,7 @@ LRAA builds a splice graph per contig and strand (`pylib/Splice_graph.py`). Node
 Read alignments are transformed into read-supported simple paths across splice-graph nodes (`pylib/MultiPath.py`, `pylib/MultiPathCounter.py`). These are summarized into a MultiPath DAG (`pylib/MultiPathGraph.py`) where each node corresponds to a simple path segment and edges preserve permissible concatenations. Distinguishing features:
 
 - Boundary flags: MultiPath nodes carry TSS/PolyA indicators, influencing downstream compatibility and sorting.
+- Boundary snapping for read paths: During read mapping, terminal TSS/PolyA nodes can be attached to read paths when termini fall near existing boundary features, terminal soft clipping is within configured thresholds, and splice-graph adjacency is valid. Candidate features are searched within half of the configured alternative-site window and ranked by nearest distance then support.
 - Pruning: Extremely large components are pruned using `config['max_path_nodes_per_component']` to keep search tractable.
 - Caching/read IDs: Read–path associations are tracked (`MpReadIdStore`, `ReadNameStore`) to support later compatibility checks and quantification.
 
@@ -60,6 +61,7 @@ After reconstruction, LRAA assigns reads to transcripts and estimates abundances
 
 - Compatibility: A read is considered compatible with a transcript if it matches splicing structure and overlaps sufficiently (
   `config['fraction_read_align_overlap']`). Exact matches may be prioritized; otherwise, compatible matches form a candidate set.
+- Assignment cascade behavior: In HiFi-style matching, boundary nodes (TSS/PolyA) are respected first; if unresolved, matching falls back to boundary-trimmed non-HiFi-style compatibility checks.
 - Weighted assignments: If `config['weight_reads_by_3prime_agreement']` is enabled, compatibility weights prioritize agreement of read 3' ends with transcript 3' ends.
 
 Model and updates:

@@ -1,4 +1,10 @@
 
+v0.15.1, April 24, 2026
+- quant/assignment fix: during read-to-splice-graph mapping, reads can now adopt nearby terminal TSS/PolyA feature nodes when the terminal soft-clipping is within existing config limits (`max_soft_clip_at_TSS` / `max_soft_clip_at_PolyA`) and splice-graph adjacency is valid. Candidate boundary features are searched within half of the configured alternative-site window and prioritized by nearest distance (then higher support). This reduces HiFi-specific contained-path misassignment caused by missing read boundary annotations.
+- constrained boundary snapping to read-path mapping only (not transcript-path mapping) to avoid unintended transcript boundary rewrites.
+- tests: regression scenarios for the HiFi contained-path boundary case now pass under `testing/make`.
+
+
 v0.15.0, December 14, 2025
 - using 90th percentile for trimming non-TSS and non-PolyA termini based on read boundaries
 
