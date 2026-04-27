@@ -168,7 +168,7 @@ def main():
         "--HiFi",
         action="store_true",
         default=False,
-        help="high fidelity mode (more stringent): min_per_id: 98, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
+        help="high fidelity mode (more stringent): min_per_id: 97, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
     )
     # Backward compatibility: accept deprecated --LowFi flag (now default); no-op with warning
     parser.add_argument(
@@ -729,7 +729,7 @@ def main():
         # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
         LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
         LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
-        LRAA_Globals.config["min_per_id"] = 98.0
+        LRAA_Globals.config["min_per_id"] = 97.0
         LRAA_Globals.config["max_exon_spur_length"] = 13
         LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
         LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
