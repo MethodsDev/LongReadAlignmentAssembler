@@ -2828,6 +2828,15 @@ def run_quant_only(
     splice_graph_cache_dir=None,
 ):
 
+    # Quantification stage uses the tighter min_mapping_quality_for_final_quant
+    # filter (default 1) so multi-mapping reads do not inflate per-transcript
+    # TPMs. Discovery upstream may have used the looser min_mapping_quality
+    # (default 0) so paralog-cluster isoforms could be detected.
+    _saved_min_mapq = LRAA_Globals.config["min_mapping_quality"]
+    LRAA_Globals.config["min_mapping_quality"] = LRAA_Globals.config[
+        "min_mapping_quality_for_final_quant"
+    ]
+
     # get path assignments for the input transcripts
     # get the path assignments for the reads.
     # compare read mappings, assign categories
@@ -2835,6 +2844,7 @@ def run_quant_only(
     # if no transcripts for this contig/strand, nothing to quant on
     if input_transcripts is None:
         logger.info(f"-no isoforms to quant on {contig_acc} [{contig_strand}]")
+        LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         # continue
         return
 
@@ -2973,6 +2983,7 @@ def run_quant_only(
         except Exception:
             pass
 
+    LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
     return q
 
 
@@ -3436,16 +3447,12 @@ def run_transcript_assembly(
     # reset
     LRAA_Globals.DEBUG = debug_mode_setting
 
-    ## one last filtering based on min isoform fraction
-
-    transcripts_kept, transcripts_removed = (
-        remove_low_isoform_fraction_transcripts_final_attempt(
-            transcripts, min_isoform_fraction
-        )
-    )
-
-    if len(transcripts_removed) > 0:
-        transcripts = transcripts_kept
+    # NOTE: previously a final post-quant low-isoform-fraction filter ran here
+    # (remove_low_isoform_fraction_transcripts_final_attempt). It was removed so
+    # that isoforms with quant=0 (e.g., paralog-cluster isoforms whose only
+    # supporting reads are mapq=0 and get filtered at the final-quant step) are
+    # still reported. Discovery-stage filtering already enforces the isoform
+    # fraction cutoff with discovery-stage read support.
 
     # Build a contig/strand prefix for final quant logs
     try:

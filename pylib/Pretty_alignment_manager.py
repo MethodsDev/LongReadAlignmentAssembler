@@ -121,22 +121,22 @@ class Pretty_alignment_manager:
 
         all_alignment_cache_file = os.path.join(
             alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.restrict-{restrict_splice_type}.corr-{try_correct_alignments}.pkl",
+            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-{restrict_splice_type}.corr-{try_correct_alignments}.pkl",
         )
 
         ME_alignment_cache_file = os.path.join(
             alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.restrict-ME.corr-{try_correct_alignments}.pkl",
+            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-ME.corr-{try_correct_alignments}.pkl",
         )
 
         SE_alignment_cache_file = os.path.join(
             alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.restrict-SE.corr-{try_correct_alignments}.pkl",
+            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-SE.corr-{try_correct_alignments}.pkl",
         )
 
         SE_masked_alignment_cache_file = os.path.join(
             alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.restrict-SE-masked.corr-{try_correct_alignments}.pkl",
+            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-SE-masked.corr-{try_correct_alignments}.pkl",
         )
 
         alignment_cache_file = all_alignment_cache_file
