@@ -187,6 +187,12 @@ def main():
         _configure_logging(debug=True)
         logger.debug("Debug logging enabled for merge script.")
 
+    # Merge collapses isoforms via simple-path equivalence; fracturing the splice
+    # graph at every input transcript boundary breaks that equivalence and prevents
+    # collapsing of transcripts whose starts/ends differ within the alt-TSS/PolyA
+    # window. Disable it for the merge tool regardless of mode.
+    LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
+
     # Apply HiFi mode if requested (enables TSS/PolyA boundary recognition during merge)
     if args.HiFi:
         LRAA_Globals.config["infer_TSS"] = True
