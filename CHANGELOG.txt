@@ -1,8 +1,14 @@
 
-v0.15.1, April 24, 2026
-- quant/assignment fix: during read-to-splice-graph mapping, reads can now adopt nearby terminal TSS/PolyA feature nodes when the terminal soft-clipping is within existing config limits (`max_soft_clip_at_TSS` / `max_soft_clip_at_PolyA`) and splice-graph adjacency is valid. Candidate boundary features are searched within half of the configured alternative-site window and prioritized by nearest distance (then higher support). This reduces HiFi-specific contained-path misassignment caused by missing read boundary annotations.
-- constrained boundary snapping to read-path mapping only (not transcript-path mapping) to avoid unintended transcript boundary rewrites.
-- tests: regression scenarios for the HiFi contained-path boundary case now pass under `testing/make`.
+
+v0.16.0, Apr 27, 2026    
+- adjusted HiFi quant read assignments by snapping read paths (not transcript paths) to nearby terminal TSS/PolyA features when soft-clipping and splice-graph adjacency support it.
+- updated quant defaults and scoring: normalized TPM after merge - sum to 1M, softened 3' end weighting near alternative PolyA windows, enabled transcript-boundary splice-graph fracturing by default, switched to two-stage mapping-quality filtering, raised default `max_intron_length` to 200000, lowered HiFi `min_per_id` to 97, and defaulted candidate PolyA site pruning to minimum isoform fraction.
+- fixed transcript filtering/annotation issues, including boundary remap + duplicate-pruning behavior, bugfix wrt nonsensical InternalPriming=True annotation on retained multi-exon transcripts, and `min_transcript_length` edge cases; added TSS/PolyA boundary read counts to GTF output.
+- added ORF workflow support via `WDL/LRAA-ORF-prediction.wdl`, including BLAST/DIAMOND homology integration, corrected ORF output naming, and transdecoder output directory export.
+- added edgeR-based DTU runner with plotting (`util/run_edgeR_DTU.R`) and updated DTU docs/tests.
+- improved single-cell matrix generation with a faster `util/sc/singlecell_tracking_to_sparse_matrix.py`, safer sparse-matrix CSV defaults, ENSG-to-symbol mapping for LRAA features, and CAS input-matrix workflow output.
+- improved WDL/Terra robustness with dynamic BAM-based memory sizing, higher scattered shard memory multipliers, `min_disk_GB`, better optional `File?` disk handling, and bounded progress-log tailing.
+- expanded test coverage, including HiFi boundary regression cases, boundary-count tests, quant TPM/reporting invariants, filtering regressions, DTU tests, ORF WDL tests, and main pytest integration in `testing/make`.
 
 
 v0.15.0, December 14, 2025
