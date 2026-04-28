@@ -23,6 +23,8 @@ workflow LRAA_quant_by_cluster {
         Array[File]? bam_files
         File? inputBAM
         File? cell_clusters_info
+        Array[File]? pre_normalized_cluster_bams
+        Array[File]? pre_normalized_cluster_bais
         
         Boolean HiFi = false
         String? oversimplify
@@ -59,25 +61,40 @@ workflow LRAA_quant_by_cluster {
 
     # Select the BAM files to use: either provided or partitioned
     Array[File] cluster_bams = select_first([bam_files, partition_bam_by_cell_cluster.partitioned_bams])
+    Boolean use_pre_normalized_bams = defined(pre_normalized_cluster_bams)
 
-    # Step 1: Normalize each input BAM in parallel
-    scatter (i in range(length(cluster_bams))) {
-        String cluster_label = basename(cluster_bams[i], ".bam")
-        
-        call NormBam.normalize_bam_by_strand as normalize_cluster_bam {
+    if (use_pre_normalized_bams) {
+        call validate_pre_normalized_inputs {
             input:
-                input_bam = cluster_bams[i],
-                normalize_max_cov_level = normalize_max_cov_level,
-                label = cluster_label,
-                docker = docker,
-                memoryGB = memoryGB_normalize
+                cluster_bams = cluster_bams,
+                normalized_bams = select_first([pre_normalized_cluster_bams]),
+                normalized_bais = pre_normalized_cluster_bais
         }
     }
+
+    # Step 1: Normalize each input BAM in parallel
+    if (!use_pre_normalized_bams) {
+        scatter (i in range(length(cluster_bams))) {
+            String cluster_label = basename(cluster_bams[i], ".bam")
+            
+            call NormBam.normalize_bam_by_strand as normalize_cluster_bam {
+                input:
+                    input_bam = cluster_bams[i],
+                    normalize_max_cov_level = normalize_max_cov_level,
+                    label = cluster_label,
+                    docker = docker,
+                    memoryGB = memoryGB_normalize
+            }
+        }
+    }
+
+    Array[File] normalized_cluster_bams_use = select_first([pre_normalized_cluster_bams, normalize_cluster_bam.normalized_bam])
+    Array[File] normalized_cluster_bais_use = select_first([pre_normalized_cluster_bais, normalize_cluster_bam.normalized_bai])
 
     # Step 2: Merge all normalized BAMs
     call merge_bams {
         input:
-            normalized_bams = normalize_cluster_bam.normalized_bam,
+            normalized_bams = normalized_cluster_bams_use,
             output_basename = sample_id + ".clusters_merged",
             docker = docker,
             memoryGB = memoryGB_merge
@@ -128,12 +145,40 @@ workflow LRAA_quant_by_cluster {
         
         # Intermediate outputs (for debugging/reuse)
         Array[File]? partitioned_bams = partition_bam_by_cell_cluster.partitioned_bams
-        Array[File] normalized_cluster_bams = normalize_cluster_bam.normalized_bam
-        Array[File] normalized_cluster_bais = normalize_cluster_bam.normalized_bai
+        Array[File] normalized_cluster_bams = normalized_cluster_bams_use
+        Array[File] normalized_cluster_bais = normalized_cluster_bais_use
         File merged_bam = merge_bams.merged_bam
         File merged_bai = merge_bams.merged_bai
         File normalized_merged_bam = normalize_merged_bam.normalized_bam
         File normalized_merged_bai = normalize_merged_bam.normalized_bai
+    }
+}
+
+task validate_pre_normalized_inputs {
+    input {
+        Array[File] cluster_bams
+        Array[File] normalized_bams
+        Array[File]? normalized_bais
+    }
+
+    command <<<
+        set -euo pipefail
+
+        cluster_count=~{length(cluster_bams)}
+        normalized_count=~{length(normalized_bams)}
+        if [[ "$cluster_count" -ne "$normalized_count" ]]; then
+            echo "ERROR: cluster_bams count ($cluster_count) must equal pre_normalized_cluster_bams count ($normalized_count)." >&2
+            exit 1
+        fi
+
+        ~{if defined(normalized_bais) then "bai_count=" + length(select_first([normalized_bais])) + "\nif [[ \"$normalized_count\" -ne \"$bai_count\" ]]; then\n    echo \"ERROR: pre_normalized_cluster_bams count ($normalized_count) must equal pre_normalized_cluster_bais count ($bai_count).\" >&2\n    exit 1\nfi" else "echo \"No pre_normalized_cluster_bais provided; proceeding without explicit BAI list check.\""}
+    >>>
+
+    runtime {
+        docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        cpu: 1
+        memory: "1 GiB"
+        disks: "local-disk 20 SSD"
     }
 }
 
