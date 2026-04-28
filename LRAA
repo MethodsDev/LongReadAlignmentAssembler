@@ -3275,6 +3275,27 @@ def run_transcript_assembly(
 
     transcripts = all_transcripts  # legacy varname
 
+    # Enforce transcript-level minimum cDNA length. Component-level filtering alone
+    # can still allow shorter final transcripts after terminal-boundary adjustments.
+    min_transcript_length = LRAA_Globals.config["min_transcript_length"]
+    logger.info(
+        f"[{contig_acc}{contig_strand}] Filtering transcripts by min length: {min_transcript_length}"
+    )
+    num_pre_length_filter = len(transcripts)
+    transcripts = TranscriptFiltering.filter_transcripts_by_min_length(
+        transcripts, min_transcript_length
+    )
+    logger.info(
+        f"[{contig_acc}{contig_strand}] Min-length filter retained {len(transcripts)} / {num_pre_length_filter} transcripts"
+    )
+    if len(transcripts) < 1:
+        logger.info(
+            "-no transcripts on contig {} {} survived min transcript length criterion".format(
+                contig_acc, contig_strand
+            )
+        )
+        return
+
     if input_transcripts is not None:
         # build splice pattern hash set for spliced reference transcripts only
         ref_splice_hashes = set(
