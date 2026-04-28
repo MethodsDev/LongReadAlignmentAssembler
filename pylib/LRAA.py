@@ -2088,8 +2088,8 @@ class LRAA:
                 has_TSS = False
                 has_PolyA = False
                 try:
-                    has_TSS = bool(input_transcript.has_annotated_TSS())
-                    has_PolyA = bool(input_transcript.has_annotated_PolyA())
+                    has_TSS = bool(input_transcript.has_source_annotated_TSS())
+                    has_PolyA = bool(input_transcript.has_source_annotated_PolyA())
                 except Exception:
                     try:
                         has_TSS = bool(input_transcript.has_TSS())

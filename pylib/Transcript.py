@@ -61,6 +61,11 @@ class Transcript(GenomeFeature):
         self._imported_TPM_val = None
         self._imported_has_TSS = None  # if parsed info from gtf, set True/False
         self._imported_has_POLYA = None
+        # Immutable source annotation provenance used by merge tracking.
+        # These should reflect what was present in the input GTF, regardless of
+        # later remapping-derived boundary refresh.
+        self._source_has_annotated_TSS = None
+        self._source_has_annotated_POLYA = None
         self._TSS_read_count = None
         self._PolyA_read_count = None
 
@@ -203,6 +208,11 @@ class Transcript(GenomeFeature):
         else:
             return False
 
+    def has_source_annotated_PolyA(self):
+        if self._source_has_annotated_POLYA is not None:
+            return self._source_has_annotated_POLYA
+        return self.has_annotated_PolyA()
+
     def has_PolyA(self):
 
         if self._imported_has_POLYA is not None:
@@ -221,6 +231,11 @@ class Transcript(GenomeFeature):
             return self._imported_has_TSS
         else:
             return False
+
+    def has_source_annotated_TSS(self):
+        if self._source_has_annotated_TSS is not None:
+            return self._source_has_annotated_TSS
+        return self.has_annotated_TSS()
 
     def has_TSS(self):
 
@@ -870,6 +885,7 @@ class GTF_contig_to_transcripts:
                 )
             else:
                 transcript_obj._imported_has_POLYA = False
+            transcript_obj._source_has_annotated_POLYA = transcript_obj._imported_has_POLYA
 
             if "TSS" in transcript_meta:
                 transcript_obj._imported_has_TSS = (
@@ -877,6 +893,7 @@ class GTF_contig_to_transcripts:
                 )
             else:
                 transcript_obj._imported_has_TSS = False
+            transcript_obj._source_has_annotated_TSS = transcript_obj._imported_has_TSS
 
             if "PolyA_read_count" in transcript_meta:
                 transcript_obj.set_PolyA_read_count(

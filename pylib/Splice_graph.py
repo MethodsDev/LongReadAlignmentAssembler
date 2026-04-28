@@ -753,6 +753,12 @@ class Splice_graph:
 
         TSS_evidence_counter = defaultdict(int)
         PolyA_evidence_counter = defaultdict(int)
+        # In merge mode, boundary-support counts imported from GTF are coordinate-level
+        # support values. Multiple transcripts within a single source GTF can share the
+        # same boundary coordinate, so track max seen support per (source_gtf, coord)
+        # and only add positive deltas to avoid double-count inflation.
+        tss_src_coord_max_support = defaultdict(int)
+        polya_src_coord_max_support = defaultdict(int)
 
         ## Exon Coverage and Intron Capture
 
@@ -806,25 +812,63 @@ class Splice_graph:
 
             if transcript.has_annotated_TSS():
                 TSS_coord = trans_lend if orient == "+" else trans_rend
-                if transcript.has_annotated_TPM():
-                    TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+                if LRAA_Globals.LRAA_MODE == "MERGE":
+                    tss_added = False
+                    tss_read_count = transcript.get_TSS_read_count()
+                    if tss_read_count is not None and tss_read_count > 0:
+                        try:
+                            meta = transcript.get_meta()
+                        except Exception:
+                            meta = {}
+                        src_gtf = meta.get("source_gtf", transcript.get_transcript_id())
+                        src_key = (str(src_gtf), int(TSS_coord))
+                        prev_support = tss_src_coord_max_support[src_key]
+                        if tss_read_count > prev_support:
+                            TSS_evidence_counter[TSS_coord] += tss_read_count - prev_support
+                            tss_src_coord_max_support[src_key] = tss_read_count
+                        tss_added = True
+
+                    if not tss_added:
+                        if transcript.has_annotated_TPM():
+                            TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+                        else:
+                            TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
+                                "min_alignments_define_TSS_site"
+                            ]
                 else:
-                    if LRAA_Globals.LRAA_MODE == "MERGE":
-                        TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
-                            "min_alignments_define_TSS_site"
-                        ]
+                    if transcript.has_annotated_TPM():
+                        TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
                     else:
                         TSS_evidence_counter[TSS_coord] = 1
 
             if transcript.has_annotated_PolyA():
                 polyA_coord = trans_rend if orient == "+" else trans_lend
-                if transcript.has_annotated_TPM():
-                    PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                if LRAA_Globals.LRAA_MODE == "MERGE":
+                    polya_added = False
+                    polya_read_count = transcript.get_PolyA_read_count()
+                    if polya_read_count is not None and polya_read_count > 0:
+                        try:
+                            meta = transcript.get_meta()
+                        except Exception:
+                            meta = {}
+                        src_gtf = meta.get("source_gtf", transcript.get_transcript_id())
+                        src_key = (str(src_gtf), int(polyA_coord))
+                        prev_support = polya_src_coord_max_support[src_key]
+                        if polya_read_count > prev_support:
+                            PolyA_evidence_counter[polyA_coord] += polya_read_count - prev_support
+                            polya_src_coord_max_support[src_key] = polya_read_count
+                        polya_added = True
+
+                    if not polya_added:
+                        if transcript.has_annotated_TPM():
+                            PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                        else:
+                            PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
+                                "min_alignments_define_polyA_site"
+                            ]
                 else:
-                    if LRAA_Globals.LRAA_MODE == "MERGE":
-                        PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
-                            "min_alignments_define_polyA_site"
-                        ]
+                    if transcript.has_annotated_TPM():
+                        PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
                     else:
                         PolyA_evidence_counter[polyA_coord] = 1
 
