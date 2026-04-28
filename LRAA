@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re
+import textwrap
 import pysam
 import argparse
 import subprocess
@@ -57,10 +58,32 @@ INCLUDE_PRELIM_TRANSCRIPTS = False
 
 # keep main() at the top
 def main():
+    class ArgumentDefaultsRawDescriptionHelpFormatter(
+        argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter
+    ):
+        pass
+
+    hifi_mode_help = textwrap.dedent(
+        """
+        Mode differences:
+
+          Setting / behavior                  non-HiFi default         --HiFi
+          ------------------------------      -----------------------   ------------------------------
+          min_per_id                          80                        97
+          infer_TSS                           disabled                  enabled (use --no_infer_TSS to disable)
+          infer_PolyA                         disabled                  enabled (use --no_infer_PolyA to disable)
+          max_exon_spur_length                20                        13
+          min_alt_splice_freq                 0.03                      0.01
+          aggregate_adjacent_splice_boundaries enabled                 disabled (or enabled with --aggregate_adjacent_splice_boundaries)
+          single-exon filtering               standard rules            require TSS or PolyA annotation
+        """
+    )
+
     # CLI: define arguments and groups
     parser = argparse.ArgumentParser(
         description="LRAA: Long-read RNA isoform discovery and quantification",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsRawDescriptionHelpFormatter,
+        epilog=hifi_mode_help,
     )
 
     # Primary inputs and run mode
@@ -471,6 +494,15 @@ def main():
             LRAA_Globals.config["min_alt_unspliced_freq"]
         ),
     )
+    config_group_altsplice.add_argument(
+        "--aggregate_adjacent_splice_boundaries",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=(
+            "aggregate nearby splice boundaries within aggregate_splice_boundary_dist. "
+            "Useful to re-enable boundary aggregation in --HiFi mode."
+        ),
+    )
 
     ## single cell settings
     config_group_single_cell = parser.add_argument_group("Single cell settings")
@@ -733,6 +765,8 @@ def main():
         LRAA_Globals.config["max_exon_spur_length"] = 13
         LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
         LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
+        if getattr(args, "aggregate_adjacent_splice_boundaries", False):
+            LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
         # HiFi-specific splice frequency threshold
         LRAA_Globals.config["min_alt_splice_freq"] = 0.01
         # Ensure splice-graph params derive the HiFi value if user didn't explicitly override
