@@ -198,8 +198,8 @@ ENV PATH="${TRANSDECODER_DIR}:${PATH}"
 WORKDIR $SRC
 
 
-ENV LRAA_VERSION="v0.16.0"
-ENV LRAA_CO=1af4bffd2c7bb3da59a6a6a7ca1a2e16a74f039b
+ENV LRAA_VERSION="v0.16.1"
+ENV LRAA_CO=b7b0989638e6e47fe4e91ff86084c05a141afb1a
 
 
 # update VERSION and LRAA_CO files with version info and checkout
