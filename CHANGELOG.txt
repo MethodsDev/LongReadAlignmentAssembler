@@ -1,3 +1,10 @@
+v0.16.1, Apr 29, 2026
+- stabilized LRAA-gtf-merge boundary provenance handling and ensured boundary read counts are consumed correctly during merge; added/updated boundary-count tests and HiFi/non-HiFi merge fixtures.
+- enforced `min_transcript_length` on final assembled isoforms to ensure short transcripts are filtered at final output.
+- improved CLI guidance for sequencing modes by adding a HiFi vs non-HiFi help table and introducing an override for splice-boundary aggregation behavior.
+- updated merge_LRAA_GTFs regression test inputs/checks, including refreshed PBMC HiFi-oriented fixture sets and annotation expectations.
+- updated single-cell WDLs to support reusable pre-normalized cluster BAM paths and added a cluster-guided quant-only full-pipeline test configuration.
+
 
 
 v0.16.0, Apr 27, 2026    

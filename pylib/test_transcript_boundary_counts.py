@@ -45,5 +45,7 @@ def test_gtf_parser_round_trips_boundary_read_counts(tmp_path):
 
     assert transcript.has_TSS() is True
     assert transcript.has_PolyA() is True
+    assert transcript.has_source_annotated_TSS() is True
+    assert transcript.has_source_annotated_PolyA() is True
     assert transcript.get_TSS_read_count() == 5
     assert transcript.get_PolyA_read_count() == 9

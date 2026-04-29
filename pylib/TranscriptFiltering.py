@@ -16,6 +16,20 @@ import intervaltree as itree
 logger = logging.getLogger(__name__)
 
 
+def filter_transcripts_by_min_length(transcripts, min_transcript_length):
+    """Retain only transcripts meeting minimum cDNA length."""
+
+    if min_transcript_length is None or min_transcript_length <= 0:
+        return transcripts
+
+    transcripts_retained = []
+    for transcript in transcripts:
+        if transcript.get_cdna_len() >= min_transcript_length:
+            transcripts_retained.append(transcript)
+
+    return transcripts_retained
+
+
 def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     transcripts_retained = list()

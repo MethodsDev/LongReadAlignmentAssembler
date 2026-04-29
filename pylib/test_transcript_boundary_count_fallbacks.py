@@ -56,3 +56,20 @@ def test_refresh_boundary_annotations_from_simple_path_clears_stale_imported_fla
     assert transcript.has_PolyA() is True
     assert transcript.get_TSS_read_count() == 99
     assert transcript.get_PolyA_read_count() == 88
+
+
+def test_source_annotated_boundary_flags_survive_refresh():
+    transcript = _build_transcript()
+    transcript._source_has_annotated_TSS = True
+    transcript._source_has_annotated_POLYA = True
+    transcript._imported_has_TSS = True
+    transcript._imported_has_POLYA = True
+
+    transcript.refresh_boundary_annotations_from_simple_path()
+
+    # Imported flags are remap-derived and can be cleared/reset.
+    assert transcript.has_TSS() is True
+    assert transcript.has_PolyA() is True
+    # Source provenance should remain intact for merge tracking.
+    assert transcript.has_source_annotated_TSS() is True
+    assert transcript.has_source_annotated_PolyA() is True

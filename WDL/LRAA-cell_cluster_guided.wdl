@@ -41,6 +41,8 @@ workflow LRAA_cell_cluster_guided {
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
         Boolean quant_only_cluster_guided = false
+        Array[File]? pre_normalized_cluster_bams
+        Array[File]? pre_normalized_cluster_bais
 
      }
 
@@ -137,6 +139,8 @@ workflow LRAA_cell_cluster_guided {
             referenceGenome = referenceGenome,
             annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
             bam_files = partition_bam_by_cell_cluster.partitioned_bams,
+            pre_normalized_cluster_bams = pre_normalized_cluster_bams,
+            pre_normalized_cluster_bais = pre_normalized_cluster_bais,
             HiFi = HiFi,
             oversimplify = oversimplify,
             normalize_max_cov_level = normalize_max_cov_level,
@@ -231,7 +235,7 @@ workflow LRAA_cell_cluster_guided {
 
          # normalized BAM intermediate outputs (for debugging/reuse)
          Array[File] normalized_cluster_bams = LRAA_quant_final_bamlist.normalized_cluster_bams
-         Array[File] normalized_cluster_bais = LRAA_quant_final_bamlist.normalized_cluster_bais
+         Array[File]? normalized_cluster_bais = LRAA_quant_final_bamlist.normalized_cluster_bais
          File merged_normalized_bam = LRAA_quant_final_bamlist.merged_bam
          File merged_normalized_bai = LRAA_quant_final_bamlist.merged_bai
          File final_normalized_merged_bam = LRAA_quant_final_bamlist.normalized_merged_bam
