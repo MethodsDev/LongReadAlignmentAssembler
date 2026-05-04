@@ -43,12 +43,16 @@ task LRAA_runner_task {
         Int progress_tail_chars = 5000
     }
 
-    # Dynamic memory: 25× the shard BAM size (tuned for per-chromosome shards), floor 32 GiB.
-    # The high multiplier reflects that LRAA's in-memory data structures dominate over raw BAM
-    # size — a few-GiB shard can require ~64 GiB peak RSS on larger chromosomes.
+    # Dynamic memory for per-chromosome shards: use the larger of two estimates.
+    #  - 25x BAM size preserves the prior behavior for larger shards.
+    #  - A bounded mid-small-shard bump gives extra headroom to shards near 0.7-1.6 GiB
+    #    without raising truly small shards above the 32 GiB floor.
     # For direct (non-scattered) runs the caller computes and passes memoryGB explicitly to override.
     Float bam_size_gib = size(inputBAM, "GiB")
-    Float mem_raw = 25.0 * bam_size_gib
+    Float mem_raw_size = 25.0 * bam_size_gib
+    Float mem_raw_mid_small_uncapped = if bam_size_gib > 0.5 then 32.0 + (40.0 * (bam_size_gib - 0.5)) else 32.0
+    Float mem_raw_mid_small = if mem_raw_mid_small_uncapped > 40.0 then 40.0 else mem_raw_mid_small_uncapped
+    Float mem_raw = if mem_raw_size > mem_raw_mid_small then mem_raw_size else mem_raw_mid_small
     Int computed_memoryGB = if mem_raw > 32.0 then ceil(mem_raw) else 32
     Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 

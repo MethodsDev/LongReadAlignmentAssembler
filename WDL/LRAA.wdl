@@ -104,7 +104,7 @@ workflow LRAA_wf {
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
                     min_mapping_quality = min_mapping_quality,
                     docker = docker,
-                    memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes from shard BAM (25× size, floor 32 GiB)
+                    memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes from shard BAM using size and mid-small-shard estimates (floor 32 GiB)
                     diskSizeGB = diskSizeGB
             }
         }
