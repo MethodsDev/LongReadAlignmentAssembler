@@ -56,8 +56,14 @@ Idents(seurat_obj) <- seurat_obj$assigned_cluster
 ###############################
 ## get pseudobulks per cluster
 
-# Extract the raw counts matrix
-counts <- GetAssayData(seurat_obj, slot = "counts")
+# Extract the raw counts matrix.
+# SeuratObject >= 5 requires `layer`, while older versions still use `slot`.
+counts <- tryCatch(
+  GetAssayData(seurat_obj, layer = "counts"),
+  error = function(e) {
+    GetAssayData(seurat_obj, slot = "counts")
+  }
+)
 
 # Get cluster assignments
 clusters <- Idents(seurat_obj)
@@ -84,5 +90,4 @@ message("writing ", output_matrix_filename)
 write.table(pseudobulk_matrix, output_matrix_filename, sep="\t", quote=F)
 
 quit(save = "no", status = 0, runLast = FALSE)
-
 
