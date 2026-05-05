@@ -40,8 +40,12 @@ workflow LRAA_quant_by_cluster {
         Int num_parallel_contigs = 3
         Int memoryGB_normalize = 8
         Int memoryGB_merge = 16
+        # Optional override for direct quant-only LRAA.wdl calls per cluster.
         Int? memoryGB_quant
+        # Optional override for chromosome-sharded quant-only LRAA.wdl workers only.
+        # This applies only when main_chromosomes is non-empty for the per-cluster quantification calls below.
         Int? memoryGB_quant_scattered
+        # Used only for chromosome-sharded per-cluster quantification runs.
         Int num_threads_per_worker_scattered = 2
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"

@@ -26,9 +26,13 @@ workflow LRAA_cell_cluster_guided {
         String read_umi_tag = "XM"
         
         Int numThreadsPerWorker = 2
+        # Used only when main_chromosomes is non-empty and inner LRAA.wdl calls are chromosome-sharded.
         Int numThreadsPerWorkerScattered = 9
         Int num_parallel_contigs = 3
+        # Optional override for direct inner LRAA.wdl runs.
         Int? memoryGB
+        # Optional override for chromosome-sharded inner LRAA.wdl workers only.
+        # The outer per-cluster scatter does not use this unless main_chromosomes triggers chromosome sharding inside each cluster run.
         Int? memoryGBPerWorkerScattered
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32

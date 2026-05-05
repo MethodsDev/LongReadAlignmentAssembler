@@ -23,10 +23,14 @@ Optional:
 - `main_chromosomes` – space-separated contigs to shard; empty runs direct mode
 - `region` – restricts run to a specific region (forces direct mode)
 
-Resources (defaults reasonable for moderate datasets):
-- `numThreads` (4), `memoryGB` (32), `diskSizeGB` (128), `docker` (LRAA image)
-- Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`,
-  `sparseMatrixCsvEngine` (`c` by default), `sparseMatrixGzipLevel` (`1` by default for faster compression)
+Resources:
+- `numThreadsPerWorker` and `numThreadsPerWorkerScattered` control LRAA worker threads for direct and chromosome-sharded runs, respectively
+- `memoryGB` is an optional override for direct LRAA runs; when unset, `LRAA.wdl` computes memory as `max(64 GiB, ceil(1.5 x input BAM size in GiB))`
+- `memoryGBPerWorkerScattered` is an optional override for chromosome-sharded LRAA workers only; when unset, each shard self-sizes in `subwdls/LRAA_runner.wdl` with a `32 GiB` floor and larger allocations for mid-size and large shard BAMs
+- `main_chromosomes` determines whether LRAA runs direct or chromosome-sharded; if empty, `memoryGBPerWorkerScattered` has no effect because the run stays in direct mode
+- In cluster-guided single-cell mode, the outer per-cluster scatter does not by itself activate `memoryGBPerWorkerScattered`; that setting only applies if each per-cluster `LRAA.wdl` call is also chromosome-sharded via `main_chromosomes`
+- `diskSizeGB` defaults to `256`
+- Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`, `sparseMatrixCsvEngine` (`python` by default), `sparseMatrixGzipLevel` (`1` by default for faster compression)
 
 Seurat clustering parameters (defaults mirror included R pipeline):
 - `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` ("^MT-")

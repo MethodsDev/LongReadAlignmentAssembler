@@ -142,9 +142,12 @@ workflow LRAA_singlecell_wf {
 
     # Resources and docker (propagated to subcalls where applicable)
     Int numThreadsPerWorker = 5
+    # Used only when main_chromosomes is non-empty and LRAA runs are chromosome-sharded.
     Int numThreadsPerWorkerScattered = 5
     Int num_parallel_contigs = 3
+    # Optional override for direct LRAA runs. When unset, LRAA.wdl uses max(64 GiB, ceil(1.5 x input BAM GiB)).
     Int? memoryGB
+    # Optional override for chromosome-sharded LRAA workers only. Has no effect when main_chromosomes is empty.
     Int? memoryGBPerWorkerScattered
     Int memoryGBbuildSparseMatrices = 32
     Int memoryGBFilterCells = 32
