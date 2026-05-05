@@ -50,8 +50,14 @@ Idents(seurat_obj) <- seurat_obj$assigned_cluster
 
 ###############################
 ## get expression fractions per cluster
-# Extract the raw counts matrix
-counts <- GetAssayData(seurat_obj, slot = "counts")
+# Extract the raw counts matrix.
+# SeuratObject >= 5 requires `layer`, while older versions still use `slot`.
+counts <- tryCatch(
+  GetAssayData(seurat_obj, layer = "counts"),
+  error = function(e) {
+    GetAssayData(seurat_obj, slot = "counts")
+  }
+)
 
 # Get cluster assignments
 clusters <- Idents(seurat_obj)
