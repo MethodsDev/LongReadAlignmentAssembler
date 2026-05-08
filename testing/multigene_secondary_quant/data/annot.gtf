@@ -1,0 +1,4 @@
+chrA	test	exon	20	59	.	+	.	gene_id "geneA"; transcript_id "txA1";
+chrA	test	exon	100	139	.	+	.	gene_id "geneA"; transcript_id "txA2";
+chrB	test	exon	20	59	.	+	.	gene_id "geneB"; transcript_id "txB1";
+chrB	test	exon	100	139	.	+	.	gene_id "geneB"; transcript_id "txB2";

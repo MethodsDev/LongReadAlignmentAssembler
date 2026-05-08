@@ -3,3 +3,12 @@ pylib/__pycache__/
 
 # Ignore all untracked files generated under testing
 testing/**
+!testing/multigene_secondary_quant/
+testing/multigene_secondary_quant/**
+!testing/multigene_secondary_quant/Makefile
+!testing/multigene_secondary_quant/validate_outputs.py
+!testing/multigene_secondary_quant/data/
+testing/multigene_secondary_quant/data/**
+!testing/multigene_secondary_quant/data/annot.gtf
+!testing/multigene_secondary_quant/data/genome.fa
+!testing/multigene_secondary_quant/data/multigene_secondary.sam
