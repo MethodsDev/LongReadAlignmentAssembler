@@ -70,23 +70,23 @@ task LRAA_runner_task {
 
         : > command_output.log
 
+        emit_log_tail() {
+            local log_file="$1"
+            local tail_lines="$2"
+
+            if [[ ! -s "$log_file" ]]; then
+                return 0
+            fi
+
+            tail -c ~{progress_tail_chars} "$log_file" | tr '\r' '\n' | tail -n "$tail_lines" >&2 || true
+        }
+
         progress_reporter() {
             local contig_prefix="~{output_prefix_use}.~{output_suffix}"
             local -a contig_tmp_dirs=(
                 "__${contig_prefix}.contigtmp"
                 "${contig_prefix}.contigtmp"
             )
-
-            emit_log_tail() {
-                local log_file="$1"
-                local tail_lines="$2"
-
-                if [[ ! -s "$log_file" ]]; then
-                    return 0
-                fi
-
-                tail -c ~{progress_tail_chars} "$log_file" | tr '\r' '\n' | tail -n "$tail_lines" >&2 || true
-            }
 
             while sleep ~{progress_report_interval_seconds}; do
                 if [[ -s command_output.log ]]; then
