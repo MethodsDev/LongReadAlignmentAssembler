@@ -186,6 +186,12 @@ def main():
         default=False,
         help="do not run EM; divide ambiguous read support equally among assigned isoforms",
     )
+    primary.add_argument(
+        "--allow_secondary_alignments",
+        action="store_true",
+        default=False,
+        help="retain secondary alignments during BAM ingestion; also forces quant mapping-quality thresholds to 0",
+    )
 
     parser.add_argument(
         "--HiFi",
@@ -684,6 +690,15 @@ def main():
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
     )
+    LRAA_Globals.config["allow_secondary_alignments"] = (
+        args.allow_secondary_alignments
+    )
+    if args.allow_secondary_alignments:
+        logger.info(
+            "Secondary alignments enabled; forcing min_mapping_quality and min_mapping_quality_for_final_quant to 0"
+        )
+        LRAA_Globals.config["min_mapping_quality"] = 0
+        LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 0
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(

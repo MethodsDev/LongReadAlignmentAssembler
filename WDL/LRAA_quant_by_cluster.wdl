@@ -28,6 +28,7 @@ workflow LRAA_quant_by_cluster {
         
         Boolean HiFi = false
         String? oversimplify
+        Boolean allow_secondary_alignments = false
         Int normalize_max_cov_level = 1000
         
         String cell_barcode_tag = "CB"
@@ -130,6 +131,7 @@ workflow LRAA_quant_by_cluster {
                 no_EM = false,
                 HiFi = HiFi,
                 oversimplify = oversimplify,
+                allow_secondary_alignments = allow_secondary_alignments,
                 main_chromosomes = main_chromosomes,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,

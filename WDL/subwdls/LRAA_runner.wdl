@@ -22,6 +22,7 @@ task LRAA_runner_task {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
+        Boolean allow_secondary_alignments = false
         Int? min_mapping_quality
         Int? min_mapping_quality_for_final_quant
         Float? min_isoform_fraction
@@ -179,6 +180,7 @@ task LRAA_runner_task {
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
+                                 ~{true="--allow_secondary_alignments" false='' allow_secondary_alignments} \
                                  ~{if defined(min_mapping_quality) then "--min_mapping_quality " + min_mapping_quality else ""} \
                                  ~{if defined(min_mapping_quality_for_final_quant) then "--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant else ""} \
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
@@ -259,6 +261,7 @@ workflow LRAA_runner {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
+        Boolean allow_secondary_alignments = false
         Int? min_mapping_quality
         Int? min_mapping_quality_for_final_quant
         Float? min_isoform_fraction
@@ -299,6 +302,7 @@ workflow LRAA_runner {
             min_per_id=min_per_id,
             no_EM=no_EM, 
             no_norm=no_norm,
+            allow_secondary_alignments=allow_secondary_alignments,
             min_mapping_quality=min_mapping_quality,
             min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,
             min_isoform_fraction=min_isoform_fraction,

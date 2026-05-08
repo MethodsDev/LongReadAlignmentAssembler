@@ -133,7 +133,9 @@ class Bam_alignment_extractor:
                 discarded_read_counter["qcfail"] += 1
                 continue
 
-            if read.is_secondary:
+            if read.is_secondary and not LRAA_Globals.config.get(
+                "allow_secondary_alignments", False
+            ):
                 discarded_read_counter["secondary"] += 1
                 continue
 

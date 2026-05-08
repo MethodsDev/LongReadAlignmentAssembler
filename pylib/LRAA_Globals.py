@@ -15,6 +15,7 @@ config = {
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 1,  # tighter filter applied at the final quant step so multi-mapping reads don't inflate per-transcript TPMs
+    "allow_secondary_alignments": False,  # when True, retain secondary alignments instead of discarding them during BAM ingestion
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_softclip_realign_test": 5,

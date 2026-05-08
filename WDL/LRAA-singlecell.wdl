@@ -128,6 +128,7 @@ workflow LRAA_singlecell_wf {
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
+    Boolean allow_secondary_alignments = false
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
@@ -197,6 +198,7 @@ workflow LRAA_singlecell_wf {
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
         region = region,
+        allow_secondary_alignments = allow_secondary_alignments,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         numThreadsPerWorker = numThreadsPerWorker,

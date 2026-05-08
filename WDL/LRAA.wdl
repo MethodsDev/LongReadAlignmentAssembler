@@ -22,6 +22,7 @@ workflow LRAA_wf {
         Boolean no_EM = false
         Boolean quant_only = false
         Boolean no_norm = false
+        Boolean allow_secondary_alignments = false
         Int? min_mapping_quality
         Int? min_mapping_quality_for_final_quant
 
@@ -100,6 +101,7 @@ workflow LRAA_wf {
                     HiFi = HiFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
+                    allow_secondary_alignments = allow_secondary_alignments,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
@@ -147,6 +149,7 @@ workflow LRAA_wf {
                 HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
+                allow_secondary_alignments = allow_secondary_alignments,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
                 numThreadsPerWorker = numThreadsPerWorker,
