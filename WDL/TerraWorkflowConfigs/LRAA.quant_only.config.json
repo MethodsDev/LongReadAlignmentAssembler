@@ -5,6 +5,7 @@
   "LRAA_wf.inputBAM":"${this.inputBAM}",
   "LRAA_wf.main_chromosomes":"${this.LRAA_main_chromosomes}",
   "LRAA_wf.min_mapping_quality":"${0}",
+  "LRAA_wf.min_mapping_quality_for_final_quant":"${1}",
   "LRAA_wf.min_per_id":"${}",
   "LRAA_wf.quant_only":"${true}",
   "LRAA_wf.referenceGenome":"${this.referenceGenome}",

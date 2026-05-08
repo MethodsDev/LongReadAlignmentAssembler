@@ -23,6 +23,7 @@ task LRAA_runner_task {
         Boolean no_EM 
         Boolean no_norm 
         Int? min_mapping_quality
+        Int? min_mapping_quality_for_final_quant
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
@@ -179,6 +180,7 @@ task LRAA_runner_task {
                                  ~{no_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
                                  ~{if defined(min_mapping_quality) then "--min_mapping_quality " + min_mapping_quality else ""} \
+                                 ~{if defined(min_mapping_quality_for_final_quant) then "--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant else ""} \
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
                                  ~{if defined(min_monoexonic_TPM) then "--min_monoexonic_TPM " + min_monoexonic_TPM else ""} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
@@ -258,6 +260,7 @@ workflow LRAA_runner {
         Boolean no_EM 
         Boolean no_norm 
         Int? min_mapping_quality
+        Int? min_mapping_quality_for_final_quant
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
@@ -297,6 +300,7 @@ workflow LRAA_runner {
             no_EM=no_EM, 
             no_norm=no_norm,
             min_mapping_quality=min_mapping_quality,
+            min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,
             min_isoform_fraction=min_isoform_fraction,
             min_monoexonic_TPM=min_monoexonic_TPM,
             no_filter_internal_priming=no_filter_internal_priming,

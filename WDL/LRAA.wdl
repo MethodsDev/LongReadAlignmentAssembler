@@ -23,6 +23,7 @@ workflow LRAA_wf {
         Boolean quant_only = false
         Boolean no_norm = false
         Int? min_mapping_quality
+        Int? min_mapping_quality_for_final_quant
 
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -103,6 +104,7 @@ workflow LRAA_wf {
                     read_umi_tag = read_umi_tag,
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
                     min_mapping_quality = min_mapping_quality,
+                    min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
                     memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes from shard BAM using size and mid-small-shard estimates (floor 32 GiB)
                     diskSizeGB = diskSizeGB
@@ -150,6 +152,7 @@ workflow LRAA_wf {
                 numThreadsPerWorker = numThreadsPerWorker,
                 num_parallel_contigs = num_parallel_contigs,
                 min_mapping_quality = min_mapping_quality,
+                min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                 docker = docker,
                 memoryGB = effective_memoryGB,
                 diskSizeGB = diskSizeGB

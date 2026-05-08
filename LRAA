@@ -339,6 +339,15 @@ def main():
     )
 
     config_group.add_argument(
+        "--min_mapping_quality_for_final_quant",
+        type=int,
+        default=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
+        help="minimum read alignment mapping quality applied during the final quant step (default: {})".format(
+            LRAA_Globals.config["min_mapping_quality_for_final_quant"]
+        ),
+    )
+
+    config_group.add_argument(
         "--min_isoform_fraction",
         type=float,
         default=LRAA_Globals.config["min_isoform_fraction"],
@@ -672,6 +681,9 @@ def main():
     LRAA_Globals.config["min_per_id"] = args.min_per_id
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
+    LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
+        args.min_mapping_quality_for_final_quant
+    )
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(

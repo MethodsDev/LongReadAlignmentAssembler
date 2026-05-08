@@ -20,7 +20,8 @@ Primary outputs include a GTF of assembled isoforms, per-isoform expression esti
 - Optional annotation: GTF to guide splice-graph construction and transcript boundary priors.
 
 Read ingestion is implemented in `pylib/Bam_alignment_extractor.py`. LRAA filters:
-- Minimum mapping quality (config `min_mapping_quality`).
+- Minimum mapping quality during discovery/assembly (config `min_mapping_quality`).
+- Minimum mapping quality during final quantification (config `min_mapping_quality_for_final_quant`).
 - Alignment percent identity derived from the `NM`/`nM` tag and the aligned-base count. Reads below `config['min_per_id']` are discarded.
 - Secondary, duplicate, and QC-failed alignments are excluded. Paired-end flags are respected when present.
 
@@ -83,7 +84,7 @@ Counts and TPM are derived from estimated proportions with effective-length or r
 
 Global configuration lives in `pylib/LRAA_Globals.py` as a `config` dictionary. The CLI updates many values directly, and additional overrides can be provided via `--config_update` JSON. Notable keys include:
 
-- Read filtering: `min_mapping_quality`, `min_per_id`.
+- Read filtering: `min_mapping_quality`, `min_mapping_quality_for_final_quant`, `min_per_id`.
 - Graph scale: `max_path_nodes_per_component`, thresholds controlling junction/exon evidence.
 - Assignment/EM: `fraction_read_align_overlap`, `weight_reads_by_3prime_agreement`, `EM_alpha`.
 - Parallelism: `CPU`, `min_mpgn_component_size_for_spawn`.
