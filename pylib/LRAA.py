@@ -915,7 +915,7 @@ class LRAA:
                 return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
             except Exception:
                 return None
-        for i, read_name in enumerate(grouped_alignments):
+        for i, group_key in enumerate(grouped_alignments):
             num_processed += 1
             if pbar is not None:
                 try:
@@ -944,11 +944,14 @@ class LRAA:
                     sys.stderr.flush()
                     last_time_update = now
 
-            # print("{}\t{}".format(read_name, len(grouped_alignments[read_name])))
+            grouped_pretty_alignments = grouped_alignments[group_key]
+            read_name = grouped_pretty_alignments[0].get_read_name()
+
+            # print("{}\t{}".format(read_name, len(grouped_pretty_alignments)))
             paths_list = list()
             path_candidates = list()  # (path, (lend, rend)) per pretty_alignment
             read_type = None
-            for pretty_alignment in grouped_alignments[read_name]:
+            for pretty_alignment in grouped_pretty_alignments:
                 if read_type is None:
                     read_type = pretty_alignment.get_read_type()
 
@@ -988,7 +991,7 @@ class LRAA:
                             "\t".join(
                                 [
                                     read_name,
-                                    str(grouped_alignments[read_name]),
+                                    str(grouped_pretty_alignments),
                                     str(paths_list),
                                     "DISCARDED-SPACER",
                                 ]
@@ -1282,10 +1285,19 @@ class LRAA:
         grouped_alignments = defaultdict(list)
 
         for pretty_alignment in pretty_alignments:
-            read_name = pretty_alignment.get_read_name()
-            grouped_alignments[read_name].append(pretty_alignment)
+            group_key = self._get_alignment_group_key(pretty_alignment)
+            grouped_alignments[group_key].append(pretty_alignment)
 
         return grouped_alignments
+
+    def _get_alignment_group_key(self, pretty_alignment):
+        read_name = pretty_alignment.get_read_name()
+        try:
+            span_lend, _ = pretty_alignment.get_alignment_span()
+        except Exception:
+            span_lend = None
+
+        return (read_name, span_lend)
 
     def _map_read_to_graph(
         self,

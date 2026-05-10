@@ -33,7 +33,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.16.2"
+VERSION = "v0.16.3"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -690,9 +690,7 @@ def main():
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
     )
-    LRAA_Globals.config["allow_secondary_alignments"] = (
-        args.allow_secondary_alignments
-    )
+    LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
     if args.allow_secondary_alignments:
         logger.info(
             "Secondary alignments enabled; forcing min_mapping_quality and min_mapping_quality_for_final_quant to 0"

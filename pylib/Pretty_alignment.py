@@ -138,6 +138,16 @@ class Pretty_alignment:
         self.orig_right_soft_clipping = right_soft_clipping
 
         read_sequence = pysam_alignment.query_sequence
+        read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
+        if read_sequence is None:
+            logger.debug(
+                "Read %s missing query sequence; skipping soft-clip sequence inspection",
+                read_name,
+            )
+            self.left_soft_clipping = left_soft_clipping
+            self.right_soft_clipping = right_soft_clipping
+            return
+
         left_soft_clipped_seq = ""
         if left_soft_clipping > 0:
             left_soft_clipped_seq = read_sequence[0:left_soft_clipping]
@@ -148,8 +158,6 @@ class Pretty_alignment:
 
         ## deal with polyA
         min_PolyA_ident_length = LRAA_Globals.config["min_PolyA_ident_length"]
-
-        read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
 
         if (
             pysam_alignment.is_forward
@@ -297,21 +305,25 @@ class Pretty_alignment:
                 pbar = None
                 use_tqdm = False
 
+        def _update_progress():
+            nonlocal last_log_t
+            if use_tqdm and pbar is not None:
+                pbar.update(1)
+            else:
+                if (
+                    (processed % LOG_EVERY == 0)
+                    or (time.time() - last_log_t) >= LOG_EVERY_SEC
+                ):
+                    logger.info(
+                        f"progress try_correct_alignments: processed={processed}/{total}, corrected={corrected}"
+                    )
+                    last_log_t = time.time()
+
         for pretty_alignment in pretty_alignments_list:
             processed += 1
 
             if not pretty_alignment.has_soft_clipping():
-                if use_tqdm and pbar is not None:
-                    pbar.update(1)
-                else:
-                    if (
-                        (processed % LOG_EVERY == 0)
-                        or (time.time() - last_log_t) >= LOG_EVERY_SEC
-                    ):
-                        logger.info(
-                            f"progress try_correct_alignments: processed={processed}/{total}, corrected={corrected}"
-                        )
-                        last_log_t = time.time()
+                _update_progress()
                 continue
 
             alignment_segments = pretty_alignment.get_pretty_alignment_segments()
@@ -329,6 +341,13 @@ class Pretty_alignment:
 
             read_sequence = read.query_sequence
             read_name = read.query_name
+            if read_sequence is None:
+                logger.debug(
+                    "Read %s missing query sequence; skipping soft-clip realignment correction",
+                    read_name,
+                )
+                _update_progress()
+                continue
 
             read_adj_lend = orig_left_soft_clipping - left_soft_clipping + 1
             assert read_adj_lend >= 1
@@ -492,17 +511,7 @@ class Pretty_alignment:
                             break
 
             # progress update per iteration
-            if use_tqdm and pbar is not None:
-                pbar.update(1)
-            else:
-                if (
-                    (processed % LOG_EVERY == 0)
-                    or (time.time() - last_log_t) >= LOG_EVERY_SEC
-                ):
-                    logger.info(
-                        f"progress try_correct_alignments: processed={processed}/{total}, corrected={corrected}"
-                    )
-                    last_log_t = time.time()
+            _update_progress()
 
         if pbar is not None:
             try:
