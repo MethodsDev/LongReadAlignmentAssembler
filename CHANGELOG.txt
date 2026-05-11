@@ -1,3 +1,13 @@
+v0.17.0, May 11, 2026
+- added transcriptome-based read rescue for unassigned reads in quantification. Rescue now runs before the first EM in quant-only mode and can recover reads discarded as `DISCARDED-SPACER`, reads anchored to a gene but incompatible with annotated isoforms, and reads dropped at genomic alignment parsing for low percent identity when they align cleanly to local transcript sequences.
+- extended rescue into reference-guided isoform identification for multi-exon annotation-supported transcripts so rescued reads can contribute during guided isoform assembly and survive downstream filtering, not just the final quant step.
+- made read rescue default-on and added `--no_rescue_unassigned_reads_via_transcriptome_alignment` as the opt-out CLI parameter. The same master switch now disables rescue in quant-only, final quant during isoform identification, and guided assembly rescue.
+- made secondary alignments default-on, lowered default `min_mapping_quality` and `min_mapping_quality_for_final_quant` to `0`, and added `--no_allow_secondary_alignments` as the opt-out CLI parameter. Retained hidden backward-compatible positive CLI aliases for the old opt-in forms where needed by tests and older wrappers.
+- updated rescue mode behavior to respect sequencing mode defaults: rescue `min_per_id` now follows the active run setting, and rescue minimap2 presets default to PacBio HiFi-oriented mapping in `--HiFi` mode and ONT-oriented mapping otherwise.
+- exposed rescue control through the WDL workflows and Terra example configs, with default-on behavior propagated through bulk, clustered, and single-cell entry points.
+- fixed handling of BAM records lacking `SEQ` on retained non-primary alignments by skipping only sequence-dependent soft-clip refinements while still allowing those alignments to contribute structurally.
+
+
 v0.16.1, Apr 29, 2026
 - stabilized LRAA-gtf-merge boundary provenance handling and ensured boundary read counts are consumed correctly during merge; added/updated boundary-count tests and HiFi/non-HiFi merge fixtures.
 - enforced `min_transcript_length` on final assembled isoforms to ensure short transcripts are filtered at final output.
