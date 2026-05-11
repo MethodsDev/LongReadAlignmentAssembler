@@ -14,8 +14,8 @@ config = {
     "HiFi": False,  # set to True when --HiFi is used; enables HiFi-specific filtering
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
-    "min_mapping_quality_for_final_quant": 1,  # tighter filter applied at the final quant step so multi-mapping reads don't inflate per-transcript TPMs
-    "allow_secondary_alignments": False,  # when True, retain secondary alignments instead of discarding them during BAM ingestion
+    "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
+    "allow_secondary_alignments": True,  # retain secondary alignments by default during BAM ingestion
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_softclip_realign_test": 5,
@@ -116,8 +116,8 @@ config = {
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
     "rescue_unassigned_reads_via_transcriptome_alignment": False,
-    "rescue_unassigned_minimap2_preset": "map-hifi",
-    "rescue_unassigned_min_per_id": 80.0,
+    "rescue_unassigned_minimap2_preset": "auto",
+    "rescue_unassigned_min_per_id": None,
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,

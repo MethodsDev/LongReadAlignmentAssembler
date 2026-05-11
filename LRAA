@@ -197,10 +197,14 @@ def main():
         help="do not run EM; divide ambiguous read support equally among assigned isoforms",
     )
     primary.add_argument(
-        "--allow_secondary_alignments",
-        action="store_true",
-        default=False,
-        help="retain secondary alignments during BAM ingestion; also forces quant mapping-quality thresholds to 0",
+        "--no_allow_secondary_alignments",
+        dest="allow_secondary_alignments",
+        action="store_false",
+        default=LRAA_Globals.config["allow_secondary_alignments"],
+        help=(
+            "disable retention of secondary alignments during BAM ingestion "
+            f"(default: {LRAA_Globals.config['allow_secondary_alignments']})"
+        ),
     )
 
     parser.add_argument(

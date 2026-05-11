@@ -96,7 +96,7 @@ def rescue_unassigned_reads_to_transcriptome(
 
 
 def _run_minimap2_transcriptome_alignment(transcript_fa, reads_fa, rescue_sam, minimap2_exe):
-    preset = LRAA_Globals.config.get("rescue_unassigned_minimap2_preset", "map-hifi")
+    preset = _resolve_rescue_minimap2_preset()
     cmd = [
         minimap2_exe,
         "-a",
@@ -204,7 +204,7 @@ def _write_reads_fasta(reads_fa, read_name_to_seq):
 
 def _parse_rescue_alignments(rescue_sam, splice_graph, transcript_models):
     read_to_hits = defaultdict(list)
-    min_per_id = float(LRAA_Globals.config.get("rescue_unassigned_min_per_id", 80.0))
+    min_per_id = float(_resolve_rescue_min_per_id())
     with pysam.AlignmentFile(rescue_sam, "r") as sam_reader:
         for read in sam_reader.fetch(until_eof=True):
             if read.is_unmapped or read.is_supplementary:
@@ -269,6 +269,22 @@ def _passes_percent_identity(read, min_per_id):
         return False
     per_id = 100.0 - (mismatch_count / aligned_base_count) * 100.0
     return per_id >= min_per_id
+
+
+def _resolve_rescue_minimap2_preset():
+    preset = LRAA_Globals.config.get("rescue_unassigned_minimap2_preset", "auto")
+    if preset in (None, "", "auto"):
+        if LRAA_Globals.config.get("HiFi", False):
+            return "map-hifi"
+        return "map-ont"
+    return str(preset)
+
+
+def _resolve_rescue_min_per_id():
+    min_per_id = LRAA_Globals.config.get("rescue_unassigned_min_per_id", None)
+    if min_per_id is None:
+        return float(LRAA_Globals.config["min_per_id"])
+    return float(min_per_id)
 
 
 def _alignment_score(read):

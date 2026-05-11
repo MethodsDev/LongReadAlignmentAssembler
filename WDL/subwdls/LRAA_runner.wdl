@@ -22,9 +22,9 @@ task LRAA_runner_task {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
-        Boolean allow_secondary_alignments = false
-        Int? min_mapping_quality
-        Int? min_mapping_quality_for_final_quant
+        Boolean allow_secondary_alignments = true
+        Int min_mapping_quality = 0
+        Int min_mapping_quality_for_final_quant = 0
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
@@ -180,9 +180,9 @@ task LRAA_runner_task {
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
-                                 ~{true="--allow_secondary_alignments" false='' allow_secondary_alignments} \
-                                 ~{if defined(min_mapping_quality) then "--min_mapping_quality " + min_mapping_quality else ""} \
-                                 ~{if defined(min_mapping_quality_for_final_quant) then "--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant else ""} \
+                                 ~{true='' false='--no_allow_secondary_alignments' allow_secondary_alignments} \
+                                 ~{"--min_mapping_quality " + min_mapping_quality} \
+                                 ~{"--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant} \
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
                                  ~{if defined(min_monoexonic_TPM) then "--min_monoexonic_TPM " + min_monoexonic_TPM else ""} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
@@ -252,7 +252,7 @@ workflow LRAA_runner {
         Boolean HiFi = false
         String? region
         String? oversimplify
-        # Expose toggle to workflow as well; default false here and override to true from scatter callers.
+        # Expose toggle to workflow as well; default on to match current LRAA quant defaults.
         Boolean no_parallelize_contigs = false
         String? contig
         Int? num_parallel_contigs
@@ -261,9 +261,9 @@ workflow LRAA_runner {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
-        Boolean allow_secondary_alignments = false
-        Int? min_mapping_quality
-        Int? min_mapping_quality_for_final_quant
+        Boolean allow_secondary_alignments = true
+        Int min_mapping_quality = 0
+        Int min_mapping_quality_for_final_quant = 0
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming

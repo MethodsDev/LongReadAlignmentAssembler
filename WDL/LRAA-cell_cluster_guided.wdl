@@ -19,7 +19,7 @@ workflow LRAA_cell_cluster_guided {
         
         Boolean HiFi = false
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
-        Boolean allow_secondary_alignments = false
+        Boolean allow_secondary_alignments = true
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         

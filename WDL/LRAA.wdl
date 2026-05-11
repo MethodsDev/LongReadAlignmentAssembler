@@ -22,9 +22,9 @@ workflow LRAA_wf {
         Boolean no_EM = false
         Boolean quant_only = false
         Boolean no_norm = false
-        Boolean allow_secondary_alignments = false
-        Int? min_mapping_quality
-        Int? min_mapping_quality_for_final_quant
+        Boolean allow_secondary_alignments = true
+        Int min_mapping_quality = 0
+        Int min_mapping_quality_for_final_quant = 0
 
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
