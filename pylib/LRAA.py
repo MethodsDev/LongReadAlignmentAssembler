@@ -30,6 +30,8 @@ from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
 import math
+from Quantify import Quantify
+from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +79,7 @@ class LRAA:
         bam_file,
         allow_spacers=False,
         input_transcripts=None,
+        rescue_target_transcripts=None,
         restrict_splice_type=None,
         SE_read_encapsulation_mask=None,
     ):
@@ -116,6 +119,16 @@ class LRAA:
             SE_read_encapsulation_mask,
         )
         self._mp_counter = mp_counter
+
+        if rescue_target_transcripts is not None:
+            self._augment_mp_counter_with_transcriptome_rescue(
+                mp_counter,
+                rescue_target_transcripts,
+                contig_acc,
+                contig_strand,
+                contig_seq,
+                bam_file,
+            )
 
         if input_transcripts is not None:
             logger.info("[%s%s] -incorporating input transcripts into multpath graph", contig_acc, contig_strand)
@@ -160,6 +173,61 @@ class LRAA:
         logger.info("[%s%s] -multipath graph building took %.1f seconds.", contig_acc, contig_strand, build_time)
 
         return mp_counter
+
+    def _augment_mp_counter_with_transcriptome_rescue(
+        self,
+        mp_counter,
+        rescue_target_transcripts,
+        contig_acc,
+        contig_strand,
+        contig_seq,
+        bam_file,
+    ):
+
+        if not LRAA_Globals.config.get(
+            "rescue_unassigned_reads_via_transcriptome_alignment", False
+        ):
+            return
+
+        if not rescue_target_transcripts or bam_file is None:
+            return
+
+        rescue_read_names = set(self.get_failed_read_names_for_rescue())
+
+        q_probe = Quantify(
+            False,
+            0,
+            quant_mode="draft",
+        )
+        for transcript in rescue_target_transcripts:
+            transcript.init_quant_info()
+        q_probe._assign_path_nodes_to_gene(rescue_target_transcripts)
+        q_probe._assign_reads_to_transcripts(self._splice_graph, mp_counter)
+        rescue_read_names.update(q_probe.get_unassigned_read_names())
+
+        if not rescue_read_names:
+            return
+
+        logger.info(
+            "[%s%s] early transcriptome rescue: retrying %d unassigned reads",
+            contig_acc,
+            contig_strand,
+            len(rescue_read_names),
+        )
+
+        rescued_mps = rescue_unassigned_reads_to_transcriptome(
+            self._splice_graph,
+            rescue_target_transcripts,
+            contig_seq,
+            bam_file,
+            contig_acc,
+            self._splice_graph._region_lend,
+            self._splice_graph._region_rend,
+            rescue_read_names,
+        )
+
+        for rescued_mp in rescued_mps:
+            mp_counter.add(rescued_mp)
 
     def reconstruct_isoforms(self, single_best_only=False):
 

@@ -3296,6 +3296,7 @@ def run_transcript_assembly(
         bam_file_for_quant,
         allow_spacers,
         transcripts_incl_in_graph,
+        rescue_target_transcripts=ME_input_transcripts,
         restrict_splice_type=None,
     )
 
@@ -3833,6 +3834,7 @@ def build_ME_transcripts(
         bam_file_for_sg,
         allow_spacers,
         input_transcripts,
+        rescue_target_transcripts=input_transcripts,
         restrict_splice_type="ME",
     )
 
