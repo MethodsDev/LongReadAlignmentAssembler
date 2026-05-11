@@ -206,6 +206,13 @@ def main():
             f"(default: {LRAA_Globals.config['allow_secondary_alignments']})"
         ),
     )
+    primary.add_argument(
+        "--allow_secondary_alignments",
+        dest="allow_secondary_alignments",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
 
     parser.add_argument(
         "--HiFi",
