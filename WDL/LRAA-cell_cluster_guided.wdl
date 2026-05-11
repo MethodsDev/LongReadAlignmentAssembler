@@ -20,6 +20,7 @@ workflow LRAA_cell_cluster_guided {
         Boolean HiFi = false
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
         Boolean allow_secondary_alignments = true
+        Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
         
@@ -90,6 +91,7 @@ workflow LRAA_cell_cluster_guided {
                     HiFi = HiFi,
                     oversimplify = oversimplify,
                     allow_secondary_alignments = allow_secondary_alignments,
+                    rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     main_chromosomes = main_chromosomes,
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
@@ -150,6 +152,7 @@ workflow LRAA_cell_cluster_guided {
             HiFi = HiFi,
             oversimplify = oversimplify,
             allow_secondary_alignments = allow_secondary_alignments,
+            rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
             normalize_max_cov_level = normalize_max_cov_level,
             main_chromosomes = main_chromosomes,
             cell_barcode_tag = cell_barcode_tag,

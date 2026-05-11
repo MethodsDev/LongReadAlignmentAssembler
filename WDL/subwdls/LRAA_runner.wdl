@@ -23,6 +23,7 @@ task LRAA_runner_task {
         Boolean no_EM 
         Boolean no_norm 
         Boolean allow_secondary_alignments = true
+        Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
         Float? min_isoform_fraction
@@ -181,6 +182,7 @@ task LRAA_runner_task {
                                  ~{no_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
                                  ~{true='' false='--no_allow_secondary_alignments' allow_secondary_alignments} \
+                                 ~{true='' false='--no_rescue_unassigned_reads_via_transcriptome_alignment' rescue_unassigned_reads_via_transcriptome_alignment} \
                                  ~{"--min_mapping_quality " + min_mapping_quality} \
                                  ~{"--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant} \
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
@@ -259,9 +261,10 @@ workflow LRAA_runner {
         
         Int? num_total_reads
         Float? min_per_id
-        Boolean no_EM 
-        Boolean no_norm 
+        Boolean no_EM
+        Boolean no_norm
         Boolean allow_secondary_alignments = true
+        Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
         Float? min_isoform_fraction
@@ -303,6 +306,7 @@ workflow LRAA_runner {
             no_EM=no_EM, 
             no_norm=no_norm,
             allow_secondary_alignments=allow_secondary_alignments,
+            rescue_unassigned_reads_via_transcriptome_alignment=rescue_unassigned_reads_via_transcriptome_alignment,
             min_mapping_quality=min_mapping_quality,
             min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,
             min_isoform_fraction=min_isoform_fraction,

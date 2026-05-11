@@ -129,6 +129,7 @@ workflow LRAA_singlecell_wf {
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
     Boolean allow_secondary_alignments = true
+    Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
@@ -199,6 +200,7 @@ workflow LRAA_singlecell_wf {
         main_chromosomes = main_chromosomes,
         region = region,
         allow_secondary_alignments = allow_secondary_alignments,
+        rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         numThreadsPerWorker = numThreadsPerWorker,

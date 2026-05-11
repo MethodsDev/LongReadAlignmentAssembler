@@ -182,13 +182,22 @@ def main():
         help="restrict to single-exon isoforms only",
     )
     primary.add_argument(
-        "--rescue_unassigned_reads_via_transcriptome_alignment",
-        action="store_true",
-        default=False,
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+        dest="rescue_unassigned_reads_via_transcriptome_alignment",
+        action="store_false",
+        default=LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"],
         help=(
-            "quant-only only: rescue reads that fail graph/isoform assignment by "
-            "realigning them to local reference transcript sequences before the first EM"
+            "disable quant-only read rescue for reads that fail graph/isoform "
+            "assignment before the first EM "
+            f"(default: {LRAA_Globals.config['rescue_unassigned_reads_via_transcriptome_alignment']})"
         ),
+    )
+    primary.add_argument(
+        "--rescue_unassigned_reads_via_transcriptome_alignment",
+        dest="rescue_unassigned_reads_via_transcriptome_alignment",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     primary.add_argument(
         "--no_EM",

@@ -23,6 +23,7 @@ workflow LRAA_wf {
         Boolean quant_only = false
         Boolean no_norm = false
         Boolean allow_secondary_alignments = true
+        Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
 
@@ -102,6 +103,7 @@ workflow LRAA_wf {
                     no_norm = no_norm,
                     no_EM = no_EM,
                     allow_secondary_alignments = allow_secondary_alignments,
+                    rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
                     numThreadsPerWorker = numThreadsPerWorkerScattered,
@@ -150,6 +152,7 @@ workflow LRAA_wf {
                 no_norm = no_norm,
                 no_EM = no_EM,
                 allow_secondary_alignments = allow_secondary_alignments,
+                rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
                 numThreadsPerWorker = numThreadsPerWorker,

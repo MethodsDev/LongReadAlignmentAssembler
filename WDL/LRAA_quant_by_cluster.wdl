@@ -29,6 +29,7 @@ workflow LRAA_quant_by_cluster {
         Boolean HiFi = false
         String? oversimplify
         Boolean allow_secondary_alignments = true
+        Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
         
         String cell_barcode_tag = "CB"
@@ -132,6 +133,7 @@ workflow LRAA_quant_by_cluster {
                 HiFi = HiFi,
                 oversimplify = oversimplify,
                 allow_secondary_alignments = allow_secondary_alignments,
+                rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 main_chromosomes = main_chromosomes,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
