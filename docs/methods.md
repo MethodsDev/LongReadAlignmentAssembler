@@ -25,6 +25,8 @@ Read ingestion is implemented in `pylib/Bam_alignment_extractor.py`. LRAA filter
 - Alignment percent identity derived from the `NM`/`nM` tag and the aligned-base count. Reads below `config['min_per_id']` are discarded.
 - Secondary, duplicate, and QC-failed alignments are excluded. Paired-end flags are respected when present.
 
+In quantification-only mode, LRAA also supports an optional transcriptome rescue pass (`--rescue_unassigned_reads_via_transcriptome_alignment`). This pass retries reads that fail normal graph/isoform assignment, including `DISCARDED-SPACER` reads, reads anchored to a gene but incompatible with all candidate isoforms, and reads discarded from genomic assignment because their genomic alignment percent identity falls below the configured threshold. Rescue is restricted to the local contig/strand transcript set and is performed before quantification EM.
+
 For memory efficiency, read objects destined for pretty/realignment inspection are “lightened” unless the read is a soft-clipping realignment candidate.
 
 ## Splice-graph construction
@@ -64,6 +66,8 @@ After reconstruction, LRAA assigns reads to transcripts and estimates abundances
   `config['fraction_read_align_overlap']`). Exact matches may be prioritized; otherwise, compatible matches form a candidate set.
 - Assignment cascade behavior: In HiFi-style matching, boundary nodes (TSS/PolyA) are respected first; if unresolved, matching falls back to boundary-trimmed non-HiFi-style compatibility checks.
 - Weighted assignments: If `config['weight_reads_by_3prime_agreement']` is enabled, compatibility weights prioritize agreement of read 3' ends with transcript 3' ends.
+
+In quantification-only mode with transcriptome rescue enabled, failed reads are first realigned to local multi-exon transcript sequences using minimap2 in non-splice mode. Rescue alignments are accepted only when, after the same small-indel block-merging logic used for genomic pretty alignments, the alignment collapses to a single contiguous transcript-coordinate interval. Accepted rescue hits are projected back onto splice-graph node paths; ambiguous transcriptome hits are retained only when all top hits imply the same node path. These rescued paths are merged into the evidence set before the first EM iteration, so quantification continues under the same compatibility and weighting model as native genomic assignments.
 
 Model and updates:
 

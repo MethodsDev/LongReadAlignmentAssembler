@@ -26,6 +26,7 @@ class Bam_alignment_extractor:
         self._alignments_bam_filename = alignments_bam_filename
 
         self._pysam_reader = pysam.AlignmentFile(self._alignments_bam_filename, "rb")
+        self._last_discarded_read_names_by_reason = defaultdict(set)
 
         return
 
@@ -48,6 +49,7 @@ class Bam_alignment_extractor:
     ):
 
         discarded_read_counter = defaultdict(int)
+        self._last_discarded_read_names_by_reason = defaultdict(set)
 
         # Collect either raw reads or Pretty_alignment objects depending on 'pretty'
         read_alignments = [] if not pretty else None
@@ -164,6 +166,9 @@ class Bam_alignment_extractor:
                         )
                     )
                     discarded_read_counter["low_perID"] += 1
+                    self._last_discarded_read_names_by_reason["low_perID"].add(
+                        read_name
+                    )
                     # print(read)
                     # print("Cigar_stats: " + str(cigar_stats))
                     num_alignments_per_id_fail += 1
@@ -246,3 +251,9 @@ class Bam_alignment_extractor:
             return pretty_alignments
         else:
             return read_alignments
+
+    def get_last_discarded_read_names_by_reason(self):
+        return {
+            reason: set(read_names)
+            for reason, read_names in self._last_discarded_read_names_by_reason.items()
+        }

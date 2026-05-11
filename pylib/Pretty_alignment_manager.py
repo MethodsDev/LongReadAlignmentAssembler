@@ -21,6 +21,7 @@ class Pretty_alignment_manager:
 
     def __init__(self, splice_graph, alignment_cache_dir = "__alignment_cache"):
         self._splice_graph = splice_graph
+        self._last_discarded_read_names_by_reason = dict()
         # If caller didn't specify a custom dir and we have a per-worker tmp dir, prefer a structured subdir
         try:
             tmp_root = os.environ.get("LRAA_TMP_DIR")
@@ -156,6 +157,7 @@ class Pretty_alignment_manager:
                 contig_strand,
             )
             pretty_alignments = self._load_pickle_cache(alignment_cache_file)
+            self._last_discarded_read_names_by_reason = dict()
             try:
                 cache_sz_mb = os.path.getsize(alignment_cache_file) / (1024.0 * 1024.0)
             except Exception:
@@ -194,6 +196,9 @@ class Pretty_alignment_manager:
                 pretty=True,
                 per_id_QC_raise_error=per_id_QC_raise_error,
                 force_lighten_all=oversimplify_this_contig,
+            )
+            self._last_discarded_read_names_by_reason = (
+                bam_extractor.get_last_discarded_read_names_by_reason()
             )
             self._log_mem(
                 "completed get_read_alignments",
@@ -347,7 +352,13 @@ class Pretty_alignment_manager:
                     )
 
         self._log_mem("end retrieve_pretty_alignments", extra={"n": len(pretty_alignments), "sec": f"{(time.time()-t_start):.2f}"})
-        return pretty_alignments                
+        return pretty_alignments
+
+    def get_last_discarded_read_names_by_reason(self):
+        return {
+            reason: set(read_names)
+            for reason, read_names in self._last_discarded_read_names_by_reason.items()
+        }
 
 
     def apply_SE_read_encapsulation_mask(self, pretty_alignments, SE_read_encapsulation_mask):

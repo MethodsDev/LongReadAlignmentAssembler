@@ -62,8 +62,12 @@ class LRAA:
         # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
         # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
         self._read_name_to_span = dict()
+        self._failed_read_names_for_rescue = set()
 
         return
+
+    def get_failed_read_names_for_rescue(self):
+        return set(self._failed_read_names_for_rescue)
 
     def build_multipath_graph(
         self,
@@ -831,6 +835,7 @@ class LRAA:
 
         # distill read alignments into unique multipaths (so if 10k alignments yield the same structure, there's one multipath with 10k count associated)
         mp_counter = MultiPathCounter()
+        self._failed_read_names_for_rescue = set()
 
         if bam_file is None:
             return mp_counter  # nothing to do here.
@@ -849,6 +854,16 @@ class LRAA:
             try_correct_alignments=LRAA_Globals.config["try_correct_alignments"],
             SE_read_encapsulation_mask=SE_read_encapsulation_mask,
         )
+
+        if LRAA_Globals.config.get(
+            "rescue_unassigned_reads_via_transcriptome_alignment", False
+        ):
+            discarded_read_names_by_reason = (
+                pretty_alignment_manager.get_last_discarded_read_names_by_reason()
+            )
+            self._failed_read_names_for_rescue.update(
+                discarded_read_names_by_reason.get("low_perID", set())
+            )
 
 
         # actually not using the updated base coverage, so can skip for now.
@@ -986,6 +1001,10 @@ class LRAA:
                     candidates_no_spacers.append(path_candidates[idx])
                 else:
                     num_discard_spacer += 1
+                    if LRAA_Globals.config.get(
+                        "rescue_unassigned_reads_via_transcriptome_alignment", False
+                    ):
+                        self._failed_read_names_for_rescue.add(read_name)
                     if LRAA_Globals.DEBUG:
                         read_graph_mappings_ofh.write(
                             "\t".join(
@@ -1008,6 +1027,10 @@ class LRAA:
                     self._read_name_to_span[read_name] = chosen_span
             else:
                 num_no_path += 1
+                if LRAA_Globals.config.get(
+                    "rescue_unassigned_reads_via_transcriptome_alignment", False
+                ):
+                    self._failed_read_names_for_rescue.add(read_name)
                 continue
 
             # Construct MultiPath storing the single read name so ID-based uniqueness

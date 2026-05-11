@@ -32,6 +32,7 @@ class Quantify:
         self._read_name_to_multipath = dict()
 
         self._mp_to_transcripts = dict()
+        self._unassigned_mp_count_pairs = list()
 
         self._quant_mode = quant_mode
 
@@ -151,6 +152,7 @@ class Quantify:
         mp_counter,
         fraction_read_align_overlap=LRAA_Globals.config["fraction_read_align_overlap"],
     ):
+        self._unassigned_mp_count_pairs = list()
 
         try:
             ca = splice_graph.get_contig_acc()
@@ -470,6 +472,7 @@ class Quantify:
                         mp_count_pair
                     )
                 )
+                self._unassigned_mp_count_pairs.append(mp_count_pair)
             else:
                 logger.debug(
                     "mp_count_pair {} maps to transcripts:\n{}".format(
@@ -1253,6 +1256,19 @@ class Quantify:
 
     def get_mp_to_transcripts(self):
         return self._mp_to_transcripts
+
+    def get_unassigned_mp_count_pairs(self):
+        return list(self._unassigned_mp_count_pairs)
+
+    def get_unassigned_read_names(self):
+        read_names = set()
+        for mp_count_pair in self._unassigned_mp_count_pairs:
+            try:
+                mp, _ = mp_count_pair.get_multipath_and_count()
+                read_names.update(mp.get_read_names())
+            except Exception:
+                continue
+        return read_names
 
     def dump_mp_to_transcripts_to_file(self, output_filename, contig_acc, strand):
 

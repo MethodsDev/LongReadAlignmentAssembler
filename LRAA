@@ -23,6 +23,7 @@ from Splice_graph import Splice_graph
 from LRAA import LRAA
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
+from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
 from ResourceMonitor import ResourceMonitor
 import TranscriptFiltering
 import Util_funcs
@@ -179,6 +180,15 @@ def main():
         action="store_true",
         default=False,
         help="restrict to single-exon isoforms only",
+    )
+    primary.add_argument(
+        "--rescue_unassigned_reads_via_transcriptome_alignment",
+        action="store_true",
+        default=False,
+        help=(
+            "quant-only only: rescue reads that fail graph/isoform assignment by "
+            "realigning them to local reference transcript sequences before the first EM"
+        ),
     )
     primary.add_argument(
         "--no_EM",
@@ -691,6 +701,9 @@ def main():
         args.min_mapping_quality_for_final_quant
     )
     LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
+    LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"] = (
+        args.rescue_unassigned_reads_via_transcriptome_alignment
+    )
     if args.allow_secondary_alignments:
         logger.info(
             "Secondary alignments enabled; forcing min_mapping_quality and min_mapping_quality_for_final_quant to 0"
@@ -3004,6 +3017,41 @@ def run_quant_only(
         allow_spacers,
         restrict_splice_type=None,
     )
+
+    if LRAA_Globals.config.get(
+        "rescue_unassigned_reads_via_transcriptome_alignment", False
+    ):
+        rescue_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
+        q_probe = Quantify(
+            run_EM,
+            LRAA_Globals.config["max_EM_iterations_quant_only"],
+            quant_mode="final",
+        )
+        for transcript in input_transcripts:
+            transcript.init_quant_info()
+        q_probe._assign_path_nodes_to_gene(input_transcripts)
+        q_probe._assign_reads_to_transcripts(sg, mp_counter)
+        rescue_read_names.update(q_probe.get_unassigned_read_names())
+
+        if rescue_read_names:
+            logger.info(
+                "[%s%s] transcriptome rescue: retrying %d unassigned reads",
+                contig_acc,
+                contig_strand,
+                len(rescue_read_names),
+            )
+            rescued_mps = rescue_unassigned_reads_to_transcriptome(
+                sg,
+                input_transcripts,
+                contig_seq_str,
+                bam_file_for_quant,
+                contig_acc,
+                restrict_region_lend,
+                restrict_region_rend,
+                rescue_read_names,
+            )
+            for rescued_mp in rescued_mps:
+                mp_counter.add(rescued_mp)
 
     q = Quantify(
         run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"

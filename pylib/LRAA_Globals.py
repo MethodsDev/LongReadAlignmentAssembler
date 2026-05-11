@@ -115,6 +115,9 @@ config = {
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
+    "rescue_unassigned_reads_via_transcriptome_alignment": False,
+    "rescue_unassigned_minimap2_preset": "map-hifi",
+    "rescue_unassigned_min_per_id": 80.0,
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,
