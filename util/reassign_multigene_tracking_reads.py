@@ -274,7 +274,7 @@ def main():
     if not affected_reads:
         shutil.copyfile(args.quant_expr, args.output_expr)
         if args.tracking != args.output_tracking:
-            shutil.copyfile(args.tracking, args.output_tracking)
+            write_tracking(args.output_tracking, tracking_fieldnames, tracking_rows)
         logger.info("No cross-gene reads found; copied inputs to outputs unchanged.")
         return
 

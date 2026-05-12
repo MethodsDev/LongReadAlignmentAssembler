@@ -14,6 +14,7 @@ run_quant:
 		--gtf data/annot.gtf \
 		--quant_only \
 		--allow_secondary_alignments \
+		--secondary_alignment_mode all \
 		--no_norm \
 		--no_parallelize_contigs \
 		--num_threads_per_worker 1 \
