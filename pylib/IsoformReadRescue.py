@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
+import hashlib
 
 import pysam
 from intervaltree import IntervalTree
@@ -75,6 +76,7 @@ def build_transcriptome_alignment_multipaths(
     split_multipaths_by_gene=False,
     genome_target_gating=False,
     log_label="transcriptome alignment",
+    return_read_details=False,
 ):
     minimap2_exe = shutil.which("minimap2")
     if minimap2_exe is None:
@@ -88,13 +90,29 @@ def build_transcriptome_alignment_multipaths(
         include_monoexonic=include_monoexonic,
     )
     if not transcript_models:
+        if return_read_details:
+            return [], {
+                "read_name_to_multipaths": {},
+                "read_name_to_best_score": {},
+                "read_name_to_primary_score": {},
+                "requested_read_names": set(),
+            }
         return []
 
     candidate_rows = None
     read_name_to_allowed_target_ids = None
+    read_name_to_primary_score = {}
+    read_name_to_primary_per_id = {}
     if genome_target_gating:
         candidate_tsv = None
-        read_name_to_seq, read_name_to_allowed_target_ids, gating_stats, candidate_rows = (
+        (
+            read_name_to_seq,
+            read_name_to_allowed_target_ids,
+            gating_stats,
+            candidate_rows,
+            read_name_to_primary_score,
+            read_name_to_primary_per_id,
+        ) = (
             _collect_genome_gated_read_targets(
                 bam_file,
                 contig_acc,
@@ -143,6 +161,15 @@ def build_transcriptome_alignment_multipaths(
             splice_graph.get_contig_strand(),
             log_label,
         )
+        if return_read_details:
+            return [], {
+                "read_name_to_multipaths": {},
+                "read_name_to_best_score": {},
+                "read_name_to_primary_score": read_name_to_primary_score,
+                "read_name_to_best_per_id": {},
+                "read_name_to_primary_per_id": read_name_to_primary_per_id,
+                "requested_read_names": set(),
+            }
         return []
 
     tmp_dir = tempfile.mkdtemp(
@@ -168,7 +195,7 @@ def build_transcriptome_alignment_multipaths(
             transcript_fa, reads_fa, rescue_sam, minimap2_exe
         )
 
-        rescued_mps = _parse_rescue_alignments(
+        rescued_mps, read_details = _parse_rescue_alignments(
             rescue_sam,
             splice_graph,
             transcript_models,
@@ -177,6 +204,23 @@ def build_transcriptome_alignment_multipaths(
             split_multipaths_by_gene=split_multipaths_by_gene,
             read_name_to_allowed_target_ids=read_name_to_allowed_target_ids,
         )
+
+        if return_read_details:
+            read_details["read_name_to_primary_score"] = {
+                _normalize_read_identifier(read_name): score
+                for read_name, score in read_name_to_primary_score.items()
+                if _normalize_read_identifier(read_name) is not None
+            }
+            read_details["read_name_to_primary_per_id"] = {
+                _normalize_read_identifier(read_name): per_id
+                for read_name, per_id in read_name_to_primary_per_id.items()
+                if _normalize_read_identifier(read_name) is not None
+            }
+            read_details["requested_read_names"] = {
+                _normalize_read_identifier(read_name)
+                for read_name in read_name_to_seq.keys()
+                if _normalize_read_identifier(read_name) is not None
+            }
 
         logger.info(
             "[%s%s] %s: requested=%d rescued=%d",
@@ -187,6 +231,9 @@ def build_transcriptome_alignment_multipaths(
             len(rescued_mps),
         )
 
+        if return_read_details:
+            return rescued_mps, read_details
+
         return rescued_mps
     finally:
         if not keep_tmp:
@@ -195,11 +242,19 @@ def build_transcriptome_alignment_multipaths(
 
 def _run_minimap2_transcriptome_alignment(transcript_fa, reads_fa, rescue_sam, minimap2_exe):
     preset = _resolve_rescue_minimap2_preset()
+    try:
+        minimap_threads = max(
+            1, int(LRAA_Globals.config.get("num_threads_per_worker", 1))
+        )
+    except Exception:
+        minimap_threads = 1
     cmd = [
         minimap2_exe,
         "-a",
         "-x",
         str(preset),
+        "-t",
+        str(minimap_threads),
         "--secondary=yes",
         "-N",
         "50",
@@ -237,6 +292,8 @@ def _collect_read_sequences(
             seq = read.query_sequence
             if not seq:
                 continue
+            if read.is_reverse:
+                seq = _reverse_complement(seq)
             if read_name not in read_name_to_seq:
                 read_name_to_seq[read_name] = seq
                 if remaining is not None:
@@ -260,6 +317,8 @@ def _collect_genome_gated_read_targets(
     remaining = None if target_read_names is None else set(target_read_names)
     read_name_to_seq = {}
     read_name_to_allowed_target_ids = defaultdict(set)
+    read_name_to_primary_score = {}
+    read_name_to_primary_per_id = {}
     candidate_rows = []
     min_per_id = float(_resolve_rescue_min_per_id())
 
@@ -297,7 +356,15 @@ def _collect_genome_gated_read_targets(
                 continue
             if read.mapping_quality < int(LRAA_Globals.config["min_mapping_quality"]):
                 continue
-            if not _passes_percent_identity(read, min_per_id):
+            passes_per_id = _passes_percent_identity(read, min_per_id)
+            if read.is_secondary and not passes_per_id:
+                continue
+            if not read.is_secondary and not passes_per_id:
+                # Keep low-perID primary alignments available for transcriptome
+                # arbitration/rescue when the genome-derived path is unusable.
+                # Secondary candidate generation remains stricter to limit noise.
+                pass
+            elif not passes_per_id:
                 continue
 
             read_name = Util_funcs.get_read_name_include_sc_encoding(read)
@@ -321,10 +388,14 @@ def _collect_genome_gated_read_targets(
             if not read.is_secondary:
                 seq = read.query_sequence
                 if seq and read_name not in read_name_to_seq:
+                    if read.is_reverse:
+                        seq = _reverse_complement(seq)
                     read_name_to_seq[read_name] = seq
                     stats["primary_retained_for_fastq"] += 1
-                    if remaining is not None:
-                        remaining.discard(read_name)
+                if remaining is not None:
+                    remaining.discard(read_name)
+                read_name_to_primary_score[read_name] = _alignment_score(read)
+                read_name_to_primary_per_id[read_name] = _alignment_per_id_fraction(read)
 
             for target_id, overlap_bp in target_id_to_overlap_bp.items():
                 read_name_to_allowed_target_ids[read_name].add(target_id)
@@ -360,7 +431,14 @@ def _collect_genome_gated_read_targets(
         len(target_ids) for target_ids in read_name_to_allowed_target_ids.values()
     )
 
-    return read_name_to_seq, read_name_to_allowed_target_ids, stats, candidate_rows
+    return (
+        read_name_to_seq,
+        read_name_to_allowed_target_ids,
+        stats,
+        candidate_rows,
+        read_name_to_primary_score,
+        read_name_to_primary_per_id,
+    )
 
 
 def _build_transcript_models(
@@ -537,6 +615,7 @@ def _parse_rescue_alignments(
             read_to_hits[read.query_name].append(
                 {
                     "score": _alignment_score(read),
+                    "per_id": _alignment_per_id_fraction(read),
                     "path": tuple(projected_path),
                     "target_id": read.reference_name,
                     "transcript_id": transcript_models[read.reference_name][
@@ -547,9 +626,19 @@ def _parse_rescue_alignments(
             )
 
     rescued_mps = []
+    read_name_to_multipaths = defaultdict(list)
+    read_name_to_best_score = {}
+    read_name_to_best_per_id = {}
     for read_name, hits in read_to_hits.items():
+        read_key = _normalize_read_identifier(read_name)
+        if read_key is None:
+            continue
         best_score = max(hit["score"] for hit in hits)
         best_hits = [hit for hit in hits if hit["score"] == best_score]
+        read_name_to_best_score[read_key] = best_score
+        read_name_to_best_per_id[read_key] = max(
+            hit.get("per_id", 0.0) for hit in best_hits
+        )
         if split_multipaths_by_gene:
             gene_to_hits = defaultdict(list)
             for hit in best_hits:
@@ -559,31 +648,35 @@ def _parse_rescue_alignments(
                 if require_unique_path_across_best_hits and len(projected_paths) != 1:
                     continue
                 mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
-                rescued_mps.append(
-                    MultiPath(
-                        splice_graph,
-                        mp_paths,
-                        read_types={"PacBio"},
-                        read_names={read_name},
-                        read_count=1,
-                    )
-                )
-        else:
-            projected_paths = {hit["path"] for hit in best_hits}
-            if require_unique_path_across_best_hits and len(projected_paths) != 1:
-                continue
-            mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
-            rescued_mps.append(
-                MultiPath(
+                multipath = MultiPath(
                     splice_graph,
                     mp_paths,
                     read_types={"PacBio"},
                     read_names={read_name},
                     read_count=1,
                 )
+                rescued_mps.append(multipath)
+                read_name_to_multipaths[read_key].append(multipath)
+        else:
+            projected_paths = {hit["path"] for hit in best_hits}
+            if require_unique_path_across_best_hits and len(projected_paths) != 1:
+                continue
+            mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
+            multipath = MultiPath(
+                splice_graph,
+                mp_paths,
+                read_types={"PacBio"},
+                read_names={read_name},
+                read_count=1,
             )
+            rescued_mps.append(multipath)
+            read_name_to_multipaths[read_key].append(multipath)
 
-    return rescued_mps
+    return rescued_mps, {
+        "read_name_to_multipaths": dict(read_name_to_multipaths),
+        "read_name_to_best_score": read_name_to_best_score,
+        "read_name_to_best_per_id": read_name_to_best_per_id,
+    }
 
 
 def _build_exon_overlap_index(transcript_models):
@@ -605,22 +698,10 @@ def _get_alignment_overlapping_targets(read, exon_overlap_index):
 
 
 def _passes_percent_identity(read, min_per_id):
-    mismatch_count = None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    if mismatch_count is None:
+    per_id_fraction = _alignment_per_id_fraction(read)
+    if per_id_fraction is None:
         return True
-
-    cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-    if aligned_base_count <= 0:
-        return False
-    per_id = 100.0 - (mismatch_count / aligned_base_count) * 100.0
-    return per_id >= min_per_id
+    return (per_id_fraction * 100.0) >= min_per_id
 
 
 def _resolve_rescue_minimap2_preset():
@@ -653,6 +734,46 @@ def _alignment_score(read):
     if aligned_base_count == 0:
         aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
     return int(aligned_base_count) - int(mismatch_count)
+
+
+def _alignment_per_id_fraction(read):
+    mismatch_count = None
+    if read.has_tag("NM"):
+        mismatch_count = int(read.get_tag("NM"))
+    elif read.has_tag("nM"):
+        mismatch_count = int(read.get_tag("nM"))
+    if mismatch_count is None:
+        return None
+
+    cigar_stats = read.get_cigar_stats()
+    aligned_base_count = cigar_stats[0][0]
+    if aligned_base_count == 0:
+        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
+    if aligned_base_count <= 0:
+        return 0.0
+
+    return max(0.0, float(aligned_base_count - mismatch_count) / float(aligned_base_count))
+
+
+def _normalize_read_identifier(value):
+    try:
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except Exception:
+                pass
+            name_store = getattr(LRAA_Globals, "READ_NAME_STORE", None)
+            if name_store is not None:
+                rid = name_store.get_or_add(value)
+                if rid is not None:
+                    return int(rid)
+            digest = hashlib.sha1(value.encode("utf-8", "ignore")).hexdigest()
+            return int(digest[:16], 16)
+    except Exception:
+        return None
+    return None
 
 
 def _get_soft_clipping_lengths(read):

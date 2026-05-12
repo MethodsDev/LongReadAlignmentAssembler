@@ -21,10 +21,12 @@ sys.path.insert(
 )
 from Splice_graph import Splice_graph
 from LRAA import LRAA
+from MultiPath import MultiPath
 from MultiPathCounter import MultiPathCounter
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
 from IsoformReadRescue import (
+    _normalize_read_identifier,
     build_transcriptome_alignment_multipaths,
     rescue_unassigned_reads_to_transcriptome,
 )
@@ -206,13 +208,19 @@ def main():
     primary.add_argument(
         "--quant_read_assignment_mode",
         type=str,
-        choices=["genome", "rescue_unassigned", "transcriptome_only"],
+        choices=[
+            "genome",
+            "rescue_unassigned",
+            "transcriptome_only",
+            "genome_tx_arb",
+        ],
         default=LRAA_Globals.config["quant_read_assignment_mode"],
         help=(
             "quant read-assignment strategy for run_quant_only(): "
             "'genome' uses only genomic graph assignments; "
             "'rescue_unassigned' uses genomic assignments plus transcriptome rescue for failed reads; "
-            "'transcriptome_only' assigns all reads by direct read-to-transcript alignment and projects those hits to graph paths "
+            "'transcriptome_only' assigns all reads by direct read-to-transcript alignment and projects those hits to graph paths; "
+            "'genome_tx_arb' starts with genome assignments and replaces a read with its transcriptome-projected path only when transcriptome alignment scores better or genome produced no usable path "
             f"(default: {LRAA_Globals.config['quant_read_assignment_mode']})"
         ),
     )
@@ -751,6 +759,7 @@ def main():
     )
     LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
     LRAA_Globals.config["secondary_alignment_mode"] = args.secondary_alignment_mode
+    LRAA_Globals.config["num_threads_per_worker"] = int(CPU)
     quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
     if (
@@ -2042,6 +2051,7 @@ def _run_jobs_schedule_and_merge(
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     quant_expr_tmp_paths = list()
+    genome_tx_arb_summary_paths = list()
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
         tmp_root_old = f"{j['output_prefix']}.contigtmp"
@@ -2052,9 +2062,14 @@ def _run_jobs_schedule_and_merge(
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
         _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
+        genome_tx_arb_summary_paths.append(f"{tmp_prefix}.genome_tx_arb.summary.tsv")
 
     _merge_quant_expr_files(quant_expr_tmp_paths, quant_out_fn, quant_header_final)
     merged_track_fh.close()
+
+    _merge_genome_tx_arb_summary_files(
+        genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
+    )
 
     # Merge GTF and write BED in discovery mode
     if not quant_only:
@@ -2337,6 +2352,12 @@ def _contig_job_runner(job):
     # prepare writers
     quant_expr_tmp = f"{tmp_prefix}.quant.expr"
     quant_tracking_tmp = f"{tmp_prefix}.quant.tracking"
+    genome_tx_arb_summary_tmp = f"{tmp_prefix}.genome_tx_arb.summary.tsv"
+    try:
+        if os.path.exists(genome_tx_arb_summary_tmp):
+            os.unlink(genome_tx_arb_summary_tmp)
+    except Exception:
+        pass
 
     # Headers
     quant_header = [
@@ -2480,6 +2501,7 @@ def _contig_job_runner(job):
                     job["prereconstruct_info_dir"],
                     report_quants=True,
                     splice_graph_cache_dir=splice_graph_cache_dir,
+                    arb_summary_path=genome_tx_arb_summary_tmp,
                 )
             else:
                 run_transcript_assembly(
@@ -2504,6 +2526,7 @@ def _contig_job_runner(job):
                     job["ME_only"],
                     job["SE_only"],
                     splice_graph_cache_dir=splice_graph_cache_dir,
+                    arb_summary_path=genome_tx_arb_summary_tmp,
                 )
 
         ofh_quant.close()
@@ -3042,6 +3065,332 @@ def _summarize_contig_resource_logs(
         pass
 
 
+def _clone_multipath_for_single_read(splice_graph, multipath_obj, read_name):
+    return MultiPath(
+        splice_graph,
+        [multipath_obj.get_simple_path()],
+        read_types=set(multipath_obj.get_read_types()),
+        read_names={read_name},
+        read_count=1,
+    )
+
+
+def _explode_mp_counter_to_read_multipaths(splice_graph, mp_counter):
+    read_name_to_multipaths = defaultdict(list)
+    for mp_count_pair in mp_counter.get_all_MultiPathCountPairs():
+        multipath_obj, _ = mp_count_pair.get_multipath_and_count()
+        for read_name in multipath_obj.get_read_names():
+            read_key = _normalize_read_identifier(read_name)
+            if read_key is None:
+                continue
+            read_name_to_multipaths[read_key].append(
+                _clone_multipath_for_single_read(splice_graph, multipath_obj, read_name)
+            )
+    return read_name_to_multipaths
+
+
+def _build_mp_counter_from_read_multipaths(read_name_to_multipaths):
+    mp_counter = MultiPathCounter()
+    for multipaths in read_name_to_multipaths.values():
+        for multipath_obj in multipaths:
+            mp_counter.add(multipath_obj)
+    return mp_counter
+
+
+def _arbitrate_genome_vs_transcriptome_read_paths(
+    splice_graph,
+    genome_mp_counter,
+    transcriptome_read_details,
+    failed_genome_read_names=None,
+):
+    failed_genome_read_names = {
+        normalized_name
+        for normalized_name in (
+            _normalize_read_identifier(read_name)
+            for read_name in (failed_genome_read_names or [])
+        )
+        if normalized_name is not None
+    }
+    read_name_to_genome_multipaths = _explode_mp_counter_to_read_multipaths(
+        splice_graph, genome_mp_counter
+    )
+    read_name_to_tx_multipaths = transcriptome_read_details.get(
+        "read_name_to_multipaths", {}
+    )
+    read_name_to_tx_best_per_id = transcriptome_read_details.get(
+        "read_name_to_best_per_id", {}
+    )
+    read_name_to_genome_primary_per_id = transcriptome_read_details.get(
+        "read_name_to_primary_per_id", {}
+    )
+
+    all_read_names = set(read_name_to_genome_multipaths.keys()) | set(
+        read_name_to_tx_multipaths.keys()
+    )
+
+    chosen_read_name_to_multipaths = {}
+    stats = {
+        "reads_total": len(all_read_names),
+        "reads_kept_genome": 0,
+        "reads_selected_tx_missing_genome": 0,
+        "reads_selected_tx_failed_genome": 0,
+        "reads_selected_tx_higher_per_id": 0,
+        "reads_tx_present_but_kept_genome": 0,
+        "reads_tx_tied_per_id_kept_genome": 0,
+        "reads_tx_lower_per_id_kept_genome": 0,
+        "reads_tx_per_id_unavailable_kept_genome": 0,
+    }
+
+    for read_name in all_read_names:
+        genome_multipaths = read_name_to_genome_multipaths.get(read_name)
+        transcriptome_multipaths = read_name_to_tx_multipaths.get(read_name)
+
+        if not transcriptome_multipaths:
+            if genome_multipaths:
+                chosen_read_name_to_multipaths[read_name] = genome_multipaths
+                stats["reads_kept_genome"] += 1
+            continue
+
+        if not genome_multipaths:
+            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
+            stats["reads_selected_tx_missing_genome"] += 1
+            continue
+
+        if read_name in failed_genome_read_names:
+            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
+            stats["reads_selected_tx_failed_genome"] += 1
+            continue
+
+        tx_best_per_id = read_name_to_tx_best_per_id.get(read_name)
+        genome_primary_per_id = read_name_to_genome_primary_per_id.get(read_name)
+        if (
+            tx_best_per_id is not None
+            and genome_primary_per_id is not None
+            and tx_best_per_id > genome_primary_per_id
+        ):
+            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
+            stats["reads_selected_tx_higher_per_id"] += 1
+        else:
+            chosen_read_name_to_multipaths[read_name] = genome_multipaths
+            stats["reads_kept_genome"] += 1
+            stats["reads_tx_present_but_kept_genome"] += 1
+            if tx_best_per_id is None or genome_primary_per_id is None:
+                stats["reads_tx_per_id_unavailable_kept_genome"] += 1
+            elif tx_best_per_id == genome_primary_per_id:
+                stats["reads_tx_tied_per_id_kept_genome"] += 1
+            else:
+                stats["reads_tx_lower_per_id_kept_genome"] += 1
+
+    reads_selected_tx_total = (
+        stats["reads_selected_tx_missing_genome"]
+        + stats["reads_selected_tx_failed_genome"]
+        + stats["reads_selected_tx_higher_per_id"]
+    )
+    stats["reads_selected_tx_total"] = reads_selected_tx_total
+
+    total_reads = max(1, stats["reads_total"])
+    kept_genome_frac = stats["reads_kept_genome"] / total_reads
+    selected_tx_frac = reads_selected_tx_total / total_reads
+    tied_kept_genome_frac = stats["reads_tx_tied_per_id_kept_genome"] / total_reads
+
+    logger.info(
+        "[%s%s] genome_tx_arb summary: total=%d kept_genome=%d (%.3f) selected_tx=%d (%.3f) tx_missing_genome=%d tx_failed_genome=%d tx_higher_per_id=%d tx_present_but_kept_genome=%d tied_per_id_kept_genome=%d (%.3f) lower_per_id_kept_genome=%d per_id_unavailable_kept_genome=%d",
+        splice_graph.get_contig_acc(),
+        splice_graph.get_contig_strand(),
+        stats["reads_total"],
+        stats["reads_kept_genome"],
+        kept_genome_frac,
+        reads_selected_tx_total,
+        selected_tx_frac,
+        stats["reads_selected_tx_missing_genome"],
+        stats["reads_selected_tx_failed_genome"],
+        stats["reads_selected_tx_higher_per_id"],
+        stats["reads_tx_present_but_kept_genome"],
+        stats["reads_tx_tied_per_id_kept_genome"],
+        tied_kept_genome_frac,
+        stats["reads_tx_lower_per_id_kept_genome"],
+        stats["reads_tx_per_id_unavailable_kept_genome"],
+    )
+
+    return _build_mp_counter_from_read_multipaths(chosen_read_name_to_multipaths), stats
+
+
+def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats):
+    total_reads = int(stats.get("reads_total", 0) or 0)
+
+    def _frac(key):
+        if total_reads <= 0:
+            return 0.0
+        return float(stats.get(key, 0) or 0) / float(total_reads)
+
+    fieldnames = [
+        "row_type",
+        "contig_acc",
+        "contig_strand",
+        "reads_total",
+        "reads_kept_genome",
+        "frac_kept_genome",
+        "reads_selected_tx_total",
+        "frac_selected_tx_total",
+        "reads_selected_tx_missing_genome",
+        "frac_selected_tx_missing_genome",
+        "reads_selected_tx_failed_genome",
+        "frac_selected_tx_failed_genome",
+        "reads_selected_tx_higher_per_id",
+        "frac_selected_tx_higher_per_id",
+        "reads_tx_present_but_kept_genome",
+        "frac_tx_present_but_kept_genome",
+        "reads_tx_tied_per_id_kept_genome",
+        "frac_tx_tied_per_id_kept_genome",
+        "reads_tx_lower_per_id_kept_genome",
+        "frac_tx_lower_per_id_kept_genome",
+        "reads_tx_per_id_unavailable_kept_genome",
+        "frac_tx_per_id_unavailable_kept_genome",
+    ]
+
+    row = {
+        "row_type": "worker",
+        "contig_acc": contig_acc,
+        "contig_strand": contig_strand,
+        "reads_total": total_reads,
+        "reads_kept_genome": int(stats.get("reads_kept_genome", 0) or 0),
+        "frac_kept_genome": "{:.6f}".format(_frac("reads_kept_genome")),
+        "reads_selected_tx_total": int(stats.get("reads_selected_tx_total", 0) or 0),
+        "frac_selected_tx_total": "{:.6f}".format(_frac("reads_selected_tx_total")),
+        "reads_selected_tx_missing_genome": int(
+            stats.get("reads_selected_tx_missing_genome", 0) or 0
+        ),
+        "frac_selected_tx_missing_genome": "{:.6f}".format(
+            _frac("reads_selected_tx_missing_genome")
+        ),
+        "reads_selected_tx_failed_genome": int(
+            stats.get("reads_selected_tx_failed_genome", 0) or 0
+        ),
+        "frac_selected_tx_failed_genome": "{:.6f}".format(
+            _frac("reads_selected_tx_failed_genome")
+        ),
+        "reads_selected_tx_higher_per_id": int(
+            stats.get("reads_selected_tx_higher_per_id", 0) or 0
+        ),
+        "frac_selected_tx_higher_per_id": "{:.6f}".format(
+            _frac("reads_selected_tx_higher_per_id")
+        ),
+        "reads_tx_present_but_kept_genome": int(
+            stats.get("reads_tx_present_but_kept_genome", 0) or 0
+        ),
+        "frac_tx_present_but_kept_genome": "{:.6f}".format(
+            _frac("reads_tx_present_but_kept_genome")
+        ),
+        "reads_tx_tied_per_id_kept_genome": int(
+            stats.get("reads_tx_tied_per_id_kept_genome", 0) or 0
+        ),
+        "frac_tx_tied_per_id_kept_genome": "{:.6f}".format(
+            _frac("reads_tx_tied_per_id_kept_genome")
+        ),
+        "reads_tx_lower_per_id_kept_genome": int(
+            stats.get("reads_tx_lower_per_id_kept_genome", 0) or 0
+        ),
+        "frac_tx_lower_per_id_kept_genome": "{:.6f}".format(
+            _frac("reads_tx_lower_per_id_kept_genome")
+        ),
+        "reads_tx_per_id_unavailable_kept_genome": int(
+            stats.get("reads_tx_per_id_unavailable_kept_genome", 0) or 0
+        ),
+        "frac_tx_per_id_unavailable_kept_genome": "{:.6f}".format(
+            _frac("reads_tx_per_id_unavailable_kept_genome")
+        ),
+    }
+
+    with open(summary_path, "wt", newline="") as ofh:
+        writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+
+
+def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
+    summary_paths = [path for path in summary_paths if os.path.exists(path)]
+    if not summary_paths:
+        try:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+        except Exception:
+            pass
+        return
+
+    merged_rows = []
+    total_keys = [
+        "reads_total",
+        "reads_kept_genome",
+        "reads_selected_tx_total",
+        "reads_selected_tx_missing_genome",
+        "reads_selected_tx_failed_genome",
+        "reads_selected_tx_higher_per_id",
+        "reads_tx_present_but_kept_genome",
+        "reads_tx_tied_per_id_kept_genome",
+        "reads_tx_lower_per_id_kept_genome",
+        "reads_tx_per_id_unavailable_kept_genome",
+    ]
+    totals = {key: 0 for key in total_keys}
+
+    fieldnames = None
+    for summary_path in summary_paths:
+        with open(summary_path, "rt", newline="") as ifh:
+            reader = csv.DictReader(ifh, delimiter="\t")
+            if fieldnames is None:
+                fieldnames = list(reader.fieldnames or [])
+            for row in reader:
+                merged_rows.append(row)
+                for key in total_keys:
+                    totals[key] += int(row.get(key, 0) or 0)
+
+    if fieldnames is None:
+        return
+
+    total_reads = totals["reads_total"]
+
+    def _frac(key):
+        if total_reads <= 0:
+            return "0.000000"
+        return "{:.6f}".format(float(totals[key]) / float(total_reads))
+
+    total_row = {field: "" for field in fieldnames}
+    total_row["row_type"] = "TOTAL"
+    total_row["contig_acc"] = "TOTAL"
+    total_row["contig_strand"] = "."
+    for key in total_keys:
+        total_row[key] = str(totals[key])
+    total_row["frac_kept_genome"] = _frac("reads_kept_genome")
+    total_row["frac_selected_tx_total"] = _frac("reads_selected_tx_total")
+    total_row["frac_selected_tx_missing_genome"] = _frac(
+        "reads_selected_tx_missing_genome"
+    )
+    total_row["frac_selected_tx_failed_genome"] = _frac(
+        "reads_selected_tx_failed_genome"
+    )
+    total_row["frac_selected_tx_higher_per_id"] = _frac(
+        "reads_selected_tx_higher_per_id"
+    )
+    total_row["frac_tx_present_but_kept_genome"] = _frac(
+        "reads_tx_present_but_kept_genome"
+    )
+    total_row["frac_tx_tied_per_id_kept_genome"] = _frac(
+        "reads_tx_tied_per_id_kept_genome"
+    )
+    total_row["frac_tx_lower_per_id_kept_genome"] = _frac(
+        "reads_tx_lower_per_id_kept_genome"
+    )
+    total_row["frac_tx_per_id_unavailable_kept_genome"] = _frac(
+        "reads_tx_per_id_unavailable_kept_genome"
+    )
+
+    with open(output_path, "wt", newline="") as ofh:
+        writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in merged_rows:
+            writer.writerow(row)
+        writer.writerow(total_row)
+
+
 def run_quant_only(
     contig_acc,
     contig_strand,
@@ -3059,6 +3408,7 @@ def run_quant_only(
     report_quants=True,
     prebuilt_splice_graph=None,
     splice_graph_cache_dir=None,
+    arb_summary_path=None,
 ):
 
     # Quantification stage uses the tighter min_mapping_quality_for_final_quant
@@ -3138,7 +3488,15 @@ def run_quant_only(
 
     lraa_obj = LRAA(sg, CPU)
     logger.info("\n//SECTION QUANT: Assigning input transcript paths in graph")
-    lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+    input_transcripts = lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+
+    if not input_transcripts:
+        logger.info(
+            "[%s%s] no input transcripts mapped to the splice graph after filtering; skipping quant for this shard.",
+            contig_acc,
+            contig_strand,
+        )
+        return
 
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(
@@ -3173,6 +3531,7 @@ def run_quant_only(
     quant_read_assignment_mode = LRAA_Globals.config.get(
         "quant_read_assignment_mode", "rescue_unassigned"
     )
+    genome_tx_arb_stats = None
     if quant_read_assignment_mode == "transcriptome_only":
         logger.info(
             "[%s%s] quant read assignment mode: transcriptome_only",
@@ -3199,6 +3558,53 @@ def run_quant_only(
         )
         for transcriptome_mp in transcriptome_mps:
             mp_counter.add(transcriptome_mp)
+    elif quant_read_assignment_mode == "genome_tx_arb":
+        logger.info(
+            "[%s%s] quant read assignment mode: genome_tx_arb",
+            contig_acc,
+            contig_strand,
+        )
+        genome_mp_counter = lraa_obj._populate_read_multi_paths(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_quant,
+            allow_spacers,
+            restrict_splice_type=None,
+        )
+        transcriptome_mps, transcriptome_read_details = (
+            build_transcriptome_alignment_multipaths(
+                sg,
+                input_transcripts,
+                contig_seq_str,
+                bam_file_for_quant,
+                contig_acc,
+                restrict_region_lend,
+                restrict_region_rend,
+                read_names=None,
+                target_strand=contig_strand,
+                include_monoexonic=True,
+                require_unique_path_across_best_hits=False,
+                split_multipaths_by_gene=True,
+                genome_target_gating=True,
+                read_path_mapper=lraa_obj._map_read_to_graph,
+                log_label="genome_tx_arb transcriptome assignment",
+                return_read_details=True,
+            )
+        )
+        mp_counter, genome_tx_arb_stats = _arbitrate_genome_vs_transcriptome_read_paths(
+            sg,
+            genome_mp_counter,
+            transcriptome_read_details,
+            failed_genome_read_names=lraa_obj.get_failed_read_names_for_rescue(),
+        )
+        if arb_summary_path is not None and genome_tx_arb_stats is not None:
+            _write_genome_tx_arb_summary(
+                arb_summary_path,
+                contig_acc,
+                contig_strand,
+                genome_tx_arb_stats,
+            )
     else:
         mp_counter = lraa_obj._populate_read_multi_paths(
             contig_acc,
@@ -3281,6 +3687,10 @@ def run_quant_only(
             pass
 
     LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
+    try:
+        q.genome_tx_arb_summary_stats = genome_tx_arb_stats
+    except Exception:
+        pass
     return q
 
 
@@ -3306,6 +3716,7 @@ def run_transcript_assembly(
     ME_only,
     SE_only,
     splice_graph_cache_dir=None,
+    arb_summary_path=None,
 ):
 
     ##---------------------
@@ -3761,6 +4172,7 @@ def run_transcript_assembly(
         prereconstruct_info_dir,
         report_quants=False,
         splice_graph_cache_dir=splice_graph_cache_dir,
+        arb_summary_path=arb_summary_path,
     )
 
     # reset
