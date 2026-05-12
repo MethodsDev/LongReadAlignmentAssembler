@@ -21,9 +21,13 @@ sys.path.insert(
 )
 from Splice_graph import Splice_graph
 from LRAA import LRAA
+from MultiPathCounter import MultiPathCounter
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
-from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
+from IsoformReadRescue import (
+    build_transcriptome_alignment_multipaths,
+    rescue_unassigned_reads_to_transcriptome,
+)
 from ResourceMonitor import ResourceMonitor
 import TranscriptFiltering
 import Util_funcs
@@ -200,6 +204,19 @@ def main():
         help=argparse.SUPPRESS,
     )
     primary.add_argument(
+        "--quant_read_assignment_mode",
+        type=str,
+        choices=["genome", "rescue_unassigned", "transcriptome_only"],
+        default=LRAA_Globals.config["quant_read_assignment_mode"],
+        help=(
+            "quant read-assignment strategy for run_quant_only(): "
+            "'genome' uses only genomic graph assignments; "
+            "'rescue_unassigned' uses genomic assignments plus transcriptome rescue for failed reads; "
+            "'transcriptome_only' assigns all reads by direct read-to-transcript alignment and projects those hits to graph paths "
+            f"(default: {LRAA_Globals.config['quant_read_assignment_mode']})"
+        ),
+    )
+    primary.add_argument(
         "--no_EM",
         action="store_true",
         default=False,
@@ -221,6 +238,18 @@ def main():
         action="store_true",
         default=argparse.SUPPRESS,
         help=argparse.SUPPRESS,
+    )
+    primary.add_argument(
+        "--secondary_alignment_mode",
+        type=str,
+        choices=["all", "tied_primary_only"],
+        default=LRAA_Globals.config["secondary_alignment_mode"],
+        help=(
+            "policy for retaining secondary alignments when enabled: "
+            "'all' keeps all secondary alignments that pass other filters; "
+            "'tied_primary_only' preprocesses the BAM so only secondaries with AS equal to the primary alignment AS are retained "
+            f"(default: {LRAA_Globals.config['secondary_alignment_mode']})"
+        ),
     )
 
     parser.add_argument(
@@ -721,8 +750,17 @@ def main():
         args.min_mapping_quality_for_final_quant
     )
     LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
+    LRAA_Globals.config["secondary_alignment_mode"] = args.secondary_alignment_mode
+    quant_read_assignment_mode = args.quant_read_assignment_mode
+    rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
+    if (
+        quant_read_assignment_mode == "rescue_unassigned"
+        and not rescue_enabled
+    ):
+        quant_read_assignment_mode = "genome"
+    LRAA_Globals.config["quant_read_assignment_mode"] = quant_read_assignment_mode
     LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"] = (
-        args.rescue_unassigned_reads_via_transcriptome_alignment
+        rescue_enabled
     )
     if args.allow_secondary_alignments:
         logger.info(
@@ -730,6 +768,15 @@ def main():
         )
         LRAA_Globals.config["min_mapping_quality"] = 0
         LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 0
+        if args.secondary_alignment_mode == "tied_primary_only":
+            logger.info(
+                "Secondary alignments will be restricted to AS-tied primary scores via BAM preprocessing"
+            )
+    elif args.secondary_alignment_mode != "all":
+        logger.info(
+            "Secondary alignment mode '%s' requested, but secondary alignments are disabled; ignoring the mode",
+            args.secondary_alignment_mode,
+        )
     LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(
@@ -947,12 +994,6 @@ def main():
     allow_spacers = False
     # allow_spacers = args.allow_spacers
 
-    if not os.path.exists(bam_filename + ".bai"):
-        logger.info(
-            "-missing index for bam {}, will try to make it...".format(bam_filename)
-        )
-        subprocess.check_call("samtools index " + bam_filename, shell=True)
-
     normalization_enabled = (not NO_NORM) and (args.normalize_max_cov_level > 0)
     normalization_cache_dir = None
     if normalization_enabled:
@@ -960,8 +1001,30 @@ def main():
             os.getcwd(), f"__{_safe_token(output_prefix)}.norm_cache"
         )
         Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
+    bam_preproc_cache_dir = os.path.join(
+        os.getcwd(), f"__{_safe_token(output_prefix)}.bam_preproc_cache"
+    )
+    Path(bam_preproc_cache_dir).mkdir(parents=True, exist_ok=True)
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
+
+    bam_filename = _filter_bam_for_secondary_alignment_policy(
+        bam_filename,
+        bam_preproc_cache_dir,
+        label="quant",
+    )
+    if bam_for_sg_cli:
+        bam_for_sg_cli = _filter_bam_for_secondary_alignment_policy(
+            bam_for_sg_cli,
+            bam_preproc_cache_dir,
+            label="splice_graph",
+        )
+
+    if not os.path.exists(bam_filename + ".bai"):
+        logger.info(
+            "-missing index for bam {}, will try to make it...".format(bam_filename)
+        )
+        subprocess.check_call("samtools index " + bam_filename, shell=True)
 
     bam_file_for_quant = bam_filename
     bam_file_for_sg = None
@@ -1477,6 +1540,84 @@ def _normalize_bam_for_splice_graph(
         checkpoint_path.touch()
 
     return str(normalized_path)
+
+
+def _resolve_singleton_stage_threads():
+    threads = 1
+    try:
+        total_threads = (
+            TOTAL_THREADS_FOR_SINGLETON_STAGE
+            if TOTAL_THREADS_FOR_SINGLETON_STAGE
+            else CPU
+        )
+        threads = int(total_threads)
+    except Exception:
+        threads = 1
+    if threads < 1:
+        threads = 1
+    try:
+        max_hw_threads = os.cpu_count()
+        if max_hw_threads:
+            threads = min(threads, max_hw_threads)
+    except Exception:
+        pass
+    return threads
+
+
+def _filter_bam_for_secondary_alignment_policy(
+    input_bam,
+    cache_dir,
+    label=None,
+):
+    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
+        return input_bam
+
+    if (
+        LRAA_Globals.config.get("secondary_alignment_mode", "tied_primary_only")
+        != "tied_primary_only"
+    ):
+        return input_bam
+
+    input_path = Path(input_bam).resolve()
+    cache_path = Path(cache_dir).resolve()
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    base_root = input_path.name
+    if base_root.endswith(".bam"):
+        base_root = base_root[: -len(".bam")]
+    base_root = _safe_token(base_root)
+    if label:
+        base_root = f"{base_root}.{_safe_token(label)}"
+
+    filtered_path = cache_path / f"{base_root}.tied_secondaries.bam"
+    checkpoint_path = filtered_path.parent / (filtered_path.name + ".ok")
+    work_dir = cache_path / f"work_{base_root}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    if not checkpoint_path.exists():
+        threads = _resolve_singleton_stage_threads()
+        cmd = [
+            sys.executable,
+            os.path.join(UTILDIR, "filter_bam_to_tied_primary_secondaries.py"),
+            "--input_bam",
+            str(input_path),
+            "--output_bam",
+            str(filtered_path),
+            "--threads",
+            str(threads),
+            "--workdir",
+            str(work_dir),
+        ]
+        logger.info(
+            "filtering BAM to tied-primary secondary alignments only: %s (threads=%d)",
+            input_path.name,
+            threads,
+        )
+        logger.debug("Secondary-filter command: %s", " ".join(cmd))
+        subprocess.check_call(cmd, cwd=str(work_dir))
+        checkpoint_path.touch()
+
+    return str(filtered_path)
 
 
 def _append_without_first_line(src_path, dst_fh):
@@ -3029,49 +3170,78 @@ def run_quant_only(
             LG.MP_READ_ID_STORE = None
         except Exception:
             pass
-    mp_counter = lraa_obj._populate_read_multi_paths(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_quant,
-        allow_spacers,
-        restrict_splice_type=None,
+    quant_read_assignment_mode = LRAA_Globals.config.get(
+        "quant_read_assignment_mode", "rescue_unassigned"
     )
-
-    if LRAA_Globals.config.get(
-        "rescue_unassigned_reads_via_transcriptome_alignment", False
-    ):
-        rescue_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
-        q_probe = Quantify(
-            run_EM,
-            LRAA_Globals.config["max_EM_iterations_quant_only"],
-            quant_mode="final",
+    if quant_read_assignment_mode == "transcriptome_only":
+        logger.info(
+            "[%s%s] quant read assignment mode: transcriptome_only",
+            contig_acc,
+            contig_strand,
         )
-        for transcript in input_transcripts:
-            transcript.init_quant_info()
-        q_probe._assign_path_nodes_to_gene(input_transcripts)
-        q_probe._assign_reads_to_transcripts(sg, mp_counter)
-        rescue_read_names.update(q_probe.get_unassigned_read_names())
+        mp_counter = MultiPathCounter()
+        transcriptome_mps = build_transcriptome_alignment_multipaths(
+            sg,
+            input_transcripts,
+            contig_seq_str,
+            bam_file_for_quant,
+            contig_acc,
+            restrict_region_lend,
+            restrict_region_rend,
+            read_names=None,
+            target_strand=contig_strand,
+            include_monoexonic=True,
+            require_unique_path_across_best_hits=False,
+            split_multipaths_by_gene=True,
+            genome_target_gating=True,
+            read_path_mapper=lraa_obj._map_read_to_graph,
+            log_label="transcriptome-only quant assignment",
+        )
+        for transcriptome_mp in transcriptome_mps:
+            mp_counter.add(transcriptome_mp)
+    else:
+        mp_counter = lraa_obj._populate_read_multi_paths(
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            bam_file_for_quant,
+            allow_spacers,
+            restrict_splice_type=None,
+        )
 
-        if rescue_read_names:
-            logger.info(
-                "[%s%s] transcriptome rescue: retrying %d unassigned reads",
-                contig_acc,
-                contig_strand,
-                len(rescue_read_names),
+        if quant_read_assignment_mode == "rescue_unassigned":
+            rescue_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
+            q_probe = Quantify(
+                run_EM,
+                LRAA_Globals.config["max_EM_iterations_quant_only"],
+                quant_mode="final",
             )
-            rescued_mps = rescue_unassigned_reads_to_transcriptome(
-                sg,
-                input_transcripts,
-                contig_seq_str,
-                bam_file_for_quant,
-                contig_acc,
-                restrict_region_lend,
-                restrict_region_rend,
-                rescue_read_names,
-            )
-            for rescued_mp in rescued_mps:
-                mp_counter.add(rescued_mp)
+            for transcript in input_transcripts:
+                transcript.init_quant_info()
+            q_probe._assign_path_nodes_to_gene(input_transcripts)
+            q_probe._assign_reads_to_transcripts(sg, mp_counter)
+            rescue_read_names.update(q_probe.get_unassigned_read_names())
+
+            if rescue_read_names:
+                logger.info(
+                    "[%s%s] transcriptome rescue: retrying %d unassigned reads",
+                    contig_acc,
+                    contig_strand,
+                    len(rescue_read_names),
+                )
+                rescued_mps = rescue_unassigned_reads_to_transcriptome(
+                    sg,
+                    input_transcripts,
+                    contig_seq_str,
+                    bam_file_for_quant,
+                    contig_acc,
+                    restrict_region_lend,
+                    restrict_region_rend,
+                    rescue_read_names,
+                    read_path_mapper=lraa_obj._map_read_to_graph,
+                )
+                for rescued_mp in rescued_mps:
+                    mp_counter.add(rescued_mp)
 
     q = Quantify(
         run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"
@@ -3733,24 +3903,7 @@ def count_reads_from_bam(bam_filename):
     read_count_file = os.path.basename(bam_filename) + ".count"
     if not os.path.exists(read_count_file):
         tmp_path = f"{read_count_file}.tmp"
-        threads = 1
-        try:
-            total_threads = (
-                TOTAL_THREADS_FOR_SINGLETON_STAGE
-                if TOTAL_THREADS_FOR_SINGLETON_STAGE
-                else CPU
-            )
-            threads = int(total_threads)
-        except Exception:
-            threads = 1
-        if threads < 1:
-            threads = 1
-        try:
-            max_hw_threads = os.cpu_count()
-            if max_hw_threads:
-                threads = min(threads, max_hw_threads)
-        except Exception:
-            pass
+        threads = _resolve_singleton_stage_threads()
         samtools_cmd = [
             "samtools",
             "view",

@@ -224,6 +224,7 @@ class LRAA:
             self._splice_graph._region_lend,
             self._splice_graph._region_rend,
             rescue_read_names,
+            read_path_mapper=self._map_read_to_graph,
         )
 
         for rescued_mp in rescued_mps:

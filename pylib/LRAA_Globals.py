@@ -16,6 +16,7 @@ config = {
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
     "allow_secondary_alignments": True,  # retain secondary alignments by default during BAM ingestion
+    "secondary_alignment_mode": "tied_primary_only",  # all|tied_primary_only ; "none" is expressed by allow_secondary_alignments=False
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_softclip_realign_test": 5,
@@ -115,6 +116,7 @@ config = {
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
+    "quant_read_assignment_mode": "rescue_unassigned",
     "rescue_unassigned_reads_via_transcriptome_alignment": True,
     "rescue_unassigned_minimap2_preset": "auto",
     "rescue_unassigned_min_per_id": None,
