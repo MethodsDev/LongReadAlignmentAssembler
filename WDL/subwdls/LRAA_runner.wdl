@@ -221,6 +221,19 @@ task LRAA_runner_task {
             touch ~{output_prefix_use}.~{output_suffix}.gtf
         fi
 
+        quant_tied_bam_out="~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam"
+        shopt -s nullglob
+        quant_tied_bams=(__*.bam_preproc_cache/*.quant.tied_secondaries.bam)
+        shopt -u nullglob
+        if (( ${#quant_tied_bams[@]} > 0 )); then
+            cp "${quant_tied_bams[0]}" "$quant_tied_bam_out"
+            if [[ -f "${quant_tied_bams[0]}.bai" ]]; then
+                cp "${quant_tied_bams[0]}.bai" "${quant_tied_bam_out}.bai"
+            else
+                samtools index -@ ~{numThreadsPerWorker} "$quant_tied_bam_out"
+            fi
+        fi
+
         
     >>>
 
@@ -228,6 +241,9 @@ task LRAA_runner_task {
         File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
+        File? LRAA_tied_secondaries_bam = "~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam"
+        File? LRAA_tied_secondaries_bai = "~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam.bai"
+        File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
     }
 
 
@@ -331,6 +347,9 @@ workflow LRAA_runner {
         File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
         File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
         File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
+        File? LRAA_tied_secondaries_bam = LRAA_runner_task.LRAA_tied_secondaries_bam
+        File? LRAA_tied_secondaries_bai = LRAA_runner_task.LRAA_tied_secondaries_bai
+        File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
     }
 
 }

@@ -124,6 +124,13 @@ workflow LRAA_wf {
                 docker = docker,
         }
 
+        call mergeGenomeTxArbSummaries {
+            input:
+                summaryFiles = select_all(LRAA_scatter.LRAA_genome_tx_arb_summary),
+                outputFilePrefix = sample_id + ".LRAA",
+                docker = docker
+        }
+
         # Only merge GTFs when not in quant-only mode
         if (!quant_only) {
             call merge_GTFs {
@@ -170,6 +177,10 @@ workflow LRAA_wf {
     File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
     File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
     File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
+    Array[File] tiedSecondariesBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_tied_secondaries_bam]) else select_all(select_first([LRAA_scatter.LRAA_tied_secondaries_bam, []]))
+    Array[File] tiedSecondariesBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_tied_secondaries_bai]) else select_all(select_first([LRAA_scatter.LRAA_tied_secondaries_bai, []]))
+    Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
+    File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
     }
 }
 
@@ -251,6 +262,121 @@ task mergeQuantResults {
         cpu: 1
         memory: "4 GiB"
         disks: "local-disk " + ceil((size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")) * 2.2 + 5) + " SSD"
+    }
+}
+
+task mergeGenomeTxArbSummaries {
+    input {
+        Array[File] summaryFiles
+        String outputFilePrefix
+        String docker
+    }
+
+    command <<<
+    set -eo pipefail
+
+    python <<'CODE'
+    import csv
+    from pathlib import Path
+
+    summary_files = [Path(p) for p in """~{sep='\n' summaryFiles}""".splitlines() if p.strip()]
+    out_path = Path("~{outputFilePrefix}.genome_tx_arb.summary.tsv")
+
+    fieldnames = None
+    worker_rows = []
+    total_keys = [
+        "reads_total",
+        "reads_kept_genome",
+        "reads_selected_tx_total",
+        "reads_selected_tx_missing_genome",
+        "reads_selected_tx_failed_genome",
+        "reads_selected_tx_higher_per_id",
+        "reads_tx_present_but_kept_genome",
+        "reads_tx_tied_per_id_kept_genome",
+        "reads_tx_lower_per_id_kept_genome",
+        "reads_tx_per_id_unavailable_kept_genome",
+    ]
+    totals = {key: 0 for key in total_keys}
+
+    for summary_file in summary_files:
+        with summary_file.open("rt", newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            if fieldnames is None:
+                fieldnames = list(reader.fieldnames or [])
+            for row in reader:
+                if row.get("row_type") == "TOTAL":
+                    continue
+                worker_rows.append(row)
+                for key in total_keys:
+                    totals[key] += int(row.get(key, 0) or 0)
+
+    if fieldnames is None:
+        fieldnames = [
+            "row_type",
+            "contig_acc",
+            "contig_strand",
+            "reads_total",
+            "reads_kept_genome",
+            "frac_kept_genome",
+            "reads_selected_tx_total",
+            "frac_selected_tx_total",
+            "reads_selected_tx_missing_genome",
+            "frac_selected_tx_missing_genome",
+            "reads_selected_tx_failed_genome",
+            "frac_selected_tx_failed_genome",
+            "reads_selected_tx_higher_per_id",
+            "frac_selected_tx_higher_per_id",
+            "reads_tx_present_but_kept_genome",
+            "frac_tx_present_but_kept_genome",
+            "reads_tx_tied_per_id_kept_genome",
+            "frac_tx_tied_per_id_kept_genome",
+            "reads_tx_lower_per_id_kept_genome",
+            "frac_tx_lower_per_id_kept_genome",
+            "reads_tx_per_id_unavailable_kept_genome",
+            "frac_tx_per_id_unavailable_kept_genome",
+        ]
+
+    total_reads = totals["reads_total"]
+
+    def frac(key):
+        if total_reads <= 0:
+            return "0.000000"
+        return f"{float(totals[key]) / float(total_reads):.6f}"
+
+    total_row = {field: "" for field in fieldnames}
+    total_row["row_type"] = "TOTAL"
+    total_row["contig_acc"] = "TOTAL"
+    total_row["contig_strand"] = "."
+    for key in total_keys:
+        total_row[key] = str(totals[key])
+    total_row["frac_kept_genome"] = frac("reads_kept_genome")
+    total_row["frac_selected_tx_total"] = frac("reads_selected_tx_total")
+    total_row["frac_selected_tx_missing_genome"] = frac("reads_selected_tx_missing_genome")
+    total_row["frac_selected_tx_failed_genome"] = frac("reads_selected_tx_failed_genome")
+    total_row["frac_selected_tx_higher_per_id"] = frac("reads_selected_tx_higher_per_id")
+    total_row["frac_tx_present_but_kept_genome"] = frac("reads_tx_present_but_kept_genome")
+    total_row["frac_tx_tied_per_id_kept_genome"] = frac("reads_tx_tied_per_id_kept_genome")
+    total_row["frac_tx_lower_per_id_kept_genome"] = frac("reads_tx_lower_per_id_kept_genome")
+    total_row["frac_tx_per_id_unavailable_kept_genome"] = frac("reads_tx_per_id_unavailable_kept_genome")
+
+    with out_path.open("wt", newline="") as ofh:
+        writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in worker_rows:
+            writer.writerow(row)
+        writer.writerow(total_row)
+    CODE
+    >>>
+
+    output {
+        File mergedSummaryFile = "~{outputFilePrefix}.genome_tx_arb.summary.tsv"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
+        disks: "local-disk " + ceil(size(summaryFiles, "GB") * 2.0 + 5) + " SSD"
     }
 }
 
