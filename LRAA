@@ -427,7 +427,7 @@ def main():
         help=(
             "policy for retaining secondary alignments when enabled: "
             "'all' keeps all secondary alignments that pass other filters; "
-            "'tied_primary_only' preprocesses the BAM so only secondaries with AS equal to the primary alignment AS are retained "
+            "'tied_primary_only' preprocesses the BAM so only mapped non-supplementary alignments whose AS ties the best AS for that read are retained "
             f"(default: {LRAA_Globals.config['secondary_alignment_mode']})"
         ),
     )
@@ -1805,7 +1805,7 @@ def _filter_bam_for_secondary_alignment_policy(
             str(work_dir),
         ]
         logger.info(
-            "filtering BAM to tied-primary secondary alignments only: %s (threads=%d)",
+            "filtering BAM to best-AS-tied non-supplementary alignments only: %s (threads=%d)",
             input_path.name,
             threads,
         )
