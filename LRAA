@@ -86,11 +86,183 @@ def main():
         """
     )
 
+    lite_help_epilog = textwrap.dedent(
+        """
+        Use --show_full_usage_info to display the complete option list.
+
+        Common examples:
+          LRAA --genome ref.fa --bam reads.bam -o sample
+          LRAA --genome ref.fa --bam reads.bam --gtf ref.gtf --quant_only -o sample
+          LRAA --genome ref.fa --bam reads.bam --HiFi --num_parallel_contigs 4 --num_threads_per_worker 2 -o sample
+        """
+    )
+
+    def build_lite_help_parser():
+        lite_parser = argparse.ArgumentParser(
+            description="LRAA: Long-read RNA isoform discovery and quantification",
+            formatter_class=ArgumentDefaultsRawDescriptionHelpFormatter,
+            epilog=lite_help_epilog,
+        )
+        lite_primary = lite_parser.add_argument_group("primary inputs")
+        lite_primary.add_argument(
+            "--bam", type=str, default=None, help="input BAM of aligned reads"
+        )
+        lite_primary.add_argument(
+            "--genome", type=str, default=None, help="reference genome FASTA"
+        )
+        lite_primary.add_argument(
+            "--gtf",
+            type=str,
+            default=None,
+            help="reference transcripts GTF (required with --quant_only)",
+        )
+        lite_primary.add_argument(
+            "--output_prefix",
+            "-o",
+            type=str,
+            default="LRAA",
+            help="output prefix for generated files",
+        )
+        lite_primary.add_argument(
+            "--quant_only",
+            action="store_true",
+            default=False,
+            help="quantify only against provided --gtf (no isoform discovery)",
+        )
+        lite_primary.add_argument(
+            "--HiFi",
+            action="store_true",
+            default=False,
+            help="high fidelity mode",
+        )
+
+        lite_parallel = lite_parser.add_argument_group("parallelization")
+        lite_parallel.add_argument(
+            "--num_parallel_contigs",
+            type=int,
+            default=4,
+            help="maximum number of contig/strand workers to launch concurrently",
+        )
+        lite_parallel.add_argument(
+            "--num_threads_per_worker",
+            type=int,
+            default=default_threads_per_worker,
+            help="CPU cores to dedicate to each contig/strand worker",
+        )
+        lite_parallel.add_argument(
+            "--no_parallelize_contigs",
+            action="store_true",
+            default=False,
+            help="disable contig/strand-level parallelization",
+        )
+
+        lite_quant = lite_parser.add_argument_group("common quant/discovery settings")
+        lite_quant.add_argument(
+            "--no_norm",
+            action="store_true",
+            default=False,
+            help="disable pre-assembly depth normalization",
+        )
+        lite_quant.add_argument(
+            "--no_EM",
+            action="store_true",
+            default=False,
+            help="do not run EM; divide ambiguous read support equally",
+        )
+        lite_quant.add_argument(
+            "--min_per_id",
+            type=float,
+            default=LRAA_Globals.config["min_per_id"],
+            help="minimum percent identity for long-read alignments",
+        )
+        lite_quant.add_argument(
+            "--min_mapping_quality",
+            type=int,
+            default=LRAA_Globals.config["min_mapping_quality"],
+            help="minimum read alignment mapping quality",
+        )
+        lite_quant.add_argument(
+            "--min_mapping_quality_for_final_quant",
+            type=int,
+            default=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
+            help="minimum mapping quality applied during the final quant step",
+        )
+        lite_quant.add_argument(
+            "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+            dest="rescue_unassigned_reads_via_transcriptome_alignment",
+            action="store_false",
+            default=LRAA_Globals.config[
+                "rescue_unassigned_reads_via_transcriptome_alignment"
+            ],
+            help="disable transcriptome rescue for unassigned reads",
+        )
+        lite_quant.add_argument(
+            "--no_allow_secondary_alignments",
+            dest="allow_secondary_alignments",
+            action="store_false",
+            default=LRAA_Globals.config["allow_secondary_alignments"],
+            help="disable retention of secondary alignments",
+        )
+
+        lite_target = lite_parser.add_argument_group("region / single-cell")
+        lite_target.add_argument(
+            "--contig", type=str, default=None, help="restrict run to single contig"
+        )
+        lite_target.add_argument(
+            "--region",
+            type=str,
+            default=None,
+            help="restrict to contig region chr:start-end or chr+:start-end",
+        )
+        lite_target.add_argument(
+            "--cell_barcode_tag",
+            type=str,
+            default=LRAA_Globals.config["cell_barcode_tag"],
+            help="BAM tag for cell barcode",
+        )
+        lite_target.add_argument(
+            "--read_umi_tag",
+            type=str,
+            default=LRAA_Globals.config["read_umi_tag"],
+            help="BAM tag for read UMI",
+        )
+
+        lite_misc = lite_parser.add_argument_group("help / version")
+        lite_misc.add_argument(
+            "--show_full_usage_info",
+            action="store_true",
+            default=False,
+            help="display the complete option list and exit",
+        )
+        lite_misc.add_argument(
+            "--version",
+            action="store_true",
+            default=False,
+            help="display version and exit",
+        )
+
+        return lite_parser
+
     # CLI: define arguments and groups
     parser = argparse.ArgumentParser(
         description="LRAA: Long-read RNA isoform discovery and quantification",
         formatter_class=ArgumentDefaultsRawDescriptionHelpFormatter,
         epilog=hifi_mode_help,
+        add_help=False,
+    )
+
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="store_true",
+        default=False,
+        help="show concise help and exit",
+    )
+    parser.add_argument(
+        "--show_full_usage_info",
+        action="store_true",
+        default=False,
+        help="show the complete option list and exit",
     )
 
     # Primary inputs and run mode
@@ -655,6 +827,21 @@ def main():
         default=LRAA_Globals.config["resource_monitor_include_children"],
         help="include child processes in aggregate resource metrics",
     )
+
+    argv = sys.argv[1:]
+
+    if len(argv) == 0:
+        build_lite_help_parser().print_help(sys.stderr)
+        print("\nError: missing required arguments --genome and --bam", file=sys.stderr)
+        sys.exit(2)
+
+    if "--show_full_usage_info" in argv:
+        parser.print_help()
+        sys.exit(0)
+
+    if "-h" in argv or "--help" in argv:
+        build_lite_help_parser().print_help()
+        sys.exit(0)
 
     if "--version" in sys.argv:
         print("LRAA VERSION: {}".format(VERSION))
