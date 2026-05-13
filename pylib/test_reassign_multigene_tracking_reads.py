@@ -63,6 +63,7 @@ def test_reassign_multigene_tracking_reads_reallocates_only_cross_gene_reads(tmp
         ["geneA", "txA2", "hA2", "mpA2", "readA2_unique", "1.000"],
         ["geneB", "txB1", "hB1", "mpB1", "readB_unique", "1.000"],
         ["geneA", "txA1", "hA1", "mpSharedA", "readShared", "1.000"],
+        ["geneA", "txA1", "hA1", "mpSharedA_dup", "readShared", "1.000"],
         ["geneB", "txB1", "hB1", "mpSharedB", "readShared", "1.000"],
     ]
     with gzip.open(tracking_in, "wt", newline="") as fh:

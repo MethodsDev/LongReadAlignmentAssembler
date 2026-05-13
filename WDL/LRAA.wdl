@@ -22,7 +22,7 @@ workflow LRAA_wf {
         Boolean no_EM = false
         Boolean quant_only = false
         Boolean no_norm = false
-        Boolean allow_secondary_alignments = true
+        Boolean allow_secondary_alignments = false
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0

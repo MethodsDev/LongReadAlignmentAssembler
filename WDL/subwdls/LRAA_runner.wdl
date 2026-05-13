@@ -23,7 +23,7 @@ task LRAA_runner_task {
         Boolean no_EM 
         Boolean no_norm 
         Boolean run_final_cross_gene_EM = true
-        Boolean allow_secondary_alignments = true
+        Boolean allow_secondary_alignments = false
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -283,7 +283,7 @@ workflow LRAA_runner {
         Boolean no_EM
         Boolean no_norm
         Boolean run_final_cross_gene_EM = true
-        Boolean allow_secondary_alignments = true
+        Boolean allow_secondary_alignments = false
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0

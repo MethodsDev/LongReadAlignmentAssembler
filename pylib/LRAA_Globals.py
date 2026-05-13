@@ -15,7 +15,7 @@ config = {
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
-    "allow_secondary_alignments": True,  # retain secondary alignments by default during BAM ingestion
+    "allow_secondary_alignments": False,  # use primary genome alignments by default during BAM ingestion
     "secondary_alignment_mode": "tied_primary_only",  # all|tied_primary_only ; tied_primary_only keeps mapped non-supplementary alignments whose AS ties the best AS per read; "none" is expressed by allow_secondary_alignments=False
     "num_threads_per_worker": 1,
     "try_correct_alignments": True,
@@ -121,6 +121,7 @@ config = {
     "quant_read_assignment_mode": "rescue_unassigned",
     "rescue_unassigned_reads_via_transcriptome_alignment": True,
     "rescue_unassigned_minimap2_preset": "auto",
+    "rescue_unassigned_minimap2_filter_fraction": 0,
     "rescue_unassigned_min_per_id": None,
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
@@ -136,6 +137,7 @@ config = {
     # parallelization
     #
     "min_mpgn_component_size_for_spawn": 150,
+    "no_cleanup": False,
     ######
     # resource monitoring
     "resource_monitor_enabled": True,

@@ -128,7 +128,7 @@ workflow LRAA_singlecell_wf {
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
-    Boolean allow_secondary_alignments = true
+    Boolean allow_secondary_alignments = false
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init

@@ -201,7 +201,7 @@ def main():
             dest="allow_secondary_alignments",
             action="store_false",
             default=LRAA_Globals.config["allow_secondary_alignments"],
-            help="disable retention of secondary alignments",
+            help=argparse.SUPPRESS,
         )
 
         lite_target = lite_parser.add_argument_group("region / single-cell")
@@ -933,6 +933,7 @@ def main():
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
+    LRAA_Globals.config["no_cleanup"] = bool(NO_CLEANUP)
     MONITOR_RESOURCES = not args.no_monitor_resources
     SHUFFLE_PARALLEL_JOBS = not args.no_shuffle_parallel_jobs
 
@@ -2117,6 +2118,7 @@ def _run_jobs_schedule_and_merge(
         j["CPU_inner"] = threads_per_worker
         j["REDIRECT_STDERR"] = redirect_stderr
         j["VERBOSE"] = VERBOSE
+        j["NO_CLEANUP"] = bool(NO_CLEANUP)
 
     logger.info(
         f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; threads per worker={threads_per_worker} (mode={'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
@@ -2456,6 +2458,10 @@ def _contig_job_runner(job):
     # Propagate DEBUG flag into worker so debug-mode artifacts are produced consistently
     try:
         LRAA_Globals.DEBUG = bool(job.get("DEBUG", False))
+    except Exception:
+        pass
+    try:
+        LRAA_Globals.config["no_cleanup"] = bool(job.get("NO_CLEANUP", False))
     except Exception:
         pass
     # Propagate INCLUDE_PRELIM_TRANSCRIPTS into worker so prelim files are written without requiring --debug

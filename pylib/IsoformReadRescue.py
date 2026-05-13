@@ -176,7 +176,9 @@ def build_transcriptome_alignment_multipaths(
         prefix=f"tx_rescue.{contig_acc}.{splice_graph.get_contig_strand()}.",
         dir=os.getcwd(),
     )
-    keep_tmp = bool(LRAA_Globals.DEBUG)
+    keep_tmp = bool(LRAA_Globals.DEBUG) or bool(
+        LRAA_Globals.config.get("no_cleanup", False)
+    )
     try:
         transcript_fa = os.path.join(tmp_dir, "transcripts.fa")
         reads_fa = os.path.join(tmp_dir, "reads.fa")
@@ -251,16 +253,17 @@ def _run_minimap2_transcriptome_alignment(transcript_fa, reads_fa, rescue_sam, m
     cmd = [
         minimap2_exe,
         "-a",
-        "-x",
-        str(preset),
         "-t",
         str(minimap_threads),
         "--secondary=yes",
         "-N",
         "50",
-        transcript_fa,
-        reads_fa,
+        "-f",
+        str(_resolve_rescue_minimap2_filter_fraction()),
     ]
+    if preset:
+        cmd.extend(["-x", str(preset)])
+    cmd.extend([transcript_fa, reads_fa])
     with open(rescue_sam, "wt") as sam_fh:
         subprocess.run(cmd, check=True, stdout=sam_fh)
 
@@ -707,10 +710,17 @@ def _passes_percent_identity(read, min_per_id):
 def _resolve_rescue_minimap2_preset():
     preset = LRAA_Globals.config.get("rescue_unassigned_minimap2_preset", "auto")
     if preset in (None, "", "auto"):
-        if LRAA_Globals.config.get("HiFi", False):
-            return "map-hifi"
-        return "map-ont"
+        return None
     return str(preset)
+
+
+def _resolve_rescue_minimap2_filter_fraction():
+    filter_fraction = LRAA_Globals.config.get(
+        "rescue_unassigned_minimap2_filter_fraction", 0
+    )
+    if filter_fraction is None:
+        return 0
+    return filter_fraction
 
 
 def _resolve_rescue_min_per_id():
@@ -837,7 +847,23 @@ def _project_interval_to_genomic_segments(model, tx_lend, tx_rend):
         return None
 
     genomic_segments.sort(key=lambda x: (x[0], x[1]))
-    return genomic_segments
+    return _merge_contiguous_genomic_segments(genomic_segments)
+
+
+def _merge_contiguous_genomic_segments(genomic_segments):
+    if not genomic_segments:
+        return genomic_segments
+
+    merged_segments = []
+    curr_lend, curr_rend = genomic_segments[0]
+    for lend, rend in genomic_segments[1:]:
+        if lend <= curr_rend + 1:
+            curr_rend = max(curr_rend, rend)
+        else:
+            merged_segments.append((curr_lend, curr_rend))
+            curr_lend, curr_rend = lend, rend
+    merged_segments.append((curr_lend, curr_rend))
+    return merged_segments
 
 
 def _project_interval_to_path(model, tx_lend, tx_rend):

@@ -28,7 +28,7 @@ workflow LRAA_quant_by_cluster {
         
         Boolean HiFi = false
         String? oversimplify
-        Boolean allow_secondary_alignments = true
+        Boolean allow_secondary_alignments = false
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
         

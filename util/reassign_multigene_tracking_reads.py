@@ -107,6 +107,46 @@ def read_tracking_rows(path):
     return rows, fieldnames
 
 
+def collapse_duplicate_tracking_candidates(rows):
+    """Keep one tracking row per read/gene/transcript candidate.
+
+    Secondary-alignments-all mode can yield multiple compatible multipaths for
+    the same read and transcript. For global cross-gene EM those are duplicate
+    candidates, not independent read observations.
+    """
+    deduped_rows = []
+    key_to_row = {}
+    duplicate_rows = 0
+    duplicate_keys = set()
+
+    for row in rows:
+        key = (row["read_name"], row["gene_id"], row["transcript_id"])
+        if key not in key_to_row:
+            key_to_row[key] = row
+            deduped_rows.append(row)
+            continue
+
+        duplicate_rows += 1
+        duplicate_keys.add(key)
+        kept_row = key_to_row[key]
+        if "read_weight" in row and "read_weight" in kept_row:
+            kept_row["read_weight"] = format_prob(
+                max(
+                    parse_float(kept_row.get("read_weight"), 1.0),
+                    parse_float(row.get("read_weight"), 1.0),
+                )
+            )
+
+    if duplicate_rows:
+        logger.info(
+            "Collapsed %d duplicate tracking rows across %d duplicate read/transcript candidates",
+            duplicate_rows,
+            len(duplicate_keys),
+        )
+
+    return deduped_rows
+
+
 def derive_rpm_scale(expr_rows):
     ratios = []
     for row in expr_rows:
@@ -244,6 +284,7 @@ def main():
 
     expr_rows, expr_fieldnames = read_expr_rows(args.quant_expr)
     tracking_rows, tracking_fieldnames = read_tracking_rows(args.tracking)
+    tracking_rows = collapse_duplicate_tracking_candidates(tracking_rows)
 
     expr_by_tx = {}
     gene_to_transcripts = defaultdict(list)
@@ -302,10 +343,6 @@ def main():
             for idx in read_to_indices[read_name]:
                 row = tracking_rows[idx]
                 tx_key = tx_key_from_row(row)
-                if tx_key in candidates:
-                    raise RuntimeError(
-                        f"Duplicate transcript candidate encountered for read {read_name}: {tx_key}"
-                    )
                 candidates[tx_key] = parse_float(row.get("read_weight"), 1.0)
             read_candidates[read_name] = candidates
 
