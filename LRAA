@@ -40,7 +40,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.17.0"
+VERSION = "v0.17.1"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -363,7 +363,9 @@ def main():
         "--no_rescue_unassigned_reads_via_transcriptome_alignment",
         dest="rescue_unassigned_reads_via_transcriptome_alignment",
         action="store_false",
-        default=LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"],
+        default=LRAA_Globals.config[
+            "rescue_unassigned_reads_via_transcriptome_alignment"
+        ],
         help=(
             "disable quant-only read rescue for reads that fail graph/isoform "
             "assignment before the first EM "
@@ -949,10 +951,7 @@ def main():
     LRAA_Globals.config["num_threads_per_worker"] = int(CPU)
     quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
-    if (
-        quant_read_assignment_mode == "rescue_unassigned"
-        and not rescue_enabled
-    ):
+    if quant_read_assignment_mode == "rescue_unassigned" and not rescue_enabled:
         quant_read_assignment_mode = "genome"
     LRAA_Globals.config["quant_read_assignment_mode"] = quant_read_assignment_mode
     LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"] = (
