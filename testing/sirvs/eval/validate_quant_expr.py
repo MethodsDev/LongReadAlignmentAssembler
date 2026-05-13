@@ -108,9 +108,14 @@ def main():
             expected_final_tpm,
             "{} final-report TPM".format(transcript_id),
         )
+        expected_rpm_col = (
+            "RPM_total_reads"
+            if "RPM_total_reads" in expected_by_tx[transcript_id]
+            else "TPM"
+        )
         _assert_close(
             _as_float(actual, "RPM_total_reads"),
-            _as_float(expected_by_tx[transcript_id], "TPM"),
+            _as_float(expected_by_tx[transcript_id], expected_rpm_col),
             "{} RPM_total_reads".format(transcript_id),
         )
 
