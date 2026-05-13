@@ -405,6 +405,13 @@ def main():
         help="do not run EM; divide ambiguous read support equally among assigned isoforms",
     )
     primary.add_argument(
+        "--no_cross_gene_EM",
+        dest="run_cross_gene_EM_for_secondary_alignments",
+        action="store_false",
+        default=LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"],
+        help=argparse.SUPPRESS,
+    )
+    primary.add_argument(
         "--no_allow_secondary_alignments",
         dest="allow_secondary_alignments",
         action="store_false",
@@ -985,6 +992,9 @@ def main():
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
     LRAA_Globals.config["run_EM"] = run_EM
+    LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
+        args.run_cross_gene_EM_for_secondary_alignments
+    )
     LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
@@ -1866,6 +1876,62 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
             writer.writerow(out_row)
 
 
+def _maybe_run_cross_gene_em_for_secondary_alignments(output_prefix, quant_expr_path, tracking_path):
+    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
+        return
+    if not LRAA_Globals.config.get("run_EM", True):
+        logger.info("Skipping final cross-gene EM because --no_EM was requested")
+        return
+    if not LRAA_Globals.config.get("run_cross_gene_EM_for_secondary_alignments", True):
+        logger.info("Skipping final cross-gene EM for secondary alignments")
+        return
+    if not os.path.exists(quant_expr_path) or not os.path.exists(tracking_path):
+        logger.warning(
+            "Skipping final cross-gene EM because quant outputs are missing: %s, %s",
+            quant_expr_path,
+            tracking_path,
+        )
+        return
+
+    raw_expr_path = f"{output_prefix}.pre_cross_gene_em.quant.expr"
+    raw_tracking_path = f"{output_prefix}.pre_cross_gene_em.quant.tracking"
+    for path in (raw_expr_path, raw_tracking_path):
+        if os.path.exists(path):
+            os.remove(path)
+
+    shutil.move(quant_expr_path, raw_expr_path)
+    shutil.move(tracking_path, raw_tracking_path)
+
+    cmd = [
+        sys.executable,
+        os.path.join(UTILDIR, "reassign_multigene_tracking_reads.py"),
+        "--quant_expr",
+        raw_expr_path,
+        "--tracking",
+        raw_tracking_path,
+        "--output_expr",
+        quant_expr_path,
+        "--output_tracking",
+        tracking_path,
+        "--max_iter",
+        str(LRAA_Globals.config.get("max_EM_iterations_quant_only", 250)),
+    ]
+    logger.info(
+        "Running final cross-gene EM for secondary alignments; preserving pre-correction outputs as %s and %s",
+        raw_expr_path,
+        raw_tracking_path,
+    )
+    logger.debug("Cross-gene EM command: %s", " ".join(cmd))
+    try:
+        subprocess.check_call(cmd)
+    except Exception:
+        if not os.path.exists(quant_expr_path) and os.path.exists(raw_expr_path):
+            shutil.copyfile(raw_expr_path, quant_expr_path)
+        if not os.path.exists(tracking_path) and os.path.exists(raw_tracking_path):
+            shutil.copyfile(raw_tracking_path, tracking_path)
+        raise
+
+
 def _parse_input_transcripts_for_cs(
     input_gtf, contig_acc, contig_strand, restrict_region_lend, restrict_region_rend
 ):
@@ -2255,6 +2321,9 @@ def _run_jobs_schedule_and_merge(
 
     _merge_genome_tx_arb_summary_files(
         genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
+    )
+    _maybe_run_cross_gene_em_for_secondary_alignments(
+        output_prefix, quant_out_fn, track_out_fn
     )
 
     # Merge GTF and write BED in discovery mode

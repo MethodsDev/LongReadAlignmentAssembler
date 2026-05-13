@@ -102,6 +102,7 @@ workflow LRAA_wf {
                     HiFi = HiFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
+                    run_final_cross_gene_EM = false,
                     allow_secondary_alignments = allow_secondary_alignments,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
@@ -121,6 +122,7 @@ workflow LRAA_wf {
                 quantExprFiles = LRAA_scatter.LRAA_quant_expr,
                 quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
                 outputFilePrefix = sample_id + ".LRAA",
+                runCrossGeneEM = allow_secondary_alignments && !no_EM,
                 docker = docker,
         }
 
@@ -158,6 +160,7 @@ workflow LRAA_wf {
                 HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
+                run_final_cross_gene_EM = true,
                 allow_secondary_alignments = allow_secondary_alignments,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
@@ -223,14 +226,21 @@ task mergeQuantResults {
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
         String outputFilePrefix
+        Boolean runCrossGeneEM = false
         String docker
     }
+
+    Float quantMergeInputGB = size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")
+    Float quantMergeInputGiB = size(quantExprFiles, "GiB") + size(quantTrackingFiles, "GiB")
+    Float mergeMemoryRawGiB = if runCrossGeneEM then quantMergeInputGiB * 30.0 + 8.0 else 4.0
+    Int mergeMemoryGiB = if mergeMemoryRawGiB > 4.0 then ceil(mergeMemoryRawGiB) else 4
+    Float mergeDiskRawGB = if runCrossGeneEM then quantMergeInputGB * 4.0 + 20.0 else quantMergeInputGB * 2.2 + 5.0
 
     command <<<
     set -eo pipefail
 
     merge_LRAA_quant_expr.py \
-        --output "~{outputFilePrefix}.quant.expr" \
+        --output "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
         --quant_files ~{sep=' ' quantExprFiles}
 
     python <<CODE
@@ -240,7 +250,7 @@ task mergeQuantResults {
     tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
     tracking_files_list = json.loads(tracking_files_json)
 
-    with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
+    with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
         for i, tracking_file in enumerate(tracking_files_list):
             openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
             with openf(tracking_file, "rt") as fh:
@@ -250,6 +260,17 @@ task mergeQuantResults {
                 for line in fh:
                         print(line, file=ofh, end='')
     CODE
+
+    if [[ "~{runCrossGeneEM}" == "true" ]]; then
+        reassign_multigene_tracking_reads.py \
+            --quant_expr "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
+            --tracking "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" \
+            --output_expr "~{outputFilePrefix}.quant.expr" \
+            --output_tracking "~{outputFilePrefix}.quant.tracking.gz"
+    else
+        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.quant.expr"
+        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.quant.tracking.gz"
+    fi
     >>>
 
     output {
@@ -260,8 +281,8 @@ task mergeQuantResults {
     runtime {
         docker: docker
         cpu: 1
-        memory: "4 GiB"
-        disks: "local-disk " + ceil((size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")) * 2.2 + 5) + " SSD"
+        memory: mergeMemoryGiB + " GiB"
+        disks: "local-disk " + ceil(mergeDiskRawGB) + " SSD"
     }
 }
 

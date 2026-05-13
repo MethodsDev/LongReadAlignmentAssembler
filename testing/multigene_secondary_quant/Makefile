@@ -1,6 +1,6 @@
-.PHONY: test build_input_bam run_quant run_reassign validate clean
+.PHONY: test build_input_bam run_quant validate clean
 
-test: clean build_input_bam run_quant run_reassign validate
+test: clean build_input_bam run_quant validate
 
 build_input_bam:
 	samtools faidx data/genome.fa
@@ -21,13 +21,6 @@ run_quant:
 		--output_prefix LRAA \
 		--verbose
 
-run_reassign:
-	python ../../util/reassign_multigene_tracking_reads.py \
-		--quant_expr LRAA.quant.expr \
-		--tracking LRAA.quant.tracking \
-		--output_expr LRAA.cross_gene_em.quant.expr \
-		--output_tracking LRAA.cross_gene_em.quant.tracking.gz
-
 validate:
 	python validate_outputs.py
 
@@ -35,5 +28,6 @@ clean:
 	rm -f data/genome.fa.fai data/multigene_secondary.bam data/multigene_secondary.bam.bai
 	rm -rf ./__*
 	rm -f ./LRAA.quant.expr ./LRAA.quant.tracking ./LRAA.quant.tracking.gz
+	rm -f ./LRAA.pre_cross_gene_em.quant.expr ./LRAA.pre_cross_gene_em.quant.tracking
 	rm -f ./LRAA.cross_gene_em.quant.expr ./LRAA.cross_gene_em.quant.tracking.gz
 	rm -f ./LRAA.resources.summary.tsv ./LRAA.resources.tsv ./multigene_secondary.bam.count

@@ -22,6 +22,7 @@ task LRAA_runner_task {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
+        Boolean run_final_cross_gene_EM = true
         Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
@@ -61,6 +62,7 @@ task LRAA_runner_task {
 
     String no_norm_flag = if (no_norm) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
+    String no_cross_gene_EM_flag = if (run_final_cross_gene_EM) then "" else "--no_cross_gene_EM"
 
     String output_prefix_use = if defined(shardno) then "${sample_id}.shardno-${shardno}" else sample_id
     
@@ -180,6 +182,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_per_id) then "--min_per_id " + min_per_id else ""} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
+                                 ~{no_cross_gene_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
                                  ~{true='' false='--no_allow_secondary_alignments' allow_secondary_alignments} \
                                  ~{true='' false='--no_rescue_unassigned_reads_via_transcriptome_alignment' rescue_unassigned_reads_via_transcriptome_alignment} \
@@ -279,6 +282,7 @@ workflow LRAA_runner {
         Float? min_per_id
         Boolean no_EM
         Boolean no_norm
+        Boolean run_final_cross_gene_EM = true
         Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
@@ -319,8 +323,9 @@ workflow LRAA_runner {
             num_parallel_contigs = num_parallel_contigs,
             num_total_reads=num_total_reads,
             min_per_id=min_per_id,
-            no_EM=no_EM, 
+            no_EM=no_EM,
             no_norm=no_norm,
+            run_final_cross_gene_EM=run_final_cross_gene_EM,
             allow_secondary_alignments=allow_secondary_alignments,
             rescue_unassigned_reads_via_transcriptome_alignment=rescue_unassigned_reads_via_transcriptome_alignment,
             min_mapping_quality=min_mapping_quality,
