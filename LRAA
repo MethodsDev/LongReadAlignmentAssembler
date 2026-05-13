@@ -40,7 +40,7 @@ import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
 
 
-VERSION = "v0.17.1"
+VERSION = "v0.17.2"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -1885,7 +1885,9 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
             writer.writerow(out_row)
 
 
-def _maybe_run_cross_gene_em_for_secondary_alignments(output_prefix, quant_expr_path, tracking_path):
+def _maybe_run_cross_gene_em_for_secondary_alignments(
+    output_prefix, quant_expr_path, tracking_path
+):
     if not LRAA_Globals.config.get("allow_secondary_alignments", False):
         return
     if not LRAA_Globals.config.get("run_EM", True):
