@@ -1727,6 +1727,14 @@ def _normalize_bam_for_splice_graph(
     work_dir = cache_path / f"work_{base_root}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info(
+        "Preparing splice-graph BAM normalization: input=%s output=%s max_coverage=%s cache_dir=%s",
+        input_path,
+        normalized_path,
+        normalize_max_cov_level,
+        cache_path,
+    )
+
     if not checkpoint_path.exists():
         cmd = [
             os.path.join(UTILDIR, "normalize_bam_by_strand.py"),
@@ -1738,7 +1746,7 @@ def _normalize_bam_for_splice_graph(
             str(normalized_path),
         ]
         logger.info(
-            "normalizing BAM for splice-graph construction: %s", input_path.name
+            "Running splice-graph BAM normalization; final quantification will continue to use the quant BAM, not this normalized BAM"
         )
         logger.debug("Normalization command: %s", " ".join(cmd))
         subprocess.check_call(cmd, cwd=str(work_dir))
