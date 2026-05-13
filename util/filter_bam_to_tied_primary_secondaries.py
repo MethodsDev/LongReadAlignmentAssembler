@@ -85,7 +85,15 @@ def _filter_group(read_name, group, bam_writer, stats):
 
         aln_as = _get_alignment_score(read)
         if best_as is None:
-            stats["dropped_no_best_as"] += 1
+            # Some BAMs do not carry AS tags at all. In that case, keep all
+            # mapped non-supplementary alignments for the read group rather
+            # than dropping the entire read set.
+            bam_writer.write(read)
+            stats["kept_without_as_fallback"] += 1
+            if read.is_secondary:
+                stats["kept_secondary_without_as_fallback"] += 1
+            else:
+                stats["kept_non_secondary_without_as_fallback"] += 1
             continue
         if aln_as is None:
             stats["dropped_no_as"] += 1
@@ -167,6 +175,9 @@ def main():
             "kept_best_as_tied": 0,
             "kept_non_secondary_best_as_tied": 0,
             "kept_secondary_best_as_tied": 0,
+            "kept_without_as_fallback": 0,
+            "kept_non_secondary_without_as_fallback": 0,
+            "kept_secondary_without_as_fallback": 0,
             "dropped_lower_as": 0,
             "dropped_no_best_as": 0,
             "dropped_no_as": 0,
@@ -197,13 +208,15 @@ def main():
         _run(["samtools", "index", "-@", str(threads), output_bam])
 
         kept_total = stats["kept_best_as_tied"]
+        kept_total += stats["kept_without_as_fallback"]
         secondary_kept_frac = (
-            stats["kept_secondary_best_as_tied"] / stats["secondary_records"]
+            (stats["kept_secondary_best_as_tied"] + stats["kept_secondary_without_as_fallback"])
+            / stats["secondary_records"]
             if stats["secondary_records"] > 0
             else 0.0
         )
         logger.info(
-            "Filtered BAM complete: groups=%d input_records=%d non_secondary_records=%d secondary_records=%d kept_total=%d kept_non_secondary_best_as_tied=%d kept_secondary_best_as_tied=%d dropped_lower_as=%d dropped_no_best_as=%d dropped_no_as=%d dropped_supplementary=%d secondary_kept_frac=%.4f",
+            "Filtered BAM complete: groups=%d input_records=%d non_secondary_records=%d secondary_records=%d kept_total=%d kept_non_secondary_best_as_tied=%d kept_secondary_best_as_tied=%d kept_non_secondary_without_as_fallback=%d kept_secondary_without_as_fallback=%d dropped_lower_as=%d dropped_no_best_as=%d dropped_no_as=%d dropped_supplementary=%d secondary_kept_frac=%.4f",
             stats["read_groups"],
             stats["input_records"],
             stats["non_secondary_records"],
@@ -211,6 +224,8 @@ def main():
             kept_total,
             stats["kept_non_secondary_best_as_tied"],
             stats["kept_secondary_best_as_tied"],
+            stats["kept_non_secondary_without_as_fallback"],
+            stats["kept_secondary_without_as_fallback"],
             stats["dropped_lower_as"],
             stats["dropped_no_best_as"],
             stats["dropped_no_as"],
