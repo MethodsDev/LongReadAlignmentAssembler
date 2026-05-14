@@ -57,6 +57,8 @@ workflow LRAA_wf {
     Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 
     Boolean run_without_splitting = (main_chromosomes == "" || defined(region))
+    String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
+    String LRAA_output_prefix = sample_id + "." + LRAA_output_suffix
     
     if (!run_without_splitting) {
 
@@ -121,7 +123,7 @@ workflow LRAA_wf {
             input:
                 quantExprFiles = LRAA_scatter.LRAA_quant_expr,
                 quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
-                outputFilePrefix = sample_id + ".LRAA",
+                outputFilePrefix = LRAA_output_prefix,
                 runCrossGeneEM = allow_secondary_alignments && !no_EM,
                 docker = docker,
         }
@@ -129,7 +131,7 @@ workflow LRAA_wf {
         call mergeGenomeTxArbSummaries {
             input:
                 summaryFiles = select_all(LRAA_scatter.LRAA_genome_tx_arb_summary),
-                outputFilePrefix = sample_id + ".LRAA",
+                outputFilePrefix = LRAA_output_prefix,
                 docker = docker
         }
 
@@ -138,7 +140,7 @@ workflow LRAA_wf {
             call merge_GTFs {
                 input:
                     gtfFiles = select_all(LRAA_scatter.LRAA_gtf),
-                    outputFilePrefix = sample_id + ".LRAA",
+                    outputFilePrefix = LRAA_output_prefix,
                     docker = docker,
             }
         }
