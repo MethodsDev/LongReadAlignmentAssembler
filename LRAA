@@ -3486,6 +3486,112 @@ def _arbitrate_genome_vs_transcriptome_read_paths(
     return _build_mp_counter_from_read_multipaths(chosen_read_name_to_multipaths), stats
 
 
+def _build_rescue_unassigned_summary_stats(
+    splice_graph,
+    genome_mp_counter,
+    rescue_requested_read_names=None,
+    rescued_multipaths=None,
+    failed_genome_read_names=None,
+    quant_unassigned_read_names=None,
+):
+    genome_read_names = set()
+    for mp_count_pair in genome_mp_counter.get_all_MultiPathCountPairs():
+        multipath, _count = mp_count_pair.get_multipath_and_count()
+        for read_name in multipath.get_read_names():
+            normalized_name = _normalize_read_identifier(read_name)
+            if normalized_name is not None:
+                genome_read_names.add(normalized_name)
+
+    requested_read_names = {
+        normalized_name
+        for normalized_name in (
+            _normalize_read_identifier(read_name)
+            for read_name in (rescue_requested_read_names or [])
+        )
+        if normalized_name is not None
+    }
+    failed_genome_read_names = {
+        normalized_name
+        for normalized_name in (
+            _normalize_read_identifier(read_name)
+            for read_name in (failed_genome_read_names or [])
+        )
+        if normalized_name is not None
+    }
+    quant_unassigned_read_names = {
+        normalized_name
+        for normalized_name in (
+            _normalize_read_identifier(read_name)
+            for read_name in (quant_unassigned_read_names or [])
+        )
+        if normalized_name is not None
+    }
+    rescued_read_names = set()
+    for rescued_mp in rescued_multipaths or []:
+        try:
+            for read_name in rescued_mp.get_read_names():
+                normalized_name = _normalize_read_identifier(read_name)
+                if normalized_name is not None:
+                    rescued_read_names.add(normalized_name)
+        except Exception:
+            continue
+
+    all_read_names = genome_read_names | requested_read_names
+    rescue_unrescued_read_names = requested_read_names - rescued_read_names
+
+    stats = {
+        "quant_read_assignment_mode": "rescue_unassigned",
+        "reads_total": len(all_read_names),
+        "reads_kept_genome": len(genome_read_names - rescued_read_names),
+        "reads_selected_tx_total": len(rescued_read_names),
+        "reads_selected_tx_missing_genome": len(rescued_read_names - genome_read_names),
+        "reads_selected_tx_failed_genome": len(
+            rescued_read_names & failed_genome_read_names
+        ),
+        "reads_selected_tx_higher_per_id": 0,
+        "reads_tx_present_but_kept_genome": 0,
+        "reads_tx_tied_per_id_kept_genome": 0,
+        "reads_tx_lower_per_id_kept_genome": 0,
+        "reads_tx_per_id_unavailable_kept_genome": 0,
+        "reads_rescue_requested": len(requested_read_names),
+        "reads_rescue_rescued": len(rescued_read_names),
+        "reads_rescue_unrescued": len(rescue_unrescued_read_names),
+        "reads_rescue_requested_failed_genome": len(
+            requested_read_names & failed_genome_read_names
+        ),
+        "reads_rescue_requested_unassigned_quant": len(
+            requested_read_names & quant_unassigned_read_names
+        ),
+    }
+    if stats["reads_rescue_requested"] > 0:
+        stats["frac_rescue_rescued_of_requested"] = (
+            stats["reads_rescue_rescued"] / stats["reads_rescue_requested"]
+        )
+        stats["frac_rescue_unrescued_of_requested"] = (
+            stats["reads_rescue_unrescued"] / stats["reads_rescue_requested"]
+        )
+    else:
+        stats["frac_rescue_rescued_of_requested"] = 0.0
+        stats["frac_rescue_unrescued_of_requested"] = 0.0
+
+    requested = max(1, stats["reads_rescue_requested"])
+    logger.info(
+        "[%s%s] rescue_unassigned summary: total=%d rescue_requested=%d rescued=%d (%.3f of requested) unrescued=%d failed_genome_requested=%d quant_unassigned_requested=%d kept_genome=%d",
+        splice_graph.get_contig_acc(),
+        splice_graph.get_contig_strand(),
+        stats["reads_total"],
+        stats["reads_rescue_requested"],
+        stats["reads_rescue_rescued"],
+        stats["reads_rescue_rescued"] / requested,
+        stats["reads_rescue_unrescued"],
+        stats["reads_rescue_requested_failed_genome"],
+        stats["reads_rescue_requested_unassigned_quant"],
+        stats["reads_kept_genome"],
+    )
+
+    return stats
+
+
 def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats):
     total_reads = int(stats.get("reads_total", 0) or 0)
 
@@ -3517,6 +3623,19 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         "frac_tx_lower_per_id_kept_genome",
         "reads_tx_per_id_unavailable_kept_genome",
         "frac_tx_per_id_unavailable_kept_genome",
+        "quant_read_assignment_mode",
+        "reads_rescue_requested",
+        "frac_rescue_requested",
+        "reads_rescue_rescued",
+        "frac_rescue_rescued",
+        "frac_rescue_rescued_of_requested",
+        "reads_rescue_unrescued",
+        "frac_rescue_unrescued",
+        "frac_rescue_unrescued_of_requested",
+        "reads_rescue_requested_failed_genome",
+        "frac_rescue_requested_failed_genome",
+        "reads_rescue_requested_unassigned_quant",
+        "frac_rescue_requested_unassigned_quant",
     ]
 
     row = {
@@ -3570,6 +3689,33 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         "frac_tx_per_id_unavailable_kept_genome": "{:.6f}".format(
             _frac("reads_tx_per_id_unavailable_kept_genome")
         ),
+        "quant_read_assignment_mode": str(
+            stats.get("quant_read_assignment_mode", "genome_tx_arb") or "genome_tx_arb"
+        ),
+        "reads_rescue_requested": int(stats.get("reads_rescue_requested", 0) or 0),
+        "frac_rescue_requested": "{:.6f}".format(_frac("reads_rescue_requested")),
+        "reads_rescue_rescued": int(stats.get("reads_rescue_rescued", 0) or 0),
+        "frac_rescue_rescued": "{:.6f}".format(_frac("reads_rescue_rescued")),
+        "frac_rescue_rescued_of_requested": "{:.6f}".format(
+            float(stats.get("frac_rescue_rescued_of_requested", 0.0) or 0.0)
+        ),
+        "reads_rescue_unrescued": int(stats.get("reads_rescue_unrescued", 0) or 0),
+        "frac_rescue_unrescued": "{:.6f}".format(_frac("reads_rescue_unrescued")),
+        "frac_rescue_unrescued_of_requested": "{:.6f}".format(
+            float(stats.get("frac_rescue_unrescued_of_requested", 0.0) or 0.0)
+        ),
+        "reads_rescue_requested_failed_genome": int(
+            stats.get("reads_rescue_requested_failed_genome", 0) or 0
+        ),
+        "frac_rescue_requested_failed_genome": "{:.6f}".format(
+            _frac("reads_rescue_requested_failed_genome")
+        ),
+        "reads_rescue_requested_unassigned_quant": int(
+            stats.get("reads_rescue_requested_unassigned_quant", 0) or 0
+        ),
+        "frac_rescue_requested_unassigned_quant": "{:.6f}".format(
+            _frac("reads_rescue_requested_unassigned_quant")
+        ),
     }
 
     with open(summary_path, "wt", newline="") as ofh:
@@ -3600,6 +3746,11 @@ def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
         "reads_tx_tied_per_id_kept_genome",
         "reads_tx_lower_per_id_kept_genome",
         "reads_tx_per_id_unavailable_kept_genome",
+        "reads_rescue_requested",
+        "reads_rescue_rescued",
+        "reads_rescue_unrescued",
+        "reads_rescue_requested_failed_genome",
+        "reads_rescue_requested_unassigned_quant",
     ]
     totals = {key: 0 for key in total_keys}
 
@@ -3652,6 +3803,28 @@ def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
     )
     total_row["frac_tx_per_id_unavailable_kept_genome"] = _frac(
         "reads_tx_per_id_unavailable_kept_genome"
+    )
+    total_row["quant_read_assignment_mode"] = "merged"
+    total_row["frac_rescue_requested"] = _frac("reads_rescue_requested")
+    total_row["frac_rescue_rescued"] = _frac("reads_rescue_rescued")
+    total_row["frac_rescue_unrescued"] = _frac("reads_rescue_unrescued")
+    if totals["reads_rescue_requested"] > 0:
+        total_row["frac_rescue_rescued_of_requested"] = "{:.6f}".format(
+            float(totals["reads_rescue_rescued"])
+            / float(totals["reads_rescue_requested"])
+        )
+        total_row["frac_rescue_unrescued_of_requested"] = "{:.6f}".format(
+            float(totals["reads_rescue_unrescued"])
+            / float(totals["reads_rescue_requested"])
+        )
+    else:
+        total_row["frac_rescue_rescued_of_requested"] = "0.000000"
+        total_row["frac_rescue_unrescued_of_requested"] = "0.000000"
+    total_row["frac_rescue_requested_failed_genome"] = _frac(
+        "reads_rescue_requested_failed_genome"
+    )
+    total_row["frac_rescue_requested_unassigned_quant"] = _frac(
+        "reads_rescue_requested_unassigned_quant"
     )
 
     with open(output_path, "wt", newline="") as ofh:
@@ -3887,7 +4060,10 @@ def run_quant_only(
         )
 
         if quant_read_assignment_mode == "rescue_unassigned":
-            rescue_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
+            failed_genome_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
+            rescue_read_names = set(failed_genome_read_names)
+            quant_unassigned_read_names = set()
+            rescued_mps = []
             q_probe = Quantify(
                 run_EM,
                 LRAA_Globals.config["max_EM_iterations_quant_only"],
@@ -3897,7 +4073,8 @@ def run_quant_only(
                 transcript.init_quant_info()
             q_probe._assign_path_nodes_to_gene(input_transcripts)
             q_probe._assign_reads_to_transcripts(sg, mp_counter)
-            rescue_read_names.update(q_probe.get_unassigned_read_names())
+            quant_unassigned_read_names = set(q_probe.get_unassigned_read_names())
+            rescue_read_names.update(quant_unassigned_read_names)
 
             if rescue_read_names:
                 logger.info(
@@ -3917,8 +4094,25 @@ def run_quant_only(
                     rescue_read_names,
                     read_path_mapper=lraa_obj._map_read_to_graph,
                 )
-                for rescued_mp in rescued_mps:
-                    mp_counter.add(rescued_mp)
+
+            genome_tx_arb_stats = _build_rescue_unassigned_summary_stats(
+                sg,
+                mp_counter,
+                rescue_requested_read_names=rescue_read_names,
+                rescued_multipaths=rescued_mps,
+                failed_genome_read_names=failed_genome_read_names,
+                quant_unassigned_read_names=quant_unassigned_read_names,
+            )
+            if arb_summary_path is not None:
+                _write_genome_tx_arb_summary(
+                    arb_summary_path,
+                    contig_acc,
+                    contig_strand,
+                    genome_tx_arb_stats,
+                )
+
+            for rescued_mp in rescued_mps:
+                mp_counter.add(rescued_mp)
 
     q = Quantify(
         run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"
