@@ -884,3 +884,126 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
     if not projected:
         return None
     return projected
+
+
+# -----------------------------------------------------------------------------
+# Transcriptome Read Rescue Implementation Notes
+# -----------------------------------------------------------------------------
+#
+# High-level purpose
+# ------------------
+# Transcriptome read rescue is used to recover read evidence that is not usable
+# from the genome-aligned BAM path alone. The core idea is:
+#
+# 1. Build local transcript sequences from the input transcript models already
+#    represented in the current splice graph.
+# 2. Extract candidate read sequences from the genome BAM.
+# 3. Align those reads to the local transcript FASTA with minimap2.
+# 4. Project accepted transcriptome alignments back into genome coordinates.
+# 5. Convert the projected genome intervals into LRAA MultiPath objects so they
+#    can be quantified by the same downstream graph/EM machinery as ordinary
+#    genome-derived read paths.
+#
+# Entry points
+# ------------
+# rescue_unassigned_reads_to_transcriptome() is the narrow rescue entry point
+# for reads that were unassigned by the genome read-path process. It delegates
+# to build_transcriptome_alignment_multipaths().
+#
+# build_transcriptome_alignment_multipaths() is the general implementation. It
+# can operate either on an explicit read-name set or on reads fetched from the
+# current contig/region. It also supports genome_target_gating, where genome
+# alignment overlap is used to restrict which transcript targets a read is
+# allowed to rescue against.
+#
+# Transcript model construction
+# -----------------------------
+# _build_transcript_models() derives a transcript FASTA and a transcript-to-
+# genome coordinate map from the current Transcript objects and splice graph.
+# Boundary nodes are intentionally removed at this stage:
+#
+#     path_no_boundaries = simple_path without TSS:/POLYA: nodes
+#
+# This is because the transcriptome alignment itself is projected through exon
+# coordinates first. TSS/PolyA handling is added later when the projected genome
+# segments are converted back into a splice-graph read path.
+#
+# Read sequence extraction and orientation
+# ----------------------------------------
+# _collect_read_sequences() and _collect_genome_gated_read_targets() pull read
+# sequences from the genome BAM. If the BAM record is on the reverse strand, the
+# read sequence is reverse-complemented before transcriptome alignment. This
+# makes the extracted sequence correspond to the transcript/cDNA orientation.
+#
+# Transcriptome alignment
+# -----------------------
+# _run_minimap2_transcriptome_alignment() runs minimap2 against the local
+# transcript FASTA with secondary alignments enabled. The rescue alignment uses
+# the per-worker thread count from LRAA_Globals.config["num_threads_per_worker"],
+# retains up to 50 secondary alignments (-N 50), and uses the configured minimap2
+# filter fraction, defaulting to -f 0 for permissive rescue sensitivity.
+#
+# Alignment acceptance
+# --------------------
+# _parse_rescue_alignments() filters transcriptome alignments before producing
+# read paths. Accepted rescue alignments must:
+#
+# - be mapped and non-supplementary;
+# - map to one of the local transcript models;
+# - pass optional genome target gating, if enabled;
+# - contain no reference-skip (N) cigar operation;
+# - pass the configured percent identity threshold;
+# - collapse to exactly one merged transcript block after Pretty_alignment-style
+#   small-gap merging.
+#
+# For each read, only best-scoring transcriptome alignments are retained. If
+# require_unique_path_across_best_hits is true, a read is rescued only when all
+# best-scoring hits project to the same graph path. If split_multipaths_by_gene
+# is true, this uniqueness check is applied separately within each gene.
+#
+# Projection back to genome/read paths
+# ------------------------------------
+# _project_alignment_to_graph_path() is where transcript-aligned intervals are
+# turned into LRAA graph paths.
+#
+# Normal LRAA path:
+#     If read_path_mapper is provided, the transcript interval is first projected
+#     to genomic exon segments with _project_interval_to_genomic_segments().
+#     Those genomic segments are then passed to read_path_mapper() with:
+#
+#         refine_TSS_simple_path=True
+#         refine_PolyA_simple_path=True
+#         snap_nearby_boundary_features=True
+#         left_soft_clipping=<from transcriptome alignment>
+#         right_soft_clipping=<from transcriptome alignment>
+#
+#     This is the genome-equivalent rescue mode. It means rescued transcriptome
+#     alignments use the same splice-graph read-path construction logic used for
+#     genome alignments, including TSS and PolyA boundary-node refinement.
+#
+#     Current LRAA execution paths provide read_path_mapper for transcriptome
+#     rescue/assignment:
+#
+#     - quant_read_assignment_mode == "rescue_unassigned"
+#     - quant_read_assignment_mode == "transcriptome_only"
+#     - quant_read_assignment_mode == "genome_tx_arb"
+#     - early transcriptome rescue during isoform reconstruction
+#
+#     Therefore, normal LRAA quant/rescue operation uses this genome-equivalent
+#     path and can incorporate TSS/PolyA nodes through the shared mapper.
+#
+# Fallback path:
+#     If read_path_mapper is not provided, which is not expected in normal LRAA
+#     execution and should only occur in direct helper calls, legacy code, or
+#     narrowly scoped tests, _project_interval_to_path() maps the transcript
+#     interval directly onto the transcript model's exon/intron nodes with
+#     path_no_boundaries. In that fallback mode, TSS and PolyA nodes are not
+#     added because the shared genome read-path mapper is not being used.
+#
+# Practical consequence
+# ---------------------
+# In current LRAA quant/rescue usage, read_path_mapper is supplied. Rescue paths
+# should therefore include TSS and PolyA nodes identically to genome-derived read
+# paths whenever the projected genomic segments and soft-clipping evidence meet
+# the existing splice-graph boundary-refinement criteria. The exon/intron-only
+# fallback exists for direct helper usage, not as the intended production mode.
