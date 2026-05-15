@@ -4,7 +4,7 @@
   "LRAA_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:0.2.30",
   "LRAA_wf.inputBAM":"${this.inputBAM}",
   "LRAA_wf.main_chromosomes":"${this.LRAA_main_chromosomes}",
-  "LRAA_wf.allow_secondary_alignments":"${false}",
+  "LRAA_wf.allow_secondary_alignments":"${true}",
   "LRAA_wf.rescue_unassigned_reads_via_transcriptome_alignment":"${true}",
   "LRAA_wf.min_mapping_quality":"${0}",
   "LRAA_wf.min_mapping_quality_for_final_quant":"${0}",

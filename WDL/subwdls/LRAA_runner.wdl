@@ -23,7 +23,7 @@ task LRAA_runner_task {
         Boolean no_EM 
         Boolean no_norm 
         Boolean run_final_cross_gene_EM = true
-        Boolean allow_secondary_alignments = false
+        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -218,23 +218,44 @@ task LRAA_runner_task {
         if [[ -f ~{output_prefix_use}.~{output_suffix}.quant.tracking ]]; then
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
         fi
+
+        pre_cross_gene_em_expr_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.expr"
+        pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.tracking"
+        pre_cross_gene_em_tracking_gz_src="${pre_cross_gene_em_tracking_src}.gz"
+        pre_cross_gene_em_expr_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.expr"
+        pre_cross_gene_em_tracking_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
+        if [[ "~{run_final_cross_gene_EM}" == "true" && -f "$pre_cross_gene_em_expr_src" ]]; then
+            cp "$pre_cross_gene_em_expr_src" "$pre_cross_gene_em_expr_out"
+        fi
+        if [[ "~{run_final_cross_gene_EM}" == "true" ]]; then
+            if [[ -f "$pre_cross_gene_em_tracking_src" ]]; then
+                gzip -c "$pre_cross_gene_em_tracking_src" > "$pre_cross_gene_em_tracking_out"
+            elif [[ -f "$pre_cross_gene_em_tracking_gz_src" ]]; then
+                cp "$pre_cross_gene_em_tracking_gz_src" "$pre_cross_gene_em_tracking_out"
+            fi
+        fi
     
         # only create GTF file when not in quant-only mode
         if [[ "~{quant_only}" != "true" ]]; then
             touch ~{output_prefix_use}.~{output_suffix}.gtf
         fi
 
-        quant_tied_bam_out="~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam"
+        quant_secondary_bam_out="~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam"
+        quant_secondary_summary_out="~{output_prefix_use}.~{output_suffix}.secondary_rescue.summary.tsv"
         shopt -s nullglob
-        quant_tied_bams=(__*.bam_preproc_cache/*.quant.tied_secondaries.bam)
+        quant_secondary_bams=(__*.bam_preproc_cache/*.quant.secondary_rescue.bam)
+        quant_secondary_summaries=(__*.bam_preproc_cache/*.quant.secondary_rescue.summary.tsv)
         shopt -u nullglob
-        if (( ${#quant_tied_bams[@]} > 0 )); then
-            cp "${quant_tied_bams[0]}" "$quant_tied_bam_out"
-            if [[ -f "${quant_tied_bams[0]}.bai" ]]; then
-                cp "${quant_tied_bams[0]}.bai" "${quant_tied_bam_out}.bai"
+        if (( ${#quant_secondary_bams[@]} > 0 )); then
+            cp "${quant_secondary_bams[0]}" "$quant_secondary_bam_out"
+            if [[ -f "${quant_secondary_bams[0]}.bai" ]]; then
+                cp "${quant_secondary_bams[0]}.bai" "${quant_secondary_bam_out}.bai"
             else
-                samtools index -@ ~{numThreadsPerWorker} "$quant_tied_bam_out"
+                samtools index -@ ~{numThreadsPerWorker} "$quant_secondary_bam_out"
             fi
+        fi
+        if (( ${#quant_secondary_summaries[@]} > 0 )); then
+            cp "${quant_secondary_summaries[0]}" "$quant_secondary_summary_out"
         fi
 
         
@@ -244,8 +265,11 @@ task LRAA_runner_task {
         File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
-        File? LRAA_tied_secondaries_bam = "~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam"
-        File? LRAA_tied_secondaries_bai = "~{output_prefix_use}.~{output_suffix}.tied_secondaries.bam.bai"
+        File? LRAA_pre_cross_gene_EM_quant_expr = "~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.expr"
+        File? LRAA_pre_cross_gene_EM_quant_tracking = "~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
+        File? LRAA_secondary_rescue_bam = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam"
+        File? LRAA_secondary_rescue_bai = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam.bai"
+        File? LRAA_secondary_rescue_summary = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.summary.tsv"
         File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
     }
 
@@ -283,7 +307,7 @@ workflow LRAA_runner {
         Boolean no_EM
         Boolean no_norm
         Boolean run_final_cross_gene_EM = true
-        Boolean allow_secondary_alignments = false
+        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -352,8 +376,11 @@ workflow LRAA_runner {
         File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
         File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
         File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
-        File? LRAA_tied_secondaries_bam = LRAA_runner_task.LRAA_tied_secondaries_bam
-        File? LRAA_tied_secondaries_bai = LRAA_runner_task.LRAA_tied_secondaries_bai
+        File? LRAA_pre_cross_gene_EM_quant_expr = LRAA_runner_task.LRAA_pre_cross_gene_EM_quant_expr
+        File? LRAA_pre_cross_gene_EM_quant_tracking = LRAA_runner_task.LRAA_pre_cross_gene_EM_quant_tracking
+        File? LRAA_secondary_rescue_bam = LRAA_runner_task.LRAA_secondary_rescue_bam
+        File? LRAA_secondary_rescue_bai = LRAA_runner_task.LRAA_secondary_rescue_bai
+        File? LRAA_secondary_rescue_summary = LRAA_runner_task.LRAA_secondary_rescue_summary
         File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
     }
 

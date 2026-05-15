@@ -431,12 +431,12 @@ def main():
     primary.add_argument(
         "--secondary_alignment_mode",
         type=str,
-        choices=["all", "tied_primary_only"],
+        choices=["all", "heuristic"],
         default=LRAA_Globals.config["secondary_alignment_mode"],
         help=(
             "policy for retaining secondary alignments when enabled: "
             "'all' keeps all secondary alignments that pass other filters; "
-            "'tied_primary_only' preprocesses the BAM so only mapped non-supplementary alignments whose AS ties the best AS for that read are retained "
+            "'heuristic' preprocesses the BAM so all mapped non-supplementary primary alignments are retained and only secondary alignments passing the secondary-rescue heuristic are retained "
             f"(default: {LRAA_Globals.config['secondary_alignment_mode']})"
         ),
     )
@@ -971,9 +971,9 @@ def main():
         )
         LRAA_Globals.config["min_mapping_quality"] = 0
         LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 0
-        if args.secondary_alignment_mode == "tied_primary_only":
+        if args.secondary_alignment_mode == "heuristic":
             logger.info(
-                "Secondary alignments will be restricted to AS-tied primary scores via BAM preprocessing"
+                "Secondary alignments will be restricted by the secondary-rescue heuristic via BAM preprocessing"
             )
     elif args.secondary_alignment_mode != "all":
         logger.info(
@@ -1786,11 +1786,15 @@ def _filter_bam_for_secondary_alignment_policy(
     if not LRAA_Globals.config.get("allow_secondary_alignments", False):
         return input_bam
 
-    if (
-        LRAA_Globals.config.get("secondary_alignment_mode", "tied_primary_only")
-        != "tied_primary_only"
-    ):
+    secondary_alignment_mode = LRAA_Globals.config.get(
+        "secondary_alignment_mode", "heuristic"
+    )
+    if secondary_alignment_mode == "all":
         return input_bam
+    if secondary_alignment_mode != "heuristic":
+        raise RuntimeError(
+            f"Unsupported secondary_alignment_mode: {secondary_alignment_mode}"
+        )
 
     input_path = Path(input_bam).resolve()
     cache_path = Path(cache_dir).resolve()
@@ -1803,7 +1807,8 @@ def _filter_bam_for_secondary_alignment_policy(
     if label:
         base_root = f"{base_root}.{_safe_token(label)}"
 
-    filtered_path = cache_path / f"{base_root}.tied_secondaries.bam"
+    filtered_path = cache_path / f"{base_root}.secondary_rescue.bam"
+    summary_path = cache_path / f"{base_root}.secondary_rescue.summary.tsv"
     checkpoint_path = filtered_path.parent / (filtered_path.name + ".ok")
     work_dir = cache_path / f"work_{base_root}"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1812,18 +1817,20 @@ def _filter_bam_for_secondary_alignment_policy(
         threads = _resolve_singleton_stage_threads()
         cmd = [
             sys.executable,
-            os.path.join(UTILDIR, "filter_bam_to_tied_primary_secondaries.py"),
+            os.path.join(UTILDIR, "filter_bam_to_secondary_rescue.py"),
             "--input_bam",
             str(input_path),
             "--output_bam",
             str(filtered_path),
+            "--summary_tsv",
+            str(summary_path),
             "--threads",
             str(threads),
             "--workdir",
             str(work_dir),
         ]
         logger.info(
-            "filtering BAM to best-AS-tied non-supplementary alignments only: %s (threads=%d)",
+            "filtering BAM to secondary-rescue heuristic alignments: %s (threads=%d)",
             input_path.name,
             threads,
         )

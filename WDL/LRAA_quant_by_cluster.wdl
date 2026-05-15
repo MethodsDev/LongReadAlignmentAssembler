@@ -28,7 +28,7 @@ workflow LRAA_quant_by_cluster {
         
         Boolean HiFi = false
         String? oversimplify
-        Boolean allow_secondary_alignments = false
+        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
         
@@ -150,8 +150,11 @@ workflow LRAA_quant_by_cluster {
         # Per-cluster quantification outputs
         Array[File] quant_exprs = LRAA_quant_cluster.mergedQuantExpr
         Array[File] quant_trackings = LRAA_quant_cluster.mergedQuantTracking
-        Array[Array[File]] tied_secondaries_bams_by_cluster = LRAA_quant_cluster.tiedSecondariesBams
-        Array[Array[File]] tied_secondaries_bais_by_cluster = LRAA_quant_cluster.tiedSecondariesBais
+        Array[File] pre_cross_gene_EM_quant_exprs = select_all(LRAA_quant_cluster.preCrossGeneEMQuantExpr)
+        Array[File] pre_cross_gene_EM_quant_trackings = select_all(LRAA_quant_cluster.preCrossGeneEMQuantTracking)
+        Array[Array[File]] secondary_rescue_bams_by_cluster = LRAA_quant_cluster.secondaryRescueBams
+        Array[Array[File]] secondary_rescue_bais_by_cluster = LRAA_quant_cluster.secondaryRescueBais
+        Array[Array[File]] secondary_rescue_summaries_by_cluster = LRAA_quant_cluster.secondaryRescueSummaries
         Array[Array[File]] genome_tx_arb_shard_summaries_by_cluster = LRAA_quant_cluster.shardGenomeTxArbSummaries
         Array[File] genome_tx_arb_merged_summaries_by_cluster = select_all(LRAA_quant_cluster.mergedGenomeTxArbSummary)
         

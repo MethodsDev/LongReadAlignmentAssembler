@@ -22,7 +22,7 @@ workflow LRAA_wf {
         Boolean no_EM = false
         Boolean quant_only = false
         Boolean no_norm = false
-        Boolean allow_secondary_alignments = false
+        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -181,9 +181,12 @@ workflow LRAA_wf {
     output {
     File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
     File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
+    File? preCrossGeneEMQuantExpr = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_expr else mergeQuantResults.preCrossGeneEMQuantExprFile
+    File? preCrossGeneEMQuantTracking = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_tracking else mergeQuantResults.preCrossGeneEMQuantTrackingFile
     File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
-    Array[File] tiedSecondariesBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_tied_secondaries_bam]) else select_all(select_first([LRAA_scatter.LRAA_tied_secondaries_bam, []]))
-    Array[File] tiedSecondariesBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_tied_secondaries_bai]) else select_all(select_first([LRAA_scatter.LRAA_tied_secondaries_bai, []]))
+    Array[File] secondaryRescueBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bam]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_bam, []]))
+    Array[File] secondaryRescueBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bai]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_bai, []]))
+    Array[File] secondaryRescueSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_summary]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_summary, []]))
     Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
     File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
     }
@@ -269,6 +272,8 @@ task mergeQuantResults {
             --tracking "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" \
             --output_expr "~{outputFilePrefix}.quant.expr" \
             --output_tracking "~{outputFilePrefix}.quant.tracking.gz"
+        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
+        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     else
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.quant.expr"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.quant.tracking.gz"
@@ -278,6 +283,8 @@ task mergeQuantResults {
     output {
         File mergedQuantExprFile = "~{outputFilePrefix}.quant.expr"
         File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking.gz"
+        File? preCrossGeneEMQuantExprFile = "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
+        File? preCrossGeneEMQuantTrackingFile = "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     }
     
     runtime {

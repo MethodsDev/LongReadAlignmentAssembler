@@ -15,8 +15,8 @@ config = {
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
-    "allow_secondary_alignments": False,  # use primary genome alignments by default during BAM ingestion
-    "secondary_alignment_mode": "tied_primary_only",  # all|tied_primary_only ; tied_primary_only keeps mapped non-supplementary alignments whose AS ties the best AS per read; "none" is expressed by allow_secondary_alignments=False
+    "allow_secondary_alignments": True,  # retain secondary alignments by default, filtered by secondary_alignment_mode
+    "secondary_alignment_mode": "heuristic",  # all|heuristic ; heuristic keeps all primaries and only secondary alignments passing the secondary-rescue rule; "none" is expressed by allow_secondary_alignments=False
     "num_threads_per_worker": 1,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
