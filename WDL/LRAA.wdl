@@ -329,97 +329,97 @@ task mergeGenomeTxArbSummaries {
     command <<<
     set -eo pipefail
 
-    python <<'CODE'
-    import csv
-    from pathlib import Path
+    python -c '
+import csv
+from pathlib import Path
 
-    summary_files = [Path(p) for p in """~{sep='\n' summaryFiles}""".splitlines() if p.strip()]
-    out_path = Path("~{outputFilePrefix}.genome_tx_arb.summary.tsv")
+summary_files = [Path(p) for p in """~{sep="\n" summaryFiles}""".splitlines() if p.strip()]
+out_path = Path("~{outputFilePrefix}.genome_tx_arb.summary.tsv")
 
-    fieldnames = None
-    worker_rows = []
-    total_keys = [
+fieldnames = None
+worker_rows = []
+total_keys = [
+    "reads_total",
+    "reads_kept_genome",
+    "reads_selected_tx_total",
+    "reads_selected_tx_missing_genome",
+    "reads_selected_tx_failed_genome",
+    "reads_selected_tx_higher_per_id",
+    "reads_tx_present_but_kept_genome",
+    "reads_tx_tied_per_id_kept_genome",
+    "reads_tx_lower_per_id_kept_genome",
+    "reads_tx_per_id_unavailable_kept_genome",
+]
+totals = {key: 0 for key in total_keys}
+
+for summary_file in summary_files:
+    with summary_file.open("rt", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if fieldnames is None:
+            fieldnames = list(reader.fieldnames or [])
+        for row in reader:
+            if row.get("row_type") == "TOTAL":
+                continue
+            worker_rows.append(row)
+            for key in total_keys:
+                totals[key] += int(row.get(key, 0) or 0)
+
+if fieldnames is None:
+    fieldnames = [
+        "row_type",
+        "contig_acc",
+        "contig_strand",
         "reads_total",
         "reads_kept_genome",
+        "frac_kept_genome",
         "reads_selected_tx_total",
+        "frac_selected_tx_total",
         "reads_selected_tx_missing_genome",
+        "frac_selected_tx_missing_genome",
         "reads_selected_tx_failed_genome",
+        "frac_selected_tx_failed_genome",
         "reads_selected_tx_higher_per_id",
+        "frac_selected_tx_higher_per_id",
         "reads_tx_present_but_kept_genome",
+        "frac_tx_present_but_kept_genome",
         "reads_tx_tied_per_id_kept_genome",
+        "frac_tx_tied_per_id_kept_genome",
         "reads_tx_lower_per_id_kept_genome",
+        "frac_tx_lower_per_id_kept_genome",
         "reads_tx_per_id_unavailable_kept_genome",
+        "frac_tx_per_id_unavailable_kept_genome",
     ]
-    totals = {key: 0 for key in total_keys}
 
-    for summary_file in summary_files:
-        with summary_file.open("rt", newline="") as fh:
-            reader = csv.DictReader(fh, delimiter="\t")
-            if fieldnames is None:
-                fieldnames = list(reader.fieldnames or [])
-            for row in reader:
-                if row.get("row_type") == "TOTAL":
-                    continue
-                worker_rows.append(row)
-                for key in total_keys:
-                    totals[key] += int(row.get(key, 0) or 0)
+total_reads = totals["reads_total"]
 
-    if fieldnames is None:
-        fieldnames = [
-            "row_type",
-            "contig_acc",
-            "contig_strand",
-            "reads_total",
-            "reads_kept_genome",
-            "frac_kept_genome",
-            "reads_selected_tx_total",
-            "frac_selected_tx_total",
-            "reads_selected_tx_missing_genome",
-            "frac_selected_tx_missing_genome",
-            "reads_selected_tx_failed_genome",
-            "frac_selected_tx_failed_genome",
-            "reads_selected_tx_higher_per_id",
-            "frac_selected_tx_higher_per_id",
-            "reads_tx_present_but_kept_genome",
-            "frac_tx_present_but_kept_genome",
-            "reads_tx_tied_per_id_kept_genome",
-            "frac_tx_tied_per_id_kept_genome",
-            "reads_tx_lower_per_id_kept_genome",
-            "frac_tx_lower_per_id_kept_genome",
-            "reads_tx_per_id_unavailable_kept_genome",
-            "frac_tx_per_id_unavailable_kept_genome",
-        ]
+def frac(key):
+    if total_reads <= 0:
+        return "0.000000"
+    return f"{float(totals[key]) / float(total_reads):.6f}"
 
-    total_reads = totals["reads_total"]
+total_row = {field: "" for field in fieldnames}
+total_row["row_type"] = "TOTAL"
+total_row["contig_acc"] = "TOTAL"
+total_row["contig_strand"] = "."
+for key in total_keys:
+    total_row[key] = str(totals[key])
+total_row["frac_kept_genome"] = frac("reads_kept_genome")
+total_row["frac_selected_tx_total"] = frac("reads_selected_tx_total")
+total_row["frac_selected_tx_missing_genome"] = frac("reads_selected_tx_missing_genome")
+total_row["frac_selected_tx_failed_genome"] = frac("reads_selected_tx_failed_genome")
+total_row["frac_selected_tx_higher_per_id"] = frac("reads_selected_tx_higher_per_id")
+total_row["frac_tx_present_but_kept_genome"] = frac("reads_tx_present_but_kept_genome")
+total_row["frac_tx_tied_per_id_kept_genome"] = frac("reads_tx_tied_per_id_kept_genome")
+total_row["frac_tx_lower_per_id_kept_genome"] = frac("reads_tx_lower_per_id_kept_genome")
+total_row["frac_tx_per_id_unavailable_kept_genome"] = frac("reads_tx_per_id_unavailable_kept_genome")
 
-    def frac(key):
-        if total_reads <= 0:
-            return "0.000000"
-        return f"{float(totals[key]) / float(total_reads):.6f}"
-
-    total_row = {field: "" for field in fieldnames}
-    total_row["row_type"] = "TOTAL"
-    total_row["contig_acc"] = "TOTAL"
-    total_row["contig_strand"] = "."
-    for key in total_keys:
-        total_row[key] = str(totals[key])
-    total_row["frac_kept_genome"] = frac("reads_kept_genome")
-    total_row["frac_selected_tx_total"] = frac("reads_selected_tx_total")
-    total_row["frac_selected_tx_missing_genome"] = frac("reads_selected_tx_missing_genome")
-    total_row["frac_selected_tx_failed_genome"] = frac("reads_selected_tx_failed_genome")
-    total_row["frac_selected_tx_higher_per_id"] = frac("reads_selected_tx_higher_per_id")
-    total_row["frac_tx_present_but_kept_genome"] = frac("reads_tx_present_but_kept_genome")
-    total_row["frac_tx_tied_per_id_kept_genome"] = frac("reads_tx_tied_per_id_kept_genome")
-    total_row["frac_tx_lower_per_id_kept_genome"] = frac("reads_tx_lower_per_id_kept_genome")
-    total_row["frac_tx_per_id_unavailable_kept_genome"] = frac("reads_tx_per_id_unavailable_kept_genome")
-
-    with out_path.open("wt", newline="") as ofh:
-        writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
-        writer.writeheader()
-        for row in worker_rows:
-            writer.writerow(row)
-        writer.writerow(total_row)
-    CODE
+with out_path.open("wt", newline="") as ofh:
+    writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
+    writer.writeheader()
+    for row in worker_rows:
+        writer.writerow(row)
+    writer.writerow(total_row)
+'
     >>>
 
     output {
