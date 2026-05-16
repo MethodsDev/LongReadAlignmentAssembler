@@ -1841,7 +1841,9 @@ def _filter_bam_for_secondary_alignment_policy(
     return str(filtered_path)
 
 
-def _append_without_first_line(src_path, dst_fh):
+def _append_without_first_line(
+    src_path, dst_fh, expected_num_fields=None, missing_value="1.000"
+):
     """Append file to dst_fh skipping the first line (header)."""
     if src_path is None or (not os.path.exists(src_path)):
         return
@@ -1851,6 +1853,11 @@ def _append_without_first_line(src_path, dst_fh):
             if first:
                 first = False
                 continue
+            if expected_num_fields is not None:
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < expected_num_fields:
+                    fields.extend([missing_value] * (expected_num_fields - len(fields)))
+                    line = "\t".join(fields) + "\n"
             dst_fh.write(line)
 
 
@@ -1933,6 +1940,8 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
         tracking_path,
         "--max_iter",
         str(LRAA_Globals.config.get("max_EM_iterations_quant_only", 250)),
+        "--tmp_dir",
+        ".",
     ]
     logger.info(
         "Running final cross-gene EM for secondary alignments; preserving pre-correction outputs as %s and %s",
@@ -2316,9 +2325,8 @@ def _run_jobs_schedule_and_merge(
         "mp_id",
         "read_name",
         "frac_assigned",
+        "read_weight",
     ]
-    if LRAA_Globals.DEBUG:
-        tracking_header_final.append("read_weight")
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     quant_expr_tmp_paths = list()
@@ -2332,7 +2340,11 @@ def _run_jobs_schedule_and_merge(
         pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
-        _append_without_first_line(f"{tmp_prefix}.quant.tracking", merged_track_fh)
+        _append_without_first_line(
+            f"{tmp_prefix}.quant.tracking",
+            merged_track_fh,
+            expected_num_fields=len(tracking_header_final),
+        )
         genome_tx_arb_summary_paths.append(f"{tmp_prefix}.genome_tx_arb.summary.tsv")
 
     _merge_quant_expr_files(quant_expr_tmp_paths, quant_out_fn, quant_header_final)
@@ -2661,9 +2673,8 @@ def _contig_job_runner(job):
         "mp_id",
         "read_name",
         "frac_assigned",
+        "read_weight",
     ]
-    if job["DEBUG"]:
-        tracking_header.append("read_weight")
 
     ofh_quant = open(quant_expr_tmp, "wt")
     print("\t".join(quant_header), file=ofh_quant)
@@ -3049,6 +3060,7 @@ def _run_oversimplify_best_overlap(
                     mp_id_token,
                     read_name,
                     "1.000",
+                    "1.000",
                 ]
             ),
             file=ofh_track,
@@ -3205,7 +3217,9 @@ def _run_oversimplify_aggregate(
     )
     for rn in read_names:
         print(
-            "\t".join([gene_id, trans_id, splice_hash, mp_id_token, rn, "1.000"]),
+            "\t".join(
+                [gene_id, trans_id, splice_hash, mp_id_token, rn, "1.000", "1.000"]
+            ),
             file=ofh_track,
         )
 

@@ -24,6 +24,7 @@ task LRAA_runner_task {
         Boolean no_norm 
         Boolean run_final_cross_gene_EM = true
         Boolean allow_secondary_alignments = true
+        String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -185,6 +186,7 @@ task LRAA_runner_task {
                                  ~{no_cross_gene_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
                                  ~{true='' false='--no_allow_secondary_alignments' allow_secondary_alignments} \
+                                 --secondary_alignment_mode ~{secondary_alignment_mode} \
                                  ~{true='' false='--no_rescue_unassigned_reads_via_transcriptome_alignment' rescue_unassigned_reads_via_transcriptome_alignment} \
                                  ~{"--min_mapping_quality " + min_mapping_quality} \
                                  ~{"--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant} \
@@ -308,6 +310,7 @@ workflow LRAA_runner {
         Boolean no_norm
         Boolean run_final_cross_gene_EM = true
         Boolean allow_secondary_alignments = true
+        String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -351,6 +354,7 @@ workflow LRAA_runner {
             no_norm=no_norm,
             run_final_cross_gene_EM=run_final_cross_gene_EM,
             allow_secondary_alignments=allow_secondary_alignments,
+            secondary_alignment_mode=secondary_alignment_mode,
             rescue_unassigned_reads_via_transcriptome_alignment=rescue_unassigned_reads_via_transcriptome_alignment,
             min_mapping_quality=min_mapping_quality,
             min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,

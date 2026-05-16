@@ -19,11 +19,14 @@ class _FakeMultipath:
 
 
 class _FakeTranscript:
-    def __init__(self, gene_id, transcript_id, read_count, multipath):
+    def __init__(
+        self, gene_id, transcript_id, read_count, multipath, multipath_weight=1.0
+    ):
         self._gene_id = gene_id
         self._transcript_id = transcript_id
         self._read_count = read_count
         self._multipath = multipath
+        self._multipath_weight = multipath_weight
 
     def get_gene_id(self):
         return self._gene_id
@@ -40,6 +43,10 @@ class _FakeTranscript:
     def get_multipaths_evidence_assigned(self):
         return [self._multipath]
 
+    def get_multipath_weight(self, multipath):
+        assert multipath == self._multipath
+        return self._multipath_weight
+
     def get_TPM(self):
         return self._read_count / LRAA_Globals.config["num_total_reads"] * 1e6
 
@@ -55,16 +62,18 @@ class _FakeTranscript:
 
 def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
     old_num_total_reads = LRAA_Globals.config["num_total_reads"]
+    old_weight_reads = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
     old_debug = LRAA_Globals.DEBUG
     try:
         LRAA_Globals.config["num_total_reads"] = 1000
+        LRAA_Globals.config["weight_reads_by_3prime_agreement"] = True
         LRAA_Globals.DEBUG = False
 
         mp1 = _FakeMultipath("mp1", ["r1", "r2"])
         mp2 = _FakeMultipath("mp2", ["r3"])
         transcripts = [
-            _FakeTranscript("gene1", "tx1", 100.0, mp1),
-            _FakeTranscript("gene2", "tx2", 300.0, mp2),
+            _FakeTranscript("gene1", "tx1", 100.0, mp1, 0.250),
+            _FakeTranscript("gene2", "tx2", 300.0, mp2, 1.000),
         ]
         frac_assignments = {
             "tx1": {mp1: 1.0},
@@ -83,6 +92,13 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
 
         assert round(tpm_sum, 3) == 1000000.0
         assert round(rpm_total_reads_sum, 3) == 400000.0
+
+        tracking_rows = [
+            line.split("\t") for line in tracking_out.getvalue().strip().splitlines()
+        ]
+        assert all(len(row) == 7 for row in tracking_rows)
+        assert {row[6] for row in tracking_rows if row[1] == "tx1"} == {"0.250"}
     finally:
         LRAA_Globals.config["num_total_reads"] = old_num_total_reads
+        LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old_weight_reads
         LRAA_Globals.DEBUG = old_debug

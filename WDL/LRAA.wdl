@@ -68,13 +68,33 @@ workflow LRAA_wf {
           samtools_threads = countBamThreads
         }
 
+        if (allow_secondary_alignments) {
+            call filterBamToSecondaryRescue as preScatterSecondaryRescue {
+                input:
+                    inputBAM = inputBAM,
+                    outputFilePrefix = sample_id + ".pre_scatter",
+                    threads = countBamThreads,
+                    docker = docker
+            }
+        }
+
+        if (allow_secondary_alignments && defined(bam_for_sg)) {
+            call filterBamToSecondaryRescue as preScatterSecondaryRescueForSG {
+                input:
+                    inputBAM = select_first([bam_for_sg]),
+                    outputFilePrefix = sample_id + ".pre_scatter.splice_graph",
+                    threads = countBamThreads,
+                    docker = docker
+            }
+        }
+
         
         ## Split inputs by main chromosomes
         
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
-                inputBAM = inputBAM,
-                bam_for_sg = bam_for_sg,
+                inputBAM = select_first([preScatterSecondaryRescue.filteredBam, inputBAM]),
+                bam_for_sg = if defined(bam_for_sg) then select_first([preScatterSecondaryRescueForSG.filteredBam, bam_for_sg]) else bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = main_chromosomes,
@@ -106,6 +126,7 @@ workflow LRAA_wf {
                     no_EM = no_EM,
                     run_final_cross_gene_EM = false,
                     allow_secondary_alignments = allow_secondary_alignments,
+                    secondary_alignment_mode = "all",
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
@@ -164,6 +185,7 @@ workflow LRAA_wf {
                 no_EM = no_EM,
                 run_final_cross_gene_EM = true,
                 allow_secondary_alignments = allow_secondary_alignments,
+                secondary_alignment_mode = "heuristic",
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
@@ -184,9 +206,9 @@ workflow LRAA_wf {
     File? preCrossGeneEMQuantExpr = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_expr else mergeQuantResults.preCrossGeneEMQuantExprFile
     File? preCrossGeneEMQuantTracking = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_tracking else mergeQuantResults.preCrossGeneEMQuantTrackingFile
     File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
-    Array[File] secondaryRescueBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bam]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_bam, []]))
-    Array[File] secondaryRescueBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bai]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_bai, []]))
-    Array[File] secondaryRescueSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_summary]) else select_all(select_first([LRAA_scatter.LRAA_secondary_rescue_summary, []]))
+    Array[File] secondaryRescueBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bam]) else select_all([preScatterSecondaryRescue.filteredBam])
+    Array[File] secondaryRescueBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bai]) else select_all([preScatterSecondaryRescue.filteredBai])
+    Array[File] secondaryRescueSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_summary]) else select_all([preScatterSecondaryRescue.summaryTsv])
     Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
     File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
     }
@@ -238,8 +260,9 @@ task mergeQuantResults {
     Float quantMergeInputGB = size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")
     Float quantMergeInputGiB = size(quantExprFiles, "GiB") + size(quantTrackingFiles, "GiB")
     Float mergeMemoryRawGiB = if runCrossGeneEM then quantMergeInputGiB * 30.0 + 8.0 else 4.0
-    Int mergeMemoryGiB = if mergeMemoryRawGiB > 4.0 then ceil(mergeMemoryRawGiB) else 4
-    Float mergeDiskRawGB = if runCrossGeneEM then quantMergeInputGB * 4.0 + 20.0 else quantMergeInputGB * 2.2 + 5.0
+    Float mergeMemoryCappedGiB = if mergeMemoryRawGiB > 64.0 then 64.0 else mergeMemoryRawGiB
+    Int mergeMemoryGiB = if mergeMemoryCappedGiB > 4.0 then ceil(mergeMemoryCappedGiB) else 4
+    Float mergeDiskRawGB = if runCrossGeneEM then quantMergeInputGB * 8.0 + 30.0 else quantMergeInputGB * 2.2 + 5.0
 
     command <<<
     set -eo pipefail
@@ -271,7 +294,8 @@ task mergeQuantResults {
             --quant_expr "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
             --tracking "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" \
             --output_expr "~{outputFilePrefix}.quant.expr" \
-            --output_tracking "~{outputFilePrefix}.quant.tracking.gz"
+            --output_tracking "~{outputFilePrefix}.quant.tracking.gz" \
+            --tmp_dir "."
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     else
@@ -436,4 +460,43 @@ task count_bam {
   output {
     Int count = read_int(stdout())
   }
+}
+
+task filterBamToSecondaryRescue {
+    input {
+        File inputBAM
+        String outputFilePrefix
+        Int threads = 16
+        String docker
+    }
+
+    Float inputBamGB = size(inputBAM, "GB")
+    Int memoryGB = if inputBamGB > 16.0 then ceil(inputBamGB) else 16
+    Int diskGB = ceil(inputBamGB * 6.0 + 50.0)
+
+    command <<<
+        set -euo pipefail
+
+        mkdir -p secondary_rescue_work
+
+        filter_bam_to_secondary_rescue.py \
+            --input_bam "~{inputBAM}" \
+            --output_bam "~{outputFilePrefix}.secondary_rescue.bam" \
+            --summary_tsv "~{outputFilePrefix}.secondary_rescue.summary.tsv" \
+            --threads "~{threads}" \
+            --workdir secondary_rescue_work
+    >>>
+
+    output {
+        File filteredBam = "~{outputFilePrefix}.secondary_rescue.bam"
+        File filteredBai = "~{outputFilePrefix}.secondary_rescue.bam.bai"
+        File summaryTsv = "~{outputFilePrefix}.secondary_rescue.summary.tsv"
+    }
+
+    runtime {
+        docker: docker
+        cpu: threads
+        memory: memoryGB + " GiB"
+        disks: "local-disk " + diskGB + " SSD"
+    }
 }

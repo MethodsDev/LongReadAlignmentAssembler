@@ -1383,10 +1383,12 @@ class Quantify:
                         "{:.3f}".format(frac_read_assigned),
                     ]
 
-                    if LRAA_Globals.DEBUG:
-                        tracking_report_info.append(
-                            "{:.3f}".format(transcript.get_multipath_weight(mp))
-                        )
+                    read_weight = (
+                        transcript.get_multipath_weight(mp)
+                        if LRAA_Globals.config["weight_reads_by_3prime_agreement"]
+                        else 1.0
+                    )
+                    tracking_report_info.append("{:.3f}".format(read_weight))
 
                     # Always emit read tracking rows for robustness; downstream annotator filters/consumes as needed
                     print("\t".join(tracking_report_info), file=ofh_read_tracking)
