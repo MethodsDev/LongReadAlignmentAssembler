@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
+VERSION = "v0.17.4"
+
 import sys, os, re
 import textwrap
 import pysam
@@ -38,9 +40,6 @@ import MultiProcessManager as mpm
 import logging
 import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
-
-
-VERSION = "v0.17.3"
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
