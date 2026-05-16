@@ -15,10 +15,10 @@ def assert_close(actual, expected, tol=1e-6):
 
 
 def main():
-    raw_expr = read_tsv("LRAA.pre_cross_gene_em.quant.expr")
-    corrected_expr = read_tsv("LRAA.quant.expr")
-    raw_tracking = read_tsv("LRAA.pre_cross_gene_em.quant.tracking")
-    corrected_tracking = read_tsv("LRAA.quant.tracking")
+    raw_expr = read_tsv("LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.expr")
+    corrected_expr = read_tsv("LRAA.LRAA.quant-only.quant.expr")
+    raw_tracking = read_tsv("LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.tracking")
+    corrected_tracking = read_tsv("LRAA.LRAA.quant-only.quant.tracking")
 
     raw_expr_by_tx = {row["transcript_id"]: row for row in raw_expr}
     corrected_expr_by_tx = {row["transcript_id"]: row for row in corrected_expr}

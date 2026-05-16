@@ -35,17 +35,20 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 ##########
 # wdls
 
+MINIWDL_CFG = ../../miniwdl.test.cfg
+MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+
 test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
 
-test_wdl_quant_only: wdl_clean
-	 miniwdl run ../../WDL/LRAA.wdl -i wf.quant-only.json  --verbose --no-cache
+test_wdl_quant_only:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.quant-only.json  --verbose
 
-test_wdl_ref_guided: wdl_clean
-	miniwdl run ../../WDL/LRAA.wdl -i wf.ref-guided.json  --verbose --no-cache
+test_wdl_ref_guided:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-guided.json  --verbose
 
-test_wdl_ref_free: wdl_clean
-	miniwdl run ../../WDL/LRAA.wdl -i wf.ref-free.json  --verbose --no-cache
+test_wdl_ref_free:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-free.json  --verbose
 
 
 
@@ -53,7 +56,7 @@ test_wdl_ref_free: wdl_clean
 # cleaning
 
 wdl_clean:
-	rm -rf  ./*_LRAA_wf ./_LAST
+	rm -rf  ./*_LRAA_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache
 
 clean: wdl_clean
 	rm -rf ./__*  ./LRAA.gtf ./LRAA.bed ./LRAA.quant.expr ./LRAA.quant.tracking \
@@ -62,5 +65,3 @@ clean: wdl_clean
 
 bench_clean:
 	$(MAKE) clean
-
-

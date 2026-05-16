@@ -38,29 +38,30 @@ test_oversimplify_refguided:
 
 ## WDLs
 
+MINIWDL_CFG = ../../miniwdl.test.cfg
+MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+
 test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_ORF_prediction
 
-test_wdl_ID_ref_free: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json --verbose --no-cache
+test_wdl_ID_ref_free:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json --verbose
 
-test_wdl_ID_ref_guided: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json --verbose --no-cache
+test_wdl_ID_ref_guided:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json --verbose
 
-test_wdl_Quant_only: clean_miniwdl
-	miniwdl run ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json --verbose --no-cache
+test_wdl_Quant_only:
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json --verbose
 
-test_wdl_ORF_prediction: clean_miniwdl
-	miniwdl run ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json --verbose --no-cache
+test_wdl_ORF_prediction:
+	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json --verbose
 
 
 
 ## Cleaning
 
 clean_miniwdl: 
-	rm -rf ./_LAST ./*_LRAA_wf 
+	rm -rf ./_LAST ./*_LRAA_wf ./__miniwdl_call_cache ./__miniwdl_download_cache
 
 
 clean: clean_miniwdl
 	rm -rf ./__* ./LRAA*
-
-

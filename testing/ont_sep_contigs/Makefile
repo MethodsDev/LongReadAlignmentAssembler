@@ -1,15 +1,14 @@
 test:
 	../../LRAA --genome minigenome.fa --bam ONT_sim_alignments.mm2.bam -d --verbose --no_cleanup 2>&1 | tee run.log
-	gffcompare -r minigenome.gtf LRAA.gtf
+	gffcompare -r minigenome.gtf LRAA.LRAA.ref-free.gtf
 	cat gffcmp.tracking | cut -f4 | sort > gffcmp.tracking.codes
 	diff gffcmp.tracking.codes data/gffcmp.tracking.codes.expected || \
 	(echo "Output does not match any expected result" && exit 1)
 
 igv:
-	igv.sh -g minigenome.fa minigenome.gtf,LRAA.bed,ONT_sim_alignments.mm2.bam
+	igv.sh -g minigenome.fa minigenome.gtf,LRAA.LRAA.ref-free.bed,ONT_sim_alignments.mm2.bam
 
 
 clean:
 	rm -rf ./__*
 	rm -rf ./LRAA.* ./gffcmp.* ./ONT_sim_alignments.mm2.bam.count ./ONT_sim_alignments.mm2.bam.SS* ./ONT_sim_alignments.mm2.bam.norm* ./run.log
-

@@ -29,5 +29,7 @@ clean:
 	rm -rf ./__*
 	rm -f ./LRAA.quant.expr ./LRAA.quant.tracking ./LRAA.quant.tracking.gz
 	rm -f ./LRAA.pre_cross_gene_em.quant.expr ./LRAA.pre_cross_gene_em.quant.tracking
+	rm -f ./LRAA.LRAA.quant-only.quant.expr ./LRAA.LRAA.quant-only.quant.tracking ./LRAA.LRAA.quant-only.quant.tracking.gz
+	rm -f ./LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.expr ./LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.tracking
 	rm -f ./LRAA.cross_gene_em.quant.expr ./LRAA.cross_gene_em.quant.tracking.gz
 	rm -f ./LRAA.resources.summary.tsv ./LRAA.resources.tsv ./multigene_secondary.bam.count

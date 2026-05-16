@@ -221,19 +221,28 @@ task LRAA_runner_task {
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
         fi
 
-        pre_cross_gene_em_expr_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.expr"
-        pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.tracking"
+        pre_cross_gene_em_expr_src="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.expr"
+        pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking"
         pre_cross_gene_em_tracking_gz_src="${pre_cross_gene_em_tracking_src}.gz"
+        legacy_pre_cross_gene_em_expr_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.expr"
+        legacy_pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre_cross_gene_em.quant.tracking"
+        legacy_pre_cross_gene_em_tracking_gz_src="${legacy_pre_cross_gene_em_tracking_src}.gz"
         pre_cross_gene_em_expr_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.expr"
         pre_cross_gene_em_tracking_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
         if [[ "~{run_final_cross_gene_EM}" == "true" && -f "$pre_cross_gene_em_expr_src" ]]; then
             cp "$pre_cross_gene_em_expr_src" "$pre_cross_gene_em_expr_out"
+        elif [[ "~{run_final_cross_gene_EM}" == "true" && -f "$legacy_pre_cross_gene_em_expr_src" ]]; then
+            cp "$legacy_pre_cross_gene_em_expr_src" "$pre_cross_gene_em_expr_out"
         fi
         if [[ "~{run_final_cross_gene_EM}" == "true" ]]; then
             if [[ -f "$pre_cross_gene_em_tracking_src" ]]; then
                 gzip -c "$pre_cross_gene_em_tracking_src" > "$pre_cross_gene_em_tracking_out"
             elif [[ -f "$pre_cross_gene_em_tracking_gz_src" ]]; then
                 cp "$pre_cross_gene_em_tracking_gz_src" "$pre_cross_gene_em_tracking_out"
+            elif [[ -f "$legacy_pre_cross_gene_em_tracking_src" ]]; then
+                gzip -c "$legacy_pre_cross_gene_em_tracking_src" > "$pre_cross_gene_em_tracking_out"
+            elif [[ -f "$legacy_pre_cross_gene_em_tracking_gz_src" ]]; then
+                cp "$legacy_pre_cross_gene_em_tracking_gz_src" "$pre_cross_gene_em_tracking_out"
             fi
         fi
     

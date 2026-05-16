@@ -13,19 +13,20 @@ test_multi:
 test_code:
 	pytest ./sqanti-like_code_test.py 
 
+MINIWDL_CFG = ../../miniwdl.test.cfg
+MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+
 test_wdl: test_wdl_single test_wdl_multi
 
 
 test_wdl_single:
-	miniwdl run ../../WDL/LRAA-sqanti-like-reads-eval.wdl -i data/inputs.json --no-cache --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA-sqanti-like-reads-eval.wdl -i data/inputs.json --verbose
 
 
 test_wdl_multi:
-	miniwdl run ../../WDL/LRAA-sqanti-like-reads-eval.summarize_mult_samples.wdl -i data/inputs.mult_samples_summary.json --no-cache --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA-sqanti-like-reads-eval.summarize_mult_samples.wdl -i data/inputs.mult_samples_summary.json --verbose
 
 
 clean:
 	rm -f ./test.* ./_LAST
-	rm -rf ./*sqanti_like_reads_eval_wf ./202*
-
-
+	rm -rf ./*sqanti_like_reads_eval_wf ./202* ./__miniwdl_call_cache ./__miniwdl_download_cache

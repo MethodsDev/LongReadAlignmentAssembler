@@ -869,7 +869,6 @@ def main():
 
     genome_fasta_filename = args.genome
     bam_filename = args.bam
-    output_prefix = args.output_prefix
     # ensure global vars used by helper functions are updated
     global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
     single_best_only = args.single_best_only
@@ -882,6 +881,14 @@ def main():
     QUANT_ONLY = args.quant_only
     TAG_BAM = args.tag_bam
     input_gtf = args.gtf
+    output_prefix = _append_lraa_output_mode_suffix(
+        args.output_prefix, QUANT_ONLY, input_gtf
+    )
+    if output_prefix != args.output_prefix:
+        logger.info(
+            "Using mode-specific output prefix %s for final output naming",
+            output_prefix,
+        )
     # oversimplify setup (minimal: strategy is fixed to best-overlap; only contig list provided via CLI)
     oversimplify_contigs = []
     if args.oversimplify:
@@ -1898,6 +1905,25 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
             writer.writerow(out_row)
 
 
+def _get_lraa_output_mode_suffix(quant_only, input_gtf):
+    if quant_only:
+        return "LRAA.quant-only"
+    if input_gtf is None:
+        return "LRAA.ref-free"
+    return "LRAA.ref-guided"
+
+
+def _append_lraa_output_mode_suffix(output_prefix, quant_only, input_gtf):
+    suffix = _get_lraa_output_mode_suffix(quant_only, input_gtf)
+    known_suffixes = ("LRAA.quant-only", "LRAA.ref-guided", "LRAA.ref-free")
+    if any(
+        output_prefix == known_suffix or output_prefix.endswith(f".{known_suffix}")
+        for known_suffix in known_suffixes
+    ):
+        return output_prefix
+    return f"{output_prefix}.{suffix}"
+
+
 def _maybe_run_cross_gene_em_for_secondary_alignments(
     output_prefix, quant_expr_path, tracking_path
 ):
@@ -1917,8 +1943,8 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
         )
         return
 
-    raw_expr_path = f"{output_prefix}.pre_cross_gene_em.quant.expr"
-    raw_tracking_path = f"{output_prefix}.pre_cross_gene_em.quant.tracking"
+    raw_expr_path = f"{output_prefix}.pre-cross-gene-EM.quant.expr"
+    raw_tracking_path = f"{output_prefix}.pre-cross-gene-EM.quant.tracking"
     for path in (raw_expr_path, raw_tracking_path):
         if os.path.exists(path):
             os.remove(path)
