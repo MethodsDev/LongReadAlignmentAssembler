@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.17.4"
+VERSION = "v0.17.5"
 
 import sys, os, re
 import textwrap
