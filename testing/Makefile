@@ -1,4 +1,4 @@
-DIRS = sirvs quant_eval single_contig sep_contigs ont_sep_contigs read_to_isoform_class_assignments single_cells multigene_secondary_quant
+DIRS = sirvs quant_eval single_contig sep_contigs ont_sep_contigs read_to_isoform_class_assignments single_cells multigene_secondary_quant txalign_path_rescue
 
 QC = read_to_isoform_class_assignments
 
