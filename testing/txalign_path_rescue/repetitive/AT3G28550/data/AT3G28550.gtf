@@ -1,0 +1,7 @@
+Chr3	Araport11	gene	1001	4457	.	-	.	gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	transcript	1077	4449	.	-	.	transcript_id "AT3G28550.1"; gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	exon	1077	4449	.	-	.	transcript_id "AT3G28550.1"; gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	transcript	1001	4457	.	-	.	transcript_id "AT3G28550.2"; gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	exon	1001	1896	.	-	.	transcript_id "AT3G28550.2"; gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	exon	2773	3522	.	-	.	transcript_id "AT3G28550.2"; gene_id "AT3G28550"; gene_name "AT3G28550";
+Chr3	Araport11	exon	3748	4457	.	-	.	transcript_id "AT3G28550.2"; gene_id "AT3G28550"; gene_name "AT3G28550";
