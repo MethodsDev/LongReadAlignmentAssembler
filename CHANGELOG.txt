@@ -1,3 +1,13 @@
+v0.17.5, May 18, 2026
+- added final cross-gene EM reassignment for retained secondary/multi-gene read assignments, preserving pre-correction `*.pre-cross-gene-EM.quant.expr` and `*.pre-cross-gene-EM.quant.tracking` outputs while reporting cross-gene-corrected quantification as the primary result.
+- refined secondary-alignment handling by making the secondary-rescue heuristic the default policy, preprocessing BAMs to retain all mapped non-supplementary primary alignments plus only heuristic-supported secondary alignments, and exposing secondary-rescue BAMs and summaries through WDL outputs.
+- added genome/transcriptome quant-read assignment arbitration support, including `genome`, `rescue_unassigned`, `transcriptome_only`, and `genome_tx_arb` assignment modes, genome-gated transcriptome target construction, and merged `*.genome_tx_arb.summary.tsv` audit outputs.
+- improved transcriptome-rescue robustness and reporting, including rescue-unassigned summary logging, documented transcriptome read-rescue path construction, transcriptome rescue execution tests for microexon and repetitive-gene cases, and better handling of BAMs without `AS` tags or with tied best-AS alignments.
+- standardized LRAA output naming with mode-specific suffixes (`LRAA.quant-only`, `LRAA.ref-guided`, `LRAA.ref-free`) and aligned scattered/WDL output names, caching behavior, and merged-summary handling.
+- updated quant tracking output to always include read weights, supporting downstream cross-gene EM correction and tracking-based sparse-matrix generation without requiring debug mode.
+- removed legacy pre-cross-gene EM WDL handling, exposed transcriptome-arbitration and pre-cross-gene-EM artifacts in WDL outputs, and added/updated regression tests for multigene secondary quantification, quant read-assignment arbitration, secondary-rescue filtering, and txalign-path rescue.
+
+
 v0.17.0, May 11, 2026
 - added transcriptome-based read rescue for unassigned reads in quantification. Rescue now runs before the first EM in quant-only mode and can recover reads discarded as `DISCARDED-SPACER`, reads anchored to a gene but incompatible with annotated isoforms, and reads dropped at genomic alignment parsing for low percent identity when they align cleanly to local transcript sequences.
 - extended rescue into reference-guided isoform identification for multi-exon annotation-supported transcripts so rescued reads can contribute during guided isoform assembly and survive downstream filtering, not just the final quant step.
