@@ -1512,6 +1512,12 @@ class LRAA:
         left_boundary = alignment_segments[0][0]
         right_boundary = alignment_segments[-1][1]
 
+        # TODO: This currently only attaches a nearby terminal feature when it is
+        # directly adjacent to the terminal read-path node. Instead, search by
+        # traversing the splice graph within the configured terminal-site window,
+        # prioritize candidate TSS/PolyA nodes by read support, and shrink or
+        # expand the read path as needed so it contains the selected terminal
+        # boundary while remaining a valid splice-graph path.
         if contig_strand == "+":
             left_feature_type = TSS
             left_max_dist = int(LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2)
