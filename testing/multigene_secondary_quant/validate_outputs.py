@@ -6,7 +6,14 @@ from collections import defaultdict
 
 def read_tsv(path):
     with open(path, "rt", newline="") as fh:
-        return list(csv.DictReader(fh, delimiter="\t"))
+        return list(csv.DictReader(iter_non_comment_lines(fh), delimiter="\t"))
+
+
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
 
 
 def assert_close(actual, expected, tol=1e-6):

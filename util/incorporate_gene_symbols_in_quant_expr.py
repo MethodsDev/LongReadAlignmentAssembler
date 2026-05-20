@@ -25,6 +25,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -205,7 +212,7 @@ def update_quant_expr_feature_names(
     num_gene_names_added = 0
 
     with open(quant_expr_filename, "rt") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
+        reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
         fieldnames = list(reader.fieldnames)
         with open(annot_quant_expr_file, "wt") as ofh:
             writer = csv.DictWriter(

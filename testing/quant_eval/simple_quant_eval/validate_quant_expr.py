@@ -8,7 +8,14 @@ import sys
 
 def _read_tsv(path):
     with open(path, "rt") as fh:
-        return list(csv.DictReader(fh, delimiter="\t"))
+        return list(csv.DictReader(_iter_non_comment_lines(fh), delimiter="\t"))
+
+
+def _iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
 
 
 def _as_float(row, column):

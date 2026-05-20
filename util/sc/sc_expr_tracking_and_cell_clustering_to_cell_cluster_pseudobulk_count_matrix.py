@@ -15,6 +15,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -74,7 +81,7 @@ def main():
     transcript_id_to_gene_id = dict()
 
     with open(LRAA_tracking_file, "rt") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
+        reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
         for row in reader:
             gene_id = row["gene_id"]
             transcript_id = row["transcript_id"]

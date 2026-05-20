@@ -27,6 +27,13 @@ def open_maybe_gzip(path, mode):
     return open(path, mode, newline="")
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -108,7 +115,7 @@ def tx_key_from_row(row):
 
 def read_expr_rows(path):
     with open(path, "rt", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
+        reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
         if reader.fieldnames is None:
             raise RuntimeError(f"Error, no header found in quant expr file: {path}")
         rows = list(reader)
@@ -259,7 +266,12 @@ class DisjointSet:
 
 def read_tracking_fieldnames(path):
     with open_maybe_gzip(path, "rt") as fh:
-        header = fh.readline()
+        header = ""
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            header = line
+            break
     if not header:
         raise RuntimeError(f"Error, no header found in tracking file: {path}")
     return header.rstrip("\r\n").split("\t")
@@ -295,10 +307,17 @@ def sort_tracking_body(input_path, output_path, fieldnames, sort_field, tmp_dir,
         )
         assert proc.stdin is not None
         with open_maybe_gzip(input_path, "rt") as ifh:
-            header = ifh.readline()
+            header = ""
+            for line in ifh:
+                if line.startswith("#"):
+                    continue
+                header = line
+                break
             if not header:
                 raise RuntimeError(f"Error, no header found in tracking file: {input_path}")
             for line in ifh:
+                if line.startswith("#"):
+                    continue
                 proc.stdin.write(line)
         proc.stdin.close()
         returncode = proc.wait()

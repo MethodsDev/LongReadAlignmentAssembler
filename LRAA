@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 VERSION = "v0.17.5"
+LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
 import textwrap
@@ -1850,12 +1851,14 @@ def _filter_bam_for_secondary_alignment_policy(
 def _append_without_first_line(
     src_path, dst_fh, expected_num_fields=None, missing_value="1.000"
 ):
-    """Append file to dst_fh skipping the first line (header)."""
+    """Append file to dst_fh skipping leading comments and the first data header."""
     if src_path is None or (not os.path.exists(src_path)):
         return
     with open(src_path, "rt") as fh:
         first = True
         for line in fh:
+            if line.startswith("#"):
+                continue
             if first:
                 first = False
                 continue
@@ -1867,6 +1870,39 @@ def _append_without_first_line(
             dst_fh.write(line)
 
 
+def _iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
+def _write_lraa_version_comment(fh):
+    print(LRAA_VERSION_COMMENT, file=fh)
+
+
+def _ensure_lraa_version_comment(path):
+    if path is None or not os.path.exists(path):
+        return
+
+    with open(path, "rt", newline="") as fh:
+        first_line = fh.readline().rstrip("\r\n")
+
+    if first_line == LRAA_VERSION_COMMENT:
+        return
+
+    output_dir = os.path.dirname(os.path.abspath(path)) or "."
+    with tempfile.NamedTemporaryFile(
+        "wt", delete=False, dir=output_dir, prefix=".lraa_version.", newline=""
+    ) as tmp_fh:
+        tmp_path = tmp_fh.name
+        _write_lraa_version_comment(tmp_fh)
+        with open(path, "rt", newline="") as src_fh:
+            shutil.copyfileobj(src_fh, tmp_fh)
+
+    shutil.move(tmp_path, path)
+
+
 def _merge_quant_expr_files(src_paths, output_path, fieldnames):
     rows = list()
     total_reported_read_count = 0.0
@@ -1875,7 +1911,7 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
         if src_path is None or not os.path.exists(src_path):
             continue
         with open(src_path, "rt") as fh:
-            reader = csv.DictReader(fh, delimiter="\t")
+            reader = csv.DictReader(_iter_non_comment_lines(fh), delimiter="\t")
             for row in reader:
                 try:
                     counts = float(row.get("all_reads", 0) or 0)
@@ -2381,11 +2417,14 @@ def _run_jobs_schedule_and_merge(
     _maybe_run_cross_gene_em_for_secondary_alignments(
         output_prefix, quant_out_fn, track_out_fn
     )
+    _ensure_lraa_version_comment(quant_out_fn)
+    _ensure_lraa_version_comment(track_out_fn)
 
     # Merge GTF and write BED in discovery mode
     if not quant_only:
         gtf_output_filename = f"{output_prefix}.gtf"
         with open(gtf_output_filename, "wt") as gtf_out:
+            _write_lraa_version_comment(gtf_out)
             for j in jobs:
                 tmp_root_new = f"__{j['output_prefix']}.contigtmp"
                 tmp_root_old = f"{j['output_prefix']}.contigtmp"

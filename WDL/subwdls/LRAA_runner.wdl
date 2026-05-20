@@ -235,7 +235,11 @@ task LRAA_runner_task {
     
         # only create GTF file when not in quant-only mode
         if [[ "~{quant_only}" != "true" ]]; then
-            touch ~{output_prefix_use}.~{output_suffix}.gtf
+            gtf_out="~{output_prefix_use}.~{output_suffix}.gtf"
+            if [[ ! -s "$gtf_out" ]]; then
+                lraa_version="$(LRAA --version | awk '{print $NF}')"
+                printf '# LRAA version %s\n' "$lraa_version" > "$gtf_out"
+            fi
         fi
 
         quant_secondary_bam_out="~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam"

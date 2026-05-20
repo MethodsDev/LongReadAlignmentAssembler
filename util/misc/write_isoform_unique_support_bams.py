@@ -15,6 +15,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="extract reads providing unique isoform support from bam",
@@ -45,7 +52,7 @@ def main():
     unique_read_names_to_transcripts = dict()
     # get unique read names to transcript ids
     with open(tracking_file, "rt") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
+        reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
         for row in reader:
             if float(row["frac_assigned"]) == 1.0:
                 read_name = row["read_name"]

@@ -12,7 +12,7 @@ dat_filename = args[1]
 
 library(tidyverse)
 
-data = read.csv(dat_filename, header=T, sep="\t")
+data = read.csv(dat_filename, header=T, sep="\t", comment.char="#")
 
 truth_data = read.csv("data/truth_quants.tsv", header=T, sep="\t")
 

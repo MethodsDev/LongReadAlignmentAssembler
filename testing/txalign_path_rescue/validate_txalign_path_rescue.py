@@ -9,8 +9,15 @@ from pathlib import Path
 
 def read_tsv(path):
     with path.open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
+        reader = csv.DictReader(iter_non_comment_lines(handle), delimiter="\t")
         return list(reader)
+
+
+def iter_non_comment_lines(handle):
+    for line in handle:
+        if line.startswith("#"):
+            continue
+        yield line
 
 
 def require(condition, message):

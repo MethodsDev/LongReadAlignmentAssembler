@@ -17,6 +17,13 @@ logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="LRAA: Long Read Alignment Assembler",
@@ -74,7 +81,7 @@ def build_read_tracking_lmdb(tracking_file, quant_read_tracking_lmdb_filename):
         openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
         with openf(tracking_file, "rt") as fh:
 
-            reader = csv.DictReader(fh, delimiter="\t")
+            reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
             for row in reader:
 
                 record_counter += 1

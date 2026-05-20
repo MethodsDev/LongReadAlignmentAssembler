@@ -218,6 +218,7 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
             "usecols": ["read_name", "gene_id", "transcript_id", "transcript_splice_hash_code", "frac_assigned"],
             "dtype": dtype_spec,
             "engine": engine,
+            "comment": "#",
         }
         if engine == "c":
             read_csv_kwargs["low_memory"] = False

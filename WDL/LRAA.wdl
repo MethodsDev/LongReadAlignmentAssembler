@@ -228,11 +228,14 @@ task merge_GTFs {
     command <<<
         set -eo pipefail
 
+        lraa_version="$(LRAA --version | awk '{print $NF}')"
+        version_comment="# LRAA version ${lraa_version}"
+
         gtf_output="~{outputFilePrefix}.gtf"
-        touch "$gtf_output"
+        printf '%s\n' "$version_comment" > "$gtf_output"
         gtf_files_str="~{sep=' ' gtfFiles}"
         for file in $gtf_files_str; do
-           cat "$file" >> "$gtf_output"
+           awk 'NR == 1 && /^# LRAA version / {next} {print}' "$file" >> "$gtf_output"
         done
     >>>
 
@@ -267,27 +270,81 @@ task mergeQuantResults {
     command <<<
     set -eo pipefail
 
+    lraa_version="$(LRAA --version | awk '{print $NF}')"
+    export LRAA_VERSION_COMMENT="# LRAA version ${lraa_version}"
+
+    prepend_lraa_version_comment() {
+        local path="$1"
+        local tmp="${path}.with_lraa_version"
+        if [[ -s "$path" ]] && head -n 1 "$path" | grep -qxF "$LRAA_VERSION_COMMENT"; then
+            return
+        fi
+        {
+            printf '%s\n' "$LRAA_VERSION_COMMENT"
+            cat "$path"
+        } > "$tmp"
+        mv "$tmp" "$path"
+    }
+
+    prepend_lraa_version_comment_gzip() {
+        local path="$1"
+        local tmp="${path}.with_lraa_version"
+        python <<PYCODE
+import gzip
+import os
+import shutil
+
+path = "${path}"
+tmp = "${tmp}"
+version_comment = os.environ["LRAA_VERSION_COMMENT"]
+
+with gzip.open(path, "rt") as inp, gzip.open(tmp, "wt") as out:
+    first = inp.readline()
+    if first.rstrip("\\r\\n") == version_comment:
+        out.write(first)
+    else:
+        print(version_comment, file=out)
+        if first:
+            out.write(first)
+    shutil.copyfileobj(inp, out)
+
+os.replace(tmp, path)
+PYCODE
+    }
+
     merge_LRAA_quant_expr.py \
         --output "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
         --quant_files ~{sep=' ' quantExprFiles}
 
+    prepend_lraa_version_comment "~{outputFilePrefix}.pre_cross_gene_em.quant.expr"
+
     python <<CODE
-    import json
-    import gzip
+import json
+import gzip
+import os
 
-    tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
-    tracking_files_list = json.loads(tracking_files_json)
+tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
+tracking_files_list = json.loads(tracking_files_json)
+version_comment = os.environ["LRAA_VERSION_COMMENT"]
 
-    with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
-        for i, tracking_file in enumerate(tracking_files_list):
-            openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-            with openf(tracking_file, "rt") as fh:
-                header = next(fh)
-                if i == 0:
+with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
+    print(version_comment, file=ofh)
+    wrote_header = False
+    for i, tracking_file in enumerate(tracking_files_list):
+        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+        with openf(tracking_file, "rt") as fh:
+            header = None
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                if header is None:
+                    header = line
+                    if not wrote_header:
                         print(header, file=ofh, end='')
-                for line in fh:
-                        print(line, file=ofh, end='')
-    CODE
+                        wrote_header = True
+                    continue
+                print(line, file=ofh, end='')
+CODE
 
     if [[ "~{runCrossGeneEM}" == "true" ]]; then
         reassign_multigene_tracking_reads.py \
@@ -296,6 +353,8 @@ task mergeQuantResults {
             --output_expr "~{outputFilePrefix}.quant.expr" \
             --output_tracking "~{outputFilePrefix}.quant.tracking.gz" \
             --tmp_dir "."
+        prepend_lraa_version_comment "~{outputFilePrefix}.quant.expr"
+        prepend_lraa_version_comment_gzip "~{outputFilePrefix}.quant.tracking.gz"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     else

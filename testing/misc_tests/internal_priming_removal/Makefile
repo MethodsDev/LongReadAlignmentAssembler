@@ -7,11 +7,11 @@ test: test_remove_iprime test_keep_iprime
 
 test_remove_iprime:
 	../../../LRAA --bam data/iprime_reads.bam --genome data/genome_region.fa --output_prefix test_remove_iprime --config_update data/config_adjust.json --HiFi --verbose --no_cleanup
-	@if [ -s test_remove_iprime.LRAA.ref-free.gtf ]; then \
-		echo "Error: test_remove_iprime.LRAA.ref-free.gtf is not empty!"; \
+	@if grep -v '^#' test_remove_iprime.LRAA.ref-free.gtf | grep -q .; then \
+		echo "Error: test_remove_iprime.LRAA.ref-free.gtf has non-comment content!"; \
 		exit 1; \
 	else \
-		echo "OK: test_remove_iprime.LRAA.ref-free.gtf is empty."; \
+		echo "OK: test_remove_iprime.LRAA.ref-free.gtf has no non-comment content."; \
 	fi
 
 

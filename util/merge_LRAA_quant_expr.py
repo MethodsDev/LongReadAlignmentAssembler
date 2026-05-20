@@ -14,6 +14,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        yield line
+
+
 def _derive_output_fieldnames(fieldnames):
     if fieldnames is None:
         raise RuntimeError("Error, no quant expr header found in input files")
@@ -31,7 +38,7 @@ def merge_quant_expr_files(quant_files, output_filename):
     for quant_file in quant_files:
         logger.info("Parsing %s", quant_file)
         with open(quant_file, "rt", newline="") as fh:
-            reader = csv.DictReader(fh, delimiter="\t")
+            reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
             if reader.fieldnames is None:
                 raise RuntimeError("Error, no header found in {}".format(quant_file))
             if "all_reads" not in reader.fieldnames:

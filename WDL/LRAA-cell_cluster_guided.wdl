@@ -309,25 +309,38 @@ task LRAA_merge_trackings {
     command <<<
         set -ex
 
+        lraa_version="$(LRAA --version | awk '{print $NF}')"
+        export LRAA_VERSION_COMMENT="# LRAA version ${lraa_version}"
+
         python <<CODE
-        import json
-        import gzip
+import json
+import gzip
+import os
 
-        tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
-        tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
+tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
+tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
+version_comment = os.environ["LRAA_VERSION_COMMENT"]
 
-        with gzip.open("~{outputfile}", "wt") as ofh:
-            for i, tracking_file in enumerate(tracking_files_list):
-                openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-                with openf(tracking_file, "rt") as fh:
-                    header = next(fh)
-                    if i == 0:
-                         print(header, file=ofh, end='')
-                    for line in fh:
-                         print(line, file=ofh, end='')
+with gzip.open("~{outputfile}", "wt") as ofh:
+    print(version_comment, file=ofh)
+    wrote_header = False
+    for i, tracking_file in enumerate(tracking_files_list):
+        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
+        with openf(tracking_file, "rt") as fh:
+            header = None
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                if header is None:
+                    header = line
+                    if not wrote_header:
+                        print(header, file=ofh, end='')
+                        wrote_header = True
+                    continue
+                print(line, file=ofh, end='')
 
 
-        CODE
+CODE
 
        
     
@@ -362,6 +375,9 @@ task lraa_merge_gtf_task {
     command <<<
         set -ex
 
+        lraa_version="$(LRAA --version | awk '{print $NF}')"
+        version_comment="# LRAA version ${lraa_version}"
+
 
       (
       
@@ -375,6 +391,25 @@ task lraa_merge_gtf_task {
              tail -n 100 command_output.log >&2
              exit 1
       }
+
+      prepend_lraa_version_comment() {
+          local path="$1"
+          local tmp="${path}.with_lraa_version"
+          if [[ -s "$path" ]] && head -n 1 "$path" | grep -qxF "$version_comment"; then
+              return
+          fi
+          {
+              printf '%s\n' "$version_comment"
+              cat "$path"
+          } > "$tmp"
+          mv "$tmp" "$path"
+      }
+
+      prepend_lraa_version_comment ~{sample_id}.LRAA.sc_merged.gtf
+
+      if [[ -f ~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv ]]; then
+          prepend_lraa_version_comment ~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv
+      fi
 
     >>>
 
