@@ -145,11 +145,31 @@ def run_component_em(
     min_expr,
     base_alpha,
 ):
+    """
+    Run a small EM over one connected cross-gene component.
+
+    Inputs are already reduced to the affected component:
+      - component_reads: read names participating in this component.
+      - read_candidates: read_name -> {(gene_id, transcript_id): read_weight}.
+      - component_transcripts: all transcripts belonging to the component genes.
+      - init_counts: previous quant.expr all_reads values used as starting abundance.
+
+    The EM estimates per-read fractional assignments among each read's candidate
+    transcripts. Unlike pylib/EM.py, this operates on individual tracking reads
+    and keeps counts on the read-count scale instead of normalizing expression
+    levels to sum to 1.
+    """
+    # Initialize transcript abundances from existing quantification counts.
+    # min_expr prevents zero-initialized candidates from being permanently
+    # unable to receive support in the E-step.
     counts = {
         tx_key: max(init_counts.get(tx_key, 0.0), min_expr)
         for tx_key in component_transcripts
     }
     read_to_fracs = {}
+
+    # Regularize only transcripts touched by ambiguous component reads. Each
+    # ambiguous read contributes base_alpha to each of its candidate transcripts.
     transcript_alphas = defaultdict(float)
     for read_name in component_reads:
         candidates = read_candidates[read_name]
@@ -161,6 +181,8 @@ def run_component_em(
         assigned_counts = defaultdict(float)
         new_read_to_fracs = {}
 
+        # E-step: for each read, distribute one read's support across candidate
+        # transcripts in proportion to read_weight * current transcript abundance.
         for read_name in component_reads:
             candidates = read_candidates[read_name]
             denom = 0.0
@@ -182,6 +204,8 @@ def run_component_em(
                     }
                 denom = fallback_total
 
+            # Store the current fractional assignments and accumulate expected
+            # read counts for each transcript.
             read_fracs = {}
             for tx_key, numer in numerators.items():
                 frac = numer / denom if denom > 0 else 0.0
@@ -190,6 +214,8 @@ def run_component_em(
 
             new_read_to_fracs[read_name] = read_fracs
 
+        # M-step: update transcript abundances from expected read counts plus
+        # ambiguity regularization. Counts remain on the raw read-count scale.
         new_expression_counts = {}
         for tx_key in component_transcripts:
             new_expression_counts[tx_key] = (
@@ -198,6 +224,7 @@ def run_component_em(
                 + min_expr
             )
 
+        # Stop when raw transcript counts no longer move by more than tol in L1.
         delta = sum(
             abs(new_expression_counts[tx_key] - counts[tx_key])
             for tx_key in component_transcripts
@@ -208,6 +235,8 @@ def run_component_em(
         if delta <= tol:
             break
 
+    # Recompute final counts directly from final read fractions. This excludes
+    # alpha and min_expr so reported counts reflect only assigned read support.
     final_counts = defaultdict(float)
     for read_fracs in read_to_fracs.values():
         for tx_key, frac in read_fracs.items():
