@@ -1,5 +1,126 @@
 #!/usr/bin/env Rscript
 
+
+read_sampled_iso_cats = function(tsv_file, sample_name, sample_num) {
+
+    if (!file.exists(tsv_file)) {
+        stop("input file does not exist: ", tsv_file)
+    }
+
+    sample_file = tempfile(pattern="sampled_iso_cats_", fileext=".tsv")
+    count_file = tempfile(pattern="sampled_iso_cats_count_")
+    awk_file = tempfile(pattern="sampled_iso_cats_", fileext=".awk")
+    on.exit(unlink(c(sample_file, count_file, awk_file)), add=TRUE)
+
+    # Stream the large iso_cats table and keep only a fixed-size sample of the
+    # columns needed for plotting.
+    writeLines(c(
+        'BEGIN {',
+        '    FS = OFS = "\t"',
+        '    srand(seed)',
+        '}',
+        'NR == 1 {',
+        '    for (i = 1; i <= NF; i++) {',
+        '        idx[$i] = i',
+        '    }',
+        '',
+        '    if (!("sqanti_cat" in idx) || !("num_exon_segments" in idx)) {',
+        '        print "missing required sqanti_cat or num_exon_segments column" > "/dev/stderr"',
+        '        err = 1',
+        '        exit 2',
+        '    }',
+        '',
+        '    if ("cDNA_length" in idx) {',
+        '        length_col = "cDNA_length"',
+        '    } else if ("alignment_length" in idx) {',
+        '        length_col = "alignment_length"',
+        '    } else {',
+        '        print "missing required cDNA_length or alignment_length column" > "/dev/stderr"',
+        '        err = 1',
+        '        exit 2',
+        '    }',
+        '',
+        '    cat_i = idx["sqanti_cat"]',
+        '    length_i = idx[length_col]',
+        '    exon_i = idx["num_exon_segments"]',
+        '    print "sqanti_cat", length_col, "num_exon_segments"',
+        '    next',
+        '}',
+        '{',
+        '    row = $cat_i OFS $length_i OFS $exon_i',
+        '    n++',
+        '',
+        '    if (n <= limit) {',
+        '        reservoir[n] = row',
+        '    } else {',
+        '        j = int(rand() * n) + 1',
+        '        if (j <= limit) {',
+        '            reservoir[j] = row',
+        '        }',
+        '    }',
+        '}',
+        'END {',
+        '    if (err) {',
+        '        exit 2',
+        '    }',
+        '',
+        '    print n > count_file',
+        '',
+        '    if (n < limit) {',
+        '        limit = n',
+        '    }',
+        '',
+        '    for (i = 1; i <= limit; i++) {',
+        '        print reservoir[i]',
+        '    }',
+        '}'
+    ), awk_file)
+
+    input_cmd = if (grepl("\\.gz$", tsv_file)) {
+        paste("gzip -dc --", shQuote(tsv_file))
+    } else {
+        paste("cat --", shQuote(tsv_file))
+    }
+
+    seed = sample.int(.Machine$integer.max, 1)
+    cmd = paste(
+        input_cmd,
+        "| awk",
+        "-v", paste0("limit=", sample_num),
+        "-v", paste0("seed=", seed),
+        "-v", paste0("count_file=", shQuote(count_file)),
+        "-f", shQuote(awk_file),
+        ">", shQuote(sample_file)
+    )
+
+    exit_status = system(cmd)
+    if (exit_status != 0) {
+        stop("failed to stream-sample ", tsv_file)
+    }
+
+    num_rows = readLines(count_file, n=1, warn=FALSE)
+    if (length(num_rows) == 0) {
+        stop("failed to count rows in ", tsv_file)
+    }
+
+    message(tsv_file, " has ", num_rows, " rows.")
+
+    df = readr::read_tsv(sample_file, show_col_types = FALSE)
+
+    df$sample_name = sample_name
+
+    if ("cDNA_length" %in% colnames(df)) {
+        df = df %>% rename(feature_length = cDNA_length)
+    } else if ("alignment_length" %in% colnames(df)) {
+        df = df %>% rename(feature_length = alignment_length)
+    }
+
+    df %>%
+        select(sample_name, sqanti_cat, num_exon_segments, feature_length) %>%
+        rename(Category = sqanti_cat)
+}
+
+
 main = function () {
     
     suppressPackageStartupMessages(library("argparse"))
@@ -25,35 +146,11 @@ main = function () {
     
 	all_stats_df = NULL
 
-    for (tsv_file in sample_iso_cats_files) {
-        df = readr::read_tsv(
-            tsv_file,
-            col_types = readr::cols(.default = readr::col_guess()),
-            col_select = c(-tidyselect::any_of("structure"))
-        )
-    
-    	sample_name = str_split(basename(tsv_file), "\\.")[[1]][1]
-    
-    	df$sample_name = sample_name
+	for (tsv_file in sample_iso_cats_files) {
+	    sample_name = str_split(basename(tsv_file), "\\.")[[1]][1]
+	    df = read_sampled_iso_cats(tsv_file, sample_name, sample_num)
 
-        if ("cDNA_length" %in% colnames(df)) {
-            df = df %>% rename(feature_length = cDNA_length)
-        } else if ("alignment_length" %in% colnames(df)) {
-            df = df %>% rename(feature_length = alignment_length) 
-        }
-
-    
-		df = df %>% select(sample_name, sqanti_cat, num_exon_segments, feature_length) %>%
-    			rename(Category = sqanti_cat)
-
-        num_rows = nrow(df)
-        message(tsv_file, " has ", num_rows, " rows.")
-    
-		if (num_rows > sample_num) {
-           df = df %>% sample_n(sample_num)
-        }
-    
-    	all_stats_df = bind_rows(all_stats_df, df)
+	    all_stats_df = bind_rows(all_stats_df, df)
 	}
 
 
@@ -91,4 +188,3 @@ main = function () {
 if (length(sys.calls())==0) {
     main()
 }
-
