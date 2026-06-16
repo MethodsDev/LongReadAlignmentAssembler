@@ -260,12 +260,22 @@ task mergeQuantResults {
         String docker
     }
 
-    Float quantMergeInputGB = size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB")
-    Float quantMergeInputGiB = size(quantExprFiles, "GiB") + size(quantTrackingFiles, "GiB")
+    Float quantExprGB = size(quantExprFiles, "GB")
+    Float quantTrackingGB = size(quantTrackingFiles, "GB")
+    Float quantMergeInputGB = quantExprGB + quantTrackingGB
+    Float quantExprGiB = size(quantExprFiles, "GiB")
+    Float quantTrackingGiB = size(quantTrackingFiles, "GiB")
+    Float quantMergeInputGiB = quantExprGiB + quantTrackingGiB
     Float mergeMemoryRawGiB = if runCrossGeneEM then quantMergeInputGiB * 30.0 + 8.0 else 4.0
     Float mergeMemoryCappedGiB = if mergeMemoryRawGiB > 64.0 then 64.0 else mergeMemoryRawGiB
     Int mergeMemoryGiB = if mergeMemoryCappedGiB > 4.0 then ceil(mergeMemoryCappedGiB) else 4
-    Float mergeDiskRawGB = if runCrossGeneEM then quantMergeInputGB * 8.0 + 30.0 else quantMergeInputGB * 2.2 + 5.0
+    # Tracking files are gzip-compressed; the cross-gene EM pass decompresses them to disk for
+    # external sort, then writes merge-sort temp files at the same uncompressed size, plus a
+    # deduplicated sorted copy and the final output.  Compression ratio on these TSVs is ~15-20x,
+    # so we need roughly: localized inputs + 4 * uncompressed_tracking.
+    # Using 60x on the compressed tracking size (15x ratio * 4 copies) covers the temp overhead.
+    # The non-EM path just concatenates and copies, so 2.2x on total input suffices there.
+    Float mergeDiskRawGB = if runCrossGeneEM then quantTrackingGB * 60.0 + quantExprGB * 2.2 + 30.0 else quantMergeInputGB * 2.2 + 5.0
 
     command <<<
     set -eo pipefail
