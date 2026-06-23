@@ -19,6 +19,10 @@ def read_tsv(path):
         return list(csv.DictReader(fh, delimiter="\t"))
 
 
+def sort_rows(rows):
+    return sorted(rows, key=lambda row: tuple(row.items()))
+
+
 def run_reassign(tmp_path, expr_rows, tracking_rows):
     expr_fields = [
         "gene_id",
@@ -113,7 +117,75 @@ def test_no_cross_gene_reads_copies_inputs(tmp_path):
     out_expr, out_tracking = run_reassign(tmp_path, expr_rows, tracking_rows)
 
     assert out_expr == expr_rows
-    assert out_tracking == tracking_rows
+    assert sort_rows(out_tracking) == sort_rows(tracking_rows)
+
+
+def test_same_gene_ambiguous_reads_do_not_trigger_requant(tmp_path):
+    expr_rows = [
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA1",
+            "uniq_reads": "1",
+            "all_reads": "1.6",
+            "isoform_fraction": "0.533",
+            "unique_gene_read_fraction": "0.333",
+            "TPM": "533333.333",
+            "RPM_total_reads": "533333.333",
+        },
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA2",
+            "uniq_reads": "0",
+            "all_reads": "1.4",
+            "isoform_fraction": "0.467",
+            "unique_gene_read_fraction": "0.000",
+            "TPM": "466666.667",
+            "RPM_total_reads": "466666.667",
+        },
+    ]
+    tracking_rows = [
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA1",
+            "transcript_splice_hash_code": "txA1",
+            "mp_id": "MP_unique_A1",
+            "read_name": "rA1_unique",
+            "frac_assigned": "1.000",
+            "read_weight": "1.000",
+        },
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA1",
+            "transcript_splice_hash_code": "txA1",
+            "mp_id": "MP_same_gene_ambig",
+            "read_name": "r_same_gene_ambig",
+            "frac_assigned": "0.600",
+            "read_weight": "1.000",
+        },
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA2",
+            "transcript_splice_hash_code": "txA2",
+            "mp_id": "MP_same_gene_ambig",
+            "read_name": "r_same_gene_ambig",
+            "frac_assigned": "0.400",
+            "read_weight": "1.000",
+        },
+        {
+            "gene_id": "geneA",
+            "transcript_id": "txA2",
+            "transcript_splice_hash_code": "txA2",
+            "mp_id": "MP_unique_A2",
+            "read_name": "rA2_unique",
+            "frac_assigned": "1.000",
+            "read_weight": "1.000",
+        },
+    ]
+
+    out_expr, out_tracking = run_reassign(tmp_path, expr_rows, tracking_rows)
+
+    assert out_expr == expr_rows
+    assert sort_rows(out_tracking) == sort_rows(tracking_rows)
 
 
 def test_cross_gene_reads_are_reassigned_and_duplicate_candidates_collapsed(tmp_path):
