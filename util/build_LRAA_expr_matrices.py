@@ -74,16 +74,19 @@ def main():
 
     gene_matrix_data = defaultdict(lambda: defaultdict(float))
     transcript_matrix_data = defaultdict(lambda: defaultdict(float))
+    special_transcript_matrix_data = defaultdict(lambda: defaultdict(float))
 
     sample_to_sum_counts = defaultdict(float)
 
     gene_ids = set()
     transcript_ids = set()
+    special_transcript_ids = set()
 
     splice_pattern_to_hash_code = dict()
     transcript_id_to_splice_pattern = dict()
 
     transcript_id_to_gene_id = dict()
+    special_transcript_id_to_gene_id = dict()
 
     def get_splice_pattern_hash_code(splice_pattern):
         if splice_pattern in splice_pattern_to_hash_code:
@@ -106,21 +109,10 @@ def main():
             for row in reader:
                 gene_id = row["gene_id"]
 
-                if iso_by_unique_SP_flag and row["introns"] != "":
-                    transcript_id = get_splice_pattern_hash_code(row["introns"])
-                    transcript_id = gene_id + "^" + transcript_id
-                    transcript_id_to_splice_pattern[transcript_id] = "\t".join(
-                        [gene_id, row["transcript_id"], row["introns"]]
-                    )
-                else:
-                    transcript_id = gene_id + "^" + row["transcript_id"]
+                transcript_id = gene_id + "^" + row["transcript_id"]
 
                 read_count_for_gene = float(row["all_reads"])
-
-                if iso_unique_read_counts_only_flag:
-                    read_count_for_transcript = float(row["uniq_reads"])
-                else:
-                    read_count_for_transcript = float(row["all_reads"])
+                read_count_for_transcript = float(row["all_reads"])
 
                 # transcript_id = gene_id + "^" + transcript_id
 
@@ -134,6 +126,29 @@ def main():
                 ] += read_count_for_transcript
 
                 transcript_id_to_gene_id[transcript_id] = gene_id
+
+                if iso_by_unique_SP_flag or iso_unique_read_counts_only_flag:
+                    if iso_by_unique_SP_flag and row["introns"] != "":
+                        special_transcript_id = get_splice_pattern_hash_code(
+                            row["introns"]
+                        )
+                        special_transcript_id = gene_id + "^" + special_transcript_id
+                        transcript_id_to_splice_pattern[special_transcript_id] = "\t".join(
+                            [gene_id, row["transcript_id"], row["introns"]]
+                        )
+                    else:
+                        special_transcript_id = transcript_id
+
+                    if iso_unique_read_counts_only_flag:
+                        special_read_count_for_transcript = float(row["uniq_reads"])
+                    else:
+                        special_read_count_for_transcript = read_count_for_transcript
+
+                    special_transcript_ids.add(special_transcript_id)
+                    special_transcript_matrix_data[sample_name][
+                        special_transcript_id
+                    ] += special_read_count_for_transcript
+                    special_transcript_id_to_gene_id[special_transcript_id] = gene_id
 
     # write gene count and expr matrices
     gene_count_matrix_filename = output_prefix + ".gene.counts.matrix"
@@ -154,14 +169,8 @@ def main():
 
     # write isoform count and expr matrices
 
-    isoform_output_prefix = output_prefix
-    if iso_by_unique_SP_flag:
-        isoform_output_prefix += ".uniqueSP"
-    if iso_unique_read_counts_only_flag:
-        isoform_output_prefix += ".uniqReadsOnly"
-
-    isoform_count_matrix_filename = isoform_output_prefix + ".isoform.counts.matrix"
-    isoform_TPM_matrix_filename = isoform_output_prefix + ".isoform.TPM.matrix"
+    isoform_count_matrix_filename = output_prefix + ".isoform.counts.matrix"
+    isoform_TPM_matrix_filename = output_prefix + ".isoform.TPM.matrix"
 
     logger.info(
         "-writing isoform matrices: {} and {}".format(
@@ -176,6 +185,30 @@ def main():
         sample_to_sum_counts,
         transcript_id_to_gene_id,
     )
+
+    if iso_by_unique_SP_flag or iso_unique_read_counts_only_flag:
+        isoform_output_prefix = output_prefix
+        if iso_by_unique_SP_flag:
+            isoform_output_prefix += ".uniqueSP"
+        if iso_unique_read_counts_only_flag:
+            isoform_output_prefix += ".uniqReadsOnly"
+
+        isoform_count_matrix_filename = isoform_output_prefix + ".isoform.counts.matrix"
+        isoform_TPM_matrix_filename = isoform_output_prefix + ".isoform.TPM.matrix"
+
+        logger.info(
+            "-writing special isoform matrices: {} and {}".format(
+                isoform_count_matrix_filename, isoform_TPM_matrix_filename
+            )
+        )
+        write_matrices(
+            special_transcript_matrix_data,
+            special_transcript_ids,
+            isoform_count_matrix_filename,
+            isoform_TPM_matrix_filename,
+            sample_to_sum_counts,
+            special_transcript_id_to_gene_id,
+        )
 
     if iso_by_unique_SP_flag:
         # write gene/iso/SP mapping.
