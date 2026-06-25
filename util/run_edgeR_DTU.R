@@ -22,8 +22,9 @@
 #       * retention of genes with at least 2 surviving transcripts
 #   - Normalize library sizes with edgeR's normLibSizes().
 #   - Fit transcript-level quasi-likelihood GLMs.
-#   - Run edgeR/limma diffSplice() grouped by gene_id so testing asks whether
-#     transcript usage within a gene differs across conditions.
+#   - Run edgeR/limma diffSplice() grouped by the configured gene grouping key
+#     (full gene_id by default; gene_symbol via --gene-grouping) so testing
+#     asks whether transcript usage within a gene differs across conditions.
 #
 # Output logic:
 #   - gene_F.tsv: primary gene-level DTU table from the quasi-F test.
@@ -52,7 +53,7 @@ args <- commandArgs(trailingOnly = TRUE)
 usage <- paste(
   "Usage:",
   "run_edgeR_DTU.R --matrix counts.tsv[.gz] --samples samples.txt --contrasts contrasts.txt --outdir outdir",
-  "[--min-cpm 1] [--min-samples 2] [--min-gene-transcripts 2] [--fdr 1] [--verbose]",
+  "[--min-cpm 1] [--min-samples 2] [--min-gene-transcripts 2] [--fdr 1] [--gene-grouping gene_id|gene_symbol] [--verbose]",
   sep = "\n"
 )
 
@@ -66,6 +67,7 @@ parse_args <- function(args) {
     `--min-samples` = 2,
     `--min-gene-transcripts` = 2,
     `--fdr` = 1,
+    `--gene-grouping` = "gene_id",
     `--verbose` = FALSE
   )
 
@@ -97,6 +99,15 @@ parse_args <- function(args) {
   opts[["--min-samples"]] <- as.integer(opts[["--min-samples"]])
   opts[["--min-gene-transcripts"]] <- as.integer(opts[["--min-gene-transcripts"]])
   opts[["--fdr"]] <- as.numeric(opts[["--fdr"]])
+
+  valid_groupings <- c("gene_id", "gene_symbol")
+  if (!opts[["--gene-grouping"]] %in% valid_groupings) {
+    stop(
+      "--gene-grouping must be one of: ", paste(valid_groupings, collapse = ", "),
+      " (got '", opts[["--gene-grouping"]], "')",
+      call. = FALSE
+    )
+  }
 
   opts
 }
@@ -236,10 +247,28 @@ counts <- as.matrix(count_df[, samples_df$sample, drop = FALSE])
 mode(counts) <- "numeric"
 rownames(counts) <- count_df$transcript_id
 
+# Determine the grouping key that defines a "gene" for DTU testing.
+# Default groups by the full LRAA gene_id. With --gene-grouping gene_symbol,
+# transcripts are grouped by gene symbol, i.e. the substring of the gene_id
+# preceding the first '^' (LRAA encodes ids as
+# "<symbol>^g:<chr>:<strand>:comp-<n>"). Grouping by symbol pools transcripts
+# from loci that share a symbol but were split across separate gene_id
+# components.
+if (identical(opts[["--gene-grouping"]], "gene_symbol")) {
+  count_df$group_id <- sub("\\^.*$", "", count_df$gene_id)
+} else {
+  count_df$group_id <- count_df$gene_id
+}
+log_msg(
+  "Gene grouping key: ", opts[["--gene-grouping"]],
+  " (", length(unique(count_df$group_id)), " groups across ",
+  length(unique(count_df$gene_id)), " gene_ids)"
+)
+
 # Reporting-only fractions are computed before filtering so downstream
 # summaries reflect the full observed transcript mixture for each gene.
-full_gene_totals <- rowsum(counts, group = count_df$gene_id, reorder = FALSE)
-full_gene_index <- match(count_df$gene_id, rownames(full_gene_totals))
+full_gene_totals <- rowsum(counts, group = count_df$group_id, reorder = FALSE)
+full_gene_index <- match(count_df$group_id, rownames(full_gene_totals))
 full_gene_totals_by_tx <- full_gene_totals[full_gene_index, , drop = FALSE]
 full_isoform_fraction <- counts / full_gene_totals_by_tx
 full_isoform_fraction[!is.finite(full_isoform_fraction)] <- 0
@@ -250,6 +279,7 @@ colnames(design) <- sub("^condition", "", colnames(design))
 y <- DGEList(
   counts = counts,
   genes = data.frame(
+    group_id = count_df$group_id,
     gene_id = count_df$gene_id,
     transcript_id = count_df$transcript_id,
     stringsAsFactors = FALSE,
@@ -275,8 +305,8 @@ keep_cpm <- rowSums(edgeR::cpm(y) >= opts[["--min-cpm"]]) >= opts[["--min-sample
 keep_expr <- keep_expr & keep_cpm
 y <- y[keep_expr, , keep.lib.sizes = FALSE]
 
-tx_per_gene <- table(y$genes$gene_id)
-keep_gene <- y$genes$gene_id %in% names(tx_per_gene[tx_per_gene >= opts[["--min-gene-transcripts"]]])
+tx_per_gene <- table(y$genes$group_id)
+keep_gene <- y$genes$group_id %in% names(tx_per_gene[tx_per_gene >= opts[["--min-gene-transcripts"]]])
 y <- y[keep_gene, , keep.lib.sizes = FALSE]
 
 if (nrow(y) == 0) {
@@ -311,11 +341,11 @@ filtering_summary <- data.frame(
   ),
   value = c(
     nrow(count_df),
-    length(unique(count_df$gene_id)),
+    length(unique(count_df$group_id)),
     sum(keep_expr),
-    length(unique(count_df$gene_id[keep_expr])),
+    length(unique(count_df$group_id[keep_expr])),
     nrow(y),
-    length(unique(y$genes$gene_id))
+    length(unique(y$genes$group_id))
   ),
   stringsAsFactors = FALSE
 )
@@ -325,7 +355,7 @@ write.table(contrasts_df, file.path(outdir, "contrasts.used.tsv"), sep = "\t", q
 write.table(sample_summary, file.path(outdir, "sample.summary.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(filtering_summary, file.path(outdir, "filtering.summary.tsv"), sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(
-  data.frame(transcript_id = y$genes$transcript_id, gene_id = y$genes$gene_id, stringsAsFactors = FALSE),
+  data.frame(transcript_id = y$genes$transcript_id, gene_id = y$genes$gene_id, group_id = y$genes$group_id, stringsAsFactors = FALSE),
   file.path(outdir, "features.retained.tsv"),
   sep = "\t",
   quote = FALSE,
@@ -352,20 +382,24 @@ for (i in seq_len(nrow(contrasts_df))) {
   ds <- diffSplice(
     fit,
     contrast = contrast_matrix,
-    geneid = "gene_id",
+    geneid = "group_id",
     exonid = "transcript_id",
     verbose = isTRUE(opts[["--verbose"]])
   )
 
   # edgeR still uses exon-oriented naming in diffSplice because the method was
   # originally developed for exon usage. Here, "exons" correspond to transcript
-  # features grouped by gene_id.
+  # features grouped by the gene grouping key (gene_id or gene_symbol).
   gene_f <- topSplice(ds, test = "F", number = Inf, FDR = opts[["--fdr"]], sort.by = "p")
   gene_simes <- topSplice(ds, test = "simes", number = Inf, FDR = opts[["--fdr"]], sort.by = "p")
   transcript_t <- topSplice(ds, test = "t", number = Inf, FDR = opts[["--fdr"]], sort.by = "p")
 
-  gene_f <- cbind(group_id = rownames(gene_f), gene_f, row.names = NULL)
-  gene_simes <- cbind(group_id = rownames(gene_simes), gene_simes, row.names = NULL)
+  # topSplice carries the group_id grouping column (constant within each group)
+  # into the gene-level tables; make it the leading column and drop rownames.
+  gene_f <- gene_f[, c("group_id", setdiff(names(gene_f), "group_id")), drop = FALSE]
+  gene_simes <- gene_simes[, c("group_id", setdiff(names(gene_simes), "group_id")), drop = FALSE]
+  rownames(gene_f) <- NULL
+  rownames(gene_simes) <- NULL
   transcript_t <- cbind(feature_id = rownames(transcript_t), transcript_t, row.names = NULL)
 
   tx_ids <- transcript_t$transcript_id
