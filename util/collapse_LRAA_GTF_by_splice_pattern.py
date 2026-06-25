@@ -26,7 +26,14 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 def main():
 
     parser = argparse.ArgumentParser(
-        description="collapse LRAA gtf by splice pattern.  If gtf is annotated with gene_symbol^ prefixes, those will be retained.",
+        description="Collapse an LRAA gtf by splice pattern. Isoforms are merged only "
+        "when they share BOTH the same gene_id AND the same intron (splice) pattern, "
+        "so collapsed identifiers stay consistent with the expression-matrix collapse "
+        "(build_LRAA_expr_matrices.py keys on gene_id^splice_hash). gene_symbol^ "
+        "prefixes (if present) are retained. Two report files are also written: a merge "
+        "report (each collapsed isoform and the isoforms merged into it) and a "
+        "gene-conflicts report (intron patterns shared across >1 gene_id, which are "
+        "kept separate rather than merged).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -41,7 +48,23 @@ def main():
         "--output_gtf",
         type=str,
         required=True,
-        help="prefix for output filenames",
+        help="output collapsed gtf filename",
+    )
+
+    parser.add_argument(
+        "--merge_report",
+        type=str,
+        default=None,
+        help="TSV listing each collapsed isoform and the isoforms merged into it "
+        "(default: <output_gtf>.isoform_merge_report.tsv)",
+    )
+
+    parser.add_argument(
+        "--gene_conflicts_report",
+        type=str,
+        default=None,
+        help="TSV listing intron patterns shared across multiple gene_ids that were "
+        "kept separate (default: <output_gtf>.gene_conflicts.tsv)",
     )
 
     parser.add_argument(
@@ -60,37 +83,80 @@ def main():
 
     input_gtf = args.gtf
     output_gtf = args.output_gtf
+    merge_report_file = args.merge_report or (output_gtf + ".isoform_merge_report.tsv")
+    gene_conflicts_file = args.gene_conflicts_report or (
+        output_gtf + ".gene_conflicts.tsv"
+    )
 
     ofh = open(output_gtf, "wt")
+
+    merge_ofh = open(merge_report_file, "wt")
+    merge_ofh.write(
+        "\t".join(
+            [
+                "collapsed_transcript_id",
+                "gene_id",
+                "num_isoforms_merged",
+                "merged_transcript_ids",
+            ]
+        )
+        + "\n"
+    )
+
+    conflict_ofh = open(gene_conflicts_file, "wt")
+    conflict_ofh.write(
+        "\t".join(
+            [
+                "contig",
+                "splice_pattern_code",
+                "num_gene_ids",
+                "gene_id",
+                "collapsed_transcript_id",
+                "num_isoforms",
+                "merged_transcript_ids",
+            ]
+        )
+        + "\n"
+    )
 
     logger.info(f"-capturing input transcripts from gtf {input_gtf}")
     contig_to_input_transcripts = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
         input_gtf
     )
 
+    num_conflicting_splice_patterns = 0
+
     for contig, transcript_obj_list in contig_to_input_transcripts.items():
 
         transcripts_to_output = list()
 
-        splice_pattern_to_transcripts = defaultdict(list)
+        # Group by (gene_id, splice_pattern_code): isoforms are merged only when they
+        # share the same gene_id AND the same intron chain. Also track which gene_ids
+        # carry each splice pattern, to report cross-gene conflicts.
+        gene_splice_to_transcripts = defaultdict(list)
+        splice_pattern_to_gene_ids = defaultdict(set)
 
         for transcript_obj in transcript_obj_list:
 
             if transcript_obj.has_introns():
                 intron_string = transcript_obj.get_introns_string()
                 splice_pattern_code = Util_funcs.get_hash_code(intron_string)
-                splice_pattern_to_transcripts[splice_pattern_code].append(
+                gene_id = transcript_obj.get_gene_id()
+                gene_splice_to_transcripts[(gene_id, splice_pattern_code)].append(
                     transcript_obj
                 )
+                splice_pattern_to_gene_ids[splice_pattern_code].add(gene_id)
             else:
                 transcripts_to_output.append(transcript_obj)
 
-        # attempt splice pattern merge
+        # collapse each (gene_id, splice_pattern) group, recording the mapping.
+        group_to_collapsed = dict()  # (gene_id, splice_pattern_code) -> (new_id, member_ids)
+
         for (
+            gene_id,
             splice_pattern,
-            transcripts_same_splice_pattern_list,
-        ) in splice_pattern_to_transcripts.items():
-            gene_id = transcripts_same_splice_pattern_list[0].get_gene_id()
+        ), transcripts_same_group_list in gene_splice_to_transcripts.items():
+
             gene_symbol = None
             if "^" in gene_id:
                 gene_symbol = gene_id.split("^")[0]
@@ -98,14 +164,58 @@ def main():
             else:
                 new_transcript_id = splice_pattern
 
-            if len(transcripts_same_splice_pattern_list) == 1:
-                transcript_obj = transcripts_same_splice_pattern_list[0]
+            member_ids = sorted(
+                [t.get_transcript_id() for t in transcripts_same_group_list]
+            )
+
+            if len(transcripts_same_group_list) == 1:
+                transcript_obj = transcripts_same_group_list[0]
                 transcript_obj.set_transcript_id(new_transcript_id)
                 transcripts_to_output.append(transcript_obj)
             else:
-                merged_isoform = merge_isoforms(transcripts_same_splice_pattern_list)
+                merged_isoform = merge_isoforms(transcripts_same_group_list)
                 merged_isoform.set_transcript_id(new_transcript_id)
                 transcripts_to_output.append(merged_isoform)
+
+            group_to_collapsed[(gene_id, splice_pattern)] = (
+                new_transcript_id,
+                member_ids,
+            )
+
+            merge_ofh.write(
+                "\t".join(
+                    [
+                        new_transcript_id,
+                        gene_id,
+                        str(len(member_ids)),
+                        ",".join(member_ids),
+                    ]
+                )
+                + "\n"
+            )
+
+        # report intron patterns shared across multiple gene_ids (kept separate).
+        for splice_pattern_code, gene_id_set in splice_pattern_to_gene_ids.items():
+            if len(gene_id_set) > 1:
+                num_conflicting_splice_patterns += 1
+                for gene_id in sorted(gene_id_set):
+                    new_transcript_id, member_ids = group_to_collapsed[
+                        (gene_id, splice_pattern_code)
+                    ]
+                    conflict_ofh.write(
+                        "\t".join(
+                            [
+                                contig,
+                                splice_pattern_code,
+                                str(len(gene_id_set)),
+                                gene_id,
+                                new_transcript_id,
+                                str(len(member_ids)),
+                                ",".join(member_ids),
+                            ]
+                        )
+                        + "\n"
+                    )
 
         transcripts_to_output = sorted(
             transcripts_to_output, key=lambda x: x._exon_segments[0][0]
@@ -114,6 +224,17 @@ def main():
         for transcript_obj in transcripts_to_output:
             ofh.write(transcript_obj.to_GTF_format(include_TPM=False) + "\n")
 
+    ofh.close()
+    merge_ofh.close()
+    conflict_ofh.close()
+
+    logger.info(f"-wrote collapsed gtf: {output_gtf}")
+    logger.info(f"-wrote isoform merge report: {merge_report_file}")
+    logger.info(
+        f"-wrote gene-conflicts report "
+        f"({num_conflicting_splice_patterns} splice patterns shared across >1 gene_id): "
+        f"{gene_conflicts_file}"
+    )
     logger.info("Done.")
 
     sys.exit(0)
