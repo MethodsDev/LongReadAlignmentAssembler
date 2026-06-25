@@ -23,6 +23,14 @@ _DEFAULT_CLASS_CODE_PRIORITY: Dict[str, int] = {
     "u": 14,
 }
 
+# gffcompare class codes that indicate an OPPOSITE-strand (antisense) match:
+#   "s" = intron match on the opposite strand
+#   "x" = exonic overlap on the opposite strand
+# These must never assign a gene symbol -- otherwise a +strand gene's symbol can
+# be applied to a -strand transcript (and vice versa). They are skipped outright
+# (not just deprioritized) so they cannot win via the default-priority fallback.
+_ANTISENSE_CLASS_CODES = frozenset({"s", "x"})
+
 
 def get_default_class_code_priority() -> Dict[str, int]:
     """Return a copy of the default class code priorities."""
@@ -33,15 +41,23 @@ def get_default_class_code_priority() -> Dict[str, int]:
 def parse_gffcompare_mappings(
     gffcompare_tracking_filename: str,
     class_code_priority: Optional[Dict[str, int]] = None,
+    disallowed_class_codes: Optional[frozenset] = None,
 ) -> Dict[str, Tuple[str, str]]:
     """Parse gffcompare tracking output into target-id → (ref_gene_id, ref_trans_id).
 
     When multiple assignments exist for a target id, favor the one with the most
     specific (lowest-ranked) class code according to the provided priority map.
+
+    Strand-aware: assignments whose class code is in `disallowed_class_codes`
+    (default: the opposite-strand antisense codes 's' and 'x') are skipped, so a
+    gene's symbol is never applied to a transcript on the other strand.
     """
 
     if class_code_priority is None:
         class_code_priority = _DEFAULT_CLASS_CODE_PRIORITY
+
+    if disallowed_class_codes is None:
+        disallowed_class_codes = _ANTISENSE_CLASS_CODES
 
     logger.info("-parsing gffcompare output: %s", gffcompare_tracking_filename)
 
@@ -71,6 +87,10 @@ def parse_gffcompare_mappings(
             _, _, ref_info, compare_code, target_info = parts[:5]
 
             if ref_info == "-":
+                continue
+
+            # never assign a symbol from an opposite-strand (antisense) match
+            if compare_code in disallowed_class_codes:
                 continue
 
             try:
