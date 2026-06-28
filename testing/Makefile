@@ -14,6 +14,9 @@ test: test_pytest
 test_pytest:
 	cd .. && pytest -q pylib
 
+
+all: test test_QC test_wdls test_DTU 
+
 test_QC:
 	@for i in $(QC); do \
     echo "Running example in $$i..."; \
