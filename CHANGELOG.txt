@@ -1,3 +1,14 @@
+v0.17.7, June 28, 2026
+- fixed `mergeQuantResults` WDL disk allocation for cross-gene EM: the merged tracking is decompressed for external sort, so disk now scales as 60x the compressed tracking size (15x decompression x ~4 on-disk sort/temp copies) plus 2.2x the expr size, replacing the prior insufficient compressed-size-based formula.
+- added standard isoform expression matrices with unique-isoform modes to `build_LRAA_expr_matrices.py`.
+- reworked `collapse_LRAA_GTF_by_splice_pattern.py` to group by `(gene_id, splice_pattern)` instead of intron-hash alone, matching `build_LRAA_expr_matrices.py` keying and preventing cross-gene merges at overlapping/antisense loci; also emits `<output_gtf>.isoform_merge_report.tsv` and `<output_gtf>.gene_conflicts.tsv` reports.
+- made gene-symbol assignment strand-aware in `gene_symbol_utils.py` by skipping antisense gffcompare class codes (`s`, `x`) via a new `disallowed_class_codes` parameter, so a symbol is no longer assigned to a transcript on the opposite strand.
+- enabled grouping by gene symbol in the edgeR DTU runner (`run_edgeR_DTU.R`).
+- reduced memory usage of the feature-length plotting summarization script and restored its plotting compatibility.
+- expanded prerelease testing, including a same-gene quant pre/post regression test and a comprehensive `make all` target.
+- LRAA now writes a version header into its output files, propagated through the WDL workflows and downstream utilities.
+
+
 v0.17.5, May 18, 2026
 - added final cross-gene EM reassignment for retained secondary/multi-gene read assignments, preserving pre-correction `*.pre-cross-gene-EM.quant.expr` and `*.pre-cross-gene-EM.quant.tracking` outputs while reporting cross-gene-corrected quantification as the primary result.
 - refined secondary-alignment handling by making the secondary-rescue heuristic the default policy, preprocessing BAMs to retain all mapped non-supplementary primary alignments plus only heuristic-supported secondary alignments, and exposing secondary-rescue BAMs and summaries through WDL outputs.
