@@ -1,0 +1,8 @@
+{
+  "LRAA_merge_gtfs_from_sample_set.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest",
+  "LRAA_merge_gtfs_from_sample_set.HiFi":"${false}",
+  "LRAA_merge_gtfs_from_sample_set.memoryGB":"${32}",
+  "LRAA_merge_gtfs_from_sample_set.referenceGenome":"gs://mdl-refs/GRCh38/GRCh38_no_alt.fa",
+  "LRAA_merge_gtfs_from_sample_set.sample_gtfs":"${this.samples.lraa_gtf}",
+  "LRAA_merge_gtfs_from_sample_set.sample_set_id":"${this.sample_set_id}"
+}
