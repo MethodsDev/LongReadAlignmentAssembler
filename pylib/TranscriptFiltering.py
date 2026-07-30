@@ -611,10 +611,10 @@ def _looks_internally_primed(
 
     if strand == "+":
         start = transcript_rend + 1
+        end = start + check_length - 1
     else:
-        start = transcript_lend - check_length - 1
-
-    end = start + check_length
+        end = transcript_lend - 1
+        start = end - check_length + 1
 
     # ensure coordinates within contig bounds
     start = max(1, start)

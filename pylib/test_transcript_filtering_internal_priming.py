@@ -39,3 +39,17 @@ def test_restrict_to_monoexonic_preserves_true_annotation_for_multiexonic_hits()
 
     assert [transcript.get_transcript_id() for transcript in retained] == ["t.multi"]
     assert retained[0]._likely_internal_primed is True
+
+
+def test_internal_priming_ignores_21st_downstream_base_on_forward_strand():
+    downstream_twenty = "ACACACAC" + "AAAAAAACCCCC"
+    contig_seq = "C" * 10 + downstream_twenty + "A" + "C" * 10
+
+    assert TranscriptFiltering._looks_internally_primed(1, 10, "+", contig_seq) is False
+
+
+def test_internal_priming_ignores_21st_downstream_base_on_reverse_strand():
+    downstream_twenty = "TTTTTTTCCCCC" + "TCTCTCTC"
+    contig_seq = "C" * 9 + "T" + downstream_twenty + "C" * 10
+
+    assert TranscriptFiltering._looks_internally_primed(31, 40, "-", contig_seq) is False
