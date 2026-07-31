@@ -7,8 +7,8 @@ main = function () {
     parser = ArgumentParser()
     parser$add_argument("--output_prefix", help="output pdf and tsv file prefix", required=TRUE, nargs=1)
     parser$add_argument("--sample_iso_cats", help="iso_cats.tsv files for all samples", required=TRUE, nargs='+')
-	parser$add_argument("--width", default=12, required=FALSE, help="pdf page width (default: 12)")
-    parser$add_argument("--height", default=12, required=FALSE, help="pdf page height (default: 12)")
+	parser$add_argument("--width", type='double', default=12, required=FALSE, help="pdf page width (default: 12)")
+    parser$add_argument("--height", type='double', default=12, required=FALSE, help="pdf page height (default: 12)")
 	parser$add_argument("--sample_n", type='integer', default=100000, required=FALSE, help="number of features to sample from each sample")
     
     args = parser$parse_args()
