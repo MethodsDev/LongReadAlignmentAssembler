@@ -58,6 +58,7 @@ workflow LRAA_cell_cluster_guided {
             sample_id = sample_id,
             cell_clusters_info = cell_clusters_info,
             inputBAM = inputBAM,
+            cell_barcode_tag = cell_barcode_tag,
             docker = docker,
      }
 

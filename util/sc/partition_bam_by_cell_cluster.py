@@ -39,6 +39,13 @@ def main():
     )
 
     parser.add_argument(
+        "--cell_barcode_tag",
+        type=str,
+        default="CB",
+        help="BAM tag containing the cell barcode",
+    )
+
+    parser.add_argument(
         "--threads",
         type=int,
         default=4,
@@ -50,6 +57,7 @@ def main():
     input_bam_filename = args.bam
     output_prefix = args.output_prefix
     cell_clusters_filename = args.cell_clusters
+    cell_barcode_tag = args.cell_barcode_tag
     num_threads = args.threads
 
     #########
@@ -59,6 +67,7 @@ def main():
     logger.info(f"Input BAM: {input_bam_filename}")
     logger.info(f"Output prefix: {output_prefix}")
     logger.info(f"Cell clusters file: {cell_clusters_filename}")
+    logger.info(f"Cell barcode tag: {cell_barcode_tag}")
     logger.info(f"Threads: {num_threads}")
 
     # Initialize memory tracking
@@ -67,7 +76,9 @@ def main():
     logger.info(f"Initial memory usage: {initial_memory:.2f} MB")
 
     logger.info("Opening input BAM file...")
-    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb", check_sq=False, threads=num_threads)
+    bamfile_reader = pysam.AlignmentFile(
+        input_bam_filename, "rb", check_sq=False, threads=num_threads
+    )
 
     # get cell cluster info
     logger.info("Loading cell cluster assignments...")
@@ -81,7 +92,7 @@ def main():
                 continue
             cell_barcode, cluster_name = vals
             cell_barcode_to_cluster[cell_barcode] = cluster_name
-    
+
     logger.info(f"Loaded {len(cell_barcode_to_cluster)} cell barcodes across clusters")
     memory_mb = process.memory_info().rss / 1024 / 1024
     logger.info(f"Memory after loading clusters: {memory_mb:.2f} MB")
@@ -90,7 +101,7 @@ def main():
 
     # Initialize read counters
     total_reads_processed = 0
-    reads_without_cb = 0
+    reads_without_barcode = 0
     reads_unrecognized_cluster = 0
     reads_written = 0
     report_interval = 100000  # Report progress every 100k reads
@@ -117,18 +128,20 @@ def main():
             logger.info(
                 f"Processed {total_reads_processed:,} reads | "
                 f"Written: {reads_written:,} | "
-                f"No CB: {reads_without_cb:,} | "
+                f"No {cell_barcode_tag}: {reads_without_barcode:,} | "
                 f"Unrecognized: {reads_unrecognized_cluster:,} | "
                 f"Clusters: {len(cell_cluster_to_ofh)} | "
                 f"Memory: {memory_mb:.2f} MB"
             )
 
-        if read.has_tag("CB"):
-            cell_barcode = read.get_tag("CB")
+        if read.has_tag(cell_barcode_tag):
+            cell_barcode = read.get_tag(cell_barcode_tag)
         else:
-            reads_without_cb += 1
-            if reads_without_cb <= 10:  # Only warn for first 10
-                logger.warn("read lacks cell barcode info: " + str(read))
+            reads_without_barcode += 1
+            if reads_without_barcode <= 10:  # Only warn for first 10
+                logger.warning(
+                    f"read lacks cell barcode tag {cell_barcode_tag}: {read}"
+                )
             continue
 
         if cell_barcode in cell_barcode_to_cluster:
@@ -150,16 +163,18 @@ def main():
 
     # Final summary
     final_memory = process.memory_info().rss / 1024 / 1024
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("Processing complete - Summary:")
     logger.info(f"  Total reads processed: {total_reads_processed:,}")
     logger.info(f"  Reads written to clusters: {reads_written:,}")
-    logger.info(f"  Reads without cell barcode: {reads_without_cb:,}")
+    logger.info(
+        f"  Reads without cell barcode tag {cell_barcode_tag}: {reads_without_barcode:,}"
+    )
     logger.info(f"  Reads with unrecognized cluster: {reads_unrecognized_cluster:,}")
     logger.info(f"  Total clusters created: {len(cell_cluster_to_ofh)}")
     logger.info(f"  Peak memory usage: {final_memory:.2f} MB")
     logger.info(f"  Memory increase: {final_memory - initial_memory:.2f} MB")
-    logger.info("="*80)
+    logger.info("=" * 80)
 
     logger.info("Closing output BAM files...")
     for cluster_name, bam_writer in cell_cluster_to_ofh.items():

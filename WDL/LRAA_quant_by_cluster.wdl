@@ -60,6 +60,7 @@ workflow LRAA_quant_by_cluster {
                 sample_id = sample_id,
                 cell_clusters_info = select_first([cell_clusters_info]),
                 inputBAM = select_first([inputBAM]),
+                cell_barcode_tag = cell_barcode_tag,
                 docker = docker,
                 memoryGB = memoryGB_normalize
         }

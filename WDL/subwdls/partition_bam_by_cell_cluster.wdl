@@ -9,6 +9,7 @@ task partition_bam_by_cell_cluster {
         String sample_id
         File cell_clusters_info
         File inputBAM
+        String cell_barcode_tag = "CB"
         String docker
         Int cpu = 8
         Int? memoryGB
@@ -32,6 +33,7 @@ task partition_bam_by_cell_cluster {
             partition_bam_by_cell_cluster.py --bam ~{inputBAM} \
                                              --cell_clusters ~{cell_clusters_info} \
                                              --output_prefix ~{sample_id} \
+                                             --cell_barcode_tag ~{cell_barcode_tag} \
                                              --threads ~{cpu} > command_output.log 2>&1
         ) || {
             echo "Command failed with exit code $?" >&2
