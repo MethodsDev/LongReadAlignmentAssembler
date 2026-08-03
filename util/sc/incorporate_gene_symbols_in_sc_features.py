@@ -8,6 +8,14 @@ import subprocess
 import csv
 from collections import defaultdict
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+PYLIB_DIR = os.path.join(ROOT_DIR, "pylib")
+if PYLIB_DIR not in sys.path:
+    sys.path.insert(0, PYLIB_DIR)
+
+from gene_symbol_utils import parse_gffcompare_mappings
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s : %(levelname)s : %(message)s",
@@ -101,7 +109,7 @@ def main():
     gff_compare_LRAA_id_to_REF_id_mapping = None
 
     if gffcompare_tracking_filename is not None:
-        gff_compare_LRAA_id_to_REF_id_mapping = parse_GFFcompare_mappings(
+        gff_compare_LRAA_id_to_REF_id_mapping = parse_gffcompare_mappings(
             gffcompare_tracking_filename
         )
 
@@ -329,44 +337,6 @@ def update_sparseM_feature_names(
     os.rename(revised_features_file, features_file)
 
     return
-
-
-def parse_GFFcompare_mappings(gffcompare_tracking_filename):
-
-    logger.info("-parsing gffcompare output: {}".format(gffcompare_tracking_filename))
-
-    gff_compare_mappings = dict()
-
-    LRAA_gene_id_eq_assigned = set()
-    LRAA_trans_id_eq_assigned = set()
-
-    with open(gffcompare_tracking_filename, "rt") as fh:
-        for line in fh:
-            line = line.rstrip()
-            tcons, xloc, ref_info, compare_code, lraa_info = line.split("\t")
-
-            if ref_info == "-":
-                continue
-
-            ensg_id, enst_id = ref_info.split("|")
-
-            lraa_info = ":".join(lraa_info.split(":")[1:])  # get rid of first q1 token
-
-            lraa_vals = lraa_info.split("|")
-            lraa_gene_id = lraa_vals[0]
-            lraa_trans_id = lraa_vals[1]
-
-            if lraa_gene_id not in LRAA_gene_id_eq_assigned:
-                gff_compare_mappings[lraa_gene_id] = [ensg_id, enst_id]
-
-            if lraa_trans_id not in LRAA_trans_id_eq_assigned:
-                gff_compare_mappings[lraa_trans_id] = [ensg_id, enst_id]
-
-            if compare_code == "=":
-                LRAA_gene_id_eq_assigned.add(lraa_gene_id)
-                LRAA_trans_id_eq_assigned.add(lraa_trans_id)
-
-    return gff_compare_mappings
 
 
 def get_ref_gene_names(ref_gtf):
