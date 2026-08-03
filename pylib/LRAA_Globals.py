@@ -80,7 +80,9 @@ config = {
     ## Terminal boundary definition
     "terminal_boundary_method": "percentile",  # choices: "extreme" (min/max), "mean", "median", "quartile" (Q1/Q3), "percentile" - method for defining terminal coords when TSS/PolyA not annotated
     "terminal_boundary_percentile": 90,  # when terminal_boundary_method is "percentile", use this percentile (e.g., 90 means 10th percentile for left, 90th for right)
-    "min_reads_for_terminal_adjustment": 7,  # minimum number of reads terminating in terminal exon required for mean/median/quartile/percentile adjustment (falls back to extreme if below threshold)
+    # Minimum read count required for mean/median/quartile/percentile adjustment; below this threshold, the existing boundary is retained.
+    # Consider whether a future implementation should instead fall back to the observed extreme (minimum/maximum) read position.
+    "min_reads_for_terminal_adjustment": 7,
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
