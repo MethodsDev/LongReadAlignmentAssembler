@@ -33,7 +33,6 @@ class Splice_graph:
     _min_alt_unspliced_freq = 0.20
     _max_intron_length_for_exon_segment_filtering = 10000
     _min_intron_support = 2
-    _min_terminal_splice_exon_anchor_length = 15
 
     _remove_unspliced_introns = False  # True
 
@@ -91,9 +90,6 @@ class Splice_graph:
             "max_intron_length_for_exon_segment_filtering"
         ]
         cls._min_intron_support = params["min_intron_support"]
-        cls._min_terminal_splice_exon_anchor_length = params[
-            "min_terminal_splice_exon_anchor_length"
-        ]
 
         cls._remove_unspliced_introns = params["remove_unspliced_introns"]
 
@@ -2181,18 +2177,6 @@ class Splice_graph:
 
             logger.debug("Evaluating {} as potential R_spur".format(exon_node))
 
-            if (
-                exon_node.get_feature_length()
-                > LRAA_Globals.config["max_exon_spur_length"]
-            ):
-                logger.debug(
-                    "{} not R spur, feature length: {} < max_exon_spur_length: {}".format(
-                        exon_node,
-                        exon_node.get_feature_length(),
-                        LRAA_Globals.config["max_exon_spur_length"],
-                    )
-                )
-                return False
 
             has_successor = self._node_has_successors(exon_node)
 
@@ -2234,18 +2218,6 @@ class Splice_graph:
 
             logger.debug("Evaluating {} as potential L_spur".format(exon_node))
 
-            if (
-                exon_node.get_feature_length()
-                > LRAA_Globals.config["max_exon_spur_length"]
-            ):
-                logger.debug(
-                    "{} not L spur, feature length: {} < max_exon_spur_length: {}".format(
-                        exon_node,
-                        exon_node.get_feature_length(),
-                        LRAA_Globals.config["max_exon_spur_length"],
-                    )
-                )
-                return False
 
             has_predecessor = self._node_has_predecessors(exon_node)
 
@@ -2289,24 +2261,19 @@ class Splice_graph:
 
             return L_spur_boolean
 
+        max_spur_length = LRAA_Globals.config["max_exon_spur_length"]
         exons_to_prune = list()
 
         for exon in exon_segment_objs:
-            if (
-                exon.get_feature_length()
-                >= Splice_graph._min_terminal_splice_exon_anchor_length
-            ):
+            if exon.get_feature_length() > max_spur_length:
                 logger.debug(
-                    "Retaining {} as spur since feature length {} exceeds min_terminal_splice_exon_anchor_length {}".format(
-                        exon,
-                        exon.get_feature_length(),
-                        Splice_graph._min_terminal_splice_exon_anchor_length,
-                    )
+                    "Retaining %s because feature length %d exceeds max_exon_spur_length %d",
+                    exon,
+                    exon.get_feature_length(),
+                    max_spur_length,
                 )
-                # long enough, we'll keep it for now.
                 continue
 
-            # ok shortie, must see if it's a spur
             if is_L_spur(exon) or is_R_spur(exon):
                 exons_to_prune.append(exon)
 

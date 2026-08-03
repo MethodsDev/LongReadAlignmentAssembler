@@ -165,9 +165,6 @@ def initialize_config(args):
         "min_alt_unspliced_freq": LRAA_Globals.config["min_alt_unspliced_freq"],
         "max_intron_length_for_exon_segment_filtering": 10000,
         "min_intron_support": 2,
-        "min_terminal_splice_exon_anchor_length": LRAA_Globals.config[
-            "min_terminal_splice_exon_anchor_length"
-        ],
         "remove_unspliced_introns": False,
     })
 

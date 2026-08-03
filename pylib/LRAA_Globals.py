@@ -23,7 +23,6 @@ config = {
     "min_softclip_realign_test": 5,
     "min_frac_alignments_pass_per_id_check": 0.9,
     "min_total_alignments_engage_frac_per_id_check": 1000,
-    "min_terminal_splice_exon_anchor_length": 15,
     "read_aln_gap_merge_int": 10,
     "max_intron_length": 200000,
     #
@@ -34,7 +33,7 @@ config = {
     "min_alt_splice_freq": 0.03,
     "min_alt_unspliced_freq": 0.01,
     "min_feature_frac_overlap": 0.50,
-    "max_exon_spur_length": 20,  # exon spurs not tied to TSS or PolyA and at most this length get pruned (HiFi sets 13)
+    "max_exon_spur_length": 14,  # maximum terminal exon spur length; HiFi sets 13
     "aggregate_adjacent_splice_boundaries": True,
     "aggregate_splice_boundary_dist": 5,
     "fracture_splice_graph_at_input_transcript_bounds": True,

@@ -79,7 +79,7 @@ def main():
           min_per_id                          80                        97
           infer_TSS                           disabled                  enabled (use --no_infer_TSS to disable)
           infer_PolyA                         disabled                  enabled (use --no_infer_PolyA to disable)
-          max_exon_spur_length                20                        13
+          max_exon_spur_length                14                        13
           min_alt_splice_freq                 0.03                      0.01
           aggregate_adjacent_splice_boundaries enabled                 disabled (or enabled with --aggregate_adjacent_splice_boundaries)
           single-exon filtering               standard rules            require TSS or PolyA annotation
@@ -1309,7 +1309,6 @@ def main():
         "min_alt_unspliced_freq": args.min_alt_unspliced_freq,
         "max_intron_length_for_exon_segment_filtering": 10000,
         "min_intron_support": 2,
-        "min_terminal_splice_exon_anchor_length": 15,
         "remove_unspliced_introns": False,
     }
     # TODO:// put above settings into the config and add to cmd line interface
@@ -1475,7 +1474,7 @@ def _safe_token(token):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
 
 
-SPLICE_GRAPH_CACHE_VERSION = 1
+SPLICE_GRAPH_CACHE_VERSION = 2
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     "min_alt_splice_freq",
@@ -1564,9 +1563,6 @@ def _snapshot_splice_graph_params():
             Splice_graph, "_max_intron_length_for_exon_segment_filtering", None
         ),
         "min_intron_support": getattr(Splice_graph, "_min_intron_support", None),
-        "min_terminal_splice_exon_anchor_length": getattr(
-            Splice_graph, "_min_terminal_splice_exon_anchor_length", None
-        ),
         "remove_unspliced_introns": getattr(
             Splice_graph, "_remove_unspliced_introns", None
         ),

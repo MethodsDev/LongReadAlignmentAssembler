@@ -31,9 +31,6 @@ class Pretty_alignment:
     )
 
     read_aln_gap_merge_int = LRAA_Globals.config["read_aln_gap_merge_int"]
-    min_terminal_splice_exon_anchor_length = LRAA_Globals.config[
-        "min_terminal_splice_exon_anchor_length"
-    ]
 
     def __init__(self, pysam_alignment, pretty_alignment_segments):
 
@@ -810,20 +807,6 @@ class Pretty_alignment:
                 # append, as too far apart from prev
                 alignment_segments.append(list(aligned_pair))
 
-        ##//TODO: make below trimming of short terminal alignment segments an option and configurable
-        """
-
-        # trim short terminal segments from each end
-        while (len(alignment_segments) > 1 and
-            alignment_segments[0][1] - alignment_segments[0][0] + 1 < self._min_terminal_splice_exon_anchor_length):
-
-            alignment_segments.pop(0)
-
-        while (len(alignment_segments) > 1 and
-            alignment_segments[len(alignment_segments)-1][1] - alignment_segments[len(alignment_segments)-1][0] + 1 < self._min_terminal_splice_exon_anchor_length):
-
-            alignment_segments.pop()
-        """
 
         logger.debug(
             "read {} pretty alignment segments: {}".format(
