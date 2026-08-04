@@ -236,7 +236,7 @@ Claim: page 37 says unspliced models were excluded from all analyses; reciprocal
 
 Verdict: Supported in part for the reported ALS/FTD run, but the threshold and set definitions remain imprecise.
 
-Implemented behavior: the ALS/FTD Makefile explicitly enabled the nondefault `--ignore_unspliced` and `--reciprocal_delta_pi` switches and supplied `--min_cell_fraction 0.05`, `--top_isoforms_each 1`, and `--group_by_feature gene_symbol`. All 198,251 input features mapped to splice identifiers; the `:iso-` test identified 37,320 monoexonic features, and none of the 22,233 reported test rows retained that marker. Unspliced exclusion and reciprocal testing therefore did run for this analysis, even though neither behavior is a CLI default.
+Implemented behavior: the ALS/FTD Makefile explicitly enabled the nondefault `--ignore_unspliced` and `--reciprocal_delta_pi` switches and supplied `--min_cell_fraction 0.05`, `--top_isoforms_each 1`, and `--group_by_feature gene_symbol`. The recorded analysis predates the explicit exon-count field: its `:iso-` test identified 37,320 monoexonic features, and none of the 22,233 reported test rows retained that marker. Unspliced exclusion and reciprocal testing therefore did run for this analysis, even though neither behavior is a CLI default. The current worktree no longer infers splicing status from identifier syntax.
 
 The numerical rules differ from the prose. Gene totals must be at least 25 separately in each cluster, whereas each directional set needs at least 25 reads summed across both clusters. Both directional `Delta pi` sums must be strictly greater than 0.1 before rounding; equality fails. Cell-fraction filtering requires at least one member of each directional set to have detection fraction at least 5% in its enriched cluster; it does not compute the fraction of cells expressing the set union or require every member to pass. Although the command requested one top isoform per cluster, missing-direction expansion produced 2-column contingency tables for 22,105 reported rows and 3-column tables for 128 rows. The final significance flag uses adjusted P value `<= 0.001`, not `< 0.001`.
 
@@ -267,21 +267,21 @@ The ordinary defaults are unchanged: normalization remains 1,000 alignments per 
 
 Evidence: `LRAA:66-168,831-847,1041-1201,1246-1315,1342-1345,1448-1465`; `pylib/Splice_graph.py:1365-1378,1835-1867`; `pylib/Quantify.py:149-162`; `pylib/test_cli_config_resolution.py:58-137`; `pylib/test_splice_graph_alt_splice_threshold.py:37-75`; `pylib/test_quant_read_assignment_arbitration.py:63-116`.
 
-### Top-level single-cell alignment-policy inputs do not control cluster-guided phases
+### Top-level single-cell alignment-policy inputs intentionally stop before cluster-guided phases
 
-`LRAA-singlecell.wdl` forwards `allow_secondary_alignments` and `rescue_unassigned_reads_via_transcriptome_alignment` to the initial LRAA call but omits them from the `ClusterGuided` call. Per-cluster discovery and final quantification silently use nested defaults.
+Decision: retain the current behavior. `LRAA-singlecell.wdl` forwards `allow_secondary_alignments` and `rescue_unassigned_reads_via_transcriptome_alignment` to the initial LRAA call but not to `ClusterGuided`. Per-cluster discovery and final quantification therefore use the nested workflow defaults. Applying these policies to every cluster-guided call would increase the computational cost of an already intensive stage.
+
+Manuscript implication: describe these two inputs as controls for the initial pooled LRAA run, not as global single-cell workflow settings.
 
 Evidence: `WDL/LRAA-singlecell.wdl:190-214,274-301`; `WDL/LRAA-cell_cluster_guided.wdl:20-23,82-105,144-168`.
 
-Decision needed: forward both inputs into all cluster-guided LRAA calls.
+### Unspliced DIU filtering now uses explicit exon counts
 
-### Unspliced DIU filtering is identifier-dependent, but worked for ALS/FTD
+Resolved in the current worktree. LRAA records `num_exons` on every quantification tracking row, including the oversimplify paths. Active Python sparse-matrix construction carries this value into the transcript/splice-hash mapping, gene-symbol incorporation preserves it, and the legacy standalone R converter now does likewise. Both WDL tracking-merge paths reject inputs with differing headers instead of combining old seven-column and new eight-column rows under one schema. When `--ignore_unspliced` is enabled, DIU resolves `num_exons` through original or renamed transcript and splice-hash identifiers and removes features with `num_exons == 1`. Missing, invalid, conflicting, or unmapped metadata is an error; there is no identifier-pattern fallback. The option remains disabled by default.
 
-`--ignore_unspliced` is false by default and detects monoexonic features by searching the mapped splice identifier for `:iso-`. The ALS/FTD Makefile enabled the switch, and all 37,320 monoexonic features in that run used the expected LRAA-style marker and were removed. The mechanism remains fragile for other inputs: a monoexonic reference transcript identifier need not contain `:iso-` and would not be excluded.
+The recorded ALS/FTD analysis used the former `:iso-` rule and successfully removed all 37,320 marked monoexonic features. Regenerating the mapping with the current workflow makes the filter reliable for quantification-only GENCODE transcript IDs as well.
 
-Evidence: ALS/FTD analysis `diff_iso_usage_for_alt_termini_analysis/Makefile:4-5` and `LP00714.gene_transcript_splicehashcode.withGeneSymbols.tsv`; `util/sc/diff_iso_usage/sc_pseudobulk_test_isoform_DiffUsage.py:232-237,408-490`; `pylib/Quantify.py:1346-1352`.
-
-Decision needed: carry explicit exon/intron status into the DIU input and filter on that field rather than encoding structure in identifier syntax.
+Evidence: `LRAA:2407-2416,2758-2772,3133-3158,3302-3315`; `pylib/Quantify.py:1354-1404`; `WDL/LRAA.wdl:340-362`; `WDL/LRAA-cell_cluster_guided.wdl:325-349`; `util/sc/singlecell_tracking_to_sparse_matrix.py:199-264`; `util/sc/singlecell_tracking_to_sparse_matrix.R:18-53`; `util/sc/incorporate_gene_symbols_in_sc_features.py:150-190`; `util/sc/diff_iso_usage/sc_pseudobulk_test_isoform_DiffUsage.py:133-219,565-580`; `util/sc/test_splicing_status_propagation.py`; `pylib/test_quantify_tpm_reporting.py:63-113`.
 
 ### Mitochondrial QC misses opaque reference gene identifiers
 

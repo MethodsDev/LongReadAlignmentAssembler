@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import sys, os, re
+import sys, os, re, csv, gzip
 import argparse
 import pysam
 import logging
@@ -12,6 +12,26 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def iter_non_comment_lines(fh):
+    for line in fh:
+        if not line.startswith("#"):
+            yield line
+
+
+def get_tracked_read_names(tracking_filename):
+    reads_want = set()
+    openf = gzip.open if tracking_filename.endswith(".gz") else open
+    with openf(tracking_filename, "rt") as fh:
+        reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
+        if reader.fieldnames is None or "read_name" not in reader.fieldnames:
+            raise ValueError(
+                f"Tracking file lacks required read_name column: {tracking_filename}"
+            )
+        for row in reader:
+            reads_want.add(row["read_name"].split("^")[-1])
+    return reads_want
 
 
 def main():
@@ -49,13 +69,7 @@ def main():
         output_bam_filename, "wb", template=bamfile_reader
     )
 
-    reads_want = set()
-    with open(tracking_filename, "rt") as fh:
-        for line in fh:
-            read_name = line.split("\t")[4]
-            # in case single cell data
-            read_name = read_name.split("^")[-1]
-            reads_want.add(read_name)
+    reads_want = get_tracked_read_names(tracking_filename)
 
     for read in bamfile_reader:
         if read.query_name in reads_want:

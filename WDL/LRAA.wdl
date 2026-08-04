@@ -340,6 +340,7 @@ version_comment = os.environ["LRAA_VERSION_COMMENT"]
 with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
     print(version_comment, file=ofh)
     wrote_header = False
+    expected_header = None
     for i, tracking_file in enumerate(tracking_files_list):
         openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
         with openf(tracking_file, "rt") as fh:
@@ -349,6 +350,14 @@ with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") 
                     continue
                 if header is None:
                     header = line
+                    if expected_header is None:
+                        expected_header = header
+                    elif header != expected_header:
+                        raise RuntimeError(
+                            "Cannot merge tracking files with different schemas: {} differs from the first input".format(
+                                tracking_file
+                            )
+                        )
                     if not wrote_header:
                         print(header, file=ofh, end='')
                         wrote_header = True

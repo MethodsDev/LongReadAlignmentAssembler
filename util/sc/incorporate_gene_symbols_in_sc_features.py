@@ -159,10 +159,16 @@ def write_annotated_id_mappings_file(
             "gene_id",
             "transcript_id",
             "transcript_splice_hash_code",
-            "new_gene_id",
-            "new_transcript_id",
-            "new_transcript_splice_hash_code",
         ]
+        if "num_exons" in reader.fieldnames:
+            fieldnames.append("num_exons")
+        fieldnames.extend(
+            [
+                "new_gene_id",
+                "new_transcript_id",
+                "new_transcript_splice_hash_code",
+            ]
+        )
         new_id_mappings_file = id_mappings_file + ".wAnnotIDs"
         with open(new_id_mappings_file, "wt") as ofh:
             writer = csv.DictWriter(

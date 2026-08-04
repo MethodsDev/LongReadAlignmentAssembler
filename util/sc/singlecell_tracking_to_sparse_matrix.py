@@ -196,7 +196,12 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
         LevelAccumulator("splice_pattern", "transcript_splice_hash_code"),
     ]
 
-    mapping_columns = ["gene_id", "transcript_id", "transcript_splice_hash_code"]
+    mapping_columns = [
+        "gene_id",
+        "transcript_id",
+        "transcript_splice_hash_code",
+        "num_exons",
+    ]
     mapping_entries = set()
     barcode_to_index = {}
     barcode_labels = []
@@ -208,6 +213,7 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
         "gene_id": str,
         "transcript_id": str,
         "transcript_splice_hash_code": str,
+        "num_exons": np.int64,
         "frac_assigned": np.float32,
     }
 
@@ -215,7 +221,14 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
         read_csv_kwargs = {
             "sep": "\t",
             "chunksize": chunksize,
-            "usecols": ["read_name", "gene_id", "transcript_id", "transcript_splice_hash_code", "frac_assigned"],
+            "usecols": [
+                "read_name",
+                "gene_id",
+                "transcript_id",
+                "transcript_splice_hash_code",
+                "num_exons",
+                "frac_assigned",
+            ],
             "dtype": dtype_spec,
             "engine": engine,
             "comment": "#",

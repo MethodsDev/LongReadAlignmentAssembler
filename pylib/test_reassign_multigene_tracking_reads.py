@@ -54,17 +54,18 @@ def test_reassign_multigene_tracking_reads_reallocates_only_cross_gene_reads(tmp
         "gene_id",
         "transcript_id",
         "transcript_splice_hash_code",
+        "num_exons",
         "mp_id",
         "read_name",
         "frac_assigned",
     ]
     tracking_rows = [
-        ["geneA", "txA1", "hA1", "mpA1", "readA_unique", "1.000"],
-        ["geneA", "txA2", "hA2", "mpA2", "readA2_unique", "1.000"],
-        ["geneB", "txB1", "hB1", "mpB1", "readB_unique", "1.000"],
-        ["geneA", "txA1", "hA1", "mpSharedA", "readShared", "1.000"],
-        ["geneA", "txA1", "hA1", "mpSharedA_dup", "readShared", "1.000"],
-        ["geneB", "txB1", "hB1", "mpSharedB", "readShared", "1.000"],
+        ["geneA", "txA1", "hA1", "1", "mpA1", "readA_unique", "1.000"],
+        ["geneA", "txA2", "hA2", "1", "mpA2", "readA2_unique", "1.000"],
+        ["geneB", "txB1", "hB1", "2", "mpB1", "readB_unique", "1.000"],
+        ["geneA", "txA1", "hA1", "1", "mpSharedA", "readShared", "1.000"],
+        ["geneA", "txA1", "hA1", "1", "mpSharedA_dup", "readShared", "1.000"],
+        ["geneB", "txB1", "hB1", "2", "mpSharedB", "readShared", "1.000"],
     ]
     with gzip.open(tracking_in, "wt", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
@@ -108,6 +109,10 @@ def test_reassign_multigene_tracking_reads_reallocates_only_cross_gene_reads(tmp
     assert len(shared_rows) == 2
     by_tx = {row["transcript_id"]: row["frac_assigned"] for row in shared_rows}
     assert by_tx == {"txA1": "0.500", "txB1": "0.500"}
+    assert {row["transcript_id"]: row["num_exons"] for row in shared_rows} == {
+        "txA1": "1",
+        "txB1": "2",
+    }
 
     unchanged_rows = [row for row in tracking_rows_out if row["read_name"] != "readShared"]
     assert all(row["frac_assigned"] == "1.000" for row in unchanged_rows)

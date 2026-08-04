@@ -20,13 +20,20 @@ class _FakeMultipath:
 
 class _FakeTranscript:
     def __init__(
-        self, gene_id, transcript_id, read_count, multipath, multipath_weight=1.0
+        self,
+        gene_id,
+        transcript_id,
+        read_count,
+        multipath,
+        multipath_weight=1.0,
+        num_exons=1,
     ):
         self._gene_id = gene_id
         self._transcript_id = transcript_id
         self._read_count = read_count
         self._multipath = multipath
         self._multipath_weight = multipath_weight
+        self._num_exons = num_exons
 
     def get_gene_id(self):
         return self._gene_id
@@ -51,13 +58,13 @@ class _FakeTranscript:
         return self._read_count / LRAA_Globals.config["num_total_reads"] * 1e6
 
     def get_num_exon_segments(self):
-        return 1
+        return self._num_exons
 
     def get_exons_string(self):
         return "1-100"
 
     def get_introns_string(self):
-        return ""
+        return "151-199" if self._num_exons > 1 else ""
 
 
 def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
@@ -73,7 +80,7 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         mp2 = _FakeMultipath("mp2", ["r3"])
         transcripts = [
             _FakeTranscript("gene1", "tx1", 100.0, mp1, 0.250),
-            _FakeTranscript("gene2", "tx2", 300.0, mp2, 1.000),
+            _FakeTranscript("gene2", "tx2", 300.0, mp2, 1.000, num_exons=2),
         ]
         frac_assignments = {
             "tx1": {mp1: 1.0},
@@ -96,8 +103,10 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         tracking_rows = [
             line.split("\t") for line in tracking_out.getvalue().strip().splitlines()
         ]
-        assert all(len(row) == 7 for row in tracking_rows)
-        assert {row[6] for row in tracking_rows if row[1] == "tx1"} == {"0.250"}
+        assert all(len(row) == 8 for row in tracking_rows)
+        assert {row[3] for row in tracking_rows if row[1] == "tx1"} == {"1"}
+        assert {row[3] for row in tracking_rows if row[1] == "tx2"} == {"2"}
+        assert {row[7] for row in tracking_rows if row[1] == "tx1"} == {"0.250"}
     finally:
         LRAA_Globals.config["num_total_reads"] = old_num_total_reads
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old_weight_reads

@@ -129,6 +129,96 @@ def process_cluster_pair(params):
     return test_df_results, annotated_subset
 
 
+
+NUM_EXON_ID_COLUMNS = (
+    "transcript_id",
+    "new_transcript_id",
+    "transcript_splice_hash_code",
+    "new_transcript_splice_hash_code",
+)
+
+
+def build_num_exons_mapping(mapping_df):
+    if "num_exons" not in mapping_df.columns:
+        raise ValueError(
+            "--ignore_unspliced requires a 'num_exons' column in the splice-hash "
+            "mapping file."
+        )
+
+    num_exons_by_id = {}
+    mapping_sources = {}
+    id_columns = [column for column in NUM_EXON_ID_COLUMNS if column in mapping_df.columns]
+
+    for row_number, (_, row) in enumerate(mapping_df.iterrows(), start=2):
+        raw_num_exons = row["num_exons"]
+        if isinstance(raw_num_exons, (bool, np.bool_)) or pd.isna(raw_num_exons):
+            raise ValueError(
+                f"Invalid num_exons value {raw_num_exons!r} at mapping-file row "
+                f"{row_number}; --ignore_unspliced requires an integer >= 1."
+            )
+
+        if isinstance(raw_num_exons, (int, np.integer)):
+            num_exons = int(raw_num_exons)
+        elif isinstance(raw_num_exons, (float, np.floating)):
+            if not np.isfinite(raw_num_exons) or not raw_num_exons.is_integer():
+                raise ValueError(
+                    f"Invalid num_exons value {raw_num_exons!r} at mapping-file row "
+                    f"{row_number}; --ignore_unspliced requires an integer >= 1."
+                )
+            num_exons = int(raw_num_exons)
+        else:
+            raw_num_exons_text = str(raw_num_exons).strip()
+            if not re.fullmatch(r"[+-]?\d+", raw_num_exons_text):
+                raise ValueError(
+                    f"Invalid num_exons value {raw_num_exons!r} at mapping-file row "
+                    f"{row_number}; --ignore_unspliced requires an integer >= 1."
+                )
+            num_exons = int(raw_num_exons_text)
+
+        if num_exons < 1:
+            raise ValueError(
+                f"Invalid num_exons value {raw_num_exons!r} at mapping-file row "
+                f"{row_number}; --ignore_unspliced requires an integer >= 1."
+            )
+
+        for id_column in id_columns:
+            feature_id = row[id_column]
+            if pd.isna(feature_id) or (
+                isinstance(feature_id, str) and not feature_id.strip()
+            ):
+                continue
+
+            if feature_id in num_exons_by_id and num_exons_by_id[feature_id] != num_exons:
+                previous_row, previous_column = mapping_sources[feature_id]
+                raise ValueError(
+                    f"Conflicting num_exons metadata for feature ID {feature_id!r}: "
+                    f"{num_exons_by_id[feature_id]} at mapping-file row {previous_row} "
+                    f"({previous_column}) versus {num_exons} at row {row_number} "
+                    f"({id_column})."
+                )
+
+            num_exons_by_id[feature_id] = num_exons
+            mapping_sources[feature_id] = (row_number, id_column)
+
+    return num_exons_by_id
+
+
+def filter_unspliced_isoforms(feature_df, num_exons_by_id, matrix_description):
+    mapped_num_exons = feature_df["transcript_id"].map(num_exons_by_id)
+    missing_status = mapped_num_exons.isna()
+    if missing_status.any():
+        missing_ids = feature_df.loc[missing_status, "transcript_id"].drop_duplicates()
+        preview = ", ".join(repr(feature_id) for feature_id in missing_ids.iloc[:10])
+        if len(missing_ids) > 10:
+            preview += f", ... ({len(missing_ids)} total)"
+        raise ValueError(
+            f"--ignore_unspliced could not map num_exons metadata for "
+            f"{matrix_description} transcript_id value(s): {preview}."
+        )
+
+    return feature_df.loc[mapped_num_exons.ne(1)].copy()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="run single cell cluster isoform DE usage tests via pseudobulk chi-square",
@@ -233,7 +323,10 @@ def main():
         "--ignore_unspliced",
         action="store_true",
         default=False,
-        help="exclude unspliced isoforms (only works when used with splice pattern collapsed isoforms)",
+        help=(
+            "exclude monoexonic isoforms using the explicit num_exons metadata in "
+            "--splice_hashcode_id_mappings"
+        ),
     )
 
     parser.add_argument(
@@ -470,23 +563,20 @@ def main():
     #########
 
     if args.ignore_unspliced:
-        logger.info("-pruning unspliced isoforms")
+        num_exons_by_id = build_num_exons_mapping(splice_hashcode_id_mappings_df)
+
+        logger.info("-pruning monoexonic isoforms using num_exons metadata")
         logger.info("before pruning counts matrix, have {} rows".format(counts_big_df.shape[0]))
-        mask_to_exclude = (
-            counts_big_df["splice_hashcode"].astype(str).str.contains(":iso-", na=False)
+        counts_big_df = filter_unspliced_isoforms(
+            counts_big_df, num_exons_by_id, "counts matrix"
         )
-        counts_big_df = counts_big_df[~mask_to_exclude]
         logger.info("after pruning counts matrix, have {} rows".format(counts_big_df.shape[0]))
-        
-        # Also prune unspliced from fraction matrix if present
+
         if fraction_big_df is not None:
             logger.info("before pruning fraction matrix, have {} rows".format(fraction_big_df.shape[0]))
-            # Add splice_hashcode to fraction_big_df for filtering
-            fraction_big_df["splice_hashcode"] = fraction_big_df["transcript_id"].map(sp_hash_mapping)
-            mask_to_exclude_frac = (
-                fraction_big_df["splice_hashcode"].astype(str).str.contains(":iso-", na=False)
+            fraction_big_df = filter_unspliced_isoforms(
+                fraction_big_df, num_exons_by_id, "fraction matrix"
             )
-            fraction_big_df = fraction_big_df[~mask_to_exclude_frac]
             logger.info("after pruning fraction matrix, have {} rows".format(fraction_big_df.shape[0]))
 
     ############################################################

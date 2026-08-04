@@ -2408,6 +2408,7 @@ def _run_jobs_schedule_and_merge(
         "gene_id",
         "transcript_id",
         "transcript_splice_hash_code",
+        "num_exons",
         "mp_id",
         "read_name",
         "frac_assigned",
@@ -2759,6 +2760,7 @@ def _contig_job_runner(job):
         "gene_id",
         "transcript_id",
         "transcript_splice_hash_code",
+        "num_exons",
         "mp_id",
         "read_name",
         "frac_assigned",
@@ -3135,9 +3137,10 @@ def _run_oversimplify_best_overlap(
         if t is None:
             continue
         gene_id = t.get_gene_id()
+        num_exons = t.get_num_exon_segments()
         splice_hash = (
             Util_funcs.get_hash_code(t.get_introns_string())
-            if t.get_num_exon_segments() > 1
+            if num_exons > 1
             else t.get_transcript_id()
         )
         print(
@@ -3146,6 +3149,7 @@ def _run_oversimplify_best_overlap(
                     gene_id,
                     tid,
                     splice_hash,
+                    f"{num_exons}",
                     mp_id_token,
                     read_name,
                     "1.000",
@@ -3299,15 +3303,25 @@ def _run_oversimplify_aggregate(
 
     # Tracking: one line per read
     mp_id_token = f"ovsimp-agg:{contig_acc}:{contig_strand}"
+    num_exons = t.get_num_exon_segments()
     splice_hash = (
         Util_funcs.get_hash_code(t.get_introns_string())
-        if t.get_num_exon_segments() > 1
+        if num_exons > 1
         else t.get_transcript_id()
     )
     for rn in read_names:
         print(
             "\t".join(
-                [gene_id, trans_id, splice_hash, mp_id_token, rn, "1.000", "1.000"]
+                [
+                    gene_id,
+                    trans_id,
+                    splice_hash,
+                    f"{num_exons}",
+                    mp_id_token,
+                    rn,
+                    "1.000",
+                    "1.000",
+                ]
             ),
             file=ofh_track,
         )
@@ -3318,7 +3332,7 @@ def _run_oversimplify_aggregate(
     unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
     tpm = 1e6
     rpm_total_reads = t.get_TPM()
-    introns_str = t.get_introns_string() if t.get_num_exon_segments() > 1 else ""
+    introns_str = t.get_introns_string() if num_exons > 1 else ""
     row = [
         gene_id,
         trans_id,

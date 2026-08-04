@@ -16,6 +16,11 @@ library(Matrix)
 
 message("-reading in ", dat_filename)
 data = read.csv(dat_filename, sep="\t", header=T)
+required_columns = c("gene_id", "transcript_id", "transcript_splice_hash_code", "num_exons", "read_name", "frac_assigned")
+missing_columns = setdiff(required_columns, colnames(data))
+if (length(missing_columns) > 0) {
+   stop("tracking file is missing required column(s): ", paste(missing_columns, collapse=", "))
+}
 
 # extract cell barcode and umi info
 data = data %>% separate_wider_delim(read_name, "^", names=c("cell_barcode", "UMI", "core_read_name"))
@@ -42,8 +47,8 @@ splice_pattern_cell_counts_tsv = paste0(output_prefix, ".splice_pattern_cell_cou
 write.table(splice_pattern_cell_counts, file=splice_pattern_cell_counts_tsv, sep="\t", row.names=F, quote=F)
 
 # summarize ids
-ids = data %>% select(gene_id, transcript_id, transcript_splice_hash_code) %>% unique()
-message("-writing gene_id, transcript_id, transcript_splice_hash_code mappings file")
+ids = data %>% select(gene_id, transcript_id, transcript_splice_hash_code, num_exons) %>% unique()
+message("-writing gene_id, transcript_id, transcript_splice_hash_code, num_exons mappings file")
 ids_tsv = paste0(output_prefix, ".gene_transcript_splicehashcode.tsv")
 write.table(ids, file=ids_tsv, sep="\t", row.names=F, quote=F)
 

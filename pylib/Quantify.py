@@ -1353,9 +1353,10 @@ class Quantify:
 
         for transcript in transcripts:
             transcript_id = transcript.get_transcript_id()
+            num_exons = transcript.get_num_exon_segments()
             transcript_splice_hash_code = (
                 Util_funcs.get_hash_code(transcript.get_introns_string())
-                if transcript.get_num_exon_segments() > 1
+                if num_exons > 1
                 else transcript_id
             )
             gene_id = transcript.get_gene_id()
@@ -1386,6 +1387,7 @@ class Quantify:
                         gene_id,
                         transcript_id,
                         transcript_splice_hash_code,
+                        f"{num_exons}",
                         mp_id,
                         readname,
                         "{:.3f}".format(frac_read_assigned),
@@ -1422,7 +1424,7 @@ class Quantify:
                 transcript.get_exons_string(),
                 (
                     transcript.get_introns_string()
-                    if transcript.get_num_exon_segments() > 1
+                    if num_exons > 1
                     else ""
                 ),
                 transcript_splice_hash_code,
