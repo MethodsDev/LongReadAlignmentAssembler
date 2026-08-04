@@ -9,10 +9,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "pylib") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "pylib"))
 
+import LRAA_Globals
 from GenomeFeature import Exon
 from IsoformReadRescue import _normalize_read_identifier
 from MultiPath import MultiPath
 from MultiPathCounter import MultiPathCounter
+from Quantify import Quantify
 from Splice_graph import Splice_graph
 
 
@@ -56,6 +58,62 @@ def _make_tx_multipath(splice_graph, simple_path, read_name):
         read_names={read_name},
         read_count=1,
     )
+
+
+def test_read_overlap_threshold_resolves_config_at_assignment_time():
+    original_fraction = LRAA_Globals.config["fraction_read_align_overlap"]
+    original_aggressive_assignment = LRAA_Globals.config[
+        "aggressively_assign_reads"
+    ]
+    original_show_progress = LRAA_Globals.config["show_progress_quant_assign"]
+
+    def build_assignment_fixture():
+        splice_graph, e1, e2, _ = _build_splice_graph()
+        splice_graph._contig_acc = "chr1"
+        splice_graph._contig_strand = "+"
+
+        transcript = MultiPath(splice_graph, [[e1.get_id()]]).toTranscript()
+        transcript.set_gene_id("g1")
+        transcript.set_transcript_id("t1")
+
+        read_multipath = MultiPath(
+            splice_graph,
+            [[e1.get_id(), e2.get_id()]],
+            read_types={"PacBio"},
+            read_names={1},
+            read_count=1,
+        )
+        mp_counter = MultiPathCounter()
+        mp_counter.add(read_multipath)
+
+        quantify = Quantify(False, 1)
+        quantify._assign_path_nodes_to_gene([transcript])
+        return quantify, splice_graph, mp_counter, read_multipath, transcript
+
+    try:
+        LRAA_Globals.config["aggressively_assign_reads"] = False
+        LRAA_Globals.config["show_progress_quant_assign"] = False
+        LRAA_Globals.config["fraction_read_align_overlap"] = 0.4
+
+        quantify, splice_graph, mp_counter, read_multipath, transcript = (
+            build_assignment_fixture()
+        )
+        quantify._assign_reads_to_transcripts(splice_graph, mp_counter)
+        assert quantify._mp_to_transcripts[read_multipath] == [transcript]
+
+        quantify, splice_graph, mp_counter, read_multipath, _ = (
+            build_assignment_fixture()
+        )
+        quantify._assign_reads_to_transcripts(
+            splice_graph, mp_counter, fraction_read_align_overlap=0.6
+        )
+        assert read_multipath not in quantify._mp_to_transcripts
+    finally:
+        LRAA_Globals.config["fraction_read_align_overlap"] = original_fraction
+        LRAA_Globals.config[
+            "aggressively_assign_reads"
+        ] = original_aggressive_assignment
+        LRAA_Globals.config["show_progress_quant_assign"] = original_show_progress
 
 
 def test_explode_mp_counter_normalizes_genome_read_keys():

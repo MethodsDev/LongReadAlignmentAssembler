@@ -63,6 +63,110 @@ prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
 
 
+def _add_splice_frequency_arguments(argument_group):
+    argument_group.add_argument(
+        "--min_alt_splice_freq",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="min fraction required for alt splicing at an exon boundary (default: {})".format(
+            LRAA_Globals.config["min_alt_splice_freq"]
+        ),
+    )
+    argument_group.add_argument(
+        "--min_alt_unspliced_freq",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="min fraction required for retained intron at splice boundary (default: {})".format(
+            LRAA_Globals.config["min_alt_unspliced_freq"]
+        ),
+    )
+
+
+def _seed_authoritative_config_from_args(config, args):
+    config["normalize_max_cov_level"] = args.normalize_max_cov_level
+    config["min_isoform_fraction"] = args.min_isoform_fraction
+    config["run_EM"] = not args.no_EM
+    config["EM_alpha"] = args.EM_alpha
+    for key in ("min_alt_splice_freq", "min_alt_unspliced_freq"):
+        if hasattr(args, key):
+            config[key] = getattr(args, key)
+
+
+def _apply_hifi_splice_default(config, args):
+    if args.HiFi and not hasattr(args, "min_alt_splice_freq"):
+        config["min_alt_splice_freq"] = 0.01
+
+
+def _cast_config_value(orig_val, new_val):
+    # attempt gentle casting to preserve expected primitive types
+    try:
+        if isinstance(orig_val, bool):
+            if isinstance(new_val, bool):
+                return new_val
+            if isinstance(new_val, (int, float)):
+                return bool(new_val)
+            if isinstance(new_val, str):
+                if new_val.lower() in ("true", "t", "1", "yes", "y"):
+                    return True
+                if new_val.lower() in ("false", "f", "0", "no", "n"):
+                    return False
+        if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
+            if isinstance(new_val, str):
+                if re.match(r"^-?\\d+$", new_val):
+                    return int(new_val)
+                if re.match(r"^-?\\d+\\.0+$", new_val):
+                    return int(float(new_val))
+            if isinstance(new_val, float) and new_val.is_integer():
+                return int(new_val)
+            if isinstance(new_val, int):
+                return new_val
+        if isinstance(orig_val, float) and isinstance(new_val, (int, float, str)):
+            if isinstance(new_val, str) and re.match(r"^-?\\d+(\\.\\d+)?$", new_val):
+                return float(new_val)
+            if isinstance(new_val, (int, float)):
+                return float(new_val)
+    except Exception:
+        pass
+    # fallback raw
+    return new_val
+
+
+def _apply_config_overrides(config, updates):
+    applied_keys = []
+    skipped_keys = []
+    for key, value in updates.items():
+        if key not in config:
+            skipped_keys.append(key)
+            continue
+        config[key] = _cast_config_value(config[key], value)
+        applied_keys.append(key)
+    return applied_keys, skipped_keys
+
+
+def _snapshot_runtime_config(config):
+    return {
+        key: config[key]
+        for key in (
+            "normalize_max_cov_level",
+            "min_isoform_fraction",
+            "run_EM",
+            "EM_alpha",
+        )
+    }
+
+
+def _build_splice_graph_params(config):
+    return {
+        "read_aln_gap_merge_int": 10,
+        "inter_exon_segment_merge_dist": 50,
+        "max_genomic_contig_length": 1e10,
+        "min_alt_splice_freq": config["min_alt_splice_freq"],
+        "min_alt_unspliced_freq": config["min_alt_unspliced_freq"],
+        "max_intron_length_for_exon_segment_filtering": 10000,
+        "min_intron_support": 2,
+        "remove_unspliced_introns": False,
+    }
+
 # keep main() at the top
 def main():
     class ArgumentDefaultsRawDescriptionHelpFormatter(
@@ -740,23 +844,7 @@ def main():
     config_group_altsplice = parser.add_argument_group("alt splice settings")
 
     # TODO:// mv splice defaults to globals.config
-    config_group_altsplice.add_argument(
-        "--min_alt_splice_freq",
-        type=float,
-        default=LRAA_Globals.config["min_alt_splice_freq"],
-        help="min fraction required for alt splicing at an exon boundary (default: {})".format(
-            LRAA_Globals.config["min_alt_splice_freq"]
-        ),
-    )
-
-    config_group_altsplice.add_argument(
-        "--min_alt_unspliced_freq",
-        type=float,
-        default=LRAA_Globals.config["min_alt_unspliced_freq"],
-        help="min fraction required for retained intron at splice boundary (default: {})".format(
-            LRAA_Globals.config["min_alt_unspliced_freq"]
-        ),
-    )
+    _add_splice_frequency_arguments(config_group_altsplice)
     config_group_altsplice.add_argument(
         "--aggregate_adjacent_splice_boundaries",
         action="store_true",
@@ -899,8 +987,6 @@ def main():
             LRAA_Globals.config["oversimplify_enabled"] = True
             LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
     NO_NORM = args.no_norm
-    min_isoform_fraction = args.min_isoform_fraction
-    run_EM = not args.no_EM
     ME_only = args.ME_only
     SE_only = args.SE_only
 
@@ -954,6 +1040,7 @@ def main():
 
     ###############
     # update config
+    _seed_authoritative_config_from_args(LRAA_Globals.config, args)
     LRAA_Globals.config["min_path_score"] = args.min_path_score
     LRAA_Globals.config["min_per_id"] = args.min_per_id
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
@@ -987,7 +1074,6 @@ def main():
             "Secondary alignment mode '%s' requested, but secondary alignments are disabled; ignoring the mode",
             args.secondary_alignment_mode,
         )
-    LRAA_Globals.config["min_isoform_fraction"] = args.min_isoform_fraction
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(
             args.min_isoform_fraction,
@@ -999,7 +1085,6 @@ def main():
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
-    LRAA_Globals.config["run_EM"] = run_EM
     LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
         args.run_cross_gene_EM_for_secondary_alignments
     )
@@ -1022,8 +1107,6 @@ def main():
     LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
     LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
 
-    quant_EM_alpha = args.EM_alpha
-    LRAA_Globals.config["EM_alpha"] = quant_EM_alpha
 
     # resource monitor config
     LRAA_Globals.config["resource_monitor_enabled"] = MONITOR_RESOURCES
@@ -1085,14 +1168,7 @@ def main():
         LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
         if getattr(args, "aggregate_adjacent_splice_boundaries", False):
             LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
-        # HiFi-specific splice frequency threshold
-        LRAA_Globals.config["min_alt_splice_freq"] = 0.01
-        # Ensure splice-graph params derive the HiFi value if user didn't explicitly override
-        # If user did not pass --min_alt_splice_freq, argparse will have set it to the parser default,
-        # which was computed before we overrode config. Force HiFi value unless user provided a value.
-        default_min_alt = parser.get_default("min_alt_splice_freq")
-        if args.min_alt_splice_freq == default_min_alt:
-            args.min_alt_splice_freq = 0.01
+        _apply_hifi_splice_default(LRAA_Globals.config, args)
 
     # apply generic config overrides last so they take precedence
     if args.config_update:
@@ -1110,59 +1186,19 @@ def main():
                 f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
             )
 
-        def _cast_value(orig_val, new_val):
-            # attempt gentle casting to preserve expected primitive types
-            try:
-                if isinstance(orig_val, bool):
-                    if isinstance(new_val, bool):
-                        return new_val
-                    if isinstance(new_val, (int, float)):
-                        return bool(new_val)
-                    if isinstance(new_val, str):
-                        if new_val.lower() in ("true", "t", "1", "yes", "y"):
-                            return True
-                        if new_val.lower() in ("false", "f", "0", "no", "n"):
-                            return False
-                if isinstance(orig_val, int) and isinstance(new_val, (int, float, str)):
-                    if isinstance(new_val, str):
-                        if re.match(r"^-?\\d+$", new_val):
-                            return int(new_val)
-                        if re.match(r"^-?\\d+\\.0+$", new_val):
-                            return int(float(new_val))
-                    if isinstance(new_val, float) and new_val.is_integer():
-                        return int(new_val)
-                    if isinstance(new_val, int):
-                        return new_val
-                if isinstance(orig_val, float) and isinstance(
-                    new_val, (int, float, str)
-                ):
-                    if isinstance(new_val, str) and re.match(
-                        r"^-?\\d+(\\.\\d+)?$", new_val
-                    ):
-                        return float(new_val)
-                    if isinstance(new_val, (int, float)):
-                        return float(new_val)
-            except Exception:
-                pass
-            # fallback raw
-            return new_val
 
-        applied_keys = []
-        skipped_keys = []
-        for k, v in user_cfg.items():
-            if k not in LRAA_Globals.config:
-                logger.warning(f"--config_update ignoring unknown config key: {k}")
-                skipped_keys.append(k)
-                continue
-            orig = LRAA_Globals.config[k]
-            newv = _cast_value(orig, v)
-            LRAA_Globals.config[k] = newv
-            applied_keys.append(k)
+        applied_keys, skipped_keys = _apply_config_overrides(
+            LRAA_Globals.config, user_cfg
+        )
+        for k in skipped_keys:
+            logger.warning(f"--config_update ignoring unknown config key: {k}")
         logger.info(
             f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
         )
         if skipped_keys:
             logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
+
+    runtime_config = _snapshot_runtime_config(LRAA_Globals.config)
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -1207,7 +1243,9 @@ def main():
     allow_spacers = False
     # allow_spacers = args.allow_spacers
 
-    normalization_enabled = (not NO_NORM) and (args.normalize_max_cov_level > 0)
+    normalization_enabled = (not NO_NORM) and (
+        runtime_config["normalize_max_cov_level"] > 0
+    )
     normalization_cache_dir = None
     if normalization_enabled:
         normalization_cache_dir = os.path.join(
@@ -1256,7 +1294,7 @@ def main():
         if normalization_enabled:
             bam_file_for_sg = _normalize_bam_for_splice_graph(
                 bam_for_sg_cli,
-                args.normalize_max_cov_level,
+                runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
             )
             logger.info(
@@ -1273,7 +1311,7 @@ def main():
         if normalization_enabled:
             bam_file_for_sg = _normalize_bam_for_splice_graph(
                 bam_filename,
-                args.normalize_max_cov_level,
+                runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
             )
             logger.info(
@@ -1301,16 +1339,7 @@ def main():
     ###########################################
     ## on to isoform discovery / reconstruction
 
-    splice_graph_params_dict = {
-        "read_aln_gap_merge_int": 10,
-        "inter_exon_segment_merge_dist": 50,
-        "max_genomic_contig_length": 1e10,
-        "min_alt_splice_freq": args.min_alt_splice_freq,
-        "min_alt_unspliced_freq": args.min_alt_unspliced_freq,
-        "max_intron_length_for_exon_segment_filtering": 10000,
-        "min_intron_support": 2,
-        "remove_unspliced_introns": False,
-    }
+    splice_graph_params_dict = _build_splice_graph_params(LRAA_Globals.config)
     # TODO:// put above settings into the config and add to cmd line interface
 
     Splice_graph.init_sg_params(splice_graph_params_dict)
@@ -1428,11 +1457,11 @@ def main():
                     input_gtf=input_gtf,
                     config_overrides=dict(LRAA_Globals.config),
                     splice_graph_params=splice_graph_params_dict,
-                    run_EM=run_EM,
+                    run_EM=runtime_config["run_EM"],
                     single_best_only=single_best_only,
                     NO_FILTER_ISOFORMS=NO_FILTER_ISOFORMS,
-                    min_isoform_fraction=min_isoform_fraction,
-                    quant_EM_alpha=quant_EM_alpha,
+                    min_isoform_fraction=runtime_config["min_isoform_fraction"],
+                    quant_EM_alpha=runtime_config["EM_alpha"],
                     prereconstruct_info_dir=prereconstruct_info_dir,
                     ME_only=ME_only,
                     SE_only=SE_only,

@@ -150,8 +150,16 @@ class Quantify:
         self,
         splice_graph,
         mp_counter,
-        fraction_read_align_overlap=LRAA_Globals.config["fraction_read_align_overlap"],
+        fraction_read_align_overlap=None,
     ):
+        if fraction_read_align_overlap is None:
+            fraction_read_align_overlap = LRAA_Globals.config[
+                "fraction_read_align_overlap"
+            ]
+
+        assert (
+            fraction_read_align_overlap >= 0 and fraction_read_align_overlap <= 1.0
+        ), "Error, fraction_read_align_overlap must be between 0 and 1.0"
         self._unassigned_mp_count_pairs = list()
 
         try:

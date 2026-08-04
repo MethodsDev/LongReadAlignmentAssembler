@@ -1863,7 +1863,7 @@ class Splice_graph:
                         )
                         if (
                             frac_i_read_support
-                            < LRAA_Globals.config["min_alt_splice_freq"]
+                            < Splice_graph._min_alt_splice_freq
                         ):
                             # insufficient support, prune all introns with that or lower support.
                             for intron in incidental_introns[i:]:
