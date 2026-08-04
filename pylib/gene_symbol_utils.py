@@ -4,6 +4,19 @@ from typing import Dict, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def combine_gene_name_and_id(gene_name: Optional[str], identifier: str) -> str:
+    """Prefix an unannotated identifier with its gene name."""
+
+    if not gene_name or not identifier:
+        return identifier
+
+    if "^" in identifier:
+        return identifier
+
+    return f"{gene_name}^{identifier}"
+
+
 # Priority ranking for gffcompare class codes (lower value means higher specificity)
 _DEFAULT_CLASS_CODE_PRIORITY: Dict[str, int] = {
     "=": 0,

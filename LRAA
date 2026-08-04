@@ -3136,7 +3136,7 @@ def _run_oversimplify_best_overlap(
         t = tid_to_tx.get(tid)
         if t is None:
             continue
-        gene_id = t.get_gene_id()
+        output_gene_id = t.get_output_gene_id()
         num_exons = t.get_num_exon_segments()
         splice_hash = (
             Util_funcs.get_hash_code(t.get_introns_string())
@@ -3146,7 +3146,7 @@ def _run_oversimplify_best_overlap(
         print(
             "\t".join(
                 [
-                    gene_id,
+                    output_gene_id,
                     tid,
                     splice_hash,
                     f"{num_exons}",
@@ -3169,6 +3169,7 @@ def _run_oversimplify_best_overlap(
     total_reported_read_count = sum(t.get_read_counts_assigned() for t in sorted_tx)
     for t in sorted_tx:
         gene_id = t.get_gene_id()
+        output_gene_id = t.get_output_gene_id()
         tid = t.get_transcript_id()
         counts = t.get_read_counts_assigned()
         isoform_frac = t.get_isoform_fraction()
@@ -3189,7 +3190,7 @@ def _run_oversimplify_best_overlap(
         )
         introns_str = t.get_introns_string() if t.get_num_exon_segments() > 1 else ""
         row = [
-            gene_id,
+            output_gene_id,
             tid,
             f"{uniq_reads}",
             f"{counts:.1f}",

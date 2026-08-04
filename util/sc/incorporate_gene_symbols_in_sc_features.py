@@ -14,7 +14,7 @@ PYLIB_DIR = os.path.join(ROOT_DIR, "pylib")
 if PYLIB_DIR not in sys.path:
     sys.path.insert(0, PYLIB_DIR)
 
-from gene_symbol_utils import parse_gffcompare_mappings
+from gene_symbol_utils import combine_gene_name_and_id, parse_gffcompare_mappings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -288,6 +288,10 @@ def update_sparseM_feature_names(
             for feature_id in fh:
                 feature_id = feature_id.rstrip()
                 gene_name = None
+                if "^" in feature_id:
+                    existing_gene_name = feature_id.split("^", 1)[0]
+                    if existing_gene_name:
+                        gene_name = existing_gene_name
 
                 # check for splice hash code
                 transcript_splice_hash_code = None
@@ -299,7 +303,7 @@ def update_sparseM_feature_names(
                     transcript_splice_hash_code = feature_id
                     feature_id = id_mappings[feature_id]["transcript_id"]
 
-                if feature_id in ref_id_to_gene_name:
+                if gene_name is None and feature_id in ref_id_to_gene_name:
                     gene_name = ref_id_to_gene_name[feature_id]
 
                 # check gffcompare results
@@ -319,7 +323,7 @@ def update_sparseM_feature_names(
                         # restore splice hash code
                         feature_id = transcript_splice_hash_code
 
-                    new_feature_id = "^".join([gene_name, feature_id])
+                    new_feature_id = combine_gene_name_and_id(gene_name, feature_id)
                     print(new_feature_id, file=ofh)
                     num_gene_names_added += 1
                     feature_ids_updated[feature_id] = new_feature_id

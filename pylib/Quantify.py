@@ -374,7 +374,7 @@ class Quantify:
                     trim_TSS_polyA=False,
                     anchor_PolyA_TSS=True,
                 )
-  
+
             if transcripts_assigned is None:
                 # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
                 transcripts_assigned = self._assign_path_to_transcript(
@@ -386,7 +386,6 @@ class Quantify:
                     trim_TSS_polyA=False,
                     anchor_PolyA_TSS=True,
                 )
-
 
             if transcripts_assigned is None:
                 # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
@@ -438,7 +437,7 @@ class Quantify:
                     trim_TSS_polyA=True,
                     anchor_PolyA_TSS=False,
                 )
-  
+
             if transcripts_assigned is None:
                 # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
                 transcripts_assigned = self._assign_path_to_transcript(
@@ -824,7 +823,6 @@ class Quantify:
                     )
                     # print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
                     transcripts_compatible_with_read.append(transcript)
-            
 
             elif test_type == "COMPATIBLE_CONTAINED":
 
@@ -842,7 +840,6 @@ class Quantify:
                     )
                     # print("Read {} compatible with transcript {}".format(read_sp, transcript_sp))
                     transcripts_compatible_with_read.append(transcript)
-
 
             elif test_type == "INTRONS_CONTAINED":
 
@@ -1360,6 +1357,7 @@ class Quantify:
                 else transcript_id
             )
             gene_id = transcript.get_gene_id()
+            output_gene_id = transcript.get_output_gene_id()
             counts = transcript.get_read_counts_assigned()
             isoform_frac = transcript.get_isoform_fraction()
 
@@ -1384,7 +1382,7 @@ class Quantify:
                 for readname in mp.get_read_names():
 
                     tracking_report_info = [
-                        gene_id,
+                        output_gene_id,
                         transcript_id,
                         transcript_splice_hash_code,
                         f"{num_exons}",
@@ -1414,7 +1412,7 @@ class Quantify:
             )
 
             report_vals = [
-                gene_id,
+                output_gene_id,
                 transcript_id,
                 f"{num_uniquely_assigned_reads}",
                 f"{counts:.1f}",
@@ -1422,11 +1420,7 @@ class Quantify:
                 f"{unique_gene_read_fraction:0.3f}",
                 f"{tpm:.3f}",
                 transcript.get_exons_string(),
-                (
-                    transcript.get_introns_string()
-                    if num_exons > 1
-                    else ""
-                ),
+                (transcript.get_introns_string() if num_exons > 1 else ""),
                 transcript_splice_hash_code,
             ]
 

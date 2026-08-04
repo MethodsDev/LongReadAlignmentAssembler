@@ -5,6 +5,7 @@ from collections import defaultdict
 from GenomeFeature import GenomeFeature
 import Scored_path
 import LRAA_Globals
+from gene_symbol_utils import combine_gene_name_and_id
 import logging
 import gzip
 
@@ -169,6 +170,9 @@ class Transcript(GenomeFeature):
         else:
             return None
 
+    def get_output_gene_id(self):
+        return combine_gene_name_and_id(self.get_gene_name(), self.get_gene_id())
+
     def get_gene_id(self):
         if self._gene_id is not None:
             return self._gene_id
@@ -316,7 +320,6 @@ class Transcript(GenomeFeature):
             self._PolyA_read_count = None
 
         return
-
 
     def set_likely_internal_primed(self, TorF_boolean):
         # indicate if the transcript looks like it's internally primed.
@@ -502,7 +505,7 @@ class Transcript(GenomeFeature):
                 self._orient,
                 ".",
                 'gene_id "{}"; transcript_id "{}";'.format(
-                    self.get_gene_id(), self.get_transcript_id()
+                    self.get_output_gene_id(), self.get_transcript_id()
                 ),
             ]
         )
@@ -524,16 +527,18 @@ class Transcript(GenomeFeature):
                 self.get_PolyA_read_count()
             )
         if self.get_TSS_read_count() is not None:
-            misc_transcript_features["TSS_read_count"] = str(
-                self.get_TSS_read_count()
-            )
+            misc_transcript_features["TSS_read_count"] = str(self.get_TSS_read_count())
 
         # Internal priming annotation: prefer internal flag, else fallback to imported meta if present
         if self._likely_internal_primed is not None:
-            misc_transcript_features["InternalPriming"] = str(self._likely_internal_primed)
+            misc_transcript_features["InternalPriming"] = str(
+                self._likely_internal_primed
+            )
         elif self._meta and "InternalPriming" in self._meta:
             # ensure we still propagate an imported value even if the internal flag wasn't explicitly set
-            misc_transcript_features["InternalPriming"] = str(self._meta["InternalPriming"])
+            misc_transcript_features["InternalPriming"] = str(
+                self._meta["InternalPriming"]
+            )
 
         for misc_feature, misc_val in misc_transcript_features.items():
             gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
@@ -553,7 +558,7 @@ class Transcript(GenomeFeature):
                         self._orient,
                         ".",
                         'gene_id "{}"; transcript_id "{}";'.format(
-                            self.get_gene_id(), self.get_transcript_id()
+                            self.get_output_gene_id(), self.get_transcript_id()
                         ),
                     ]
                 )
@@ -579,7 +584,6 @@ class Transcript(GenomeFeature):
         self._isoform_fraction = None
 
         return
-
 
     @classmethod
     def recluster_transcripts_to_genes(cls, transcripts, contig_acc, contig_strand):
@@ -614,8 +618,6 @@ class Transcript(GenomeFeature):
                 for idx, clust in enumerate(initial_clusters, start=1):
                     tids = [t.get_transcript_id() for t in clust]
                     print(f"{idx}\t{len(clust)}\t{','.join(tids)}", file=fh_dbg)
-
-
 
         # Overlap thresholds
         min_overlap_shorter_frac = LRAA_Globals.config.get(
@@ -741,7 +743,6 @@ class Transcript(GenomeFeature):
                 t.set_gene_id(new_gene_id)
                 t.set_transcript_id(new_transcript_id)
                 revised_transcripts.append(t)
-
 
         return revised_transcripts
 

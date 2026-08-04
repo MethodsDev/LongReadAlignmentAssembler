@@ -55,3 +55,43 @@ def test_single_cell_symbol_mapping_uses_ranked_strand_aware_gffcompare_parser(
     assert result.returncode == 0, result.stderr
     with gzip.open(sparse_matrix_dir / "features.tsv.gz", "rt") as features:
         assert features.read().splitlines() == ["GENE_C^LRAA_TX", "LRAA_ANTI_TX"]
+
+
+def test_precomposed_gene_feature_is_accepted_without_double_prefix(tmp_path):
+    script = Path(__file__).with_name("incorporate_gene_symbols_in_sc_features.py")
+    ref_gtf = tmp_path / "reference.gtf"
+    id_mappings = tmp_path / "id_mappings.tsv"
+    sparse_matrix_dir = tmp_path / "gene-sparseM"
+    sparse_matrix_dir.mkdir()
+
+    ref_gtf.write_text(
+        "chrM\tref\ttranscript\t1\t100\t.\t+\t.\t"
+        'gene_id "ENSG00000198888"; transcript_id "ENST00000361390"; '
+        'gene_name "RENAMED-MT-ND1";\n'
+    )
+    id_mappings.write_text(
+        "gene_id\ttranscript_id\ttranscript_splice_hash_code\tnum_exons\n"
+        "MT-ND1^ENSG00000198888\tENST00000361390\tENST00000361390\t1\n"
+    )
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "wt") as features:
+        features.write("MT-ND1^ENSG00000198888\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ref_gtf",
+            str(ref_gtf),
+            "--id_mappings",
+            str(id_mappings),
+            "--sparseM_dirs",
+            str(sparse_matrix_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "rt") as features:
+        assert features.read().splitlines() == ["MT-ND1^ENSG00000198888"]

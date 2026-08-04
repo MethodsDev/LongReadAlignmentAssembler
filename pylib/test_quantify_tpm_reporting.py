@@ -4,6 +4,7 @@ from io import StringIO
 
 import LRAA_Globals
 from Quantify import Quantify
+from gene_symbol_utils import combine_gene_name_and_id
 
 
 class _FakeMultipath:
@@ -27,6 +28,7 @@ class _FakeTranscript:
         multipath,
         multipath_weight=1.0,
         num_exons=1,
+        gene_name=None,
     ):
         self._gene_id = gene_id
         self._transcript_id = transcript_id
@@ -34,9 +36,13 @@ class _FakeTranscript:
         self._multipath = multipath
         self._multipath_weight = multipath_weight
         self._num_exons = num_exons
+        self._gene_name = gene_name
 
     def get_gene_id(self):
         return self._gene_id
+
+    def get_output_gene_id(self):
+        return combine_gene_name_and_id(self._gene_name, self._gene_id)
 
     def get_transcript_id(self):
         return self._transcript_id
@@ -79,7 +85,7 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         mp1 = _FakeMultipath("mp1", ["r1", "r2"])
         mp2 = _FakeMultipath("mp2", ["r3"])
         transcripts = [
-            _FakeTranscript("gene1", "tx1", 100.0, mp1, 0.250),
+            _FakeTranscript("gene1", "tx1", 100.0, mp1, 0.250, gene_name="GENE1"),
             _FakeTranscript("gene2", "tx2", 300.0, mp2, 1.000, num_exons=2),
         ]
         frac_assignments = {
@@ -95,6 +101,9 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
 
         rows = [line.split("\t") for line in quant_out.getvalue().strip().splitlines()]
         tpm_sum = sum(float(row[6]) for row in rows)
+        quant_by_transcript = {row[1]: row for row in rows}
+        assert quant_by_transcript["tx1"][0] == "GENE1^gene1"
+        assert quant_by_transcript["tx2"][0] == "gene2"
         rpm_total_reads_sum = sum(float(row[-1]) for row in rows)
 
         assert round(tpm_sum, 3) == 1000000.0
@@ -103,6 +112,9 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         tracking_rows = [
             line.split("\t") for line in tracking_out.getvalue().strip().splitlines()
         ]
+        tracking_by_transcript = {row[1]: row for row in tracking_rows}
+        assert tracking_by_transcript["tx1"][0] == "GENE1^gene1"
+        assert tracking_by_transcript["tx2"][0] == "gene2"
         assert all(len(row) == 8 for row in tracking_rows)
         assert {row[3] for row in tracking_rows if row[1] == "tx1"} == {"1"}
         assert {row[3] for row in tracking_rows if row[1] == "tx2"} == {"2"}
