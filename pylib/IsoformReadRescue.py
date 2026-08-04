@@ -804,16 +804,25 @@ def _project_alignment_to_graph_path(
     right_soft_clipping=None,
 ):
     if read_path_mapper is not None:
-        genomic_segments = _project_interval_to_genomic_segments(model, tx_lend, tx_rend)
+        genomic_segments = _project_interval_to_genomic_segments(
+            model, tx_lend, tx_rend
+        )
         if not genomic_segments:
             return None
+        genomic_left_soft_clipping = left_soft_clipping
+        genomic_right_soft_clipping = right_soft_clipping
+        if model["transcript"].get_strand() == "-":
+            genomic_left_soft_clipping, genomic_right_soft_clipping = (
+                right_soft_clipping,
+                left_soft_clipping,
+            )
         return read_path_mapper(
             genomic_segments,
             refine_TSS_simple_path=True,
             refine_PolyA_simple_path=True,
             snap_nearby_boundary_features=True,
-            left_soft_clipping=left_soft_clipping,
-            right_soft_clipping=right_soft_clipping,
+            left_soft_clipping=genomic_left_soft_clipping,
+            right_soft_clipping=genomic_right_soft_clipping,
         )
 
     return _project_interval_to_path(model, tx_lend, tx_rend)

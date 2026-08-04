@@ -249,6 +249,16 @@ Suggested correction: identify the nondefault switches used for the ALS/FTD run 
 
 ## Suspected or confirmed code defects
 
+### Minus-strand projected rescue clips were mapped to opposite genomic boundaries
+
+Verdict: Confirmed and resolved in the current worktree.
+
+Transcriptome rescue aligns against 5′-to-3′ transcript sequences and obtains soft clips from the low- and high-coordinate ends of that transcript reference. Projection reverses transcript coordinates for minus-strand models and then sorts the genomic segments from low to high. The former implementation passed the transcript-reference clips through unchanged, so the transcript 5′ clip controlled the genomic-left PolyA end and the transcript 3′ clip controlled the genomic-right TSS end. The corrected projection swaps the two clip values for minus-strand models before calling the genomic path mapper; plus-strand behavior is unchanged.
+
+A production-object regression fixture parses asymmetric `95M5S` and `5S95M` transcriptome SAM alignments through `_parse_rescue_alignments`, minus-strand coordinate projection, `LRAA._map_read_to_graph`, and boundary snapping. Before the correction, both rescued paths incorrectly acquired both terminal features. After the correction, a transcript-3′ clip blocks only the genomic-left PolyA snap, and a transcript-5′ clip blocks only the genomic-right TSS snap.
+
+Evidence: `pylib/IsoformReadRescue.py:573-615,789-857`; `pylib/LRAA.py:1394-1582`; `pylib/test_isoform_read_rescue_projection.py:51-139`; active callers in `pylib/LRAA.py:177-228` and `LRAA:4111-4126,4144-4161,4211-4221`.
+
 ### Internal-priming annotation exemption is ineffective for monoexonic models
 
 The Methods state that a flagged monoexonic model is retained when its 3′ end matches a known annotation. Current code removes a flagged monoexonic model before consulting the known-end interval tree. With the default `restrict_internal_priming_filter_to_monoexonic=True`, multiexonic models bypass removal before the lookup, while monoexonic models enter the unconditional-removal branch; the interval tree is therefore built but never queried. It only affects behavior when that setting is overridden to `False`, in which case it protects multiexonic models near known 3′ ends from the broader internal-priming filter. A real-object check placed a monoexonic candidate exactly at a supplied known 3′ end and confirmed that it was removed. History identifies this as an omission rather than a regression: commit `5079dbf` introduced the known-end lookup only in the multiexonic branch, and commit `d214266` changed the source of known ends while explicitly retaining the multiexonic-only behavior. No later commit moved the exemption into the monoexonic branch.
@@ -306,7 +316,6 @@ Evidence: `util/sc/partition_bam_by_cell_cluster.py:122-182`; `WDL/subwdls/parti
 
 The following source-level concerns require dedicated end-to-end fixtures before being reported as defects:
 
-- [INFERENCE] projected minus-strand transcriptome-rescue clips may be interpreted at the wrong genomic end during boundary snapping (`pylib/IsoformReadRescue.py:287-300,447-510,798-850`; `pylib/LRAA.py:1510-1550`).
 - [INFERENCE] oversimplify can count multiple retained alignment records for one read name while tracking only one final choice (`LRAA:3023-3057,3102-3127,3215-3240,3271-3284`).
 - [INFERENCE] default non-HiFi graphs can retain stale component sets after terminal-spur deletion when no TSS/PolyA objects trigger rediscovery (`pylib/Splice_graph.py:313-350,2425-2499`).
 
