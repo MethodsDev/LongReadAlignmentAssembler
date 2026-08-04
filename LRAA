@@ -3016,15 +3016,21 @@ def _run_oversimplify_best_overlap(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
+        primary_alignments_only=True,
     )
 
     # Precompute transcript exon intervals and maps
     tx_list = list(input_transcripts)
     tx_exons = {}
-    tx_gene = {}
+    tid_to_tx = {}
+    gene_to_tx = defaultdict(list)
     for t in tx_list:
-        tx_exons[t.get_transcript_id()] = [tuple(x) for x in t.get_exon_segments()]
-        tx_gene[t.get_transcript_id()] = t.get_gene_id()
+        tid = t.get_transcript_id()
+        tx_exons[tid] = [tuple(x) for x in t.get_exon_segments()]
+        tid_to_tx[tid] = t
+        gene_to_tx[t.get_gene_id()].append(t)
+        t.set_read_counts_assigned(0.0)
+        t.set_isoform_fraction(0.0)
 
     # Helpers
     def _overlap_len(a_intervals, b_intervals):
@@ -3051,10 +3057,10 @@ def _run_oversimplify_best_overlap(
                     j += 1
         return ov
 
-    # Assign reads
-    read_to_tx = {}
-    tx_to_reads = defaultdict(list)
-    gene_to_reads = defaultdict(list)
+    # Assign each passing primary alignment directly.
+    assigned_read_count = 0
+    assigned_tids = set()
+    mp_id_token = f"ovsimp:{contig_acc}:{contig_strand}"
 
     for pa in pretty_alignments or []:
         segs = pa.get_pretty_alignment_segments()
@@ -3068,85 +3074,36 @@ def _run_oversimplify_best_overlap(
             except Exception:
                 continue
         # Compute best overlap
-        best = []  # list[(tx_id, ov)] for ties
+        candidate_tids = []
         best_ov = -1
         for t in tx_list:
             tid = t.get_transcript_id()
             ov = _overlap_len(segs, tx_exons[tid])
             if ov > best_ov:
-                best = [(tid, ov)]
+                candidate_tids = [tid]
                 best_ov = ov
             elif ov == best_ov:
-                best.append((tid, ov))
+                candidate_tids.append(tid)
         if best_ov <= 0:
             # no exonic bp overlap; skip assignment
             continue
-        # tie-break randomly among equals
-        choice = random.choice(best)[0]
-        read_to_tx[read_name] = choice
-        tx_to_reads[choice].append(read_name)
-        gene_to_reads[tx_gene[choice]].append(read_name)
 
-    # Compute per-transcript counts and isoform fractions
-    # Initialize counts
-    for t in tx_list:
-        t.set_read_counts_assigned(0.0)
-        t.set_isoform_fraction(0.0)
+        tid = random.choice(candidate_tids)
+        transcript = tid_to_tx[tid]
+        transcript.set_read_counts_assigned(transcript.get_read_counts_assigned() + 1.0)
+        assigned_read_count += 1
+        assigned_tids.add(tid)
 
-    gene_to_tx = defaultdict(list)
-    for t in tx_list:
-        gene_to_tx[t.get_gene_id()].append(t)
-
-    tid_to_tx = {t.get_transcript_id(): t for t in tx_list}
-
-    # Set read counts per transcript
-    for tid, reads in tx_to_reads.items():
-        t = tid_to_tx.get(tid)
-        if t is None:
-            continue
-        t.set_read_counts_assigned(float(len(reads)))
-
-    # Compute isoform fractions per gene
-    for gene_id, tlist in gene_to_tx.items():
-        gene_sum = sum([tt.get_read_counts_assigned() for tt in tlist])
-        for tt in tlist:
-            frac = (tt.get_read_counts_assigned() / gene_sum) if gene_sum > 0 else 0.0
-            tt.set_isoform_fraction(frac)
-
-    # Build quant report for all transcripts (including zeroes for completeness)
-    # Also derive unique_gene_read_fraction per transcript
-    # Prepare per-gene unique counts (all are unique here since we assign one transcript per read)
-    gene_unique_counts = {g: float(len(rds)) for g, rds in gene_to_reads.items()}
-    # total per gene for normalization
-    gene_totals = {
-        g: float(
-            sum(
-                [
-                    tid_to_tx[t.get_transcript_id()].get_read_counts_assigned()
-                    for t in tls
-                ]
-            )
-        )
-        for g, tls in gene_to_tx.items()
-    }
-
-    # Tracking lines: write one per assigned read
-    mp_id_token = f"ovsimp:{contig_acc}:{contig_strand}"
-    for read_name, tid in read_to_tx.items():
-        t = tid_to_tx.get(tid)
-        if t is None:
-            continue
-        output_gene_id = t.get_output_gene_id()
-        num_exons = t.get_num_exon_segments()
+        num_exons = transcript.get_num_exon_segments()
         splice_hash = (
-            Util_funcs.get_hash_code(t.get_introns_string())
+            Util_funcs.get_hash_code(transcript.get_introns_string())
             if num_exons > 1
-            else t.get_transcript_id()
+            else tid
         )
         print(
             "\t".join(
                 [
-                    output_gene_id,
+                    transcript.get_output_gene_id(),
                     tid,
                     splice_hash,
                     f"{num_exons}",
@@ -3158,6 +3115,18 @@ def _run_oversimplify_best_overlap(
             ),
             file=ofh_track,
         )
+
+    gene_totals = {}
+    for gene_id, tlist in gene_to_tx.items():
+        gene_sum = sum(tt.get_read_counts_assigned() for tt in tlist)
+        gene_totals[gene_id] = gene_sum
+        for transcript in tlist:
+            frac = (
+                transcript.get_read_counts_assigned() / gene_sum
+                if gene_sum > 0
+                else 0.0
+            )
+            transcript.set_isoform_fraction(frac)
 
     # Quant lines
     # Sort like existing report: by counts desc then transcript_id
@@ -3205,7 +3174,7 @@ def _run_oversimplify_best_overlap(
         print("\t".join(row), file=ofh_quant)
 
     logger.info(
-        f"[{contig_acc}{contig_strand}] oversimplify: assigned {len(read_to_tx)} reads across {len(tx_to_reads)} transcripts"
+        f"[{contig_acc}{contig_strand}] oversimplify: assigned {assigned_read_count} reads across {len(assigned_tids)} transcripts"
     )
     return
 
@@ -3260,18 +3229,10 @@ def _run_oversimplify_aggregate(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
+        primary_alignments_only=True,
     )
 
-    read_names = []
-    for pa in pretty_alignments or []:
-        try:
-            rn = pa.get_read_name()
-        except Exception:
-            rn = None
-        if rn:
-            read_names.append(rn)
-
-    read_count = float(len(read_names))
+    read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))
     if read_count <= 0:
         # No reads: do not emit a pseudo-transcript for this strand
         logger.info(
@@ -3310,7 +3271,10 @@ def _run_oversimplify_aggregate(
         if num_exons > 1
         else t.get_transcript_id()
     )
-    for rn in read_names:
+    for pa in pretty_alignments or []:
+        rn = pa.get_read_name()
+        if not rn:
+            continue
         print(
             "\t".join(
                 [

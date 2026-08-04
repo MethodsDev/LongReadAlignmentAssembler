@@ -46,6 +46,7 @@ class Bam_alignment_extractor:
         per_id_QC_raise_error=False,
         config=LRAA_Globals.config,
         force_lighten_all=False,
+        primary_alignments_only=False,
     ):
 
         discarded_read_counter = defaultdict(int)
@@ -139,8 +140,9 @@ class Bam_alignment_extractor:
                 discarded_read_counter["supplementary"] += 1
                 continue
 
-            if read.is_secondary and not LRAA_Globals.config.get(
-                "allow_secondary_alignments", False
+            if read.is_secondary and (
+                primary_alignments_only
+                or not LRAA_Globals.config.get("allow_secondary_alignments", False)
             ):
                 discarded_read_counter["secondary"] += 1
                 continue

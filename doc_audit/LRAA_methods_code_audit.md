@@ -259,6 +259,18 @@ A production-object regression fixture parses asymmetric `95M5S` and `5S95M` tra
 
 Evidence: `pylib/IsoformReadRescue.py:573-615,789-857`; `pylib/LRAA.py:1394-1582`; `pylib/test_isoform_read_rescue_projection.py:51-139`; active callers in `pylib/LRAA.py:177-228` and `LRAA:4111-4126,4144-4161,4211-4221`.
 
+### Oversimplify counted retained alignment records instead of read names
+
+Verdict: Confirmed and resolved in the current worktree.
+
+The best-overlap path formerly selected a transcript independently for every retained alignment record. It appended every record's choice to the transcript and gene count lists, but stored the tracking choice in a dictionary keyed by read name. Multiple records for one read could therefore increment several transcript counts while producing only the last tracking assignment. The annotation-free aggregate path likewise counted and tracked an undeduplicated list of alignment-record read names. Supplementary records are excluded upstream, but retained secondary alignments and repeated primary records can reach both paths.
+
+A real indexed-BAM fixture supplied one read name on a 30-base primary alignment to one transcript and a retained 50-base secondary alignment to another transcript in the same gene. Before correction, best-overlap reported one read for each transcript but emitted one tracking row for only the secondary record's final choice; aggregate mode reported two reads and emitted the same read name twice. The optional final cross-gene postprocessor did not reliably repair this: when the merged tracking file contained no cross-gene read it copied the inflated expression file unchanged, while the presence of an unrelated cross-gene read caused a tracking-based recount and made the outcome dataset-dependent.
+
+Oversimplify now requests primary alignments only during BAM ingestion, before `Pretty_alignment` objects are materialized. Each primary record that passes the existing strand, mapping-quality, duplicate, QC-failure, supplementary, and percent-identity filters is therefore evaluated once. Best-overlap assigns that record directly to one maximum-overlap transcript; aggregate mode counts it directly. The fixture now reports the primary transcript once, the secondary transcript at zero, and one matching tracking row; aggregate mode likewise reports and tracks one read. This intentionally relies on the SAM invariant that a long-read query has at most one primary alignment; malformed BAMs containing repeated primary records are not deduplicated.
+
+Evidence: `LRAA:2980-3179,3218-3292`; `pylib/Pretty_alignment_manager.py:88-102,197-206`; `pylib/Bam_alignment_extractor.py:39-49,113-196`; `util/filter_bam_to_secondary_rescue.py:84-124,188-232,271-272`; `util/reassign_multigene_tracking_reads.py:383-435,709-771,784-849`; `pylib/test_oversimplify_composite_gene_id.py:38-175`.
+
 ### Internal-priming annotation exemption is ineffective for monoexonic models
 
 The Methods state that a flagged monoexonic model is retained when its 3′ end matches a known annotation. Current code removes a flagged monoexonic model before consulting the known-end interval tree. With the default `restrict_internal_priming_filter_to_monoexonic=True`, multiexonic models bypass removal before the lookup, while monoexonic models enter the unconditional-removal branch; the interval tree is therefore built but never queried. It only affects behavior when that setting is overridden to `False`, in which case it protects multiexonic models near known 3′ ends from the broader internal-priming filter. A real-object check placed a monoexonic candidate exactly at a supplied known 3′ end and confirmed that it was removed. History identifies this as an omission rather than a regression: commit `5079dbf` introduced the known-end lookup only in the multiexonic branch, and commit `d214266` changed the source of known ends while explicitly retaining the multiexonic-only behavior. No later commit moved the exemption into the monoexonic branch.
@@ -314,9 +326,7 @@ Evidence: `util/sc/partition_bam_by_cell_cluster.py:122-182`; `WDL/subwdls/parti
 
 ## Unconfirmed implementation risks
 
-The following source-level concerns require dedicated end-to-end fixtures before being reported as defects:
-
-- [INFERENCE] oversimplify can count multiple retained alignment records for one read name while tracking only one final choice (`LRAA:3023-3057,3102-3127,3215-3240,3271-3284`).
+The following source-level concern requires a dedicated end-to-end fixture before being reported as a defect:
 - [INFERENCE] default non-HiFi graphs can retain stale component sets after terminal-spur deletion when no TSS/PolyA objects trigger rediscovery (`pylib/Splice_graph.py:313-350,2425-2499`).
 
 ## Claims not verifiable from this repository

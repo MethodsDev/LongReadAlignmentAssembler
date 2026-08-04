@@ -41,7 +41,6 @@ class Pretty_alignment_manager:
             if not os.path.isdir(self._alignment_cache_dir):
                 raise
 
-
     # --- diagnostics helpers ---
     def _mem_usage_mb(self):
         """Return current process RSS in MB if available, else None."""
@@ -84,17 +83,22 @@ class Pretty_alignment_manager:
         else:
             logger.info(f"{prefix}[mem] {event}: rss=<unavailable>{extra_txt}")
 
+    def retrieve_pretty_alignments(
+        self,
+        contig_acc,
+        contig_strand,
+        contig_seq,
+        bam_file,
+        region_lend=None,
+        region_rend=None,
+        use_cache=False,
+        restrict_splice_type=None,
+        try_correct_alignments=False,
+        SE_read_encapsulation_mask=None,
+        per_id_QC_raise_error=False,
+        primary_alignments_only=False,
+    ):
 
-    def retrieve_pretty_alignments(self, 
-                                    contig_acc, contig_strand, contig_seq, bam_file, 
-                                    region_lend=None,
-                                    region_rend=None,
-                                    use_cache=False,
-                                    restrict_splice_type=None,
-                                    try_correct_alignments=False,
-                                    SE_read_encapsulation_mask=None,
-                                    per_id_QC_raise_error=False):
-        
         # progress/logging: starting pretty alignment retrieval for this contig/strand (and region if set)
         region_txt = (
             f":{region_lend}-{region_rend}"
@@ -196,6 +200,7 @@ class Pretty_alignment_manager:
                 pretty=True,
                 per_id_QC_raise_error=per_id_QC_raise_error,
                 force_lighten_all=oversimplify_this_contig,
+                primary_alignments_only=primary_alignments_only,
             )
             self._last_discarded_read_names_by_reason = (
                 bam_extractor.get_last_discarded_read_names_by_reason()
@@ -233,7 +238,6 @@ class Pretty_alignment_manager:
                         "total": len(pretty_alignments),
                     },
                 )
-               
 
             Pretty_alignment.prune_long_terminal_introns(
                 pretty_alignments, self._splice_graph
@@ -264,7 +268,6 @@ class Pretty_alignment_manager:
                     )
                 except Exception:
                     pass
-
 
             # Define SE and ME alignments and cache them separately when requested
             # To reduce peak memory, only materialize the subset we actually need unless caching all variants
@@ -324,7 +327,6 @@ class Pretty_alignment_manager:
                 elif restrict_splice_type == "SE":
                     pretty_alignments = SE_alignments
 
-            
         if SE_read_encapsulation_mask is not None:
             assert restrict_splice_type == "SE"
 
@@ -341,7 +343,7 @@ class Pretty_alignment_manager:
                 self._log_mem("before apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
                 pretty_alignments = self.apply_SE_read_encapsulation_mask(pretty_alignments, SE_read_encapsulation_mask)
                 self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
-                
+
                 if use_cache:
                     self._write_pickle_cache(SE_masked_alignment_cache_file, pretty_alignments)
                     logger.info(
@@ -359,7 +361,6 @@ class Pretty_alignment_manager:
             reason: set(read_names)
             for reason, read_names in self._last_discarded_read_names_by_reason.items()
         }
-
 
     def apply_SE_read_encapsulation_mask(self, pretty_alignments, SE_read_encapsulation_mask):
 
@@ -391,27 +392,27 @@ class Pretty_alignment_manager:
 
             align_lend, align_rend = pretty_alignment.get_alignment_span()
             align_len = align_rend - align_lend + 1
-            
+
             should_filter = False
             # intervaltree expects either a point lookup tree[point] or a slice tree[start:stop]
             # Here we want all exons overlapping the alignment span
             for exon_interval in exon_itree[align_lend:align_rend + 1]:
                 exon_lend = exon_interval.begin
                 exon_rend = exon_interval.end - 1  # convert from half-open to inclusive
-                
+
                 # Calculate overlap length
                 overlap_lend = max(align_lend, exon_lend)
                 overlap_rend = min(align_rend, exon_rend)
                 overlap_len = max(0, overlap_rend - overlap_lend + 1)
-                
+
                 # Calculate percentage of SE read covered by this ME exon
                 overlap_pct = (overlap_len / align_len) * 100.0
-                
+
                 if overlap_pct >= min_overlap_pct:
                     should_filter = True
                     logger.debug("Excluding SE alignment with {:.1f}% overlap with ME exon: {}".format(overlap_pct, pretty_alignment))
                     break
-            
+
             if not should_filter:
                 non_overlapping_pretty_alignments.append(pretty_alignment)
 
