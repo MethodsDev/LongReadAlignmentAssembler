@@ -9,6 +9,7 @@ from Transcript import GTF_contig_to_transcripts
     ("source_gene_id", "gene_name", "expected_output_gene_id"),
     [
         ("ENSG00000198888", "MT-ND1", "MT-ND1^ENSG00000198888"),
+        ("PABPC4", "PABPC4", "PABPC4"),
         ("MT-ND1^ENSG00000198888", "MT-ND1", "MT-ND1^ENSG00000198888"),
         ("OLD^ENSG00000198888", "NEW", "OLD^ENSG00000198888"),
         ("ENSG00000198888", None, "ENSG00000198888"),

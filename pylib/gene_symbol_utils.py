@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 def combine_gene_name_and_id(gene_name: Optional[str], identifier: str) -> str:
     """Prefix an unannotated identifier with its gene name."""
 
-    if not gene_name or not identifier:
+    if not gene_name or not identifier or gene_name == identifier:
         return identifier
 
     if "^" in identifier:
@@ -79,7 +79,9 @@ def parse_gffcompare_mappings(
     def get_priority(code: str) -> int:
         return class_code_priority.get(code, 100)
 
-    def consider_assignment(target_id: Optional[str], ref_gene_id: str, ref_trans_id: str, priority: int) -> None:
+    def consider_assignment(
+        target_id: Optional[str], ref_gene_id: str, ref_trans_id: str, priority: int
+    ) -> None:
         if not target_id or target_id == "-":
             return
 
@@ -133,16 +135,23 @@ def parse_gffcompare_mappings(
                 target_trans_id = fields[1]
 
                 consider_assignment(target_gene_id, ref_gene_id, ref_trans_id, priority)
-                consider_assignment(target_trans_id, ref_gene_id, ref_trans_id, priority)
+                consider_assignment(
+                    target_trans_id, ref_gene_id, ref_trans_id, priority
+                )
 
     # Strip priority metadata before returning
-    return {target_id: (ref_gene_id, ref_trans_id) for target_id, (ref_gene_id, ref_trans_id, _) in mappings.items()}
+    return {
+        target_id: (ref_gene_id, ref_trans_id)
+        for target_id, (ref_gene_id, ref_trans_id, _) in mappings.items()
+    }
 
 
 def get_ref_gene_names(ref_gtf: str) -> Dict[str, str]:
     """Extract dictionaries mapping reference ids to gene symbols."""
 
-    logger.info("-extracting gene_names and identifiers from reference gtf: %s", ref_gtf)
+    logger.info(
+        "-extracting gene_names and identifiers from reference gtf: %s", ref_gtf
+    )
 
     ref_id_to_gene_name: Dict[str, str] = {}
 
@@ -157,7 +166,7 @@ def get_ref_gene_names(ref_gtf: str) -> Dict[str, str]:
 
             info = vals[8]
 
-            m = re.search('gene_id "([^\"]+)";.*transcript_id "([^\"]+)";', info)
+            m = re.search('gene_id "([^"]+)";.*transcript_id "([^"]+)";', info)
             if not m:
                 continue
 
@@ -165,7 +174,7 @@ def get_ref_gene_names(ref_gtf: str) -> Dict[str, str]:
             transcript_id = m.group(2)
             gene_name = gene_id
 
-            m2 = re.search(' gene_name "([^\"]+)";', info)
+            m2 = re.search(' gene_name "([^"]+)";', info)
             if m2:
                 gene_name = m2.group(1)
 
