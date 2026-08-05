@@ -33,7 +33,7 @@ Resources:
 - Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`, `sparseMatrixCsvEngine` (`python` by default), `sparseMatrixGzipLevel` (`1` by default for faster compression)
 
 Seurat clustering parameters (defaults mirror included R pipeline):
-- `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` ("^MT-")
+- `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` (`^(MT-|mt-|g:(chrM|MT|M):)`; matches conventional mitochondrial gene symbols and annotation-free LRAA gene IDs on `chrM`, `MT`, or `M`)
 - `npcs` (12), `resolution` (0.6), `n_variable_features` (2000), `seed` (1)
 
 See `WDL/example_inputs/LRAA-singlecell.inputs.json` for a starting template.

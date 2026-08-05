@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.17.7"
+VERSION = "v0.18.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -166,6 +166,7 @@ def _build_splice_graph_params(config):
         "min_intron_support": 2,
         "remove_unspliced_introns": False,
     }
+
 
 # keep main() at the top
 def main():
@@ -1107,7 +1108,6 @@ def main():
     LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
     LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
 
-
     # resource monitor config
     LRAA_Globals.config["resource_monitor_enabled"] = MONITOR_RESOURCES
     LRAA_Globals.config["resource_monitor_interval"] = float(args.monitor_interval)
@@ -1185,7 +1185,6 @@ def main():
             sys.exit(
                 f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
             )
-
 
         applied_keys, skipped_keys = _apply_config_overrides(
             LRAA_Globals.config, user_cfg

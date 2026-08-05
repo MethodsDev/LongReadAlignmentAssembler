@@ -11,7 +11,7 @@ workflow GeneSparseM_To_SeuratClusters {
     Int min_cells = 10
     Int min_features = 1000
     Float percent_mt_max = 20.0
-    String mt_pattern = "^MT-"
+    String mt_pattern = "^(MT-|mt-|g:(chrM|MT|M):)"
     Int npcs = 12
     Float resolution = 0.6
     Int n_variable_features = 2000

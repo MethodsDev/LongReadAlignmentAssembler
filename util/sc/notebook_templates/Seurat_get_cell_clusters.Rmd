@@ -72,7 +72,7 @@ seurat_obj@meta.data %>% summarize(median(nCount_RNA), median(nFeature_RNA))
 
 ```{r}
 
-seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^(MT-|mt-|g:(chrM|MT|M):)")
 
 seurat_obj
 ```

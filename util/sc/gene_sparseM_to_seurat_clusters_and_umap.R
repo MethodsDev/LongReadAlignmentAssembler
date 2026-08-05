@@ -23,8 +23,8 @@ parser$add_argument("--min_features", type = "integer", default = 1000,
                     help = "Keep cells with at least this many detected genes [default: 1000]")
 parser$add_argument("--percent_mt_max", type = "double", default = 20.0,
                     help = "Max percent.mt allowed; cells above are filtered [default: 20]")
-parser$add_argument("--mt_pattern", default = "^MT-",
-                    help = "Regex for mitochondrial genes (for percent.mt) [default: ^MT-]")
+parser$add_argument("--mt_pattern", default = "^(MT-|mt-|g:(chrM|MT|M):)",
+                    help = "Regex for mitochondrial genes (for percent.mt) [default: ^(MT-|mt-|g:(chrM|MT|M):)]")
 
 # Dimensionality and clustering
 parser$add_argument("--npcs", type = "integer", default = 12,
