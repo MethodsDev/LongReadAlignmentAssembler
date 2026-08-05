@@ -4338,19 +4338,23 @@ def run_transcript_assembly(
         return
 
     ## Build final Splice Graph
-    transcripts_incl_in_graph = list(all_transcripts)
+    reference_transcripts_incl_in_graph = list()
     if input_transcripts is not None:
-        # include only those input transcripts consistent with ME/SE restrictions
+        # Include only reference transcripts consistent with ME/SE restrictions.
         if ME_only:
-            transcripts_incl_in_graph += [
+            reference_transcripts_incl_in_graph = [
                 t for t in input_transcripts if t.has_introns()
             ]
         elif SE_only:
-            transcripts_incl_in_graph += [
+            reference_transcripts_incl_in_graph = [
                 t for t in input_transcripts if not t.has_introns()
             ]
         else:
-            transcripts_incl_in_graph += input_transcripts
+            reference_transcripts_incl_in_graph = list(input_transcripts)
+
+    transcripts_incl_in_graph = (
+        list(all_transcripts) + reference_transcripts_incl_in_graph
+    )
 
     sg_all = None
     cache_key = None
@@ -4395,9 +4399,37 @@ def run_transcript_assembly(
 
     lraa_all_obj = LRAA(sg_all, CPU)
 
-    lraa_all_obj.assign_transcripts_paths_in_graph(
+    mapped_transcripts = lraa_all_obj.assign_transcripts_paths_in_graph(
         transcripts_incl_in_graph
-    )  # limit to all input transcripts
+    )
+    mapped_transcript_object_ids = {id(transcript) for transcript in mapped_transcripts}
+    all_transcripts = [
+        transcript
+        for transcript in all_transcripts
+        if id(transcript) in mapped_transcript_object_ids
+    ]
+    mapped_reference_transcripts = [
+        transcript
+        for transcript in reference_transcripts_incl_in_graph
+        if id(transcript) in mapped_transcript_object_ids
+    ]
+    mapped_ME_reference_transcripts = [
+        transcript
+        for transcript in mapped_reference_transcripts
+        if transcript.has_introns()
+    ]
+
+    if not all_transcripts:
+        logger.warning(
+            "[%s%s] no draft transcripts mapped to the final splice graph; skipping",
+            contig_acc,
+            contig_strand,
+        )
+        return
+
+    lraa_all_obj.assign_reference_transcript_provenance(
+        all_transcripts, mapped_reference_transcripts
+    )
 
     # reassign gene and transcript component ids based on shared nodes.
     logger.info(
@@ -4429,49 +4461,10 @@ def run_transcript_assembly(
         contig_seq_str,
         bam_file_for_quant,
         allow_spacers,
-        transcripts_incl_in_graph,
-        rescue_target_transcripts=ME_input_transcripts,
+        input_transcripts=None,
+        rescue_target_transcripts=mapped_ME_reference_transcripts,
         restrict_splice_type=None,
     )
-
-    # Ensure subsequent filtering/quant steps use ONLY real read evidence (not injected reference transcript pseudo-reads)
-    # Rationale: earlier build_multipath_graph() calls (with input_transcripts) inject a synthetic "reftranscript:<id>" read per
-    # reference transcript to guarantee a path in the graph. These pseudo-reads artificially inflate initial read support counts
-    # and can cause inconsistencies vs. the final quant (which rebuilds without reinjecting them). By pruning them here we enforce
-    # consistent real-read-based support across all downstream filtering and quantification passes.
-    try:
-        if mp_all_counter is not None:
-            before_prune = (
-                sum(
-                    [
-                        m.get_multipath_and_count()[1]
-                        for m in mp_all_counter.get_all_MultiPathCountPairs()
-                    ]
-                )
-                if hasattr(mp_all_counter, "get_all_MultiPathCountPairs")
-                else None
-            )
-            mp_all_counter.prune_ref_transcripts_as_evidence()
-            after_prune = (
-                sum(
-                    [
-                        m.get_multipath_and_count()[1]
-                        for m in mp_all_counter.get_all_MultiPathCountPairs()
-                    ]
-                )
-                if hasattr(mp_all_counter, "get_all_MultiPathCountPairs")
-                else None
-            )
-            if before_prune is not None and after_prune is not None:
-                logger.info(
-                    f"[{contig_acc}{contig_strand}] Pruned reference transcript pseudo-read evidence: total mp read counts {before_prune} -> {after_prune}"
-                )
-            else:
-                logger.info(
-                    f"[{contig_acc}{contig_strand}] Pruned reference transcript pseudo-read evidence from multipath counter"
-                )
-    except Exception as e:
-        logger.warning(f"Failed pruning reference transcript pseudo-read evidence: {e}")
 
     q = Quantify(
         run_EM,

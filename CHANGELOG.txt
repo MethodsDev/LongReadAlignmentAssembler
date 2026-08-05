@@ -1,3 +1,7 @@
+v0.18.0, in development
+- matched reconstructed isoforms to final-graph reference paths after removing reference TSS/PolyA nodes, preserved the matching reference IDs across quantification resets, and excluded synthetic reference reads from draft expression estimates.
+
+
 v0.17.7, June 28, 2026
 - fixed `mergeQuantResults` WDL disk allocation for cross-gene EM: the merged tracking is decompressed for external sort, so disk now scales as 60x the compressed tracking size (15x decompression x ~4 on-disk sort/temp copies) plus 2.2x the expr size, replacing the prior insufficient compressed-size-based formula.
 - added standard isoform expression matrices with unique-isoform modes to `build_LRAA_expr_matrices.py`.

@@ -67,6 +67,9 @@ class Transcript(GenomeFeature):
         # later remapping-derived boundary refresh.
         self._source_has_annotated_TSS = None
         self._source_has_annotated_POLYA = None
+        # Source-reference transcript IDs whose final splice-graph paths are
+        # structurally contained by this reconstructed isoform.
+        self._source_reference_transcript_ids = set()
         self._TSS_read_count = None
         self._PolyA_read_count = None
 
@@ -191,6 +194,9 @@ class Transcript(GenomeFeature):
         assert simple_path is not None
         assert len(simple_path) > 0
         self._simplepath = simple_path
+
+    def clear_simple_path(self):
+        self._simplepath = None
 
     def get_left_boundary_sort_weight(self):
         assert self._simplepath is not None
@@ -373,15 +379,13 @@ class Transcript(GenomeFeature):
         return self.multipaths_evidence_assigned.copy()
 
     def includes_reference_transcript(self):
-        return len(self.get_ref_trans_included()) > 0
+        return bool(self._source_reference_transcript_ids)
 
-    def get_ref_trans_included(self):
-        ref_trans_included = set()
-        for mp in self.get_multipaths_evidence_assigned():
-            for read_name in mp.get_read_names():
-                if "reftranscript:" in read_name:
-                    ref_trans_included.add(read_name)
-        return ref_trans_included
+    def get_source_reference_transcript_ids(self):
+        return self._source_reference_transcript_ids.copy()
+
+    def set_source_reference_transcript_ids(self, transcript_ids):
+        self._source_reference_transcript_ids = set(transcript_ids)
 
     def is_novel_isoform(self):
         return self._is_novel_isoform_bool

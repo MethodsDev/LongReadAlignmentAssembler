@@ -656,9 +656,9 @@ class LRAA:
                     continue
                 if rn in self._read_name_to_span:
                     spans.append(self._read_name_to_span[rn])
-            
+
             logger.info(f"DEBUG_TEST: Processing {transcript.get_transcript_id()}, found {len(read_names)} reads, {len(spans)} spans")
-            
+
             if not spans:
                 logger.info(f"  No spans found for {transcript.get_transcript_id()}, returning without adjustment")
                 return  # nothing to adjust
@@ -677,25 +677,25 @@ class LRAA:
             # Filter reads by terminal exon overlap - only consider reads terminating in terminal exons
             left_terminal_spans = []   # reads with 5' end in first exon
             right_terminal_spans = []  # reads with 3' end in last exon
-            
+
             first_exon_lend, first_exon_rend = first_exon_bounds
             last_exon_lend, last_exon_rend = last_exon_bounds
-            
+
             for span_lend, span_rend in spans:
                 # Check if read's 5' end is in first exon
                 if first_exon_lend <= span_lend <= first_exon_rend:
                     left_terminal_spans.append(span_lend)
-                
+
                 # Check if read's 3' end is in last exon
                 if last_exon_lend <= span_rend <= last_exon_rend:
                     right_terminal_spans.append(span_rend)
-            
+
             # Calculate boundaries using configured method
             boundary_method = LRAA_Globals.config.get("terminal_boundary_method", "mean")
             min_reads_threshold = LRAA_Globals.config.get("min_reads_for_terminal_adjustment", 7)
             exon_left_limit = first_exon_bounds[0]
             exon_right_limit = last_exon_bounds[1]
-            
+
             # Debug logging
             logger.debug(
                 f"Terminal adjustment for {transcript.get_transcript_id()}: "
@@ -723,7 +723,7 @@ class LRAA:
                     f"Q3={int(statistics.quantiles(right_terminal_spans, n=4)[2]) if len(right_terminal_spans) >= 2 else max(right_terminal_spans)}, "
                     f"max={max(right_terminal_spans)}"
                 )
-            
+
             if boundary_method == "mean" and len(left_terminal_spans) >= min_reads_threshold:
                 import statistics
                 candidate_first_lend = max(exon_left_limit, int(statistics.mean(left_terminal_spans)))
@@ -756,7 +756,7 @@ class LRAA:
             else:
                 # Fallback if no reads terminate in first exon or unknown method
                 candidate_first_lend = first_lend
-            
+
             if boundary_method == "mean" and len(right_terminal_spans) >= min_reads_threshold:
                 import statistics
                 candidate_last_rend = min(exon_right_limit, int(statistics.mean(right_terminal_spans)))
@@ -841,7 +841,7 @@ class LRAA:
                 transcript._lend = exons[0][0]
                 transcript._rend = exons[-1][1]
                 transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
-                
+
                 logger.info(
                     f"  ADJUSTED {transcript.get_transcript_id()}: "
                     f"first [{first_lend}-{first_rend}]->[{new_first_lend}-{first_rend}], "
@@ -933,7 +933,6 @@ class LRAA:
             self._failed_read_names_for_rescue.update(
                 discarded_read_names_by_reason.get("low_perID", set())
             )
-
 
         # actually not using the updated base coverage, so can skip for now.
         #  - disabling # must redo base coverage and exon coverage assignments
@@ -1232,18 +1231,21 @@ class LRAA:
 
         prev_time = time.time()
         last_time_update = prev_time
-        
+
         skipped_transcript_ids = []  # track IDs of transcripts that failed to map
         successfully_mapped = []  # track transcripts that were successfully mapped
 
         for idx, transcript in enumerate(transcripts, 1):
+            # A path is valid only for the splice graph that produced it. Clear
+            # paths inherited from earlier ME/SE graph instances before remapping.
+            transcript.clear_simple_path()
             logger.debug("-mapping transcript to graph: {}".format(transcript))
             segments = transcript.get_exon_segments()
             path = self._map_read_to_graph(
                 segments, refine_TSS_simple_path=True, refine_PolyA_simple_path=True
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
-            
+
             # Handle transcripts that fail to map to the splice graph
             if path is None:
                 error_msg = (
@@ -1270,13 +1272,13 @@ class LRAA:
                             error_msg += "  No overlapping exons found - transcript coordinates may not match splice graph.\n"
                     except Exception as e:
                         error_msg += f"  Could not query overlapping exons: {e}\n"
-                
+
                 if LRAA_Globals.LRAA_MODE == "MERGE":
                     error_msg += (
                         "  This can occur when merging GTFs with coordinate variations. "
                         "The transcript will be skipped.\n"
                     )
-                
+
                 logger.warning(error_msg)
                 skipped_transcript_ids.append(transcript.get_transcript_id())
                 continue  # Skip this transcript and move to the next
@@ -2242,6 +2244,68 @@ class LRAA:
                 )
 
             mp_counter.add(mp)
+
+        return
+
+    def assign_reference_transcript_provenance(
+        self, draft_transcripts, reference_transcripts
+    ):
+        """Record reference models structurally contained in each draft isoform.
+
+        Both collections must already be mapped successfully to this LRAA
+        instance's splice graph. Reference TSS and PolyA nodes are excluded so
+        provenance reflects exon-intron structure rather than terminal labels.
+        """
+
+        contig_strand = self._splice_graph.get_contig_strand()
+        references_by_first_node = defaultdict(list)
+
+        for reference in reference_transcripts:
+            reference_path, _, _ = SPU.trim_TSS_and_PolyA(
+                reference.get_simple_path(), contig_strand
+            )
+            if not reference_path:
+                logger.warning(
+                    "Skipping reference transcript %s with no structural path after terminal-boundary trimming",
+                    reference.get_transcript_id(),
+                )
+                continue
+            if any(
+                isinstance(node_id, str)
+                and (node_id.startswith("TSS:") or node_id.startswith("POLYA:"))
+                for node_id in reference_path
+            ):
+                logger.warning(
+                    "Skipping reference transcript %s with an internal TSS/PolyA node in path %s",
+                    reference.get_transcript_id(),
+                    reference_path,
+                )
+                continue
+            references_by_first_node[reference_path[0]].append(
+                (reference.get_transcript_id(), reference_path)
+            )
+
+        num_matches = 0
+        for draft in draft_transcripts:
+            draft_path = draft.get_simple_path()
+            matching_reference_ids = set()
+            for node_id in dict.fromkeys(draft_path):
+                for reference_id, reference_path in references_by_first_node.get(
+                    node_id, ()
+                ):
+                    if SPU.path_A_contains_path_B(draft_path, reference_path):
+                        matching_reference_ids.add(reference_id)
+
+            draft.set_source_reference_transcript_ids(matching_reference_ids)
+            num_matches += len(matching_reference_ids)
+
+        logger.info(
+            "[%s%s] assigned %d source-reference matches across %d draft isoforms",
+            self._splice_graph.get_contig_acc(),
+            contig_strand,
+            num_matches,
+            len(draft_transcripts),
+        )
 
         return
 
