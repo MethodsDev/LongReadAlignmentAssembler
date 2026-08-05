@@ -243,8 +243,12 @@ class Splice_graph:
                 if bamf is None:
                     continue
                 self._populate_exon_coverage_and_extract_introns(
-                    bamf, contig_acc, contig_strand, quant_mode, restrict_splice_type,
-                    SE_read_encapsulation_mask
+                    bamf,
+                    contig_acc,
+                    contig_strand,
+                    quant_mode,
+                    restrict_splice_type,
+                    SE_read_encapsulation_mask,
                 )
 
         # incorporate guide structures if provided
@@ -310,11 +314,11 @@ class Splice_graph:
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__prefilter_r2", pad=0)
             self.describe_graph("__prefilter_r2.graph")
-        # Connected component discovery with progress
-        connected_components = self._discover_connected_components_with_progress(contig_acc, contig_strand)
-
-        # filter out TSS and PolyA features based on min isoform fraction
+        # Filtering boundary features requires component-local support totals.
         if len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0:
+            connected_components = self._discover_connected_components_with_progress(
+                contig_acc, contig_strand
+            )
 
             for connected_component in connected_components:
                 if len(self._TSS_objs) > 0:
@@ -322,24 +326,17 @@ class Splice_graph:
                 if len(self._PolyA_objs) > 0:
                     self._eliminate_low_support_PolyA(connected_component)
 
-            # revise again
             self._merge_neighboring_proximal_unbranched_exon_segments()
 
             if LRAA_Globals.DEBUG:
                 self.write_intron_exon_splice_graph_bed_files("__prefilter_r3", pad=0)
                 self.describe_graph("__prefilter_r3.graph")
 
-            # if not quant_mode:
-            self._prune_exon_spurs_at_introns()
-
-            self._finalize_splice_graph()  # do again after TSS and PolyA integration
-            connected_components = self._discover_connected_components_with_progress(contig_acc, contig_strand, stage_label="post-TSS/PolyA")
-
-        else:
-            # if not quant_mode:
-            self._prune_exon_spurs_at_introns()
-            self._finalize_splice_graph()
-
+        self._prune_exon_spurs_at_introns()
+        self._finalize_splice_graph()
+        connected_components = self._discover_connected_components_with_progress(
+            contig_acc, contig_strand, stage_label="final"
+        )
         if LRAA_Globals.DEBUG:
             self.write_intron_exon_splice_graph_bed_files("__final_graph", pad=0)
             self.describe_graph("__final.graph")
@@ -397,7 +394,11 @@ class Splice_graph:
         contig_seq_str = self._contig_seq_str
         contig_len = self._contig_seq_len
         try:
-            logging.info("[{}{}] initing coverage array of len: {}".format(self._contig_acc, self._contig_strand, contig_len))
+            logging.info(
+                "[{}{}] initing coverage array of len: {}".format(
+                    self._contig_acc, self._contig_strand, contig_len
+                )
+            )
         except Exception:
             logging.info("initing coverage array of len: {}".format(contig_len))
         if contig_len > Splice_graph._max_genomic_contig_length:
@@ -409,14 +410,23 @@ class Splice_graph:
 
         # init depth of coverage array
         self._contig_base_cov = [0 for i in range(0, contig_len + 1)]
-        
-        logging.info("[{}{}] coverage array initialized; populating from alignments next".format(self._contig_acc, self._contig_strand))
-      
+
+        logging.info(
+            "[{}{}] coverage array initialized; populating from alignments next".format(
+                self._contig_acc, self._contig_strand
+            )
+        )
 
         return
 
     def _populate_exon_coverage_and_extract_introns(
-        self, bam_filename, contig_acc, contig_strand, quant_mode, restrict_splice_type, SE_read_encapsulation_mask
+        self,
+        bam_filename,
+        contig_acc,
+        contig_strand,
+        quant_mode,
+        restrict_splice_type,
+        SE_read_encapsulation_mask,
     ):
 
         ## Intron Capture
@@ -448,7 +458,11 @@ class Splice_graph:
         assert contig_strand in ("+", "-")
 
         try:
-            logger.info("[{}{}] -got {} pretty alignments.".format(contig_acc, contig_strand, len(pretty_alignments)))
+            logger.info(
+                "[{}{}] -got {} pretty alignments.".format(
+                    contig_acc, contig_strand, len(pretty_alignments)
+                )
+            )
         except Exception:
             logger.info("-got {} pretty alignments.".format(len(pretty_alignments)))
 
@@ -491,6 +505,7 @@ class Splice_graph:
         def _rss_mb():
             try:
                 import psutil  # type: ignore
+
                 return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
             except Exception:
                 return None
@@ -597,7 +612,7 @@ class Splice_graph:
 
                     self._contig_base_cov[i] += 1
                 try:
-                    total_bases_added += (segment[1] - segment[0] + 1)
+                    total_bases_added += segment[1] - segment[0] + 1
                 except Exception:
                     pass
 
@@ -617,7 +632,10 @@ class Splice_graph:
         try:
             logger.info(
                 "[{}{}] -total read alignments used: {} (~bases added: {})".format(
-                    contig_acc, contig_strand, total_read_alignments_used, total_bases_added
+                    contig_acc,
+                    contig_strand,
+                    total_read_alignments_used,
+                    total_bases_added,
                 )
             )
         except Exception:
@@ -745,7 +763,9 @@ class Splice_graph:
 
         """
 
-        logger.info(f"[{contig_acc}{contig_strand}] Integrating input transcript structures.")
+        logger.info(
+            f"[{contig_acc}{contig_strand}] Integrating input transcript structures."
+        )
 
         TSS_evidence_counter = defaultdict(int)
         PolyA_evidence_counter = defaultdict(int)
@@ -765,7 +785,11 @@ class Splice_graph:
         prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
 
         total_transcripts = None
-        if show_progress and transcripts is not None and hasattr(transcripts, "__len__"):
+        if (
+            show_progress
+            and transcripts is not None
+            and hasattr(transcripts, "__len__")
+        ):
             try:
                 total_transcripts = len(transcripts)
             except Exception:
@@ -820,13 +844,17 @@ class Splice_graph:
                         src_key = (str(src_gtf), int(TSS_coord))
                         prev_support = tss_src_coord_max_support[src_key]
                         if tss_read_count > prev_support:
-                            TSS_evidence_counter[TSS_coord] += tss_read_count - prev_support
+                            TSS_evidence_counter[TSS_coord] += (
+                                tss_read_count - prev_support
+                            )
                             tss_src_coord_max_support[src_key] = tss_read_count
                         tss_added = True
 
                     if not tss_added:
                         if transcript.has_annotated_TPM():
-                            TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
+                            TSS_evidence_counter[TSS_coord] += round(
+                                transcript.get_TPM()
+                            )
                         else:
                             TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
                                 "min_alignments_define_TSS_site"
@@ -851,20 +879,26 @@ class Splice_graph:
                         src_key = (str(src_gtf), int(polyA_coord))
                         prev_support = polya_src_coord_max_support[src_key]
                         if polya_read_count > prev_support:
-                            PolyA_evidence_counter[polyA_coord] += polya_read_count - prev_support
+                            PolyA_evidence_counter[polyA_coord] += (
+                                polya_read_count - prev_support
+                            )
                             polya_src_coord_max_support[src_key] = polya_read_count
                         polya_added = True
 
                     if not polya_added:
                         if transcript.has_annotated_TPM():
-                            PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                            PolyA_evidence_counter[polyA_coord] += round(
+                                transcript.get_TPM()
+                            )
                         else:
                             PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
                                 "min_alignments_define_polyA_site"
                             ]
                 else:
                     if transcript.has_annotated_TPM():
-                        PolyA_evidence_counter[polyA_coord] += round(transcript.get_TPM())
+                        PolyA_evidence_counter[polyA_coord] += round(
+                            transcript.get_TPM()
+                        )
                     else:
                         PolyA_evidence_counter[polyA_coord] = 1
 
@@ -1615,7 +1649,9 @@ class Splice_graph:
         min_intron_cov_for_filtering = 1 / Splice_graph._min_alt_unspliced_freq + 1
 
         # progress logging controls
-        _progress_interval = float(LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0)
+        _progress_interval = float(
+            LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0
+        )
         _last_prog_t = time.time()
         _total_introns = len(intron_objs)
         _processed_introns = 0
@@ -1797,7 +1833,9 @@ class Splice_graph:
         introns_to_prune = set()
 
         # progress logging controls
-        _progress_interval = float(LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0)
+        _progress_interval = float(
+            LRAA_Globals.config.get("prune_introns_progress_interval_sec", 0) or 0
+        )
         _last_prog_t = time.time()
         _exon_islands_processed = 0
 
@@ -1861,10 +1899,7 @@ class Splice_graph:
                                 frac_i_read_support,
                             )
                         )
-                        if (
-                            frac_i_read_support
-                            < Splice_graph._min_alt_splice_freq
-                        ):
+                        if frac_i_read_support < Splice_graph._min_alt_splice_freq:
                             # insufficient support, prune all introns with that or lower support.
                             for intron in incidental_introns[i:]:
                                 logger.debug(
@@ -2083,7 +2118,10 @@ class Splice_graph:
 
             return exon_seg_list
 
-        progress_interval = LRAA_Globals.config.get("log_splice_graph_merge_progress_interval_sec", 0) or 0
+        progress_interval = (
+            LRAA_Globals.config.get("log_splice_graph_merge_progress_interval_sec", 0)
+            or 0
+        )
         last_progress_t = time.time()
         total_init = len(init_exons)
         processed_init = 0
@@ -2162,7 +2200,9 @@ class Splice_graph:
 
     def _prune_exon_spurs_at_introns(self):
 
-        logger.info(f"[{self._contig_acc}{self._contig_strand}] checking for exon spurs at introns")
+        logger.info(
+            f"[{self._contig_acc}{self._contig_strand}] checking for exon spurs at introns"
+        )
 
         exon_segment_objs, intron_objs = self._get_exon_and_intron_nodes()
 
@@ -2176,7 +2216,6 @@ class Splice_graph:
         def is_R_spur(exon_node):
 
             logger.debug("Evaluating {} as potential R_spur".format(exon_node))
-
 
             has_successor = self._node_has_successors(exon_node)
 
@@ -2217,7 +2256,6 @@ class Splice_graph:
         def is_L_spur(exon_node):
 
             logger.debug("Evaluating {} as potential L_spur".format(exon_node))
-
 
             has_predecessor = self._node_has_predecessors(exon_node)
 
@@ -2304,7 +2342,9 @@ class Splice_graph:
             exons_to_prune = exons_no_overlap_with_ref
 
         if exons_to_prune:
-            logger.info(f"[{self._contig_acc}{self._contig_strand}] -removing {len(exons_to_prune)} exon spurs")
+            logger.info(
+                f"[{self._contig_acc}{self._contig_strand}] -removing {len(exons_to_prune)} exon spurs"
+            )
 
             if LRAA_Globals.DEBUG:
                 with open("__pruned_exon_spurs.list", "a") as ofh:
@@ -2324,9 +2364,7 @@ class Splice_graph:
 
         t0 = time.time()
         progress_interval = (
-            LRAA_Globals.config.get(
-                "finalize_splice_graph_progress_interval_sec", 0
-            )
+            LRAA_Globals.config.get("finalize_splice_graph_progress_interval_sec", 0)
             or 0
         )
         progress_every_n = (
@@ -2337,13 +2375,11 @@ class Splice_graph:
             try:
                 import psutil  # type: ignore
 
-                return (
-                    psutil.Process(os.getpid()).memory_info().rss
-                    / (1024.0 * 1024.0)
-                )
+                return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
             except Exception:
                 return None
 
+        self._node_id_to_node.clear()
         nodes = list(self._splice_graph)
         total_nodes = len(nodes)
         last_log_t = t0
@@ -2365,7 +2401,9 @@ class Splice_graph:
                     LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2
                 )
                 intervals.append(
-                    itree.Interval(TSS_coord - half_dist, TSS_coord + half_dist + 1, node)
+                    itree.Interval(
+                        TSS_coord - half_dist, TSS_coord + half_dist + 1, node
+                    )
                 )
                 tss_ct += 1
             elif type(node) == PolyAsite:
@@ -2422,16 +2460,22 @@ class Splice_graph:
 
         return
 
-    def _discover_connected_components_with_progress(self, contig_acc, contig_strand, stage_label="initial"):
+    def _discover_connected_components_with_progress(
+        self, contig_acc, contig_strand, stage_label="initial"
+    ):
         """Discover connected components with optional progress logging.
         For very large graphs networkx.connected_components can take time; we stream nodes and periodically log counts.
         """
         do_timing = LRAA_Globals.config.get("log_splice_graph_component_timing", True)
-        interval_sec = LRAA_Globals.config.get("cc_discovery_progress_interval_sec", 0) or 0
+        interval_sec = (
+            LRAA_Globals.config.get("cc_discovery_progress_interval_sec", 0) or 0
+        )
         every_n = LRAA_Globals.config.get("cc_discovery_progress_every_n", 0) or 0
         t0 = time.time() if do_timing else None
         if do_timing:
-            logger.info(f"[{contig_acc}{contig_strand}] discovering connected components ({stage_label}) ...")
+            logger.info(
+                f"[{contig_acc}{contig_strand}] discovering connected components ({stage_label}) ..."
+            )
 
         # We fall back to standard networkx call; emulate progress by iterating after converting to undirected.
         G_u = self._splice_graph.to_undirected()
@@ -2446,8 +2490,9 @@ class Splice_graph:
             processed_nodes += len(comp)
             now = time.time()
             if (
-                (every_n > 0 and processed_nodes >= len(components) * every_n)  # simplistic threshold
-                or (interval_sec > 0 and now - last_log_t >= interval_sec)
+                every_n > 0 and processed_nodes >= len(components) * every_n
+            ) or (  # simplistic threshold
+                interval_sec > 0 and now - last_log_t >= interval_sec
             ):
                 try:
                     frac = processed_nodes / max(total_nodes, 1)
@@ -2467,20 +2512,22 @@ class Splice_graph:
         return components
 
     def _assign_nodes_to_components_with_progress(self, contig_acc, contig_strand):
-        interval_sec = LRAA_Globals.config.get("component_assign_progress_interval_sec", 0) or 0
+        interval_sec = (
+            LRAA_Globals.config.get("component_assign_progress_interval_sec", 0) or 0
+        )
         every_n = LRAA_Globals.config.get("component_assign_progress_every_n", 0) or 0
         total_components = len(self._components)
         total_nodes = sum(len(c) for c in self._components)
         processed_nodes = 0
         last_log_t = time.time()
+        self._node_id_to_component.clear()
         for i, component in enumerate(self._components):
             for node in component:
                 self._node_id_to_component[node.get_id()] = i
                 processed_nodes += 1
                 now = time.time()
-                if (
-                    (every_n > 0 and processed_nodes % every_n == 0)
-                    or (interval_sec > 0 and now - last_log_t >= interval_sec)
+                if (every_n > 0 and processed_nodes % every_n == 0) or (
+                    interval_sec > 0 and now - last_log_t >= interval_sec
                 ):
                     try:
                         frac = processed_nodes / max(total_nodes, 1)
@@ -2581,7 +2628,10 @@ class Splice_graph:
         ## should we restrict to certain introns here? min coverage? YES!!!
 
         # progress logging controls
-        _progress_interval = float(LRAA_Globals.config.get("prune_unspliced_exons_progress_interval_sec", 0) or 0)
+        _progress_interval = float(
+            LRAA_Globals.config.get("prune_unspliced_exons_progress_interval_sec", 0)
+            or 0
+        )
         _last_prog_t = time.time()
         _total_introns = len(intron_objs)
         _processed_introns = 0
@@ -2635,7 +2685,9 @@ class Splice_graph:
 
     def _eliminate_low_support_TSS(self, node_list):
 
-        logger.info(f"[{self._contig_acc}{self._contig_strand}] pruning low support TSS ...")
+        logger.info(
+            f"[{self._contig_acc}{self._contig_strand}] pruning low support TSS ..."
+        )
 
         TSS_list = list()
 
@@ -2658,8 +2710,12 @@ class Splice_graph:
             )
 
             # progress controls
-            prog_interval = float(LRAA_Globals.config.get("tss_prune_progress_interval_sec", 0) or 0)
-            prog_every_n = int(LRAA_Globals.config.get("tss_prune_progress_every_n", 0) or 0)
+            prog_interval = float(
+                LRAA_Globals.config.get("tss_prune_progress_interval_sec", 0) or 0
+            )
+            prog_every_n = int(
+                LRAA_Globals.config.get("tss_prune_progress_every_n", 0) or 0
+            )
             last_log_t = time.time()
 
             for i, TSS_obj in enumerate(TSS_list):
@@ -2795,7 +2851,9 @@ class Splice_graph:
         return
 
     def _eliminate_low_support_PolyA(self, node_list):
-        logger.info(f"[{self._contig_acc}{self._contig_strand}] pruning low support PolyA ...")
+        logger.info(
+            f"[{self._contig_acc}{self._contig_strand}] pruning low support PolyA ..."
+        )
 
         PolyA_list = list()
         for node in node_list:
@@ -2823,7 +2881,9 @@ class Splice_graph:
             last_log_t = time.time()
 
             for i, PolyA_obj in enumerate(PolyA_list):
-                frac_read_support = PolyA_obj.get_read_support() / sum_PolyA_read_support
+                frac_read_support = (
+                    PolyA_obj.get_read_support() / sum_PolyA_read_support
+                )
                 if frac_read_support < min_PolyA_iso_fraction:
                     PolyA_to_purge = PolyA_list[i:]
                     PolyA_list = PolyA_list[0:i]
@@ -2855,7 +2915,9 @@ class Splice_graph:
         self._initialize_contig_coverage()
 
         # recompute base coverage with optional progress reporting
-        total = len(pretty_alignments) if hasattr(pretty_alignments, "__len__") else None
+        total = (
+            len(pretty_alignments) if hasattr(pretty_alignments, "__len__") else None
+        )
         show_progress = LRAA_Globals.config.get("show_progress_cov_reset", True)
         prefer_tqdm = LRAA_Globals.config.get("use_tqdm_progress", True)
         update_every_n = LRAA_Globals.config.get("cov_reset_update_every_n", 5000)
@@ -2865,16 +2927,24 @@ class Splice_graph:
         if show_progress and prefer_tqdm and total:
             try:
                 import importlib
+
                 _mod = importlib.import_module("tqdm")
                 _tqdm = getattr(_mod, "tqdm", None)
                 if _tqdm is not None:
                     desc = f"cov-reset [{self._contig_acc}{self._contig_strand}]"
-                    pbar = _tqdm(total=total, desc=desc, unit="reads", leave=False, dynamic_ncols=True)
+                    pbar = _tqdm(
+                        total=total,
+                        desc=desc,
+                        unit="reads",
+                        leave=False,
+                        dynamic_ncols=True,
+                    )
             except Exception:
                 pbar = None
 
         import time as _time
         import sys as _sys
+
         last_update_t = _time.time()
         processed = 0
 
@@ -2895,15 +2965,25 @@ class Splice_graph:
                     pbar = None
             elif show_progress and total:
                 do_emit = False
-                if update_every_n and update_every_n > 0 and (processed % update_every_n == 0):
+                if (
+                    update_every_n
+                    and update_every_n > 0
+                    and (processed % update_every_n == 0)
+                ):
                     do_emit = True
                 now = _time.time()
-                if update_interval and update_interval > 0 and (now - last_update_t) >= update_interval:
+                if (
+                    update_interval
+                    and update_interval > 0
+                    and (now - last_update_t) >= update_interval
+                ):
                     do_emit = True
                 if do_emit:
                     frac = (processed / total) * 100.0
                     # simple stderr progress line
-                    _sys.stderr.write(f"\r[{self._contig_acc}{self._contig_strand}] cov-reset: {processed}/{total} ({frac:.2f}%)    ")
+                    _sys.stderr.write(
+                        f"\r[{self._contig_acc}{self._contig_strand}] cov-reset: {processed}/{total} ({frac:.2f}%)    "
+                    )
                     _sys.stderr.flush()
                     last_update_t = now
 

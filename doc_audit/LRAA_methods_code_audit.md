@@ -324,10 +324,15 @@ Decision needed: incorporate symbols before mitochondrial QC or derive mitochond
 
 Evidence: `util/sc/partition_bam_by_cell_cluster.py:122-182`; `WDL/subwdls/partition_bam_by_cell_cluster.wdl:26-56`; `LRAA:1236-1240`; `pylib/gene_symbol_utils.py:7-126`; `pylib/Transcript.py:879-880`; `pylib/Quantify.py:1377-1383`.
 
-## Unconfirmed implementation risks
+### Terminal-spur pruning left stale component metadata
 
-The following source-level concern requires a dedicated end-to-end fixture before being reported as a defect:
-- [INFERENCE] default non-HiFi graphs can retain stale component sets after terminal-spur deletion when no TSS/PolyA objects trigger rediscovery (`pylib/Splice_graph.py:313-350,2425-2499`).
+Verdict: Confirmed and resolved in the current worktree.
+
+The graph builder formerly discovered connected components before terminal-spur pruning. It rediscovered them after pruning only when TSS or PolyA objects were present. In the usual non-HiFi path without boundary objects, `_components`, `_node_id_to_node`, and `_node_id_to_component` could therefore retain an exon node removed from the final graph. The final interval tree was rebuilt from live nodes, and deleting a terminal leaf does not split the surviving component, so no incorrect isoform output was demonstrated; the stored component and ID-map state was nevertheless inconsistent.
+
+A real indexed-BAM fixture supplies five canonical splice-junction alignments and two unspliced alignments that create a 14-base terminal exon spur. Before correction, the live graph contained the two retained exons and intron, while the stored component and both ID maps also contained the deleted spur. Final component discovery now runs after all terminal-spur pruning in every boundary mode. Finalization clears and rebuilds the node lookup, and component assignment clears and rebuilds the component lookup. The fixture confirms that the component union and both lookup-key sets exactly equal the final graph nodes.
+
+Evidence: `pylib/Splice_graph.py:317-347,2382-2412,2523-2527`; `pylib/test_splice_graph_exon_spurs.py:92-157`.
 
 ## Claims not verifiable from this repository
 
