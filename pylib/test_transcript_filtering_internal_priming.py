@@ -96,3 +96,54 @@ def test_multiexonic_internal_priming_spared_by_a_known_3prime_end():
     assert [transcript.get_transcript_id() for transcript in retained] == ["t.multi"]
     # the transcript is still judged internally primed; the known end is what spares it
     assert retained[0]._likely_internal_primed is True
+
+
+def test_monoexonic_internal_priming_filtered_despite_known_3prime_by_default():
+    """Default: a known 3' end does not spare a monoexonic model."""
+    monoexonic = _build_transcript("t.mono", [[10, 50]], "+")
+    known = _build_transcript("t.known", [[30, 50]], "+")
+
+    retained = TranscriptFiltering.filter_internally_primed_transcripts(
+        [monoexonic],
+        contig_seq_str=_PRIMED_CONTIG,
+        contig_strand="+",
+        known_transcripts=[known],
+        restrict_filter_to_monoexonic=True,
+    )
+
+    assert retained == []
+    assert monoexonic._likely_internal_primed is True
+
+
+def test_monoexonic_internal_priming_spared_when_option_enabled():
+    monoexonic = _build_transcript("t.mono", [[10, 50]], "+")
+    known = _build_transcript("t.known", [[30, 50]], "+")
+
+    retained = TranscriptFiltering.filter_internally_primed_transcripts(
+        [monoexonic],
+        contig_seq_str=_PRIMED_CONTIG,
+        contig_strand="+",
+        known_transcripts=[known],
+        restrict_filter_to_monoexonic=True,
+        spare_monoexonic_with_known_3prime=True,
+    )
+
+    assert [transcript.get_transcript_id() for transcript in retained] == ["t.mono"]
+    # spared, not re-evaluated: it still looks internally primed
+    assert retained[0]._likely_internal_primed is True
+
+
+def test_monoexonic_internal_priming_still_filtered_without_known_3prime():
+    """The option spares only models whose 3' end a reference vouches for."""
+    monoexonic = _build_transcript("t.mono", [[10, 50]], "+")
+
+    retained = TranscriptFiltering.filter_internally_primed_transcripts(
+        [monoexonic],
+        contig_seq_str=_PRIMED_CONTIG,
+        contig_strand="+",
+        known_transcripts=None,
+        restrict_filter_to_monoexonic=True,
+        spare_monoexonic_with_known_3prime=True,
+    )
+
+    assert retained == []

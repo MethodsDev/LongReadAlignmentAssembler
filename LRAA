@@ -4672,6 +4672,9 @@ def run_transcript_assembly(
                 restrict_filter_to_monoexonic=LRAA_Globals.config[
                     "restrict_internal_priming_filter_to_monoexonic"
                 ],
+                spare_monoexonic_with_known_3prime=LRAA_Globals.config[
+                    "spare_monoexonic_internal_priming_with_known_3prime"
+                ],
             )
             logger.info(
                 f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts"

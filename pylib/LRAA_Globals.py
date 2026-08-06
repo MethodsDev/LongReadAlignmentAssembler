@@ -100,6 +100,11 @@ config = {
     "min_monoexonic_TPM": 1.0,
     "filter_internal_priming": True,
     "restrict_internal_priming_filter_to_monoexonic": True,
+    # When True, a monoexonic transcript that looks internally primed is retained if its
+    # 3' end agrees with a reference annotation 3' end, the same reprieve multi-exonic
+    # transcripts get. Off by default: a monoexonic model has no intron chain
+    # corroborating it, so agreement alone is weaker evidence there.
+    "spare_monoexonic_internal_priming_with_known_3prime": False,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,

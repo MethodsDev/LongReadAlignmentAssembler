@@ -512,6 +512,7 @@ def filter_internally_primed_transcripts(
     contig_strand,
     known_transcripts,
     restrict_filter_to_monoexonic,
+    spare_monoexonic_with_known_3prime=False,
 ):
 
     # Build prefix using contig_strand and contig accession from first transcript if available
@@ -576,13 +577,22 @@ def filter_internally_primed_transcripts(
             retained_transcripts.append(transcript)
             continue
 
-
         filter_flag = False
 
+        # A 3' end that agrees with a reference annotation argues the polyA signal is
+        # genuine rather than internal priming. Multi-exonic models have always been
+        # spared on that basis. Monoexonic models are spared only when
+        # spare_monoexonic_internal_priming_with_known_3prime is enabled, since a
+        # monoexonic model has no intron chain corroborating it and is the more likely
+        # internal-priming artifact.
         if looks_internally_primed:
 
-            if transcript.is_monoexonic():
-                # gbye
+            end_check = transcript_rend if contig_strand == "+" else transcript_lend
+            agrees_with_known_3prime = (
+                len(known_ok_3prime_ends_itree[end_check : end_check + 1]) > 0
+            )
+
+            if transcript.is_monoexonic() and not spare_monoexonic_with_known_3prime:
                 logger.debug(
                     "FILTERING monoexonic transcript {} as likely internally primed".format(
                         transcript
@@ -590,21 +600,20 @@ def filter_internally_primed_transcripts(
                 )
                 filter_flag = True
 
-            else:
-                # different rules for mutlti-exon transcripts.
-                end_check = transcript_rend if contig_strand == "+" else transcript_lend
-
-                if len(known_ok_3prime_ends_itree[end_check : end_check + 1]) == 0:
-                    # no overlap with known acceptable site.
-                    # gbye
-                    logger.debug(
-                        "FILTERING multiexonic transcript {} as likely internally primed".format(
-                            transcript
-                        )
+            elif not agrees_with_known_3prime:
+                logger.debug(
+                    "FILTERING {}exonic transcript {} as likely internally primed".format(
+                        "mono" if transcript.is_monoexonic() else "multi", transcript
                     )
-                    filter_flag = True
-                else:
-                    logger.info("Ignoring internal priming info for {} as found consistent with known 3' end".format(transcript))
+                )
+                filter_flag = True
+
+            else:
+                logger.info(
+                    "Ignoring internal priming info for {} as found consistent with known 3' end".format(
+                        transcript
+                    )
+                )
 
         if not filter_flag:
             # keep
