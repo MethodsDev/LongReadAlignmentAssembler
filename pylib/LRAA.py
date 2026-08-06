@@ -82,6 +82,7 @@ class LRAA:
         rescue_target_transcripts=None,
         restrict_splice_type=None,
         SE_read_encapsulation_mask=None,
+        rescue_probe_unassigned=True,
     ):
 
         if SE_read_encapsulation_mask is not None and restrict_splice_type != "SE":
@@ -128,6 +129,7 @@ class LRAA:
                 contig_strand,
                 contig_seq,
                 bam_file,
+                rescue_probe_unassigned,
             )
 
         if input_transcripts is not None:
@@ -182,6 +184,7 @@ class LRAA:
         contig_strand,
         contig_seq,
         bam_file,
+        rescue_probe_unassigned=True,
     ):
 
         if not LRAA_Globals.config.get(
@@ -192,27 +195,43 @@ class LRAA:
         if not rescue_target_transcripts or bam_file is None:
             return
 
+        # Reads with no path through the splice graph are unusable as they stand, so
+        # realigning them against the targets can only help. Reads that merely fail to
+        # match a target are a different case: rescue is purely additive and never
+        # replaces a read's original multipath, so for a read that already has a path
+        # it can only add a second one shaped like a target. During discovery the
+        # targets are the supplied reference models, and a read incompatible with all of
+        # them is the evidence for a novel isoform; projecting it onto a reference
+        # structure hands its reads to that reference and suppresses the novel model.
+        # Callers reconstructing isoforms therefore pass rescue_probe_unassigned=False.
         rescue_read_names = set(self.get_failed_read_names_for_rescue())
+        num_failed_graph = len(rescue_read_names)
 
-        q_probe = Quantify(
-            False,
-            0,
-            quant_mode="draft",
-        )
-        for transcript in rescue_target_transcripts:
-            transcript.init_quant_info()
-        q_probe._assign_path_nodes_to_gene(rescue_target_transcripts)
-        q_probe._assign_reads_to_transcripts(self._splice_graph, mp_counter)
-        rescue_read_names.update(q_probe.get_unassigned_read_names())
+        num_probe_added = 0
+        if rescue_probe_unassigned:
+            q_probe = Quantify(
+                False,
+                0,
+                quant_mode="draft",
+            )
+            for transcript in rescue_target_transcripts:
+                transcript.init_quant_info()
+            q_probe._assign_path_nodes_to_gene(rescue_target_transcripts)
+            q_probe._assign_reads_to_transcripts(self._splice_graph, mp_counter)
+            probe_names = set(q_probe.get_unassigned_read_names())
+            num_probe_added = len(probe_names - rescue_read_names)
+            rescue_read_names.update(probe_names)
 
         if not rescue_read_names:
             return
 
         logger.info(
-            "[%s%s] early transcriptome rescue: retrying %d unassigned reads",
+            "[%s%s] early transcriptome rescue: retrying %d reads (%d with no graph path, %d unassigned to targets)",
             contig_acc,
             contig_strand,
             len(rescue_read_names),
+            num_failed_graph,
+            num_probe_added,
         )
 
         rescued_mps = rescue_unassigned_reads_to_transcriptome(

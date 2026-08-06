@@ -4956,6 +4956,7 @@ def build_ME_transcripts(
         input_transcripts,
         rescue_target_transcripts=input_transcripts,
         restrict_splice_type="ME",
+        rescue_probe_unassigned=False,
     )
 
     # Define ME isoforms

@@ -19,15 +19,18 @@ test_quant:
 # Guided by data/SIRVs1-7.annot.half.gtf, which supplies 37 of the 69 SIRV
 # isoforms, including the two under 200 bases (SIRV311, SIRV618). Recovery is
 # scored against the complete annotation. The baseline pins per-gene class-code
-# counts, currently 60 exact matches -- all 37 supplied models plus 23 of the 32
-# withheld ones -- with the remaining 9 withheld models undiscovered. It is a
-# snapshot of current behavior, not a target: regenerate it when a change moves
-# those counts intentionally.
-# Of those 9, exactly 7 (SIRV202, SIRV304, SIRV306, SIRV404, SIRV506, SIRV606,
-# SIRV608) are recovered by the annotation-free target, under both default and
-# the loosened TSS/PolyA settings, so guided discovery is currently the weaker
-# of the two on this dataset. That asymmetry is unexplained; this baseline
-# records it rather than endorsing it.
+# counts, currently 67 exact matches -- all 37 supplied models plus 30 of the 32
+# withheld ones -- leaving SIRV107 and SIRV206 undiscovered. It is a snapshot of
+# current behavior, not a target: regenerate it when a change moves those counts
+# intentionally.
+#
+# Comparing against test_ref_free_ID needs care: that target loosens the TSS and
+# PolyA site thresholds (SIRVs.LRAA_config_update.json) and this one does not.
+# Under matched settings guided recovery is a superset of annotation-free -- 67 vs
+# 64 at the defaults, 68 vs 66 with both loosened. As the two targets actually
+# run, neither set contains the other: annotation-free reaches SIRV206 on the
+# looser thresholds, while this target reaches the two short models. SIRV107 is
+# recovered by no mode in either configuration, despite carrying 11 reads.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
