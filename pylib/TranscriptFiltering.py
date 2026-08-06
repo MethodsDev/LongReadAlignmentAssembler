@@ -96,8 +96,9 @@ def filter_isoforms_by_min_isoform_fraction(
         num_unique_reads = 0
         for mp in frac_read_assignments[transcript_id]:
             if (
-                frac_read_assignments[transcript_id][mp] >= 0.9999
-            ):  # close enough to 1.0
+                frac_read_assignments[transcript_id][mp]
+                >= LRAA_Globals.config["unique_read_filter_min_frac"]
+            ):
                 num_unique_reads += mp.get_read_count()
 
         return num_unique_reads

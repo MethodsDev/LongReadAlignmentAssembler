@@ -148,6 +148,7 @@ def run_EM(
         mp_read_counts,
         num_transcripts,
         max_iter=max_EM_iterations,
+        tol=LRAA_Globals.config["EM_convergence_tol"],
         base_alpha=alpha,
         prefix_str=prefix_str,
     )

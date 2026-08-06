@@ -1388,7 +1388,7 @@ class Quantify:
                         f"{num_exons}",
                         mp_id,
                         readname,
-                        "{:.3f}".format(frac_read_assigned),
+                        "{:.6f}".format(frac_read_assigned),
                     ]
 
                     read_weight = (
@@ -1396,12 +1396,15 @@ class Quantify:
                         if LRAA_Globals.config["weight_reads_by_3prime_agreement"]
                         else 1.0
                     )
-                    tracking_report_info.append("{:.3f}".format(read_weight))
+                    tracking_report_info.append("{:.6f}".format(read_weight))
 
                     # Always emit read tracking rows for robustness; downstream annotator filters/consumes as needed
                     print("\t".join(tracking_report_info), file=ofh_read_tracking)
 
-                    if frac_read_assigned == 1:
+                    if (
+                        frac_read_assigned
+                        >= LRAA_Globals.config["unique_read_report_min_frac"]
+                    ):
                         num_uniquely_assigned_reads += 1
 
             gene_read_count = gene_to_read_count[gene_id]

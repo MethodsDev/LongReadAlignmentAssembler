@@ -118,7 +118,7 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         assert all(len(row) == 8 for row in tracking_rows)
         assert {row[3] for row in tracking_rows if row[1] == "tx1"} == {"1"}
         assert {row[3] for row in tracking_rows if row[1] == "tx2"} == {"2"}
-        assert {row[7] for row in tracking_rows if row[1] == "tx1"} == {"0.250"}
+        assert {row[7] for row in tracking_rows if row[1] == "tx1"} == {"0.250000"}
     finally:
         LRAA_Globals.config["num_total_reads"] = old_num_total_reads
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old_weight_reads

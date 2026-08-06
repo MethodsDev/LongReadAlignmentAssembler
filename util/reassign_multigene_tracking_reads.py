@@ -67,20 +67,26 @@ def parse_args():
     parser.add_argument(
         "--tol",
         type=float,
-        default=1e-9,
-        help="L1 convergence tolerance on transcript counts within each component",
+        default=1e-6,
+        help="convergence tolerance on the L2 norm of the change in normalized component abundances",
     )
     parser.add_argument(
         "--min_expr",
         type=float,
         default=1e-8,
-        help="minimum abundance floor used during EM updates",
+        help="abundance floor used in the expectation step so zero-support candidates stay recoverable",
     )
     parser.add_argument(
         "--alpha",
         type=float,
         default=0.01,
         help="base alpha regularization applied to ambiguous component reads",
+    )
+    parser.add_argument(
+        "--min_uniq_frac",
+        type=float,
+        default=1.0,
+        help="assignment fraction at or above which a read counts as uniquely assigned",
     )
     parser.add_argument(
         "--tmp_dir",
@@ -109,6 +115,12 @@ def format_prob(value):
     return f"{value:.3f}"
 
 
+def format_frac(value):
+    """Per-read fractions and weights keep more digits than the expr summary columns,
+    so re-reading them does not perturb the EM inputs or the recomputed counts."""
+    return f"{value:.6f}"
+
+
 def tx_key_from_row(row):
     return (row["gene_id"], row["transcript_id"])
 
@@ -135,6 +147,22 @@ def derive_rpm_scale(expr_rows):
     return median(ratios)
 
 
+def _normalized_abundance_delta(prev_counts, new_counts, component_transcripts):
+    """L2 distance between two abundance vectors after normalizing each to sum to 1."""
+    prev_total = sum(prev_counts.get(tx_key, 0.0) for tx_key in component_transcripts)
+    new_total = sum(new_counts.get(tx_key, 0.0) for tx_key in component_transcripts)
+
+    sum_sq = 0.0
+    for tx_key in component_transcripts:
+        prev_frac = (
+            prev_counts.get(tx_key, 0.0) / prev_total if prev_total > 0 else 0.0
+        )
+        new_frac = new_counts.get(tx_key, 0.0) / new_total if new_total > 0 else 0.0
+        sum_sq += (new_frac - prev_frac) ** 2
+
+    return math.sqrt(sum_sq)
+
+
 def run_component_em(
     component_reads,
     read_candidates,
@@ -157,14 +185,15 @@ def run_component_em(
     The EM estimates per-read fractional assignments among each read's candidate
     transcripts. Unlike pylib/EM.py, this operates on individual tracking reads
     and keeps counts on the read-count scale instead of normalizing expression
-    levels to sum to 1.
+    levels to sum to 1. Both are the same estimator: the expectation step is
+    invariant to rescaling the abundance vector, so the update rule and the
+    convergence test below match the per-locus EM once abundances are normalized.
     """
-    # Initialize transcript abundances from existing quantification counts.
-    # min_expr prevents zero-initialized candidates from being permanently
-    # unable to receive support in the E-step.
+    # Initialize transcript abundances from existing quantification counts. A
+    # candidate can arrive at zero; the expectation-step floor below is what keeps
+    # it able to regain reads, so no floor is applied to the model values here.
     counts = {
-        tx_key: max(init_counts.get(tx_key, 0.0), min_expr)
-        for tx_key in component_transcripts
+        tx_key: init_counts.get(tx_key, 0.0) for tx_key in component_transcripts
     }
     read_to_fracs = {}
 
@@ -218,25 +247,23 @@ def run_component_em(
         # ambiguity regularization. Counts remain on the raw read-count scale.
         new_expression_counts = {}
         for tx_key in component_transcripts:
-            new_expression_counts[tx_key] = (
-                assigned_counts.get(tx_key, 0.0)
-                + transcript_alphas.get(tx_key, 0.0)
-                + min_expr
-            )
+            new_expression_counts[tx_key] = assigned_counts.get(
+                tx_key, 0.0
+            ) + transcript_alphas.get(tx_key, 0.0)
 
-        # Stop when raw transcript counts no longer move by more than tol in L1.
-        delta = sum(
-            abs(new_expression_counts[tx_key] - counts[tx_key])
-            for tx_key in component_transcripts
+        # Stop on the L2 change in normalized abundances, the same test the
+        # per-locus EM applies to its isoform-proportion vector.
+        delta = _normalized_abundance_delta(
+            counts, new_expression_counts, component_transcripts
         )
         counts = new_expression_counts
         read_to_fracs = new_read_to_fracs
 
-        if delta <= tol:
+        if delta < tol:
             break
 
     # Recompute final counts directly from final read fractions. This excludes
-    # alpha and min_expr so reported counts reflect only assigned read support.
+    # alpha so reported counts reflect only assigned read support.
     final_counts = defaultdict(float)
     for read_fracs in read_to_fracs.values():
         for tx_key, frac in read_fracs.items():
@@ -393,7 +420,7 @@ def dedupe_tracking_group(rows):
         duplicate_rows += 1
         kept_row = key_to_row[key]
         if "read_weight" in row and "read_weight" in kept_row:
-            kept_row["read_weight"] = format_prob(
+            kept_row["read_weight"] = format_frac(
                 max(
                     parse_float(kept_row.get("read_weight"), 1.0),
                     parse_float(row.get("read_weight"), 1.0),
@@ -497,6 +524,7 @@ def write_component_candidate_rows(
     fieldnames,
     gene_to_component,
     candidates_path,
+    min_uniq_frac,
 ):
     candidate_rows = 0
     component_read_count = 0
@@ -520,7 +548,7 @@ def write_component_candidate_rows(
                     tx_key = tx_key_from_row(row)
                     frac = parse_float(row.get("frac_assigned"), 0.0)
                     fixed_counts[tx_key] += frac
-                    if frac >= 0.9995:
+                    if frac >= min_uniq_frac:
                         fixed_uniq_reads[tx_key] += 1
                 continue
 
@@ -588,6 +616,7 @@ def run_component_ems_to_fraction_file(
     tol,
     min_expr,
     base_alpha,
+    min_uniq_frac,
 ):
     updated_counts = defaultdict(float)
     updated_counts.update(fixed_counts)
@@ -631,12 +660,12 @@ def run_component_ems_to_fraction_file(
                             read_name,
                             tx_key[0],
                             tx_key[1],
-                            format_prob(frac),
-                            format_prob(weight),
+                            format_frac(frac),
+                            format_frac(weight),
                         ]
                     )
                     updated_counts[tx_key] += frac
-                    if frac >= 0.9995:
+                    if frac >= min_uniq_frac:
                         updated_uniq_reads[tx_key] += 1
 
     return updated_counts, updated_uniq_reads
@@ -785,6 +814,7 @@ def main():
             tracking_fieldnames,
             gene_to_component,
             candidates_unsorted_path,
+            args.min_uniq_frac,
         )
         sort_tsv_body(
             candidates_unsorted_path,
@@ -795,7 +825,8 @@ def main():
         )
 
         expr_init_counts = {
-            tx_key_from_row(row): parse_float(row.get("all_reads"), 0.0) for row in expr_rows
+            tx_key_from_row(row): parse_float(row.get("all_reads"), 0.0)
+            for row in expr_rows
         }
 
         updated_counts, updated_uniq_reads = run_component_ems_to_fraction_file(
@@ -810,6 +841,7 @@ def main():
             args.tol,
             args.min_expr,
             args.alpha,
+            args.min_uniq_frac,
         )
         sort_tsv_body(
             fractions_unsorted_path,

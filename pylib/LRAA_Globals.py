@@ -128,6 +128,13 @@ config = {
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,
     "EM_alpha": 0.01,  # regularization
+    "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
+    # cross-gene EM correction (util/reassign_multigene_tracking_reads.py)
+    "cross_gene_EM_min_abundance": 1e-8,  # expectation-step floor keeping zero-support candidates recoverable
+    # assignment fraction at or above which a read counts as uniquely assigned.
+    # Reporting requires a whole read; isoform filtering tolerates EM rounding.
+    "unique_read_report_min_frac": 1.0,
+    "unique_read_filter_min_frac": 0.9995,
     # low-memory tuning knobs (now implicit defaults: always avoid in-memory read-name storage; always track spans)
     #
     ######

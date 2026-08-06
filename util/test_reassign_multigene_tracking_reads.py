@@ -263,12 +263,12 @@ def test_cross_gene_reads_are_reassigned_and_duplicate_candidates_collapsed(tmp_
 
     assert len(out_tracking) == 4
     assert [row["frac_assigned"] for row in out_tracking if row["read_name"] == "rX"] == [
-        "0.355",
-        "0.645",
+        "0.354677",
+        "0.645323",
     ]
     assert [row["read_weight"] for row in out_tracking if row["read_name"] == "rX"] == [
-        "1.000",
-        "1.500",
+        "1.000000",
+        "1.500000",
     ]
     counts_by_tx = {row["transcript_id"]: row["all_reads"] for row in out_expr}
     assert counts_by_tx == {"txA": "1.4", "txB": "1.6"}
@@ -361,6 +361,6 @@ def test_component_requant_includes_within_gene_ambiguous_reads(tmp_path):
         row for row in out_tracking if row["read_name"] == "rA_within"
     ]
     assert len(within_rows) == 2
-    assert [row["frac_assigned"] for row in within_rows] != ["0.500", "0.500"]
+    assert [row["frac_assigned"] for row in within_rows] != ["0.500000", "0.500000"]
 
     assert {row["transcript_id"] for row in out_expr} == {"txA1", "txA2", "txB"}

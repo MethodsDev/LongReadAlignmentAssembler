@@ -1873,7 +1873,7 @@ def _filter_bam_for_secondary_alignment_policy(
 
 
 def _append_without_first_line(
-    src_path, dst_fh, expected_num_fields=None, missing_value="1.000"
+    src_path, dst_fh, expected_num_fields=None, missing_value="1.000000"
 ):
     """Append file to dst_fh skipping leading comments and the first data header."""
     if src_path is None or (not os.path.exists(src_path)):
@@ -2025,6 +2025,14 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
         tracking_path,
         "--max_iter",
         str(LRAA_Globals.config.get("max_EM_iterations_quant_only", 250)),
+        "--alpha",
+        str(LRAA_Globals.config["EM_alpha"]),
+        "--tol",
+        str(LRAA_Globals.config["EM_convergence_tol"]),
+        "--min_expr",
+        str(LRAA_Globals.config["cross_gene_EM_min_abundance"]),
+        "--min_uniq_frac",
+        str(LRAA_Globals.config["unique_read_report_min_frac"]),
         "--tmp_dir",
         ".",
     ]
@@ -3108,8 +3116,8 @@ def _run_oversimplify_best_overlap(
                     f"{num_exons}",
                     mp_id_token,
                     read_name,
-                    "1.000",
-                    "1.000",
+                    "1.000000",
+                    "1.000000",
                 ]
             ),
             file=ofh_track,
@@ -3283,8 +3291,8 @@ def _run_oversimplify_aggregate(
                     f"{num_exons}",
                     mp_id_token,
                     rn,
-                    "1.000",
-                    "1.000",
+                    "1.000000",
+                    "1.000000",
                 ]
             ),
             file=ofh_track,

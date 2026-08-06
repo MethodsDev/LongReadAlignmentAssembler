@@ -169,10 +169,10 @@ Inside `run_component_em()`:
 3. Runs the E-step: assigns each read fractionally by
    `read_weight * current_abundance`.
 4. Runs the M-step: updates transcript counts from expected read support plus
-   alpha plus `min_expr`.
-5. Stops when L1 count movement is below `tol`.
-6. Recomputes final reported counts from read fractions only, excluding alpha
-   and `min_expr`.
+   alpha, matching the per-locus update in `pylib/EM.py` up to normalization.
+5. Stops when the L2 change in normalized component abundances is below `tol`,
+   the same convergence test the per-locus EM applies to isoform proportions.
+6. Recomputes final reported counts from read fractions only, excluding alpha.
 
 The output from component EM is written to `read_fractions.unsorted.tsv` as:
 
