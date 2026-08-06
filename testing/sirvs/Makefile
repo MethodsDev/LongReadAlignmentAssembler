@@ -16,9 +16,24 @@ test_quant:
 	./eval/validate_quant_expr.py LRAA.LRAA.quant-only.quant.expr data/latest_quant_info.tsv
 
 
+# Guided by data/SIRVs1-7.annot.half.gtf, which supplies 37 of the 69 SIRV
+# isoforms, including the two under 200 bases (SIRV311, SIRV618). Recovery is
+# scored against the complete annotation. The baseline pins per-gene class-code
+# counts, currently 60 exact matches -- all 37 supplied models plus 23 of the 32
+# withheld ones -- with the remaining 9 withheld models undiscovered. It is a
+# snapshot of current behavior, not a target: regenerate it when a change moves
+# those counts intentionally.
+# Of those 9, exactly 7 (SIRV202, SIRV304, SIRV306, SIRV404, SIRV506, SIRV606,
+# SIRV608) are recovered by the annotation-free target, under both default and
+# the loosened TSS/PolyA settings, so guided discovery is currently the weaker
+# of the two on this dataset. That asymmetry is unexplained; this baseline
+# records it rather than endorsing it.
 test_ref_guided_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.reduced.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-guided.gtf -o gffcompare
+	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-guided.gtf.refmap
+	diff gffcompare.LRAA.LRAA.ref-guided.gtf.refmap.full.summary.tsv data/latest_refguided_summary.tsv
 
 
 MINIWDL_CFG = ../../miniwdl.test.cfg
