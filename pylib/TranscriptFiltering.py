@@ -17,13 +17,25 @@ logger = logging.getLogger(__name__)
 
 
 def filter_transcripts_by_min_length(transcripts, min_transcript_length):
-    """Retain only transcripts meeting minimum cDNA length."""
+    """Retain only transcripts meeting minimum cDNA length.
+
+    A model containing an expressed reference transcript is exempt: the annotation
+    asserts a transcript there, and its component was admitted for assembly on that
+    basis, so dropping it here would discard its reads without any output row."""
 
     if min_transcript_length is None or min_transcript_length <= 0:
         return transcripts
 
     transcripts_retained = []
     for transcript in transcripts:
+        if (
+            transcript.contains_reference_model()
+            and LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
+            and transcript.get_TPM() > 0
+        ):
+            transcripts_retained.append(transcript)
+            continue
+
         if transcript.get_cdna_len() >= min_transcript_length:
             transcripts_retained.append(transcript)
 

@@ -601,11 +601,30 @@ class MultiPathGraph:
 
         return
 
+    # Read types marking a path that came from an input transcript rather than from
+    # aligned reads: "reftranscript" during discovery, "fake_for_merge" during merge.
+    INPUT_TRANSCRIPT_READ_TYPES = frozenset(["reftranscript", "fake_for_merge"])
+
+    @classmethod
+    def _mpgn_from_input_transcript(cls, mpgn):
+        try:
+            read_types = mpgn.get_multiPathObj().get_read_types()
+        except Exception:
+            return False
+        return bool(cls.INPUT_TRANSCRIPT_READ_TYPES & set(read_types))
+
     def remove_small_components(self, mpg_components, min_transcript_length):
 
         surviving_components = list()
 
         for mpgn_list in mpg_components:
+            # A component holding an input-transcript path is kept whatever its length:
+            # the annotation asserts a transcript there, and admitting only these short
+            # components avoids assembling every short read-only component.
+            if any(self._mpgn_from_input_transcript(mpgn) for mpgn in mpgn_list):
+                surviving_components.append(mpgn_list)
+                continue
+
             # Find the maximum length among all nodes in this component
             # (each node represents a different path/isoform possibility)
             max_seq_len = 0
