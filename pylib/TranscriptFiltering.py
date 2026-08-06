@@ -34,7 +34,7 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     transcripts_retained = list()
     hifi_mode = LRAA_Globals.config.get("HiFi", False)
-    
+
     if hifi_mode:
         logger.info("HiFi mode: single-exon transcripts must have TSS or PolyA annotation to be retained")
 
@@ -43,7 +43,7 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
         # reftrans logic:
         if (
-            transcript.includes_reference_transcript()
+            transcript.contains_reference_model()
             and LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
             and tpm > 0
         ):
@@ -178,7 +178,7 @@ def filter_isoforms_by_min_isoform_fraction(
 
                 ## first check to see if we should retain a reftrans
                 if (
-                    transcript.includes_reference_transcript()
+                    transcript.contains_reference_model()
                     and LRAA_Globals.config["ref_trans_filter_mode"]
                     == "retain_expressed"
                     and transcript.get_TPM() > 0
@@ -216,7 +216,7 @@ def filter_isoforms_by_min_isoform_fraction(
                     )
 
                 elif not isoforms_were_filtered and (
-                    transcript.is_novel_isoform() is True
+                    transcript.has_novel_splice_pattern() is True
                     and transcript_unique_read_count
                     < LRAA_Globals.config["min_unique_reads_novel_isoform"]
                 ):
@@ -754,9 +754,11 @@ def filter_novel_isoforms_by_min_read_support(
         _prefix = ""
 
     for transcript in transcripts:
-        if transcript.is_novel_isoform() is True:
+        if transcript.has_novel_splice_pattern() is True:
             try:
-                logger.info(f"{_prefix}transcript {transcript} is a novel isoform with {transcript.get_read_counts_assigned()} read support")
+                logger.info(
+                    f"{_prefix}transcript {transcript} is a novel isoform with {transcript.get_read_counts_assigned()} read support"
+                )
             except Exception:
                 logger.info("transcript {} is a novel isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
             if transcript.get_read_counts_assigned() >= min_reads_novel_isoform:

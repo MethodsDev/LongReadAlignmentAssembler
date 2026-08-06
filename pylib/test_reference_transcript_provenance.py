@@ -51,7 +51,7 @@ def test_reference_provenance_ignores_reference_terminal_boundaries(
 
     lraa.assign_reference_transcript_provenance([draft], [reference])
 
-    assert draft.includes_reference_transcript()
+    assert draft.contains_reference_model()
     assert draft.get_source_reference_transcript_ids() == {"reference"}
 
 
@@ -64,7 +64,7 @@ def test_reference_provenance_requires_contiguous_containment():
 
     lraa.assign_reference_transcript_provenance([draft], [reference])
 
-    assert not draft.includes_reference_transcript()
+    assert not draft.contains_reference_model()
     assert draft.get_source_reference_transcript_ids() == set()
 
 
@@ -78,7 +78,7 @@ def test_reference_provenance_rejects_internal_boundary_nodes():
 
     lraa.assign_reference_transcript_provenance([draft], [reference])
 
-    assert not draft.includes_reference_transcript()
+    assert not draft.contains_reference_model()
 
 
 def test_failed_remap_clears_stale_path_and_excludes_rescue_target(monkeypatch):

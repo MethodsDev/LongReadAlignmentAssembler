@@ -2332,7 +2332,7 @@ class LRAA:
             if transcript.has_introns() and reference_splice_hashes is not None:
                 splice_hash = Util_funcs.get_hash_code(transcript.get_introns_string())
                 if splice_hash in reference_splice_hashes:
-                    transcript.set_is_novel_isoform(False)
+                    transcript.set_has_novel_splice_pattern(False)
                     continue
             # default novel
-            transcript.set_is_novel_isoform(True)
+            transcript.set_has_novel_splice_pattern(True)

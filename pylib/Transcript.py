@@ -96,7 +96,8 @@ class Transcript(GenomeFeature):
 
         self._isoform_fraction = None  # set during expression quantification
 
-        self._is_novel_isoform_bool = True  # set to False if it's a known isoform.
+        # cleared when this isoform's intron chain matches a reference model exactly
+        self._has_novel_splice_pattern = True
 
         self._cdna_len = 0
         for exon_segment in segment_coordinates_list:
@@ -378,7 +379,11 @@ class Transcript(GenomeFeature):
     def get_multipaths_evidence_assigned(self):
         return self.multipaths_evidence_assigned.copy()
 
-    def includes_reference_transcript(self):
+    def contains_reference_model(self):
+        """True when a reference model is structurally contained by this isoform.
+
+        Distinct from has_novel_splice_pattern(): an isoform that extends a reference
+        model contains it, yet its own splice pattern is novel."""
         return bool(self._source_reference_transcript_ids)
 
     def get_source_reference_transcript_ids(self):
@@ -387,11 +392,14 @@ class Transcript(GenomeFeature):
     def set_source_reference_transcript_ids(self, transcript_ids):
         self._source_reference_transcript_ids = set(transcript_ids)
 
-    def is_novel_isoform(self):
-        return self._is_novel_isoform_bool
+    def has_novel_splice_pattern(self):
+        """True unless this isoform's intron chain exactly matches a reference model.
 
-    def set_is_novel_isoform(self, boolean_val: bool):
-        self._is_novel_isoform_bool = boolean_val
+        Monoexonic isoforms have no intron chain to match and are always novel here."""
+        return self._has_novel_splice_pattern
+
+    def set_has_novel_splice_pattern(self, boolean_val: bool):
+        self._has_novel_splice_pattern = boolean_val
 
     def add_multipaths_evidence_assigned(self, multipaths):
         if self.multipaths_evidence_assigned == None:
