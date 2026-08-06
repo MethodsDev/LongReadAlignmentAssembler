@@ -3251,9 +3251,11 @@ def _run_oversimplify_aggregate(
     from Transcript import Transcript  # local import to avoid circular
 
     t = Transcript(contig_acc, [[lend, rend]], contig_strand)
-    # Override deterministic IDs and gene grouping
-    gene_id = f"g:OVSIMP:{contig_acc}:{contig_strand}"
-    trans_id = f"t:OVSIMP:{contig_acc}:{contig_strand}"
+    # Override deterministic IDs and gene grouping. Contig and strand lead so the
+    # identifier keeps the g:<contig>:<strand> shape that downstream QC patterns
+    # match, notably the single-cell mitochondrial regex used for percent.mt.
+    gene_id = f"g:{contig_acc}:{contig_strand}:OVSIMP"
+    trans_id = f"t:{contig_acc}:{contig_strand}:OVSIMP"
     if restrict_region_lend is not None and restrict_region_rend is not None:
         gene_id += f":{lend}-{rend}"
         trans_id += f":{lend}-{rend}"

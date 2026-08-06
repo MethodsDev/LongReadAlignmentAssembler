@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import re
 from importlib.machinery import SourceFileLoader
 from io import StringIO
 from pathlib import Path
@@ -173,3 +174,38 @@ def test_oversimplify_aggregate_uses_primary_alignment_only(tmp_path, monkeypatc
     tracking_rows = tracking_output.getvalue().splitlines()
     assert len(tracking_rows) == 1
     assert tracking_rows[0].split("\t")[5] == "read1"
+
+
+def test_oversimplify_aggregate_gene_id_matches_mitochondrial_qc_pattern(
+    tmp_path, monkeypatch
+):
+    # Default pattern shipped in WDL/LRAA-singlecell.wdl and
+    # util/sc/gene_sparseM_to_seurat_clusters_and_umap.R; annotation-free
+    # mitochondrial pseudo-genes must match it or percent.mt is always zero.
+    mt_pattern = "^(MT-|mt-|g:(chrM|MT|M):)"
+
+    lraa = _load_lraa_module()
+    bam_path = _write_repeated_alignment_bam(tmp_path / "repeated.bam")
+    monkeypatch.setenv("LRAA_TMP_DIR", str(tmp_path))
+    monkeypatch.setitem(LRAA_Globals.config, "oversimplify_enabled", True)
+    monkeypatch.setitem(LRAA_Globals.config, "oversimplify_contigs", ["chrM"])
+    monkeypatch.setitem(LRAA_Globals.config, "allow_secondary_alignments", True)
+    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
+
+    gtf_output = StringIO()
+    quant_output = StringIO()
+    tracking_output = StringIO()
+    lraa._run_oversimplify_aggregate(
+        "chrM",
+        "+",
+        "A" * 500,
+        bam_path,
+        None,
+        None,
+        gtf_output,
+        quant_output,
+        tracking_output,
+    )
+
+    gene_id = quant_output.getvalue().rstrip().split("\t")[0]
+    assert re.match(mt_pattern, gene_id), gene_id
