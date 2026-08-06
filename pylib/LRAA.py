@@ -2021,9 +2021,6 @@ class LRAA:
             logger.debug("_decrement: {}".format(mpgn))
             recursive_reweight(mpgn)
 
-            # if mpgn.get_reweighted_flag() is False:
-            #    mpgn.reevaluate_weighting_via_path_compatibilities(transcript_path_multipath_obj)
-
         ## //TODO: //FIXME  why vertex path incompatible but still part of transcript path?
 
         for mpgn in transcript_path.get_path_mpgn_list():

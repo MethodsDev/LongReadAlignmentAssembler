@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 NORMALIZE_SCORES_BY_SEQ_LENGTH = False
-MIN_WEIGHT = 0.01
 
 
 class MultiPathGraphNode:
@@ -354,43 +353,3 @@ class MultiPathGraphNode:
 
         return seq_length
 
-    def reevaluate_weighting_via_path_compatibilities(self, transcript_multiPath):
-
-        logger.debug("reevaluating weights for {}".format(self))
-        # sys.stderr.write("reevaluating weights for {}".format(self))
-
-        assert type(transcript_multiPath) == MultiPath.MultiPath
-
-        self.set_weight(0.001)
-
-        """
-        transcript_simple_path = transcript_multiPath.get_simple_path()
-        
-        compatible_score = self.get_score_INCLUDE_containments(use_prev_weight=True)
-        incompatible_score = 0
-
-        connected_mpgns = self.get_predecessors() + self.get_successors()
-
-        for node in connected_mpgns:
-            node_simple_path = node.get_simple_path()
-            if Simple_path_utils.path_A_contains_path_B(transcript_simple_path, node_simple_path):
-                compatible_score += node.get_score_INCLUDE_containments(use_prev_weight=True)
-            else:
-                incompatible_score += node.get_score_INCLUDE_containments(use_prev_weight=True)
-
-        pseudocount = 1e-3 
-        
-        fraction_compatible = (compatible_score + pseudocount) / (compatible_score + incompatible_score + pseudocount)
-        
-        current_weight = self.get_weight()
-
-        adjusted_weight = current_weight - (fraction_compatible * current_weight)
-
-        adjusted_weight = max(MIN_WEIGHT, adjusted_weight) # to avoid going too low.
-        
-        self.set_weight(adjusted_weight)
-
-        logger.debug("fraction compatibile: {}, adjusted weight -> {}".format(fraction_compatible, adjusted_weight))
-        """
-
-        return
