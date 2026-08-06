@@ -4736,6 +4736,10 @@ def run_transcript_assembly(
     # still reported. Discovery-stage filtering already enforces the isoform
     # fraction cutoff with discovery-stage read support.
 
+    # Report in a fixed structural order. Filtering passes transcripts through
+    # gene-keyed sets, so the surviving list order otherwise varies between runs.
+    transcripts = sorted(transcripts, key=Transcript.structural_sort_key)
+
     # Build a contig/strand prefix for final quant logs
     try:
         _prefix = (

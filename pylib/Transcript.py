@@ -597,10 +597,47 @@ class Transcript(GenomeFeature):
 
         return
 
+    @staticmethod
+    def structural_sort_key(transcript):
+        """Total ordering key derived only from a transcript's structure.
+
+        Used wherever output identifiers or grouping must not depend on the order in
+        which transcripts happen to arrive; splice-graph node objects hash by identity,
+        so upstream set iteration order varies between processes."""
+        lend, rend = transcript.get_coords()
+        try:
+            simple_path = transcript.get_simple_path()
+        except Exception:
+            simple_path = None
+        simple_path_str = (
+            ",".join(str(node_id) for node_id in simple_path) if simple_path else ""
+        )
+        return (
+            lend,
+            rend,
+            transcript.get_cdna_len(),
+            simple_path_str,
+            transcript.get_exons_string(),
+        )
+
+    @classmethod
+    def _cluster_sort_key(cls, cluster):
+        member_keys = sorted(cls.structural_sort_key(t) for t in cluster)
+        return (
+            member_keys[0][0],
+            max(key[1] for key in member_keys),
+            len(member_keys),
+            tuple(member_keys),
+        )
+
     @classmethod
     def recluster_transcripts_to_genes(cls, transcripts, contig_acc, contig_strand):
         import networkx as nx
         from typing import Hashable, List, Dict
+
+        # Sort by structure so cluster membership and the identifiers assigned below
+        # are reproducible regardless of the order transcripts were reconstructed in.
+        transcripts = sorted(transcripts, key=cls.structural_sort_key)
 
         # Build first-pass graph linking transcripts sharing any simple path node
         G = nx.Graph()
@@ -747,11 +784,18 @@ class Transcript(GenomeFeature):
                     comp_transcripts = [cluster[i] for i in comp_to_indices[cid]]
                     refined_clusters.append(comp_transcripts)
 
+        # Number genes and isoforms from structure alone: clusters left to right along
+        # the contig, isoforms within a cluster by their own coordinates. Identifiers
+        # are then reproducible across runs, and comp-1 is the leftmost locus.
+        refined_clusters = sorted(refined_clusters, key=cls._cluster_sort_key)
+
         revised_transcripts = []
         for i, cluster in enumerate(refined_clusters):
             new_gene_id = f"g:{contig_acc}:{contig_strand}:comp-{i+1}"
-            for j, t in enumerate(cluster):
-                new_transcript_id = f"t:{contig_acc}:{contig_strand}:comp-{i+1}:iso-{j+1}"
+            for j, t in enumerate(sorted(cluster, key=cls.structural_sort_key)):
+                new_transcript_id = (
+                    f"t:{contig_acc}:{contig_strand}:comp-{i+1}:iso-{j+1}"
+                )
                 t.set_gene_id(new_gene_id)
                 t.set_transcript_id(new_transcript_id)
                 revised_transcripts.append(t)

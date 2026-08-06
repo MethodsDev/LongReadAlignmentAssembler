@@ -469,9 +469,14 @@ class MultiPathGraph:
         splice_graph_nodes_visited = set()
 
         component_list = list()
-        all_splice_graph_nodes = list(
-            all_splice_graph_nodes
-        )  # convert earlier set to list
+        # Splice-graph nodes and MPGNs hash by object identity, so set iteration order
+        # varies between processes. Seed and traverse in coordinate order instead, which
+        # keeps component numbering and record order reproducible across runs.
+        all_splice_graph_nodes = sorted(
+            all_splice_graph_nodes,
+            key=lambda node: (node.get_coords(), str(node.get_id())),
+            reverse=True,
+        )
         while len(all_splice_graph_nodes) > 0:
 
             queue = list()
@@ -486,7 +491,10 @@ class MultiPathGraph:
 
             while len(queue) > 0:
                 splice_graph_node = queue.pop(0)
-                mpgns = list(splice_graph_node_to_mpgns[splice_graph_node])
+                mpgns = sorted(
+                    splice_graph_node_to_mpgns[splice_graph_node],
+                    key=lambda mpgn: (mpgn.get_coords(), str(mpgn.get_id())),
+                )
                 splice_graph_nodes_visited.add(splice_graph_node)
                 for mpgn in mpgns:
                     if mpgn not in component:

@@ -1428,19 +1428,19 @@ class Quantify:
             ]
 
             if splice_compatible_containments is not None:
-                splice_compat_containment_vals = (
-                    str(splice_compatible_containments[transcript_id])
-                    if transcript_id in splice_compatible_containments
-                    else ""
-                )
-                report_vals.append(splice_compat_containment_vals)
+                # These are sets of transcript ids; emit them sorted so the report is
+                # reproducible between runs rather than following set iteration order.
+                def _format_id_set(id_sets, transcript_id):
+                    if transcript_id not in id_sets:
+                        return ""
+                    return "{" + ",".join(sorted(id_sets[transcript_id])) + "}"
 
-                splice_compat_contained_by_vals = (
-                    str(splice_compatible_contained_by[transcript_id])
-                    if transcript_id in splice_compatible_contained_by
-                    else ""
+                report_vals.append(
+                    _format_id_set(splice_compatible_containments, transcript_id)
                 )
-                report_vals.append(splice_compat_contained_by_vals)
+                report_vals.append(
+                    _format_id_set(splice_compatible_contained_by, transcript_id)
+                )
 
             report_vals.append(f"{rpm_total_reads:.3f}")
 
