@@ -464,6 +464,30 @@ class LRAA:
     ## Private methods
     ##################
 
+    @staticmethod
+    def _summarize_unrepresented_mpgns(mpgns):
+        """Split unrepresented graph nodes by whether any real read supports them.
+
+        Returns (template_only, nodes_with_reads, real_reads). A node supported only by
+        the synthetic read injected for an input transcript has no observation behind it
+        and is expected to go unrepresented; real reads left unrepresented are a loss.
+        """
+        synthetic_ids = LRAA_Globals.SYNTHETIC_READ_IDS
+        template_only = 0
+        nodes_with_reads = 0
+        real_reads = 0
+        for mpgn in mpgns:
+            try:
+                num_real = len(set(mpgn.get_read_ids()) - synthetic_ids)
+            except Exception:
+                num_real = 0
+            if num_real == 0:
+                template_only += 1
+            else:
+                nodes_with_reads += 1
+                real_reads += num_real
+        return template_only, nodes_with_reads, real_reads
+
     def _reconstruct_isoforms_single_component(
         self, q, mpg_component, component_counter, mpg_token, single_best_only=False
     ):
@@ -611,6 +635,36 @@ class LRAA:
 
                 # reprioritize
                 all_scored_paths = sorted(all_scored_paths, key=lambda x: x.get_score())
+
+        # Path extraction stops when the best remaining path falls below min_path_score,
+        # which can leave graph nodes unrepresented. A node whose only support is the
+        # synthetic read for an input transcript is expected to be left behind: nothing
+        # observed it. A node carrying real reads is a genuine loss -- those reads
+        # described a structure that no reported transcript covers -- so report it.
+        if mpgns_require_representation:
+            template_only, nodes_with_reads, unexplained_reads = (
+                self._summarize_unrepresented_mpgns(mpgns_require_representation)
+            )
+            logger.info(
+                "[%s%s] %s: %d graph nodes unrepresented after %d rounds (%d supported only by input-transcript templates, %d carrying %d real reads)",
+                contig_acc,
+                contig_strand,
+                mpg_token,
+                len(mpgns_require_representation),
+                round_iter,
+                template_only,
+                nodes_with_reads,
+                unexplained_reads,
+            )
+            if unexplained_reads > 0:
+                logger.warning(
+                    "[%s%s] %s: %d read(s) across %d graph nodes are not represented by any reported transcript; their structures fell below min_path_score during path extraction",
+                    contig_acc,
+                    contig_strand,
+                    mpg_token,
+                    unexplained_reads,
+                    nodes_with_reads,
+                )
 
         # from the best transcript paths, reconstruct the actual transcripts themselves:
 

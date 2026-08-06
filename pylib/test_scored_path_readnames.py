@@ -157,3 +157,39 @@ def test_fallback_still_applies_when_no_read_ids_exist(name_store):
     _, sp = _scored_path(sg, [e1.get_id(), e2.get_id()], set(), 5)
     assert not sp._all_represented_read_ids
     assert sp.compute_path_score() == 5
+
+
+def _mpgn(sg, exon_ids, read_names, count):
+    mp = MultiPath(sg, [exon_ids], read_names=read_names, read_count=count)
+    lend, rend = mp.get_coords()
+    return mp, MultiPathGraphNode(
+        mp, count=count, lend=lend, rend=rend, mpg=_DummyMPG(sg)
+    )
+
+
+def test_unrepresented_nodes_separate_templates_from_lost_reads(name_store):
+    from LRAA import LRAA
+
+    sg, e1, e2, e3 = build_minimal_sg_with_exons()
+    # a node whose only support is the synthetic read standing in for an annotation
+    tmpl_mp, tmpl = _mpgn(sg, [e1.get_id(), e2.get_id()], {"reftranscript:t1"}, 1)
+    LG.SYNTHETIC_READ_IDS.update(tmpl_mp.get_read_ids())
+    # a node carrying real reads that no reported transcript covered
+    _, real = _mpgn(sg, [e2.get_id(), e3.get_id()], {"r1", "r2", "r3"}, 3)
+
+    template_only, nodes_with_reads, real_reads = LRAA._summarize_unrepresented_mpgns(
+        [tmpl, real]
+    )
+    assert (template_only, nodes_with_reads, real_reads) == (1, 1, 3)
+
+    # a template node that also accumulated real reads counts as a loss, not a template
+    mixed_mp, mixed = _mpgn(
+        sg, [e1.get_id(), e3.get_id()], {"reftranscript:t2", "r9"}, 2
+    )
+    synthetic = {
+        rid
+        for rid in mixed_mp.get_read_ids()
+        if str(LG.READ_NAME_STORE.get_name(int(rid))).startswith("reftranscript:")
+    }
+    LG.SYNTHETIC_READ_IDS.update(synthetic)
+    assert LRAA._summarize_unrepresented_mpgns([mixed]) == (0, 1, 1)
