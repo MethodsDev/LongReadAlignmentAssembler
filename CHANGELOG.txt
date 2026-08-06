@@ -1,5 +1,6 @@
 v0.18.0, in development
 - matched reconstructed isoforms to final-graph reference paths after removing reference TSS/PolyA nodes, preserved the matching reference IDs across quantification resets, and excluded synthetic reference reads from draft expression estimates.
+- fixed the post-assembly draft quantification step to rescue reads against the assembled isoforms being quantified instead of the supplied reference models; the mismatch let reads already assigned to a draft isoform be realigned onto a reference path and counted twice in the read support that drives isoform filtering.
 
 
 v0.17.7, June 28, 2026

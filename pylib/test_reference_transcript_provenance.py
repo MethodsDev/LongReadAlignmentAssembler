@@ -94,26 +94,26 @@ def test_failed_remap_clears_stale_path_and_excludes_rescue_target(monkeypatch):
     splice_graph._intron_objs = {"151:199": intron}
     splice_graph._finalize_splice_graph()
 
-    mapped_reference = _transcript("mapped", ["E:old"])
-    unmapped_reference = _transcript(
+    mapped_draft = _transcript("mapped", ["E:old"])
+    unmapped_draft = _transcript(
         "unmapped", ["E:stale"], exons=[[300, 350], [400, 450]]
     )
     lraa = LRAA(splice_graph)
 
-    mapped = lraa.assign_transcripts_paths_in_graph(
-        [mapped_reference, unmapped_reference]
-    )
+    mapped = lraa.assign_transcripts_paths_in_graph([mapped_draft, unmapped_draft])
     mapped_object_ids = {id(transcript) for transcript in mapped}
+    # Rescue targets mirror the post-assembly quant step: the draft models that
+    # mapped into the final splice graph, which is also the set being quantified.
     rescue_targets = [
         transcript
-        for transcript in (mapped_reference, unmapped_reference)
-        if id(transcript) in mapped_object_ids and transcript.has_introns()
+        for transcript in (mapped_draft, unmapped_draft)
+        if id(transcript) in mapped_object_ids
     ]
 
-    assert mapped == [mapped_reference]
-    assert rescue_targets == [mapped_reference]
+    assert mapped == [mapped_draft]
+    assert rescue_targets == [mapped_draft]
     with pytest.raises(AssertionError):
-        unmapped_reference.get_simple_path()
+        unmapped_draft.get_simple_path()
 
 
 def test_reference_provenance_survives_quant_reset_and_drives_filter(monkeypatch):

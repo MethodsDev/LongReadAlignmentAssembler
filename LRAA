@@ -4413,11 +4413,6 @@ def run_transcript_assembly(
         for transcript in reference_transcripts_incl_in_graph
         if id(transcript) in mapped_transcript_object_ids
     ]
-    mapped_ME_reference_transcripts = [
-        transcript
-        for transcript in mapped_reference_transcripts
-        if transcript.has_introns()
-    ]
 
     if not all_transcripts:
         logger.warning(
@@ -4462,7 +4457,7 @@ def run_transcript_assembly(
         bam_file_for_quant,
         allow_spacers,
         input_transcripts=None,
-        rescue_target_transcripts=mapped_ME_reference_transcripts,
+        rescue_target_transcripts=all_transcripts,
         restrict_splice_type=None,
     )
 
