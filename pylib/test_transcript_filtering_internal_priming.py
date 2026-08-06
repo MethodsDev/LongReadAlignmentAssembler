@@ -52,4 +52,47 @@ def test_internal_priming_ignores_21st_downstream_base_on_reverse_strand():
     downstream_twenty = "TTTTTTTCCCCC" + "TCTCTCTC"
     contig_seq = "C" * 9 + "T" + downstream_twenty + "C" * 10
 
-    assert TranscriptFiltering._looks_internally_primed(31, 40, "-", contig_seq) is False
+    assert (
+        TranscriptFiltering._looks_internally_primed(31, 40, "-", contig_seq) is False
+    )
+# With restrict_filter_to_monoexonic disabled, multi-exonic transcripts reach the
+# known-3'-end check instead of being retained unconditionally. That branch is the only
+# consumer of the known-3'-end interval tree, and it is unreachable under the default
+# config (restrict_internal_priming_filter_to_monoexonic is True), so it is covered here.
+# The pair brackets the branch: same transcript and sequence, differing only in whether a
+# known 3' end vouches for the end position.
+
+_PRIMED_CONTIG = "C" * 50 + "A" * 12 + "C" * 38
+
+
+def test_multiexonic_internal_priming_filtered_without_a_known_3prime_end():
+    multiexonic = _build_transcript("t.multi", [[10, 20], [40, 50]], "+")
+
+    retained = TranscriptFiltering.filter_internally_primed_transcripts(
+        [multiexonic],
+        contig_seq_str=_PRIMED_CONTIG,
+        contig_strand="+",
+        known_transcripts=None,
+        restrict_filter_to_monoexonic=False,
+    )
+
+    assert retained == []
+    assert multiexonic._likely_internal_primed is True
+
+
+def test_multiexonic_internal_priming_spared_by_a_known_3prime_end():
+    multiexonic = _build_transcript("t.multi", [[10, 20], [40, 50]], "+")
+    # a known model ending at the same 3' coordinate vouches for that end
+    known = _build_transcript("t.known", [[30, 50]], "+")
+
+    retained = TranscriptFiltering.filter_internally_primed_transcripts(
+        [multiexonic],
+        contig_seq_str=_PRIMED_CONTIG,
+        contig_strand="+",
+        known_transcripts=[known],
+        restrict_filter_to_monoexonic=False,
+    )
+
+    assert [transcript.get_transcript_id() for transcript in retained] == ["t.multi"]
+    # the transcript is still judged internally primed; the known end is what spares it
+    assert retained[0]._likely_internal_primed is True
