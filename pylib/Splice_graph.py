@@ -59,6 +59,11 @@ class Splice_graph:
         self._intron_objs = dict()  # "lend:rend" => intron_obj
         self._itree_introns = None  # itree.IntervalTree()
 
+        # Read-derived junctions declined by the splice-motif check, kept as distinct
+        # coordinate pairs so a locus rendered unrepresentable can be diagnosed.
+        self._junctions_rejected_wrong_strand = set()
+        self._junctions_rejected_no_motif = set()
+
         ## connected components (genes)
         self._components = list()  # ordered list of graph components
         self._node_id_to_component = dict()  # node_id -> component index
@@ -676,6 +681,23 @@ class Splice_graph:
                 # else:
                 #    logger.debug("Excluding intron {} with insufficient frac_intron_support {} (below threshold Splice_graph._min_alt_splice_freq {})".format(intron_coords_key, frac_intron_support, Splice_graph._min_alt_splice_freq))
 
+        # A read whose junctions were all declined has no path through this graph, so its
+        # locus cannot be reconstructed from reads alone. Annotation-supplied junctions do
+        # not pass through this check, so such a locus is still reachable when the model is
+        # provided. Report the two reasons separately: a wrong-strand motif means the
+        # sequence supports the junction in the opposite orientation, while no motif means
+        # it is canonical in neither.
+        if self._junctions_rejected_wrong_strand or self._junctions_rejected_no_motif:
+            logger.info(
+                "[%s%s] %d read junction(s) declined by the splice-motif check: %d with a motif implying the opposite strand, %d with no canonical motif in either orientation. Loci reachable only through these junctions cannot be reconstructed from reads.",
+                contig_acc,
+                contig_strand,
+                len(self._junctions_rejected_wrong_strand)
+                + len(self._junctions_rejected_no_motif),
+                len(self._junctions_rejected_wrong_strand),
+                len(self._junctions_rejected_no_motif),
+            )
+
         # Define TSS and PolyA sites
         #    unless it's derived from the input annotation in quant-only mode, in which case we'll limit ourselves to that.
         if not (quant_mode and (len(self._TSS_objs) > 0 or len(self._PolyA_objs) > 0)):
@@ -1210,6 +1232,9 @@ class Splice_graph:
 
                 else:
                     num_introns_conflicting_splice_signals += 1
+                    self._junctions_rejected_wrong_strand.add(
+                        (intron_lend, intron_rend)
+                    )
                     logger.debug(
                         "Splice type for intron {}:{}-{}[{}] is not consistent with read alignment orientation: {}".format(
                             contig_acc,
@@ -1219,6 +1244,16 @@ class Splice_graph:
                             contig_strand,
                         )
                     )
+            else:
+                # Canonical in neither orientation, so no strand can be inferred and the
+                # junction is not admitted. Recorded because a read whose junctions are all
+                # rejected has no path through the graph, making its locus unrepresentable.
+                self._junctions_rejected_no_motif.add((intron_lend, intron_rend))
+                logger.debug(
+                    "No canonical splice motif for intron {}:{}-{}; not admitted".format(
+                        contig_acc, intron_lend, intron_rend
+                    )
+                )
 
         # logger.debug("Of the {} intron candidates, {} = {:.1f} % have conflicting orientation to contig.".format(
         #    num_introns_with_splice_signals,
