@@ -247,3 +247,10 @@ if "LRAA_READSTORE_BACKEND" not in os.environ:
 # in-memory read name retention is disabled.
 READ_NAME_STORE = None  # type: ignore
 MP_READ_ID_STORE = None  # type: ignore
+
+# Read IDs of the synthetic multipaths injected for input transcripts. They give the
+# reference structure a template in the graph, but they are not observations, so path
+# scoring excludes them: a path supported by nothing but these has no read evidence and
+# must not be selected as a candidate. Populated per splice graph while incorporating
+# input transcripts, and cleared when a new multipath graph is built.
+SYNTHETIC_READ_IDS = set()

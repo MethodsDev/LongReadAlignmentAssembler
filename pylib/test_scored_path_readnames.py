@@ -62,7 +62,7 @@ def test_scored_path_reads_with_containments(tmp_path):
     base = tmp_path / "spnames2"
     os.makedirs(base, exist_ok=True)
     LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
-    
+
     class DummyMPG:
         def __init__(self, sg):
             self._sg = sg
@@ -91,3 +91,69 @@ def test_scored_path_reads_with_containments(tmp_path):
     if LG.READ_NAME_STORE is not None:
         LG.READ_NAME_STORE.close()
         LG.READ_NAME_STORE = None
+
+
+class _DummyMPG:
+    def __init__(self, sg):
+        self._sg = sg
+
+    def get_splice_graph(self):
+        return self._sg
+
+
+def _scored_path(sg, exon_ids, read_names, count):
+    mp = MultiPath(sg, [exon_ids], read_names=read_names, read_count=count)
+    lend, rend = mp.get_coords()
+    mpgn = MultiPathGraphNode(mp, count=count, lend=lend, rend=rend, mpg=_DummyMPG(sg))
+    return mp, Scored_path([mpgn])
+
+
+@pytest.fixture
+def name_store(tmp_path):
+    base = tmp_path / "synscore"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    preserved = set(LG.SYNTHETIC_READ_IDS)
+    LG.SYNTHETIC_READ_IDS.clear()
+    yield
+    LG.SYNTHETIC_READ_IDS.clear()
+    LG.SYNTHETIC_READ_IDS.update(preserved)
+    if LG.READ_NAME_STORE is not None:
+        LG.READ_NAME_STORE.close()
+        LG.READ_NAME_STORE = None
+
+
+def test_path_supported_only_by_a_synthetic_read_scores_zero(name_store):
+    """A structure no read supports must not be selectable as a candidate."""
+    sg, e1, e2, _ = build_minimal_sg_with_exons()
+    mp, sp = _scored_path(sg, [e1.get_id(), e2.get_id()], {"reftranscript:t1"}, 1)
+    assert sp.compute_path_score() == 1  # before registration, it counts
+
+    LG.SYNTHETIC_READ_IDS.update(mp.get_read_ids())
+    assert sp.compute_path_score() == 0
+    # must not fall through to the node-count fallback, which still holds the read
+    assert sp._all_represented_read_ids
+
+
+def test_synthetic_read_does_not_inflate_a_real_supported_path(name_store):
+    sg, e1, e2, _ = build_minimal_sg_with_exons()
+    mp, sp = _scored_path(
+        sg, [e1.get_id(), e2.get_id()], {"reftranscript:t1", "r1", "r2"}, 3
+    )
+    synthetic = {
+        rid
+        for rid in mp.get_read_ids()
+        if str(LG.READ_NAME_STORE.get_name(int(rid))).startswith("reftranscript:")
+    }
+    assert len(synthetic) == 1
+    LG.SYNTHETIC_READ_IDS.update(synthetic)
+    # scores the two real reads only
+    assert sp.compute_path_score() == 2
+
+
+def test_fallback_still_applies_when_no_read_ids_exist(name_store):
+    """The node-count fallback covers missing id data, not zero support."""
+    sg, e1, e2, _ = build_minimal_sg_with_exons()
+    _, sp = _scored_path(sg, [e1.get_id(), e2.get_id()], set(), 5)
+    assert not sp._all_represented_read_ids
+    assert sp.compute_path_score() == 5

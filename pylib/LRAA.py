@@ -89,6 +89,9 @@ class LRAA:
             raise RuntimeError(
                 "Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments"
             )
+        # Synthetic input-transcript reads are registered per graph; drop any from a
+        # previously built graph so their IDs cannot suppress scoring here.
+        LRAA_Globals.SYNTHETIC_READ_IDS.clear()
 
         # Ensure external read-tracking stores are initialized so MultiPath.get_read_names()
         # can stream names and debug/graph-building logic that depends on names/spans works in assembly mode too.
@@ -2261,6 +2264,12 @@ class LRAA:
                     read_types={"fake_for_merge"},
                     read_names=fake_read_names,
                 )
+
+            # Record the synthetic read IDs so path scoring can ignore them.
+            try:
+                LRAA_Globals.SYNTHETIC_READ_IDS.update(mp.get_read_ids())
+            except Exception:
+                pass
 
             mp_counter.add(mp)
 

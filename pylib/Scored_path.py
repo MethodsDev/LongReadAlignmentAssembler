@@ -194,9 +194,13 @@ class Scored_path:
 
         score = 0
 
-        # Primary scoring: unique supporting read IDs across represented nodes
+        # Primary scoring: unique supporting read IDs across represented nodes. Synthetic
+        # reads injected for input transcripts are templates rather than observations, so
+        # they are not counted: a path supported by nothing else scores zero and is not
+        # selected, which is the correct outcome for a structure no read supports.
+        synthetic_read_ids = LRAA_Globals.SYNTHETIC_READ_IDS
         for rid in self._all_represented_read_ids:
-            if rid not in exclude_read_ids:
+            if rid not in exclude_read_ids and rid not in synthetic_read_ids:
                 score += 1
 
         # Fallback (initial scoring only): if no ids are available at all (e.g., external read-id
@@ -204,7 +208,9 @@ class Scored_path:
         # support by summed node counts across represented mpgns. Critically, do not apply this fallback
         # during rescoring with exclude_read_ids, otherwise overlapping candidates may retain positive
         # scores after their supporting reads were already assigned, defeating the greedy exclusion logic.
-        if score == 0 and not exclude_read_ids:
+        # The test is whether any ids exist, not whether the score came out zero: a score of zero from
+        # ids that were all excluded or all synthetic is a real answer, not missing data.
+        if not self._all_represented_read_ids and not exclude_read_ids:
             try:
                 approx = 0
                 for mpgn in self._all_represented_mpgns:
