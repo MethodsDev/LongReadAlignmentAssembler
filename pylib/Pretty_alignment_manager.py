@@ -124,24 +124,33 @@ class Pretty_alignment_manager:
         if region_lend is not None and region_rend is not None:
             contig_strand_token = f"{contig_acc}^{contig_strand}:{region_lend}-{region_rend}"
 
-        all_alignment_cache_file = os.path.join(
-            alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-{restrict_splice_type}.corr-{try_correct_alignments}.pkl",
+        # Extraction identity: every parameter that changes which alignments the
+        # extractor returns or discards. The ME/SE/masked pickles are partitions of a
+        # single extraction, so they share this stem and its discard-provenance sidecar.
+        extraction_token = (
+            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments"
+            f".mapq-{LRAA_Globals.config['min_mapping_quality']}"
+            f".corr-{try_correct_alignments}"
+            f".primary-{primary_alignments_only}"
+            f".qcerr-{per_id_QC_raise_error}"
         )
 
-        ME_alignment_cache_file = os.path.join(
-            alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-ME.corr-{try_correct_alignments}.pkl",
-        )
+        def variant_cache_file(restrict_token):
+            return os.path.join(
+                alignment_cache_dir, f"{extraction_token}.restrict-{restrict_token}.pkl"
+            )
 
-        SE_alignment_cache_file = os.path.join(
-            alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-SE.corr-{try_correct_alignments}.pkl",
-        )
+        all_alignment_cache_file = variant_cache_file(None)
+        ME_alignment_cache_file = variant_cache_file("ME")
+        SE_alignment_cache_file = variant_cache_file("SE")
+        SE_masked_alignment_cache_file = variant_cache_file("SE-masked")
 
-        SE_masked_alignment_cache_file = os.path.join(
-            alignment_cache_dir,
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments.mapq-{LRAA_Globals.config['min_mapping_quality']}.restrict-SE-masked.corr-{try_correct_alignments}.pkl",
+        # Read names dropped during extraction (currently low percent identity) are
+        # consumed downstream as transcriptome-rescue candidates, so they must survive a
+        # cache hit. Requiring this file for a hit makes caches from earlier builds
+        # re-extract once instead of silently reporting no discards.
+        discard_cache_file = os.path.join(
+            alignment_cache_dir, f"{extraction_token}.discards.pkl"
         )
 
         alignment_cache_file = all_alignment_cache_file
@@ -154,14 +163,20 @@ class Pretty_alignment_manager:
             else:
                 alignment_cache_file = SE_masked_alignment_cache_file
 
-        if use_cache and self._cache_ready(alignment_cache_file):
+        if (
+            use_cache
+            and self._cache_ready(alignment_cache_file)
+            and self._cache_ready(discard_cache_file)
+        ):
             logger.info(
                 "[%s%s] reusing earlier-generated pretty alignments",
                 contig_acc,
                 contig_strand,
             )
             pretty_alignments = self._load_pickle_cache(alignment_cache_file)
-            self._last_discarded_read_names_by_reason = dict()
+            self._last_discarded_read_names_by_reason = self._load_discard_cache(
+                discard_cache_file
+            )
             try:
                 cache_sz_mb = os.path.getsize(alignment_cache_file) / (1024.0 * 1024.0)
             except Exception:
@@ -205,10 +220,20 @@ class Pretty_alignment_manager:
             self._last_discarded_read_names_by_reason = (
                 bam_extractor.get_last_discarded_read_names_by_reason()
             )
+            if use_cache:
+                # Written before any alignment pickle so a ready variant cache always
+                # has its discard provenance on disk.
+                self._write_pickle_cache(
+                    discard_cache_file, self._last_discarded_read_names_by_reason
+                )
             self._log_mem(
                 "completed get_read_alignments",
                 extra={
-                    "n": len(pretty_alignments) if isinstance(pretty_alignments, list) else "?",
+                    "n": (
+                        len(pretty_alignments)
+                        if isinstance(pretty_alignments, list)
+                        else "?"
+                    ),
                     "sec": f"{(time.time()-t0):.2f}",
                 },
             )
@@ -330,18 +355,35 @@ class Pretty_alignment_manager:
         if SE_read_encapsulation_mask is not None:
             assert restrict_splice_type == "SE"
 
-            if use_cache and self._cache_ready(SE_masked_alignment_cache_file):
+            if (
+                use_cache
+                and self._cache_ready(SE_masked_alignment_cache_file)
+                and self._cache_ready(discard_cache_file)
+            ):
                 logger.info(
                     "[%s%s] reusing earlier-generated pretty alignments",
                     contig_acc,
                     contig_strand,
                 )
-                pretty_alignments = self._load_pickle_cache(SE_masked_alignment_cache_file)
-                self._log_mem("loaded SE masked alignments from cache", extra={"n": len(pretty_alignments)})
+                pretty_alignments = self._load_pickle_cache(
+                    SE_masked_alignment_cache_file
+                )
+                self._last_discarded_read_names_by_reason = self._load_discard_cache(
+                    discard_cache_file
+                )
+                self._log_mem(
+                    "loaded SE masked alignments from cache",
+                    extra={"n": len(pretty_alignments)},
+                )
             else:
                 # apply ME mask of encapsulated SEs
-                self._log_mem("before apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
-                pretty_alignments = self.apply_SE_read_encapsulation_mask(pretty_alignments, SE_read_encapsulation_mask)
+                self._log_mem(
+                    "before apply_SE_read_encapsulation_mask",
+                    extra={"n": len(pretty_alignments)},
+                )
+                pretty_alignments = self.apply_SE_read_encapsulation_mask(
+                    pretty_alignments, SE_read_encapsulation_mask
+                )
                 self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
 
                 if use_cache:
@@ -433,6 +475,17 @@ class Pretty_alignment_manager:
     def _load_pickle_cache(self, cache_path: str):
         with open(cache_path, "rb") as handle:
             return pickle.load(handle)
+
+    def _load_discard_cache(self, cache_path: str) -> dict:
+        """Return the cached discarded-read-name sets, or empty on an unusable payload."""
+        try:
+            payload = self._load_pickle_cache(cache_path)
+        except Exception:
+            logger.warning("Could not read discard provenance cache: %s", cache_path)
+            return dict()
+        if not isinstance(payload, dict):
+            return dict()
+        return {reason: set(read_names) for reason, read_names in payload.items()}
 
     def _write_pickle_cache(self, cache_path: str, payload: Any) -> None:
         """Atomically write a pickle cache and create its OK marker."""

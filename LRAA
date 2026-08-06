@@ -3943,10 +3943,10 @@ def run_quant_only(
     arb_summary_path=None,
 ):
 
-    # Quantification stage uses the tighter min_mapping_quality_for_final_quant
-    # filter (default 1) so multi-mapping reads do not inflate per-transcript
-    # TPMs. Discovery upstream may have used the looser min_mapping_quality
-    # (default 0) so paralog-cluster isoforms could be detected.
+    # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
+    # hold final quant to a stricter threshold than discovery, which stays permissive
+    # so paralog-cluster isoforms can be detected. Both default to 0, so the effective
+    # filter is identical unless a caller raises the final-quant setting.
     _saved_min_mapq = LRAA_Globals.config["min_mapping_quality"]
     LRAA_Globals.config["min_mapping_quality"] = LRAA_Globals.config[
         "min_mapping_quality_for_final_quant"
