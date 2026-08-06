@@ -1031,9 +1031,6 @@ def main():
     MONITOR_RESOURCES = not args.no_monitor_resources
     SHUFFLE_PARALLEL_JOBS = not args.no_shuffle_parallel_jobs
 
-    # if args.collapse:
-    #    LRAA_Globals.config['collapse_alt_TSS_and_PolyA'] = True
-
     if args.quant_only and input_gtf is None:
         sys.exit(
             "If running --quant_only, must specify --gtf corresponding to targets of quantification"

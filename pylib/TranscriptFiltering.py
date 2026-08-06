@@ -412,7 +412,6 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 ##
                 ##
                 ## variables of interest: (in LRAA_Globals.config[]
-                #    - "collapse_alt_TSS_and_PolyA"
                 #  TSS:
                 #    - "max_frac_alt_TSS_from_degradation"
                 #    - "min_frac_gene_alignments_define_TSS_site"
@@ -435,57 +434,53 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
 
                     subsume_J = False  # init
 
-                    if LRAA_Globals.config["collapse_alt_TSS_and_PolyA"]:
+                    # no TSS or PolyA on j - prune.
+                    if j_TSS_id is None and j_polyA_id is None:
                         logger.debug(
-                            "Collapsing compatible path: {} into {}".format(
-                                transcript_j, transcript_i
+                            "compatible/contained {} being pruned as lacking TSS or polyA annots.".format(
+                                transcript_j_id
                             )
                         )
                         subsume_J = True
 
-                    else:
-
-                        # no TSS or PolyA on j - prune.
-                        if j_TSS_id is None and j_polyA_id is None:
-                            logger.debug(
-                                "compatible/contained {} being pruned as lacking TSS or polyA annots.".format(
-                                    transcript_j_id
-                                )
+                    # no TSS on j and shares same PolyA as i - prune as redundant 5' truncation
+                    elif (
+                        j_TSS_id is None
+                        and j_polyA_id is not None
+                        and j_polyA_id == i_polyA_id
+                    ):
+                        logger.debug(
+                            "compatible/contained {} being pruned as lacking TSS and sharing PolyA with {}".format(
+                                transcript_j_id, transcript_i_id
                             )
-                            subsume_J = True
+                        )
+                        subsume_J = True
 
-                        # no TSS on j and shares same PolyA as i - prune as redundant 5' truncation
-                        elif j_TSS_id is None and j_polyA_id is not None and j_polyA_id == i_polyA_id:
-                            logger.debug(
-                                "compatible/contained {} being pruned as lacking TSS and sharing PolyA with {}".format(
-                                    transcript_j_id, transcript_i_id
-                                )
+                    # no PolyA on j and shares same TSS as i - prune as redundant 3' truncation
+                    elif (
+                        j_polyA_id is None
+                        and j_TSS_id is not None
+                        and j_TSS_id == i_TSS_id
+                    ):
+                        logger.debug(
+                            "compatible/contained {} being pruned as lacking PolyA and sharing TSS with {}".format(
+                                transcript_j_id, transcript_i_id
                             )
-                            subsume_J = True
+                        )
+                        subsume_J = True
 
-                        # no PolyA on j and shares same TSS as i - prune as redundant 3' truncation
-                        elif j_polyA_id is None and j_TSS_id is not None and j_TSS_id == i_TSS_id:
-                            logger.debug(
-                                "compatible/contained {} being pruned as lacking PolyA and sharing TSS with {}".format(
-                                    transcript_j_id, transcript_i_id
-                                )
+                    elif (
+                        frac_gene_expression_j_of_i_and_j is not None
+                        and frac_gene_expression_j_of_i_and_j
+                        < LRAA_Globals.config["max_rel_frac_expr_alt_compat_contained"]
+                    ):
+                        # if relative fraction of support for both is below threshold, then prune.
+                        logger.debug(
+                            "compatible/contained {} being pruned as insufficiently relatively expressed.".format(
+                                transcript_j_id
                             )
-                            subsume_J = True
-
-                        elif (
-                            frac_gene_expression_j_of_i_and_j is not None
-                            and frac_gene_expression_j_of_i_and_j
-                            < LRAA_Globals.config[
-                                "max_rel_frac_expr_alt_compat_contained"
-                            ]
-                        ):
-                            # if relative fraction of support for both is below threshold, then prune.
-                            logger.debug(
-                                "compatible/contained {} being pruned as insufficiently relatively expressed.".format(
-                                    transcript_j_id
-                                )
-                            )
-                            subsume_J = True
+                        )
+                        subsume_J = True
 
                     if subsume_J:
                         logger.debug(

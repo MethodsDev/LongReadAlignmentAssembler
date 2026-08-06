@@ -109,7 +109,6 @@ config = {
     # assembly
     "normalize_max_cov_level": 1000,
     "restrict_asm_to_collapse": True,  # if True, no chaining of overlapping/extended paths
-    "collapse_alt_TSS_and_PolyA": False,  # if True, collapses paths that are overlapping and contained but differ in TSS or PolyA
     #
     #######
     # quant
