@@ -67,12 +67,12 @@ After reconstruction, LRAA assigns reads to transcripts and estimates abundances
 - Assignment cascade behavior: In HiFi-style matching, boundary nodes (TSS/PolyA) are respected first; if unresolved, matching falls back to boundary-trimmed non-HiFi-style compatibility checks.
 - Weighted assignments: If `config['weight_reads_by_3prime_agreement']` is enabled, compatibility weights prioritize agreement of read 3' ends with transcript 3' ends.
 
-In quantification-only mode with transcriptome rescue enabled, failed reads are first realigned to local multi-exon transcript sequences using minimap2 in non-splice mode. Rescue alignments are accepted only when, after the same small-indel block-merging logic used for genomic pretty alignments, the alignment collapses to a single contiguous transcript-coordinate interval. Accepted rescue hits are projected back onto splice-graph node paths; ambiguous transcriptome hits are retained only when all top hits imply the same node path. These rescued paths are merged into the evidence set before the first EM iteration, so quantification continues under the same compatibility and weighting model as native genomic assignments.
+Transcriptome rescue realigns reads that cannot be placed on the splice graph to local multi-exon transcript sequences using minimap2 in non-splice mode. It runs in two places, not only in quantification-only mode. During reference-guided discovery, only reads with no path through the splice graph are eligible: a read that has a path but matches no supplied model is evidence for a novel isoform, and reshaping it onto a reference structure would suppress that isoform. During final quantification, the eligible reads and the rescue targets depend on `config['quant_read_assignment_mode']`; the default `rescue_unassigned` targets the isoforms being quantified, `transcriptome_only` and `genome_tx_arb` apply their own target rules, and `genome` performs no rescue. Rescue alignments are accepted only when, after the same small-indel block-merging logic used for genomic pretty alignments, the alignment collapses to a single contiguous transcript-coordinate interval. Accepted rescue hits are projected back onto splice-graph node paths; ambiguous transcriptome hits are retained only when all top hits imply the same node path. These rescued paths are merged into the evidence set before the first EM iteration, so quantification continues under the same compatibility and weighting model as native genomic assignments.
 
 Model and updates:
 
-- Let transcripts be indexed by i, reads by r. Define a per-read likelihood L_{ri} capturing compatibility/weight.
-- Let p_i be the isoform proportion parameters (initialized uniformly or proportional to initial counts). With optional Dirichlet prior (regularization) α = `config['EM_alpha']`.
+- Let transcripts be indexed by i. The per-locus EM operates over read-compatibility classes -- reads sharing an identical labeled splice-graph path -- rather than individual reads; index those classes by r, each carrying a read count. Define a per-class likelihood L_{ri} capturing compatibility/weight.
+- Let p_i be the isoform proportion parameters, initialized uniformly. Regularization uses a Dirichlet prior whose mass is scaled per isoform by the ambiguous support that isoform competes for, with α = `config['EM_alpha']` (see the M-step).
 
 E-step (responsibilities):
 
@@ -80,9 +80,9 @@ $w_{ri} = \frac{p_i \cdot L_{ri}}{\sum_j p_j \cdot L_{rj}}$ for transcripts comp
 
 M-step (update proportions):
 
-$p_i \leftarrow \frac{\sum_r w_{ri} + (\alpha - 1)}{\sum_k \left(\sum_r w_{rk} + (\alpha - 1)\right)}$.
+$p_i \leftarrow \frac{\sum_r w_{ri} + \alpha_i}{\sum_k \left(\sum_r w_{rk} + \alpha_k\right)}$, where $\alpha_i = \alpha \cdot A_i$ and $A_i$ is the read count summed over compatibility classes that include isoform i but are compatible with more than one isoform. The prior mass therefore scales with how much ambiguous evidence an isoform competes for; it is not a constant $\alpha - 1$. An isoform with no ambiguous support receives no prior mass.
 
-Counts and TPM are derived from estimated proportions with effective-length or read-depth normalization as appropriate for long reads. The algorithm iterates to convergence or a maximum iteration threshold; convergence is detected by small changes in the log-likelihood or parameter deltas.
+Counts and TPM are derived from estimated proportions with effective-length or read-depth normalization as appropriate for long reads. Iteration stops when the Euclidean norm of the change in the proportion vector between consecutive iterations falls below `config['EM_convergence_tol']`, or at the iteration cap (`max_EM_iterations_during_asm` during assembly, `max_EM_iterations_quant_only` for final quantification and quantification-only analysis). No log-likelihood is computed.
 
 ## Configuration and tunables
 

@@ -26,10 +26,11 @@ test_quant:
 #
 # Comparing against test_ref_free_ID needs care: that target loosens the TSS and
 # PolyA site thresholds (SIRVs.LRAA_config_update.json) and this one does not.
-# Under matched settings guided recovery is a superset of annotation-free -- 67 vs
-# 64 at the defaults, 68 vs 66 with both loosened. As the two targets actually
-# run, neither set contains the other: annotation-free reaches SIRV206 on the
-# looser thresholds, while this target reaches the two short models. SIRV107 is
+# Under matched settings guided recovery is a superset of annotation-free: 67 exact
+# against 63 at the defaults, 68 against 65 with both loosened, and annotation-free
+# also leaves one model merely contained rather than exact. As the two targets
+# actually run, neither set contains the other: annotation-free reaches SIRV206 on
+# the looser thresholds, while this target reaches the two short models. SIRV107 is
 # recovered by no mode in either configuration, despite carrying 11 reads.
 test_ref_guided_ID:
 	make clean
