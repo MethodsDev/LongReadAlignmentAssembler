@@ -384,8 +384,15 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                     )
                 )
 
-                frac_gene_expression_j_of_i_and_j = frac_gene_expression_j / (
+                combined_frac_gene_expression = (
                     frac_gene_expression_j + frac_gene_expression_i
+                )
+                # Relative support is undefined when neither model carries assigned
+                # reads, so such a pair is left out of expression-based pruning.
+                frac_gene_expression_j_of_i_and_j = (
+                    frac_gene_expression_j / combined_frac_gene_expression
+                    if combined_frac_gene_expression > 0
+                    else None
                 )
 
                 ##
@@ -454,7 +461,8 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                             subsume_J = True
 
                         elif (
-                            frac_gene_expression_j_of_i_and_j
+                            frac_gene_expression_j_of_i_and_j is not None
+                            and frac_gene_expression_j_of_i_and_j
                             < LRAA_Globals.config[
                                 "max_rel_frac_expr_alt_compat_contained"
                             ]

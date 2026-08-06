@@ -56,3 +56,43 @@ def test_prune_degradation_products_handles_terminal_split_exon_paths():
 
     retained_ids = {transcript.get_transcript_id() for transcript in retained}
     assert retained_ids == {"t.keep"}
+
+
+def test_prune_degradation_products_tolerates_zero_support_pair():
+    # A gene with expression elsewhere can still contain two models that carry no
+    # assigned reads; their relative support is undefined rather than zero.
+    expressed = _build_transcript(
+        "t.expressed",
+        [[100, 150], [200, 250]],
+        ["POLYA:1", "E:1", "E:2", "I:1", "E:3", "TSS:1"],
+        12.0,
+    )
+    zero_long = _build_transcript(
+        "t.zero_long",
+        [[300, 350], [400, 450]],
+        ["POLYA:2", "E:5", "I:2", "E:6", "TSS:2"],
+        0.0,
+    )
+    zero_contained = _build_transcript(
+        "t.zero_contained",
+        [[300, 350], [400, 440]],
+        ["POLYA:2", "E:5", "I:2", "E:6", "TSS:2"],
+        0.0,
+    )
+
+    frac_read_assignments = {
+        "t.expressed": {_DummyMP(12): 1.0},
+        "t.zero_long": {},
+        "t.zero_contained": {},
+    }
+
+    retained = TranscriptFiltering.prune_likely_degradation_products(
+        [expressed, zero_long, zero_contained],
+        _DummySpliceGraph(),
+        frac_read_assignments,
+    )
+
+    retained_ids = {transcript.get_transcript_id() for transcript in retained}
+    assert "t.expressed" in retained_ids
+    # neither zero-support model may be pruned on relative expression grounds
+    assert {"t.zero_long", "t.zero_contained"} <= retained_ids
