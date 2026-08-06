@@ -8,11 +8,13 @@ if str(REPO_ROOT / "pylib") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "pylib"))
 
 import networkx as nx
+import pysam
 
 import LRAA_Globals
 from GenomeFeature import Exon, Intron, PolyAsite, TSS
 from IsoformReadRescue import (
     _build_transcript_models,
+    _collect_read_sequences,
     _merge_contiguous_genomic_segments,
     _normalize_read_identifier,
     _parse_rescue_alignments,
@@ -134,3 +136,35 @@ def test_minus_strand_rescue_soft_clips_follow_transcript_ends(tmp_path, monkeyp
         intron.get_id(),
         exon_high.get_id(),
     ]
+
+
+def _supplementary_then_primary_bam(path):
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
+
+    def _alignment(flag, start, cigar, seq):
+        aln = pysam.AlignedSegment()
+        aln.query_name = "r1"
+        aln.flag = flag
+        aln.reference_id = 0
+        aln.reference_start = start
+        aln.mapping_quality = 60
+        aln.cigar = cigar
+        aln.query_sequence = seq
+        aln.set_tag("NM", 0)
+        return aln
+
+    with pysam.AlignmentFile(str(path), "wb", header=header) as bam_writer:
+        bam_writer.write(_alignment(2048, 100, [(5, 10), (0, 40)], "G" * 40))
+        bam_writer.write(_alignment(0, 300, [(0, 50)], "T" * 50))
+    pysam.index(str(path))
+
+
+def test_rescue_sequences_come_from_the_primary_record(tmp_path):
+    bam_path = tmp_path / "supplementary.bam"
+    _supplementary_then_primary_bam(bam_path)
+
+    read_name_to_seq = _collect_read_sequences(
+        str(bam_path), "chr1", None, None, {"r1"}, "+"
+    )
+
+    assert read_name_to_seq == {"r1": "T" * 50}

@@ -284,6 +284,10 @@ def _collect_read_sequences(
         else:
             fetch_iter = bam_reader.fetch(contig_acc)
         for read in fetch_iter:
+            if read.is_unmapped or read.is_supplementary or read.is_secondary:
+                # Only a primary record is guaranteed to carry the full read sequence;
+                # hard-clipped supplementary records would supply a truncated one.
+                continue
             if target_strand is not None:
                 if read.is_forward and target_strand != "+":
                     continue

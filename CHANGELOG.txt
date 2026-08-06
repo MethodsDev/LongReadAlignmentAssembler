@@ -2,6 +2,7 @@ v0.18.0, in development
 - matched reconstructed isoforms to final-graph reference paths after removing reference TSS/PolyA nodes, preserved the matching reference IDs across quantification resets, and excluded synthetic reference reads from draft expression estimates.
 - fixed the post-assembly draft quantification step to rescue reads against the assembled isoforms being quantified instead of the supplied reference models; the mismatch let reads already assigned to a draft isoform be realigned onto a reference path and counted twice in the read support that drives isoform filtering.
 - fixed transcriptome rescue losing its low-percent-identity candidates on an alignment cache hit: the discarded read names are now stored beside the cached alignments and restored when the cache is reused, and a cache lacking that record is re-extracted rather than reported as having no discards. The cache key also covers the extraction flags that determine what gets discarded, and the unrestricted alignment pickle no longer shares a filename with the multi-exon subset.
+- fixed transcriptome rescue reading a truncated read sequence when a hard-clipped supplementary record preceded the primary alignment; sequences are now taken only from primary records.
 
 
 v0.17.7, June 28, 2026
