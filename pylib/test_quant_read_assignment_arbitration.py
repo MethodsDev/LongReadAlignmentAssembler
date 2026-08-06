@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import importlib.util
 import sys
 from importlib.machinery import SourceFileLoader
@@ -62,9 +63,7 @@ def _make_tx_multipath(splice_graph, simple_path, read_name):
 
 def test_read_overlap_threshold_resolves_config_at_assignment_time():
     original_fraction = LRAA_Globals.config["fraction_read_align_overlap"]
-    original_aggressive_assignment = LRAA_Globals.config[
-        "aggressively_assign_reads"
-    ]
+    original_aggressive_assignment = LRAA_Globals.config["aggressively_assign_reads"]
     original_show_progress = LRAA_Globals.config["show_progress_quant_assign"]
 
     def build_assignment_fixture():
@@ -110,9 +109,9 @@ def test_read_overlap_threshold_resolves_config_at_assignment_time():
         assert read_multipath not in quantify._mp_to_transcripts
     finally:
         LRAA_Globals.config["fraction_read_align_overlap"] = original_fraction
-        LRAA_Globals.config[
-            "aggressively_assign_reads"
-        ] = original_aggressive_assignment
+        LRAA_Globals.config["aggressively_assign_reads"] = (
+            original_aggressive_assignment
+        )
         LRAA_Globals.config["show_progress_quant_assign"] = original_show_progress
 
 
@@ -248,3 +247,71 @@ def test_genome_tx_arb_higher_tx_per_id_is_not_miscounted_as_missing_genome():
         e1.get_id(),
         e3.get_id(),
     ]
+
+
+def _build_single_transcript_fixture():
+    """One transcript on the first exon; the third exon belongs to no transcript."""
+    splice_graph, e1, _, e3 = _build_splice_graph()
+    splice_graph._contig_acc = "chr1"
+    splice_graph._contig_strand = "+"
+
+    transcript = MultiPath(splice_graph, [[e1.get_id()]]).toTranscript()
+    transcript.set_gene_id("g1")
+    transcript.set_transcript_id("t1")
+
+    quantify = Quantify(False, 1)
+    quantify._assign_path_nodes_to_gene([transcript])
+    return quantify, splice_graph, e1, e3
+
+
+def _assign_read_on_exon(quantify, splice_graph, exon, read_count):
+    read_multipath = MultiPath(
+        splice_graph,
+        [[exon.get_id()]],
+        read_types={"PacBio"},
+        read_names={1},
+        read_count=read_count,
+    )
+    mp_counter = MultiPathCounter()
+    mp_counter.add(read_multipath)
+    quantify._assign_reads_to_transcripts(splice_graph, mp_counter)
+    return read_multipath
+
+
+def _warnings_from(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+
+
+def test_unanchored_read_paths_report_the_reads_they_drop(caplog):
+    original_show_progress = LRAA_Globals.config["show_progress_quant_assign"]
+    try:
+        LRAA_Globals.config["show_progress_quant_assign"] = False
+
+        quantify, splice_graph, _, unused_exon = _build_single_transcript_fixture()
+        with caplog.at_level(logging.WARNING):
+            unanchored = _assign_read_on_exon(quantify, splice_graph, unused_exon, 4)
+
+        assert unanchored not in quantify._mp_to_transcripts
+        # the reads carried by the dropped path are reported, not just the path count
+        assert any("carrying 4 reads" in message for message in _warnings_from(caplog))
+    finally:
+        LRAA_Globals.config["show_progress_quant_assign"] = original_show_progress
+
+
+def test_anchored_read_paths_do_not_report_dropped_reads(caplog):
+    original_show_progress = LRAA_Globals.config["show_progress_quant_assign"]
+    try:
+        LRAA_Globals.config["show_progress_quant_assign"] = False
+
+        quantify, splice_graph, transcript_exon, _ = _build_single_transcript_fixture()
+        with caplog.at_level(logging.WARNING):
+            anchored = _assign_read_on_exon(quantify, splice_graph, transcript_exon, 4)
+
+        assert quantify._mp_to_transcripts[anchored]
+        assert not any("matched no gene" in m for m in _warnings_from(caplog))
+    finally:
+        LRAA_Globals.config["show_progress_quant_assign"] = original_show_progress

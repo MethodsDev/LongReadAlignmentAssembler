@@ -229,7 +229,11 @@ class Quantify:
                 tqdm = None
                 pbar = None
 
-        gene_unanchored_mp_count_pairs = list()
+        # Read paths that match no gene's splice-graph nodes are not assignable and
+        # are not offered to rescue, so their reads leave quantification without an
+        # output row. Count them so the loss is visible.
+        num_paths_unanchored = 0
+        num_read_counts_unanchored = 0
 
         num_paths_total = 0
         num_read_counts_total = 0
@@ -319,7 +323,8 @@ class Quantify:
             top_genes = self._get_all_genes_with_node_matches_to_simplepath(sp)
 
             if top_genes is None:
-                gene_unanchored_mp_count_pairs.append(mp_count_pair)
+                num_paths_unanchored += 1
+                num_read_counts_unanchored += count
                 logger.debug("mp_count_pair unanchored: " + str(mp_count_pair))
 
                 continue
@@ -543,6 +548,12 @@ class Quantify:
                 num_read_counts_assigned,
                 num_read_counts_assigned / num_read_counts_total * 100,
             ),
+            "\tnum_paths_unanchored: {} = {:.2f}%, num_read_counts_unanchored: {} = {:.2f}%\n".format(
+                num_paths_unanchored,
+                num_paths_unanchored / num_paths_total * 100,
+                num_read_counts_unanchored,
+                num_read_counts_unanchored / num_read_counts_total * 100,
+            ),
         ]
 
         try:
@@ -554,6 +565,17 @@ class Quantify:
 
         logger.debug(audit_txt)
         logger.info(audit_txt)
+
+        if num_read_counts_unanchored > 0:
+            logger.warning(
+                "%s%d read path(s) carrying %s reads (%.1f%% of reads here) matched no gene "
+                "in the splice graph; those reads are excluded from quantification because "
+                "no isoform exists at those loci",
+                prefix,
+                num_paths_unanchored,
+                num_read_counts_unanchored,
+                num_read_counts_unanchored / num_read_counts_total * 100,
+            )
 
         # finish the progress display cleanly
         if pbar is not None:
