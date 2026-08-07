@@ -45,7 +45,8 @@ workflow LRAA_cell_cluster_guided {
         String sparseMatrixCsvEngine = "python"
         Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
+        String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Boolean quant_only_cluster_guided = false
         Array[File]? pre_normalized_cluster_bams
         Array[File]? pre_normalized_cluster_bais
@@ -204,7 +205,7 @@ workflow LRAA_cell_cluster_guided {
          input:
                  sample_id = sample_id,
                  tracking_file = merge_cluster_trackings.merged_tracking,
-                 docker = docker,
+                 docker = docker_sc,
                  memoryGB = memoryGBscSparseMatrices,
                  csv_engine = sparseMatrixCsvEngine,
                  gzip_level = sparseMatrixGzipLevel

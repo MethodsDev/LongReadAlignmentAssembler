@@ -9,7 +9,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         File? input_BAI
         File? input_GTF
         
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int? min_disk_GB
     }
 

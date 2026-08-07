@@ -1,6 +1,7 @@
 {
     "LRAA_singlecell_wf.HiFi":true,
-    "LRAA_singlecell_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest",
+    "LRAA_singlecell_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest",
+    "LRAA_singlecell_wf.docker_sc":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest",
 
     // ref-guided mode
     "LRAA_singlecell_wf.sample_id":"${this.sample_id}",

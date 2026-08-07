@@ -6,7 +6,7 @@ workflow FilterGoodCells {
     File gene_sparse_tar_gz
     File? isoform_sparse_tar_gz
     File? splice_pattern_sparse_tar_gz
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     Int memoryGB = 32
     
     # Filter parameters

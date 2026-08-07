@@ -8,6 +8,10 @@ unset DOCKER_API_VERSION
 
 VERSION=`cat VERSION.txt`
 
+REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
+
+CORE_IMAGE=${REGISTRY}/lraa-core:${VERSION}
+
 #docker buildx create --name terra-builder --use
 
 #docker buildx build --platform linux/amd64 \
@@ -15,11 +19,36 @@ VERSION=`cat VERSION.txt`
 #  --push .
 
 
-docker build -t us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:${VERSION} .
-docker push  us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:${VERSION}
+# lraa-core must be built and pushed first: Dockerfile.sc and Dockerfile.orf
+# are FROM ${LRAA_CORE_IMAGE} and are built against the core image just made
+# here, not against whatever copy the registry happens to hold.
+#
+#   image        dockerfile
+#   lraa-core    Dockerfile.core
+#   lraa-sc      Dockerfile.sc
+#   lraa-orf     Dockerfile.orf
+#   lraa         Dockerfile        (combined image, kept for anyone pinning it)
+#
+# Each image gets both ${VERSION} and :testing.  The :testing tag is applied
+# with 'docker tag' on the image just built; rebuilding it would cost about an
+# hour of R layers for a byte-identical result.
 
-docker build -t us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing .
-docker push  us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing
+build_and_push() {
+    local name=$1
+    local dockerfile=$2
+
+    docker build -f ${dockerfile} --build-arg LRAA_CORE_IMAGE=${CORE_IMAGE} \
+        -t ${REGISTRY}/${name}:${VERSION} .
+    docker tag ${REGISTRY}/${name}:${VERSION} ${REGISTRY}/${name}:testing
+
+    docker push ${REGISTRY}/${name}:${VERSION}
+    docker push ${REGISTRY}/${name}:testing
+}
+
+build_and_push lraa-core Dockerfile.core
+build_and_push lraa-sc   Dockerfile.sc
+build_and_push lraa-orf  Dockerfile.orf
+build_and_push lraa      Dockerfile
 
 # verify
-docker run --rm us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:${VERSION} /usr/local/src/LRAA/LRAA --version
+docker run --rm ${CORE_IMAGE} /usr/local/src/LRAA/LRAA --version

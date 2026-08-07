@@ -4,7 +4,7 @@ workflow BuildSparseMatricesFromTracking {
   input {
     String sample_id
     File tracking_file
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     Int memoryGB = 16
     String csv_engine = "python"
     Int gzip_level = 1

@@ -4,7 +4,7 @@ workflow GeneSparseM_To_SeuratClusters {
   input {
     String sample_id
     File gene_sparse_tar_gz
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     Int memoryGB = 32
 
     # Seurat parameters (defaults aligned with the Rmd)

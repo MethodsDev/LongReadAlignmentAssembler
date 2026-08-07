@@ -38,7 +38,7 @@ task LRAA_runner_task {
         String read_umi_tag = "XM"
 
         Int? shardno
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         # CPU cores per contig worker (passed to --num_threads_per_worker)
         Int numThreadsPerWorker
         Int? memoryGB
@@ -324,7 +324,7 @@ workflow LRAA_runner {
         String read_umi_tag = "XM"
                     
         Int? shardno
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         # CPU cores per contig worker (passed to --num_threads_per_worker)
         Int numThreadsPerWorker
     

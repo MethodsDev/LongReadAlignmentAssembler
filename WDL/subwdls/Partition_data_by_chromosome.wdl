@@ -71,7 +71,7 @@ workflow partition_by_chromosome {
         File? genome_fasta
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         Int samtools_threads = 16
     }
 

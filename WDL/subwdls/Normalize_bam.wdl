@@ -10,7 +10,7 @@ task normalize_bam_by_strand {
     Int normalize_max_cov_level
     String label = ""
     # runtime knobs
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     Int cpu = 2
     Int memoryGB = 8
   }

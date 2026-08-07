@@ -9,7 +9,7 @@ workflow Incorporate_gene_symbols {
     File final_sc_isoform_sparse_tar_gz
     File final_sc_splice_pattern_sparse_tar_gz
     File final_sc_gene_transcript_splicehash_mapping
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     Int gffcompare_memoryGB = 8
     Int integrate_memoryGB = 16
   }

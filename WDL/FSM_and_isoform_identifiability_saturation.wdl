@@ -3,7 +3,7 @@ version 1.0
 workflow IsoformSaturationRow {
   input {
     File input_tsv
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
 
     String iso_col = "matching_isoforms"
     String cat_col = "sqanti_cat"
@@ -51,7 +51,7 @@ workflow IsoformSaturationRow {
 task RunSaturation {
   input {
     File input_tsv
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     String iso_col = "matching_isoforms"
     String cat_col = "sqanti_cat"
     String fsm_value = "FSM"

@@ -3,5 +3,5 @@
     "LRAA_ORF_prediction_wf.input_gtf"       : "pasa-salraa.pbio.gtf",
     "LRAA_ORF_prediction_wf.genome_fasta"    : "ref_genome.fa",
     "LRAA_ORF_prediction_wf.min_prot_length" : 30,
-    "LRAA_ORF_prediction_wf.docker"          : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing"
+    "LRAA_ORF_prediction_wf.docker"          : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-orf:testing"
 }

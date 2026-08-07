@@ -19,7 +19,7 @@ workflow LRAA_ORF_prediction_wf {
         String blast_tool = "diamond"  # "diamond" or "blastp"
         File? pfam_search_db
 
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-orf:latest"
     }
 
     call LRAA_ORF_prediction_task {

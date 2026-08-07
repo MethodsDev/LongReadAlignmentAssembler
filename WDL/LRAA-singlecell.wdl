@@ -160,7 +160,8 @@ workflow LRAA_singlecell_wf {
     String sparseMatrixCsvEngine = "python"
     Int sparseMatrixGzipLevel = 1
     Int diskSizeGB = 256
-    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
+    String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
 
     # Seurat clustering parameters (forwarded to Seurat subworkflow)
     Int min_cells = 10
@@ -226,7 +227,7 @@ workflow LRAA_singlecell_wf {
       input:
         sample_id = sample_id,
         tracking_file = select_first([init_quant_tracking_file]),
-        docker = docker,
+        docker = docker_sc,
         memoryGB = memoryGBbuildSparseMatrices,
         csv_engine = sparseMatrixCsvEngine,
         gzip_level = sparseMatrixGzipLevel
@@ -240,7 +241,7 @@ workflow LRAA_singlecell_wf {
           gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz,
           isoform_sparse_tar_gz = build_sc_from_init_tracking.isoform_sparse_dir_tgz,
           splice_pattern_sparse_tar_gz = build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz,
-          docker = docker,
+          docker = docker_sc,
           memoryGB = memoryGBFilterCells,
           fdr_threshold = fdr_threshold,
           lower_threshold = lower_threshold
@@ -254,7 +255,7 @@ workflow LRAA_singlecell_wf {
       input:
         sample_id = sample_id,
         gene_sparse_tar_gz = gene_sparse_for_clustering,
-        docker = docker,
+        docker = docker_sc,
         memoryGB = memoryGBSeurat,
         min_cells = min_cells,
         min_features = min_features,
@@ -297,6 +298,7 @@ workflow LRAA_singlecell_wf {
         sparseMatrixGzipLevel = sparseMatrixGzipLevel,
         diskSizeGB = diskSizeGB,
         docker = docker,
+        docker_sc = docker_sc,
         quant_only_cluster_guided = quant_only
     }
   }

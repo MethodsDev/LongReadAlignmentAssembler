@@ -5,5 +5,5 @@
     "LRAA_wf.annot_gtf" : "ref_annot.gtf",
     "LRAA_wf.main_chromosomes" : "minigenome",
     "LRAA_wf.quant_only" : true,
-    "LRAA_wf.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing"
+    "LRAA_wf.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing"
 }

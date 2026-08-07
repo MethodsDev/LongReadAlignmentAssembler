@@ -12,7 +12,7 @@ workflow LRAA_sqanti_like_multi_sample_summary_wf {
         Int width = 12
         Int height = 12
     
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     
     }
 

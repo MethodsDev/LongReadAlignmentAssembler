@@ -50,7 +50,7 @@ workflow LRAA_quant_by_cluster {
         # Used only for chromosome-sharded per-cluster quantification runs.
         Int num_threads_per_worker_scattered = 2
         
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
 
     # If bam_files not provided, partition the input BAM by cell clusters
@@ -75,7 +75,8 @@ workflow LRAA_quant_by_cluster {
             input:
                 cluster_bams = cluster_bams,
                 normalized_bams = select_first([pre_normalized_cluster_bams]),
-                normalized_bais = pre_normalized_cluster_bais
+                normalized_bais = pre_normalized_cluster_bais,
+                docker = docker
         }
     }
 
@@ -175,6 +176,7 @@ task validate_pre_normalized_inputs {
         Array[File] cluster_bams
         Array[File] normalized_bams
         Array[File]? normalized_bais
+        String docker
     }
 
     command <<<
@@ -191,7 +193,7 @@ task validate_pre_normalized_inputs {
     >>>
 
     runtime {
-        docker: "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:latest"
+        docker: docker
         cpu: 1
         memory: "1 GiB"
         disks: "local-disk 20 SSD"

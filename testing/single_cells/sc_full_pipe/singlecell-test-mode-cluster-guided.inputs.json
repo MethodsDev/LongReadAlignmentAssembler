@@ -10,7 +10,8 @@
 
     
   "LRAA_singlecell_wf.HiFi": true,
-  "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa:testing",
+  "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing",
+  "LRAA_singlecell_wf.docker_sc": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:testing",
 
   "LRAA_singlecell_wf.memoryGB" : 8,
   "LRAA_singlecell_wf.memoryGBPerWorkerScattered" : 8,
