@@ -103,4 +103,5 @@ test_docker:
 
 
 clean:
-	rm -rf ./gffcompare* ./LRAA.* ./__* ./*_lraa_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache
+	rm -rf ./gffcompare* ./LRAA.* ./__* ./*_lraa_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache \
+		./tx_rescue.* ./reassign_multigene_tracking.* ./*.bam.count

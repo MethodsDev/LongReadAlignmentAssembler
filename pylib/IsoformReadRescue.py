@@ -185,9 +185,16 @@ def build_transcriptome_alignment_multipaths(
             }
         return []
 
+    # Keep the scratch tree inside the run's per-(contig,strand) temp dir so that it is
+    # swept by the normal contigtmp cleanup (and by `rm -rf __*` in the test Makefiles)
+    # rather than accumulating in the working directory. Falls back to cwd when the
+    # rescue is invoked outside a contig worker (e.g. unit tests).
+    tmp_parent = os.environ.get("LRAA_TMP_DIR") or os.getcwd()
+    if not os.path.isdir(tmp_parent):
+        tmp_parent = os.getcwd()
     tmp_dir = tempfile.mkdtemp(
         prefix=f"tx_rescue.{contig_acc}.{splice_graph.get_contig_strand()}.",
-        dir=os.getcwd(),
+        dir=tmp_parent,
     )
     keep_tmp = bool(LRAA_Globals.DEBUG) or bool(
         LRAA_Globals.config.get("no_cleanup", False)
