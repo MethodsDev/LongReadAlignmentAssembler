@@ -100,7 +100,7 @@ RUN pip install --no-cache-dir --break-system-packages \
 WORKDIR $SRC
 
 ENV LRAA_VERSION="v0.18.1"
-ENV LRAA_CO=3738823e0b836daa72f9cf7a5862709836a9a0fb
+ENV LRAA_CO=d31ee8562a2fe5d8357618f04255d87a522357b5
 
 RUN curl -sSL https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz -o lraa.tar.gz && \
     tar xzf lraa.tar.gz && \
