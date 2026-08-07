@@ -232,11 +232,17 @@ task merge_GTFs {
         version_comment="# LRAA version ${lraa_version}"
 
         gtf_output="~{outputFilePrefix}.gtf"
-        printf '%s\n' "$version_comment" > "$gtf_output"
         gtf_files_str="~{sep=' ' gtfFiles}"
-        for file in $gtf_files_str; do
-           awk 'NR == 1 && /^# LRAA version / {next} {print}' "$file" >> "$gtf_output"
-        done
+
+        lraa_merge_header.py \
+            --version_comment "$version_comment" \
+            --inputs $gtf_files_str \
+            --output "$gtf_output"
+
+        # the merged header above stands in for the shard headers, so drop each
+        # shard's whole leading comment block, not just its version line
+        awk 'FNR == 1 { in_header = 1 } in_header && /^#/ { next } { in_header = 0; print }' \
+            $gtf_files_str >> "$gtf_output"
     >>>
 
     output {
@@ -283,22 +289,24 @@ task mergeQuantResults {
     lraa_version="$(LRAA --version | awk '{print $NF}')"
     export LRAA_VERSION_COMMENT="# LRAA version ${lraa_version}"
 
-    prepend_lraa_version_comment() {
+    lraa_merge_header.py \
+        --version_comment "$LRAA_VERSION_COMMENT" \
+        --inputs ~{sep=' ' quantExprFiles} \
+        --output merge_header.txt
+
+    prepend_lraa_merge_header() {
         local path="$1"
-        local tmp="${path}.with_lraa_version"
+        local tmp="${path}.with_lraa_header"
         if [[ -s "$path" ]] && head -n 1 "$path" | grep -qxF "$LRAA_VERSION_COMMENT"; then
             return
         fi
-        {
-            printf '%s\n' "$LRAA_VERSION_COMMENT"
-            cat "$path"
-        } > "$tmp"
+        cat merge_header.txt "$path" > "$tmp"
         mv "$tmp" "$path"
     }
 
-    prepend_lraa_version_comment_gzip() {
+    prepend_lraa_merge_header_gzip() {
         local path="$1"
-        local tmp="${path}.with_lraa_version"
+        local tmp="${path}.with_lraa_header"
         python <<PYCODE
 import gzip
 import os
@@ -310,12 +318,11 @@ version_comment = os.environ["LRAA_VERSION_COMMENT"]
 
 with gzip.open(path, "rt") as inp, gzip.open(tmp, "wt") as out:
     first = inp.readline()
-    if first.rstrip("\\r\\n") == version_comment:
+    if first.rstrip("\\r\\n") != version_comment:
+        with open("merge_header.txt", "rt") as header_fh:
+            shutil.copyfileobj(header_fh, out)
+    if first:
         out.write(first)
-    else:
-        print(version_comment, file=out)
-        if first:
-            out.write(first)
     shutil.copyfileobj(inp, out)
 
 os.replace(tmp, path)
@@ -326,19 +333,18 @@ PYCODE
         --output "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
         --quant_files ~{sep=' ' quantExprFiles}
 
-    prepend_lraa_version_comment "~{outputFilePrefix}.pre_cross_gene_em.quant.expr"
+    prepend_lraa_merge_header "~{outputFilePrefix}.pre_cross_gene_em.quant.expr"
 
     python <<CODE
 import json
 import gzip
-import os
 
 tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
 tracking_files_list = json.loads(tracking_files_json)
-version_comment = os.environ["LRAA_VERSION_COMMENT"]
+header_lines = open("merge_header.txt", "rt").read()
 
 with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
-    print(version_comment, file=ofh)
+    ofh.write(header_lines)
     wrote_header = False
     expected_header = None
     for i, tracking_file in enumerate(tracking_files_list):
@@ -372,8 +378,8 @@ CODE
             --output_expr "~{outputFilePrefix}.quant.expr" \
             --output_tracking "~{outputFilePrefix}.quant.tracking.gz" \
             --tmp_dir "."
-        prepend_lraa_version_comment "~{outputFilePrefix}.quant.expr"
-        prepend_lraa_version_comment_gzip "~{outputFilePrefix}.quant.tracking.gz"
+        prepend_lraa_merge_header "~{outputFilePrefix}.quant.expr"
+        prepend_lraa_merge_header_gzip "~{outputFilePrefix}.quant.tracking.gz"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
         cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     else

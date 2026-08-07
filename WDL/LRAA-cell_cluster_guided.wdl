@@ -313,17 +313,21 @@ task LRAA_merge_trackings {
         lraa_version="$(LRAA --version | awk '{print $NF}')"
         export LRAA_VERSION_COMMENT="# LRAA version ${lraa_version}"
 
+        lraa_merge_header.py \
+            --version_comment "$LRAA_VERSION_COMMENT" \
+            --inputs ~{sep=' ' tracking_files} \
+            --output merge_header.txt
+
         python <<CODE
 import json
 import gzip
-import os
 
 tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
 tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
-version_comment = os.environ["LRAA_VERSION_COMMENT"]
+header_lines = open("merge_header.txt", "rt").read()
 
 with gzip.open("~{outputfile}", "wt") as ofh:
-    print(version_comment, file=ofh)
+    ofh.write(header_lines)
     wrote_header = False
     expected_header = None
     for i, tracking_file in enumerate(tracking_files_list):
@@ -402,23 +406,25 @@ task lraa_merge_gtf_task {
              exit 1
       }
 
-      prepend_lraa_version_comment() {
+      lraa_merge_header.py \
+          --version_comment "$version_comment" \
+          --inputs ~{sep=' ' LRAA_cell_cluster_gtfs} \
+          --output merge_header.txt
+
+      prepend_lraa_merge_header() {
           local path="$1"
-          local tmp="${path}.with_lraa_version"
+          local tmp="${path}.with_lraa_header"
           if [[ -s "$path" ]] && head -n 1 "$path" | grep -qxF "$version_comment"; then
               return
           fi
-          {
-              printf '%s\n' "$version_comment"
-              cat "$path"
-          } > "$tmp"
+          cat merge_header.txt "$path" > "$tmp"
           mv "$tmp" "$path"
       }
 
-      prepend_lraa_version_comment ~{sample_id}.LRAA.sc_merged.gtf
+      prepend_lraa_merge_header ~{sample_id}.LRAA.sc_merged.gtf
 
       if [[ -f ~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv ]]; then
-          prepend_lraa_version_comment ~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv
+          prepend_lraa_merge_header ~{sample_id}.LRAA.sc_merged.gtf.tracking.tsv
       fi
 
     >>>
