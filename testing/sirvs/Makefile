@@ -52,13 +52,18 @@ test_quant:
 #
 # SIRV7 is asserted against two permitted values rather than one. SIRV701 and SIRV705
 # are terminal twins: identical intron chains, identical cDNA length, differing by 2
-# bases at each end, and both supplied here. Both become multipaths, with 2 and 3 real
-# reads, but a single model is reconstructed and which twin's terminals it carries
-# varies between runs. That is pre-existing, reproduced at 89a94d9, and eliminated by
-# neither PYTHONHASHSEED nor serial execution, so it comes from identity-ordered
-# iteration while paths are composed rather than from hashing or scheduling. Asserting
-# one pair would fail about half the time; asserting both still catches drift to any
-# other coordinate. Tighten this to a single pair once that ordering is made stable.
+# bases at each end, and both supplied here. Both are reconstructed, deterministically
+# and with stable read counts of 2 and 3; __PRE-Tx-Filtering.transcripts.gtf is
+# byte-identical between runs and carries both. Degradation pruning then removes one,
+# and each twin is a valid degradation product of the other, so whichever is examined
+# first survives. The examination order is set iteration over Transcript objects,
+# which define no __hash__ and so order by address: TranscriptFiltering.py builds
+# transcript_list = list(transcript_set) with the deterministic sort just below it
+# commented out. Hence PYTHONHASHSEED, which salts only string hashing, does not
+# help, and neither does serial execution. Pre-existing, reproduced at 89a94d9.
+# Asserting one pair would fail about half the time; asserting both still catches
+# drift to any other coordinate. Tighten this to a single pair once that order is
+# made deterministic, ideally so the better-supported twin wins.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
