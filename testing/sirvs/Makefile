@@ -44,12 +44,31 @@ test_quant:
 # its full 11 reads, and a guided run against the complete annotation rebuilds its
 # exact structure. Its absence here follows from the reference sequence and is not a
 # regression to chase.
+#
+# The class-code summary above keys on intron chains, so it cannot see terminal
+# coordinates: a boundary shift leaves every count unchanged. The three checks after
+# the diff pin terminals directly. SIRV311 and SIRV618 are asserted exactly, matching
+# their annotated spans.
+#
+# SIRV7 is asserted against two permitted values rather than one. SIRV701 and SIRV705
+# are terminal twins: identical intron chains, identical cDNA length, differing by 2
+# bases at each end, and both supplied here. Both become multipaths, with 2 and 3 real
+# reads, but a single model is reconstructed and which twin's terminals it carries
+# varies between runs. That is pre-existing, reproduced at 89a94d9, and eliminated by
+# neither PYTHONHASHSEED nor serial execution, so it comes from identity-ordered
+# iteration while paths are composed rather than from hashing or scheduling. Asserting
+# one pair would fail about half the time; asserting both still catches drift to any
+# other coordinate. Tighten this to a single pair once that ordering is made stable.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-guided.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-guided.gtf.refmap
 	diff gffcompare.LRAA.LRAA.ref-guided.gtf.refmap.full.summary.tsv data/latest_refguided_summary.tsv
+	@echo "checking exact terminal coordinates, which the class-code summary cannot see"
+	awk '$$1=="SIRV3" && $$3=="transcript" && $$4==4602 && $$5==4762 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
+	awk '$$1=="SIRV6" && $$3=="transcript" && $$4==2359 && $$5==2547 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
+	awk '$$1=="SIRV7" && $$3=="transcript" && $$7=="-" && (($$4==1004 && $$5==147923) || ($$4==1006 && $$5==147925)) {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 
 
 # A supplied annotation model with no read evidence must never become a candidate.
