@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
+import importlib.machinery
+import importlib.util
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "pylib") not in sys.path:
@@ -201,3 +205,55 @@ def test_rescue_declined_when_it_explains_less_of_the_read_than_the_genome():
     # substitutions reduce the count, insertions and deletions do not double-count
     assert _explained_read_bases(_aln("100M", 4)) == 96
     assert _explained_read_bases(_aln("96M4I", 4)) == 96
+
+
+def test_rescue_raises_rather_than_skipping_when_minimap2_is_absent(monkeypatch):
+    """Returning empty here would silently drop every read rescue was to recover."""
+
+    import shutil as rescue_shutil
+
+    import IsoformReadRescue
+
+    monkeypatch.setattr(
+        IsoformReadRescue.shutil, "which", lambda name: None, raising=True
+    )
+    assert rescue_shutil is IsoformReadRescue.shutil
+
+    with pytest.raises(RuntimeError, match="minimap2"):
+        IsoformReadRescue.build_transcriptome_alignment_multipaths(
+            None, [], "", "reads.bam", "chr1", 1, 1000
+        )
+
+
+def test_lraa_exits_before_doing_work_when_a_configured_alignment_has_no_minimap2(
+    monkeypatch,
+):
+    """The CLI guard must fire on rescue and on the two transcriptome quant modes."""
+
+    lraa_cli = _load_lraa_cli()
+    monkeypatch.setattr(lraa_cli.shutil, "which", lambda name: None, raising=True)
+
+    for rescue_enabled, mode, expected in (
+        (True, "rescue_unassigned", "transcriptome read rescue"),
+        (False, "transcriptome_only", "transcriptome_only"),
+        (False, "genome_tx_arb", "genome_tx_arb"),
+    ):
+        with pytest.raises(SystemExit) as exit_info:
+            lraa_cli._require_minimap2_for_transcriptome_alignment(
+                rescue_enabled, mode
+            )
+        assert "minimap2" in str(exit_info.value)
+        assert expected in str(exit_info.value)
+
+    # genome-only assignment never aligns to transcripts, so it must still run
+    lraa_cli._require_minimap2_for_transcriptome_alignment(False, "genome")
+
+
+def _load_lraa_cli():
+    """Import the top-level LRAA script, which is not importable by name."""
+
+    loader = importlib.machinery.SourceFileLoader("lraa_cli", str(REPO_ROOT / "LRAA"))
+    spec = importlib.util.spec_from_loader("lraa_cli", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module

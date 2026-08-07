@@ -97,6 +97,36 @@ def _seed_authoritative_config_from_args(config, args):
             config[key] = getattr(args, key)
 
 
+def _require_minimap2_for_transcriptome_alignment(
+    rescue_enabled, quant_read_assignment_mode
+):
+    """Refuse to run a configuration that silently degrades without minimap2.
+
+    Transcriptome alignment is skipped outright when the binary is missing, so
+    the run completes, reports fewer assigned reads, and says so only in a
+    per-contig log that cleanup deletes.  A run that cannot do what it was asked
+    to do must fail instead.
+    """
+
+    modes_requiring_alignment = ("transcriptome_only", "genome_tx_arb")
+    mode_requires = quant_read_assignment_mode in modes_requiring_alignment
+    if not (rescue_enabled or mode_requires):
+        return
+    if shutil.which("minimap2") is not None:
+        return
+
+    requirement = (
+        f"--quant_read_assignment_mode {quant_read_assignment_mode}"
+        if mode_requires
+        else "transcriptome read rescue"
+    )
+    sys.exit(
+        f"Error, {requirement} aligns reads with minimap2, which was not found in PATH. "
+        "Install minimap2, or run with --no_rescue_unassigned_reads_via_transcriptome_alignment "
+        "and --quant_read_assignment_mode genome to proceed without it."
+    )
+
+
 def _apply_hifi_splice_default(config, args):
     if args.HiFi and not hasattr(args, "min_alt_splice_freq"):
         config["min_alt_splice_freq"] = 0.01
@@ -1061,6 +1091,9 @@ def main():
     LRAA_Globals.config["quant_read_assignment_mode"] = quant_read_assignment_mode
     LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"] = (
         rescue_enabled
+    )
+    _require_minimap2_for_transcriptome_alignment(
+        rescue_enabled, quant_read_assignment_mode
     )
     if args.allow_secondary_alignments:
         logger.info(

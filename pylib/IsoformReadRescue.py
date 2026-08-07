@@ -83,8 +83,13 @@ def build_transcriptome_alignment_multipaths(
 ):
     minimap2_exe = shutil.which("minimap2")
     if minimap2_exe is None:
-        logger.warning("minimap2 not found in PATH; skipping %s", log_label)
-        return []
+        # Skipping here would drop every read this call was meant to recover and
+        # let the run report the smaller number as if it were the answer.
+        raise RuntimeError(
+            f"minimap2 not found in PATH, so {log_label} cannot run. "
+            "Install minimap2, or disable it with "
+            "--no_rescue_unassigned_reads_via_transcriptome_alignment."
+        )
 
     transcript_models = _build_transcript_models(
         splice_graph,
