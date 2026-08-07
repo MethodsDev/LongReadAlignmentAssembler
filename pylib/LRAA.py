@@ -42,6 +42,24 @@ logger = logging.getLogger(__name__)
 ITER = 0
 
 
+def _path_selection_sort_key(scored_path):
+    """Score first; an input-transcript template breaks a tie.
+
+    A template contributes nothing to the score, so it cannot make an unsupported
+    model selectable. It only settles which of two paths carrying the very same reads
+    is taken, and there the annotated structure is the better answer: a read whose
+    genome alignment misplaced a microexon supports both the path it was misaligned to
+    and the annotated one it was rescued onto, at identical read counts.
+    """
+    try:
+        has_template = bool(
+            scored_path.get_all_represented_read_ids() & LRAA_Globals.SYNTHETIC_READ_IDS
+        )
+    except Exception:
+        has_template = False
+    return (scored_path.get_score(), has_template)
+
+
 class LRAA:
 
     # Removed min_transcript_length as class variable - now referenced from LRAA_Globals.config at runtime
@@ -552,7 +570,9 @@ class LRAA:
 
         all_scored_paths = self._retrieve_all_scored_paths(pasa_vertices)
 
-        all_scored_paths = sorted(all_scored_paths, key=lambda x: x.get_score())
+        all_scored_paths = sorted(
+            all_scored_paths, key=_path_selection_sort_key
+        )
 
         all_represented_read_ids = set()
 
@@ -628,7 +648,9 @@ class LRAA:
                     path.rescore(all_represented_read_ids)
 
                 # reprioritize
-                all_scored_paths = sorted(all_scored_paths, key=lambda x: x.get_score())
+                all_scored_paths = sorted(
+            all_scored_paths, key=_path_selection_sort_key
+        )
 
         # Path extraction stops when the best remaining path falls below min_path_score,
         # which can leave graph nodes unrepresented. A node whose only support is the

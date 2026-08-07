@@ -253,3 +253,36 @@ def test_merge_mode_fake_reads_are_not_discounted_from_scoring(tmp_path):
         LG.SYNTHETIC_READ_IDS.clear()
         LG.SYNTHETIC_READ_IDS.update(preserved)
         LG.READ_NAME_STORE = None
+
+
+def test_template_breaks_a_score_tie_but_never_creates_support():
+    from LRAA import _path_selection_sort_key
+
+    class _Stub:
+        def __init__(self, score, ids):
+            self._score = score
+            self._ids = set(ids)
+
+        def get_score(self):
+            return self._score
+
+        def get_all_represented_read_ids(self):
+            return self._ids
+
+    preserved = set(LG.SYNTHETIC_READ_IDS)
+    LG.SYNTHETIC_READ_IDS.clear()
+    LG.SYNTHETIC_READ_IDS.update({901})
+    try:
+        plain = _Stub(5, {1, 2, 3})
+        templated = _Stub(5, {1, 2, 3, 901})
+        # paths are popped from the end, so the templated one is taken first on a tie
+        assert sorted([plain, templated], key=_path_selection_sort_key)[-1] is templated
+
+        # a template cannot outrank real support
+        stronger = _Stub(6, {1, 2, 3, 4})
+        assert (
+            sorted([templated, stronger], key=_path_selection_sort_key)[-1] is stronger
+        )
+    finally:
+        LG.SYNTHETIC_READ_IDS.clear()
+        LG.SYNTHETIC_READ_IDS.update(preserved)
