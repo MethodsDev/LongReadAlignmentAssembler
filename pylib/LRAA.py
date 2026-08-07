@@ -570,9 +570,7 @@ class LRAA:
 
         all_scored_paths = self._retrieve_all_scored_paths(pasa_vertices)
 
-        all_scored_paths = sorted(
-            all_scored_paths, key=_path_selection_sort_key
-        )
+        all_scored_paths = sorted(all_scored_paths, key=_path_selection_sort_key)
 
         all_represented_read_ids = set()
 
@@ -649,8 +647,8 @@ class LRAA:
 
                 # reprioritize
                 all_scored_paths = sorted(
-            all_scored_paths, key=_path_selection_sort_key
-        )
+                    all_scored_paths, key=_path_selection_sort_key
+                )
 
         # Path extraction stops when the best remaining path falls below min_path_score,
         # which can leave graph nodes unrepresented. A node whose only support is the
