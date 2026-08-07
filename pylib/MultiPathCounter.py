@@ -148,6 +148,39 @@ class MultiPathCounter:
 
             return self._multipath_counter[multipath_key]
 
+    def detach_reads_from_other_paths(self, read_ids, keep_simple_path_tuples):
+        """Leave each given read represented only by the paths named in keep.
+
+        A rescued read has been realigned onto a target and projected back to a graph
+        path. Its original path is the one the rescue improved on, so leaving the read
+        on both would let a single read support two competing structures, and would let
+        a path built entirely from reads that moved elsewhere keep their support. Any
+        path emptied by this is dropped.
+
+        Returns the number of read-to-path attachments removed.
+        """
+        read_ids = set(read_ids)
+        keep = set(keep_simple_path_tuples)
+        detached = 0
+
+        for multipath_key in list(self._multipath_counter.keys()):
+            if multipath_key in keep:
+                continue
+            mp_count_pair = self._multipath_counter[multipath_key]
+            multipath, _count = mp_count_pair.get_multipath_and_count()
+            present = read_ids & set(multipath.get_read_ids())
+            if not present:
+                continue
+            for read_id in present:
+                multipath.remove_read_id(read_id)
+                detached += 1
+            # remove_read_id decrements the multipath's own count; resync the pair
+            mp_count_pair.reset_count()
+            if mp_count_pair.get_count() <= 0:
+                del self._multipath_counter[multipath_key]
+
+        return detached
+
     def get_all_MultiPathCountPairs(self):
         # self.validate_MultiPathCounter()
         return self._multipath_counter.values()

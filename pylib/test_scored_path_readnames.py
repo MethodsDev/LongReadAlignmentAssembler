@@ -286,3 +286,48 @@ def test_template_breaks_a_score_tie_but_never_creates_support():
     finally:
         LG.SYNTHETIC_READ_IDS.clear()
         LG.SYNTHETIC_READ_IDS.update(preserved)
+
+
+def test_detach_leaves_a_rescued_read_on_only_its_rescued_path(tmp_path):
+    """A rescued read must not keep supporting the path the rescue improved on.
+
+    Otherwise one read backs two competing structures, and a path whose reads have all
+    moved elsewhere keeps their support.
+    """
+    from MultiPathCounter import MultiPathCounter
+
+    sg, e1, e2, e3 = build_minimal_sg_with_exons()
+    base = tmp_path / "detachnames"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    try:
+        original = MultiPath(
+            sg, [[e1.get_id(), e2.get_id()]], read_names={"shared", "own"}
+        )
+        rescued = MultiPath(
+            sg, [[e1.get_id(), e2.get_id(), e3.get_id()]], read_names={"shared"}
+        )
+        counter = MultiPathCounter()
+        counter.add(original)
+        counter.add(rescued)
+
+        detached = counter.detach_reads_from_other_paths(
+            rescued.get_read_ids(), {rescued.get_simple_path_tuple()}
+        )
+        assert detached == 1
+
+        by_path = {
+            mp.get_simple_path_tuple(): count
+            for mp, count in (
+                pair.get_multipath_and_count()
+                for pair in counter.get_all_MultiPathCountPairs()
+            )
+        }
+        # the rescued path keeps the read; the original keeps only its own
+        assert by_path[rescued.get_simple_path_tuple()] == 1
+        assert by_path[original.get_simple_path_tuple()] == 1
+        assert "shared" not in {
+            LG.READ_NAME_STORE.get_name(rid) for rid in original.get_read_ids()
+        }
+    finally:
+        LG.READ_NAME_STORE = None

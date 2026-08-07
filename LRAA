@@ -23,7 +23,7 @@ sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "pylib"])
 )
 from Splice_graph import Splice_graph
-from LRAA import LRAA
+from LRAA import LRAA, _detach_rescued_reads_from_original_paths
 from MultiPath import MultiPath
 from MultiPathCounter import MultiPathCounter
 from Transcript import Transcript, GTF_contig_to_transcripts
@@ -4209,6 +4209,10 @@ def run_quant_only(
 
             for rescued_mp in rescued_mps:
                 mp_counter.add(rescued_mp)
+
+            _detach_rescued_reads_from_original_paths(
+                mp_counter, rescued_mps, contig_acc, contig_strand
+            )
 
     q = Quantify(
         run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"

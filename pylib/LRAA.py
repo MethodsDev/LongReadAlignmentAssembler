@@ -42,6 +42,39 @@ logger = logging.getLogger(__name__)
 ITER = 0
 
 
+def _detach_rescued_reads_from_original_paths(
+    mp_counter, rescued_mps, contig_acc=None, contig_strand=None
+):
+    """Leave each rescued read represented only by its rescued path.
+
+    Rescue realigns a read against a target and projects the hit back to a graph path,
+    but it does not detach the read from the path it already had. Left alone, one read
+    supports two competing structures, and a path whose reads all moved elsewhere keeps
+    their support: a read whose genome alignment misplaced a microexon would back both
+    the misaligned path and the corrected one, at identical counts. Acceptance has
+    already established the rescued alignment explains at least as much of the read, so
+    the original attachment is the one to drop.
+    """
+    if not rescued_mps:
+        return 0
+
+    rescued_read_ids = set()
+    keep_paths = set()
+    for rescued_mp in rescued_mps:
+        rescued_read_ids.update(rescued_mp.get_read_ids())
+        keep_paths.add(rescued_mp.get_simple_path_tuple())
+
+    detached = mp_counter.detach_reads_from_other_paths(rescued_read_ids, keep_paths)
+    if detached:
+        logger.info(
+            "[%s%s] rescue: detached %d read attachments from superseded paths",
+            contig_acc,
+            contig_strand,
+            detached,
+        )
+    return detached
+
+
 def _path_selection_sort_key(scored_path):
     """Score first; an input-transcript template breaks a tie.
 
@@ -263,6 +296,10 @@ class LRAA:
 
         for rescued_mp in rescued_mps:
             mp_counter.add(rescued_mp)
+
+        _detach_rescued_reads_from_original_paths(
+            mp_counter, rescued_mps, contig_acc, contig_strand
+        )
 
     def reconstruct_isoforms(self, single_best_only=False):
 
