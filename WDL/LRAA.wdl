@@ -27,6 +27,9 @@ workflow LRAA_wf {
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
 
+        # If set, the count_bam step is skipped and this value is passed to LRAA as --num_total_reads
+        Int? num_total_reads
+
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
@@ -62,11 +65,15 @@ workflow LRAA_wf {
     
     if (!run_without_splitting) {
 
-        call count_bam {
-            input:
-          bam = inputBAM,
-          samtools_threads = countBamThreads
+        if (!defined(num_total_reads)) {
+            call count_bam {
+                input:
+                    bam = inputBAM,
+                    samtools_threads = countBamThreads
+            }
         }
+
+        Int scatter_num_total_reads = select_first([num_total_reads, count_bam.count])
 
         if (allow_secondary_alignments) {
             call filterBamToSecondaryRescue as preScatterSecondaryRescue {
@@ -118,7 +125,7 @@ workflow LRAA_wf {
                     oversimplify = oversimplify,
                     contig = contig_name,
                     num_parallel_contigs = num_parallel_contigs,
-                    num_total_reads = count_bam.count,
+                    num_total_reads = scatter_num_total_reads,
                     min_per_id = min_per_id,
                     quant_only = quant_only,
                     HiFi = HiFi,
@@ -191,6 +198,7 @@ workflow LRAA_wf {
                 read_umi_tag = read_umi_tag,
                 numThreadsPerWorker = numThreadsPerWorker,
                 num_parallel_contigs = num_parallel_contigs,
+                num_total_reads = num_total_reads,
                 min_mapping_quality = min_mapping_quality,
                 min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                 docker = docker,
