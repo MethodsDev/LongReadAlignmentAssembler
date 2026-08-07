@@ -96,3 +96,34 @@ def test_prune_degradation_products_tolerates_zero_support_pair():
     assert "t.expressed" in retained_ids
     # neither zero-support model may be pruned on relative expression grounds
     assert {"t.zero_long", "t.zero_contained"} <= retained_ids
+
+
+def test_prune_degradation_products_prefers_better_supported_terminal_twin():
+    # Terminal variants of one intron chain are the same length and each qualifies as
+    # the other's degradation product, so the structural tests cannot separate them.
+    # The better-supported model must win, and the winner must not depend on the order
+    # the models happen to arrive in.
+    def build_pair():
+        more = _build_transcript(
+            "t.more", [[102, 152], [202, 252]], ["E:2", "I:1", "E:3", "E:4"], 5.0
+        )
+        less = _build_transcript(
+            "t.less", [[100, 150], [200, 250]], ["E:1", "E:2", "I:1", "E:3"], 2.0
+        )
+        assert more.get_cdna_len() == less.get_cdna_len()
+        return more, less
+
+    frac_read_assignments = {
+        "t.more": {_DummyMP(5): 1.0},
+        "t.less": {_DummyMP(2): 1.0},
+    }
+
+    for ordering in ((0, 1), (1, 0)):
+        pair = build_pair()
+        retained = TranscriptFiltering.prune_likely_degradation_products(
+            [pair[i] for i in ordering],
+            _DummySpliceGraph(),
+            frac_read_assignments,
+        )
+        retained_ids = {transcript.get_transcript_id() for transcript in retained}
+        assert retained_ids == {"t.more"}

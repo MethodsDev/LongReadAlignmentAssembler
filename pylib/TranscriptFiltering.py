@@ -328,9 +328,21 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                                                                        ) ) ) 
         """
 
-        # sort by desc cdna len
-        transcript_list = list(
-            reversed(sorted(transcript_list, key=lambda x: x.get_cdna_len()))
+        # Longest first, so a longer model is the candidate subsumer of a shorter one.
+        # Equal cdna lengths are a real tie: terminal variants of one intron chain can
+        # each qualify as the other's degradation product, and the structural tests
+        # below run before the expression test, so whichever is visited first wins
+        # outright. Transcript hashes by identity, so that used to be address order.
+        # Break the tie on assigned reads, then on structure, so the better-supported
+        # model survives and absorbs the weaker one. Read counts are a stable snapshot:
+        # absorbing transfers multipath evidence, not assigned counts.
+        transcript_list = sorted(
+            transcript_list,
+            key=lambda x: (
+                -x.get_cdna_len(),
+                -x.get_read_counts_assigned(),
+                Transcript.Transcript.structural_sort_key(x),
+            ),
         )
 
         transcript_prune_as_degradation = set()

@@ -50,20 +50,15 @@ test_quant:
 # the diff pin terminals directly. SIRV311 and SIRV618 are asserted exactly, matching
 # their annotated spans.
 #
-# SIRV7 is asserted against two permitted values rather than one. SIRV701 and SIRV705
-# are terminal twins: identical intron chains, identical cDNA length, differing by 2
-# bases at each end, and both supplied here. Both are reconstructed, deterministically
-# and with stable read counts of 2 and 3; __PRE-Tx-Filtering.transcripts.gtf is
-# byte-identical between runs and carries both. Degradation pruning then removes one,
-# and each twin is a valid degradation product of the other, so whichever is examined
-# first survives. The examination order is set iteration over Transcript objects,
-# which define no __hash__ and so order by address: TranscriptFiltering.py builds
-# transcript_list = list(transcript_set) with the deterministic sort just below it
-# commented out. Hence PYTHONHASHSEED, which salts only string hashing, does not
-# help, and neither does serial execution. Pre-existing, reproduced at 89a94d9.
-# Asserting one pair would fail about half the time; asserting both still catches
-# drift to any other coordinate. Tighten this to a single pair once that order is
-# made deterministic, ideally so the better-supported twin wins.
+# SIRV7 pins the harder case. SIRV701 and SIRV705 are terminal twins: identical intron
+# chains, identical cDNA length, differing by 2 bases at each end, and both supplied
+# here. Both are reconstructed, deterministically and with stable read counts of 2 and
+# 3, and degradation pruning then removes one. Each twin is a valid degradation
+# product of the other, so this used to be decided by whichever was examined first,
+# which was set iteration over Transcript objects -- address order, since Transcript
+# defines no __hash__. The run-to-run flip that caused is fixed: pruning now breaks a
+# cdna-length tie on assigned reads, so SIRV705 wins on its 3 reads against 2 and the
+# terminals follow the read evidence.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
@@ -73,7 +68,7 @@ test_ref_guided_ID:
 	@echo "checking exact terminal coordinates, which the class-code summary cannot see"
 	awk '$$1=="SIRV3" && $$3=="transcript" && $$4==4602 && $$5==4762 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 	awk '$$1=="SIRV6" && $$3=="transcript" && $$4==2359 && $$5==2547 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
-	awk '$$1=="SIRV7" && $$3=="transcript" && $$7=="-" && (($$4==1004 && $$5==147923) || ($$4==1006 && $$5==147925)) {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
+	awk '$$1=="SIRV7" && $$3=="transcript" && $$7=="-" && $$4==1006 && $$5==147925 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 
 
 # A supplied annotation model with no read evidence must never become a candidate.
