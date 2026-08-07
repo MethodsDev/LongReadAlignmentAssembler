@@ -4,13 +4,19 @@ MAINTAINER bhaas@broadinstitute.org
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Every apt layer clears /var/lib/apt/lists afterwards; the lists are ~60MB and
+# nothing reads them at runtime.
+#
+# Deliberately absent:
+#   libghc-zlib-dev -- the Haskell zlib binding, which drags in the 667MB GHC
+#     toolchain. The C builds here want zlib1g-dev, which is listed below.
+#   default-jre -- nothing in the tree invokes java or a jar.
 RUN apt-get -qq update && apt-get -qq -y install \
     automake \
     build-essential \
     bzip2 \
     cmake \
     curl \
-    default-jre \
     fort77 \
     ftp \
     g++ \
@@ -22,14 +28,12 @@ RUN apt-get -qq update && apt-get -qq -y install \
     libcairo2-dev \
     libcurl4-openssl-dev \
     libdb-dev \
-    libghc-zlib-dev \
     libjpeg-dev \
     liblzma-dev \
     libncurses-dev \
     libncurses5-dev \
     libpcre3-dev \
     libpng-dev \
-    libreadline-dev \
     libreadline-dev \
     libssl-dev \
     libtbb-dev \
@@ -52,14 +56,14 @@ RUN apt-get -qq update && apt-get -qq -y install \
     unzip \
     wget \
     x11-common \
-    zlib1g-dev
-
+    zlib1g-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 
 ## Perl stuff
-RUN curl -L https://cpanmin.us | perl - App::cpanminus
-RUN cpanm install DB_File
-RUN cpanm install URI::Escape
+RUN curl -L https://cpanmin.us | perl - App::cpanminus && \
+    cpanm DB_File URI::Escape && \
+    rm -rf /root/.cpanm
 
 
 ## set up tool config and deployment area:
@@ -70,31 +74,52 @@ ENV BIN=/usr/local/bin
 ## Python 3 stuff
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-RUN pip install argparse pysam networkx lmdb psutil tqdm --break-system-packages
-
 WORKDIR $SRC
 
-RUN pip install intervaltree --break-system-packages
-## Leiden community clustering dependencies (Python)
-# igraph requires C core; install build and runtime deps first
-RUN apt-get -qq update && apt-get -qq -y install \
-    libxml2-dev \
-    libigraph0-dev || true
-RUN pip install --break-system-packages igraph==0.11.4 leidenalg==0.10.2
+# One layer, and --no-cache-dir throughout: the wheel cache for the numeric
+# stack alone is ~166MB and is never reused inside the image.
+# igraph/leidenalg back the Leiden gene clustering in pylib/GeneCommunityCluster.py
+# and install from manylinux wheels, so no igraph C headers are needed.
+RUN pip install --no-cache-dir --break-system-packages \
+    argparse \
+    pysam \
+    networkx \
+    lmdb \
+    psutil \
+    tqdm \
+    intervaltree \
+    pytest \
+    igraph==0.11.4 \
+    leidenalg==0.10.2 \
+    "numpy>=1.26" \
+    "pandas>=2.2" \
+    "pyarrow>=15" \
+    "scipy>=1.11" \
+    "matplotlib>=3.8"
 
 ## Samtools
 ENV SAMTOOLS_VERSION=1.13
 RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
-    tar xvf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
+    tar xf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     cd samtools-${SAMTOOLS_VERSION} && \
-    ./configure && make && make install
+    ./configure && make && make install && \
+    cd $SRC && rm -rf samtools-${SAMTOOLS_VERSION} samtools-${SAMTOOLS_VERSION}.tar.bz2
 
 ## HTSlib (for tabix and bgzip)
 ENV HTSLIB_VERSION=1.13
 RUN wget https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/htslib-${HTSLIB_VERSION}.tar.bz2 && \
-    tar xvf htslib-${HTSLIB_VERSION}.tar.bz2 && \
+    tar xf htslib-${HTSLIB_VERSION}.tar.bz2 && \
     cd htslib-${HTSLIB_VERSION} && \
-    ./configure && make && make install
+    ./configure && make && make install && \
+    cd $SRC && rm -rf htslib-${HTSLIB_VERSION} htslib-${HTSLIB_VERSION}.tar.bz2
+
+## minimap2 -- transcriptome read rescue realigns against local transcript
+## sequences with it (pylib/IsoformReadRescue.py), and rescue is on by default.
+ENV MINIMAP2_VERSION=2.28
+RUN wget https://github.com/lh3/minimap2/releases/download/v${MINIMAP2_VERSION}/minimap2-${MINIMAP2_VERSION}_x64-linux.tar.bz2 && \
+    tar xf minimap2-${MINIMAP2_VERSION}_x64-linux.tar.bz2 && \
+    cp minimap2-${MINIMAP2_VERSION}_x64-linux/minimap2 /usr/local/bin/ && \
+    cd $SRC && rm -rf minimap2-${MINIMAP2_VERSION}_x64-linux minimap2-${MINIMAP2_VERSION}_x64-linux.tar.bz2
 
 
 
@@ -108,53 +133,54 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc && \
     add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/" && \
     apt-get update && \
-    apt-get install -y r-base r-base-dev
+    apt-get install -y r-base r-base-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN R -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-
+# System libraries the CRAN/Bioconductor sources below compile against.
+# The GDAL/GEOS/PROJ stack is deliberately absent: it costs ~400MB (libgraphblas
+# and boost headers dominate) and no spatial R package (sf, terra, units, s2) is
+# installed here.
 RUN apt-get update && \
     apt-get install -y --fix-missing \
         libharfbuzz-dev \
         libfontconfig1-dev \
         libfreetype6-dev \
         libfribidi-dev \
-        libgdal-dev \
-        libgeos-dev \
         libglpk-dev \
         libuv1-dev \
-        libproj-dev \
         pandoc \
         libtiff5-dev \
         libudunits2-dev \
         patch \
-        python3-venv
+        python3-venv && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    
+
 RUN echo 'options(repos = c(CRAN = "https://cloud.r-project.org"), Ncpus = 1)' >> /usr/lib/R/etc/Rprofile.site
-RUN Rscript --vanilla -e 'install.packages("tidyverse", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'install.packages("cowplot", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'install.packages("argparse", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'install.packages("devtools", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'install.packages("remotes", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'install.packages("FNN", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'BiocManager::install("DropletUtils", ask = FALSE, update = FALSE)'
-RUN Rscript --vanilla -e 'BiocManager::install("seqLogo", ask = FALSE, update = FALSE)'
-RUN Rscript --vanilla -e 'BiocManager::install("clustermole", ask = FALSE, update = FALSE)'
-RUN Rscript --vanilla -e 'install.packages("SeuratObject", repos="https://cloud.r-project.org")'
-RUN Rscript --vanilla -e 'remotes::install_github("satijalab/seurat", ref = "seurat5", quiet = FALSE, upgrade = "never", dependencies = TRUE); stopifnot("Seurat" %in% rownames(installed.packages())); suppressPackageStartupMessages(library(Seurat)); cat(as.character(packageVersion("Seurat")), "\n")'
 
-RUN pip install numpy --break-system-packages
+# One layer so the package caches can be dropped before it is committed, and
+# Seurat installed with dependencies = NA (Depends/Imports/LinkingTo only).
+# dependencies = TRUE pulled its Suggests as well -- BPCells, Rfast, Rfast2 and
+# Rnanoflann alone are ~400MB, and nothing here loads them.
+# devtools is not installed: remotes is what install_github needs, and devtools
+# adds pak/gert/testthat for no caller.
+#
+# clustermole is not installed and never has been: it needs GSVA ->
+# SpatialExperiment -> magick, magick needs libmagick++-dev, and without those
+# headers BiocManager::install only warns, so the layer looked like it had
+# succeeded while leaving nothing behind but its partial dependency tree.  Only
+# util/sc/notebook_templates/Seurat_get_cell_clusters.Rmd loads it, and no
+# workflow renders that notebook.  Add libmagick++-dev here to bring it back.
+#
+# The final check turns any such silent skip into a build failure.
+RUN Rscript --vanilla -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")' && \
+    Rscript --vanilla -e 'install.packages(c("tidyverse", "cowplot", "argparse", "remotes", "FNN", "SeuratObject"), repos="https://cloud.r-project.org")' && \
+    Rscript --vanilla -e 'options(repos = c(CRAN = "https://cloud.r-project.org")); BiocManager::install(c("DropletUtils", "seqLogo"), ask = FALSE, update = FALSE)' && \
+    Rscript --vanilla -e 'options(repos = c(CRAN = "https://cloud.r-project.org")); remotes::install_github("satijalab/seurat", ref = "seurat5", quiet = FALSE, upgrade = "never", dependencies = NA)' && \
+    Rscript --vanilla -e 'required <- c("BiocManager", "tidyverse", "cowplot", "argparse", "remotes", "FNN", "SeuratObject", "DropletUtils", "seqLogo", "Seurat"); missing <- setdiff(required, rownames(installed.packages())); if (length(missing)) stop("R packages failed to install: ", paste(missing, collapse = ", ")); invisible(lapply(required, function(p) suppressPackageStartupMessages(library(p, character.only = TRUE)))); cat("Seurat", as.character(packageVersion("Seurat")), "\n")' && \
+    rm -rf /root/.cache/R /tmp/Rtmp* /tmp/downloaded_packages
 
-RUN pip install pytest --break-system-packages
 
-RUN python -m pip install \
-    "numpy>=1.26" \
-    "pandas>=2.2" \
-    "pyarrow>=15" \
-    "scipy>=1.11" \
-    "matplotlib>=3.8" --break-system-packages
-
-        
 WORKDIR $SRC
 
 ## gffcompare
@@ -164,7 +190,7 @@ RUN cd $SRC && \
     cd gffcompare && \
     make release && \
     cp gffcompare trmap /usr/local/bin/ && \
-    cd $SRC && rm -rf gffcompare
+    cd $SRC && rm -rf gffcompare gclib
 
 
 WORKDIR $SRC
@@ -176,11 +202,13 @@ RUN wget https://github.com/bbuchfink/diamond/releases/download/v${DIAMOND_VERSI
     mv diamond /usr/local/bin/ && \
     rm diamond-linux64.tar.gz
 
-## NCBI BLAST+ (alternative to Diamond)
+## NCBI BLAST+ (alternative to Diamond, via --blast_tool blastp)
+# Only the two programs TransDecoder's blastp path runs are kept; the full
+# release is 672MB of which the rest is never invoked.
 ENV BLAST_VERSION=2.14.0
 RUN wget https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/${BLAST_VERSION}/ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz && \
     tar xzf ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz && \
-    cp ncbi-blast-${BLAST_VERSION}+/bin/* /usr/local/bin/ && \
+    cp ncbi-blast-${BLAST_VERSION}+/bin/blastp ncbi-blast-${BLAST_VERSION}+/bin/makeblastdb /usr/local/bin/ && \
     rm -rf ncbi-blast-${BLAST_VERSION}+ ncbi-blast-${BLAST_VERSION}+-x64-linux.tar.gz
 
 ## TransDecoder (for ORF prediction)
@@ -204,9 +232,14 @@ ENV LRAA_CO=3738823e0b836daa72f9cf7a5862709836a9a0fb
 
 # update VERSION and LRAA_CO files with version info and checkout
 
-RUN git clone --recursive https://github.com/MethodsDev/LongReadAlignmentAssembler.git LRAA && \
-    cd LRAA && \
-    git checkout ${LRAA_CO}
+# The pinned commit as a source archive rather than a clone: no runtime code
+# consults git, and a clone of this repository carries ~85MB of pack history.
+# testing/ holds ~155MB of fixture data that only the repo's own Makefiles read,
+# from a host checkout, so it is not shipped.
+RUN wget -q https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz && \
+    tar xzf ${LRAA_CO}.tar.gz && \
+    mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \
+    rm -rf ${LRAA_CO}.tar.gz LRAA/testing
 
 
 
