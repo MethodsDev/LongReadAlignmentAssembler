@@ -2048,6 +2048,11 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
             shutil.copyfile(raw_tracking_path, tracking_path)
         raise
 
+    # The pre-correction outputs are moved into place before the EM runs, so they
+    # bypass the stamping applied to the final quant files below.
+    _ensure_lraa_version_comment(raw_expr_path)
+    _ensure_lraa_version_comment(raw_tracking_path)
+
 
 def _parse_input_transcripts_for_cs(
     input_gtf, contig_acc, contig_strand, restrict_region_lend, restrict_region_rend
@@ -2484,6 +2489,7 @@ def _run_jobs_schedule_and_merge(
         )
         logger.info(f"-making bed output file: {bed_output_file}")
         subprocess.check_call(cmd, shell=True)
+        _ensure_lraa_version_comment(bed_output_file)
 
         if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
             prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"
