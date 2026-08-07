@@ -30,8 +30,20 @@ test_quant:
 # against 63 at the defaults, 68 against 65 with both loosened, and annotation-free
 # also leaves one model merely contained rather than exact. As the two targets
 # actually run, neither set contains the other: annotation-free reaches SIRV206 on
-# the looser thresholds, while this target reaches the two short models. SIRV107 is
-# recovered by no mode in either configuration, despite carrying 11 reads.
+# the looser thresholds, while this target reaches the two short models.
+#
+# SIRV107 is a settled case, not an open one. It is undiscoverable rather than
+# under-supported: its 11 reads are pristine full-length alignments, but it is
+# annotated on the minus strand while its junction at 10792-10882 carries a GT-AG
+# motif implying the plus strand (that junction is shared with plus-strand SIRV109),
+# and its junction at 11243-11403 is CT-AG, canonical in neither orientation. A
+# read-derived junction is admitted to the splice graph only when its motif implies
+# the strand being built, so those reads have no graph path and the locus cannot be
+# reconstructed from reads in any mode. Junctions supplied by an annotation skip that
+# check, so SIRV107 is recovered whenever it is provided: test_quant quantifies it at
+# its full 11 reads, and a guided run against the complete annotation rebuilds its
+# exact structure. Its absence here follows from the reference sequence and is not a
+# regression to chase.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
