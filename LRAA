@@ -18,6 +18,11 @@ from multiprocessing import Process
 from collections import defaultdict, deque
 import random
 from pathlib import Path
+import shlex
+
+# The invocation as given, shell-quoted so the line can be pasted back into a shell.
+# Newlines inside an argument would break the one-line-per-comment invariant.
+LRAA_CMD_COMMENT = "# LRAA CMD: " + shlex.join(sys.argv).replace("\n", " ")
 
 sys.path.insert(
     0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "pylib"])
@@ -1900,6 +1905,7 @@ def _iter_non_comment_lines(fh):
 
 def _write_lraa_version_comment(fh):
     print(LRAA_VERSION_COMMENT, file=fh)
+    print(LRAA_CMD_COMMENT, file=fh)
 
 
 def _ensure_lraa_version_comment(path):
