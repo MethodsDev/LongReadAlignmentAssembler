@@ -10,6 +10,7 @@ from Splice_graph import Splice_graph
 from GenomeFeature import Exon
 from MultiPath import MultiPath
 from MultiPathGraphNode import MultiPathGraphNode
+from MultiPathCounter import MultiPathCounter
 from Scored_path import Scored_path
 
 
@@ -34,15 +35,18 @@ def test_scored_path_reads_without_containments(tmp_path):
     base = tmp_path / "spnames1"
     os.makedirs(base, exist_ok=True)
     LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
-    
+
     class DummyMPG:
         def __init__(self, sg):
             self._sg = sg
+
         def get_splice_graph(self):
             return self._sg
 
     # path over two exons; embed read names directly to avoid external store dependency
-    mp = MultiPath(sg, [[e1.get_id(), e2.get_id()]], read_names={"r1", "r2"}, read_count=2)
+    mp = MultiPath(
+        sg, [[e1.get_id(), e2.get_id()]], read_names={"r1", "r2"}, read_count=2
+    )
     lend, rend = mp.get_coords()
     mpgn = MultiPathGraphNode(mp, count=2, lend=lend, rend=rend, mpg=DummyMPG(sg))
 
@@ -66,18 +70,27 @@ def test_scored_path_reads_with_containments(tmp_path):
     class DummyMPG:
         def __init__(self, sg):
             self._sg = sg
+
         def get_splice_graph(self):
             return self._sg
 
     # parent path e1-e3, contained path e1-e2
-    mp_parent = MultiPath(sg, [[e1.get_id(), e3.get_id()]], read_names={"p1"}, read_count=1)
-    mp_child = MultiPath(sg, [[e1.get_id(), e2.get_id()]], read_names={"c1", "c2"}, read_count=2)
+    mp_parent = MultiPath(
+        sg, [[e1.get_id(), e3.get_id()]], read_names={"p1"}, read_count=1
+    )
+    mp_child = MultiPath(
+        sg, [[e1.get_id(), e2.get_id()]], read_names={"c1", "c2"}, read_count=2
+    )
 
     lend_p, rend_p = mp_parent.get_coords()
     lend_c, rend_c = mp_child.get_coords()
 
-    node_parent = MultiPathGraphNode(mp_parent, count=1, lend=lend_p, rend=rend_p, mpg=DummyMPG(sg))
-    node_child = MultiPathGraphNode(mp_child, count=2, lend=lend_c, rend=rend_c, mpg=DummyMPG(sg))
+    node_parent = MultiPathGraphNode(
+        mp_parent, count=1, lend=lend_p, rend=rend_p, mpg=DummyMPG(sg)
+    )
+    node_child = MultiPathGraphNode(
+        mp_child, count=2, lend=lend_c, rend=rend_c, mpg=DummyMPG(sg)
+    )
 
     # manually register containment
     node_parent.add_containment(node_child)
@@ -193,3 +206,50 @@ def test_unrepresented_nodes_separate_templates_from_lost_reads(name_store):
     }
     LG.SYNTHETIC_READ_IDS.update(synthetic)
     assert LRAA._summarize_unrepresented_mpgns([mixed]) == (0, 1, 1)
+
+
+def test_merge_mode_fake_reads_are_not_discounted_from_scoring(tmp_path):
+    """Discovery templates are discounted from path scoring; merge-mode reads are not.
+
+    In discovery a `reftranscript:` read stands in for reads that may or may not exist,
+    so a path supported by nothing else must score zero. Merge mode has no real reads
+    at all -- its fake reads carry each input model's weight and are the only evidence
+    present -- so discounting them there scores every path zero and merges nothing.
+    """
+    from LRAA import LRAA
+    from Transcript import Transcript
+
+    sg, e1, e2, _e3 = build_minimal_sg_with_exons()
+    sg._contig_acc = "chr1"
+    sg._contig_strand = "+"
+
+    base = tmp_path / "mergenames"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    preserved = set(LG.SYNTHETIC_READ_IDS)
+    LG.SYNTHETIC_READ_IDS.clear()
+    try:
+        transcript = Transcript("chr1", [[100, 150], [200, 250]], "+")
+        transcript.set_gene_id("g1")
+        transcript.set_transcript_id("t1")
+        transcript.set_simple_path([e1.get_id(), e2.get_id()])
+
+        lraa = LRAA(sg)
+
+        # merge mode: no BAM, so the fake reads are the only evidence there is
+        merge_counter = MultiPathCounter()
+        lraa._incorporate_transcripts_into_mp_counter(
+            merge_counter, [transcript], bam_file=None
+        )
+        assert LG.SYNTHETIC_READ_IDS == set()
+
+        # discovery: the template is registered and therefore discounted
+        discovery_counter = MultiPathCounter()
+        lraa._incorporate_transcripts_into_mp_counter(
+            discovery_counter, [transcript], bam_file="placeholder.bam"
+        )
+        assert LG.SYNTHETIC_READ_IDS != set()
+    finally:
+        LG.SYNTHETIC_READ_IDS.clear()
+        LG.SYNTHETIC_READ_IDS.update(preserved)
+        LG.READ_NAME_STORE = None

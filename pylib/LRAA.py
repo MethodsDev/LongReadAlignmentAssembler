@@ -2175,6 +2175,16 @@ class LRAA:
                         "reftranscript:" + input_transcript.get_transcript_id()
                     },
                 )
+
+                # Record the synthetic read IDs so path scoring can ignore them. Only
+                # in discovery, where a reference template stands in for reads that may
+                # or may not exist. Merge mode has no real reads at all: its fake reads
+                # carry the per-model weight and are the only evidence there, so
+                # discounting them would score every path zero and merge nothing.
+                try:
+                    LRAA_Globals.SYNTHETIC_READ_IDS.update(mp.get_read_ids())
+                except Exception:
+                    pass
             else:
                 # transcript-merge mode: synthesize provenance-aware fake reads
                 # Determine weight (k) for this input transcript
@@ -2239,13 +2249,6 @@ class LRAA:
                     read_types={"fake_for_merge"},
                     read_names=fake_read_names,
                 )
-
-            # Record the synthetic read IDs so path scoring can ignore them.
-            try:
-                LRAA_Globals.SYNTHETIC_READ_IDS.update(mp.get_read_ids())
-            except Exception:
-                pass
-
             mp_counter.add(mp)
 
         return
