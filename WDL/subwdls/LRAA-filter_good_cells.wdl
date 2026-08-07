@@ -57,7 +57,7 @@ task run_filter_good_cells {
 
     # Extract gene sparse matrix into a fixed directory name
     mkdir gene-sparseM-input
-    tar -xzf ~{gene_sparse_tar_gz} --strip-components=1 -C gene-sparseM-input
+    tar -xzf ~{gene_sparse_tar_gz} --no-same-owner --strip-components=1 -C gene-sparseM-input
 
     # Create output directory for filtered gene matrix
     mkdir gene-sparseM-filtered
@@ -69,7 +69,7 @@ task run_filter_good_cells {
     # Extract and prepare isoform matrix if provided
     if [ -n "~{isoform_sparse_tar_gz}" ] && [ "~{isoform_sparse_tar_gz}" != "" ]; then
       mkdir isoform-sparseM-input
-      tar -xzf ~{isoform_sparse_tar_gz} --strip-components=1 -C isoform-sparseM-input
+      tar -xzf ~{isoform_sparse_tar_gz} --no-same-owner --strip-components=1 -C isoform-sparseM-input
       mkdir isoform-sparseM-filtered
       ISOFORM_ARGS="--isoform_matrix_dir isoform-sparseM-input --isoform_output_dir isoform-sparseM-filtered"
     fi
@@ -77,7 +77,7 @@ task run_filter_good_cells {
     # Extract and prepare splice pattern matrix if provided
     if [ -n "~{splice_pattern_sparse_tar_gz}" ] && [ "~{splice_pattern_sparse_tar_gz}" != "" ]; then
       mkdir splice_pattern-sparseM-input
-      tar -xzf ~{splice_pattern_sparse_tar_gz} --strip-components=1 -C splice_pattern-sparseM-input
+      tar -xzf ~{splice_pattern_sparse_tar_gz} --no-same-owner --strip-components=1 -C splice_pattern-sparseM-input
       mkdir splice_pattern-sparseM-filtered
       SPLICE_PATTERN_ARGS="--splice_pattern_matrix_dir splice_pattern-sparseM-input --splice_pattern_output_dir splice_pattern-sparseM-filtered"
     fi

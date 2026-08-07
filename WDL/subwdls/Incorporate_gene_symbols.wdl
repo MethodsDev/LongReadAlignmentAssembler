@@ -123,9 +123,11 @@ task incorporate_gene_symbols_sc {
 
   Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")))
 
-  String gene_sparse_tar_out = "~{sample_id}.withGeneSymbols^gene-sparseM.tar.gz"
-  String isoform_sparse_tar_out = "~{sample_id}.withGeneSymbols^isoform-sparseM.tar.gz"
-  String splice_sparse_tar_out = "~{sample_id}.withGeneSymbols^splice_pattern-sparseM.tar.gz"
+  # "." rather than "^": this File crosses task/workflow boundaries and Apptainer's
+  # --bind spec parser mis-splits paths containing a literal "^" (Docker is unaffected).
+  String gene_sparse_tar_out = "~{sample_id}.withGeneSymbols.gene-sparseM.tar.gz"
+  String isoform_sparse_tar_out = "~{sample_id}.withGeneSymbols.isoform-sparseM.tar.gz"
+  String splice_sparse_tar_out = "~{sample_id}.withGeneSymbols.splice_pattern-sparseM.tar.gz"
   String updated_gtf_out = "~{sample_id}.withGeneSymbols.gtf"
   String updated_mapping_out = "~{sample_id}.gene_transcript_splicehashcode.withGeneSymbols.tsv"
 
@@ -160,9 +162,9 @@ task incorporate_gene_symbols_sc {
     splice_dir=$(tar -tzf splice_sparse.tar.gz | head -1 | cut -d/ -f1 | sed 's@^\./@@')
     set -o pipefail
 
-    tar -xzf gene_sparse.tar.gz
-    tar -xzf isoform_sparse.tar.gz
-    tar -xzf splice_sparse.tar.gz
+    tar -xzf gene_sparse.tar.gz --no-same-owner
+    tar -xzf isoform_sparse.tar.gz --no-same-owner
+    tar -xzf splice_sparse.tar.gz --no-same-owner
 
     if [[ -z "${gene_dir}" || -z "${isoform_dir}" || -z "${splice_dir}" ]]; then
       echo "Failed to determine sparse matrix directory names from tarballs" >&2

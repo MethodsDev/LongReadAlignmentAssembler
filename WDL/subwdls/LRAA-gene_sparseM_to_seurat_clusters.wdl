@@ -70,7 +70,7 @@ task run_seurat_from_gene_sparseM {
 
     # Extract gene sparse matrix into a fixed directory name
     mkdir gene-sparseM
-    tar -xzf ~{gene_sparse_tar_gz} --strip-components=1 -C gene-sparseM
+    tar -xzf ~{gene_sparse_tar_gz} --no-same-owner --strip-components=1 -C gene-sparseM
 
     # Run the Seurat pipeline script (executable on PATH)
     gene_sparseM_to_seurat_clusters_and_umap.R \
