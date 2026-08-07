@@ -4188,6 +4188,7 @@ def run_quant_only(
                     restrict_region_rend,
                     rescue_read_names,
                     read_path_mapper=lraa_obj._map_read_to_graph,
+                    reads_without_graph_path=failed_genome_read_names,
                 )
 
             genome_tx_arb_stats = _build_rescue_unassigned_summary_stats(
@@ -4956,7 +4957,6 @@ def build_ME_transcripts(
         input_transcripts,
         rescue_target_transcripts=input_transcripts,
         restrict_splice_type="ME",
-        rescue_probe_unassigned=False,
     )
 
     # Define ME isoforms

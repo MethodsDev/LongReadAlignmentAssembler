@@ -69,6 +69,8 @@ test_ref_guided_ID:
 	awk '$$1=="SIRV3" && $$3=="transcript" && $$4==4602 && $$5==4762 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 	awk '$$1=="SIRV6" && $$3=="transcript" && $$4==2359 && $$5==2547 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 	awk '$$1=="SIRV7" && $$3=="transcript" && $$7=="-" && $$4==1006 && $$5==147925 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
+	@echo "checking total assigned reads, which the class-code summary also cannot see"
+	awk 'BEGIN{FS="\t"} !/^#/ && NR>1 {s+=$$4} END{printf "  assigned reads: %.0f\n", s; exit !(s>547.5 && s<548.5)}' LRAA.LRAA.ref-guided.quant.expr
 
 
 # A supplied annotation model with no read evidence must never become a candidate.

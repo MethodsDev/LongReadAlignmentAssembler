@@ -14,6 +14,7 @@ import LRAA_Globals
 from GenomeFeature import Exon, Intron, PolyAsite, TSS
 from IsoformReadRescue import (
     _build_transcript_models,
+    _explained_read_bases,
     _collect_read_sequences,
     _merge_contiguous_genomic_segments,
     _normalize_read_identifier,
@@ -163,8 +164,40 @@ def test_rescue_sequences_come_from_the_primary_record(tmp_path):
     bam_path = tmp_path / "supplementary.bam"
     _supplementary_then_primary_bam(bam_path)
 
-    read_name_to_seq = _collect_read_sequences(
+    read_name_to_seq, read_name_to_genome_explained = _collect_read_sequences(
         str(bam_path), "chr1", None, None, {"r1"}, "+"
     )
 
     assert read_name_to_seq == {"r1": "T" * 50}
+    # the primary is a clean 50-base match, so it explains the whole read
+    assert read_name_to_genome_explained == {"r1": 50}
+
+
+def test_rescue_declined_when_it_explains_less_of_the_read_than_the_genome():
+    # A target that disagrees with part of a read can soft-clip the disagreement away
+    # and still score 100% identity over what remains, which is how a read carrying a
+    # novel terminal exon gets reshaped onto a reference model. Rescue is additive, so
+    # such an alignment cannot correct anything and only adds a competing path. It is
+    # declined by comparing explained read bases, not identity over the aligned part.
+    import pysam
+
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "g1^t1", "LN": 100}]}
+
+    def _aln(cigar, nm):
+        segment = pysam.AlignedSegment(pysam.AlignmentHeader.from_dict(header))
+        segment.query_name = "r1"
+        segment.reference_id = 0
+        segment.reference_start = 0
+        segment.cigarstring = cigar
+        segment.query_sequence = "A" * 100
+        segment.set_tag("NM", nm)
+        return segment
+
+    # whole read matched: explains every base
+    assert _explained_read_bases(_aln("100M", 0)) == 100
+    # thirty bases clipped away: those bases are not explained, though identity over
+    # the aligned portion is still a perfect 100%
+    assert _explained_read_bases(_aln("30S70M", 0)) == 70
+    # substitutions reduce the count, insertions and deletions do not double-count
+    assert _explained_read_bases(_aln("100M", 4)) == 96
+    assert _explained_read_bases(_aln("96M4I", 4)) == 96

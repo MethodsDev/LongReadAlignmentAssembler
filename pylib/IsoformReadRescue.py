@@ -31,6 +31,7 @@ def rescue_unassigned_reads_to_transcriptome(
     region_rend,
     read_names,
     read_path_mapper=None,
+    reads_without_graph_path=None,
 ):
     """
     Rescue previously unassigned reads by aligning them to local transcript sequences and
@@ -56,6 +57,7 @@ def rescue_unassigned_reads_to_transcriptome(
         target_strand=splice_graph.get_contig_strand(),
         include_monoexonic=False,
         require_unique_path_across_best_hits=True,
+        reads_without_graph_path=reads_without_graph_path,
         log_label="transcriptome rescue",
     )
 
@@ -75,6 +77,7 @@ def build_transcriptome_alignment_multipaths(
     require_unique_path_across_best_hits=True,
     split_multipaths_by_gene=False,
     genome_target_gating=False,
+    reads_without_graph_path=None,
     log_label="transcriptome alignment",
     return_read_details=False,
 ):
@@ -103,6 +106,9 @@ def build_transcriptome_alignment_multipaths(
     read_name_to_allowed_target_ids = None
     read_name_to_primary_score = {}
     read_name_to_primary_per_id = {}
+    # Empty under genome gating, which runs its own genome-versus-transcript
+    # arbitration; the baseline check below then imposes nothing there.
+    read_name_to_genome_explained = {}
     if genome_target_gating:
         candidate_tsv = None
         (
@@ -150,9 +156,16 @@ def build_transcriptome_alignment_multipaths(
             avg_targets_per_read,
         )
     else:
-        read_name_to_seq = _collect_read_sequences(
+        read_name_to_seq, read_name_to_genome_explained = _collect_read_sequences(
             bam_file, contig_acc, region_lend, region_rend, read_names, target_strand
         )
+        if reads_without_graph_path:
+            # A read with no usable path through the graph has nothing to preserve, so
+            # rescue is its only route in and the baseline below must not block it. Its
+            # genome alignment may still look good: junctions the graph declined, or a
+            # repetitive locus, leave a well-aligned read with no path.
+            for read_name in reads_without_graph_path:
+                read_name_to_genome_explained.pop(read_name, None)
 
     if not read_name_to_seq:
         logger.info(
@@ -205,6 +218,7 @@ def build_transcriptome_alignment_multipaths(
             require_unique_path_across_best_hits=require_unique_path_across_best_hits,
             split_multipaths_by_gene=split_multipaths_by_gene,
             read_name_to_allowed_target_ids=read_name_to_allowed_target_ids,
+            read_name_to_genome_explained=read_name_to_genome_explained,
         )
 
         if return_read_details:
@@ -278,6 +292,7 @@ def _collect_read_sequences(
 ):
     remaining = None if target_read_names is None else set(target_read_names)
     read_name_to_seq = {}
+    read_name_to_genome_explained = {}
     with pysam.AlignmentFile(bam_file, "rb") as bam_reader:
         if region_lend is not None and region_rend is not None:
             fetch_iter = bam_reader.fetch(contig_acc, max(int(region_lend) - 1, 0), int(region_rend))
@@ -303,11 +318,16 @@ def _collect_read_sequences(
                 seq = _reverse_complement(seq)
             if read_name not in read_name_to_seq:
                 read_name_to_seq[read_name] = seq
+                # What this read's genome alignment already explains, so a rescue that
+                # would explain less of it can be declined.
+                genome_explained = _explained_read_bases(read)
+                if genome_explained is not None:
+                    read_name_to_genome_explained[read_name] = genome_explained
                 if remaining is not None:
                     remaining.discard(read_name)
             if remaining is not None and not remaining:
                 break
-    return read_name_to_seq
+    return read_name_to_seq, read_name_to_genome_explained
 
 
 def _collect_genome_gated_read_targets(
@@ -582,6 +602,7 @@ def _parse_rescue_alignments(
     require_unique_path_across_best_hits=True,
     split_multipaths_by_gene=False,
     read_name_to_allowed_target_ids=None,
+    read_name_to_genome_explained=None,
 ):
     read_to_hits = defaultdict(list)
     min_per_id = float(_resolve_rescue_min_per_id())
@@ -591,19 +612,30 @@ def _parse_rescue_alignments(
                 continue
             if read.reference_name not in transcript_models:
                 continue
-            if (
-                read_name_to_allowed_target_ids is not None
-                and (
-                    read.query_name not in read_name_to_allowed_target_ids
-                    or read.reference_name
-                    not in read_name_to_allowed_target_ids[read.query_name]
-                )
+            if read_name_to_allowed_target_ids is not None and (
+                read.query_name not in read_name_to_allowed_target_ids
+                or read.reference_name
+                not in read_name_to_allowed_target_ids[read.query_name]
             ):
                 continue
             if any(code == 3 for code, _ in (read.cigartuples or [])):
                 continue
             if not _passes_percent_identity(read, min_per_id):
                 continue
+            if read_name_to_genome_explained:
+                # Rescue is purely additive: it never replaces a read's original
+                # multipath. An alignment that explains less of the read than the
+                # genome already does therefore cannot correct anything, and only
+                # adds a competing path shaped like the target. A read with no genome
+                # alignment has no baseline here and is unconstrained.
+                genome_explained = read_name_to_genome_explained.get(read.query_name)
+                if genome_explained is not None:
+                    rescue_explained = _explained_read_bases(read)
+                    if (
+                        rescue_explained is not None
+                        and rescue_explained < genome_explained
+                    ):
+                        continue
             merged_segments = Pretty_alignment.read_to_pretty_alignment_segments(read)
             if len(merged_segments) != 1:
                 continue
@@ -748,6 +780,38 @@ def _alignment_score(read):
     if aligned_base_count == 0:
         aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
     return int(aligned_base_count) - int(mismatch_count)
+
+
+def _explained_read_bases(read):
+    """Read bases this alignment accounts for as matches.
+
+    Clipped bases are excluded, so a target that disagrees with part of a read cannot
+    score well by clipping the disagreement away; percent identity, measured over the
+    aligned portion only, is blind to exactly that. Computed the same way for a genome
+    alignment and for a transcriptome alignment of the same read, so the two compare.
+    """
+    cigar_stats = read.get_cigar_stats()
+    aligned_base_count = cigar_stats[0][0]
+    if aligned_base_count == 0:
+        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
+    if aligned_base_count <= 0:
+        return None
+
+    mismatch_count = None
+    if read.has_tag("NM"):
+        mismatch_count = int(read.get_tag("NM"))
+    elif read.has_tag("nM"):
+        mismatch_count = int(read.get_tag("nM"))
+    if mismatch_count is None:
+        return int(aligned_base_count)
+
+    # NM counts inserted and deleted bases alongside substitutions. Only substitutions
+    # reduce the read bases an alignment explains: inserted bases are already outside
+    # the aligned count, and deleted bases are not read bases at all.
+    substitutions = max(
+        0, int(mismatch_count) - int(cigar_stats[0][1]) - int(cigar_stats[0][2])
+    )
+    return max(0, int(aligned_base_count) - substitutions)
 
 
 def _alignment_per_id_fraction(read):
