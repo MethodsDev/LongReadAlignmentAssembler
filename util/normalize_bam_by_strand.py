@@ -56,7 +56,6 @@ def main():
     pipeliner.run()
     
     ## run normalizations
-    bamsifter_prog = os.path.join(os.path.abspath(os.path.dirname(__file__)), "../plugins/bamsifter/bamsifter")
     SS_bam_files = [SS_output_prefix + x for x in (".+.bam", ".-.bam") ]
 
     SS_norm_bam_files = list()

@@ -38,7 +38,7 @@ echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm
 
   runtime {
     docker: docker
-    bootDiskSizeGb: disksize
+    bootDiskSizeGb: 30
     cpu: "~{cpu}"
     memory: "~{memoryGB} GiB"
     disks: "local-disk ~{disksize} SSD"
@@ -50,10 +50,11 @@ workflow NormalizeBam {
     File input_bam
     Int normalize_max_cov_level
     String label = ""
+    String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
   }
 
   call normalize_bam_by_strand {
-    input: input_bam=input_bam, normalize_max_cov_level=normalize_max_cov_level, label=label
+    input: input_bam=input_bam, normalize_max_cov_level=normalize_max_cov_level, label=label, docker=docker
   }
 
   output {
