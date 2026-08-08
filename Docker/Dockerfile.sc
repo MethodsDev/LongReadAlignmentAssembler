@@ -1,6 +1,10 @@
-# Single-cell, differential-usage and plotting work on top of the barebones
-# image: the R stack (Seurat, DropletUtils, tidyverse, edgeR) and the scientific
-# Python stack that the util/sc and util/misc helpers need.
+# Single-cell, differential-usage and plotting work: the R stack (Seurat,
+# DropletUtils, tidyverse, edgeR) and the scientific Python stack that the
+# util/sc and util/misc helpers need.
+#
+# Builds from Dockerfile.base rather than from lraa-core, so that bumping the
+# pinned LRAA commit does not invalidate the R layers below and force an hour of
+# recompiling Seurat.  The LRAA checkout is the final layer instead.
 #
 # Tasks that need this image rather than the core one:
 #   run_seurat_from_gene_sparseM        (WDL/subwdls/LRAA-gene_sparseM_to_seurat_clusters.wdl)
@@ -9,8 +13,8 @@
 #   LRAA_sqanti_like_reads_eval_task and the two multi-sample summary tasks
 #   RunSaturation                       (WDL/FSM_and_isoform_identifiability_saturation.wdl)
 
-ARG LRAA_CORE_IMAGE=lraa-core:latest
-FROM ${LRAA_CORE_IMAGE}
+ARG LRAA_BASE_IMAGE=lraa-base:latest
+FROM ${LRAA_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -83,3 +87,16 @@ RUN pip install --no-cache-dir --break-system-packages \
     seaborn \
     statsmodels \
     pytest
+
+ARG LRAA_VERSION
+ARG LRAA_CO
+ENV LRAA_VERSION=${LRAA_VERSION}
+ENV LRAA_CO=${LRAA_CO}
+
+# Last layer, so a version bump reuses everything above.
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+    cd ${SRC} && \
+    curl -sSL https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz -o lraa.tar.gz && \
+    tar xzf lraa.tar.gz && \
+    mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \
+    rm -rf lraa.tar.gz LRAA/testing

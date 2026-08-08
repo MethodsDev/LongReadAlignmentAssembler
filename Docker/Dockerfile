@@ -226,17 +226,18 @@ ENV PATH="${TRANSDECODER_DIR}:${PATH}"
 WORKDIR $SRC
 
 
-ENV LRAA_VERSION="v0.18.2"
-ENV LRAA_CO=1decb5bcbedce85f14ed51f31fe8bdd499ac2f0c
+ARG LRAA_VERSION
+ARG LRAA_CO
+ENV LRAA_VERSION=${LRAA_VERSION}
+ENV LRAA_CO=${LRAA_CO}
 
-
-# update VERSION and LRAA_CO files with version info and checkout
 
 # The pinned commit as a source archive rather than a clone: no runtime code
 # consults git, and a clone of this repository carries ~85MB of pack history.
 # testing/ holds ~155MB of fixture data that only the repo's own Makefiles read,
 # from a host checkout, so it is not shipped.
-RUN wget -q https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz && \
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+    wget -q https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz && \
     tar xzf ${LRAA_CO}.tar.gz && \
     mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \
     rm -rf ${LRAA_CO}.tar.gz LRAA/testing

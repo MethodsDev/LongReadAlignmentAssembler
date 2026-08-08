@@ -1,13 +1,15 @@
 # LRAA Docker images
 
-Four images are built from this directory, and a fifth name, plain `lraa`, is an
-alias for the smallest of them.
+Four images are published from this directory, plus the plain `lraa` name as an
+alias for the smallest of them. A fifth, `lraa-base`, is a build input that
+carries the shared dependencies and is never pushed.
 
 | image | Dockerfile | size | contents |
 |---|---|---|---|
-| `lraa-core` | `Dockerfile.core` | 422 MB | LRAA and what an LRAA run reaches: python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
-| `lraa-orf` | `Dockerfile.orf` | 615 MB | `FROM lraa-core`, plus TransDecoder, diamond, and the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs |
-| `lraa-sc` | `Dockerfile.sc` | 2.69 GB | `FROM lraa-core`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, and pandas, scipy, matplotlib, seaborn, statsmodels, pytest |
+| `lraa-base` | `Dockerfile.base` | 400 MB | not published. Python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
+| `lraa-core` | `Dockerfile.core` | 422 MB | `FROM lraa-base`, plus the LRAA checkout |
+| `lraa-orf` | `Dockerfile.orf` | 615 MB | `FROM lraa-base`, plus TransDecoder, diamond, the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs, and the LRAA checkout |
+| `lraa-sc` | `Dockerfile.sc` | 2.69 GB | `FROM lraa-base`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, pandas, scipy, matplotlib, seaborn, statsmodels, pytest, and the LRAA checkout |
 | `lraa-combined` | `Dockerfile` | 3.95 GB | everything in one image, as it was before the split |
 | `lraa` | none | 422 MB | the same digest as `lraa-core`, pushed under the plain name |
 
@@ -23,8 +25,22 @@ Before v0.18.1 the plain name held the combined image. Anyone who needs that
 content should switch to `lraa-combined`; `lraa-core` covers isoform discovery
 and quantification on its own.
 
-The specialized images derive from the core one, so a workflow that mixes them
-pulls the shared layers once.
+## Layer order, and why lraa-base exists
+
+The LRAA checkout is the final layer of every image. Docker keys a layer's
+cache on its parent image id, so anything sitting above the checkout is
+rebuilt whenever the pinned commit moves.
+
+`lraa-sc` and `lraa-orf` used to build `FROM lraa-core`, which put the R and
+TransDecoder layers above core's checkout. Bumping a version then recompiled
+Seurat from source, and a release that changed nothing but a git SHA took an
+hour. Building all three from a dependency-only base instead costs one small
+layer per image.
+
+The three published images therefore share `lraa-base` rather than deriving
+from each other, so a workflow that mixes them still pulls the shared layers
+once. What is no longer shared is the checkout itself, a few MB repeated in
+each image, which is the price of the arrangement.
 
 ## Which image a task runs on
 
@@ -65,30 +81,31 @@ bash build_docker.versioned.sh   # <version> and testing
 bash build_docker.latest.sh      # latest
 ```
 
-Both scripts build core first and pass its tag to the other two as
-`--build-arg LRAA_CORE_IMAGE=`, so the derived images build against the core
-image just made rather than whatever copy the registry holds. The versioned
-script applies the `testing` tag with `docker tag` instead of a second build; a
-rebuild costs about an hour of R compilation for a byte-identical result.
+Both scripts build `lraa-base` first and pass it to the other builds as
+`--build-arg LRAA_BASE_IMAGE=`, so the three published images are built against
+the base just made rather than a stale local copy. The base is not pushed. The
+version and the pinned commit are passed as `--build-arg LRAA_VERSION=` and
+`--build-arg LRAA_CO=`, read from `VERSION.txt` and `LRAA_CO.txt`, so the SHA
+lives in one file instead of four Dockerfiles that can drift apart.
 
-Each script finishes by retagging the core image it just built as plain `lraa`
-and pushing that too, so the alias never drifts from `lraa-core`.
+The versioned script applies the `testing` tag with `docker tag` instead of a
+second build; a rebuild would cost an hour of R compilation for a byte-identical
+result. Each script finishes by retagging the core image as plain `lraa` and
+pushing that too, so the alias never drifts from `lraa-core`.
 
-A cold run of the versioned script takes about an hour, nearly all of it
-compiling Seurat and its dependencies from source for `lraa-sc` and for the
-combined image. Core and orf take a few minutes between them. The second script
-then reuses those layers and only tags and pushes.
+A cold run takes about an hour, nearly all of it compiling Seurat from source
+for `lraa-sc` and for the combined image. A run that changes only `LRAA_CO.txt`
+and `VERSION.txt` takes a few minutes, because the checkout is the last layer of
+every image.
 
 ## Releasing a new version
 
 1. Update `VERSION` in the top-level `LRAA` script and `Docker/VERSION.txt` to
    the same value.
 2. Commit and push the code.
-3. Set `ENV LRAA_CO` in both `Dockerfile` and `Dockerfile.core` to the commit
-   SHA you just pushed, and `ENV LRAA_VERSION` to the version. The images fetch
+3. Put the commit SHA you just pushed in `Docker/LRAA_CO.txt`. The images fetch
    `https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz`
-   rather than cloning, so this pin is the only thing that decides which code
-   ships.
+   rather than cloning, so this one line decides which code ships.
 4. Commit the pin, then run both build scripts.
 5. Confirm what shipped:
 

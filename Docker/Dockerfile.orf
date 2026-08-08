@@ -1,8 +1,11 @@
-# ORF prediction on top of the barebones image: TransDecoder plus the two
-# homology-search tools its --blast_tool switch selects.
+# ORF prediction: TransDecoder plus the two homology-search tools its
+# --blast_tool switch selects.
 # Used by WDL/LRAA-ORF-prediction.wdl (util/LRAA_isoforms_to_ORFs.py).
+#
+# Builds from Dockerfile.base rather than from lraa-core so that the LRAA
+# checkout stays the final layer and a version bump reuses everything above it.
 
-ARG LRAA_CORE_IMAGE=lraa-core:latest
+ARG LRAA_BASE_IMAGE=lraa-base:latest
 
 FROM ubuntu:24.04 AS builder
 
@@ -38,7 +41,7 @@ RUN wget -q https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/${BLAST_VERSIO
     cp ncbi-blast-${BLAST_VERSION}+/bin/blastp ncbi-blast-${BLAST_VERSION}+/bin/makeblastdb /opt/blast/
 
 
-FROM ${LRAA_CORE_IMAGE}
+FROM ${LRAA_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -52,3 +55,16 @@ COPY --from=builder /opt/blast/ /usr/local/bin/
 
 ENV TRANSDECODER_DIR=/usr/local/src/TransDecoder
 ENV PATH="${TRANSDECODER_DIR}:${PATH}"
+
+ARG LRAA_VERSION
+ARG LRAA_CO
+ENV LRAA_VERSION=${LRAA_VERSION}
+ENV LRAA_CO=${LRAA_CO}
+
+# Last layer, so a version bump reuses everything above.
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+    cd ${SRC} && \
+    curl -sSL https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz -o lraa.tar.gz && \
+    tar xzf lraa.tar.gz && \
+    mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \
+    rm -rf lraa.tar.gz LRAA/testing
