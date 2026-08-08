@@ -21,9 +21,9 @@ thing that can run an assembly. Someone who pulls it to assemble isoforms gets
 `docker tag` gives the two names one digest, so the alias costs no extra
 storage and no extra build.
 
-Before v0.18.1 the plain name held the combined image. Anyone who needs that
-content should switch to `lraa-combined`; `lraa-core` covers isoform discovery
-and quantification on its own.
+The plain name used to hold the combined image, through the 0.18.0 tags. Anyone
+who needs that content should switch to `lraa-combined`; `lraa-core` covers
+isoform discovery and quantification on its own.
 
 ## Layer order, and why lraa-base exists
 
@@ -116,16 +116,22 @@ docker run --rm <registry>/lraa-core:<version> \
 
 ## Adding a dependency
 
-Put it in the smallest image that needs it. Anything reachable from an `LRAA`
-run belongs in `Dockerfile.core` and is paid for by every task; anything an R
-script or a pandas/scipy helper needs belongs in `Dockerfile.sc`.
+Put it in the smallest place that covers everything needing it. Anything
+reachable from an `LRAA` run belongs in `Dockerfile.base`, since all three
+published images run LRAA and each pays for the base. `Dockerfile.core` adds
+nothing but the checkout, so a dependency put there would be missing from
+`lraa-sc` and `lraa-orf`, which build from the base rather than from core.
+Anything only an R script or a pandas/scipy helper needs belongs in
+`Dockerfile.sc`; anything only TransDecoder needs belongs in `Dockerfile.orf`.
+Whatever you add, add it to `Dockerfile` too, which is standalone.
 
 Two dependencies are load-bearing in ways the imports do not show, both found
 by running the images rather than reading the source:
 
 - `igraph` and `leidenalg` are imported under `try/except`, but
   `Transcript.recluster_transcripts_to_genes` raises without them on the default
-  discovery path. They belong in core.
+  discovery path. They belong in the base, so that every image running LRAA has
+  them.
 - `pytest` is imported at module scope by `pylib/SQANTI_like_annotator.py`, so
   the image running the SQANTI-like task needs it.
 
@@ -133,7 +139,8 @@ The R layer in `Dockerfile` and `Dockerfile.sc` ends by loading every package it
 claims to install. Keep new packages in that list. `BiocManager::install` only
 warns when a dependency fails to build, so without the check a layer can exit 0
 having installed nothing. That is how `clustermole` was missing from every image
-built up to v0.18.1 while the layer that installed it reported success.
+built before the check existed while the layer that installed it reported
+success.
 
 ## What is deliberately absent
 
