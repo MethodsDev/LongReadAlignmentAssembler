@@ -1,17 +1,27 @@
 # LRAA Docker images
 
-Four images are built from this directory. Three of them are what the WDL
-workflows run on; the fourth is the old combined image, kept for anyone who
-pins it.
+Four images are built from this directory, and a fifth name, plain `lraa`, is an
+alias for the smallest of them.
 
 | image | Dockerfile | size | contents |
 |---|---|---|---|
 | `lraa-core` | `Dockerfile.core` | 422 MB | LRAA and what an LRAA run reaches: python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
 | `lraa-orf` | `Dockerfile.orf` | 615 MB | `FROM lraa-core`, plus TransDecoder, diamond, and the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs |
 | `lraa-sc` | `Dockerfile.sc` | 2.69 GB | `FROM lraa-core`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, and pandas, scipy, matplotlib, seaborn, statsmodels, pytest |
-| `lraa` | `Dockerfile` | 3.95 GB | everything in one image, as it was before the split |
+| `lraa-combined` | `Dockerfile` | 3.95 GB | everything in one image, as it was before the split |
+| `lraa` | none | 422 MB | the same digest as `lraa-core`, pushed under the plain name |
 
 Registry: `us-central1-docker.pkg.dev/methods-dev-lab/lraa/`
+
+We pay egress on every pull, so the plain `lraa` name has to be the cheapest
+thing that can run an assembly. Someone who pulls it to assemble isoforms gets
+422 MB instead of the 3.95 GB of R and TransDecoder they will never invoke.
+`docker tag` gives the two names one digest, so the alias costs no extra
+storage and no extra build.
+
+Before v0.18.1 the plain name held the combined image. Anyone who needs that
+content should switch to `lraa-combined`; `lraa-core` covers isoform discovery
+and quantification on its own.
 
 The specialized images derive from the core one, so a workflow that mixes them
 pulls the shared layers once.
@@ -60,6 +70,9 @@ Both scripts build core first and pass its tag to the other two as
 image just made rather than whatever copy the registry holds. The versioned
 script applies the `testing` tag with `docker tag` instead of a second build; a
 rebuild costs about an hour of R compilation for a byte-identical result.
+
+Each script finishes by retagging the core image it just built as plain `lraa`
+and pushing that too, so the alias never drifts from `lraa-core`.
 
 A cold run of the versioned script takes about an hour, nearly all of it
 compiling Seurat and its dependencies from source for `lraa-sc` and for the
