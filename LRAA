@@ -803,6 +803,39 @@ def main():
     )
 
     config_group.add_argument(
+        "--min_monoexonic_read_span_peak_frac",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["min_monoexonic_read_span_peak_frac"],
+        help="fraction of a mono-exonic isoform's supporting reads that must mutually "
+        "overlap at a single base; 0 disables (default: {})".format(
+            LRAA_Globals.config["min_monoexonic_read_span_peak_frac"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--min_monoexonic_adjusted_TPM_ratio",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"],
+        help="minimum ratio of a mono-exonic isoform's coverage-depth (length-adjusted) "
+        "TPM to its read-count TPM; 0 disables (default: {})".format(
+            LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--rescue_unassigned_min_aligned_read_frac",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["rescue_unassigned_min_aligned_read_frac"],
+        help="fraction of a read's length that must align to the target transcript for "
+        "a transcriptome rescue alignment to be accepted; 0 disables (default: {})".format(
+            LRAA_Globals.config["rescue_unassigned_min_aligned_read_frac"]
+        ),
+    )
+
+    config_group.add_argument(
         "--no_filter_internal_priming",
         action="store_true",
         default=False,
@@ -1121,6 +1154,15 @@ def main():
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
+    LRAA_Globals.config["min_monoexonic_read_span_peak_frac"] = (
+        args.min_monoexonic_read_span_peak_frac
+    )
+    LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"] = (
+        args.min_monoexonic_adjusted_TPM_ratio
+    )
+    LRAA_Globals.config["rescue_unassigned_min_aligned_read_frac"] = (
+        args.rescue_unassigned_min_aligned_read_frac
+    )
     LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
         args.run_cross_gene_EM_for_secondary_alignments
     )
@@ -4711,6 +4753,56 @@ def run_transcript_assembly(
                     )
                 )
                 # continue
+                return
+
+        ##################################################################
+        # Drop monoexonic models whose reads tile a span instead of stacking on it
+        if LRAA_Globals.config["min_monoexonic_read_span_peak_frac"] > 0:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] \n// -filtering monoexonic transcripts on read-span coherence"
+            )
+            num_before = len(transcripts)
+            transcripts = (
+                TranscriptFiltering.filter_monoexonic_isoforms_by_read_span_coherence(
+                    transcripts,
+                    lraa_all_obj._read_name_to_span,
+                    LRAA_Globals.config["min_monoexonic_read_span_peak_frac"],
+                )
+            )
+            logger.info(
+                f"[{contig_acc}{contig_strand}] read-span coherence: {num_before} -> {len(transcripts)} transcripts"
+            )
+            if len(transcripts) < 1:
+                logger.info(
+                    "-no transcripts on contig {} {} survived monoexonic read-span coherence filtering".format(
+                        contig_acc, contig_strand
+                    )
+                )
+                return
+
+        ##################################################################
+        # Drop monoexonic models whose coverage-depth TPM diverges from read-count TPM
+        if LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"] > 0:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] \n// -filtering monoexonic transcripts on adjusted-TPM agreement"
+            )
+            num_before = len(transcripts)
+            transcripts = (
+                TranscriptFiltering.filter_monoexonic_isoforms_by_adjusted_TPM_ratio(
+                    transcripts,
+                    lraa_all_obj._read_name_to_span,
+                    LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"],
+                )
+            )
+            logger.info(
+                f"[{contig_acc}{contig_strand}] adjusted-TPM agreement: {num_before} -> {len(transcripts)} transcripts"
+            )
+            if len(transcripts) < 1:
+                logger.info(
+                    "-no transcripts on contig {} {} survived monoexonic adjusted-TPM filtering".format(
+                        contig_acc, contig_strand
+                    )
+                )
                 return
 
         ####################################################################

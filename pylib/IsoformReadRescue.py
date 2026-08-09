@@ -618,6 +618,9 @@ def _parse_rescue_alignments(
 ):
     read_to_hits = defaultdict(list)
     min_per_id = float(_resolve_rescue_min_per_id())
+    min_aligned_frac = float(
+        LRAA_Globals.config.get("rescue_unassigned_min_aligned_read_frac", 0) or 0
+    )
     with pysam.AlignmentFile(rescue_sam, "r") as sam_reader:
         for read in sam_reader.fetch(until_eof=True):
             if read.is_unmapped or read.is_supplementary:
@@ -634,6 +637,22 @@ def _parse_rescue_alignments(
                 continue
             if not _passes_percent_identity(read, min_per_id):
                 continue
+            # The genome-baseline test below only constrains reads that already had a
+            # genome alignment. Reads with no graph path -- the bulk of what rescue
+            # retries -- reach here with nothing bounding how much of the read the
+            # target accounts for: percent identity is measured over the aligned
+            # portion alone and is blind to clipping, so a 200bp end of a 3kb read at
+            # 85% identity would count as full support for the isoform. Require the
+            # alignment to span essentially the whole read. Measured as aligned length
+            # over read length rather than as matched bases, so ONT/PacBio error rates
+            # do not make the requirement unsatisfiable; mismatches are already
+            # constrained by rescue_unassigned_min_per_id.
+            if min_aligned_frac > 0:
+                read_length = read.infer_read_length() or read.query_length
+                aligned_length = read.query_alignment_length
+                if read_length and aligned_length is not None:
+                    if (aligned_length / read_length) < min_aligned_frac:
+                        continue
             if read_name_to_genome_explained:
                 # Rescue is purely additive: it never replaces a read's original
                 # multipath. An alignment that explains less of the read than the

@@ -98,6 +98,20 @@ config = {
     "min_isoform_fraction": 0.01,
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
     "min_monoexonic_TPM": 1.0,
+    # A monoexonic model has no intron chain to corroborate it, so its only structural
+    # evidence is that its reads describe one contiguous thing. Reads that tile a long
+    # span without overlapping each other describe a covered region, not a transcript:
+    # 500bp reads can never establish a 20kb unspliced isoform. This is the fraction of
+    # a model's supporting reads that must mutually overlap at some single base
+    # (i.e. peak read depth / supporting read count). Self-calibrating: long reads and
+    # genuinely stacked support pass regardless of model length. 0 disables the check.
+    "min_monoexonic_read_span_peak_frac": 0.5,
+    # Minimum ratio of a monoexonic model's coverage-depth ("adjusted") TPM to its
+    # read-count TPM. Equivalently, the mean fraction of the model an individual
+    # supporting read covers. Reads that each span the model give a ratio near 1;
+    # reads that tile it drive the ratio toward 1/read_count. Scale-free, so it
+    # measures agreement rather than abundance. 0 disables the check.
+    "min_monoexonic_adjusted_TPM_ratio": 0.20,
     "filter_internal_priming": True,
     "restrict_internal_priming_filter_to_monoexonic": True,
     # When True, a monoexonic transcript that looks internally primed is retained if its
@@ -127,6 +141,14 @@ config = {
     "rescue_unassigned_reads_via_transcriptome_alignment": True,
     "rescue_unassigned_minimap2_preset": "auto",
     "rescue_unassigned_minimap2_filter_fraction": 0,
+    # Fraction of a read's length that must align to the target transcript before the
+    # alignment can be accepted as rescue evidence. Measured as aligned length over
+    # read length (clipping excluded from the numerator), not as matched bases, so
+    # platform error rates do not make it unsatisfiable -- mismatches are bounded
+    # separately by rescue_unassigned_min_per_id. A partial alignment describes a read
+    # that only locally resembles the target and must not count as support for the
+    # whole isoform. 0 disables the check.
+    "rescue_unassigned_min_aligned_read_frac": 0.95,
     "rescue_unassigned_min_per_id": None,
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)

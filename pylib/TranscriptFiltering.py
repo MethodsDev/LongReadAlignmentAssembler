@@ -42,6 +42,185 @@ def filter_transcripts_by_min_length(transcripts, min_transcript_length):
     return transcripts_retained
 
 
+def _peak_overlapping_read_fraction(spans):
+    """Largest fraction of these read spans that mutually overlap at one base.
+
+    Equivalent to peak read depth divided by read count. A sweep is used rather than
+    pairwise comparison so this stays linear in read count. Returns None when there is
+    nothing to judge.
+    """
+
+    if not spans:
+        return None
+
+    events = []
+    for lend, rend in spans:
+        events.append((lend, 1))
+        events.append((rend + 1, -1))
+    events.sort()
+
+    depth = 0
+    peak = 0
+    for _, delta in events:
+        depth += delta
+        if depth > peak:
+            peak = depth
+
+    return peak / len(spans)
+
+
+def _collect_supporting_read_spans(transcript, read_name_to_span):
+    """Genomic spans of the real reads assigned to this transcript."""
+
+    read_names = set()
+    for mp in transcript.get_multipaths_evidence_assigned():
+        read_names.update(mp.get_read_names())
+
+    spans = []
+    for read_name in read_names:
+        if read_name.startswith("reftranscript:") or read_name.startswith(
+            "fake_for_merge"
+        ):
+            continue
+        span = read_name_to_span.get(read_name)
+        if span is not None:
+            spans.append(span)
+
+    return spans
+
+
+def filter_monoexonic_isoforms_by_adjusted_TPM_ratio(
+    transcripts, read_name_to_span, min_ratio
+):
+    """Drop monoexonic models whose read-count TPM and coverage-depth TPM disagree.
+
+    The reported TPM counts reads, so it treats a read as evidence for the whole
+    model no matter how little of it the read covers. The adjusted TPM instead
+    divides the read bases landing on the model by the model's length, giving mean
+    coverage depth in the same units:
+
+        TPM     = read_count                    / num_total_reads * 1e6
+        adjTPM  = (sum aligned bases / L_model) / num_total_reads * 1e6
+
+    When the reads agree -- each spanning the model -- the two are similar. When they
+    tile a long span, each contributing a fraction, adjTPM falls far below TPM. Their
+    ratio is the mean fraction of the model an individual read covers, which is
+    independent of library size and of read count, so it isolates agreement rather
+    than abundance. Note that an absolute threshold on adjTPM does NOT work here: a
+    20kb model tiled by 188 short reads still averages ~5x depth and would pass, while
+    genuinely coherent 3-read models would fail.
+
+    Spans are alignment extents, so a spliced read overlapping the model is credited
+    its full overlap including any intron. That inflates the ratio, making the filter
+    conservative, which is the safe direction.
+    """
+
+    if min_ratio is None or min_ratio <= 0:
+        return transcripts
+
+    transcripts_retained = list()
+    num_filtered = 0
+
+    for transcript in transcripts:
+        if not transcript.is_monoexonic():
+            transcripts_retained.append(transcript)
+            continue
+
+        spans = _collect_supporting_read_spans(transcript, read_name_to_span)
+        model_lend, model_rend = transcript.get_coords()
+        model_length = model_rend - model_lend + 1
+
+        if not spans or model_length <= 0:
+            transcripts_retained.append(transcript)
+            continue
+
+        covered_bases = 0
+        for span_lend, span_rend in spans:
+            overlap = min(model_rend, span_rend) - max(model_lend, span_lend) + 1
+            if overlap > 0:
+                covered_bases += overlap
+
+        # ratio == (covered_bases / model_length) / read_count
+        ratio = (covered_bases / model_length) / len(spans)
+
+        if ratio >= min_ratio:
+            transcripts_retained.append(transcript)
+            continue
+
+        num_filtered += 1
+        logger.debug(
+            "FILTERING monoexonic transcript %s: adjusted/plain TPM ratio %.3f over "
+            "%d reads and %d bp (min_monoexonic_adjusted_TPM_ratio=%.2f)",
+            transcript.get_transcript_id(),
+            ratio,
+            len(spans),
+            model_length,
+            min_ratio,
+        )
+
+    if num_filtered:
+        logger.info(
+            "-filtered %d monoexonic transcripts whose coverage-depth TPM diverges "
+            "from their read-count TPM",
+            num_filtered,
+        )
+
+    return transcripts_retained
+
+
+def filter_monoexonic_isoforms_by_read_span_coherence(
+    transcripts, read_name_to_span, min_peak_frac
+):
+    """Drop monoexonic models whose supporting reads do not stack on a common interval.
+
+    Multi-exonic models are untouched: their intron chain is the corroborating
+    evidence. A monoexonic model has none, so we require its reads to agree on where
+    the transcript is. Reads that tile a span without overlapping describe contiguous
+    coverage -- unspliced pre-mRNA, intronic signal, a gene body -- rather than one
+    molecule, and collapsing that into a single model invents a transcript nothing
+    observed end to end.
+    """
+
+    if min_peak_frac is None or min_peak_frac <= 0:
+        return transcripts
+
+    transcripts_retained = list()
+    num_filtered = 0
+
+    for transcript in transcripts:
+        if not transcript.is_monoexonic():
+            transcripts_retained.append(transcript)
+            continue
+
+        spans = _collect_supporting_read_spans(transcript, read_name_to_span)
+
+        peak_frac = _peak_overlapping_read_fraction(spans)
+
+        # No recorded spans means no basis to reject; leave the call to the other
+        # filters rather than dropping a model over missing bookkeeping.
+        if peak_frac is None or peak_frac >= min_peak_frac:
+            transcripts_retained.append(transcript)
+            continue
+
+        num_filtered += 1
+        logger.debug(
+            "FILTERING monoexonic transcript %s: only %.2f of its %d supporting reads "
+            "overlap at any single base (min_monoexonic_read_span_peak_frac=%.2f)",
+            transcript.get_transcript_id(),
+            peak_frac,
+            len(spans),
+            min_peak_frac,
+        )
+
+    if num_filtered:
+        logger.info(
+            "-filtered %d monoexonic transcripts lacking mutually overlapping read support",
+            num_filtered,
+        )
+
+    return transcripts_retained
+
+
 def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     transcripts_retained = list()
