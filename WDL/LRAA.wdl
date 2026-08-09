@@ -541,7 +541,10 @@ task count_bam {
 
   command <<<
     set -ex
-        samtools view -@ ~{samtools_threads} -c ~{bam}
+        # -F 0x904 drops unmapped/secondary/supplementary so this matches
+        # count_reads_from_bam() in the LRAA driver: one count per genome-mapped
+        # read. Both paths must agree or TPM depends on which one ran.
+        samtools view -@ ~{samtools_threads} -c -F 0x904 ~{bam}
 
   >>>
 

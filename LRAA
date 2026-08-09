@@ -1293,6 +1293,14 @@ def main():
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
 
+    # TPM's denominator must describe the library, not the alignment policy applied
+    # to it. The secondary-rescue filter below rewrites bam_filename and drops
+    # unmapped and supplementary records, so counting the filtered file would make
+    # num_total_reads -- and therefore every expression value and the
+    # min_monoexonic_TPM gate -- depend on --secondary_alignment_mode. Retain the
+    # original path and count genome-mapped reads from it.
+    bam_filename_for_read_count = bam_filename
+
     bam_filename = _filter_bam_for_secondary_alignment_policy(
         bam_filename,
         bam_preproc_cache_dir,
@@ -1356,11 +1364,11 @@ def main():
 
     if args.num_total_reads is None:
         LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-            bam_file_for_quant
+            bam_filename_for_read_count
         )
         logger.info(
-            "total number of reads counted from {} as: {}".format(
-                bam_file_for_quant, LRAA_Globals.config["num_total_reads"]
+            "genome-mapped reads counted from {} as: {}".format(
+                bam_filename_for_read_count, LRAA_Globals.config["num_total_reads"]
             )
         )
 
@@ -4916,8 +4924,20 @@ def report_transcript_paths_in_graph(transcripts, filename):
 
 
 def count_reads_from_bam(bam_filename):
+    """Count genome-mapped reads: one record per read that aligned.
 
-    read_count_file = os.path.basename(bam_filename) + ".count"
+    -F 0x904 excludes unmapped (0x4), secondary (0x100) and supplementary (0x800)
+    records, so each aligned read contributes exactly once regardless of how many
+    alignments it has. This is the library size TPM is meant to be relative to;
+    counting raw records instead would let an unmapped-read-heavy BAM inflate the
+    denominator (SG-NEx ONT cDNA is ~74% unmapped) and silently make every absolute
+    expression threshold, notably min_monoexonic_TPM, that much more permissive.
+
+    The cache filename records the counting policy so a stale .count written under
+    the older all-records semantics is never reused.
+    """
+
+    read_count_file = os.path.basename(bam_filename) + ".mapped_primary.count"
     if not os.path.exists(read_count_file):
         tmp_path = f"{read_count_file}.tmp"
         threads = _resolve_singleton_stage_threads()
@@ -4927,10 +4947,14 @@ def count_reads_from_bam(bam_filename):
             "-@",
             str(threads),
             "-c",
+            "-F",
+            "0x904",
             bam_filename,
         ]
         logger.debug(
-            "Counting reads in %s with samtools (threads=%d)", bam_filename, threads
+            "Counting genome-mapped reads in %s with samtools (threads=%d)",
+            bam_filename,
+            threads,
         )
         with open(tmp_path, "wt") as tmp_fh:
             subprocess.check_call(samtools_cmd, stdout=tmp_fh)
