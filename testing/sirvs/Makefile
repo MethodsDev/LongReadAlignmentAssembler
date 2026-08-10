@@ -59,6 +59,18 @@ test_quant:
 # defines no __hash__. The run-to-run flip that caused is fixed: pruning now breaks a
 # cdna-length tie on assigned reads, so SIRV705 wins on its 3 reads against 2 and the
 # terminals follow the read evidence.
+#
+# The last check pins total assigned reads at 537 of the 551 in the BAM. The 14
+# unassigned are SIRV107's 11 and SIRV206's 3: both are withheld from the half
+# annotation and neither is reconstructed, so neither is ever a rescue target.
+# SIRV206's 3 were already unassigned when this baseline read 548. SIRV107's 11
+# joined them once rescue gained an aligned-length floor: transcriptome rescue had
+# been crediting those reads fractionally to unrelated SIRV1 isoforms on alignments
+# covering under 30% of the read, which is why any nonzero
+# rescue_unassigned_min_aligned_read_frac now rejects them and only 0 restores 548.
+# A read this run cannot place is left unassigned rather than attached to a model
+# that is not its own. test_quant, which supplies the complete annotation, still
+# accounts for all 551.
 test_ref_guided_ID:
 	make clean
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
@@ -70,7 +82,7 @@ test_ref_guided_ID:
 	awk '$$1=="SIRV6" && $$3=="transcript" && $$4==2359 && $$5==2547 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 	awk '$$1=="SIRV7" && $$3=="transcript" && $$7=="-" && $$4==1006 && $$5==147925 {n++} END{exit !(n==1)}' LRAA.LRAA.ref-guided.gtf
 	@echo "checking total assigned reads, which the class-code summary also cannot see"
-	awk 'BEGIN{FS="\t"} !/^#/ && NR>1 {s+=$$4} END{printf "  assigned reads: %.0f\n", s; exit !(s>547.5 && s<548.5)}' LRAA.LRAA.ref-guided.quant.expr
+	awk 'BEGIN{FS="\t"} !/^#/ && NR>1 {s+=$$4} END{printf "  assigned reads: %.0f\n", s; exit !(s>536.5 && s<537.5)}' LRAA.LRAA.ref-guided.quant.expr
 
 
 # A supplied annotation model with no read evidence must never become a candidate.
