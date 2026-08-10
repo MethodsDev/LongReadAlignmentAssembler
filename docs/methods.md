@@ -92,6 +92,7 @@ Global configuration lives in `pylib/LRAA_Globals.py` as a `config` dictionary. 
 - Graph scale: `max_path_nodes_per_component`, thresholds controlling junction/exon evidence.
 - Assignment/EM: `fraction_read_align_overlap`, `weight_reads_by_3prime_agreement`, `EM_alpha`.
 - Monoexonic isoform confidence: `min_monoexonic_TPM`, plus `min_monoexonic_read_span_peak_frac` and `min_monoexonic_adjusted_TPM_ratio`, which require the supporting reads of a single-exon model to overlap one another rather than tile a span. Either may be set to `0` to disable it.
+- Monoexonic isoform confidence, single-cell only: `min_monoexonic_supporting_cells` requires a novel single-exon model to be seen in that many distinct cells; reference-matching monoexonic models are exempt and bulk data is unaffected. The roster of real cells comes from `--cell_list` (per-cluster in cluster-guided runs), so empty droplets and ambient barcodes do not count. `0` disables.
 - Transcriptome rescue: `rescue_unassigned_reads_via_transcriptome_alignment`, `rescue_unassigned_min_aligned_read_frac`, `rescue_unassigned_min_per_id`.
 - Parallelism: `CPU`, `min_mpgn_component_size_for_spawn`.
 - Normalization/debug: flags to normalize BAM by strand; `--debug` enables extensive intermediate artifacts.

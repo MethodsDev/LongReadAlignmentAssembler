@@ -46,7 +46,10 @@ task partition_bam_by_cell_cluster {
     >>>
      
     output {
-        Array[File] partitioned_bams = glob("partitioned_bams/*.bam") 
+        Array[File] partitioned_bams = glob("partitioned_bams/*.bam")
+        # Same cluster names and the same sort order as the BAMs above, so index i
+        # of each array refers to the same cluster.
+        Array[File] partitioned_cell_lists = glob("partitioned_bams/*.cells.txt")
     }
 
     runtime {

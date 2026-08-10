@@ -90,6 +90,7 @@ workflow LRAA_cell_cluster_guided {
                     referenceGenome = referenceGenome,
                     annot_gtf = annot_gtf,
                     inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
+                    cell_list = partition_bam_by_cell_cluster.partitioned_cell_lists[i],
                     HiFi = HiFi,
                     oversimplify = oversimplify,
                     allow_secondary_alignments = allow_secondary_alignments,

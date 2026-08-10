@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import sys, os, re
 import Transcript
 import MultiPath
@@ -38,6 +39,125 @@ def filter_transcripts_by_min_length(transcripts, min_transcript_length):
 
         if transcript.get_cdna_len() >= min_transcript_length:
             transcripts_retained.append(transcript)
+
+    return transcripts_retained
+
+
+def _cell_barcode_from_read_name(read_name):
+    """Cell barcode encoded in a read name, or None for bulk input.
+
+    Util_funcs.get_read_name_include_sc_encoding() emits
+    "<cell_barcode>^<umi>^<read_name>" only when both the barcode and UMI tags are
+    present on the alignment, and the bare read name otherwise. The separator is
+    therefore what distinguishes single-cell input from bulk, and any filter keyed
+    on it self-disables on bulk data.
+    """
+
+    separator_pos = read_name.find("^")
+    if separator_pos <= 0:
+        return None
+    return read_name[:separator_pos]
+
+
+def _input_has_cell_barcodes(transcripts, probe_limit=10000):
+    """Whether these transcripts carry cell-encoded read names.
+
+    Single-cell input answers on the first read examined; bulk input has to be
+    probed, so the scan is bounded. Determined up front rather than during
+    filtering, so the verdict cannot depend on the order transcripts are visited.
+    """
+
+    num_examined = 0
+    for transcript in transcripts:
+        for mp in transcript.get_multipaths_evidence_assigned():
+            for read_name in mp.get_read_names():
+                if _cell_barcode_from_read_name(read_name) is not None:
+                    return True
+                num_examined += 1
+                if num_examined >= probe_limit:
+                    return False
+    return False
+
+
+def filter_novel_monoexonic_isoforms_by_min_cells(
+    transcripts, min_supporting_cells, cell_roster=None
+):
+    """Require a novel monoexonic model to be seen in a minimum number of cells.
+
+    Single-cell only, and monoexonic only. A monoexonic model has no intron chain
+    corroborating it, so the number of distinct cells it was observed in is the one
+    independent axis of evidence available: reads all drawn from one cell describe a
+    single amplification event, not a transcript the population expresses.
+
+    A model containing a reference model is exempt, on the same basis as the
+    reference reprieve in filter_monoexonic_isoforms_by_TPM_threshold(): the
+    annotation already asserts a transcript there, so prevalence is not the evidence
+    being asked for. Only novel monoexonic models must clear the bar.
+
+    An absolute cell count rather than a fraction of the cells present. A fraction
+    makes the bar scale with however many cells a cluster happens to contain, so the
+    same model passes in a small cluster and fails in a large one; against 14 PBMC
+    clusters spanning 122 to 1,506 cells, recovery of reference-matching monoexons
+    under a fixed bar was 98% at 3 cells, 92% at 5 and 73% at 10, while a
+    5%-of-roster rule recovered well under half of them.
+
+    cell_roster, when given, is the set of barcodes accepted as real cells. Barcodes
+    outside it are empty droplets or ambient signal; counting them would let ambient
+    RNA, which is spread thinly across many droplets, masquerade as prevalence.
+    """
+
+    if min_supporting_cells is None or min_supporting_cells <= 0:
+        return transcripts
+
+    retain_reference = (
+        LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
+    )
+
+    if not _input_has_cell_barcodes(transcripts):
+        # Bulk input encodes no barcode in read names; there is no cell axis to judge on.
+        return transcripts
+
+    transcripts_retained = list()
+    num_filtered = 0
+
+    for transcript in transcripts:
+        if not transcript.is_monoexonic():
+            transcripts_retained.append(transcript)
+            continue
+
+        if retain_reference and transcript.contains_reference_model():
+            transcripts_retained.append(transcript)
+            continue
+
+        cells = set()
+        for mp in transcript.get_multipaths_evidence_assigned():
+            for read_name in mp.get_read_names():
+                cell_barcode = _cell_barcode_from_read_name(read_name)
+                if cell_barcode is None:
+                    continue
+                if cell_roster and cell_barcode not in cell_roster:
+                    continue
+                cells.add(cell_barcode)
+
+        if len(cells) >= min_supporting_cells:
+            transcripts_retained.append(transcript)
+            continue
+
+        num_filtered += 1
+        logger.debug(
+            "FILTERING novel monoexonic transcript %s: supported by %d cells, "
+            "below min_monoexonic_supporting_cells=%d",
+            transcript.get_transcript_id(),
+            len(cells),
+            min_supporting_cells,
+        )
+
+    if num_filtered:
+        logger.info(
+            "-filtered %d novel monoexonic transcripts supported by fewer than %d cells",
+            num_filtered,
+            min_supporting_cells,
+        )
 
     return transcripts_retained
 

@@ -19,6 +19,7 @@ task LRAA_runner_task {
         Int? num_parallel_contigs
         
         Int? num_total_reads
+        File? cell_list
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
@@ -197,6 +198,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \
                                  ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
                                  ~{if defined(num_total_reads) then "--num_total_reads " + num_total_reads else ""} \
+                                 ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
@@ -305,6 +307,7 @@ workflow LRAA_runner {
         Int? num_parallel_contigs
         
         Int? num_total_reads
+        File? cell_list
         Float? min_per_id
         Boolean no_EM
         Boolean no_norm
@@ -349,6 +352,7 @@ workflow LRAA_runner {
             contig = contig,
             num_parallel_contigs = num_parallel_contigs,
             num_total_reads=num_total_reads,
+            cell_list=cell_list,
             min_per_id=min_per_id,
             no_EM=no_EM,
             no_norm=no_norm,

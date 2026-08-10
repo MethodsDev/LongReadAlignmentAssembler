@@ -3,6 +3,7 @@
 import sys, os, re
 import argparse
 import pysam
+from collections import defaultdict
 import logging
 import psutil
 
@@ -94,6 +95,23 @@ def main():
             cell_barcode_to_cluster[cell_barcode] = cluster_name
 
     logger.info(f"Loaded {len(cell_barcode_to_cluster)} cell barcodes across clusters")
+
+    # Emit each cluster's called-cell barcodes alongside its BAM. Downstream isoform
+    # identification needs the roster of real cells for that cluster: barcodes are
+    # what distinguish called cells from empty droplets and ambient signal, and the
+    # BAM alone cannot convey cells that contributed no read.
+    cluster_to_cell_barcodes = defaultdict(list)
+    for cell_barcode, cluster_name in cell_barcode_to_cluster.items():
+        cluster_to_cell_barcodes[cluster_name].append(cell_barcode)
+    for cluster_name, cell_barcodes in cluster_to_cell_barcodes.items():
+        cell_list_filename = f"{output_prefix}.{cluster_name}.cells.txt"
+        with open(cell_list_filename, "wt") as cell_list_fh:
+            for cell_barcode in sorted(cell_barcodes):
+                print(cell_barcode, file=cell_list_fh)
+        logger.info(
+            f"Wrote {len(cell_barcodes)} cell barcodes for cluster {cluster_name} "
+            f"to {cell_list_filename}"
+        )
     memory_mb = process.memory_info().rss / 1024 / 1024
     logger.info(f"Memory after loading clusters: {memory_mb:.2f} MB")
 

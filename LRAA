@@ -697,6 +697,18 @@ def main():
     )
 
     config_group.add_argument(
+        "--cell_list",
+        type=str,
+        default=None,
+        help="file of cell barcodes considered real cells, one per line (a "
+        "cell-clusters file's first column is accepted). Restricts the "
+        "supporting-cell filter to these barcodes, so empty droplets and ambient "
+        "barcodes present in the BAM inflate neither the roster nor a model's "
+        "apparent prevalence. In cluster-guided analysis, supply the barcodes of the "
+        "cluster being analyzed.",
+    )
+
+    config_group.add_argument(
         "--min_path_score",
         type=float,
         default=LRAA_Globals.config["min_path_score"],
@@ -821,6 +833,18 @@ def main():
         help="minimum ratio of a mono-exonic isoform's coverage-depth (length-adjusted) "
         "TPM to its read-count TPM; 0 disables (default: {})".format(
             LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"]
+        ),
+    )
+
+    config_group.add_argument(
+        "--min_monoexonic_supporting_cells",
+        type=int,
+        required=False,
+        default=LRAA_Globals.config["min_monoexonic_supporting_cells"],
+        help="single-cell only: minimum number of distinct cells that must support a "
+        "NOVEL mono-exonic isoform; reference-matching mono-exonic isoforms are exempt "
+        "and bulk data is unaffected; 0 disables (default: {})".format(
+            LRAA_Globals.config["min_monoexonic_supporting_cells"]
         ),
     )
 
@@ -1160,6 +1184,9 @@ def main():
     LRAA_Globals.config["min_monoexonic_adjusted_TPM_ratio"] = (
         args.min_monoexonic_adjusted_TPM_ratio
     )
+    LRAA_Globals.config["min_monoexonic_supporting_cells"] = (
+        args.min_monoexonic_supporting_cells
+    )
     LRAA_Globals.config["rescue_unassigned_min_aligned_read_frac"] = (
         args.rescue_unassigned_min_aligned_read_frac
     )
@@ -1419,6 +1446,22 @@ def main():
         logger.info("using total number of reads as: {}".format(args.num_total_reads))
         if args.num_total_reads == 0:
             raise RuntimeError("Error, number of total reads is set to zero.")
+
+    # Barcodes accepted as real cells for the monoexonic supporting-cell filter. A BAM
+    # that has not been cell-filtered carries empty-droplet and ambient barcodes, which
+    # would make an ambient-driven model look like it was seen in many cells.
+    if args.cell_list is not None:
+        with open(args.cell_list, "rt") as fh:
+            LRAA_Globals.CELL_ROSTER = {
+                line.split("\t")[0].strip()
+                for line in fh
+                if line.strip() and not line.startswith("#")
+            }
+        logger.info(
+            "using {} called cells from --cell_list {}".format(
+                len(LRAA_Globals.CELL_ROSTER), args.cell_list
+            )
+        )
 
     ###########################################
     ## on to isoform discovery / reconstruction
@@ -4800,6 +4843,30 @@ def run_transcript_assembly(
             if len(transcripts) < 1:
                 logger.info(
                     "-no transcripts on contig {} {} survived monoexonic adjusted-TPM filtering".format(
+                        contig_acc, contig_strand
+                    )
+                )
+                return
+
+        ##################################################################
+        # Single-cell: novel monoexonic models must be seen in enough cells.
+        # Self-disables on bulk input, where read names carry no cell barcode.
+        if LRAA_Globals.config["min_monoexonic_supporting_cells"] > 0:
+            num_before = len(transcripts)
+            transcripts = (
+                TranscriptFiltering.filter_novel_monoexonic_isoforms_by_min_cells(
+                    transcripts,
+                    LRAA_Globals.config["min_monoexonic_supporting_cells"],
+                    LRAA_Globals.CELL_ROSTER,
+                )
+            )
+            if len(transcripts) != num_before:
+                logger.info(
+                    f"[{contig_acc}{contig_strand}] monoexonic supporting-cells: {num_before} -> {len(transcripts)} transcripts"
+                )
+            if len(transcripts) < 1:
+                logger.info(
+                    "-no transcripts on contig {} {} survived monoexonic supporting-cell filtering".format(
                         contig_acc, contig_strand
                     )
                 )

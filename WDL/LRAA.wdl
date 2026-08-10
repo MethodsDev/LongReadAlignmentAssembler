@@ -29,6 +29,10 @@ workflow LRAA_wf {
 
         # If set, the count_bam step is skipped and this value is passed to LRAA as --num_total_reads
         Int? num_total_reads
+        # Barcodes accepted as real cells. Without it the supporting-cell filter
+        # trusts every barcode in the BAM, which is only safe when the BAM was already
+        # restricted to called cells.
+        File? cell_list
 
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -127,6 +131,7 @@ workflow LRAA_wf {
                     contig = contig_name,
                     num_parallel_contigs = num_parallel_contigs,
                     num_total_reads = scatter_num_total_reads,
+                    cell_list = cell_list,
                     min_per_id = min_per_id,
                     quant_only = quant_only,
                     HiFi = HiFi,
@@ -200,6 +205,7 @@ workflow LRAA_wf {
                 numThreadsPerWorker = numThreadsPerWorker,
                 num_parallel_contigs = num_parallel_contigs,
                 num_total_reads = num_total_reads,
+                cell_list = cell_list,
                 min_mapping_quality = min_mapping_quality,
                 min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                 docker = docker,
@@ -558,6 +564,7 @@ task count_bam {
     Int count = read_int(stdout())
   }
 }
+
 
 task filterBamToSecondaryRescue {
     input {

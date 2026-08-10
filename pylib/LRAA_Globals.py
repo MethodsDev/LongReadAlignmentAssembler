@@ -112,6 +112,15 @@ config = {
     # reads that tile it drive the ratio toward 1/read_count. Scale-free, so it
     # measures agreement rather than abundance. 0 disables the check.
     "min_monoexonic_adjusted_TPM_ratio": 0.20,
+    # Single-cell only. Minimum number of distinct cells that must contribute a read
+    # to a NOVEL monoexonic model; monoexonic models containing a reference model are
+    # exempt under ref_trans_filter_mode retain_expressed, and bulk input carries no
+    # barcode in its read names so the check self-disables there. An absolute count
+    # rather than a fraction of the cluster: measured across 14 PBMC clusters (122 to
+    # 1,506 cells), a fraction's stringency swung with roster size, while recovery of
+    # reference-matching monoexons against an absolute bar was stable -- 98% at 3
+    # cells, 92% at 5, 73% at 10. 0 disables.
+    "min_monoexonic_supporting_cells": 5,
     "filter_internal_priming": True,
     "restrict_internal_priming_filter_to_monoexonic": True,
     # When True, a monoexonic transcript that looks internally primed is retained if its
@@ -280,3 +289,9 @@ MP_READ_ID_STORE = None  # type: ignore
 # must not be selected as a candidate. Populated per splice graph while incorporating
 # input transcripts, and cleared when a new multipath graph is built.
 SYNTHETIC_READ_IDS = set()
+
+# Barcodes accepted as real cells, from --cell_list. Empty means no list was given,
+# in which case the supporting-cell filter trusts every barcode in the BAM, which
+# is only safe when the BAM was already restricted to called cells (as the
+# cluster-guided partitioner does).
+CELL_ROSTER = set()
