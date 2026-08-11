@@ -380,6 +380,41 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
     return transcripts_retained
 
 
+def filter_multiexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
+    """Drop multi-exonic isoforms that quantification found no expression for.
+
+    Supplied models reach path selection carrying a synthetic template read, so a
+    reference structure is selectable even when a dominant overlapping isoform has
+    already claimed every real read it could have had. That is deliberate: it defers
+    the judgement to quantification, which can see read assignments the greedy
+    selection order cannot. This is where the judgement is made.
+
+    Retains a transcript when its TPM is strictly greater than min_TPM, so the
+    default of 0 means "keep it if EM gave it any expression at all", matching what
+    ref_trans_filter_mode=retain_expressed asks everywhere else. A structure no read
+    supports quantifies to zero and is dropped here rather than being reported on the
+    strength of its own annotation.
+
+    Applies to every multi-exonic model, not only reference-containing ones: a novel
+    model with no expression is no better evidenced than a supplied one. Monoexonic
+    models are untouched; they have their own thresholds. A negative min_TPM disables
+    the filter entirely.
+    """
+
+    if min_TPM is None or min_TPM < 0:
+        return transcripts
+
+    transcripts_retained = []
+    for transcript in transcripts:
+        if transcript.is_monoexonic():
+            transcripts_retained.append(transcript)
+            continue
+        if transcript.get_TPM() > min_TPM:
+            transcripts_retained.append(transcript)
+
+    return transcripts_retained
+
+
 def filter_isoforms_by_min_isoform_fraction(
     transcripts, min_isoform_fraction, run_EM, max_EM_iterations
 ):

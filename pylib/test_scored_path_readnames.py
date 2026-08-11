@@ -137,7 +137,11 @@ def name_store(tmp_path):
 
 
 def test_path_supported_only_by_a_synthetic_read_scores_zero(name_store):
-    """A structure no read supports must not be selectable as a candidate."""
+    """A structure no read supports must never be reconstructed.
+
+    The template alone is not evidence, so such a path scores zero and is not
+    selected. Asserted on the SIRV suite too, via test_unsupported_ref_model.
+    """
     sg, e1, e2, _ = build_minimal_sg_with_exons()
     mp, sp = _scored_path(sg, [e1.get_id(), e2.get_id()], {"reftranscript:t1"}, 1)
     assert sp.compute_path_score() == 1  # before registration, it counts
@@ -148,7 +152,13 @@ def test_path_supported_only_by_a_synthetic_read_scores_zero(name_store):
     assert sp._all_represented_read_ids
 
 
-def test_synthetic_read_does_not_inflate_a_real_supported_path(name_store):
+def test_synthetic_read_floors_a_path_whose_real_reads_were_claimed(name_store):
+    """A supplied model with real evidence stays selectable once that evidence is taken.
+
+    This is the case the greedy loop otherwise loses: the reads are real but a dominant
+    overlapping isoform got them first, so without the template floor the path rescores
+    to zero and never reaches quantification.
+    """
     sg, e1, e2, _ = build_minimal_sg_with_exons()
     mp, sp = _scored_path(
         sg, [e1.get_id(), e2.get_id()], {"reftranscript:t1", "r1", "r2"}, 3
@@ -160,8 +170,13 @@ def test_synthetic_read_does_not_inflate_a_real_supported_path(name_store):
     }
     assert len(synthetic) == 1
     LG.SYNTHETIC_READ_IDS.update(synthetic)
-    # scores the two real reads only
-    assert sp.compute_path_score() == 2
+
+    # unexcluded: the template counts alongside the two real reads
+    assert sp.compute_path_score() == 3
+
+    # every real read claimed by a competitor: the floor keeps it selectable
+    real = set(mp.get_read_ids()) - synthetic
+    assert sp.compute_path_score(exclude_read_ids=real) == 1
 
 
 def test_fallback_still_applies_when_no_read_ids_exist(name_store):

@@ -815,6 +815,18 @@ def main():
     )
 
     config_group.add_argument(
+        "--min_multiexonic_TPM",
+        type=float,
+        required=False,
+        default=LRAA_Globals.config["min_multiexonic_TPM"],
+        help="minimum TPM for multi-exonic isoforms, applied after quantification; "
+        "the default of 0 keeps any model with expression and drops those quantified "
+        "to zero, negative disables (default: {})".format(
+            LRAA_Globals.config["min_multiexonic_TPM"]
+        ),
+    )
+
+    config_group.add_argument(
         "--min_monoexonic_read_span_peak_frac",
         type=float,
         required=False,
@@ -1178,6 +1190,7 @@ def main():
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
+    LRAA_Globals.config["min_multiexonic_TPM"] = args.min_multiexonic_TPM
     LRAA_Globals.config["min_monoexonic_read_span_peak_frac"] = (
         args.min_monoexonic_read_span_peak_frac
     )
@@ -4796,6 +4809,34 @@ def run_transcript_assembly(
                     )
                 )
                 # continue
+                return
+
+        ##################################################################
+        # Drop multiexonic transcripts that quantification found no expression for.
+        # Supplied models reach selection on their synthetic template read; this is
+        # where a structure no read supports is discarded. Kept separate from the
+        # monoexonic block above so disabling one threshold does not disable the other.
+        if LRAA_Globals.config["min_multiexonic_TPM"] >= 0:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] \n// -filtering multiexonic transcripts based on min TPM"
+            )
+            logger.info(
+                f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts"
+            )
+            transcripts = (
+                TranscriptFiltering.filter_multiexonic_isoforms_by_TPM_threshold(
+                    transcripts, LRAA_Globals.config["min_multiexonic_TPM"]
+                )
+            )
+            logger.info(
+                f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts"
+            )
+            if len(transcripts) < 1:
+                logger.info(
+                    "-no transcripts on contig {} {} survived multiexonic TPM filtering".format(
+                        contig_acc, contig_strand
+                    )
+                )
                 return
 
         ##################################################################

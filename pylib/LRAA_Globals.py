@@ -98,6 +98,13 @@ config = {
     "min_isoform_fraction": 0.01,
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
     "min_monoexonic_TPM": 1.0,
+    # A multi-exonic model is kept only if quantification gave it expression above this
+    # value. The default of 0 means "any expression at all", which is the judgement
+    # ref_trans_filter_mode=retain_expressed asks for: supplied models are selectable
+    # from the trellis on their synthetic template read, then this decides whether they
+    # were actually expressed. Raise it to demand more than a trace; set it negative to
+    # disable the check and report every selected multi-exonic model.
+    "min_multiexonic_TPM": 0.0,
     # A monoexonic model has no intron chain to corroborate it, so its only structural
     # evidence is that its reads describe one contiguous thing. Reads that tile a long
     # span without overlapping each other describe a covered region, not a transcript:

@@ -194,14 +194,37 @@ class Scored_path:
 
         score = 0
 
-        # Primary scoring: unique supporting read IDs across represented nodes. Synthetic
-        # reads injected for input transcripts are templates rather than observations, so
-        # they are not counted: a path supported by nothing else scores zero and is not
-        # selected, which is the correct outcome for a structure no read supports.
+        # Primary scoring: unique supporting read IDs across represented nodes.
+        #
+        # Synthetic reads injected for input transcripts are templates, not
+        # observations, and two different failure modes hang on how they are counted:
+        #
+        #   a) a structure NO read supports must never be reconstructed. Its only ids
+        #      are synthetic, and it has to score zero.
+        #   b) a supplied model whose real reads were all claimed by a dominant
+        #      overlapping isoform must still reach quantification. Scoring it zero
+        #      drops it at selection, before anything can judge whether it was
+        #      expressed; on chr20 HG002 that cost 110 supplied models, only 7 of
+        #      which had no expression once quantified.
+        #
+        # These are distinguishable: (a) has no real read id at all, (b) has real read
+        # ids that happen to be excluded. So the template counts only for a path that
+        # carries at least one real read, giving (b) a floor of 1 that greedy exclusion
+        # cannot erode while leaving (a) at zero.
+        #
+        # Selection is not reporting. A model selected on that floor is still dropped
+        # after EM by filter_multiexonic_isoforms_by_TPM_threshold if quantification
+        # gave it nothing.
         synthetic_read_ids = LRAA_Globals.SYNTHETIC_READ_IDS
+        has_real_read = any(
+            rid not in synthetic_read_ids for rid in self._all_represented_read_ids
+        )
         for rid in self._all_represented_read_ids:
-            if rid not in exclude_read_ids and rid not in synthetic_read_ids:
-                score += 1
+            if rid in exclude_read_ids:
+                continue
+            if rid in synthetic_read_ids and not has_real_read:
+                continue
+            score += 1
 
         # Fallback (initial scoring only): if no ids are available at all (e.g., external read-id
         # store not populated or inaccessible) and we are NOT rescoring with exclusions, approximate
