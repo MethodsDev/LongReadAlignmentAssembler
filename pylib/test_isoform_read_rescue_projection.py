@@ -168,13 +168,17 @@ def test_rescue_sequences_come_from_the_primary_record(tmp_path):
     bam_path = tmp_path / "supplementary.bam"
     _supplementary_then_primary_bam(bam_path)
 
-    read_name_to_seq, read_name_to_genome_explained = _collect_read_sequences(
-        str(bam_path), "chr1", None, None, {"r1"}, "+"
-    )
+    (
+        read_name_to_seq,
+        read_name_to_genome_explained,
+        read_name_to_genome_gap_id,
+    ) = _collect_read_sequences(str(bam_path), "chr1", None, None, {"r1"}, "+")
 
     assert read_name_to_seq == {"r1": "T" * 50}
-    # the primary is a clean 50-base match, so it explains the whole read
+    # the primary is a clean 50-base match, so it explains the whole read and agrees
+    # with the genome perfectly over the span it covers
     assert read_name_to_genome_explained == {"r1": 50}
+    assert read_name_to_genome_gap_id == {"r1": 1.0}
 
 
 def test_rescue_declined_when_it_explains_less_of_the_read_than_the_genome():

@@ -114,6 +114,7 @@ def build_transcriptome_alignment_multipaths(
     # Empty under genome gating, which runs its own genome-versus-transcript
     # arbitration; the baseline check below then imposes nothing there.
     read_name_to_genome_explained = {}
+    read_name_to_genome_gap_id = {}
     if genome_target_gating:
         candidate_tsv = None
         (
@@ -161,7 +162,11 @@ def build_transcriptome_alignment_multipaths(
             avg_targets_per_read,
         )
     else:
-        read_name_to_seq, read_name_to_genome_explained = _collect_read_sequences(
+        (
+            read_name_to_seq,
+            read_name_to_genome_explained,
+            read_name_to_genome_gap_id,
+        ) = _collect_read_sequences(
             bam_file, contig_acc, region_lend, region_rend, read_names, target_strand
         )
         # No exemption for reads_without_graph_path. Lacking a graph path says the
@@ -232,6 +237,7 @@ def build_transcriptome_alignment_multipaths(
             split_multipaths_by_gene=split_multipaths_by_gene,
             read_name_to_allowed_target_ids=read_name_to_allowed_target_ids,
             read_name_to_genome_explained=read_name_to_genome_explained,
+            read_name_to_genome_gap_id=read_name_to_genome_gap_id,
         )
 
         if return_read_details:
@@ -306,6 +312,7 @@ def _collect_read_sequences(
     remaining = None if target_read_names is None else set(target_read_names)
     read_name_to_seq = {}
     read_name_to_genome_explained = {}
+    read_name_to_genome_gap_id = {}
     with pysam.AlignmentFile(bam_file, "rb") as bam_reader:
         if region_lend is not None and region_rend is not None:
             fetch_iter = bam_reader.fetch(contig_acc, max(int(region_lend) - 1, 0), int(region_rend))
@@ -332,15 +339,20 @@ def _collect_read_sequences(
             if read_name not in read_name_to_seq:
                 read_name_to_seq[read_name] = seq
                 # What this read's genome alignment already explains, so a rescue that
-                # would explain less of it can be declined.
+                # would explain less of it can be declined. The gap-aware identity is
+                # carried alongside because explained bases cannot see a rescue that
+                # agrees over a shorter span, having skipped part of its target.
                 genome_explained = _explained_read_bases(read)
                 if genome_explained is not None:
                     read_name_to_genome_explained[read_name] = genome_explained
+                genome_gap_id = _gap_aware_identity(read)
+                if genome_gap_id is not None:
+                    read_name_to_genome_gap_id[read_name] = genome_gap_id
                 if remaining is not None:
                     remaining.discard(read_name)
             if remaining is not None and not remaining:
                 break
-    return read_name_to_seq, read_name_to_genome_explained
+    return read_name_to_seq, read_name_to_genome_explained, read_name_to_genome_gap_id
 
 
 def _collect_genome_gated_read_targets(
@@ -616,11 +628,15 @@ def _parse_rescue_alignments(
     split_multipaths_by_gene=False,
     read_name_to_allowed_target_ids=None,
     read_name_to_genome_explained=None,
+    read_name_to_genome_gap_id=None,
 ):
     read_to_hits = defaultdict(list)
     min_per_id = float(_resolve_rescue_min_per_id())
     min_aligned_frac = float(
         LRAA_Globals.config.get("rescue_unassigned_min_aligned_read_frac", 0) or 0
+    )
+    max_indel_length = int(
+        LRAA_Globals.config.get("rescue_unassigned_max_indel_length", 0) or 0
     )
     with pysam.AlignmentFile(rescue_sam, "r") as sam_reader:
         for read in sam_reader.fetch(until_eof=True):
@@ -635,6 +651,23 @@ def _parse_rescue_alignments(
             ):
                 continue
             if any(code == 3 for code, _ in (read.cigartuples or [])):
+                continue
+            # A long indel is structural disagreement, not sequencing error: the read
+            # skips (D) or carries (I) a stretch the target does not share, which is
+            # what an exon-level difference looks like once the alignment is against a
+            # cDNA rather than the genome. Nothing else here sees it -- the aligned
+            # fraction counts query bases, so a deletion costs it nothing; the
+            # explained-bases baseline excludes deleted bases by construction; and the
+            # single-merged-segment test cannot fire because a deletion emits its own
+            # genome segment and bridges its own gap.
+            #
+            # Calibrated against reads realigned to the transcript their genome intron
+            # chain exactly matches, where every indel is platform error: the largest
+            # deletion seen was 32 on PacBio HiFi and 45 on ONT cDNA.
+            if max_indel_length > 0 and any(
+                code in (1, 2) and length >= max_indel_length
+                for code, length in (read.cigartuples or [])
+            ):
                 continue
             if not _passes_percent_identity(read, min_per_id):
                 continue
@@ -673,6 +706,18 @@ def _parse_rescue_alignments(
                         rescue_explained is not None
                         and rescue_explained < genome_explained
                     ):
+                        continue
+            if read_name_to_genome_gap_id:
+                # Explained bases cannot separate a clean spliced genome alignment from
+                # a transcript alignment that skips part of its target: deleted bases
+                # are not read bases, so both explain the read equally and the test
+                # above ties. Gap-aware identity charges the skipped span, so the
+                # rescue must agree with its target at least as well as the genome
+                # alignment agrees with the genome, over the extent each covers.
+                genome_gap_id = read_name_to_genome_gap_id.get(read.query_name)
+                if genome_gap_id is not None:
+                    rescue_gap_id = _gap_aware_identity(read)
+                    if rescue_gap_id is not None and rescue_gap_id < genome_gap_id:
                         continue
             merged_segments = Pretty_alignment.read_to_pretty_alignment_segments(read)
             if len(merged_segments) != 1:
@@ -850,6 +895,44 @@ def _explained_read_bases(read):
         0, int(mismatch_count) - int(cigar_stats[0][1]) - int(cigar_stats[0][2])
     )
     return max(0, int(aligned_base_count) - substitutions)
+
+
+def _gap_aware_identity(read):
+    """Matched read bases over the alignment's full extent, gaps included.
+
+    _explained_read_bases() answers "how much of the read did this account for" and
+    deliberately ignores deleted reference bases, since those are not read bases. That
+    makes it blind to exon-level disagreement: a read skipping 74 bases the target
+    contains explains exactly as much of itself as a clean spliced genome alignment
+    does, and ties the baseline.
+
+    This counts the skipped bases in the denominator, so an alignment that agrees with
+    its target over a shorter span scores lower. Reference skips (N) are excluded --
+    an intron is not a gap in the read's agreement with the genome, which is what makes
+    a genome alignment comparable to a transcriptome one here.
+
+    Returns None when NM is unavailable, matching _explained_read_bases().
+    """
+    mismatch_count = None
+    if read.has_tag("NM"):
+        mismatch_count = int(read.get_tag("NM"))
+    elif read.has_tag("nM"):
+        mismatch_count = int(read.get_tag("nM"))
+    if mismatch_count is None:
+        return None
+
+    cigar_stats = read.get_cigar_stats()
+    aligned_base_count = cigar_stats[0][0]
+    if aligned_base_count == 0:
+        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
+    insertions = int(cigar_stats[0][1])
+    deletions = int(cigar_stats[0][2])
+    span = int(aligned_base_count) + insertions + deletions
+    if span <= 0:
+        return None
+
+    substitutions = max(0, int(mismatch_count) - insertions - deletions)
+    return max(0.0, float(int(aligned_base_count) - substitutions) / float(span))
 
 
 def _alignment_per_id_fraction(read):

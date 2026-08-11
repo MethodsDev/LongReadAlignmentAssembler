@@ -872,6 +872,18 @@ def main():
     )
 
     config_group.add_argument(
+        "--rescue_unassigned_max_indel_length",
+        type=int,
+        required=False,
+        default=LRAA_Globals.config["rescue_unassigned_max_indel_length"],
+        help="decline a transcriptome rescue alignment carrying an insertion or "
+        "deletion of at least this length, keeping the read's genome alignment; "
+        "--HiFi lowers it to 10; 0 disables (default: {})".format(
+            LRAA_Globals.config["rescue_unassigned_max_indel_length"]
+        ),
+    )
+
+    config_group.add_argument(
         "--no_filter_internal_priming",
         action="store_true",
         default=False,
@@ -1203,6 +1215,9 @@ def main():
     LRAA_Globals.config["rescue_unassigned_min_aligned_read_frac"] = (
         args.rescue_unassigned_min_aligned_read_frac
     )
+    LRAA_Globals.config["rescue_unassigned_max_indel_length"] = (
+        args.rescue_unassigned_max_indel_length
+    )
     LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
         args.run_cross_gene_EM_for_secondary_alignments
     )
@@ -1280,6 +1295,7 @@ def main():
         LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
         LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
         LRAA_Globals.config["min_per_id"] = 97.0
+        LRAA_Globals.config["rescue_unassigned_max_indel_length"] = 10
         LRAA_Globals.config["max_exon_spur_length"] = 13
         LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
         LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False

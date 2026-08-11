@@ -166,6 +166,20 @@ config = {
     # whole isoform. 0 disables the check.
     "rescue_unassigned_min_aligned_read_frac": 0.95,
     "rescue_unassigned_min_per_id": None,
+    # Longest insertion or deletion tolerated in a transcriptome rescue alignment.
+    # A read that skips or inserts this many bases relative to the target disagrees
+    # with it structurally rather than by sequencing error, so the alignment is
+    # declined and the read keeps its genome alignment.
+    #
+    # Calibrated on chr20 reads whose genome intron chain exactly matches an
+    # annotated transcript, realigned to that transcript's cDNA: for correctly
+    # placed reads the largest deletion observed was 32 (PacBio HiFi, p99.9 = 15)
+    # and 45 (ONT cDNA, p99.9 = 37); insertions reach p99.9 of 12 and 13. The
+    # defaults sit below those maxima deliberately -- rejecting ~0.3% of correctly
+    # placed reads on either platform buys a bar low enough to catch exon-sized
+    # disagreement, which error-calibrated caps would not. The HiFi block lowers
+    # this to 10. 0 disables the check.
+    "rescue_unassigned_max_indel_length": 30,
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,
