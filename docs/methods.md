@@ -187,8 +187,12 @@ Notable keys include:
 - Transcriptome rescue: `rescue_unassigned_reads_via_transcriptome_alignment`,
   `rescue_unassigned_min_aligned_read_frac`, `rescue_unassigned_min_per_id`.
 - Parallelism: `CPU`, `min_mpgn_component_size_for_spawn`.
-- Normalization/debug: flags to normalize BAM by strand; `--debug` enables extensive
-  intermediate artifacts.
+- Coverage normalization: `normalize_max_cov_level` sets the read depth that splice-graph
+  evidence is thinned toward, per strand; `0` disables it. Coverage below the target is
+  retained in full, and retained reads carry the reciprocal of their acceptance probability in
+  the `XW` tag so support stays on the scale of the original BAM. Quantification always reads
+  the unnormalized BAM. See `docs/coverage_normalization.md`.
+- Debug: `--debug` enables extensive intermediate artifacts.
 
 Splice-graph parameters are set via `Splice_graph.init_sg_params(...)` inside `LRAA` to keep
 all graph-level thresholds centralized.

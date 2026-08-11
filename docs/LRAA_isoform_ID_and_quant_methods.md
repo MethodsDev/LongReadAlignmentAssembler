@@ -61,10 +61,17 @@ onto splice-graph node paths and included in the normal quantification EM, rathe
 assigned in a separate post-processing step.
 
 Normalization of read coverage for isoform discovery: To reduce computational requirements in
-ultra-high-coverage regions, alignments are down-sampled to a maximum per-base coverage of
-1000× using a strand-aware normalization procedure applied independently per strand before
-splice-graph construction. The original unnormalized BAM is used for isoform abundance
-estimation, ensuring quantification accuracy is preserved.
+ultra-high-coverage regions, alignments are thinned toward a target read depth of 1000x before
+splice-graph construction, independently per strand. Acceptance follows local depth, so reads
+are retained in full wherever coverage already sits below the target and thinned only where it
+does not. Because any depth-dependent acceptance rate varies along the genome, each retained
+read records the reciprocal of its acceptance probability, and the splice graph sums those
+weights rather than counting reads; support therefore remains on the scale of the original BAM,
+and the relative quantities that graph filtering compares are preserved. Reads carrying a
+junction supported by fewer reads than the target are retained in full, making support for
+scarce junctions exact rather than estimated. The original unnormalized BAM is used for isoform
+abundance estimation, ensuring quantification accuracy is preserved. See
+`docs/coverage_normalization.md` for the procedure, the `XW` tag, and its parameters.
 
 Correction of alignments at soft-clipped termini: Long reads often contain soft-clipped bases
 at alignment boundaries when short segments fail to align across splice junctions to adjacent
