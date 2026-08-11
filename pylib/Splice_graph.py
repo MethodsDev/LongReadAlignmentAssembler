@@ -520,6 +520,17 @@ class Splice_graph:
             read_name = pretty_alignment.get_read_name()
             align_lend, align_rend = pretty_alignment.get_alignment_span()
 
+            # Reads reaching the splice graph may have been thinned by coverage
+            # normalization, which accepts a read with a probability that follows
+            # local depth. Counting each surviving read as one would then measure
+            # the sampling rate as much as the evidence, and every support
+            # comparison here is between features whose reads sat at different
+            # depths. The normalizer records 1/p, so summing weights estimates
+            # what an unnormalized bam would have shown. Absent the tag -- an
+            # unnormalized bam, or a read written before this was recorded -- the
+            # weight is 1 and counting is unchanged.
+            read_weight = pretty_alignment.get_normalization_weight()
+
             TSS_pos, polyA_pos = (
                 (align_lend, align_rend)
                 if contig_strand == "+"
@@ -540,7 +551,7 @@ class Splice_graph:
             ## Capture TSS support
 
             if TSS_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]:
-                TSS_position_counter[TSS_pos] += 1
+                TSS_position_counter[TSS_pos] += read_weight
                 if TSS_reads_ofh is not None:
                     print(
                         "\t".join(
@@ -561,7 +572,7 @@ class Splice_graph:
             ## Capture PolyA support
 
             if polyA_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_PolyA"]:
-                polyA_position_counter[polyA_pos] += 1
+                polyA_position_counter[polyA_pos] += read_weight
                 if POLYA_reads_ofh is not None:
                     print(
                         "\t".join(
@@ -600,12 +611,12 @@ class Splice_graph:
                     "\tread {} : introns found: {}".format(read_name, str(introns_list))
                 )
                 for intron in introns_list:
-                    intron_counter[intron] += 1
+                    intron_counter[intron] += read_weight
                     intron_to_read_types[intron].add(read_type)
 
                     intron_lend, intron_rend, splice_orient = intron
-                    intron_splice_site_support[intron_lend] += 1
-                    intron_splice_site_support[intron_rend] += 1
+                    intron_splice_site_support[intron_lend] += read_weight
+                    intron_splice_site_support[intron_rend] += read_weight
 
             total_read_alignments_used += 1
             processed += 1
@@ -615,7 +626,7 @@ class Splice_graph:
                     if i > self._contig_seq_len:
                         break
 
-                    self._contig_base_cov[i] += 1
+                    self._contig_base_cov[i] += read_weight
                 try:
                     total_bases_added += segment[1] - segment[0] + 1
                 except Exception:

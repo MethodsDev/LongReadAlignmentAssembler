@@ -28,6 +28,7 @@ class Pretty_alignment:
         "right_soft_clipping",
         "read_name",
         "strand",
+        "_normalization_weight",
     )
 
     read_aln_gap_merge_int = LRAA_Globals.config["read_aln_gap_merge_int"]
@@ -53,6 +54,14 @@ class Pretty_alignment:
 
         self.read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
         self.strand = self.get_strand(pysam_alignment)
+        # Read now, not on demand: lighten() drops the pysam record long before
+        # the splice graph tallies support, and a float per alignment is cheaper
+        # to carry than the record it comes from.
+        self._normalization_weight = (
+            float(pysam_alignment.get_tag("XW"))
+            if pysam_alignment.has_tag("XW")
+            else 1.0
+        )
 
         self._set_read_soft_clipping_info(pysam_alignment)  # sets above
 
@@ -65,6 +74,19 @@ class Pretty_alignment:
 
     def get_read_name(self):
         return self.read_name
+
+    def get_normalization_weight(self):
+        """How many reads this one stands for after coverage normalization.
+
+        The normalizer accepts a read with probability p that follows local
+        depth and records 1/p. Summing these instead of counting reads recovers
+        what an unnormalized bam would have shown. Reads from an unnormalized
+        bam carry no tag and weigh 1.
+        """
+        # Alignment pickles are keyed on extraction parameters, not on code
+        # version, so a cache predating this slot can still be loaded. Such a
+        # cache was built from reads that carried no weight, which is 1.
+        return getattr(self, "_normalization_weight", 1.0)
 
     def get_pretty_alignment_segments(self):
         return self._pretty_alignment_segments
