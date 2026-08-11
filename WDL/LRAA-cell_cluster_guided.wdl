@@ -93,6 +93,8 @@ workflow LRAA_cell_cluster_guided {
                     cell_list = partition_bam_by_cell_cluster.partitioned_cell_lists[i],
                     HiFi = HiFi,
                     oversimplify = oversimplify,
+                    # single-cell: this workflow never surfaces the normalized splice-graph BAM
+                    retain_normalized_splice_graph_bam = false,
                     allow_secondary_alignments = allow_secondary_alignments,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     main_chromosomes = main_chromosomes,

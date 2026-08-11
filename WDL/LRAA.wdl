@@ -22,6 +22,10 @@ workflow LRAA_wf {
         Boolean no_EM = false
         Boolean quant_only = false
         Boolean no_norm = false
+        # Return the depth-normalized BAM(s) the splice graph was built from. Single-cell
+        # workflows that call this one set this false; they never surface the file, and
+        # delocalizing it would cost them storage for nothing.
+        Boolean retain_normalized_splice_graph_bam = true
         Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
@@ -138,6 +142,7 @@ workflow LRAA_wf {
                     no_norm = no_norm,
                     no_EM = no_EM,
                     run_final_cross_gene_EM = false,
+                    retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                     allow_secondary_alignments = allow_secondary_alignments,
                     secondary_alignment_mode = "all",
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
@@ -197,6 +202,7 @@ workflow LRAA_wf {
                 no_norm = no_norm,
                 no_EM = no_EM,
                 run_final_cross_gene_EM = allow_secondary_alignments && !no_EM,
+                retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                 allow_secondary_alignments = allow_secondary_alignments,
                 secondary_alignment_mode = "heuristic",
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
@@ -226,6 +232,12 @@ workflow LRAA_wf {
     Array[File] secondaryRescueSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_summary]) else select_all([preScatterSecondaryRescue.summaryTsv])
     Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
     File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
+    # The depth-normalized BAM(s) the splice graph -- and therefore isoform identification --
+    # was built from. Quantification does not use these; it runs against the unnormalized quant
+    # BAM. Empty when no_norm is set. Scattered runs normalize each chromosome shard separately,
+    # so this is one BAM per shard rather than one whole-genome BAM.
+    Array[File] normalizedSpliceGraphBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bam]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bam, []]))
+    Array[File] normalizedSpliceGraphBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bai]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bai, []]))
     }
 }
 

@@ -24,6 +24,9 @@ task LRAA_runner_task {
         Boolean no_EM 
         Boolean no_norm 
         Boolean run_final_cross_gene_EM = true
+        # Export the depth-normalized splice-graph BAM as a task output. Bulk runs keep it;
+        # single-cell callers turn it off so they do not pay to delocalize a BAM they never surface.
+        Boolean retain_normalized_splice_graph_bam = true
         Boolean allow_secondary_alignments = true
         String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
@@ -267,6 +270,27 @@ task LRAA_runner_task {
             cp "${quant_secondary_summaries[0]}" "$quant_secondary_summary_out"
         fi
 
+        # The depth-normalized BAM that the splice graph -- and therefore isoform
+        # identification -- is built from. LRAA leaves it in its own cache dir, which is not
+        # delocalized. Only the top level of the cache holds the finished file; work_*/ holds
+        # per-strand intermediates. Moved rather than copied: the run is over, and these can
+        # be large enough for a second copy to matter against the task disk.
+        if [[ "~{retain_normalized_splice_graph_bam}" == "true" ]]; then
+            normalized_sg_bam_out="~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam"
+            shopt -s nullglob
+            normalized_sg_bams=(__*.norm_cache/*.norm_*.bam)
+            shopt -u nullglob
+            if (( ${#normalized_sg_bams[@]} > 0 )); then
+                if [[ -f "${normalized_sg_bams[0]}.bai" ]]; then
+                    mv "${normalized_sg_bams[0]}.bai" "${normalized_sg_bam_out}.bai"
+                fi
+                mv "${normalized_sg_bams[0]}" "$normalized_sg_bam_out"
+                if [[ ! -f "${normalized_sg_bam_out}.bai" ]]; then
+                    samtools index -@ ~{numThreadsPerWorker} "$normalized_sg_bam_out"
+                fi
+            fi
+        fi
+
         
     >>>
 
@@ -280,6 +304,8 @@ task LRAA_runner_task {
         File? LRAA_secondary_rescue_bai = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam.bai"
         File? LRAA_secondary_rescue_summary = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.summary.tsv"
         File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
+        File? LRAA_normalized_splice_graph_bam = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam"
+        File? LRAA_normalized_splice_graph_bai = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam.bai"
     }
 
 
@@ -317,6 +343,7 @@ workflow LRAA_runner {
         Boolean no_EM
         Boolean no_norm
         Boolean run_final_cross_gene_EM = true
+        Boolean retain_normalized_splice_graph_bam = true
         Boolean allow_secondary_alignments = true
         String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
@@ -362,6 +389,7 @@ workflow LRAA_runner {
             no_EM=no_EM,
             no_norm=no_norm,
             run_final_cross_gene_EM=run_final_cross_gene_EM,
+            retain_normalized_splice_graph_bam=retain_normalized_splice_graph_bam,
             allow_secondary_alignments=allow_secondary_alignments,
             secondary_alignment_mode=secondary_alignment_mode,
             rescue_unassigned_reads_via_transcriptome_alignment=rescue_unassigned_reads_via_transcriptome_alignment,
@@ -395,6 +423,8 @@ workflow LRAA_runner {
         File? LRAA_secondary_rescue_bai = LRAA_runner_task.LRAA_secondary_rescue_bai
         File? LRAA_secondary_rescue_summary = LRAA_runner_task.LRAA_secondary_rescue_summary
         File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
+        File? LRAA_normalized_splice_graph_bam = LRAA_runner_task.LRAA_normalized_splice_graph_bam
+        File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
     }
 
 }

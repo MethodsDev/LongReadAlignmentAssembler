@@ -200,6 +200,8 @@ workflow LRAA_singlecell_wf {
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
         region = region,
+        # single-cell: this workflow never surfaces the normalized splice-graph BAM
+        retain_normalized_splice_graph_bam = false,
         allow_secondary_alignments = allow_secondary_alignments,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,

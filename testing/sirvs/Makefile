@@ -111,7 +111,7 @@ MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 # call cache: a cache hit skips the task and the assertion checks nothing.
 MINIWDL_RUN_UNCACHED = miniwdl run
 
-test_docker: test_docker_direct_cross_gene_EM_gating
+test_docker: test_docker_direct_cross_gene_EM_gating test_docker_normalized_sg_bam
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json
@@ -136,6 +136,20 @@ test_docker_direct_cross_gene_EM_gating:
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); assert o.get("LRAA_wf.mergedQuantExpr"), "no_secondary: quant expr missing"; assert o.get("LRAA_wf.preCrossGeneEMQuantExpr") is None, "no_secondary: pre-cross-gene-EM output should be absent"; print("  no_secondary gating ok")'
 
 
+# LRAA builds the splice graph -- and therefore identifies isoforms -- from a depth-normalized
+# copy of the BAM that it leaves in __*.norm_cache/, which is not a task output and used to be
+# discarded with the VM. LRAA.wdl now returns it. Quantification is unaffected: it still runs
+# against the unnormalized quant BAM. data/input_quant_only.json sets no no_norm, so
+# normalization runs at the default cap of 1000. Scattered runs normalize per chromosome shard,
+# hence one BAM per shard rather than one whole-genome BAM. The last run pins the opt-out that
+# the single-cell workflows pass, so they do not delocalize a BAM they never surface.
+test_docker_normalized_sg_bam:
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json
+	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==1 and len(i)==1, "direct: expected one normalized BAM, got {}".format(len(b)); print("  direct normalized BAM ok")'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json 'main_chromosomes=SIRV1 SIRV2 SIRV3'
+	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==3 and len(i)==3, "scatter: expected one normalized BAM per shard, got {}".format(len(b)); print("  scattered per-shard normalized BAMs ok")'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json retain_normalized_splice_graph_bam=false
+	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; assert b==[], "opt-out: expected no normalized BAM, got {}".format(b); print("  retain_normalized_splice_graph_bam=false ok")'
 
 
 clean:

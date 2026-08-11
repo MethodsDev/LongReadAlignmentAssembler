@@ -131,6 +131,9 @@ workflow LRAA_quant_by_cluster {
                 annot_gtf = annot_gtf,
                 quant_only = true,
                 no_norm = true,
+                # single-cell: no_norm above already means there is nothing to export, and this
+                # workflow surfaces its normalized BAMs from Normalize_bam.wdl instead
+                retain_normalized_splice_graph_bam = false,
                 no_EM = false,
                 HiFi = HiFi,
                 oversimplify = oversimplify,
