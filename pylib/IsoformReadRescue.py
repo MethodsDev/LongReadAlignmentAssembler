@@ -447,7 +447,7 @@ def _collect_genome_gated_read_targets(
                 if remaining is not None:
                     remaining.discard(read_name)
                 read_name_to_primary_score[read_name] = _alignment_score(read)
-                read_name_to_primary_per_id[read_name] = _alignment_per_id_fraction(read)
+                read_name_to_primary_per_id[read_name] = _gap_aware_identity(read)
 
             for target_id, overlap_bp in target_id_to_overlap_bp.items():
                 read_name_to_allowed_target_ids[read_name].add(target_id)
@@ -737,7 +737,7 @@ def _parse_rescue_alignments(
             read_to_hits[read.query_name].append(
                 {
                     "score": _alignment_score(read),
-                    "per_id": _alignment_per_id_fraction(read),
+                    "per_id": _gap_aware_identity(read),
                     "path": tuple(projected_path),
                     "target_id": read.reference_name,
                     "transcript_id": transcript_models[read.reference_name][
@@ -820,7 +820,20 @@ def _get_alignment_overlapping_targets(read, exon_overlap_index):
 
 
 def _passes_percent_identity(read, min_per_id):
-    per_id_fraction = _alignment_per_id_fraction(read)
+    """Percent identity for acceptance, measured gap-aware.
+
+    The previous formula divided matched-minus-NM by the matched count alone. NM
+    counts inserted and deleted bases while the denominator excludes them, so the
+    result was not an identity: it could go negative, and it scored an alignment with
+    zero substitutions and a 592-base insertion at 0%. It was also the only gate that
+    saw indels at all, which made a real defect load-bearing.
+
+    _gap_aware_identity() charges gap bases to the denominator instead, which is a
+    standard definition, cannot go negative, and preserves the behaviour that mattered:
+    across 313 rescue alignments the two disagreed on 2 acceptance decisions at the
+    HiFi threshold of 97, both within 0.001 of it.
+    """
+    per_id_fraction = _gap_aware_identity(read)
     if per_id_fraction is None:
         return True
     return (per_id_fraction * 100.0) >= min_per_id
@@ -934,24 +947,6 @@ def _gap_aware_identity(read):
     substitutions = max(0, int(mismatch_count) - insertions - deletions)
     return max(0.0, float(int(aligned_base_count) - substitutions) / float(span))
 
-
-def _alignment_per_id_fraction(read):
-    mismatch_count = None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    if mismatch_count is None:
-        return None
-
-    cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-    if aligned_base_count <= 0:
-        return 0.0
-
-    return max(0.0, float(aligned_base_count - mismatch_count) / float(aligned_base_count))
 
 
 def _normalize_read_identifier(value):

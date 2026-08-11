@@ -149,3 +149,30 @@ def test_gap_aware_identity_equal_alignments_are_not_declined():
     genome = _aln_from_cigar("1000M", 1000, 0)
     transcript = _aln_from_cigar("1000M", 1000, 0)
     assert not (_gap_aware_identity(transcript) < _gap_aware_identity(genome))
+
+
+def test_identity_is_never_negative_and_gates_on_it():
+    """The old formula could return a negative 'identity'; this one cannot.
+
+    Divided matched-minus-NM by the matched count alone, an alignment with zero
+    substitutions and a 592-base insertion scored below zero and was clamped to 0,
+    failing every threshold. Charging gap bases to the denominator gives a real
+    fraction in [0,1] for the same alignment.
+    """
+    from IsoformReadRescue import _gap_aware_identity, _passes_percent_identity
+
+    # 1S 18M 1D 30M 591I 135M 1I 321M 1961S -- zero substitutions, huge insertion
+    a = _aln_from_cigar("1S18M1D30M591I135M1I321M1961S", 3057, 593)
+    val = _gap_aware_identity(a)
+    assert 0.0 <= val <= 1.0
+    assert val > 0.0, "an alignment with no substitutions must not score zero identity"
+
+    # it still fails a stringent threshold, on the gap burden rather than by clamping
+    assert _passes_percent_identity(a, 97.0) is False
+
+
+def test_identity_gate_accepts_a_clean_alignment():
+    from IsoformReadRescue import _passes_percent_identity
+
+    clean = _aln_from_cigar("1000M", 1000, 0)
+    assert _passes_percent_identity(clean, 97.0) is True
