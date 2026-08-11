@@ -8,6 +8,20 @@ DEBUG = False
 
 LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 
+# Identifies how splice-graph coverage normalization was performed. It appears in
+# the names of the normalized bam and its work directory, so a cache produced by
+# a different method is never mistaken for a current one.
+#
+# BUMP THIS whenever normalize_bam_by_strand.py changes which reads it keeps or
+# what it records on them. Nothing downstream can detect a stale cache on its
+# own: a bam from the read-start-binning era carries no XW tag, and an absent
+# tag legitimately means "weight 1", so its distorted counts would be consumed
+# in silence.
+#
+#   startbin1  read starts binned per 100 bp, each bin capped, no weights
+#   cov1       depth-targeted sampling, scarce junctions kept whole, XW weights
+SPLICE_GRAPH_NORMALIZATION_METHOD = "cov1"
+
 config = {
     #########################
     # read alignment criteria

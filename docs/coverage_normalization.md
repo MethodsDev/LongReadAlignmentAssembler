@@ -25,8 +25,11 @@ Two sequential passes over each strand-specific BAM.
 
 **Pass 1 — measure.** Read depth is accumulated per 100 bp window (`--depth_window`) from
 aligned blocks, and junction support is counted exactly. Both come from one CIGAR-only scan.
-Windowing keeps this cheap: 10 MB for the largest human chromosome, where a per-base array
-would take 1 GB.
+Both structures are held for all contigs until pass 2 finishes. At 100 bp windows the depth
+arrays come to roughly 250 MB for a human genome (20 MB for its largest chromosome), against
+2 GB for a per-base array of the same width; junction counts add on the order of 150 MB at the
+~0.65 M junctions per strand that chr20 extrapolates to. Strands are processed one after the
+other, so those are peak figures rather than a sum.
 
 **Pass 2 — sample.** Each read is kept with probability `p` and, if kept, records `1/p`:
 
@@ -77,6 +80,38 @@ itself to a single rate per unit of comparison.
 | `--normalize_max_cov_level` | 1000 | target read depth; `0` disables normalization entirely |
 | `--depth_window` | 100 | resolution in bases at which depth is measured |
 | `--random_seed` | 42 | seed for the per-read draw |
+
+## Caching and method changes
+
+Both the driver and the utility checkpoint their work, and a checkpoint is trusted on sight, so
+every name has to carry whatever determines the contents.
+
+`Util_funcs.splice_graph_norm_cache_stem` names the cached BAM and its work directory:
+
+```
+<source>.norm_<target>.<method>.<identity>.bam    sample.quant.norm_1000.cov1.a56fdafac29c.bam
+work_<source>.norm_<target>.<method>.<identity>/  the utility runs here
+```
+
+**Bump `LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD` whenever the normalizer changes which
+reads it keeps or what it records on them.** No consumer can detect a stale cache for itself: a
+BAM from the read-start-binning era carries no `XW` tag, an absent tag legitimately means weight
+1, and its distorted counts would be used in silence. The token is the only thing standing
+between a superseded cache and a current run.
+
+`<identity>` is `Util_funcs.file_identity_token`: a digest of the resolved path, size, and
+modification time. The stem otherwise holds only a basename, so without it a second
+`sample.bam` from another directory, or the same path regenerated, would land on the first
+one's cache. Contents are not hashed — reading a multi-gigabyte BAM on every startup would cost
+more than the step being cached, to cover what the stat pair already catches.
+
+The utility keys its own checkpoints separately, because the two stages depend on different
+things. The strand split depends only on the input, so it is keyed on `<identity>` alone and is
+reused across settings. Sampling, merge, and index are keyed on a digest of the input identity,
+target depth, `--depth_window`, `--random_seed`, the method, and the output path — every flag
+that changes which reads are kept or where they land. The driver holds the window and seed
+fixed, but both are exposed on the command line, and without this a second invocation in the
+same directory would silently reuse the first one's sample.
 
 ## Why read-start binning was replaced
 

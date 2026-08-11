@@ -189,3 +189,85 @@ def test_disabling_the_target_keeps_everything(tmp_path):
     out = tmp_path / "off.bam"
     norm.sift_bam(str(src), str(out), 0, 100, 42)
     assert len(_load(out)) == 4970
+
+
+@pytest.fixture
+def source_bam(tmp_path):
+    p = tmp_path / "sample.bam"
+    p.write_bytes(b"A" * 100)
+    return p
+
+
+def _stem(source, level=1000):
+    import Util_funcs
+
+    return Util_funcs.splice_graph_norm_cache_stem("s.quant", level, str(source))
+
+
+def test_cache_name_distinguishes_the_method(source_bam):
+    """A cache from a superseded method must not be reachable by the current key.
+
+    Nothing downstream can detect one. A bam produced by read-start binning
+    carries no XW tag, and an untagged read correctly weighs 1, so its distorted
+    counts would be consumed in silence.
+    """
+    import LRAA_Globals
+
+    current = _stem(source_bam)
+    previous = LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD
+    try:
+        LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD = "startbin1"
+        superseded = _stem(source_bam)
+    finally:
+        LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD = previous
+
+    assert current != superseded
+    assert previous in current
+
+
+def test_cache_name_distinguishes_the_target_depth(source_bam):
+    """Also scopes the work directory, whose checkpoints are otherwise shared."""
+    assert _stem(source_bam, 1000) != _stem(source_bam, 5000)
+
+
+def test_cache_name_distinguishes_inputs_sharing_a_basename(tmp_path, source_bam):
+    """The stem carries only a basename, so identity cannot rest on the name."""
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other = other_dir / "sample.bam"
+    other.write_bytes(b"A" * 100)  # same name, same size, different file
+
+    assert _stem(source_bam) != _stem(other)
+
+
+def test_cache_name_follows_an_input_replaced_in_place(source_bam):
+    """Regenerating a bam at the same path must not hit the old cache."""
+    import time
+
+    before = _stem(source_bam)
+    time.sleep(0.01)
+    source_bam.write_bytes(b"B" * 100)  # identical size, new contents
+
+    assert _stem(source_bam) != before
+
+
+def test_cache_name_is_stable_for_an_untouched_input(source_bam):
+    """The point of the cache: an unchanged input must still hit it.
+
+    Keying on identity is only worth it if it does not also defeat reuse across
+    reruns, which is the entire reason the normalized bam is kept.
+    """
+    assert _stem(source_bam) == _stem(source_bam)
+
+
+def test_every_retained_read_is_tagged(tmp_path):
+    """The weight is what makes a cache self-describing, so none may be missing."""
+    header = _header()
+    src = tmp_path / "in.bam"
+    _write_bam(src, _corpus(header))
+    out = tmp_path / "out.bam"
+    norm.sift_bam(str(src), str(out), 100, 100, 42)
+
+    with pysam.AlignmentFile(str(out), "rb") as fh:
+        untagged = [a.query_name for a in fh.fetch(until_eof=True) if not a.has_tag("XW")]
+    assert untagged == []

@@ -11,6 +11,13 @@ from collections import defaultdict
 from statistics import median
 sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"]))
 from Pipeliner import Pipeliner, Command
+import LRAA_Globals
+import Util_funcs
+
+# Named in every artifact this writes, so a cache from a different method cannot
+# be mistaken for a current one. Defined in LRAA_Globals because the driver keys
+# its own cache on it too.
+METHOD = LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD
 
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s : %(levelname)s : %(message)s',
@@ -42,19 +49,43 @@ def main():
     # neither its position in the file nor the order reads are visited in
     logger.info(f"Using random seed: {random_seed}")
 
-    
+    # Every artifact below is checkpointed, and a checkpoint is trusted on sight,
+    # so its name has to carry whatever determines the contents. Two tokens,
+    # because the two stages depend on different things.
+    #
+    # The strand split depends only on which bam came in -- and only on its
+    # basename otherwise, so two inputs of the same name from different
+    # directories would collide here.
+    source_token = Util_funcs.file_identity_token(input_bam_filename)
+
+    # Sampling, merge and index additionally depend on every flag that changes
+    # which reads are kept or where they land. The driver holds the window and
+    # seed fixed, but both are exposed on this command line.
+    run_token = Util_funcs.get_hash_code(
+        "|".join(
+            [
+                source_token,
+                str(normalize_max_cov_level),
+                str(depth_window),
+                str(random_seed),
+                METHOD,
+                os.path.realpath(output_bam_filename),
+            ]
+        )
+    )[:12]
+
     pipeliner = Pipeliner("__chckpts")
-    
+
     # first separate input bam into strand-specific files
-    SS_output_prefix = os.path.basename(input_bam_filename) + ".SS"
+    SS_output_prefix = f"{os.path.basename(input_bam_filename)}.{source_token}.SS"
 
     scriptdir = os.path.abspath(os.path.dirname(__file__))
     cmd = " ".join([os.path.join(scriptdir, "separate_bam_by_strand.py"),
                     "--bam {}".format(input_bam_filename),
                     "--output_prefix {}".format(SS_output_prefix)])
-    
-    
-    pipeliner.add_commands([Command(cmd, "sep_by_strand.ok")])
+
+
+    pipeliner.add_commands([Command(cmd, f"sep_by_strand.{source_token}.ok")])
 
     pipeliner.run()
     
@@ -65,7 +96,7 @@ def main():
     
     for SS_bam_file in SS_bam_files:
 
-        norm_bam_filename = f"{SS_bam_file}.{normalize_max_cov_level}.bam"
+        norm_bam_filename = f"{SS_bam_file}.norm_{normalize_max_cov_level}.{run_token}.bam"
 
         norm_bam_checkpoint = norm_bam_filename + ".ok"
 
@@ -79,11 +110,10 @@ def main():
     # merge the norm SS bam filenames into the final output file
 
     cmd = f"samtools merge -f {output_bam_filename} " + " ".join(SS_norm_bam_files)
-    pipeliner.add_commands([Command(cmd, "SS_merge.ok")])
-
+    pipeliner.add_commands([Command(cmd, f"SS_merge.{run_token}.ok")])
 
     cmd = f"samtools index {output_bam_filename}"
-    pipeliner.add_commands([Command(cmd, "index_merged.ok")])
+    pipeliner.add_commands([Command(cmd, f"index_merged.{run_token}.ok")])
 
     pipeliner.run()
 

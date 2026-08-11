@@ -1911,9 +1911,15 @@ def _normalize_bam_for_splice_graph(
     if label:
         base_root = f"{base_root}.{_safe_token(label)}"
 
-    normalized_path = cache_path / f"{base_root}.norm_{normalize_max_cov_level}.bam"
+    cache_stem = Util_funcs.splice_graph_norm_cache_stem(
+        base_root, normalize_max_cov_level, input_path
+    )
+    normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
-    work_dir = cache_path / f"work_{base_root}"
+    # scoped by the same stem: the utility keeps its own checkpoints here, and a
+    # strand split or merge done for a different depth or method must not be
+    # picked up by this run
+    work_dir = cache_path / f"work_{cache_stem}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
