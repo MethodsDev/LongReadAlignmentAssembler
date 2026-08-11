@@ -36,7 +36,7 @@ other, so those are peak figures rather than a sum.
 | condition | `p` | rationale |
 |---|---|---|
 | local depth ≤ target | 1 | coverage is already at or below what the graph needs |
-| read carries a junction with support < target | 1 | such a junction cannot be why depth is over target |
+| read carries a junction with support < target | 1 | preserve scarce evidence exactly |
 | otherwise | `target / local_depth` | thin toward the target |
 
 `local_depth` is the **median** window depth across the read's aligned blocks. The median keeps
@@ -50,10 +50,23 @@ this design removes.
 The first rule is what makes this a normalization rather than a downsampling: wherever coverage
 already sits below the target, every read passes through untouched.
 
-The second rule buys exactness where it matters most. A junction below the target contributes
-too few reads to be responsible for the depth, so retaining all of them costs almost nothing —
-and it turns that junction's support from an estimate into an exact count. Without it, a
-junction with 156 reads at a locus retained at 11% would be judged on about a dozen reads.
+The second rule buys exactness where it matters most. Without it, a junction with 156 reads at a
+locus retained at 11% would be judged on about a dozen, and the frequency test that decides
+whether to keep it becomes a coin flip; retaining those reads turns its support from an estimate
+into an exact count.
+
+**This rule trades the depth target for evidence, and the target is the side that gives.** No
+single sub-target junction can be why depth is over target, but nothing stops many of them from
+adding up, and alignment noise produces exactly that: a spray of distinct, weakly supported
+junctions, each individually exempt. A locus whose excess depth is spread across many minor
+junctions rather than concentrated in a few dominant ones will therefore thin less than one
+whose isoform structure is simple. Peak retained depth across fifteen high-expression loci ran
+to 1.78x the target for this reason, so the target is a target and not a bound.
+
+The exemption is deliberate: over-retention costs graph-construction time, while the counts it
+protects decide what the graph contains at all. If a locus is ever slow enough to matter,
+lowering `--normalize_max_cov_level` also lowers the support at which a junction stops being
+exempt, tightening both halves together.
 
 ## The XW tag
 
