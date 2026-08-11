@@ -196,7 +196,7 @@ workflow LRAA_wf {
                 HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
-                run_final_cross_gene_EM = true,
+                run_final_cross_gene_EM = allow_secondary_alignments && !no_EM,
                 allow_secondary_alignments = allow_secondary_alignments,
                 secondary_alignment_mode = "heuristic",
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,

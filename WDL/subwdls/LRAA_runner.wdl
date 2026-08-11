@@ -65,6 +65,11 @@ task LRAA_runner_task {
     String no_norm_flag = if (no_norm) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
     String no_cross_gene_EM_flag = if (run_final_cross_gene_EM) then "" else "--no_cross_gene_EM"
+    # LRAA skips the cross-gene EM pass -- and therefore writes no pre-cross-gene-EM
+    # outputs -- when secondary alignments are disabled or EM is off, independently of
+    # --no_cross_gene_EM (see _maybe_run_cross_gene_em_for_secondary_alignments in LRAA).
+    # The existence check below must gate on all three or it fails a successful run.
+    Boolean expect_pre_cross_gene_EM = run_final_cross_gene_EM && allow_secondary_alignments && !no_EM
 
     String output_prefix_use = if defined(shardno) then "${sample_id}.shardno-${shardno}" else sample_id
     
@@ -226,7 +231,7 @@ task LRAA_runner_task {
         pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking"
         pre_cross_gene_em_tracking_gz_src="${pre_cross_gene_em_tracking_src}.gz"
         pre_cross_gene_em_tracking_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
-        if [[ "~{run_final_cross_gene_EM}" == "true" ]]; then
+        if [[ "~{expect_pre_cross_gene_EM}" == "true" ]]; then
             if [[ -f "$pre_cross_gene_em_tracking_src" ]]; then
                 gzip -c "$pre_cross_gene_em_tracking_src" > "$pre_cross_gene_em_tracking_out"
             elif [[ ! -f "$pre_cross_gene_em_tracking_gz_src" ]]; then

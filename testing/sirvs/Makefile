@@ -107,11 +107,35 @@ test_unsupported_ref_model:
 
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+# The gating test below asserts on task behavior, so it must never be served from the
+# call cache: a cache hit skips the task and the assertion checks nothing.
+MINIWDL_RUN_UNCACHED = miniwdl run
 
-test_docker:
+test_docker: test_docker_direct_cross_gene_EM_gating
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json
+
+
+# Both runs reuse data/input_quant_only.json, which leaves main_chromosomes unset, so
+# LRAA.wdl takes the direct (non-scattered) branch; the flag under test is supplied as a
+# miniwdl CLI override rather than a new input file, since testing/** is gitignored.
+# LRAA writes *.pre-cross-gene-EM.quant.* only when secondary alignments are on, EM is on,
+# AND the cross-gene pass is enabled -- see
+# _maybe_run_cross_gene_em_for_secondary_alignments in ../../LRAA. LRAA.wdl used to hardcode
+# run_final_cross_gene_EM=true on the direct branch while LRAA_runner asserted the file's
+# existence off that flag alone, so --no_EM and --no_allow_secondary_alignments each killed
+# an otherwise successful run in the task's post-processing block, after all compute was
+# done and with every output discarded. The scattered path was never affected: it passes
+# run_final_cross_gene_EM=false and gates the merge on allow_secondary_alignments && !no_EM.
+# Each run must therefore succeed and report a null preCrossGeneEMQuantExpr.
+test_docker_direct_cross_gene_EM_gating:
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json no_EM=true
+	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); assert o.get("LRAA_wf.mergedQuantExpr"), "no_EM: quant expr missing"; assert o.get("LRAA_wf.preCrossGeneEMQuantExpr") is None, "no_EM: pre-cross-gene-EM output should be absent"; print("  no_EM gating ok")'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json allow_secondary_alignments=false
+	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); assert o.get("LRAA_wf.mergedQuantExpr"), "no_secondary: quant expr missing"; assert o.get("LRAA_wf.preCrossGeneEMQuantExpr") is None, "no_secondary: pre-cross-gene-EM output should be absent"; print("  no_secondary gating ok")'
+
+
 
 
 clean:
