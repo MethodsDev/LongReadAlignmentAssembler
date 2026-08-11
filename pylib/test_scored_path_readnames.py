@@ -331,3 +331,104 @@ def test_detach_leaves_a_rescued_read_on_only_its_rescued_path(tmp_path):
         }
     finally:
         LG.READ_NAME_STORE = None
+
+
+def _paths_to_counts(counter):
+    return {
+        mp.get_simple_path_tuple(): count
+        for mp, count in (
+            pair.get_multipath_and_count()
+            for pair in counter.get_all_MultiPathCountPairs()
+        )
+    }
+
+
+def _names_on(multipath):
+    return {LG.READ_NAME_STORE.get_name(rid) for rid in multipath.get_read_ids()}
+
+
+def test_detach_keeps_the_unrescued_read_on_the_original_path(tmp_path):
+    """A read that was not rescued keeps its genome path attachment.
+
+    Detachment is justified only by an accepted rescue having explained at least as
+    much of that read. It says nothing about the other reads sharing the path, so
+    they must survive by name, not merely leave the count non-zero.
+    """
+    sg, e1, e2, e3 = build_minimal_sg_with_exons()
+    base = tmp_path / "detach_unrescued"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    try:
+        original = MultiPath(
+            sg, [[e1.get_id(), e2.get_id()]], read_names={"moved", "stayed"}
+        )
+        rescued = MultiPath(
+            sg, [[e1.get_id(), e2.get_id(), e3.get_id()]], read_names={"moved"}
+        )
+        counter = MultiPathCounter()
+        counter.add(original)
+        counter.add(rescued)
+
+        counter.detach_reads_from_other_paths(
+            rescued.get_read_ids(), {rescued.get_simple_path_tuple()}
+        )
+
+        assert _names_on(original) == {"stayed"}
+        assert original.get_simple_path_tuple() in _paths_to_counts(counter)
+    finally:
+        LG.READ_NAME_STORE = None
+
+
+def test_detach_leaves_a_wholly_unrescued_path_untouched(tmp_path):
+    """A path sharing no reads with the rescue is not touched at all."""
+    sg, e1, e2, e3 = build_minimal_sg_with_exons()
+    base = tmp_path / "detach_bystander"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    try:
+        bystander = MultiPath(sg, [[e1.get_id(), e2.get_id()]], read_names={"solo"})
+        rescued = MultiPath(
+            sg, [[e1.get_id(), e2.get_id(), e3.get_id()]], read_names={"moved"}
+        )
+        counter = MultiPathCounter()
+        counter.add(bystander)
+        counter.add(rescued)
+
+        detached = counter.detach_reads_from_other_paths(
+            rescued.get_read_ids(), {rescued.get_simple_path_tuple()}
+        )
+
+        assert detached == 0
+        assert _paths_to_counts(counter)[bystander.get_simple_path_tuple()] == 1
+        assert _names_on(bystander) == {"solo"}
+    finally:
+        LG.READ_NAME_STORE = None
+
+
+def test_no_accepted_rescue_detaches_nothing(tmp_path):
+    """Offering a read to rescue must not cost it its genome path.
+
+    Rescue considers reads that already have a graph path, and an alignment can be
+    declined by the aligned-length floor or the percent-identity floor. A declined
+    read is not a rescued read, so its single-read path must survive: it is exactly
+    the case where dropping the attachment would delete the model outright.
+    """
+    from LRAA import _detach_rescued_reads_from_original_paths
+
+    sg, e1, e2, _ = build_minimal_sg_with_exons()
+    base = tmp_path / "detach_declined"
+    os.makedirs(base, exist_ok=True)
+    LG.READ_NAME_STORE = ReadNameStore(str(base / "names"))
+    try:
+        original = MultiPath(sg, [[e1.get_id(), e2.get_id()]], read_names={"candidate"})
+        counter = MultiPathCounter()
+        counter.add(original)
+
+        # rescue ran and accepted nothing
+        detached = _detach_rescued_reads_from_original_paths(counter, [])
+
+        assert detached == 0
+        assert _paths_to_counts(counter)[original.get_simple_path_tuple()] == 1
+        assert _names_on(original) == {"candidate"}
+    finally:
+        LG.READ_NAME_STORE = None
