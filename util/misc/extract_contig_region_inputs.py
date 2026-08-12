@@ -36,6 +36,16 @@ def main():
         help="prefix for output files. Default: region string.",
     )
 
+    parser.add_argument(
+        "--strict_window",
+        action="store_true",
+        default=False,
+        help="extract exactly the requested region, discarding reads that start before it. "
+        "Default is to widen the left edge so those reads are kept: a read overhanging the "
+        "start cannot be rebased into the extracted contig, and silently dropping it removes "
+        "evidence the region genuinely has.",
+    )
+
     args = parser.parse_args()
 
     genome_fa_filename = args.genome_fa
@@ -57,6 +67,40 @@ def main():
     strand = m.group(2)
     lend = int(m.group(3))
     rend = int(m.group(4))
+
+    # Reads starting left of the region cannot be rebased into it -- their
+    # alignment would begin before position 1. Dropping them removes evidence
+    # that belongs to the region: at one locus 22% of the reads spanning the
+    # target began 5.3 kb upstream, and without them the models built from them
+    # could not form, so the extraction produced an answer the whole genome does
+    # not give. Widen the left edge to cover them instead, and say so.
+    overhang_lend = lend
+    with pysam.AlignmentFile(bam_filename, "rb") as probe:
+        for read in probe.fetch(chrom, lend, rend):
+            if read.reference_start + 1 < overhang_lend:
+                overhang_lend = read.reference_start + 1
+
+    num_overhanging = 0
+    if overhang_lend < lend:
+        with pysam.AlignmentFile(bam_filename, "rb") as probe:
+            num_overhanging = sum(
+                1 for r in probe.fetch(chrom, lend, rend) if r.reference_start + 1 < lend
+            )
+        if args.strict_window:
+            print(
+                f"WARNING: {num_overhanging} read(s) overlapping {chrom}:{lend}-{rend} start as far "
+                f"as {lend - overhang_lend} bp upstream and are being DISCARDED under --strict_window. "
+                f"The extracted region under-represents its own left edge.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"NOTE: widening left edge {lend} -> {overhang_lend} ({lend - overhang_lend} bp) to keep "
+                f"{num_overhanging} read(s) that start upstream of the requested region. "
+                f"Use --strict_window to discard them instead.",
+                file=sys.stderr,
+            )
+            lend = overhang_lend
 
     # extract contig
     genome_region_fa_filename = f"{output_prefix}.fa"

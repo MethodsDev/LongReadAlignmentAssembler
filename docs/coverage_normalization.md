@@ -129,7 +129,21 @@ same directory would silently reuse the first one's sample.
 ## Why read-start binning was replaced
 
 The previous procedure grouped reads into 100 bp bins **by start position** and capped each bin
-at 1000 by sampling within the bin. Three consequences followed.
+at 1000 by sampling within the bin. Four consequences followed.
+
+**Its output depended on the coordinate origin.** Bin boundaries came from absolute start
+positions, so translating a locus re-partitioned the bins and changed which reads survived. The
+control is exact: the same 6,026 reads — identical names, identical CIGAR and sequence, every
+position offset by precisely 1,203 bp, and no read starting in the strip between the two origins
+— retained 2,804 reads at one origin and 1,980 at the other, and flipped whether a transcript
+was emitted. LRAA itself is deterministic; triplicate runs gave byte-identical output. Under the
+current scheme the same control retains 1,984 versus 1,964 reads, a symmetric difference of 26
+out of ~2,000, and the assembled chain sets are identical. Window edges still move with the
+origin, but the acceptance draw is a hash of the read name and no longer does.
+
+This is why extracted sub-regions could not be trusted to reproduce whole-genome behaviour:
+rebasing a window to position 1 is exactly the translation above, so at any deep locus the
+extraction changed the answer for reasons unrelated to its read content.
 
 **It did not bound coverage.** Starts were capped per bin while depth accumulates across bins.
 Across fifteen high-expression loci, depth after "capping at 1000" ranged to 3,793.
