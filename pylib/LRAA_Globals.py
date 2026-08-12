@@ -69,6 +69,11 @@ config = {
     "max_dist_between_alt_TSS_sites": 50,
     "min_alignments_define_TSS_site": 5,
     "max_soft_clip_at_TSS": 0,
+    # Length of a leading untemplated-G run to strip before judging a TSS. Reverse
+    # transcriptase adds these opposite the cap during template switching, so they
+    # mark a genuine transcript start; with max_soft_clip_at_TSS at 0 they instead
+    # disqualify the read. 0 disables the stripping and preserves that behaviour.
+    "max_untemplated_G_at_TSS": 0,
     "min_TSS_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of TSS-candidate gene reads assigned.
     "TSS_window_read_enrich_len": 50,
     "TSS_window_read_enrich_factor": 5,
@@ -168,6 +173,13 @@ config = {
     # Only the last carrier is spared, so terminal variants of one chain do not
     # all survive on the strength of the reads they share. 0 disables.
     "min_FSM_reads_retain_isoform": 0,
+    # Substitute an absolute count of full-splice-match reads for the relative
+    # unique-read fraction when deciding a model is too weakly supported. The
+    # default 0 keeps the fraction. On chr20 ref-guided a gate of 2 moved
+    # precision 0.329 -> 0.363, dropping 268 false chains for 10 true ones, where
+    # tightening the fraction to 0.02 reached the same precision at a cost of 58
+    # more true chains -- the gain is in the quantity, not the cut.
+    "min_FSM_reads_gate": 0,
     #
     ##########
     # assembly

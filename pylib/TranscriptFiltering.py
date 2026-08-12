@@ -455,12 +455,65 @@ def filter_multiexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
     return transcripts_retained
 
 
+def get_splice_pattern(transcript):
+    """The isoform's intron chain, as splice-graph nodes.
+
+    Introns are nodes of the gene's own graph, so identity of node sequence is
+    identity of intron chain here. Reads reach this code as multipaths through
+    the same graph, which makes the comparison exact without resolving either
+    side back to coordinates. Pretty_alignment.get_splice_hashcode carries the
+    coordinate form for reporting, where stability across graphs matters.
+    """
+    return tuple(
+        node for node in transcript.get_simple_path() if node.startswith("I:")
+    )
+
+
+def get_isoform_FSM_read_count(transcript, frac_read_assignments):
+    """Reads in this isoform's support whose splice pattern is exactly its own.
+
+    A read is a full splice match when its intron chain is identical to the
+    isoform's -- not a prefix, not a subset, not merely compatible. That is
+    direct evidence for the whole structure, and neither test above can see
+    it: isoform fraction measures how much of a gene EM apportioned here, and
+    apportionment tracks abundance rather than evidence, while the unique-read
+    fraction is measured against gene depth and so demands more of a minor
+    isoform the better expressed its gene is.
+
+    Counted within this isoform's own support, so a read that fits only some
+    other terminal variant of the same intron chain cannot vouch for this one.
+    Unioning across variants would also make the count depend on which of them
+    had already been filtered when it was taken.
+
+    The fraction EM assigned is deliberately ignored. It says which isoform
+    currently explains a read best and is recomputed every filtering round, so
+    gating on it would let a threshold protect a model in one round and drop
+    it the next. Whether a read carries this intron chain does not change;
+    whether EM prefers a neighbour does.
+    """
+    pattern = get_splice_pattern(transcript)
+    if not pattern:
+        return 0  # a monoexonic model has no splice pattern to match
+
+    reads_by_path = dict()
+    for mp in frac_read_assignments.get(transcript.get_transcript_id(), {}):
+        if (
+            tuple(node for node in mp.get_simple_path() if node.startswith("I:"))
+            != pattern
+        ):
+            continue
+        reads_by_path[mp.get_simple_path_tuple()] = mp.get_read_count()
+
+    return sum(reads_by_path.values())
+
+
 def filter_isoforms_by_min_isoform_fraction(
     transcripts, min_isoform_fraction, run_EM, max_EM_iterations
 ):
 
     min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
     min_FSM_reads_retain_isoform = LRAA_Globals.config["min_FSM_reads_retain_isoform"]
+    min_FSM_reads_gate = LRAA_Globals.config["min_FSM_reads_gate"]
 
     # Build contig/strand prefix from transcripts if available
     try:
@@ -490,55 +543,7 @@ def filter_isoforms_by_min_isoform_fraction(
 
         return num_unique_reads
 
-    def get_splice_pattern(transcript):
-        """The isoform's intron chain, as splice-graph nodes.
 
-        Introns are nodes of the gene's own graph, so identity of node sequence is
-        identity of intron chain here. Reads reach this code as multipaths through
-        the same graph, which makes the comparison exact without resolving either
-        side back to coordinates. Pretty_alignment.get_splice_hashcode carries the
-        coordinate form for reporting, where stability across graphs matters.
-        """
-        return tuple(
-            node for node in transcript.get_simple_path() if node.startswith("I:")
-        )
-
-    def get_isoform_FSM_read_count(transcript, frac_read_assignments):
-        """Reads in this isoform's support whose splice pattern is exactly its own.
-
-        A read is a full splice match when its intron chain is identical to the
-        isoform's -- not a prefix, not a subset, not merely compatible. That is
-        direct evidence for the whole structure, and neither test above can see
-        it: isoform fraction measures how much of a gene EM apportioned here, and
-        apportionment tracks abundance rather than evidence, while the unique-read
-        fraction is measured against gene depth and so demands more of a minor
-        isoform the better expressed its gene is.
-
-        Counted within this isoform's own support, so a read that fits only some
-        other terminal variant of the same intron chain cannot vouch for this one.
-        Unioning across variants would also make the count depend on which of them
-        had already been filtered when it was taken.
-
-        The fraction EM assigned is deliberately ignored. It says which isoform
-        currently explains a read best and is recomputed every filtering round, so
-        gating on it would let a threshold protect a model in one round and drop
-        it the next. Whether a read carries this intron chain does not change;
-        whether EM prefers a neighbour does.
-        """
-        pattern = get_splice_pattern(transcript)
-        if not pattern:
-            return 0  # a monoexonic model has no splice pattern to match
-
-        reads_by_path = dict()
-        for mp in frac_read_assignments.get(transcript.get_transcript_id(), {}):
-            if (
-                tuple(node for node in mp.get_simple_path() if node.startswith("I:"))
-                != pattern
-            ):
-                continue
-            reads_by_path[mp.get_simple_path_tuple()] = mp.get_read_count()
-
-        return sum(reads_by_path.values())
 
     gene_id_to_transcripts = _get_gene_id_to_transcripts(transcripts)
 
@@ -636,8 +641,40 @@ def filter_isoforms_by_min_isoform_fraction(
                 recording = _FILTER_DECISION_LOG is not None
                 num_FSM_reads = (
                     get_isoform_FSM_read_count(transcript, frac_read_assignments)
-                    if (min_FSM_reads_retain_isoform > 0 or recording)
+                    if (
+                        min_FSM_reads_retain_isoform > 0
+                        or min_FSM_reads_gate > 0
+                        or recording
+                    )
                     else 0
+                )
+
+                # Which quantity decides that a model is too weakly supported.
+                #
+                # By default it is the isoform's uniquely-assigned reads as a
+                # fraction of the gene's total, which is relative to gene depth:
+                # a minor isoform of a deeply sequenced gene must clear a bar
+                # that rises with its neighbours. Setting min_FSM_reads_gate
+                # substitutes an absolute count of reads whose splice pattern is
+                # exactly this model's -- direct evidence for the structure
+                # rather than a share of the locus.
+                #
+                # Measured on chr20 ref-guided, gating at 2 full-splice-match
+                # reads instead: precision 0.329 -> 0.363, 268 fewer false chains
+                # for 10 fewer true ones. Tightening the existing fraction to
+                # 0.02 reaches the same precision but costs 58 more true chains,
+                # so the improvement comes from the quantity and not the cut.
+                # Ranked by permutation importance over held-out gene folds the
+                # unique-read fraction places tenth while this count places
+                # first; the filter currently uses the former and not the latter.
+                # Only for spliced models: a monoexonic model has no splice
+                # pattern, so its full-splice-match count is zero by definition
+                # and substituting it would delete every one of them outright.
+                # Those keep the fraction.
+                insufficient_support = (
+                    num_FSM_reads < min_FSM_reads_gate
+                    if (min_FSM_reads_gate > 0 and transcript_pattern)
+                    else frac_gene_unique_reads < min_frac_gene_unique_reads
                 )
 
                 # A splice pattern that reads attest to end to end keeps one model:
@@ -669,14 +706,14 @@ def filter_isoforms_by_min_isoform_fraction(
                     > LRAA_Globals.config[
                         "min_isoform_count_aggressive_filtering_iso_fraction"
                     ]
-                    and frac_gene_unique_reads < min_frac_gene_unique_reads
+                    and insufficient_support
                     and transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
                     verdict = "filtered_aggressive"
 
                 # standard isoform fraction based filtering
                 elif not isoforms_were_filtered and (
-                    frac_gene_unique_reads < min_frac_gene_unique_reads
+                    insufficient_support
                     or transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
                     verdict = "filtered_low_unique_or_isoform_fraction"
