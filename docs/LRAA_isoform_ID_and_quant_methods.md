@@ -113,10 +113,13 @@ the same threshold over a wider scope: within an exon island — a maximal run o
 segments — every incident intron is compared against the single strongest intron anywhere in
 that island, and those below the threshold are removed (`_prune_low_support_introns`). Because
 the same-site rule runs first, the island rule only ever removes junctions sharing neither donor
-nor acceptor with the intron they are judged against; measured on chr20 this accounts for 100%
-of its 490 removals. Islands can span more than one gene (13.9% of chr20 islands do, and 30% of
-those where the rule fires), so a weakly expressed transcript's junction may be judged against a
-neighbouring gene's dominant junction. Short terminal exon segments (≤13 bp in HiFi mode, ≤20 bp
+nor acceptor with the intron they are judged against: across the graph builds that determine
+emitted models this accounts for 100% of removals on both chr20 and chr19 (717 of 717), and no
+same-site island member falls below the threshold at all (0 of 6,205, minimum surviving ratio
+0.0101). Islands can span more than one gene — 12.8% of chr20 islands and 15.9% of chr19's, up
+to eight genes — rising to 33% and 37% among those where the rule fires, so a weakly expressed
+transcript's junction may be judged against a neighbouring gene's dominant junction.
+Short terminal exon segments (≤13 bp in HiFi mode, ≤20 bp
 for ONT)
 not anchored by TSS or PolyA nodes are removed. Unspliced intervals bridging annotated introns
 are retained only if supported by ≥1% of junction coverage, distinguishing genuine intron

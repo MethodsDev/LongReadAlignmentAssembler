@@ -185,3 +185,45 @@ def test_a_run_longer_than_allowed_is_not_stripped(restore_config):
     assert _clips(_alignment("3S100M", "GGG" + "A" * 100))[0] == 3
     LRAA_Globals.config["max_untemplated_G_at_TSS"] = 3
     assert _clips(_alignment("3S100M", "GGG" + "A" * 100))[0] == 0
+
+
+# --------------------------------------------------------------------------
+# which quantity decides that a model is too weakly supported
+# --------------------------------------------------------------------------
+
+WEAK_FRACTION = 0.006  # below the 0.01 floor
+STRONG_FRACTION = 0.4
+
+
+def _insufficient(fsm, frac, spliced=True, gate=0, floor=0.01):
+    return TranscriptFiltering.has_insufficient_support(fsm, frac, spliced, gate, floor)
+
+
+def test_the_fraction_decides_when_the_gate_is_off():
+    """Default behaviour: plenty of full-splice-match reads do not save a model."""
+    assert _insufficient(500, WEAK_FRACTION) is True
+    assert _insufficient(0, STRONG_FRACTION) is False
+
+
+def test_the_gate_replaces_the_fraction_for_spliced_models():
+    """With the gate on, the depth-relative fraction stops being consulted.
+
+    This is the whole point: a model holding 12 of a gene's 2,146 reads fails the
+    fraction at 0.0056 while carrying direct evidence for its own structure.
+    """
+    assert _insufficient(6, WEAK_FRACTION, gate=2) is False
+    assert _insufficient(1, STRONG_FRACTION, gate=2) is True
+
+
+def test_the_gate_is_a_floor_not_a_ratio():
+    assert _insufficient(1, WEAK_FRACTION, gate=2) is True
+    assert _insufficient(2, WEAK_FRACTION, gate=2) is False
+    assert _insufficient(2, WEAK_FRACTION, gate=3) is True
+
+
+def test_monoexonic_models_keep_the_fraction():
+    """Their full-splice-match count is zero by construction, so applying the gate
+    to them deletes every one -- measured, 170 emitted down to 55 at any
+    threshold. They must fall through to the fraction instead."""
+    assert _insufficient(0, STRONG_FRACTION, spliced=False, gate=2) is False
+    assert _insufficient(0, WEAK_FRACTION, spliced=False, gate=2) is True

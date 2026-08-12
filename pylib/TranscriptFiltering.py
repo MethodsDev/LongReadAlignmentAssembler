@@ -507,6 +507,32 @@ def get_isoform_FSM_read_count(transcript, frac_read_assignments):
     return sum(reads_by_path.values())
 
 
+def has_insufficient_support(
+    num_FSM_reads,
+    frac_gene_unique_reads,
+    is_spliced,
+    min_FSM_reads_gate,
+    min_frac_gene_unique_reads,
+):
+    """Whether a model is too weakly supported to keep.
+
+    By default this is the isoform's uniquely-assigned reads as a fraction of the
+    gene's total, which is relative to gene depth: a minor isoform of a deeply
+    sequenced gene must clear a bar that rises with its neighbours. Setting
+    min_FSM_reads_gate substitutes an absolute count of reads whose splice pattern
+    is exactly this model's -- direct evidence for the structure rather than a
+    share of the locus.
+
+    Only for spliced models. A monoexonic model has no splice pattern, so its
+    full-splice-match count is zero by definition and substituting it would delete
+    every one of them outright; those keep the fraction.
+    """
+    if min_FSM_reads_gate > 0 and is_spliced:
+        return num_FSM_reads < min_FSM_reads_gate
+
+    return frac_gene_unique_reads < min_frac_gene_unique_reads
+
+
 def filter_isoforms_by_min_isoform_fraction(
     transcripts, min_isoform_fraction, run_EM, max_EM_iterations
 ):
@@ -671,10 +697,12 @@ def filter_isoforms_by_min_isoform_fraction(
                 # pattern, so its full-splice-match count is zero by definition
                 # and substituting it would delete every one of them outright.
                 # Those keep the fraction.
-                insufficient_support = (
-                    num_FSM_reads < min_FSM_reads_gate
-                    if (min_FSM_reads_gate > 0 and transcript_pattern)
-                    else frac_gene_unique_reads < min_frac_gene_unique_reads
+                insufficient_support = has_insufficient_support(
+                    num_FSM_reads,
+                    frac_gene_unique_reads,
+                    bool(transcript_pattern),
+                    min_FSM_reads_gate,
+                    min_frac_gene_unique_reads,
                 )
 
                 # A splice pattern that reads attest to end to end keeps one model:
