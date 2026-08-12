@@ -17,6 +17,46 @@ import intervaltree as itree
 logger = logging.getLogger(__name__)
 
 
+# Set LRAA_FILTER_DECISION_LOG to a path prefix to record one row per
+# isoform-filtering decision. Written straight to a file rather than through the
+# logger, because isoform filtering runs inside worker processes whose logger
+# output never reaches the driver's stdout -- piping the driver silently collects
+# nothing, which is how an earlier attempt produced an empty file after 23
+# minutes of compute.
+#
+# One file per process rather than a shared append. O_APPEND on a regular file
+# gives no cross-process guarantee of whole-line writes, and buffered text I/O
+# can split a line at an arbitrary byte; concatenate the parts afterwards.
+_FILTER_DECISION_LOG = os.environ.get("LRAA_FILTER_DECISION_LOG") or None
+
+_FILTER_DECISION_FIELDS = (
+    "verdict transcript_id unique_reads gene_reads frac_unique "
+    "isoform_fraction FSM_reads n_introns carriers_standing novel_splice"
+).split()
+
+_filter_decision_ofh = None
+_filter_decision_failed = False
+
+
+def _record_filter_decision(*values):
+    global _filter_decision_ofh, _filter_decision_failed
+    if _filter_decision_failed:
+        return
+    try:
+        if _filter_decision_ofh is None:
+            _filter_decision_ofh = open(
+                "{}.{}.tsv".format(_FILTER_DECISION_LOG, os.getpid()), "w"
+            )
+            _filter_decision_ofh.write("\t".join(_FILTER_DECISION_FIELDS) + "\n")
+        _filter_decision_ofh.write("\t".join(str(v) for v in values) + "\n")
+        _filter_decision_ofh.flush()
+    except Exception as e:
+        # A diagnostic must not take down a run, but it must not fail silently
+        # either -- an empty diagnostic that looks like "no decisions" is worse
+        # than none at all.
+        _filter_decision_failed = True
+        logger.warning("filter-decision recording disabled after error: %s", e)
+
 def filter_transcripts_by_min_length(transcripts, min_transcript_length):
     """Retain only transcripts meeting minimum cDNA length.
 
@@ -420,6 +460,7 @@ def filter_isoforms_by_min_isoform_fraction(
 ):
 
     min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
+    min_FSM_reads_retain_isoform = LRAA_Globals.config["min_FSM_reads_retain_isoform"]
 
     # Build contig/strand prefix from transcripts if available
     try:
@@ -448,6 +489,56 @@ def filter_isoforms_by_min_isoform_fraction(
                 num_unique_reads += mp.get_read_count()
 
         return num_unique_reads
+
+    def get_splice_pattern(transcript):
+        """The isoform's intron chain, as splice-graph nodes.
+
+        Introns are nodes of the gene's own graph, so identity of node sequence is
+        identity of intron chain here. Reads reach this code as multipaths through
+        the same graph, which makes the comparison exact without resolving either
+        side back to coordinates. Pretty_alignment.get_splice_hashcode carries the
+        coordinate form for reporting, where stability across graphs matters.
+        """
+        return tuple(
+            node for node in transcript.get_simple_path() if node.startswith("I:")
+        )
+
+    def get_isoform_FSM_read_count(transcript, frac_read_assignments):
+        """Reads in this isoform's support whose splice pattern is exactly its own.
+
+        A read is a full splice match when its intron chain is identical to the
+        isoform's -- not a prefix, not a subset, not merely compatible. That is
+        direct evidence for the whole structure, and neither test above can see
+        it: isoform fraction measures how much of a gene EM apportioned here, and
+        apportionment tracks abundance rather than evidence, while the unique-read
+        fraction is measured against gene depth and so demands more of a minor
+        isoform the better expressed its gene is.
+
+        Counted within this isoform's own support, so a read that fits only some
+        other terminal variant of the same intron chain cannot vouch for this one.
+        Unioning across variants would also make the count depend on which of them
+        had already been filtered when it was taken.
+
+        The fraction EM assigned is deliberately ignored. It says which isoform
+        currently explains a read best and is recomputed every filtering round, so
+        gating on it would let a threshold protect a model in one round and drop
+        it the next. Whether a read carries this intron chain does not change;
+        whether EM prefers a neighbour does.
+        """
+        pattern = get_splice_pattern(transcript)
+        if not pattern:
+            return 0  # a monoexonic model has no splice pattern to match
+
+        reads_by_path = dict()
+        for mp in frac_read_assignments.get(transcript.get_transcript_id(), {}):
+            if (
+                tuple(node for node in mp.get_simple_path() if node.startswith("I:"))
+                != pattern
+            ):
+                continue
+            reads_by_path[mp.get_simple_path_tuple()] = mp.get_read_count()
+
+        return sum(reads_by_path.values())
 
     gene_id_to_transcripts = _get_gene_id_to_transcripts(transcripts)
 
@@ -501,6 +592,22 @@ def filter_isoforms_by_min_isoform_fraction(
             )
             num_isoforms_of_gene = len(isoforms_of_gene)
 
+            # Isoforms carrying each splice pattern, and how many are still
+            # standing. Filtering runs weakest-first, so carriers fall away in
+            # ascending order of isoform fraction and the last one left is the
+            # strongest. The tally has to be live rather than taken at round
+            # start: the aggressive branch below removes several isoforms in a
+            # single pass, which can take every carrier of a pattern at once.
+            pattern_to_carriers = defaultdict(list)
+            for isoform in isoforms_of_gene:
+                pattern = get_splice_pattern(isoform)
+                if pattern:
+                    pattern_to_carriers[pattern].append(isoform)
+            pattern_carriers_standing = {
+                pattern: len(carriers)
+                for pattern, carriers in pattern_to_carriers.items()
+            }
+
             for transcript in isoforms_of_gene:
 
                 num_total_isoforms += 1
@@ -522,7 +629,27 @@ def filter_isoforms_by_min_isoform_fraction(
                     )
                 )
 
-                ## first check to see if we should retain a reftrans
+                transcript_pattern = get_splice_pattern(transcript)
+
+                # Reads whose splice pattern is exactly this model's. Only needed
+                # when the exemption is enabled or when recording decisions.
+                recording = _FILTER_DECISION_LOG is not None
+                num_FSM_reads = (
+                    get_isoform_FSM_read_count(transcript, frac_read_assignments)
+                    if (min_FSM_reads_retain_isoform > 0 or recording)
+                    else 0
+                )
+
+                # A splice pattern that reads attest to end to end keeps one model:
+                # the last still standing, which is the strongest because filtering
+                # runs weakest-first.
+                retain_on_FSM_evidence = (
+                    min_FSM_reads_retain_isoform > 0
+                    and transcript_pattern
+                    and pattern_carriers_standing[transcript_pattern] == 1
+                    and num_FSM_reads >= min_FSM_reads_retain_isoform
+                )
+
                 if (
                     transcript.contains_reference_model()
                     and LRAA_Globals.config["ref_trans_filter_mode"]
@@ -530,10 +657,14 @@ def filter_isoforms_by_min_isoform_fraction(
                     and transcript.get_TPM() > 0
                 ):
                     transcripts_retained.append(transcript)
-                    continue
+                    verdict = "retained_reference_model"
+
+                elif retain_on_FSM_evidence:
+                    transcripts_retained.append(transcript)
+                    verdict = "retained_FSM_evidence"
 
                 ## if tons of isoforms, allow pruning of multiple in a single round
-                if (
+                elif (
                     num_isoforms_of_gene - num_isoforms_of_gene_filtered
                     > LRAA_Globals.config[
                         "min_isoform_count_aggressive_filtering_iso_fraction"
@@ -541,43 +672,64 @@ def filter_isoforms_by_min_isoform_fraction(
                     and frac_gene_unique_reads < min_frac_gene_unique_reads
                     and transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
-                    isoforms_were_filtered = True
-                    num_filtered_isoforms += 1
-                    num_isoforms_of_gene_filtered += 1
+                    verdict = "filtered_aggressive"
 
                 # standard isoform fraction based filtering
                 elif not isoforms_were_filtered and (
                     frac_gene_unique_reads < min_frac_gene_unique_reads
                     or transcript.get_isoform_fraction() < min_isoform_fraction
                 ):
-
-                    isoforms_were_filtered = True
-                    num_filtered_isoforms += 1
-                    num_isoforms_of_gene_filtered += 1
-
-                    logger.debug(
-                        "Filtering out transcript_id {} as low fraction of unique reads: {}".format(
-                            transcript_id, frac_gene_unique_reads
-                        )
-                    )
+                    verdict = "filtered_low_unique_or_isoform_fraction"
 
                 elif not isoforms_were_filtered and (
                     transcript.has_novel_splice_pattern() is True
                     and transcript_unique_read_count
                     < LRAA_Globals.config["min_unique_reads_novel_isoform"]
                 ):
-                    isoforms_were_filtered = True
-                    num_filtered_isoforms += 1
-                    num_isoforms_of_gene_filtered += 1
-
-                    logger.debug(
-                        "Filtering out transcript_id {} as novel isoform with too few unique reads: {}".format(
-                            transcript_id, transcript_unique_read_count
-                        )
-                    )
+                    verdict = "filtered_novel_too_few_unique_reads"
 
                 else:
                     transcripts_retained.append(transcript)
+                    verdict = "retained"
+
+                if verdict.startswith("filtered"):
+                    isoforms_were_filtered = True
+                    num_filtered_isoforms += 1
+                    num_isoforms_of_gene_filtered += 1
+                    if transcript_pattern:
+                        pattern_carriers_standing[transcript_pattern] -= 1
+
+                    # kept verbatim: existing tooling and analyses grep these
+                    if verdict == "filtered_low_unique_or_isoform_fraction":
+                        logger.debug(
+                            "Filtering out transcript_id {} as low fraction of unique reads: {}".format(
+                                transcript_id, frac_gene_unique_reads
+                            )
+                        )
+                    elif verdict == "filtered_novel_too_few_unique_reads":
+                        logger.debug(
+                            "Filtering out transcript_id {} as novel isoform with too few unique reads: {}".format(
+                                transcript_id, transcript_unique_read_count
+                            )
+                        )
+
+                if recording:
+                    _record_filter_decision(
+                        verdict,
+                        transcript_id,
+                        transcript_unique_read_count,
+                        gene_read_count,
+                        frac_gene_unique_reads,
+                        transcript.get_isoform_fraction(),
+                        num_FSM_reads,
+                        len(transcript_pattern) if transcript_pattern else 0,
+                        (
+                            pattern_carriers_standing.get(transcript_pattern, 0)
+                            if transcript_pattern
+                            else 0
+                        ),
+                        transcript.has_novel_splice_pattern(),
+                    )
 
             logger.debug(
                 "gene {} based isoform filtering round {} involved filtering of {} isoforms / {} total isoforms".format(

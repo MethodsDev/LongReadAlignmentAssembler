@@ -153,6 +153,21 @@ config = {
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,
     "min_isoform_count_aggressive_filtering_iso_fraction": 10,  # allow for filtering mult isoforms in a single round if more than this number of isoform candidates.
+    # Reads matching an isoform's intron chain exactly -- a full splice match --
+    # are direct evidence for that whole structure. Where a splice pattern has at
+    # least this many, the last isoform carrying it is kept rather than filtered
+    # on isoform fraction or unique-read fraction.
+    #
+    # Both of those are relative to the gene, so a minor isoform of a deeply
+    # sequenced gene must clear a bar that rises with the gene's expression: at
+    # 3,324 gene reads the 1% unique-read floor asks for 33, and an annotated
+    # SEC11A isoform with 21 reads carrying its exact chain was dropped for having
+    # 0.63%. This is an absolute count so that direct evidence of a structure
+    # cannot be outvoted by the depth of its neighbours.
+    #
+    # Only the last carrier is spared, so terminal variants of one chain do not
+    # all survive on the strength of the reads they share. 0 disables.
+    "min_FSM_reads_retain_isoform": 0,
     #
     ##########
     # assembly

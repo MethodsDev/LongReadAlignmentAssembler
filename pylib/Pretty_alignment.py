@@ -29,6 +29,7 @@ class Pretty_alignment:
         "read_name",
         "strand",
         "_normalization_weight",
+        "_splice_hashcode",
     )
 
     read_aln_gap_merge_int = LRAA_Globals.config["read_aln_gap_merge_int"]
@@ -63,6 +64,9 @@ class Pretty_alignment:
             else 1.0
         )
 
+        # computed on demand; see set_pretty_alignment_segments
+        self._splice_hashcode = None
+
         self._set_read_soft_clipping_info(pysam_alignment)  # sets above
 
     def __repr__(self):
@@ -93,6 +97,11 @@ class Pretty_alignment:
 
     def set_pretty_alignment_segments(self, alignment_segments):
         self._pretty_alignment_segments = alignment_segments
+        # prune_long_terminal_introns drops terminal introns from reads well after
+        # construction, so a hash computed once at __init__ would describe a splice
+        # pattern the read no longer has. Anything mutating segments must come
+        # through here.
+        self._splice_hashcode = None
         return
 
     def get_strand(self, pysam_alignment=None):
@@ -137,6 +146,26 @@ class Pretty_alignment:
         rend = self._pretty_alignment_segments[-1][1]
 
         return (lend, rend)
+
+    def get_splice_hashcode(self, contig_acc):
+        """Stable identifier for this read's splice pattern.
+
+        The same hash a transcript reports for the same intron chain, over the
+        same string form, so a read and an isoform are a full splice match
+        exactly when their hashcodes agree. Quantification already reports this
+        for isoforms as splice_hashcode.
+
+        Monoexonic alignments have no splice pattern and return None rather than
+        the hash of an empty chain, which every monoexonic read would share.
+        """
+        if self._splice_hashcode is None:
+            if not self.has_introns():
+                return None
+            self._splice_hashcode = Util_funcs.get_hash_code(
+                self.get_introns_string(contig_acc)
+            )
+
+        return self._splice_hashcode
 
     def get_read_type(self):
         return self._read_type

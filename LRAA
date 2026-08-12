@@ -776,6 +776,16 @@ def main():
     )
 
     config_group.add_argument(
+        "--min_FSM_reads_retain_isoform",
+        type=int,
+        required=False,
+        default=LRAA_Globals.config["min_FSM_reads_retain_isoform"],
+        help="retain the last isoform carrying a splice pattern when this many reads match its intron chain exactly; overrides the isoform-fraction and unique-read-fraction filters, which are relative to gene expression. 0 disables (default: {})".format(
+            LRAA_Globals.config["min_FSM_reads_retain_isoform"]
+        ),
+    )
+
+    config_group.add_argument(
         "--no_infer_TSS", action="store_true", default=False, help="do not infer TSS"
     )
     config_group.add_argument(
@@ -1199,6 +1209,9 @@ def main():
     )
     LRAA_Globals.config["min_reads_novel_isoform"] = args.min_reads_novel
     LRAA_Globals.config["min_unique_reads_novel_isoform"] = args.min_reads_novel
+    LRAA_Globals.config["min_FSM_reads_retain_isoform"] = (
+        args.min_FSM_reads_retain_isoform
+    )
     # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
     # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
