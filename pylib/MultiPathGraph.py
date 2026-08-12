@@ -58,7 +58,11 @@ class MultiPathGraph:
 
         self._mp_id_to_node = dict()  # mp_id -> mpg_node
 
-        sg_component_to_mp_id = defaultdict(set)
+        # component_id -> list of MPGN id strings, in creation order.  Was a
+        # defaultdict(set) of str, and str hashing is randomised per process, so
+        # the node order fed to the size-pruning and edge-direction sorts below
+        # varied run to run.
+        sg_component_to_mp_id = defaultdict(list)
 
         multiPathCountPairs = multiPathCounter.get_all_MultiPathCountPairs()
 
@@ -119,7 +123,7 @@ class MultiPathGraph:
 
             component_id = self._splice_graph._node_id_to_component[first_node_id]
             # print(f"{mp_graph_node_id} first node is {first_node_id} and assigned to component_id {component_id}")
-            sg_component_to_mp_id[component_id].add(mp_graph_node_id)
+            sg_component_to_mp_id[component_id].append(mp_graph_node_id)
 
             # Periodic progress during node creation
             processed_pairs += 1
@@ -250,7 +254,7 @@ class MultiPathGraph:
                 )
                 ordered_nodes = sorted(
                     ordered_nodes,
-                    key=lambda x: (x.get_count(), x._seq_length),
+                    key=lambda x: (x.get_count(), x._seq_length, x.get_id()),
                     reverse=True,
                 )
 
@@ -269,6 +273,7 @@ class MultiPathGraph:
                     x._rend,
                     x.get_left_boundary_sort_weight(),
                     x.get_right_boundary_sort_weight(),
+                    x.get_id(),
                 ),
             )
 

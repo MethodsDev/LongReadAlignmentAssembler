@@ -79,9 +79,15 @@ class Transcript(GenomeFeature):
             None  # optional - useful if transcript obj was built based on a scored path
         )
 
-        self.multipaths_evidence_assigned = (
-            set()
-        )  # multipaths supporting the transcript structure.
+        # Insertion-ordered set of the multipaths supporting this structure.
+        # A dict, not a set: MultiPath has no __hash__, so a set of them
+        # iterates in memory-address order, and _estimate_isoform_read_support
+        # accumulates `frac_mp_assignment * num_reads_in_mp` over exactly this
+        # container.  Float addition is not associative, so address order
+        # perturbed each isoform fraction in its low bits, which then reordered
+        # the weakest-first isoform-fraction filter and changed which isoform
+        # was deleted.  Values are unused; only key order matters.
+        self.multipaths_evidence_assigned = dict()
 
         self._multipaths_evidence_weights = dict()
 
@@ -377,7 +383,7 @@ class Transcript(GenomeFeature):
         return
 
     def get_multipaths_evidence_assigned(self):
-        return self.multipaths_evidence_assigned.copy()
+        return list(self.multipaths_evidence_assigned)
 
     def contains_reference_model(self):
         """True when a reference model is structurally contained by this isoform.
@@ -402,14 +408,15 @@ class Transcript(GenomeFeature):
         self._has_novel_splice_pattern = boolean_val
 
     def add_multipaths_evidence_assigned(self, multipaths):
-        if self.multipaths_evidence_assigned == None:
-            self.multipaths_evidence_assigned = set()
+        if self.multipaths_evidence_assigned is None:
+            self.multipaths_evidence_assigned = dict()
 
-        if type(multipaths) in (list, set):
-            self.multipaths_evidence_assigned.update(multipaths)
+        if isinstance(multipaths, (list, set, tuple)):
+            for multipath in multipaths:
+                self.multipaths_evidence_assigned.setdefault(multipath, None)
 
         else:
-            self.multipaths_evidence_assigned.add(multipaths)
+            self.multipaths_evidence_assigned.setdefault(multipaths, None)
 
         self._ensure_multipaths_have_weights()
 
@@ -590,7 +597,7 @@ class Transcript(GenomeFeature):
         return gtf_text
 
     def init_quant_info(self):
-        self.multipaths_evidence_assigned = set()
+        self.multipaths_evidence_assigned = dict()
         self._multipaths_evidence_weights = dict()
         self._read_counts_assigned = None
         self._isoform_fraction = None

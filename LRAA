@@ -2458,19 +2458,26 @@ def _run_jobs_schedule_and_merge(
                 f"Resuming {resumed} completed contig/strand jobs from previous run"
             )
 
+    # Launch order is shuffled for load balancing; `jobs` itself is left in its
+    # canonical (contig, strand) construction order.  Shuffling `jobs` in place
+    # also reordered the merge loops below, which concatenate each worker's temp
+    # GTF / quant.expr / quant.tracking in list order -- so an unseeded global
+    # RNG decided which strand block came first in every output file, and two
+    # runs with identical content produced different bytes.
+    launch_order = jobs
     if SHUFFLE_JOBS and pool_size > 1:
-        random.shuffle(jobs)
+        launch_order = list(jobs)
+        random.shuffle(launch_order)
         logger.info(
-            "Shuffled contig/strand job order for load balancing ({} jobs)".format(
-                len(jobs)
-            )
+            "Shuffled contig/strand job launch order for load balancing ({} jobs); "
+            "output merge order remains canonical".format(len(jobs))
         )
 
     # Launch jobs via rolling scheduler
     logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
     mgr = mpm.MultiProcessManager(pool_size)
     try:
-        for j in jobs:
+        for j in launch_order:
             if j.get("skip"):
                 continue
             # Name the process with contig and strand so launcher logs include [contig+strand]

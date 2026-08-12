@@ -27,7 +27,12 @@ class Quantify:
 
         self._path_node_id_to_gene_ids = defaultdict(set)
 
-        self._gene_id_to_transcript_objs = defaultdict(set)
+        # transcript_id -> Transcript, per gene.  A dict rather than a set: no
+        # class in pylib defines __hash__, so a set of Transcript objects hashes
+        # by id() and iterates in memory-address order, which differs between
+        # processes.  Keying by transcript id keeps set semantics (one entry per
+        # transcript) while iterating in a stable insertion order.
+        self._gene_id_to_transcript_objs = defaultdict(dict)
 
         self._read_name_to_multipath = dict()
 
@@ -138,7 +143,7 @@ class Quantify:
 
             transcript_id = transcript.get_transcript_id()
             gene_id = transcript.get_gene_id()
-            self._gene_id_to_transcript_objs[gene_id].add(transcript)
+            self._gene_id_to_transcript_objs[gene_id][transcript_id] = transcript
 
             for node_id in simplepath:
                 if node_id != SPACER:
@@ -338,11 +343,13 @@ class Quantify:
             num_read_counts_anchored_to_gene += count
 
             ## assign reads to transcripts
-            gene_isoforms = set()
+            # Ordered dedupe across the (possibly overlapping) top genes; the
+            # resulting sequence is what read-to-transcript compatibility is
+            # built from, so it must not depend on address order.
+            gene_isoforms_by_id = dict()
             for top_gene in top_genes:
-                isoforms = self._gene_id_to_transcript_objs[top_gene]
-                for isoform in isoforms:
-                    gene_isoforms.add(isoform)
+                gene_isoforms_by_id.update(self._gene_id_to_transcript_objs[top_gene])
+            gene_isoforms = list(gene_isoforms_by_id.values())
 
             logger.debug(
                 "mp_count_pair {} assigned to gene {} with isoforms to test for read assignment:\n\t{}".format(
@@ -610,8 +617,14 @@ class Quantify:
         if len(gene_ranker) == 0:
             return None
         else:
+            # (-count, gene_id) is a total order.  Ranking on the bare count was
+            # a stable sort over dict insertion order, and that insertion order
+            # comes from iterating _path_node_id_to_gene_ids[node], a set of
+            # gene-id STRINGS whose iteration order is randomised per process by
+            # PYTHONHASHSEED.  Equally-matching genes could therefore swap the
+            # top slot between runs, and this function picks genes_ranked[0].
             genes_ranked = sorted(
-                gene_ranker.keys(), key=lambda x: gene_ranker[x], reverse=True
+                gene_ranker.keys(), key=lambda x: (-gene_ranker[x], x)
             )
             return genes_ranked[0]
 
@@ -630,7 +643,7 @@ class Quantify:
             return None
         else:
             genes_ranked = sorted(
-                gene_ranker.keys(), key=lambda x: gene_ranker[x], reverse=True
+                gene_ranker.keys(), key=lambda x: (-gene_ranker[x], x)
             )
             return genes_ranked
 
@@ -646,10 +659,13 @@ class Quantify:
     ):
 
         assert type(mp) == MultiPath.MultiPath
-        assert (
-            type(transcripts) == set
-        ), "Error, type(transcripts) is {} not set ".format(type(transcripts))
-        assert type(list(transcripts)[0]) == Transcript.Transcript
+        # A sequence, not a set: the caller's order is now meaningful and must
+        # be preserved.  Sorted defensively so the compatibility list this
+        # builds is a function of transcript structure alone, whatever order a
+        # future caller supplies.
+        transcripts = sorted(transcripts, key=Transcript.Transcript.structural_sort_key)
+        assert transcripts, "Error, no transcripts supplied"
+        assert type(transcripts[0]) == Transcript.Transcript
         assert (
             fraction_read_align_overlap >= 0 and fraction_read_align_overlap <= 1.0
         ), "Error, fraction_read_align_overlap must be between 0 and 1.0"
@@ -949,10 +965,9 @@ class Quantify:
     ):
 
         assert type(mp) == MultiPath.MultiPath
-        assert (
-            type(transcripts) == set
-        ), "Error, type(transcripts) is {} not set ".format(type(transcripts))
-        assert type(list(transcripts)[0]) == Transcript.Transcript
+        transcripts = sorted(transcripts, key=Transcript.Transcript.structural_sort_key)
+        assert transcripts, "Error, no transcripts supplied"
+        assert type(transcripts[0]) == Transcript.Transcript
 
         contig_strand = splice_graph.get_contig_strand()
 
@@ -1401,7 +1416,10 @@ class Quantify:
 
                 mp_id = mp.get_id()
 
-                for readname in mp.get_read_names():
+                # get_read_names() returns a set of str, whose iteration order
+                # is randomised per process by PYTHONHASHSEED.  These become one
+                # output row each, so unsorted it reorders quant.tracking.
+                for readname in sorted(mp.get_read_names()):
 
                     tracking_report_info = [
                         output_gene_id,

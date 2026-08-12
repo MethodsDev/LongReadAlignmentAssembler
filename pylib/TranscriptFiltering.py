@@ -618,8 +618,15 @@ def filter_isoforms_by_min_isoform_fraction(
 
             num_isoforms_of_gene_filtered = 0
 
+            # Bare get_isoform_fraction() is a float with no tie-break, and this
+            # is a weakest-first greedy removal: two isoforms on the same
+            # fraction must not be able to swap places.
             isoforms_of_gene = sorted(
-                isoforms_of_gene, key=lambda x: x.get_isoform_fraction()
+                isoforms_of_gene,
+                key=lambda x: (
+                    x.get_isoform_fraction(),
+                    Transcript.Transcript.structural_sort_key(x),
+                ),
             )
             num_isoforms_of_gene = len(isoforms_of_gene)
 
@@ -816,12 +823,20 @@ def filter_isoforms_by_min_isoform_fraction(
 
 def _get_gene_id_to_transcripts(transcripts):
 
-    gene_id_to_transcripts = defaultdict(set)
+    # gene_id -> list of Transcript, in the caller's order.  Was a
+    # defaultdict(set); Transcript has no __hash__, so that set iterated in
+    # memory-address order and every consumer of this mapping -- the
+    # weakest-first isoform-fraction filter and the degradation-product pruner,
+    # both of which decide which transcript survives -- inherited it.
+    gene_id_to_transcripts = defaultdict(dict)
     for transcript in transcripts:
         gene_id = transcript.get_gene_id()
-        gene_id_to_transcripts[gene_id].add(transcript)
+        gene_id_to_transcripts[gene_id][transcript.get_transcript_id()] = transcript
 
-    return gene_id_to_transcripts
+    return {
+        gene_id: list(by_id.values())
+        for gene_id, by_id in gene_id_to_transcripts.items()
+    }
 
 
 def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assignments):

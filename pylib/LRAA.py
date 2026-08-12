@@ -371,7 +371,14 @@ class LRAA:
                 for mpgn in mpgn_list:
                     print(str(mpgn), file=ofh)
 
-        all_reconstructed_transcripts = list()
+        # Component results are keyed by component_counter and flattened in that
+        # order at the end, rather than appended as they arrive.  Components at
+        # or above min_mpgn_component_size_for_spawn are reconstructed in forked
+        # workers and come back through a Queue in completion order, interleaved
+        # with the smaller components handled in-process; appending in arrival
+        # order made the transcript list, and therefore every order-sensitive
+        # stage downstream of it, a function of worker scheduling.
+        component_results = list()
         component_counter = 0
         try:
             for mpg_component in mpg_components:
@@ -434,7 +441,9 @@ class LRAA:
                                 single_best_only,
                             )
                         )
-                        all_reconstructed_transcripts.extend(reconstructed_transcripts)
+                        component_results.append(
+                            (component_counter, reconstructed_transcripts)
+                        )
 
                     except KeyboardInterrupt:
                         if mpm is not None:
@@ -462,9 +471,7 @@ class LRAA:
                 )
 
                 if USE_MULTIPROCESSOR:
-                    queue_entries = mpm.retrieve_queue_contents(clear=True)
-                    for entry in queue_entries:
-                        all_reconstructed_transcripts.extend(entry)
+                    component_results.extend(mpm.retrieve_queue_contents(clear=True))
         except KeyboardInterrupt:
             # Ensure all spawned component workers are pruned before bubbling up
             if mpm is not None:
@@ -489,13 +496,21 @@ class LRAA:
                 self._contig_strand,
                 mpm.summarize_status(),
             )
-            queue_entries = mpm.retrieve_queue_contents(clear=True)
-            for entry in queue_entries:
-                all_reconstructed_transcripts.extend(entry)
+            component_results.extend(mpm.retrieve_queue_contents(clear=True))
             if num_failures:
                 raise RuntimeError(
                     "Error, {} component failures encountered".format(num_failures)
                 )
+
+        # component_counter is assigned in mpg_components order, which is itself
+        # coordinate/id-stabilised, so this restores a scheduling-independent
+        # transcript order for both the forked and the in-process branch.
+        component_results.sort(key=lambda pair: pair[0])
+        all_reconstructed_transcripts = [
+            transcript
+            for _counter, transcripts in component_results
+            for transcript in transcripts
+        ]
 
         logger.info(
             "[%s%s] Finished round of isoform reconstruction",
@@ -1002,8 +1017,10 @@ class LRAA:
         logger.info(f"Assembly time for {mpg_token} is {asm_time_min:.2f} min.")
 
         if q is not None:
-            # using MultiProcessing Queue
-            q.put(transcripts)
+            # using MultiProcessing Queue.  The component index travels with the
+            # payload so the parent can restore submission order regardless of
+            # which worker finishes first.
+            q.put((component_counter, transcripts))
         else:
             return transcripts
 
