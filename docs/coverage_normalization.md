@@ -31,6 +31,11 @@ arrays come to roughly 250 MB for a human genome (20 MB for its largest chromoso
 ~0.65 M junctions per strand that chr20 extrapolates to. Strands are processed one after the
 other, so those are peak figures rather than a sum.
 
+Windows are offset from the contig's first aligned base, not from coordinate zero, so the
+partition travels with the reads. Translate a locus and every read lands in the window it was
+in before, giving the same depth estimate and the same acceptance probability. See the origin
+section below for why that matters.
+
 **Pass 2 — sample.** Each read is kept with probability `p` and, if kept, records `1/p`:
 
 | condition | `p` | rationale |
@@ -137,9 +142,11 @@ control is exact: the same 6,026 reads — identical names, identical CIGAR and 
 position offset by precisely 1,203 bp, and no read starting in the strip between the two origins
 — retained 2,804 reads at one origin and 1,980 at the other, and flipped whether a transcript
 was emitted. LRAA itself is deterministic; triplicate runs gave byte-identical output. Under the
-current scheme the same control retains 1,984 versus 1,964 reads, a symmetric difference of 26
-out of ~2,000, and the assembled chain sets are identical. Window edges still move with the
-origin, but the acceptance draw is a hash of the read name and no longer does.
+current scheme the same reads at origins 363 and 1,203 bp apart retain an identical set — 2,837
+reads at every origin, symmetric difference zero — because window offsets are measured from the
+contig's first aligned base and the acceptance draw is a hash of the read name. Neither depends
+on absolute position, so the procedure is translation-invariant by construction rather than
+approximately so.
 
 This is why extracted sub-regions could not be trusted to reproduce whole-genome behaviour:
 rebasing a window to position 1 is exactly the translation above, so at any deep locus the

@@ -130,9 +130,18 @@ def _read_variate(read_name, random_seed):
     return int.from_bytes(digest, "big") / float(1 << 64)
 
 
-def _window_span(lend, rend, depth_window):
-    """Windows touched by the half-open interval [lend, rend)."""
-    return range(lend // depth_window, (rend - 1) // depth_window + 1)
+def _window_span(lend, rend, depth_window, anchor):
+    """Windows touched by the half-open interval [lend, rend).
+
+    Offsets are measured from `anchor`, the first aligned base on the contig,
+    rather than from coordinate zero. Translating a locus then translates the
+    anchor with it, so every read falls in the same window as before and the
+    depth estimate is unchanged. Anchoring at zero instead makes the partition a
+    function of absolute position: the same reads extracted at two origins get
+    different window boundaries, different depth estimates, and different
+    acceptance probabilities, purely from where the coordinates start.
+    """
+    return range((lend - anchor) // depth_window, (rend - 1 - anchor) // depth_window + 1)
 
 
 def sift_bam(
@@ -169,6 +178,7 @@ def sift_bam(
     """
 
     window_bases = dict()  # contig -> aligned bases per window
+    contig_anchor = dict()  # contig -> first aligned base, the window origin
     junction_support = defaultdict(int)
 
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
@@ -181,14 +191,18 @@ def sift_bam(
             contig = read.reference_name
             bases = window_bases.get(contig)
             if bases is None:
+                # coordinate-sorted input, so the first read seen on a contig
+                # starts at its minimum aligned position
+                contig_anchor[contig] = read.reference_start
                 bases = array("q", bytes(8 * (contig_length[contig] // depth_window + 2)))
                 window_bases[contig] = bases
+            anchor = contig_anchor[contig]
 
             for block_lend, block_rend in read.get_blocks():
-                windows = _window_span(block_lend, block_rend, depth_window)
-                for window in windows:
-                    covered_lend = max(block_lend, window * depth_window)
-                    covered_rend = min(block_rend, (window + 1) * depth_window)
+                for window in _window_span(block_lend, block_rend, depth_window, anchor):
+                    window_lend = anchor + window * depth_window
+                    covered_lend = max(block_lend, window_lend)
+                    covered_rend = min(block_rend, window_lend + depth_window)
                     bases[window] += covered_rend - covered_lend
 
             for junction in _read_junctions(read):
@@ -215,6 +229,7 @@ def sift_bam(
                     read,
                     contig,
                     window_bases[contig],
+                    contig_anchor[contig],
                     junction_support,
                     normalize_max_cov_level,
                     depth_window,
@@ -250,7 +265,13 @@ def _read_junctions(read):
 
 
 def _acceptance_probability(
-    read, contig, window_bases, junction_support, normalize_max_cov_level, depth_window
+    read,
+    contig,
+    window_bases,
+    anchor,
+    junction_support,
+    normalize_max_cov_level,
+    depth_window,
 ):
     if normalize_max_cov_level <= 0:
         return 1.0
@@ -262,8 +283,8 @@ def _acceptance_probability(
 
     depths = []
     for block_lend, block_rend in read.get_blocks():
-        for window in _window_span(block_lend, block_rend, depth_window):
-            if window < len(window_bases):
+        for window in _window_span(block_lend, block_rend, depth_window, anchor):
+            if 0 <= window < len(window_bases):
                 depths.append(window_bases[window] / depth_window)
     if not depths:
         return 1.0
