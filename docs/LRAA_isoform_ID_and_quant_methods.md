@@ -108,7 +108,16 @@ To remove spurious features arising from alignment errors, the graph is filtered
 criteria. Introns supported by fewer than 2 reads are removed unless they match known junctions
 from a provided reference annotation. For competing splice junctions at the same donor or
 acceptor site, minor junctions representing less than 1% (HiFi mode) or 3% (ONT mode) of total
-junction support are pruned. Short terminal exon segments (≤13 bp in HiFi mode, ≤20 bp for ONT)
+junction support are pruned (`_prune_spurious_introns_shared_boundary`). A second rule applies
+the same threshold over a wider scope: within an exon island — a maximal run of adjacent exon
+segments — every incident intron is compared against the single strongest intron anywhere in
+that island, and those below the threshold are removed (`_prune_low_support_introns`). Because
+the same-site rule runs first, the island rule only ever removes junctions sharing neither donor
+nor acceptor with the intron they are judged against; measured on chr20 this accounts for 100%
+of its 490 removals. Islands can span more than one gene (13.9% of chr20 islands do, and 30% of
+those where the rule fires), so a weakly expressed transcript's junction may be judged against a
+neighbouring gene's dominant junction. Short terminal exon segments (≤13 bp in HiFi mode, ≤20 bp
+for ONT)
 not anchored by TSS or PolyA nodes are removed. Unspliced intervals bridging annotated introns
 are retained only if supported by ≥1% of junction coverage, distinguishing genuine intron
 retention from unprocessed pre-mRNA. When a reference GTF is provided, known exons and introns
