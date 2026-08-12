@@ -3,6 +3,7 @@
 import sys, os, re
 import argparse
 import subprocess
+import collections
 import pysam
 
 
@@ -37,6 +38,15 @@ def main():
     )
 
     parser.add_argument(
+        "--max_left_extension",
+        type=int,
+        default=20000,
+        help="how far the left edge may widen to keep reads that start upstream of the region. "
+        "The overhang is bounded by alignment span, not read length, so a single spliced read can "
+        "reach megabases; anything beyond this is dropped and reported.",
+    )
+
+    parser.add_argument(
         "--strict_window",
         action="store_true",
         default=False,
@@ -53,6 +63,7 @@ def main():
     gtf_filename = args.gtf
     region = args.region
     output_prefix = args.output_prefix
+    max_left_extension = args.max_left_extension
 
     region = region.replace(",", "")
 
@@ -69,38 +80,56 @@ def main():
     rend = int(m.group(4))
 
     # Reads starting left of the region cannot be rebased into it -- their
-    # alignment would begin before position 1. Dropping them removes evidence
-    # that belongs to the region: at one locus 22% of the reads spanning the
-    # target began 5.3 kb upstream, and without them the models built from them
-    # could not form, so the extraction produced an answer the whole genome does
-    # not give. Widen the left edge to cover them instead, and say so.
-    overhang_lend = lend
+    # alignment would begin before position 1. Dropping them silently removes
+    # evidence the region genuinely has: at one locus 22% of the reads spanning
+    # the target began 5.3 kb upstream, and without them the models built from
+    # them could not form, so the extraction gave an answer the whole genome does
+    # not. Widen the left edge to cover them instead.
+    #
+    # Bounded, because the overhang is limited by ALIGNMENT SPAN and not by read
+    # length: a spliced read can reach across megabases, and following the worst
+    # one has been observed to turn a 100 kb request into 3.1 Mb and a few
+    # thousand reads into 242,000. Reads overhanging beyond the bound are still
+    # dropped, but the loss is now reported rather than silent.
+    counts = collections.Counter()
+    furthest = lend
+    furthest_recoverable = lend
     with pysam.AlignmentFile(bam_filename, "rb") as probe:
-        for read in probe.fetch(chrom, lend, rend):
-            if read.reference_start + 1 < overhang_lend:
-                overhang_lend = read.reference_start + 1
+        for read in probe.fetch(chrom, lend - 1, rend):
+            start = read.reference_start + 1
+            if start < lend:
+                counts["overhanging"] += 1
+                furthest = min(furthest, start)
+                if start >= lend - max_left_extension:
+                    counts["recoverable"] += 1
+                    furthest_recoverable = min(furthest_recoverable, start)
 
-    num_overhanging = 0
-    if overhang_lend < lend:
-        with pysam.AlignmentFile(bam_filename, "rb") as probe:
-            num_overhanging = sum(
-                1 for r in probe.fetch(chrom, lend, rend) if r.reference_start + 1 < lend
-            )
+    if counts["overhanging"]:
         if args.strict_window:
             print(
-                f"WARNING: {num_overhanging} read(s) overlapping {chrom}:{lend}-{rend} start as far "
-                f"as {lend - overhang_lend} bp upstream and are being DISCARDED under --strict_window. "
-                f"The extracted region under-represents its own left edge.",
+                f"WARNING: {counts['overhanging']} read(s) overlapping {chrom}:{lend}-{rend} start up to "
+                f"{lend - furthest} bp upstream and are DISCARDED under --strict_window; the extracted "
+                f"region under-represents its own left edge.",
                 file=sys.stderr,
             )
         else:
-            print(
-                f"NOTE: widening left edge {lend} -> {overhang_lend} ({lend - overhang_lend} bp) to keep "
-                f"{num_overhanging} read(s) that start upstream of the requested region. "
-                f"Use --strict_window to discard them instead.",
-                file=sys.stderr,
-            )
-            lend = overhang_lend
+            widened = lend - furthest_recoverable
+            dropped = counts["overhanging"] - counts["recoverable"]
+            if widened:
+                print(
+                    f"NOTE: widening left edge by {widened} bp ({lend} -> {lend - widened}) to keep "
+                    f"{counts['recoverable']} of {counts['overhanging']} read(s) starting upstream of the "
+                    f"requested region.",
+                    file=sys.stderr,
+                )
+            if dropped:
+                print(
+                    f"WARNING: {dropped} read(s) start further upstream than --max_left_extension "
+                    f"({max_left_extension} bp), as far as {lend - furthest} bp, and are DISCARDED. "
+                    f"Raise --max_left_extension to keep them, at the cost of a larger region.",
+                    file=sys.stderr,
+                )
+            lend -= widened
 
     # extract contig
     genome_region_fa_filename = f"{output_prefix}.fa"
@@ -120,14 +149,16 @@ def main():
     output_bam_filename = output_prefix + ".bam"
     bamwriter = pysam.AlignmentFile(output_bam_filename, "wb", template=bamreader)
 
-    for read in bamreader.fetch(chrom, lend, rend):
+    for read in bamreader.fetch(chrom, lend - 1, rend):
         if strand != "":
             if (strand == "+" and not read.is_forward) or (
                 strand == "-" and not read.is_reverse
             ):
                 continue
 
-        if read.reference_start >= lend:
+        # reference_start is 0-based; a read beginning at the 1-based region
+        # start has reference_start == lend - 1 and belongs in the extraction
+        if read.reference_start >= lend - 1:
             read.reference_start -= lend - 1
             bamwriter.write(read)
 
