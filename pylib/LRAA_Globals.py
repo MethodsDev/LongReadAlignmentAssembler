@@ -72,8 +72,19 @@ config = {
     # Length of a leading untemplated-G run to strip before judging a TSS. Reverse
     # transcriptase adds these opposite the cap during template switching, so they
     # mark a genuine transcript start; with max_soft_clip_at_TSS at 0 they instead
-    # disqualify the read. 0 disables the stripping and preserves that behaviour.
-    "max_untemplated_G_at_TSS": 0,
+    # disqualify the read. Measured on chr20: 83.8% of primary alignments are clipped
+    # at their 5' end, the first clipped base is G in 99.9%, 96.5% are pure G runs of
+    # three or fewer, and none of 257,880 clipped bases matches the reference beyond
+    # the alignment. Enabled by default on that evidence.
+    #
+    # Honest caveat for whoever tunes this next. On chr20 de novo the strip cost 13
+    # true chains and gained none; 13 of 17 lost chains had a strict subset emitted in
+    # their place, so the mechanism of the loss is truncation. Untemplated G's mark
+    # where reverse transcription terminated rather than where the cap is, and for a
+    # degraded transcript RT stops internally and still adds them, so some admitted
+    # ends are internal. The biology justifies stripping; the chromosome-scale chain
+    # count did not. 0 disables the stripping and restores the pre-0.18.3 behaviour.
+    "max_untemplated_G_at_TSS": 3,
     "min_TSS_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of TSS-candidate gene reads assigned.
     "TSS_window_read_enrich_len": 50,
     "TSS_window_read_enrich_factor": 5,

@@ -98,9 +98,16 @@ used throughout downstream filtering and scoring steps.
 
 In HiFi mode, TSS and PolyA sites are explicitly inferred from read boundary clustering. Reads
 terminating with minimal soft-clipping (≤0 bases) within a 50 bp window are aggregated to
-define boundary candidates. A candidate site is retained if supported by at least 5 reads
-representing ≥5% of gene-level read coverage. TSS and PolyA nodes are integrated as first-class
-graph features that influence downstream isoform selection. For ONT data, TSS and PolyA
+define boundary candidates. Before that test is applied, a leading untemplated-G run of up to
+3 bases is stripped from the 5' end (`max_untemplated_G_at_TSS`, and its reverse-complement
+C-run on reverse-strand alignments), mirroring the polyA conversion applied at the opposite
+terminus. Reverse transcriptase adds these non-genomic G's opposite the cap during template
+switching, so they are positive evidence of a genuine transcript start rather than
+misalignment; without the strip the zero-soft-clip requirement disqualifies precisely the
+reads that carry that evidence. Only pure G-runs qualify, so a clip beginning with any other
+base is still treated as a misalignment. A candidate site is retained if supported by at least
+5 reads representing ≥5% of gene-level read coverage. TSS and PolyA nodes are integrated as
+first-class graph features that influence downstream isoform selection. For ONT data, TSS and PolyA
 inference is disabled; terminal boundaries are instead refined empirically after
 reconstruction.
 

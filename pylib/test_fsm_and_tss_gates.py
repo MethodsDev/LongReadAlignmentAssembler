@@ -11,6 +11,7 @@ disqualifying -- rejecting the reads that evidence a real transcript start.
 Both default off. These tests cover what turns on when they are not.
 """
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -145,8 +146,8 @@ def _clips(alignment):
     return pa.left_soft_clipping, pa.right_soft_clipping
 
 
-def test_g_run_is_kept_by_default(restore_config):
-    """Off unless asked for: the shipped behaviour is unchanged."""
+def test_g_run_is_kept_when_disabled(restore_config):
+    """Setting the key to 0 restores the pre-0.18.3 behaviour: the clip stands."""
     LRAA_Globals.config["max_untemplated_G_at_TSS"] = 0
     assert _clips(_alignment("2S100M", "GG" + "A" * 100))[0] == 2
 
@@ -227,3 +228,17 @@ def test_monoexonic_models_keep_the_fraction():
     threshold. They must fall through to the fraction instead."""
     assert _insufficient(0, STRONG_FRACTION, spliced=False, gate=2) is False
     assert _insufficient(0, WEAK_FRACTION, spliced=False, gate=2) is True
+
+
+def test_untemplated_G_strip_is_on_by_default():
+    """The shipped default strips up to 3 untemplated G's before judging a TSS.
+
+    Enabled on biological grounds: reverse transcriptase adds a non-genomic G run
+    opposite the cap during template switching, so with max_soft_clip_at_TSS at 0
+    the clip disqualifies precisely the reads evidencing a genuine start. Pinned
+    here because the value is a deliberate decision, not an incidental default,
+    and because chromosome-scale chain counts argue the other way.
+    """
+    fresh = importlib.reload(LRAA_Globals)
+    assert fresh.config["max_untemplated_G_at_TSS"] == 3
+    assert fresh.config["max_soft_clip_at_TSS"] == 0
