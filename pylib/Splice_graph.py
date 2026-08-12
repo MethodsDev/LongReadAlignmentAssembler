@@ -1831,7 +1831,7 @@ class Splice_graph:
 
         for pred in predecessors:
             if type(pred) == Exon:
-                exon_predecessors.append(Exon)
+                exon_predecessors.append(pred)
 
         assert len(exon_predecessors) <= 1
 
