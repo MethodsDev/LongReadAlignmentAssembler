@@ -87,6 +87,14 @@ class Transcript(GenomeFeature):
         # perturbed each isoform fraction in its low bits, which then reordered
         # the weakest-first isoform-fraction filter and changed which isoform
         # was deleted.  Values are unused; only key order matters.
+        #
+        # The insertion order is load-bearing, not incidental.  Ordering this
+        # container makes the sum reproducible because it fixes the order, not
+        # because the arithmetic became exact.  Swapping it for a different
+        # ordered container, or sorting it on some other key, changes the low
+        # bits of every isoform fraction and can change which isoform the
+        # weakest-first filter deletes -- silently, with no test failing in
+        # between.  Do not "tidy" this into a set or reorder the inserts.
         self.multipaths_evidence_assigned = dict()
 
         self._multipaths_evidence_weights = dict()
