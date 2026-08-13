@@ -12,6 +12,7 @@ import intervaltree as itree
 from GenomeFeature import *
 from Pretty_alignment_manager import Pretty_alignment_manager
 import LRAA_Globals
+import Util_funcs
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -757,7 +758,7 @@ class Splice_graph:
         return
 
     def _incorporate_PolyA_objects(
-        self, contig_acc, contig_strand, polyA_position_counter
+        self, contig_acc, contig_strand, polyA_position_counter, from_reads=True
     ):
 
         if LRAA_Globals.DEBUG:
@@ -774,10 +775,42 @@ class Splice_graph:
             LRAA_Globals.config["min_alignments_define_polyA_site"],
         )
 
+        n_internally_primed = 0
+
         for polyA_site_grouping in PolyA_grouped_positions:
             position, count = polyA_site_grouping
+
+            # Reject a candidate whose downstream genome is itself A-rich: the oligo-dT
+            # primer had a template there, so this is internal priming and not cleavage.
+            #
+            # This is the only genomic-context check on the path from a read's soft clip
+            # to a PolyA graph vertex. Without it the site becomes an absorbing vertex --
+            # in-degree or out-degree 0 on its transcript-interior side -- so no path can
+            # read through it and every model overlapping the locus is truncated onto an
+            # artifact. The same rule used to be applied only at transcript filtering,
+            # long after the vertex had already constrained assembly.
+            #
+            # Read-derived candidates only. `from_reads=False` marks the coordinates
+            # folded in from a reference annotation by
+            # _integrate_input_transcript_structures: those are assertions about a
+            # transcript rather than inferences from a soft clip, and vetoing them would
+            # make a ref-guided run delete annotated 3' ends.
+            if from_reads and Util_funcs.looks_internally_primed(
+                self._contig_seq_str, position, contig_strand
+            ):
+                n_internally_primed += 1
+                continue
+
             self._PolyA_objs.append(
                 PolyAsite(contig_acc, position, position, contig_strand, count)
+            )
+
+        if from_reads:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] PolyA sites: "
+                f"{len(PolyA_grouped_positions)} candidates, "
+                f"{n_internally_primed} rejected as internally primed, "
+                f"{len(PolyA_grouped_positions) - n_internally_primed} retained"
             )
 
         if LRAA_Globals.DEBUG:
@@ -990,7 +1023,7 @@ class Splice_graph:
 
         if LRAA_Globals.config["infer_PolyA"] and len(PolyA_evidence_counter) > 0:
             self._incorporate_PolyA_objects(
-                contig_acc, contig_strand, PolyA_evidence_counter
+                contig_acc, contig_strand, PolyA_evidence_counter, from_reads=False
             )
 
         if pbar is not None:

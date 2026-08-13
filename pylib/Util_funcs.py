@@ -108,6 +108,56 @@ def frac_base_composition(nuc_seq, nuc_base):
     return frac_base
 
 
+def looks_internally_primed(
+    contig_seq_str, three_prime_pos, strand, check_length=20
+):
+    """True when the genome immediately 3' of `three_prime_pos` is itself A-rich in
+    transcript sense: the oligo-dT primer had a template to bind without any
+    post-transcriptional tail, so the 3' end is an internal-priming artifact rather
+    than a cleavage site.
+
+    `three_prime_pos` is the 1-based genomic coordinate of the 3'-most transcribed base
+    -- a transcript's rend on '+' and its lend on '-', or equally a candidate PolyA
+    site's coordinate. The test fires on either a diffuse A-run (>= 12 of the 20
+    downstream bases) or a hexamer of A's within the first 8, unchanged from the rule
+    that has always been applied at transcript filtering.
+
+    Single definition, called from two stages: the PolyA candidate gate in
+    Splice_graph._incorporate_PolyA_objects and the annotation pass in
+    TranscriptFiltering.annotate_internally_primed_transcripts. Copying the rule into
+    either caller is what would let the two drift apart.
+    """
+
+    if strand not in {"+", "-"}:
+        raise ValueError("Strand must be '+' or '-'")
+
+    target_base = "A" if strand == "+" else "T"
+    target_polyA_motif = target_base * 6
+
+    contig_length = len(contig_seq_str)
+
+    if strand == "+":
+        start = three_prime_pos + 1
+        end = start + check_length - 1
+    else:
+        end = three_prime_pos - 1
+        start = end - check_length + 1
+
+    # ensure coordinates within contig bounds
+    start = max(1, start)
+    end = min(end, contig_length)
+
+    extracted_long_sequence = contig_seq_str[start - 1 : end].upper()
+    extracted_short_sequence = (
+        extracted_long_sequence[-8:] if strand == "-" else extracted_long_sequence[0:8]
+    )
+
+    return (
+        extracted_long_sequence.count(target_base) >= 12
+        or target_polyA_motif in extracted_short_sequence
+    )
+
+
 def get_hash_code(input_string):
     hash_object = blake2s(digest_size=11)
     hash_object.update(input_string.encode("utf-8"))
