@@ -425,7 +425,10 @@ class LRAA:
                         ),
                     )
 
-                    mpm.launch_process(p)
+                    # component_counter is this unit's id: the worker tags its
+                    # payload with it and the manager keys, orders and audits
+                    # the results by it.
+                    mpm.launch_process(p, unit_id=component_counter)
 
                 else:
 

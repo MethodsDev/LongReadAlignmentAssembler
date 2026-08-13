@@ -1616,6 +1616,9 @@ def main():
                 continue
             jobs.append(
                 dict(
+                    # Stable per-job id, assigned in canonical construction
+                    # order and unaffected by the launch-order shuffle below.
+                    unit_id=len(jobs),
                     contig_acc=contig_acc,
                     contig_strand=contig_strand,
                     genome_fasta_filename=genome_fasta_filename,
@@ -2491,7 +2494,7 @@ def _run_jobs_schedule_and_merge(
                 p = Process(target=_contig_job_runner, name=_pname, args=(j,))
             else:
                 p = Process(target=_contig_job_runner, args=(j,))
-            mgr.launch_process(p)
+            mgr.launch_process(p, unit_id=j["unit_id"])
         errs = mgr.wait_for_remaining_processes()
     except KeyboardInterrupt:
         # Propagate Ctrl-C: terminate children and wait for full pruning before exit
