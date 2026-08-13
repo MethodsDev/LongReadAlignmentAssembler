@@ -165,3 +165,26 @@ def splice_graph_norm_cache_stem(base_root, normalize_max_cov_level, source_bam)
         LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD,
         file_identity_token(source_bam),
     )
+
+
+def available_cpus():
+    """Number of CPUs this process may actually run on.
+
+    `os.cpu_count()` reports the machine's CPUs, not the ones the process is allowed to
+    use. Under a cpuset -- every container runtime, Slurm with `--cpus-per-task`, taskset
+    -- those differ, and sizing a thread pool from `cpu_count()` oversubscribes by the
+    ratio between them: 4x for 4 cpus granted out of 16 present.
+
+    `os.sched_getaffinity` is the affinity-aware count but exists only on Linux, so it is
+    probed rather than assumed. `os.cpu_count()` can itself return None when the count is
+    indeterminable, hence the floor of 1.
+    """
+
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            return max(1, len(get_affinity(0)))
+        except OSError:
+            pass
+
+    return max(1, os.cpu_count() or 1)

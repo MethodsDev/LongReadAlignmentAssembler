@@ -1977,7 +1977,9 @@ def _resolve_singleton_stage_threads():
     if threads < 1:
         threads = 1
     try:
-        max_hw_threads = os.cpu_count()
+        # affinity-aware: cpu_count() counts CPUs this process may not be allowed to use,
+        # which oversubscribes the pool under any cpuset (containers, Slurm, taskset)
+        max_hw_threads = Util_funcs.available_cpus()
         if max_hw_threads:
             threads = min(threads, max_hw_threads)
     except Exception:
