@@ -893,9 +893,14 @@ def main():
         ),
     )
 
-    # `--no_filter_internal_priming` is gone: internal priming is rejected during PolyA
-    # site identification, unconditionally, so there is no isoform-filtering step left
-    # for it to disable.
+    config_group.add_argument(
+        "--no_filter_internal_priming",
+        action="store_true",
+        default=False,
+        help="do not delete transcripts whose 3' end sits in A-rich genomic context "
+        "(the InternalPriming attribute is still recorded, and A-rich read-derived "
+        "PolyA sites are still rejected during PolyA site identification)",
+    )
 
     config_group.add_argument(
         "--polyA_signal_motifs",
@@ -1156,6 +1161,9 @@ def main():
     SE_only = args.SE_only
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
+    LRAA_Globals.config["filter_internal_priming"] = (
+        not args.no_filter_internal_priming
+    )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
     # By default, parallelize contigs; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
@@ -5013,14 +5021,33 @@ def run_transcript_assembly(
                 return
 
         ####################################################################
-        # Annotate 3' ends that sit in A-rich genomic context. Internal-priming
-        # candidates are now REJECTED during PolyA site identification, in
-        # Splice_graph._incorporate_PolyA_objects, so nothing is deleted here; see
-        # TranscriptFiltering.annotate_internally_primed_transcripts for why re-applying
-        # the rule at the emitted terminus would expand filtering rather than move it.
-        transcripts = TranscriptFiltering.annotate_internally_primed_transcripts(
-            transcripts, contig_seq_str, contig_strand
+        # Internal priming. The gate in Splice_graph._incorporate_PolyA_objects has
+        # already stopped A-rich READ-DERIVED candidates becoming vertices. This stage
+        # judges the model's own emitted 3' terminus, which reconstruction may have put
+        # somewhere no rejected candidate sat -- on chr20 that leaves 123 monoexonic
+        # models in A-rich context, only 2.4% of which end near a measured cleavage site
+        # against 52.4% of unflagged monoexonic models. Annotation is always applied so
+        # the InternalPriming attribute round-trips; deletion is policy.
+        transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
+            transcripts,
+            contig_seq_str,
+            contig_strand,
+            input_transcripts,
+            restrict_filter_to_monoexonic=LRAA_Globals.config[
+                "restrict_internal_priming_filter_to_monoexonic"
+            ],
+            spare_monoexonic_with_known_3prime=LRAA_Globals.config[
+                "spare_monoexonic_internal_priming_with_known_3prime"
+            ],
+            delete=LRAA_Globals.config["filter_internal_priming"],
         )
+        if len(transcripts) < 1:
+            logger.info(
+                "-no transcripts on contig {} {} survived internal-priming filtering".format(
+                    contig_acc, contig_strand
+                )
+            )
+            return
 
         ####################################################################
         # Canonical PAS upstream of each 3' end.  Unconditional: this is

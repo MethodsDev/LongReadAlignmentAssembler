@@ -1126,41 +1126,81 @@ def annotate_polyA_signal(transcripts, contig_seq_str, contig_strand):
     return transcripts
 
 
-def annotate_internally_primed_transcripts(
-    transcripts, contig_seq_str, contig_strand
+def filter_internally_primed_transcripts(
+    transcripts,
+    contig_seq_str,
+    contig_strand,
+    known_transcripts,
+    restrict_filter_to_monoexonic,
+    spare_monoexonic_with_known_3prime=False,
+    delete=True,
 ):
-    """Record, per transcript, whether its own 3' terminus sits in A-rich genomic
-    context, and return every transcript.
+    """Annotate every transcript's 3' terminus for A-rich genomic context, and delete
+    the models that policy says should not survive it.
 
-    This used to DELETE such models. The internal-priming decision now happens during
-    PolyA site identification (Splice_graph._incorporate_PolyA_objects), where an A-rich
-    candidate never becomes a graph vertex in the first place, so deleting here as well
-    would not be a backstop -- it would re-apply the same rule at a DIFFERENT
-    coordinate. Once the gate changes where a model terminates, this stage sees the new
-    terminus, and a model whose end moved onto an A-run would be deleted although no
-    spurious vertex was ever created for it. That expands filtering rather than moving
-    it, which is the opposite of the intent.
+    Two stages now apply the same rule, deliberately and for different reasons.
+    `Splice_graph._incorporate_PolyA_objects` rejects an A-rich READ-DERIVED candidate
+    before it can become a graph vertex, so the constraint is never created. This stage
+    then judges the model's own emitted 3' terminus, which reconstruction may have
+    placed somewhere no rejected candidate ever sat.
 
-    The annotation itself is kept because it is load-bearing beyond logging:
-    `Transcript.py` reads an `InternalPriming` attribute back off an input GTF
-    specifically so it can be re-exported, so dropping it here would silently change
-    what round-trips through a GTF.
+    Both are wanted. On chr20 the gate alone leaves 123 monoexonic models terminating
+    in A-rich context, and they are an artifact population rather than real single-exon
+    transcripts: 2.4% end within 25 bp of a measured PolyASite cleavage site against
+    52.4% for unflagged monoexonic models, and 1 of 123 ends inside an annotated exon.
 
-    Consumers should note the attribute is now computed at whatever terminus survives
-    reconstruction, which the gate may have moved, and is therefore a statement about
-    the emitted model rather than about a rejected PolyA candidate.
+    The annotation is set on every transcript regardless of `delete`, because
+    `Transcript.py` reads an `InternalPriming` attribute back off an input GTF in order
+    to re-export it, so the attribute has to round-trip even when nothing is being
+    removed. Consumers should read it as a statement about the emitted model's
+    terminus, not about a rejected PolyA candidate.
+
+    The reprieve in `spare_monoexonic_with_known_3prime` keys on proximity to a
+    `known_transcripts` 3' end -- the reference annotation handed to this function --
+    and not on any measured cleavage atlas. Note that its window is asymmetric by one
+    base -- intervals go in as [K - half, K + half) but are probed at [E, E + 1), so a
+    known end spares a model ending at E over [E - half + 1, E + half]. That reads as an
+    off-by-one rather than an intended tolerance. It predates this change and is
+    unreachable at shipped defaults, so it is left alone here rather than fixed in
+    passing; the tests deliberately do not assert that edge.
     """
 
-    # Build prefix using contig_strand and contig accession from first transcript if available
     try:
         _ca = transcripts[0].get_contig_acc() if transcripts else None
         _prefix = f"[{_ca}{contig_strand}] " if _ca and contig_strand else ""
     except Exception:
         _prefix = ""
 
-    logger.info(f"{_prefix}annotating internally primed 3' ends")
+    logger.info(
+        f"{_prefix}internal priming: delete={delete}, "
+        f"restricting deletion to monoexonic: {restrict_filter_to_monoexonic}"
+    )
 
+    known_polyA_dist_ok_window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+    known_polyA_dist_ok_window_half = int(known_polyA_dist_ok_window / 2)
+
+    known_ok_3prime_ends = set()
+    if known_transcripts is not None:
+        for known_transcript in known_transcripts:
+            if known_transcript.get_strand() == contig_strand:
+                transcript_lend, transcript_rend = known_transcript.get_coords()
+                known_3prime_end = (
+                    transcript_rend if contig_strand == "+" else transcript_lend
+                )
+                known_ok_3prime_ends.add(known_3prime_end)
+
+    known_ok_3prime_ends_itree = itree.IntervalTree()
+    for ok_3prime_end in known_ok_3prime_ends:
+        known_ok_3prime_ends_itree[
+            max(1, ok_3prime_end - known_polyA_dist_ok_window_half) : (
+                ok_3prime_end + known_polyA_dist_ok_window_half
+            )
+        ] = ok_3prime_end
+
+    retained_transcripts = list()
     n_flagged = 0
+    n_deleted = 0
+
     for transcript in transcripts:
 
         transcript_lend, transcript_rend = transcript.get_coords()
@@ -1172,15 +1212,60 @@ def annotate_internally_primed_transcripts(
         )
         n_flagged += bool(looks_internally_primed)
 
+        # Set on every transcript, deleted or not, so the attribute round-trips.
         transcript.set_likely_internal_primed(looks_internally_primed)
 
+        if not delete:
+            retained_transcripts.append(transcript)
+            continue
+
+        if restrict_filter_to_monoexonic and not transcript.is_monoexonic():
+            retained_transcripts.append(transcript)
+            continue
+
+        filter_flag = False
+
+        if looks_internally_primed:
+
+            end_check = transcript_rend if contig_strand == "+" else transcript_lend
+            agrees_with_known_3prime = (
+                len(known_ok_3prime_ends_itree[end_check : end_check + 1]) > 0
+            )
+
+            if transcript.is_monoexonic() and not spare_monoexonic_with_known_3prime:
+                logger.debug(
+                    "FILTERING monoexonic transcript {} as likely internally primed".format(
+                        transcript
+                    )
+                )
+                filter_flag = True
+
+            elif not agrees_with_known_3prime:
+                logger.debug(
+                    "FILTERING {}exonic transcript {} as likely internally primed".format(
+                        "mono" if transcript.is_monoexonic() else "multi", transcript
+                    )
+                )
+                filter_flag = True
+
+            else:
+                logger.info(
+                    "Ignoring internal priming info for {} as found consistent with known 3' end".format(
+                        transcript
+                    )
+                )
+
+        if not filter_flag:
+            retained_transcripts.append(transcript)
+        else:
+            n_deleted += 1
+
     logger.info(
-        f"{_prefix}internally primed 3' ends: {n_flagged} of {len(transcripts)} "
-        f"transcripts annotated (none deleted; the decision is made at PolyA site "
-        f"identification)"
+        f"{_prefix}internal priming: {n_flagged} of {len(transcripts)} transcripts "
+        f"flagged, {n_deleted} deleted, {len(retained_transcripts)} retained"
     )
 
-    return transcripts
+    return retained_transcripts
 
 
 def evaluate_splice_compatible_alt_isoforms(transcripts):

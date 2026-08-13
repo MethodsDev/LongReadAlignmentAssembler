@@ -14,8 +14,16 @@ reads end.
           -> the candidate must survive, which is the control that proves the rejection
              is about genomic context and not about being monoexonic
 
-Also asserts that an emitted model whose own terminus sits in A-rich context still
-carries InternalPriming "True": the annotation is preserved, only the deletion moved.
+Two arms are run over the identical locus, and their outcomes must differ:
+
+  default                          -> a monoexonic model terminating in A-rich context
+                                      is DELETED by the transcript stage
+  --no_filter_internal_priming     -> the same model is EMITTED, carrying
+                                      InternalPriming "True"
+
+The second arm is what makes the first meaningful: it proves the model is reconstructed
+at all, so its absence under the default is a deletion rather than a locus that simply
+never assembled.
 
   check_monoexonic_internal_priming.py [--keep] [--lraa /path/to/LRAA]
 """
@@ -117,29 +125,37 @@ def main():
     seq = build_genome(genome)
     build_bam(bam, seq)
 
-    cmd = [sys.executable, args.lraa,
-           "--genome", genome, "--bam", bam,
-           "--output_prefix", "ip_mono",
-           "--num_threads_per_worker", "1",
-           "--min_mapping_quality", "0",
-           "--min_mapping_quality_for_final_quant", "0",
-           "--HiFi",
-           # --debug so the graph writes __PolyAsite_info.bed; the gate's own log line
-           # is emitted from a worker process and never reaches this stdout
-           "--debug"]
-    print("running: " + " ".join(cmd))
-    proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
-    log = proc.stdout + proc.stderr
-    with open(os.path.join(workdir, "run.log"), "w") as fh:
-        fh.write(log)
-    if proc.returncode != 0:
-        print(log[-4000:])
-        sys.exit(f"LRAA exited {proc.returncode}; log in {workdir}/run.log")
+    def run(prefix, extra=()):
+        # each arm gets its own directory: with --debug, LRAA writes graph artifacts
+        # whose names are not qualified by --output_prefix (__MPGN_components_described
+        # .*.bed), and it refuses to overwrite them
+        rundir = os.path.join(workdir, prefix)
+        os.makedirs(rundir, exist_ok=True)
+        cmd = [sys.executable, args.lraa,
+               "--genome", genome, "--bam", bam,
+               "--output_prefix", prefix,
+               "--num_threads_per_worker", "1",
+               "--min_mapping_quality", "0",
+               "--min_mapping_quality_for_final_quant", "0",
+               "--HiFi",
+               # --debug so the graph writes __PolyAsite_info.bed; the gate's own log
+               # line is emitted from a worker process and never reaches this stdout
+               "--debug", *extra]
+        print("running: " + " ".join(cmd))
+        proc = subprocess.run(cmd, cwd=rundir, capture_output=True, text=True)
+        log = proc.stdout + proc.stderr
+        with open(os.path.join(rundir, "run.log"), "w") as fh:
+            fh.write(log)
+        if proc.returncode != 0:
+            print(log[-4000:])
+            sys.exit(f"LRAA exited {proc.returncode}; log in {rundir}/run.log")
+
+    run("ip_mono")
 
     failures = []
 
     # --- 1. the gate: no PolyA VERTEX at the A-rich locus, one at the clean locus
-    verts = polyA_vertices(workdir)
+    verts = polyA_vertices(os.path.join(workdir, "ip_mono"))
     if verts is None:
         failures.append("no __PolyAsite_info.bed written; cannot inspect PolyA vertices")
     else:
@@ -159,11 +175,12 @@ def main():
                 f"absence at {A_LOCUS_END} does not demonstrate the gate -- it may just "
                 f"be that no PolyA site was called anywhere")
 
-    # --- 2. no PolyA vertex survives at the A-rich locus, and one does at the clean locus
-    gtf = os.path.join(workdir, "ip_mono.LRAA.ref-free.gtf")
-    if not os.path.exists(gtf):
-        failures.append(f"no GTF emitted at {gtf}")
-    else:
+    # --- 2. the deletion, and the flag that disables it
+    def emitted(prefix):
+        gtf = os.path.join(workdir, prefix, prefix + ".LRAA.ref-free.gtf")
+        if not os.path.exists(gtf):
+            failures.append(f"no GTF emitted at {gtf}")
+            return None, None
         ends, flags = [], {}
         for line in open(gtf):
             if line.startswith("#"):
@@ -176,28 +193,43 @@ def main():
             three = int(f[4]) if f[6] == "+" else int(f[3])
             ends.append((tid, f[6], three))
             flags[tid] = 'InternalPriming "True"' in f[8]
-        print(f"emitted models: {ends}")
-        print(f"InternalPriming flags: {flags}")
+        return ends, flags
 
-        # a model terminating within the capture window of the A-rich site would mean the
-        # vertex survived; 25 nt is max_dist_between_alt_polyA_sites/2
-        snapped_to_A = [e for e in ends if e[1] == "+" and abs(e[2] - A_LOCUS_END) <= 25]
-        snapped_to_clean = [
-            e for e in ends if e[1] == "+" and abs(e[2] - CLEAN_LOCUS_END) <= 25]
-        if snapped_to_clean == []:
+    # 25 nt is max_dist_between_alt_polyA_sites/2, the capture window of a site
+    def near(ends, locus):
+        return [e for e in ends if e[1] == "+" and abs(e[2] - locus) <= 25]
+
+    ends, flags = emitted("ip_mono")
+    if ends is not None:
+        print(f"default arm, emitted models: {ends}")
+        print(f"default arm, InternalPriming flags: {flags}")
+        if near(ends, CLEAN_LOCUS_END) == []:
             failures.append(
                 "control failed: no model terminates near the CLEAN locus, so the test "
-                "cannot distinguish rejection from the locus simply not being assembled")
-        # annotation must survive for anything that does end in A-rich context
-        for tid, strand, three in snapped_to_A:
-            if not flags.get(tid):
+                "cannot distinguish deletion from the locus never being assembled")
+        surviving = near(ends, A_LOCUS_END)
+        if surviving:
+            failures.append(
+                f"monoexonic model(s) {[e[0] for e in surviving]} terminate in A-rich "
+                f"context and were NOT deleted; the transcript stage should remove them")
+
+    # the same locus with deletion disabled: the model must reappear, annotated
+    run("ip_mono_nofilt", extra=("--no_filter_internal_priming",))
+    ends_nf, flags_nf = emitted("ip_mono_nofilt")
+    if ends_nf is not None:
+        print(f"--no_filter_internal_priming arm, emitted models: {ends_nf}")
+        print(f"--no_filter_internal_priming arm, flags: {flags_nf}")
+        kept = near(ends_nf, A_LOCUS_END)
+        if not kept:
+            failures.append(
+                "with --no_filter_internal_priming no model terminates near the A-rich "
+                "locus either, so the default arm's absence does not demonstrate the "
+                "deletion -- the model may never be reconstructed at all")
+        for tid, strand, three in kept:
+            if not flags_nf.get(tid):
                 failures.append(
                     f"model {tid} ends at {three}, in A-rich context, but is not "
                     f"annotated InternalPriming True -- the annotation was lost")
-        if snapped_to_A:
-            print(f"note: {len(snapped_to_A)} model(s) still terminate near the A-rich "
-                  f"site; they are annotated, which is the intended behaviour now that "
-                  f"the transcript stage no longer deletes")
 
     if not args.keep:
         import shutil

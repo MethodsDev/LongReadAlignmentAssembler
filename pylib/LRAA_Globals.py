@@ -159,11 +159,13 @@ config = {
     # cells, 92% at 5, 73% at 10. 0 disables.
     "min_monoexonic_supporting_cells": 5,
     # Internal priming is rejected during PolyA site identification
-    # (Splice_graph._incorporate_PolyA_objects), unconditionally, so the three keys that
-    # used to steer an isoform-filtering pass -- filter_internal_priming,
-    # restrict_internal_priming_filter_to_monoexonic and
-    # spare_monoexonic_internal_priming_with_known_3prime -- no longer govern anything
-    # and have been removed rather than left as no-ops.
+    "filter_internal_priming": True,
+    "restrict_internal_priming_filter_to_monoexonic": True,
+    # When True, a monoexonic transcript that looks internally primed is retained if its
+    # 3' end agrees with a reference annotation 3' end -- proximity to a known_transcripts
+    # terminus, not to any measured cleavage atlas. Off by default: a monoexonic model has
+    # no intron chain corroborating it, so agreement alone is weaker evidence there.
+    "spare_monoexonic_internal_priming_with_known_3prime": False,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,

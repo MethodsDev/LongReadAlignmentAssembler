@@ -123,9 +123,11 @@ def looks_internally_primed(
     that has always been applied at transcript filtering.
 
     Single definition, called from two stages: the PolyA candidate gate in
-    Splice_graph._incorporate_PolyA_objects and the annotation pass in
-    TranscriptFiltering.annotate_internally_primed_transcripts. Copying the rule into
-    either caller is what would let the two drift apart.
+    Splice_graph._incorporate_PolyA_objects, which stops an A-rich read-derived
+    candidate becoming a vertex, and
+    TranscriptFiltering.filter_internally_primed_transcripts, which judges the emitted
+    model's own terminus. Copying the rule into either caller is what would let the two
+    drift apart.
     """
 
     if strand not in {"+", "-"}:
