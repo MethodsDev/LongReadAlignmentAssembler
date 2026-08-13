@@ -25,7 +25,7 @@ from shutil import rmtree
 import time
 from multiprocessing import Process, Queue
 import traceback
-from MultiProcessManager import MultiProcessManager
+from MultiProcessManager import MultiProcessManager, ResultQueue
 from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
@@ -340,7 +340,7 @@ class LRAA:
         mpm = None
         if USE_MULTIPROCESSOR:
             logger.info("[%s%s] -Running assembly jobs with multiprocessing", self._contig_acc, self._contig_strand)
-            q = Queue()
+            q = ResultQueue()
             mpm = MultiProcessManager(self._num_parallel_processes, q)
         else:
             logger.info(
@@ -1024,6 +1024,18 @@ class LRAA:
             # payload so the parent can restore submission order regardless of
             # which worker finishes first.
             q.put((component_counter, transcripts))
+
+            # Flush while this process is still alive.  put() is asynchronous, so
+            # without this the pickling happens inside util._exit_function()
+            # during interpreter shutdown, where Queue._feed takes the
+            # `if is_exiting(): return` branch and skips
+            # _on_queue_feeder_error entirely -- a serialisation failure would be
+            # dropped with no report anywhere, which is exactly the case
+            # ResultQueue exists to report.  Normal exit performs this same
+            # flush; doing it here only changes when, which is what makes the
+            # failure reportable.
+            q.close()
+            q.join_thread()
         else:
             return transcripts
 

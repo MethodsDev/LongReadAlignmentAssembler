@@ -2,6 +2,7 @@
 
 import time
 import multiprocessing
+import multiprocessing.queues
 import random
 import logging
 import re
@@ -13,6 +14,49 @@ logger = logging.getLogger(__name__)
 SLEEPTIME = 0.1
 
 MPM_DEBUG = False
+
+
+class ResultQueue(multiprocessing.queues.Queue):
+    """A result queue that says so when a payload fails to serialise.
+
+    `Queue.put()` hands the object to a background feeder thread which pickles it
+    and writes it to the pipe.  When that pickling raises -- an unpicklable
+    member, or a RecursionError on a deep object graph -- CPython drops that one
+    item, calls `_on_queue_feeder_error`, and lets the feeder carry on.  The
+    worker is never told, so it exits 0 having silently delivered nothing.  The
+    default handler is `traceback.print_exc()`, which in this pipeline lands on a
+    worker's stderr inside a per-contig temp directory that is deleted when the
+    run succeeds -- so the one message explaining the loss is written and then
+    thrown away.
+
+    Overriding the hook puts the failure in the logger, tagged with the unit id
+    carried by the payload, so it survives next to the WorkUnitAccountingError
+    that the drop will trigger.  Note this only makes the loss legible: the item
+    is still gone, and preventing that needs the payload off the queue entirely.
+    """
+
+    def __init__(self, *args, ctx=None, **kwargs):
+        if ctx is None:
+            ctx = multiprocessing.get_context()
+        super().__init__(*args, ctx=ctx, **kwargs)
+
+    @staticmethod
+    def _on_queue_feeder_error(exception, obj):
+        # Payloads are (unit_id, result); recover the id when the shape holds so
+        # the message names the unit that lost its result.
+        unit_id = None
+        if isinstance(obj, tuple) and len(obj) >= 1:
+            unit_id = obj[0]
+
+        logger.error(
+            "result queue failed to serialise the payload for unit %s: %s: %s. "
+            "That result is LOST -- the worker will still exit 0, and the loss "
+            "surfaces as a work-unit accounting failure.",
+            "unknown" if unit_id is None else unit_id,
+            type(exception).__name__,
+            exception,
+            exc_info=exception,
+        )
 
 
 class WorkUnitAccountingError(RuntimeError):
