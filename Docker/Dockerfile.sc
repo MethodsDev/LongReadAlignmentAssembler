@@ -80,12 +80,20 @@ RUN Rscript --vanilla -e 'install.packages("BiocManager", repos="https://cloud.r
 # (pandas/scipy), plotting (matplotlib/seaborn), differential usage
 # (statsmodels), and pytest, which pylib/SQANTI_like_annotator.py imports at
 # module scope.
+#
+# scikit-learn is here for the isoform-classification work: gradient-boosted
+# models and cross-validated feature ranking over per-isoform feature tables
+# (the DegradationDiscrimination and IsoformFeatureML investigations).  Nothing
+# in the repository imports it yet; it is installed so that analysis running in
+# this image does not have to pip-install into a running container, which is
+# how environments silently diverge between the container and the host.
 RUN pip install --no-cache-dir --break-system-packages \
     pandas \
     scipy \
     matplotlib \
     seaborn \
     statsmodels \
+    scikit-learn \
     pytest
 
 ARG LRAA_VERSION
