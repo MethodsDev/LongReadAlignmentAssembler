@@ -6,6 +6,7 @@ import Transcript
 import MultiPath
 import MultiPathCounter
 import Simple_path_utils as SPU
+import Util_funcs
 from Quantify import Quantify
 from collections import defaultdict
 import LRAA_Globals
@@ -1082,6 +1083,47 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                     )
 
     return transcripts_ret
+
+
+def annotate_polyA_signal(transcripts, contig_seq_str, contig_strand):
+    """Record the canonical PAS upstream of each model's own 3' terminus.
+
+    Pure annotation: nothing is filtered, reordered or removed, and the pass is not
+    gated on any config key, so the attribute is present on every emitted model.
+
+    Deliberately separate from internal-priming filtering. That asks whether the
+    genome DOWNSTREAM of the terminus looks like an oligo-dT template; this asks
+    whether the signal a genuine cleavage site requires is present UPSTREAM. The two
+    are independent evidence about the same site and a terminus can carry both, so
+    they are reported as separate attributes rather than folded into one verdict.
+    """
+
+    try:
+        _ca = transcripts[0].get_contig_acc() if transcripts else None
+        _prefix = f"[{_ca}{contig_strand}] " if _ca and contig_strand else ""
+    except Exception:
+        _prefix = ""
+
+    motifs, window = Util_funcs.resolve_polyA_signal_settings()
+
+    n_with_signal = 0
+    for transcript in transcripts:
+        transcript_lend, transcript_rend = transcript.get_coords()
+        strand = transcript.get_orient()
+        three_prime_pos = transcript_rend if strand == "+" else transcript_lend
+
+        hexamer, offset = Util_funcs.find_polyA_signal(
+            contig_seq_str, three_prime_pos, strand, window=window, hexamers=motifs
+        )
+        n_with_signal += hexamer is not None
+        transcript.set_polyA_signal(hexamer, offset)
+
+    logger.info(
+        f"{_prefix}polyA signal {list(motifs)} in window {list(window)} upstream of the "
+        f"3' end: {n_with_signal} of {len(transcripts)} transcripts"
+    )
+
+    return transcripts
 
 
 def filter_internally_primed_transcripts(

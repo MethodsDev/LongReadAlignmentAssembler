@@ -74,6 +74,8 @@ class Transcript(GenomeFeature):
         self._PolyA_read_count = None
 
         self._likely_internal_primed = None
+        self._polyA_signal = None          # canonical PAS hexamer, transcript sense
+        self._polyA_signal_offset = None   # signed nt from the 3' end to its first base
 
         self._scored_path_obj = (
             None  # optional - useful if transcript obj was built based on a scored path
@@ -346,6 +348,18 @@ class Transcript(GenomeFeature):
         # indicate if the transcript looks like it's internally primed.
         self._likely_internal_primed = TorF_boolean
 
+    def set_polyA_signal(self, hexamer, offset):
+        """Record the canonical polyadenylation signal found upstream of this model's
+        3' terminus, or its documented absence.
+
+        `hexamer` is None when the check ran and found nothing, which is emitted as
+        PAS "none" rather than by omitting the attribute -- absence of a key would be
+        indistinguishable from a GTF written before this existed.
+        """
+        self._polyA_signal = hexamer
+        self._polyA_signal_offset = offset
+        self._polyA_signal_evaluated = True
+
     def __repr__(self):
 
         text = "Transcript: {} {}-{} [{}] {} {} segs: {}".format(
@@ -566,6 +580,21 @@ class Transcript(GenomeFeature):
             misc_transcript_features["InternalPriming"] = str(
                 self._meta["InternalPriming"]
             )
+
+        # Canonical PAS upstream of the 3' end.  Independent of InternalPriming: that
+        # asks whether the genome DOWNSTREAM looks like an oligo-dT template, this asks
+        # whether the signal a real cleavage site needs is present UPSTREAM.  A terminus
+        # can carry both.
+        if getattr(self, "_polyA_signal_evaluated", False):
+            misc_transcript_features["PAS"] = (
+                self._polyA_signal if self._polyA_signal is not None else "none"
+            )
+            if self._polyA_signal_offset is not None:
+                misc_transcript_features["PAS_offset"] = str(self._polyA_signal_offset)
+        elif self._meta and "PAS" in self._meta:
+            misc_transcript_features["PAS"] = str(self._meta["PAS"])
+            if "PAS_offset" in self._meta:
+                misc_transcript_features["PAS_offset"] = str(self._meta["PAS_offset"])
 
         for misc_feature, misc_val in misc_transcript_features.items():
             gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
@@ -982,6 +1011,16 @@ class GTF_contig_to_transcripts:
             if "InternalPriming" in transcript_meta:
                 transcript_obj._likely_internal_primed = (
                     True if transcript_meta["InternalPriming"] == "True" else False
+                )
+
+            # same for PAS, so a value written by an earlier run survives a
+            # quant-only pass rather than being silently dropped on re-export
+            if "PAS" in transcript_meta:
+                hexamer = transcript_meta["PAS"]
+                offset = transcript_meta.get("PAS_offset")
+                transcript_obj.set_polyA_signal(
+                    None if hexamer in ("none", "None", "") else hexamer,
+                    int(offset) if offset not in (None, "", "None") else None,
                 )
 
             contig_to_transcripts[contig].append(transcript_obj)

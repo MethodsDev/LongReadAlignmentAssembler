@@ -332,6 +332,15 @@ config = {
     # will bypass graph/EM and assign each read to the single best-overlapping reference transcript.
     "oversimplify_enabled": False,
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
+    # Polyadenylation signal annotation.  Defaults are human: the two canonical hexamers
+    # and the transcript-sense window LRAA's own PAS analyses used.  Both are settable
+    # for other organisms -- plant and many invertebrate signals are more degenerate and
+    # sit at different spacings -- via --polyA_signal_motifs / --polyA_signal_window.
+    # All motifs must share one length, since the containment bound is derived from it.
+    # Purely annotation: these affect the PAS and PAS_offset GTF attributes and nothing
+    # else, so they are not part of the splice-graph cache key.
+    "polyA_signal_motifs": ["AATAAA", "ATTAAA"],
+    "polyA_signal_window": [-40, -10],
 }
 
 

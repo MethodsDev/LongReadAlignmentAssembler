@@ -188,3 +188,198 @@ def available_cpus():
             pass
 
     return max(1, os.cpu_count() or 1)
+
+
+# Canonical polyadenylation signal hexamers, in transcript sense.  These two account
+# for the large majority of characterised human cleavage sites; the many
+# single-substitution variants are deliberately excluded, so a positive call means the
+# canonical signal rather than a permissive match.
+POLYA_SIGNAL_HEXAMERS = ("AATAAA", "ATTAAA")
+
+# Transcript-sense bounds of the EXTRACTED REGION, relative to the cleavage site.  A
+# motif must fall entirely inside it, so a 6-mer in -40..-10 has first-base offsets of
+# -40..-15.  Note that is NOT the same set as "every start 10 to 30 nt upstream".
+#
+# Deliberately broader than the textbook 10-30 nt spacing.  This is an ANNOTATION, and
+# PAS_offset is emitted alongside the motif, so a scan that reports a motif at -38 loses
+# nothing: a consumer wanting the canonical spacing filters on the offset.  Narrowing
+# the scan instead would make an out-of-window motif indistinguishable from no motif at
+# all, which is the one thing an annotation should not do.
+#
+# -40..-10 also matches the offline analysis these numbers are compared against,
+# investigations/PIP_work/pip_profile.py, which extracts sense(pos, -40, -10) and
+# substring-searches it.
+#
+# For scale, on 3,073 chr20 ref-free termini against 9,219 strand-matched random genomic
+# positions, canonical first-base offsets are ~26-62x more frequent than background at
+# -23..-17, ~5x by -15, and indistinguishable from background by -14 and beyond -41.
+# That is an enrichment estimate against a random-position null, not a precision or
+# recall measurement -- nothing here carries validated true-positive labels -- so it
+# describes where signal concentrates, and does not by itself justify a narrower default.
+POLYA_SIGNAL_WINDOW = (-40, -10)
+
+_DNA_COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}
+
+
+def _genomic_spelling_on_minus(motif):
+    """How a transcript-sense motif is written in the reference on the minus strand.
+
+    Scanning for this instead of reverse-complementing the extracted slice keeps the
+    reference read-only and matches what looks_internally_primed does when it counts T
+    rather than A on '-'.
+    """
+    return "".join(reversed([_DNA_COMPLEMENT[base] for base in motif]))
+
+
+def find_polyA_signal(
+    contig_seq_str,
+    three_prime_pos,
+    strand,
+    window=POLYA_SIGNAL_WINDOW,
+    hexamers=POLYA_SIGNAL_HEXAMERS,
+):
+    """Look for a canonical polyadenylation signal upstream of a 3' terminus.
+
+    Returns (hexamer, offset) for the match closest to the site, or (None, None).
+    `hexamer` is always reported in transcript sense, so a minus-strand hit reads
+    AATAAA rather than its genomic spelling TTTATT.  `offset` is the signed distance
+    from `three_prime_pos` to the hexamer's first base in transcript sense, so it is
+    negative: -21 means the signal begins 21 nt upstream of the cleavage site.
+
+    `window` bounds the extracted region and the hexamer must lie entirely within it,
+    so a 6-mer in the default -40..-10 window has first-base offsets of -40..-15.
+
+    This is evidence ABOUT a 3' end and is deliberately independent of
+    `looks_internally_primed`, which interrogates the opposite side of the same site.
+    A terminus can carry both -- a genuine signal upstream and an A-rich stretch
+    downstream -- and the two belong in the output separately rather than collapsed
+    into one verdict.
+
+    `three_prime_pos` is the 1-based genomic coordinate of the 3'-most transcribed
+    base: a transcript's rend on '+' and its lend on '-'.
+    """
+
+    if strand not in {"+", "-"}:
+        raise ValueError("Strand must be '+' or '-'")
+
+    lo, hi = window
+    if lo > hi:
+        raise ValueError("window must be (low, high) with low <= high")
+
+    # The scan reads fixed-width k-mers and derives the containment bound from that one
+    # width, so a mixed-width motif set would silently mis-place the shorter members.
+    hexamers = tuple(hexamers)
+    if not hexamers:
+        raise ValueError("hexamers must be a non-empty sequence of motifs")
+    widths = {len(motif) for motif in hexamers}
+    if len(widths) != 1:
+        raise ValueError(
+            f"all motifs must share one length; got lengths {sorted(widths)}"
+        )
+    if any(set(motif) - set("ACGT") for motif in hexamers):
+        raise ValueError("motifs must be uppercase and contain only A, C, G or T")
+
+    if strand == "+":
+        patterns = {motif: motif for motif in hexamers}
+    else:
+        patterns = {_genomic_spelling_on_minus(motif): motif for motif in hexamers}
+
+    width = widths.pop()
+
+    # Genomic span that can hold a hexamer whose transcript-sense first base falls in
+    # [lo, hi].  On '+' that first base is the leftmost genomic base; on '-' it is the
+    # rightmost, so the span shifts by the hexamer width.
+    # Only fully contained hexamers count, so the first base can lie no later than
+    # hi - width + 1 and the region needs no widening beyond the window itself.
+    if strand == "+":
+        start, end = three_prime_pos + lo, three_prime_pos + hi
+    else:
+        start, end = three_prime_pos - hi, three_prime_pos - lo
+
+    start = max(1, start)
+    end = min(len(contig_seq_str), end)
+    if end - start + 1 < width:
+        return (None, None)
+
+    region = contig_seq_str[start - 1 : end].upper()
+
+    best_hexamer, best_offset = None, None
+    for i in range(0, len(region) - width + 1):
+        hexamer = patterns.get(region[i : i + width])
+        if hexamer is None:
+            continue
+
+        genomic_start = start + i
+        if strand == "+":
+            offset = genomic_start - three_prime_pos
+        else:
+            offset = three_prime_pos - (genomic_start + width - 1)
+
+        # fully contained: both the first and last base inside the window
+        if not (lo <= offset and offset + width - 1 <= hi):
+            continue
+
+        # closest to the site wins, i.e. the least negative offset
+        if best_offset is None or offset > best_offset:
+            best_hexamer, best_offset = hexamer, offset
+
+    return (best_hexamer, best_offset)
+
+
+def resolve_polyA_signal_settings(config=None):
+    """Validate and normalise the PAS annotation settings from config.
+
+    Returns (motifs, window) as a tuple of uppercase motifs and an (lo, hi) pair.
+    Raises ValueError with a message naming the offending key, so a bad organism
+    configuration fails at startup rather than part-way through a run.
+    """
+
+    if config is None:
+        config = LRAA_Globals.config
+
+    raw_motifs = config.get("polyA_signal_motifs", POLYA_SIGNAL_HEXAMERS)
+    if isinstance(raw_motifs, str):
+        raw_motifs = [token for token in re.split(r"[\s,]+", raw_motifs.strip()) if token]
+    motifs = tuple(str(motif).strip().upper() for motif in raw_motifs)
+
+    if not motifs:
+        raise ValueError("polyA_signal_motifs must list at least one motif")
+    widths = {len(motif) for motif in motifs}
+    if len(widths) != 1:
+        raise ValueError(
+            "polyA_signal_motifs must all share one length, since the search derives "
+            f"its containment bound from that length; got lengths {sorted(widths)} "
+            f"for {list(motifs)}"
+        )
+    for motif in motifs:
+        if set(motif) - set("ACGT"):
+            raise ValueError(
+                f"polyA_signal_motifs entry {motif!r} must contain only A, C, G or T"
+            )
+
+    raw_window = config.get("polyA_signal_window", POLYA_SIGNAL_WINDOW)
+    if isinstance(raw_window, str):
+        raw_window = [t for t in re.split(r"[\s,]+", raw_window.strip()) if t]
+    try:
+        window = tuple(int(bound) for bound in raw_window)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"polyA_signal_window must be two integers; got {raw_window!r}"
+        )
+    if len(window) != 2:
+        raise ValueError(
+            f"polyA_signal_window must be exactly two integers (low, high); got {list(window)}"
+        )
+    lo, hi = window
+    if lo > hi:
+        raise ValueError(
+            f"polyA_signal_window must be (low, high) with low <= high; got {list(window)}"
+        )
+    width = widths.pop()
+    if hi - lo + 1 < width:
+        raise ValueError(
+            f"polyA_signal_window {list(window)} spans {hi - lo + 1} nt, too narrow to "
+            f"contain a motif of length {width}"
+        )
+
+    return motifs, window

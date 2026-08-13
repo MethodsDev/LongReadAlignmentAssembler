@@ -901,6 +901,29 @@ def main():
     )
 
     config_group.add_argument(
+        "--polyA_signal_motifs",
+        default=None,
+        help="comma- or space-separated polyadenylation signal motifs to annotate, all "
+        "of one length; defaults to the human canonical pair {}".format(
+            ",".join(LRAA_Globals.config["polyA_signal_motifs"])
+        ),
+    )
+
+    config_group.add_argument(
+        "--polyA_signal_window",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("LOW", "HIGH"),
+        help="transcript-sense window relative to the 3' end in which to search for a "
+        "signal motif, given as two integers; offsets are negative because the signal "
+        "is upstream, and the motif must fit entirely inside the window, so LOW HIGH of "
+        "-40 -10 admits 6-mer starts of -40..-15 (default: {} {})".format(
+            *LRAA_Globals.config["polyA_signal_window"]
+        ),
+    )
+
+    config_group.add_argument(
         "--no_weight_reads_by_3prime_agreement",
         action="store_true",
         default=False,
@@ -1113,6 +1136,24 @@ def main():
         if oversimplify_contigs:
             LRAA_Globals.config["oversimplify_enabled"] = True
             LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
+    # PolyA signal annotation settings.  Resolved and validated here so a bad organism
+    # configuration fails immediately rather than part-way through a contig.
+    if args.polyA_signal_motifs is not None:
+        LRAA_Globals.config["polyA_signal_motifs"] = args.polyA_signal_motifs
+    if args.polyA_signal_window is not None:
+        LRAA_Globals.config["polyA_signal_window"] = args.polyA_signal_window
+    try:
+        _pas_motifs, _pas_window = Util_funcs.resolve_polyA_signal_settings()
+    except ValueError as e:
+        sys.exit(f"Error, invalid polyA signal configuration: {e}")
+    LRAA_Globals.config["polyA_signal_motifs"] = list(_pas_motifs)
+    LRAA_Globals.config["polyA_signal_window"] = list(_pas_window)
+    logger.info(
+        "PolyA signal annotation: motifs %s in transcript-sense window %s",
+        list(_pas_motifs),
+        list(_pas_window),
+    )
+
     NO_NORM = args.no_norm
     ME_only = args.ME_only
     SE_only = args.SE_only
@@ -4992,6 +5033,15 @@ def run_transcript_assembly(
                 )
                 # continue
                 return
+
+        ####################################################################
+        # Canonical PAS upstream of each 3' end.  Unconditional: this is
+        # annotation, not policy, and it is independent of the internal-priming
+        # decision -- that reads the genome downstream of the terminus, this reads
+        # upstream, and a terminus can carry both signals.
+        transcripts = TranscriptFiltering.annotate_polyA_signal(
+            transcripts, contig_seq_str, contig_strand
+        )
 
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(
