@@ -166,6 +166,23 @@ config = {
     # terminus, not to any measured cleavage atlas. Off by default: a monoexonic model has
     # no intron chain corroborating it, so agreement alone is weaker evidence there.
     "spare_monoexonic_internal_priming_with_known_3prime": False,
+    # Internal-priming veto at PolyA site identification: when a READ-DERIVED candidate
+    # sits at a 3' end the supplied reference annotation also calls, the reference is
+    # independent evidence that cleavage happens there, so the A-rich context veto is
+    # waived.  Inert without a reference -- ref-free runs have no known 3' ends -- so
+    # this only ever loosens a ref-guided run.
+    #
+    # "Also calls" means within max_dist_between_alt_polyA_sites / 2 (25 nt), not an
+    # exact coordinate match: the candidate coordinate is the most-supported read end in
+    # a 50 nt aggregation window, so it is not base-precise the way the annotation is,
+    # and this is the window the transcript-level reprieve
+    # (spare_monoexonic_internal_priming_with_known_3prime, and the multi-exonic rule
+    # above it in TranscriptFiltering) already uses for the same question.  Measured
+    # exposure on chr20: of 3,138,689 positions both strands where the veto would fire,
+    # an exact match waives 193 and +/-25 waives 7,644.
+    #
+    # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
+    "spare_polyA_veto_at_known_3prime": True,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,

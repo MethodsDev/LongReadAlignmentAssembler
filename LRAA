@@ -903,6 +903,16 @@ def main():
     )
 
     config_group.add_argument(
+        "--no_spare_polyA_veto_at_known_3prime",
+        action="store_true",
+        default=False,
+        help="veto A-rich read-derived PolyA candidates even where the supplied "
+        "reference annotation calls a 3' end within max_dist_between_alt_polyA_sites/2 "
+        "(25 nt) of them; without this the reference is treated as independent evidence "
+        "of cleavage and the veto is waived there (no effect without --gtf)",
+    )
+
+    config_group.add_argument(
         "--polyA_signal_motifs",
         default=None,
         help="comma- or space-separated polyadenylation signal motifs to annotate, all "
@@ -1138,6 +1148,8 @@ def main():
         if oversimplify_contigs:
             LRAA_Globals.config["oversimplify_enabled"] = True
             LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
+    if args.no_spare_polyA_veto_at_known_3prime:
+        LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = False
     # PolyA signal annotation settings.  Resolved and validated here so a bad organism
     # configuration fails immediately rather than part-way through a contig.
     if args.polyA_signal_motifs is not None:
@@ -1731,7 +1743,7 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 3
+SPLICE_GRAPH_CACHE_VERSION = 4
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     "min_alt_splice_freq",
@@ -1752,6 +1764,7 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "infer_PolyA",
     "max_dist_between_alt_polyA_sites",
     "min_alignments_define_polyA_site",
+    "spare_polyA_veto_at_known_3prime",
     "min_frac_alignments_define_polyA_site",
     "min_PolyA_ident_length",
     "min_PolyA_iso_fraction",
@@ -1826,6 +1839,92 @@ def _snapshot_splice_graph_params():
     }
 
 
+def _guide_structure_digest(transcripts, contig_strand):
+    """Stable digest of the reference structures that shape this contig/strand's graph.
+
+    The guide is an INPUT to graph construction -- it contributes introns, coverage and,
+    since spare_polyA_veto_at_known_3prime, the 3' coordinates that waive the
+    internal-priming veto -- so it has to be part of the cache key. It was not, and the
+    cache root is only per-output-prefix, so two ref-guided runs sharing a prefix with
+    different GTFs could reuse each other's graphs.
+
+    Digests exon segments as well as termini: the termini alone are what the veto reads,
+    but the intron chains they imply shape the rest of the graph, and a digest that
+    covers both cannot be silently right for one and wrong for the other.
+    """
+
+    if not transcripts:
+        return None
+
+    def _guarded(getter, default="ERR"):
+        """Guard each FIELD rather than the whole transcript.
+
+        A catch-all around the record would drop transcripts silently and could degrade
+        the digest to None, which fails OPEN and reinstates exactly the stale-cache
+        collision this function exists to prevent.  get_TPM and the read-count fallbacks
+        can still reach into a multipath/splice-graph that a bare guide has not got.
+        """
+        try:
+            return getter()
+        except Exception:
+            return default
+
+    structures = []
+    for transcript in transcripts:
+        try:
+            if transcript.get_strand() != contig_strand:
+                continue
+            segments = sorted(
+                [int(segment[0]), int(segment[1])]
+                for segment in transcript.get_exon_segments()
+            )
+        except Exception:
+            # No usable structure: nothing to contribute, and unlike the boundary fields
+            # this genuinely cannot be recorded.
+            continue
+
+        # Exon segments alone underdetermine the graph.
+        # _integrate_input_transcript_structures turns these boundary flags, their read
+        # counts and the annotated TPM into TSS/PolyA evidence, so two guides with
+        # identical segments and different boundary metadata build different graphs.
+        # Over-inclusion here only costs a cache miss; under-inclusion reuses a wrong graph.
+        #
+        # NOT has_TSS/has_PolyA.  Those are graph-derived: with no imported value they
+        # read self._simplepath and assert when there is none, so a directly constructed
+        # Transcript yields "ERR" for every record and the field distinguishes nothing;
+        # and where a simple path DOES exist they report state derived from a graph,
+        # i.e. an output, in the key for the graph being built.
+        #
+        # has_source_annotated_*, not has_annotated_*, because the digest has to survive
+        # remapping.  LRAA.assign_transcripts_paths_in_graph calls
+        # refresh_boundary_annotations_from_simple_path, which CLEARS _imported_has_TSS
+        # and _imported_has_POLYA -- and build_ME_transcripts/build_SE_transcripts remap
+        # the reference objects in place before run_transcript_assembly computes the
+        # final graph's cache entry over those same objects.  By then has_annotated_PolyA
+        # is False for the whole reference set, so two GTFs differing only in a PolyA
+        # flag collide again.  _source_has_annotated_* is set once by the parser and never
+        # cleared, and falls back to has_annotated_* for anything that did not come from
+        # a GTF, so it is defined everywhere and still says what the guide asserted.
+        boundary = [
+            _guarded(transcript.has_source_annotated_TSS),
+            _guarded(transcript.has_source_annotated_PolyA),
+            _guarded(transcript.get_TSS_read_count),
+            _guarded(transcript.get_PolyA_read_count),
+            (
+                _guarded(transcript.get_TPM)
+                if _guarded(transcript.has_annotated_TPM, False)
+                else None
+            ),
+        ]
+        structures.append([segments, [str(value) for value in boundary]])
+
+    structures.sort()
+    payload = json.dumps(structures, separators=(",", ":"))
+    return "{}:{}".format(
+        len(structures), hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    )
+
+
 def _compute_splice_graph_cache_entry(
     contig_acc,
     contig_strand,
@@ -1834,6 +1933,7 @@ def _compute_splice_graph_cache_entry(
     restrict_region_rend,
     transcripts,
     quant_mode,
+    reference_transcripts=None,
 ):
     sg_params = _snapshot_splice_graph_params()
     if isinstance(bam_file_for_sg, (list, tuple, set)):
@@ -1853,6 +1953,15 @@ def _compute_splice_graph_cache_entry(
         "region": [restrict_region_lend, restrict_region_rend],
         "config_digest": _splice_graph_config_digest(),
         "sg_params": sg_params,
+        # Two digests, because two different things are decided.  The integrated set
+        # determines graph STRUCTURE; the genuine reference subset determines which
+        # A-rich PolyA candidates have their veto waived.  Identical combined structures
+        # can arise with different provenance splits and then build different graphs, so
+        # one digest over the mixture cannot stand in for both.
+        "guide_digest": _guide_structure_digest(transcripts, contig_strand),
+        "reference_digest": _guide_structure_digest(
+            reference_transcripts, contig_strand
+        ),
     }
     cache_key = hashlib.sha256(
         json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -3144,6 +3253,9 @@ def _contig_job_runner(job):
                     report_quants=True,
                     splice_graph_cache_dir=splice_graph_cache_dir,
                     arb_summary_path=genome_tx_arb_summary_tmp,
+                    # QUANT_ONLY is only reachable with --gtf, so here
+                    # input_transcripts really is the user's annotation.
+                    reference_transcripts=input_transcripts,
                 )
             else:
                 run_transcript_assembly(
@@ -4206,6 +4318,7 @@ def run_quant_only(
     prebuilt_splice_graph=None,
     splice_graph_cache_dir=None,
     arb_summary_path=None,
+    reference_transcripts=None,
 ):
 
     # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
@@ -4241,6 +4354,7 @@ def run_quant_only(
             restrict_region_rend,
             input_transcripts,
             quant_mode=True,
+            reference_transcripts=reference_transcripts,
         )
         if sg is None:
             sg = _load_splice_graph_from_cache(
@@ -4258,6 +4372,11 @@ def run_quant_only(
             restrict_region_lend,
             restrict_region_rend,
             input_transcripts,
+            # NOT input_transcripts: run_quant_only is also called from
+            # run_transcript_assembly with the models LRAA just built, and treating those
+            # as a reference would let a model waive the veto on the A-rich vertex its own
+            # terminus came from.  Only a genuine annotation, passed explicitly.
+            reference_transcripts=reference_transcripts,
             quant_mode=True,
             restrict_splice_type=None,
         )
@@ -4638,6 +4757,7 @@ def run_transcript_assembly(
             restrict_region_rend,
             transcripts_incl_in_graph,
             quant_mode=False,
+            reference_transcripts=reference_transcripts_incl_in_graph,
         )
         sg_all = _load_splice_graph_from_cache(
             splice_graph_cache_dir, cache_key, cache_signature
@@ -4654,6 +4774,9 @@ def run_transcript_assembly(
             restrict_region_lend,
             restrict_region_rend,
             transcripts_incl_in_graph,
+            # the mixture above is what gets INTEGRATED into the graph; only the genuine
+            # annotation may waive the internal-priming veto
+            reference_transcripts=reference_transcripts_incl_in_graph,
             quant_mode=False,
             restrict_splice_type=None,
         )
@@ -5094,6 +5217,9 @@ def run_transcript_assembly(
         report_quants=False,
         splice_graph_cache_dir=splice_graph_cache_dir,
         arb_summary_path=arb_summary_path,
+        # `transcripts` above are the models LRAA just assembled; the genuine annotation
+        # is the reference subset, and only it may waive the internal-priming veto.
+        reference_transcripts=reference_transcripts_incl_in_graph,
     )
 
     # reset
@@ -5302,6 +5428,8 @@ def build_ME_transcripts(
         restrict_region_lend,
         restrict_region_rend,
         input_transcripts,
+        # caller passes ME_input_transcripts, the intron-bearing reference subset
+        reference_transcripts=input_transcripts,
         quant_mode=False,
         restrict_splice_type="ME",
     )
@@ -5388,6 +5516,8 @@ def build_SE_transcripts(
         restrict_region_lend,
         restrict_region_rend,
         transcripts_incl_in_graph,
+        # caller passes SE_input_transcripts, the single-exon reference subset
+        reference_transcripts=transcripts_incl_in_graph,
         quant_mode=False,
         restrict_splice_type="SE",
         SE_read_encapsulation_mask=SE_read_encapsulation_mask,
