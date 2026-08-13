@@ -27,6 +27,9 @@ testing/multigene_secondary_quant/data/**
 !testing/txalign_path_rescue/repetitive/*/Makefile
 !testing/txalign_path_rescue/repetitive/*/data/
 !testing/txalign_path_rescue/repetitive/*/data/**
+!testing/determinism/
+!testing/determinism/Makefile
+!testing/determinism/check_determinism.py
 
 # personal audit working notes; not for distribution
 doc_audit/
