@@ -163,7 +163,7 @@ def test_pas_and_internal_priming_are_independent_on_the_same_terminus():
     model = _build_transcript("t.both", [[10, 50]], "+")
     TranscriptFiltering.annotate_polyA_signal([model], contig, "+")
     model.set_likely_internal_primed(
-        TranscriptFiltering._looks_internally_primed(10, 50, "+", contig)
+        Util_funcs.looks_internally_primed(contig, 50, "+")
     )
 
     gtf = model.to_GTF_format()
