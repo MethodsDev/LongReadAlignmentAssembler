@@ -76,36 +76,69 @@ class Quantify:
 
         self._assign_reads_to_transcripts(splice_graph, mp_counter)
 
+        # The EM unit is a read-sharing component of genes, not a single gene: a
+        # read compatible with transcripts in two genes has to be apportioned by
+        # one converged EM rather than handed to each gene by two independent
+        # ones.  Reporting below stays strictly gene-scoped.
+        gene_components = self._build_read_sharing_gene_components(gene_to_transcripts)
+
+        num_multigene_components = sum(1 for x in gene_components if len(x) > 1)
+        if num_multigene_components > 0:
+            logger.info(
+                "[%s%s] %d of %d quant component(s) hold more than one gene; "
+                "each such component is quantified as one joint EM.",
+                contig_acc,
+                contig_strand,
+                num_multigene_components,
+                len(gene_components),
+            )
+
         transcript_to_fractional_read_assignment = dict()
 
-        for gene_id, transcripts_list in gene_to_transcripts.items():
+        for component_gene_ids in gene_components:
+
+            transcripts_list = list()
+            for gene_id in component_gene_ids:
+                transcripts_list.extend(gene_to_transcripts[gene_id])
 
             trans_coords = list()
             for transcript in transcripts_list:
                 trans_coords.extend(transcript.get_coords())
 
             trans_coords = sorted(trans_coords)
-            gene_lend = trans_coords[0]
-            gene_rend = trans_coords[-1]
+            component_lend = trans_coords[0]
+            component_rend = trans_coords[-1]
+
+            # Single-gene components keep the original log line verbatim so an
+            # ordinary run reads exactly as before; a joint EM is named as such,
+            # with its member genes and combined span, because that is precisely
+            # what someone chasing an unexpected number needs to see.
+            if len(component_gene_ids) > 1:
+                component_descr = "read-sharing component of {} genes {{{}}}".format(
+                    len(component_gene_ids), ",".join(component_gene_ids)
+                )
+            else:
+                component_descr = component_gene_ids[0]
+
             try:
                 logger.info(
                     "[%s%s] quant estimates for isoforms of %s %s%s:%d-%d",
                     contig_acc,
                     contig_strand,
-                    gene_id,
+                    component_descr,
                     contig_acc,
                     contig_strand,
-                    gene_lend,
-                    gene_rend,
+                    component_lend,
+                    component_rend,
                 )
             except Exception:
                 logger.info(
                     "quant estimates for isoforms of %s %s%s:%d-%d",
-                    gene_id,
+                    component_descr,
                     contig_acc,
                     contig_strand,
-                    gene_lend,
-                    gene_rend,
+                    component_lend,
+                    component_rend,
                 )
 
             # build a contig/strand prefix for downstream logs
@@ -114,13 +147,16 @@ class Quantify:
             except Exception:
                 prefix_str = None
 
-            gene_transcript_to_fractional_read_assignment = (
+            # One joint EM over every transcript of every gene in the component.
+            # _estimate_isoform_read_support() computes isoform fractions per
+            # gene_id internally, so widening the EM does not widen them.
+            component_transcript_to_fractional_read_assignment = (
                 self._estimate_isoform_read_support(transcripts_list, prefix_str=prefix_str)
             )
             # copy over to the full data structure
-            for transcript_id in gene_transcript_to_fractional_read_assignment:
+            for transcript_id in component_transcript_to_fractional_read_assignment:
                 transcript_to_fractional_read_assignment[transcript_id] = (
-                    gene_transcript_to_fractional_read_assignment[transcript_id]
+                    component_transcript_to_fractional_read_assignment[transcript_id]
                 )
 
         # see documentation for _estimate_isoform_read_support() below
@@ -602,6 +638,89 @@ class Quantify:
             logging.getLogger().setLevel(logging_orig_setting)
 
         return
+
+    def _build_read_sharing_gene_components(self, gene_to_transcripts):
+        """Group gene_ids into components of genes that share at least one read.
+
+        The EM apportions each read across the transcripts it is compatible with,
+        so genes whose transcripts compete for the same read have to be solved in
+        one joint EM.  Quantifying them one gene at a time hands the whole read to
+        each gene independently, which a deleted post-hoc pass used to try to
+        repair after the fact.  Overlapping annotation is enough to produce this,
+        and is what does produce it in practice: an ordinary read compatible with
+        one transcript of a readthrough gene model and one transcript of its
+        constituent gene, e.g. PEDS1-UBE2V1 against UBE2V1.  No unusual alignment
+        is involved -- on a chr20 measurement of that population the median
+        aligned span was 1,325 bp with a median longest intron of zero.
+
+        Genes are joined when one multipath is compatible with transcripts in both
+        of them, read off the compatibility _assign_reads_to_transcripts already
+        produced.  There is no second pass over the BAM and no recomputed
+        compatibility, and genes sharing no read stay singletons, which is the
+        overwhelming majority.
+
+        Returns a list of lists of gene_ids.  Components are ordered by leftmost
+        transcript coordinate then gene_id, and genes within a component likewise,
+        so neither the EM order nor the transcript order within an EM depends on
+        dict or set iteration order.
+        """
+
+        gene_id_to_lend = dict()
+        for gene_id, transcripts_of_gene in gene_to_transcripts.items():
+            gene_id_to_lend[gene_id] = min(
+                transcript.get_coords()[0] for transcript in transcripts_of_gene
+            )
+
+        # union-find over gene_ids
+        gene_id_to_parent = dict((gene_id, gene_id) for gene_id in gene_to_transcripts)
+
+        def _find(gene_id):
+            root = gene_id
+            while gene_id_to_parent[root] != root:
+                root = gene_id_to_parent[root]
+            while gene_id_to_parent[gene_id] != root:
+                gene_id_to_parent[gene_id], gene_id = root, gene_id_to_parent[gene_id]
+            return root
+
+        def _union(gene_id_a, gene_id_b):
+            root_a, root_b = _find(gene_id_a), _find(gene_id_b)
+            if root_a != root_b:
+                gene_id_to_parent[root_b] = root_a
+
+        for transcripts_assigned in self._mp_to_transcripts.values():
+            anchor_gene_id = None
+            for transcript in transcripts_assigned:
+                gene_id = transcript.get_gene_id()
+                if gene_id not in gene_id_to_parent:
+                    # transcript held over from an earlier quantify() call on this
+                    # object; not part of this quantification.
+                    continue
+                if anchor_gene_id is None:
+                    anchor_gene_id = gene_id
+                else:
+                    _union(anchor_gene_id, gene_id)
+
+        root_to_gene_ids = defaultdict(list)
+        for gene_id in gene_id_to_parent:
+            root_to_gene_ids[_find(gene_id)].append(gene_id)
+
+        gene_components = list()
+        for component_gene_ids in root_to_gene_ids.values():
+            component_gene_ids.sort(
+                key=lambda gene_id: (gene_id_to_lend[gene_id], gene_id)
+            )
+            gene_components.append(component_gene_ids)
+
+        # leftmost gene of each component is now its first, so this orders
+        # components by leftmost coordinate then gene_id.
+        gene_components.sort(
+            key=lambda component_gene_ids: (
+                gene_id_to_lend[component_gene_ids[0]],
+                component_gene_ids[0],
+            )
+        )
+
+        return gene_components
 
     def _get_gene_with_best_node_matches_to_simplepath(self, simplepath):
 
@@ -1239,6 +1358,11 @@ class Quantify:
                 )
 
         ## assign final read counts to each transcript object.
+        # The transcripts handed here are a read-sharing component of genes, which
+        # is the EM unit but is NOT the reporting unit.  isoform_fraction is a
+        # transcript's share of its OWN gene, so the regrouping by gene_id below is
+        # load-bearing rather than incidental bookkeeping: it is what keeps the
+        # fraction gene-scoped while the EM that produced the counts was not.
         gene_to_transcripts = defaultdict(list)
         for transcript in transcripts:
             transcript_id = transcript.get_transcript_id()
