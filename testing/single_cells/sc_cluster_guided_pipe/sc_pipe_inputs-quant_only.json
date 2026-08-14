@@ -10,11 +10,9 @@
 
     "LRAA_cell_cluster_guided.annot_gtf" : "data/chr19.2M.annot.gtf.gz",
 
-    "LRAA_cell_cluster_guided.quant_only_cluster_guided" : true,
+    "LRAA_cell_cluster_guided.quant_only_cluster_guided" : true
 
-    "LRAA_cell_cluster_guided.docker" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing",
 
-    "LRAA_cell_cluster_guided.docker_sc" : "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:testing"
 
 }
 

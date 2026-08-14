@@ -3,6 +3,7 @@ pylib/__pycache__/
 
 # Ignore all untracked files generated under testing
 testing/**
+!testing/lraa_test_docker.mk
 !testing/multigene_secondary_quant/
 testing/multigene_secondary_quant/**
 !testing/multigene_secondary_quant/Makefile

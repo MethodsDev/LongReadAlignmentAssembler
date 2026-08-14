@@ -35,6 +35,8 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 ##########
 # wdls
 
+include ../lraa_test_docker.mk
+
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 
@@ -42,13 +44,13 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
 
 test_wdl_quant_only:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.quant-only.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.quant-only.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ref_guided:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-guided.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-guided.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ref_free:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-free.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-free.json $(LRAA_WDL_DOCKER) --verbose
 
 
 

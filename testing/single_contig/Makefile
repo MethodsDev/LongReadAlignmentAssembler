@@ -38,22 +38,24 @@ test_oversimplify_refguided:
 
 ## WDLs
 
+include ../lraa_test_docker.mk
+
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 
 test_wdls: test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_ORF_prediction
 
 test_wdl_ID_ref_free:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ID_ref_guided:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_Quant_only:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.Quant_only_mode.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ORF_prediction:
-	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json $(LRAA_WDL_DOCKER_ORF) --verbose
 
 
 

@@ -36,9 +36,10 @@ BASE_IMAGE=lraa-base:${VERSION}
 # than recompiling Seurat.  Passing it as a build arg keeps one copy of the SHA
 # instead of four Dockerfiles that can drift apart.
 #
-# Each image gets both ${VERSION} and :testing.  The :testing tag is applied
-# with 'docker tag' on the image just built; rebuilding it would cost about an
-# hour of R layers for a byte-identical result.
+# Only ${VERSION} is written here.  :testing belongs to build_docker.testing.sh
+# and means "built from the commit under test": a release build stamping it too
+# would leave the WDL tests pointed at released code, which is the one thing
+# they must not be.  A release is reachable as :latest and as its version.
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
 
@@ -51,10 +52,7 @@ build_and_push() {
         --build-arg LRAA_VERSION=v${VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
         -t ${REGISTRY}/${name}:${VERSION} .
-    docker tag ${REGISTRY}/${name}:${VERSION} ${REGISTRY}/${name}:testing
-
     docker push ${REGISTRY}/${name}:${VERSION}
-    docker push ${REGISTRY}/${name}:testing
 }
 
 # 'lraa' is an alias for 'lraa-core', not a separate build.  Every pull off the
@@ -73,7 +71,6 @@ build_and_push lraa-orf      Dockerfile.orf
 build_and_push lraa-combined Dockerfile
 
 alias_core ${VERSION}
-alias_core testing
 
 # verify
 docker run --rm ${REGISTRY}/lraa-core:${VERSION} /usr/local/src/LRAA/LRAA --version

@@ -65,49 +65,82 @@ declare `docker_sc`, and the former passes its value into the latter so the
 nested single-cell task follows the caller rather than a default two levels
 down.
 
+`LRAA-ORF-prediction.wdl` names the orf image, under the same `docker` input.
+A workflow with two image inputs needs both set to override it: an unset one
+keeps its `:latest` default, and half the run tests the last release.  The test
+targets under `testing/` set them from one place, `testing/lraa_test_docker.mk`,
+which names the core, sc and orf images and the tag they share.
+
 ## Tags
 
-| tag | set by | used by |
-|---|---|---|
-| `latest` | `build_docker.latest.sh` | defaults written inside the `.wdl` files |
-| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | release pins |
-| `testing` | `build_docker.versioned.sh` | input JSONs under `testing/` |
+| tag | set by | built from | used by |
+|---|---|---|---|
+| `latest` | `build_docker.latest.sh` | `LRAA_CO.txt` | defaults written inside the `.wdl` files |
+| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `LRAA_CO.txt` | release pins |
+| `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | the WDL test targets, through `testing/lraa_test_docker.mk` |
+
+`testing` images are built from whatever commit you are sitting on and are not
+release artifacts. The tag names the last commit someone validated, it is
+overwritten as often as anyone runs the script, and nothing outside `testing/`
+should point at it. A release is reachable as `:latest` and as its version; no
+release build writes `testing`.
 
 ## Building
 
+Three paths. They differ only in the tag they write and the commit the checkout
+comes from:
+
 ```bash
 cd Docker
-bash build_docker.versioned.sh   # <version> and testing
-bash build_docker.latest.sh      # latest
+bash build_docker.testing.sh     # testing,   from git HEAD
+bash build_docker.versioned.sh   # <version>, from LRAA_CO.txt
+bash build_docker.latest.sh      # latest,    from LRAA_CO.txt
 ```
 
-Both scripts build `lraa-base` first and pass it to the other builds as
+Use `build_docker.testing.sh` to validate the commit you are on before it is
+released -- running the WDLs against `latest` tests the last release, so it
+cannot fail on anything you have changed since. Use the versioned script for a
+release someone can pin, and the latest script for the release the `.wdl`
+defaults resolve to; a release normally runs both.
+
+All three build `lraa-base` first and pass it to the other builds as
 `--build-arg LRAA_BASE_IMAGE=`, so the three published images are built against
 the base just made rather than a stale local copy. The base is not pushed. The
-version and the pinned commit are passed as `--build-arg LRAA_VERSION=` and
-`--build-arg LRAA_CO=`, read from `VERSION.txt` and `LRAA_CO.txt`, so the SHA
-lives in one file instead of four Dockerfiles that can drift apart.
+version and the commit are passed as `--build-arg LRAA_VERSION=` and
+`--build-arg LRAA_CO=`, so the SHA lives in one place instead of four
+Dockerfiles that can drift apart.
 
-The versioned script applies the `testing` tag with `docker tag` instead of a
-second build; a rebuild would cost an hour of R compilation for a byte-identical
-result. Each script finishes by retagging the core image as plain `lraa` and
-pushing that too, so the alias never drifts from `lraa-core`.
+The release scripts read that SHA from `LRAA_CO.txt`. The testing script asks
+git instead, and refuses to build a commit GitHub cannot serve: the Dockerfiles
+fetch the checkout by SHA, so an unpushed commit fails several layers in with an
+error naming a tarball rather than the mistake. It also asserts the version the
+built image reports, which catches a stale cached layer or a `VERSION.txt` that
+has drifted from the `VERSION` in the `LRAA` script.
+
+Only the release scripts retag the core image as plain `lraa` and push that too,
+so the alias never drifts from `lraa-core`. `testing` gets no such alias: the
+plain name is what a pipeline that never named an image ends up pulling, and a
+pre-release commit does not belong there.
 
 A cold run takes about an hour, nearly all of it compiling Seurat from source
-for `lraa-sc` and for the combined image. A run that changes only `LRAA_CO.txt`
-and `VERSION.txt` takes a few minutes, because the checkout is the last layer of
-every image.
+for `lraa-sc` and for the combined image. A run that only moves the commit takes
+a few minutes, because the checkout is the last layer of every image. That is
+what makes a per-commit testing build cheap enough to be routine.
 
 ## Releasing a new version
 
 1. Update `VERSION` in the top-level `LRAA` script and `Docker/VERSION.txt` to
    the same value.
 2. Commit and push the code.
-3. Put the commit SHA you just pushed in `Docker/LRAA_CO.txt`. The images fetch
+3. Validate the commit you just pushed before naming it a release: run
+   `bash build_docker.testing.sh`, then the WDL test targets under `testing/`,
+   which run against `:testing`. A green run against `:latest` would only tell
+   you the previous release still works.
+4. Put the commit SHA you just pushed in `Docker/LRAA_CO.txt`. The images fetch
    `https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz`
    rather than cloning, so this one line decides which code ships.
-4. Commit the pin, then run both build scripts.
-5. Confirm what shipped:
+5. Commit the pin, then run both release build scripts.
+6. Confirm what shipped:
 
 ```bash
 docker run --rm <registry>/lraa-core:<version> \

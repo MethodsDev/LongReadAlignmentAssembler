@@ -105,6 +105,8 @@ test_unsupported_ref_model:
 	awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=8700 && $$5<=10000 {n++} END{exit !(n>=2)}' __PRE-Tx-Filtering.transcripts.gtf
 
 
+include ../lraa_test_docker.mk
+
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 # The gating test below asserts on task behavior, so it must never be served from the
@@ -112,9 +114,9 @@ MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 MINIWDL_RUN_UNCACHED = miniwdl run
 
 test_docker: test_docker_normalized_sg_bam
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json $(LRAA_WDL_DOCKER)
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json $(LRAA_WDL_DOCKER)
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER)
 
 
 # LRAA builds the splice graph -- and therefore identifies isoforms -- from a depth-normalized
@@ -125,11 +127,11 @@ test_docker: test_docker_normalized_sg_bam
 # hence one BAM per shard rather than one whole-genome BAM. The last run pins the opt-out that
 # the single-cell workflows pass, so they do not delocalize a BAM they never surface.
 test_docker_normalized_sg_bam:
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER)
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==1 and len(i)==1, "direct: expected one normalized BAM, got {}".format(len(b)); print("  direct normalized BAM ok")'
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json 'main_chromosomes=SIRV1 SIRV2 SIRV3'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER) 'main_chromosomes=SIRV1 SIRV2 SIRV3'
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==3 and len(i)==3, "scatter: expected one normalized BAM per shard, got {}".format(len(b)); print("  scattered per-shard normalized BAMs ok")'
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json retain_normalized_splice_graph_bam=false
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER) retain_normalized_splice_graph_bam=false
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; assert b==[], "opt-out: expected no normalized BAM, got {}".format(b); print("  retain_normalized_splice_graph_bam=false ok")'
 
 
