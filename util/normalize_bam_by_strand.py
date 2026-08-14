@@ -236,8 +236,19 @@ def compute_tokens(
     # The split also drops the records failing the intron length criterion, so
     # the threshold determines which records it emits and has to name the split's
     # outputs and checkpoint alongside the input identity.
+
+    # Named only when the split actually enforces it. Under --input_is_single_strand the
+    # split is skipped entirely, sift_bam receives the raw input, and depth measurement
+    # passes max_intron_length=0 -- so no code path in that mode consults the threshold,
+    # and naming it would key every artifact on an input that cannot change them.
+    #
+    # Over-keying is the mirror of under-keying, not a safe direction: it costs rebuilds,
+    # and it makes the key unauditable, because a field that sometimes determines the
+    # contents and always appears in the name cannot be checked against behaviour. The two
+    # modes still cannot collide -- variant_fields carries "single_strand".
+    intron_fields = [] if input_is_single_strand else [str(max_intron_length)]
     split_token = Util_funcs.get_hash_code(
-        "|".join([source_token, str(max_intron_length)] + variant_fields)
+        "|".join([source_token] + intron_fields + variant_fields)
     )[:12]
 
     # Sampling, merge and index consume the split's output, so they depend on the
@@ -248,7 +259,9 @@ def compute_tokens(
         "|".join(
             [
                 source_token,
-                str(max_intron_length),
+            ]
+            + intron_fields
+            + [
                 str(normalize_max_cov_level),
                 str(depth_window),
                 str(random_seed),
