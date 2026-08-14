@@ -1,5 +1,8 @@
-# Ignore Python bytecode cache for pylib
-pylib/__pycache__/
+# Ignore Python bytecode cache anywhere in the tree. Was pylib-only, which left
+# util/, util/misc/, util/sc/ and the repo root uncovered -- an `add -A` swept 18
+# of them into a commit from there.
+__pycache__/
+*.pyc
 
 # Ignore all untracked files generated under testing
 testing/**
