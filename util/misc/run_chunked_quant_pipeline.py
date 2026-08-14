@@ -338,7 +338,14 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
         # filtered on the value the quant step will use, so the thresholds belong in
         # the token: the same cuts with a different min_per_id emit a different bam.
         effective_min_per_id = 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
-        effective_min_mapq = int(LRAA_Globals.config["min_mapping_quality"])
+        # Stage 5 runs LRAA --quant_only, which swaps
+        # min_mapping_quality_for_final_quant into min_mapping_quality before it
+        # filters (LRAA:4201-4204).  Reading the discovery key here would be wrong
+        # for every run that raises the final-quant threshold; both default to 0,
+        # so nothing would have failed until someone set it.
+        effective_min_mapq = int(
+            LRAA_Globals.config["min_mapping_quality_for_final_quant"]
+        )
         token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
             tag,
             args.approx_MB_per_cut,

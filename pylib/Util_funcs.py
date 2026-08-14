@@ -170,6 +170,8 @@ def quant_discard_reason(
 
     if read.is_unmapped:
         return "unmapped"
+    if read.reference_id < 0:
+        return "no_chromosome"
     if contig_strand is not None:
         if read.is_forward and contig_strand != "+":
             return "wrong_strand"
