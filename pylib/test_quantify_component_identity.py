@@ -228,6 +228,34 @@ def test_a_call_rejected_by_argument_validation_still_invalidates():
         quantify.get_component_id_to_gene_ids()
 
 
+def test_a_direct_estimator_call_invalidates_a_published_map():
+    """The non-publishing entry point, which is also a real one.
+
+    run_quant_only completes quantify() and returns its Quantify (LRAA:4433,
+    :4469); a later caller drives _estimate_isoform_read_support directly
+    (LRAA:5079) over a transcript set that may have been filtered since.  That
+    updates theta and the assignments while the component map still describes the
+    set quantify() saw, so a consumer reading both gets this run's theta against
+    an earlier grouping.
+
+    Publishing the map only from quantify() does not prevent this: an
+    already-valid map stays serveable until something invalidates it.
+    """
+
+    quantify = Quantify(False, 1)
+    splice_graph, transcripts, mp_counter = _build(*_SHARED_READ)
+    quantify.quantify(splice_graph, transcripts, mp_counter)
+    assert set(quantify.get_transcript_id_to_component_id()) == {"t1", "t2"}
+
+    # exactly what LRAA:5079 does with the object run_quant_only handed back
+    quantify._estimate_isoform_read_support(transcripts)
+
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_transcript_id_to_component_id()
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_component_id_to_gene_ids()
+
+
 def test_the_accessors_hand_back_copies():
     quantify = Quantify(False, 1)
     quantify.quantify(*_build(*_SHARED_READ))

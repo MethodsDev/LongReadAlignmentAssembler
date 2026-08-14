@@ -1338,6 +1338,21 @@ class Quantify:
 
         """
 
+        # FIRST statement, unconditionally.  This method is also a public entry
+        # point in practice: run_quant_only completes quantify() and returns its
+        # Quantify (LRAA:4433, :4469), and a later caller drives this directly
+        # (LRAA:5079) over a transcript set that may have been filtered since --
+        # the TODO there says as much.  That call updates theta and the assignments
+        # while the component map still describes the set quantify() saw, so a
+        # consumer pairing the two gets this run's theta against an earlier
+        # grouping.  Publishing the map only from quantify() does not prevent that;
+        # an already-valid map simply stays serveable.
+        #
+        # Unconditional is safe: quantify() invalidates at its own entry and marks
+        # valid only at its successful exit, so the calls it makes here are already
+        # invalid and nothing it does is undone.
+        self._component_identity_valid = False
+
         try:
             if prefix_str:
                 logger.info(
