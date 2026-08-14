@@ -166,6 +166,17 @@ change in the proportion vector between consecutive iterations falls below
 assembly, `max_EM_iterations_quant_only` for final quantification and quantification-only
 analysis). No log-likelihood is computed.
 
+Iteration stops after an M-step, so a final E-step is then run at the proportions being
+returned. Without it the reported responsibilities would come from the previous iteration's
+proportions while the reported proportions are the updated ones, and any consumer recombining
+them — a streaming assignment pass splitting a read it must resolve itself, or a reader
+comparing a `frac_assigned` in `quant.tracking` against the abundance in `quant.expr` — would
+be mixing two different estimates with nothing in the output to say so. The gap is bounded by
+`config['EM_convergence_tol']` only when EM converged; on a gene that reaches the iteration cap
+it is unbounded, and those are the genes with the most ambiguous reads. Proportions are not
+re-updated by this step, so abundances are unchanged; only the responsibilities and the counts
+derived from them are brought onto the same footing.
+
 ## Configuration and tunables
 
 Global configuration lives in `pylib/LRAA_Globals.py` as a `config` dictionary. The CLI updates
@@ -210,11 +221,19 @@ are candidates for soft-clip realignment.
 - Assembly: `LRAA.gtf` (and optional `.bed`), with one record per transcript isoform;
   boundaries mark TSS/PolyA when applicable.
 - Quantification: `LRAA.quant.expr` (per-transcript counts, final-report TPM, and
-  `RPM_total_reads`) and `LRAA.quant.tracking` (read-to-transcript compatibility/assignment
+  `RPM_total_reads`) and `LRAA.quant.tracking.gz` (read-to-transcript compatibility/assignment
   details). The `TPM` column is normalized over final reported transcripts; `RPM_total_reads`
   scales against `num_total_reads`, the number of genome-mapped reads in the input BAM
   (unmapped, secondary, and supplementary records excluded), counted before alignment-policy
   preprocessing so it does not depend on `--secondary_alignment_mode`.
+
+  Tracking is always gzipped, including the per-(contig, strand) temporary files the parallel
+  merge concatenates. It carries one row per (read, compatible isoform) and is the only output
+  that scales with library size rather than with the annotation — roughly 140 bytes per row at
+  ~2.2 rows per assigned read, so a billion-read library implies about 0.30 TB uncompressed
+  against 0.05 TB compressed (measured 5.57x on ONT chr20). There is no option to disable it:
+  a run that could emit either form would leave consumers guessing which of two filenames is
+  current, and every in-repo reader already selects its decompressor from the suffix.
 - Debug (optional): `__*` files including component descriptions and intermediate GTF/BEDs of
   MultiPath graphs and trellis selections.
 

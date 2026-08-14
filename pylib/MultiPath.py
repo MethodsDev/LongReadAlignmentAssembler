@@ -81,6 +81,21 @@ class MultiPath:
                 except Exception:
                     self._read_count = 0
 
+        # Support on the scale of the original bam: the sum of the reads'
+        # normalization weights, not a count of the reads that survived thinning.
+        # Derived from the IDs, so a multipath rebuilt anywhere -- transcriptome
+        # rescue included -- recovers it without being handed the weights.
+        self._read_weight = self._weight_of_ids(self._read_ids)
+        if not self._read_ids:
+            # no IDs to look up against; the count is the only estimate available
+            self._read_weight = float(self._read_count)
+        elif read_count is not None and int(read_count) == 0:
+            # An explicit zero says this multipath is not an observation, whatever
+            # provenance it carries -- a reference template placed to give a structure
+            # a foothold in the graph. Deriving weight from its IDs anyway would turn
+            # it into evidence in EM, which is exactly what the zero count forbids.
+            self._read_weight = 0.0
+
         self._exon_segments = Simple_path_utils.merge_adjacent_segments(exon_segments)
 
         return
@@ -198,6 +213,54 @@ class MultiPath:
     def get_read_id_count(self):
         return self.get_read_names_count()
 
+    def get_read_weight(self):
+        """Support on the scale of the original bam.
+
+        Equals get_read_count() when no read carried a normalization weight, so an
+        unnormalized bam quantifies exactly as before. Use this, not the read count,
+        anywhere the tally stands in for abundance: counting the reads that survived
+        thinning measures the sampling rate as much as the evidence.
+        """
+        weight = getattr(self, "_read_weight", None)
+        if weight is None:
+            # unpickled from a cache written before weights were tracked
+            return float(self._read_count)
+        return weight
+
+    def _weight_of_ids(self, read_ids):
+        """Summed normalization weight of these read IDs; len() when none was recorded."""
+        if not read_ids:
+            return 0.0
+        try:
+            import LRAA_Globals
+
+            registry = getattr(LRAA_Globals, "READ_WEIGHT_REGISTRY", None)
+            if not registry:
+                # nothing was normalized in this run; every read stands for itself
+                return float(len(read_ids))
+            return float(sum(registry.get(int(rid), 1.0) for rid in read_ids))
+        except Exception:
+            return float(len(read_ids))
+
+    def _add_id_weight(self, read_id):
+        """Accrue one ID's normalization weight onto the running total."""
+        try:
+            import LRAA_Globals
+
+            w = LRAA_Globals.read_weight_for_id(read_id)
+        except Exception:
+            w = 1.0
+        self._read_weight = getattr(self, "_read_weight", 0.0) + w
+
+    def _drop_id_weight(self, read_id):
+        try:
+            import LRAA_Globals
+
+            w = LRAA_Globals.read_weight_for_id(read_id)
+        except Exception:
+            w = 1.0
+        self._read_weight = max(0.0, getattr(self, "_read_weight", 0.0) - w)
+
     def include_read_name(self, read_name):
         # Accept a single read identifier or a collection; coerce to ID when possible
         if type(read_name) in [list, set]:
@@ -205,12 +268,16 @@ class MultiPath:
             for r in read_name:
                 rid = self._coerce_read_identifier(r)
                 if rid is not None:
+                    if int(rid) not in self._read_ids:
+                        self._add_id_weight(rid)
                     self._read_ids.add(int(rid))
                     added += 1
             self._read_count += added if added > 0 else len(read_name)
         else:
             rid = self._coerce_read_identifier(read_name)
             if rid is not None:
+                if int(rid) not in self._read_ids:
+                    self._add_id_weight(rid)
                 self._read_ids.add(int(rid))
             self._read_count += 1
 
@@ -220,27 +287,39 @@ class MultiPath:
             added = 0
             for r in read_id:
                 try:
-                    self._read_ids.add(int(r))
-                    added += 1
+                    rid = int(r)
                 except Exception:
                     continue
+                if rid not in self._read_ids:
+                    self._add_id_weight(rid)
+                self._read_ids.add(rid)
+                added += 1
             self._read_count += added if added > 0 else len(read_id)
         else:
             try:
-                self._read_ids.add(int(read_id))
+                rid = int(read_id)
+                if rid not in self._read_ids:
+                    self._add_id_weight(rid)
+                self._read_ids.add(rid)
             except Exception:
                 pass
             self._read_count += 1
 
-    def include_read_count(self, increment=1):
-        # count-only change; IDs unchanged
-        self._read_count += int(increment)
+    def include_read_count(self, increment=1, weight=None):
+        # count-only change; IDs unchanged. `weight` is the summed normalization
+        # weight of the reads behind this increment; without it the reads count for
+        # themselves, which is the unnormalized-bam case.
+        inc = int(increment)
+        self._read_count += inc
+        added = float(inc) if weight is None else float(weight)
+        self._read_weight = getattr(self, "_read_weight", 0.0) + added
 
     def remove_read_name(self, read_name):
         rid = self._coerce_read_identifier(read_name)
         if rid is not None and int(rid) in self._read_ids:
             self._read_ids.discard(int(rid))
             self._read_count = max(0, self._read_count - 1)
+            self._drop_id_weight(rid)
 
     # Alias for clarity
     def remove_read_id(self, read_id):
@@ -249,6 +328,7 @@ class MultiPath:
             if rid in self._read_ids:
                 self._read_ids.discard(rid)
                 self._read_count = max(0, self._read_count - 1)
+                self._drop_id_weight(rid)
         except Exception:
             pass
 
@@ -288,6 +368,10 @@ class MultiPath:
         self._read_ids = ids_to_keep
         if pruned > 0:
             self._read_count = max(0, self._read_count - pruned)
+            # Weight must follow the IDs, not lag them: a reference template left in
+            # the weight would keep contributing support that no read stands behind,
+            # and every abundance consumer now reads the weight.
+            self._read_weight = self._weight_of_ids(self._read_ids)
 
     # splice graph operations
 
@@ -605,14 +689,29 @@ class MultiPath:
 
     def merge_read_ids(self, read_ids):
         """
-        Merge a collection of compact read IDs into this MultiPath without adjusting read_count.
-        Returns the number of *new* unique IDs added so the caller can keep external
-        counters in sync without having to materialize the existing ID set (which can be large).
+        Merge a collection of compact read IDs into this MultiPath without adjusting
+        read_count or read_weight.
+
+        Returns (new_unique_ids, summed_normalization_weight_of_those_ids) so the
+        caller can keep both external tallies in sync without materializing the
+        existing ID set (which can be large). The weight is returned rather than
+        applied here because the caller owns the count/weight bookkeeping and would
+        otherwise double-count it.
         """
         if read_ids is None:
-            return 0
+            return 0, 0.0
 
         added = 0
+        added_weight = 0.0
+        try:
+            import LRAA_Globals
+
+            weight_of = LRAA_Globals.read_weight_for_id
+        except Exception:
+
+            def weight_of(_rid):
+                return 1.0
+
         try:
             for rid in read_ids:
                 try:
@@ -623,10 +722,11 @@ class MultiPath:
                 if rid_int not in self._read_ids:
                     self._read_ids.add(rid_int)
                     added += 1
+                    added_weight += weight_of(rid_int)
         except Exception:
-            return added
+            return added, added_weight
 
-        return added
+        return added, added_weight
 
 
 def __get_dummy_splice_graph():

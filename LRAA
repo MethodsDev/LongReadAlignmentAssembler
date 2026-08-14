@@ -14,6 +14,7 @@ import csv
 import hashlib
 import pickle
 import tempfile
+import gzip
 from multiprocessing import Process
 from collections import defaultdict, deque
 import random
@@ -59,6 +60,13 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
+# Coverage-normalization parameters the driver holds fixed. Named here, passed explicitly
+# to the utility, and included in the cache stem, so that changing one cannot silently
+# reuse a normalized bam built under the old value. These must match the utility's own
+# defaults in util/normalize_bam_by_strand.py.
+NORM_DEPTH_WINDOW = 100
+NORM_RANDOM_SEED = 42
+
 default_threads_per_worker = 1
 CPU = default_threads_per_worker  # legacy global name retained for compatibility
 TOTAL_THREADS_FOR_SINGLETON_STAGE = None  # computed after CLI parsing
@@ -95,6 +103,32 @@ def _seed_authoritative_config_from_args(config, args):
     for key in ("min_alt_splice_freq", "min_alt_unspliced_freq"):
         if hasattr(args, key):
             config[key] = getattr(args, key)
+
+
+def _bam_looks_single_cell(bam_filename, barcode_tag, umi_tag, max_records=2000):
+    """Whether this bam's reads carry both the cell-barcode and UMI tags.
+
+    Single-cell-ness is a property of the data, not of a flag: read identifiers
+    become barcode^UMI^name only when Util_funcs.get_read_name finds both tags, and
+    the settings naming those tags have defaults, so they cannot be asked instead.
+    Both are required for the same reason -- one alone does not change identifiers.
+
+    A bounded peek, because this decides whether to refuse a run and must not cost a
+    pass over a multi-gigabyte bam. Reading nothing -- a missing or unreadable bam --
+    answers no, leaving the real complaint to the code that opens it properly.
+    """
+    if not bam_filename or not barcode_tag or not umi_tag:
+        return False
+    try:
+        with pysam.AlignmentFile(bam_filename, "rb") as fh:
+            for i, read in enumerate(fh.fetch(until_eof=True)):
+                if i >= max_records:
+                    break
+                if read.has_tag(barcode_tag) and read.has_tag(umi_tag):
+                    return True
+    except Exception:
+        return False
+    return False
 
 
 def _require_minimap2_for_transcriptome_alignment(
@@ -498,6 +532,54 @@ def main():
         action="store_true",
         default=False,
         help="restrict to single-exon isoforms only",
+    )
+    primary.add_argument(
+        "--use_XW_read_weights_for_quant",
+        action="store_true",
+        default=LRAA_Globals.config["use_XW_read_weights_for_quant"],
+        help=(
+            "EXPERIMENTAL. Quantify using each read's XW coverage-normalization weight "
+            "rather than counting the reads that survived thinning, so support is on "
+            "the scale of the original bam. This is a weight consumer, not a "
+            "normalized-only mode: it only does anything if you pass an already "
+            "normalized bam as --bam, and doing so makes --num_total_reads count that "
+            "bam instead of the original, so RPM_total_reads is scaled wrong unless you "
+            "supply -N yourself. Per-read tracking and uniq_reads still describe the "
+            "reads that survived thinning, not the population the weights estimate. "
+            "Requires primary-only alignments (--no_allow_secondary_alignments) "
+            f"(default: {LRAA_Globals.config['use_XW_read_weights_for_quant']})"
+        ),
+    )
+    primary.add_argument(
+        "--stream_reads",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads"],
+        help=(
+            "quantify in two passes instead of one: estimate abundances from the "
+            "coverage-normalized bam, then stream the full bam assigning each read "
+            "against those abundances and writing its tracking row immediately. Holds "
+            "no per-read state, so peak memory does not grow with library size -- "
+            "intended for libraries too large to hold a shard's alignments. Reports one "
+            "expectation step at the first pass's abundances rather than re-estimating "
+            "them, so counts are close to but not identical with the default: measured on "
+            "ONT chr20, gene totals are preserved and 22 of 1785 expressed transcripts sit "
+            "more than 5% apart at the isoform level. Requires --quant_only, coverage "
+            "normalization, --quant_read_assignment_mode genome, and "
+            f"--no_allow_secondary_alignments (default: {LRAA_Globals.config['stream_reads']})"
+        ),
+    )
+    primary.add_argument(
+        "--library_type",
+        type=str,
+        choices=["bulk", "single_cell"],
+        default=None,
+        help=(
+            "declare whether the input is bulk or single-cell. Required with "
+            "--use_XW_read_weights_for_quant, which cannot produce correct per-cell "
+            "output and cannot detect single-cell input reliably enough to refuse it "
+            "on your behalf. Otherwise unused; single-cell handling is driven by the "
+            "BAM's barcode and UMI tags"
+        ),
     )
     primary.add_argument(
         "--no_rescue_unassigned_reads_via_transcriptome_alignment",
@@ -1238,6 +1320,136 @@ def main():
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
     )
+    LRAA_Globals.config["use_XW_read_weights_for_quant"] = (
+        args.use_XW_read_weights_for_quant
+    )
+    if args.stream_reads and args.allow_secondary_alignments:
+        sys.exit(
+            "Error, --stream_reads requires --no_allow_secondary_alignments.\n"
+            "Streaming handles one alignment record at a time. The default path first "
+            "groups a read's records by name and span and then lets one of them "
+            "represent it; in a coordinate-sorted bam a read's other placements can sit "
+            "arbitrarily far away, so a streaming pass cannot reproduce that grouping "
+            "without buffering unboundedly. With secondaries enabled it would instead "
+            "emit a tracking row per placement and assign the same read more than once."
+        )
+    if args.stream_reads and not args.quant_only:
+        # Discovery quantifies repeatedly over changing transcript sets while selecting
+        # isoforms; the streaming pass is a final accounting over a settled set. Wiring it
+        # into discovery would stream the whole bam once per selection round.
+        sys.exit(
+            "Error, --stream_reads requires --quant_only. The streaming pass is a final "
+            "read accounting over a settled transcript set, not part of isoform selection."
+        )
+    if args.stream_reads and args.normalize_max_cov_level <= 0:
+        # Both passes would read the same bam: the first would materialize every read of it,
+        # which is the cost the mode exists to avoid, and the table would then match every
+        # read trivially. Nothing is gained and the run is slower than the default path.
+        sys.exit(
+            "Error, --stream_reads requires coverage normalization (--normalize_max_cov_level "
+            "> 0). Its first pass reads the normalized bam and its second streams the full "
+            "one; with normalization off both are the same bam and the mode only adds work."
+        )
+    if args.stream_reads and args.quant_read_assignment_mode != "genome":
+        # The streaming pass maps every record genomically through _map_read_to_graph and
+        # runs no transcriptome alignment. Under the default rescue_unassigned mode the
+        # first pass rescues the reads that failed genomic assignment *in the normalized
+        # bam*, so reads present only in the full bam would reach the second pass and be
+        # assigned genomically or resolved -- never rescued -- while the rescue summary
+        # described the first pass alone. transcriptome_only and genome_tx_arb additionally
+        # build their first pass from the full bam, so the flag would cost a second traversal
+        # and save nothing.
+        sys.exit(
+            "Error, --stream_reads requires --quant_read_assignment_mode genome. The "
+            "streaming pass assigns reads by genomic graph mapping only, so it cannot "
+            "reproduce transcriptome rescue or arbitration for reads the first pass never "
+            "saw."
+        )
+    if args.stream_reads and args.tag_bam:
+        # Tagging annotates each bam record with the gene/transcript it was assigned to,
+        # which needs the read-name -> assignment associations the default path retains.
+        # The streaming pass drops every read once its tracking row is written -- that is
+        # what bounds its memory -- so it has nothing to tag from. Left unguarded, the run
+        # would tag from pass 1 alone, i.e. from the normalized bam, and emit a bam whose
+        # tagged subset silently excludes every read normalization removed.
+        sys.exit(
+            "Error, --stream_reads cannot be combined with --tag_bam. Tagging needs the "
+            "per-read assignments the streaming pass deliberately does not retain; pass 1 "
+            "alone would tag only the reads that survived coverage normalization."
+        )
+    LRAA_Globals.config["stream_reads"] = args.stream_reads
+    if args.use_XW_read_weights_for_quant:
+        # Discovery is out of scope on purpose. Its absolute support gates --
+        # min_reads_novel_isoform, min_unique_reads_novel_isoform, and the FSM gates --
+        # deliberately still read raw retained-read counts, so enabling weighted EM
+        # alongside them builds isoform sets under one notion of support and filters
+        # them under another. That hybrid has not been evaluated and nobody asked for
+        # it; re-deriving those thresholds onto weighted support is its own change.
+        if not args.quant_only:
+            sys.exit(
+                "Error, --use_XW_read_weights_for_quant is supported only with "
+                "--quant_only. In discovery mode the absolute isoform filters still "
+                "count retained reads while EM would use weighted support, so isoforms "
+                "would be selected and filtered on different scales."
+            )
+        # Weighting corrects the aggregate expression file, whose counts become
+        # estimates on the scale of the original bam. It cannot correct the tracking
+        # file: that has one row per *retained* read, and the reads normalization
+        # discarded have no row to carry a weight. Any consumer that derives counts by
+        # summing tracking rows therefore sees roughly the retained fraction of the
+        # library, unevenly -- worst exactly at the deep loci weighting exists to fix.
+        #
+        # Refuse the two consumers that would do that silently rather than emit output
+        # that looks finished and is wrong. Both need the full-bam post-pass that would
+        # reconstitute per-read rows for every read; until that exists, they are out of
+        # scope for this mode.
+        if args.tag_bam:
+            sys.exit(
+                "Error, --tag_bam is not supported with --use_XW_read_weights_for_quant. "
+                "Tagging annotates reads from the tracking file, which covers only the "
+                "reads that survived coverage normalization, so the reads thinned away "
+                "would be written untagged and indistinguishable from unassigned ones."
+            )
+        # Single-cell-ness cannot be inferred safely. It is a property of the data --
+        # identifiers become barcode^UMI^name only when Util_funcs.get_read_name finds
+        # both tags -- and the settings naming those tags have defaults, so they answer
+        # nothing. Scanning for the tags can only ever prove presence: any bounded peek
+        # may miss a bam whose early records are untagged, and a false negative here
+        # emits a silently undercounted matrix, which is the outcome this guard exists
+        # to prevent. So require the declaration instead of guessing, and use detection
+        # only to contradict it.
+        if args.library_type is None:
+            sys.exit(
+                "Error, --use_XW_read_weights_for_quant requires an explicit "
+                "--library_type (bulk|single_cell). Weighted quantification cannot "
+                "produce correct per-cell output, and single-cell input cannot be "
+                "detected reliably enough to refuse it on your behalf."
+            )
+        if args.library_type == "single_cell" or args.cell_list:
+            sys.exit(
+                "Error, single-cell quantification is not supported with "
+                "--use_XW_read_weights_for_quant. Per-cell matrices are built by summing "
+                "frac_assigned over tracking rows (util/sc/"
+                "singlecell_tracking_to_sparse_matrix.py), which ignores XW and counts "
+                "only retained reads, so every cell would be undercounted -- most at the "
+                "deep loci this mode is meant to fix. A weight cannot be apportioned "
+                "across the cells of reads that were discarded."
+            )
+        if _bam_looks_single_cell(
+            args.bam,
+            LRAA_Globals.config.get("cell_barcode_tag"),
+            LRAA_Globals.config.get("read_umi_tag"),
+        ):
+            sys.exit(
+                "Error, --library_type bulk was declared but reads in {} carry both the "
+                "cell-barcode ({}) and UMI ({}) tags, so read identifiers will be "
+                "single-cell. Weighted quantification cannot produce correct per-cell "
+                "output.".format(
+                    args.bam,
+                    LRAA_Globals.config.get("cell_barcode_tag"),
+                    LRAA_Globals.config.get("read_umi_tag"),
+                )
+            )
     LRAA_Globals.config["terminal_boundary_method"] = args.terminal_boundary_method
     LRAA_Globals.config["terminal_boundary_percentile"] = (
         args.terminal_boundary_percentile
@@ -1924,8 +2136,38 @@ def _normalize_bam_for_splice_graph(
     if label:
         base_root = f"{base_root}.{_safe_token(label)}"
 
+    # The normalizer must measure depth over the same records the splice graph will
+    # read, or acceptance probabilities describe a coverage level nothing downstream
+    # sees. Supplementary records are excluded by the utility either way; secondaries
+    # follow the ingestion policy.
+    alignment_filter_mode = (
+        "with_secondary"
+        if LRAA_Globals.config.get("allow_secondary_alignments", False)
+        else "primary"
+    )
+
+    # The consumer's per-identity and mapping-quality floors are part of the evidence
+    # definition: alignments below either are discarded before quantification sees them,
+    # so depth measured over them describes coverage nothing downstream has. HiFi mode
+    # raises the identity floor to 97.
+    norm_min_per_id = LRAA_Globals.config.get("min_per_id", 0) or 0
+    norm_min_mapq = LRAA_Globals.config.get("min_mapping_quality", 0) or 0
+
+    # Held fixed here, but named rather than implied: both change which reads the utility
+    # keeps, both are in the cache stem, and a future default change must not be able to
+    # reuse a bam built under the old one.
+    norm_depth_window = NORM_DEPTH_WINDOW
+    norm_random_seed = NORM_RANDOM_SEED
+
     cache_stem = Util_funcs.splice_graph_norm_cache_stem(
-        base_root, normalize_max_cov_level, input_path
+        base_root,
+        normalize_max_cov_level,
+        input_path,
+        alignment_filter_mode,
+        norm_min_per_id,
+        norm_min_mapq,
+        norm_depth_window,
+        norm_random_seed,
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
@@ -1950,6 +2192,16 @@ def _normalize_bam_for_splice_graph(
             str(input_path),
             "--normalize_max_cov_level",
             str(normalize_max_cov_level),
+            "--alignment_filter_mode",
+            alignment_filter_mode,
+            "--min_per_id",
+            str(norm_min_per_id),
+            "--min_mapping_quality",
+            str(norm_min_mapq),
+            "--depth_window",
+            str(norm_depth_window),
+            "--random_seed",
+            str(norm_random_seed),
             "--output_bam",
             str(normalized_path),
         ]
@@ -2048,13 +2300,94 @@ def _filter_bam_for_secondary_alignment_policy(
     return str(filtered_path)
 
 
+def _tracking_suffix():
+    """`.quant.tracking.gz`. Tracking is always written compressed.
+
+    One definition, because the suffix is built in eight places: the per-shard temp path, the
+    shard writer, the merge source, the merge destination, the cleanup list, the completeness
+    check that decides whether a finished shard can be reused, the pre-correction name the
+    cross-gene EM step moves the file to, and the stale-sibling clears.
+
+    That cross-gene one is not hypothetical: it once lacked `.gz`, and because
+    reassign_multigene_tracking_reads.py picks its reader from the suffix alone it parsed gzip
+    magic as UTF-8 and killed every run. Anything that names this file belongs here.
+
+    Compressed unconditionally rather than behind a flag, because this file holds one row per
+    (read, isoform) and is the only artifact that scales with library size: ~140 bytes per row
+    at ~2.2 rows per assigned read, so a billion-read library implies roughly 0.30 TB in the
+    clear against 0.05 TB compressed, measured at 5.57x on ONT chr20. The WDL already published
+    gzipped tracking by compressing LRAA's plain output itself, and both of its call sites gate
+    on the uncompressed file existing (WDL/subwdls/LRAA_runner.wdl:230 and :238), so writing it
+    compressed here turns those into no-ops rather than compressing twice.
+    """
+    return ".quant.tracking.gz"
+
+
+def _stale_tracking_suffix():
+    """`.quant.tracking` -- the uncompressed name an older LRAA wrote.
+
+    Not a second output format: nothing writes this any more. It is the name a shard tree from
+    a previous version carries, and resume has to reason about it.
+
+    A shard is reused when its `.ok` checkpoint and its tracking file both exist, and that test
+    necessarily looks for the name this version writes. So an upgraded run silently ignores a
+    shard tree it cannot read, and a tree holding BOTH names cannot say which is current --
+    reusing either could splice rows from a previous version into the merge. Clearing this name
+    when a shard is rewritten, and refusing reuse while both exist, is what makes an upgrade
+    converge rather than quietly mix outputs.
+    """
+    return ".quant.tracking"
+
+
+def _open_text(path, mode="rt"):
+    """Open plain or gzipped text by suffix, so callers do not branch on it."""
+    if str(path).endswith(".gz"):
+        return gzip.open(path, mode)
+    return open(path, mode)
+
+
+def _invalidate_ambiguous_shard(shard_prefix, stale_track):
+    """Make a shard of unknowable provenance unreusable, crash-safely.
+
+    `.ok` is removed FIRST, and that order is the whole point.
+
+    The caller runs in the parent during the resume scan, while the recompute it is about to
+    schedule happens later in a worker. Removing only the stale sibling would destroy the
+    evidence that triggers the veto while leaving the checkpoint that grants reuse: die in
+    between -- OOM, preemption, a killed job, all routine for this workload -- and the next
+    run sees `.ok` plus tracking under its own suffix, concludes the shard is complete and
+    unambiguous, and silently merges a file nobody can vouch for. The runs that get
+    interrupted are the same ones that leave both encodings behind, so the trigger and the
+    precondition arrive together rather than independently.
+
+    With `.ok` gone the shard is incomplete under either encoding until a writer rewrites and
+    re-stamps it, so every interruption point leaves a state that is refused rather than
+    trusted. Reversing the order would recreate the original defect at the same crash point.
+
+    Removing the sibling as well is convergence: without it a legacy-root ambiguity -- which
+    no writer ever visits -- would keep vetoing reuse on every future resume. Note the `.ok`
+    removal is what makes the legacy root stop qualifying at all; the sibling removal keeps
+    the NEW root from re-vetoing for one extra cycle if the writer's own cleanup ever fails.
+
+    Only FileNotFoundError is tolerated, and deliberately not OSError: swallowing an EPERM on
+    `.ok` would let the loop go on to delete the sibling, leaving the checkpoint standing with
+    its evidence gone -- the original defect through a different door. Raising leaves the disk
+    untouched and the next run hits the same wall deterministically.
+    """
+    for victim in (f"{shard_prefix}.ok", stale_track):
+        try:
+            os.unlink(victim)
+        except FileNotFoundError:
+            pass
+
+
 def _append_without_first_line(
     src_path, dst_fh, expected_num_fields=None, missing_value="1.000000"
 ):
     """Append file to dst_fh skipping leading comments and the first data header."""
     if src_path is None or (not os.path.exists(src_path)):
         return
-    with open(src_path, "rt") as fh:
+    with _open_text(src_path, "rt") as fh:
         first = True
         for line in fh:
             if line.startswith("#"):
@@ -2083,24 +2416,61 @@ def _write_lraa_version_comment(fh):
 
 
 def _ensure_lraa_version_comment(path):
+    """Prepend the version/command comments, preserving the file's own compression.
+
+    Reads and rewrites through _open_text so a gzipped tracking file round-trips as gzip.
+    Opening it as plain text would read the deflate header as the first line, decide the
+    comment was missing, and then write a file that is a text comment followed by gzip
+    bytes -- unreadable as either.
+    """
     if path is None or not os.path.exists(path):
         return
 
-    with open(path, "rt", newline="") as fh:
+    with _open_text(path, "rt") as fh:
         first_line = fh.readline().rstrip("\r\n")
 
     if first_line == LRAA_VERSION_COMMENT:
         return
 
     output_dir = os.path.dirname(os.path.abspath(path)) or "."
+    is_gz = str(path).endswith(".gz")
+    # The temp file is created only to reserve a name; every byte is written by the
+    # _open_text call below, which reopens it by path. So mode and newline are deliberately
+    # not set here -- setting them would configure a handle nothing writes through, which
+    # reads as if encoding were being controlled at this point. Only `suffix` matters, since
+    # _open_text decides compression from it.
     with tempfile.NamedTemporaryFile(
-        "wt", delete=False, dir=output_dir, prefix=".lraa_version.", newline=""
+        delete=False,
+        dir=output_dir,
+        prefix=".lraa_version.",
+        suffix=".gz" if is_gz else "",
     ) as tmp_fh:
         tmp_path = tmp_fh.name
-        _write_lraa_version_comment(tmp_fh)
-        with open(path, "rt", newline="") as src_fh:
-            shutil.copyfileobj(src_fh, tmp_fh)
 
+    try:
+        with _open_text(tmp_path, "wt") as out_fh:
+            _write_lraa_version_comment(out_fh)
+            with _open_text(path, "rt") as src_fh:
+                shutil.copyfileobj(src_fh, out_fh)
+    except Exception:
+        # The original is untouched, so nothing downstream is damaged; drop the partial so a
+        # directory listing does not accumulate half-written .lraa_version.* files.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    # NamedTemporaryFile creates 0600, so without this the rewritten file loses group and
+    # other read in a shared output directory -- silently, and only for files that happened
+    # to need the comment prepended. Pre-existing; corrected here because this function now
+    # rewrites the tracking file too.
+    try:
+        shutil.copymode(path, tmp_path)
+    except OSError:
+        pass
+
+    # Same directory, so this is an atomic rename rather than a copy.
     shutil.move(tmp_path, path)
 
 
@@ -2173,6 +2543,24 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
         logger.info("Skipping final cross-gene EM for secondary alignments")
         return
     if not os.path.exists(quant_expr_path) or not os.path.exists(tracking_path):
+        # Raise only when the TRACKING file is the missing one and a copy sits under the
+        # other encoding. Gating on the tracking path specifically, because this branch also
+        # fires for a missing expr file, and a stale .gz relic beside a present tracking file
+        # would otherwise produce a confident error about a file that is right there.
+        #
+        # Loud rather than skipped, because skipping means reporting uncorrected abundances
+        # as final: measured on ONT chr20, the correction moves 11.2% of tracking fractions
+        # and 2.7% of total fractional mass.
+        stale = f"{output_prefix}{_stale_tracking_suffix()}"
+        if not os.path.exists(tracking_path) and os.path.exists(stale):
+            raise RuntimeError(
+                "cross-gene EM cannot find {} but {} exists. Either a tracking path was "
+                "built without _tracking_suffix(), or this prefix holds output from an "
+                "earlier LRAA version that wrote it uncompressed. Skipping the "
+                "correction would report uncorrected abundances as final.".format(
+                    tracking_path, stale
+                )
+            )
         logger.warning(
             "Skipping final cross-gene EM because quant outputs are missing: %s, %s",
             quant_expr_path,
@@ -2181,8 +2569,17 @@ def _maybe_run_cross_gene_em_for_secondary_alignments(
         return
 
     raw_expr_path = f"{output_prefix}.pre-cross-gene-EM.quant.expr"
-    raw_tracking_path = f"{output_prefix}.pre-cross-gene-EM.quant.tracking"
-    for path in (raw_expr_path, raw_tracking_path):
+    # Suffix carried through, because the next two lines MOVE the finished tracking file
+    # here and reassign_multigene_tracking_reads.py decides how to open it from the suffix
+    # alone. Naming a gzipped file without .gz hands it deflate bytes to parse as text.
+    raw_tracking_path = f"{output_prefix}.pre-cross-gene-EM{_tracking_suffix()}"
+    # Both encodings: this artifact is published beside the final outputs, so a copy left
+    # under the other suffix by an earlier run is as misleading here as at the final level.
+    for path in (
+        raw_expr_path,
+        raw_tracking_path,
+        f"{output_prefix}.pre-cross-gene-EM{_stale_tracking_suffix()}",
+    ):
         if os.path.exists(path):
             os.remove(path)
 
@@ -2439,19 +2836,66 @@ def _run_jobs_schedule_and_merge(
             tmp_root_old = f"{j['output_prefix']}.contigtmp"
 
             # Prefer new location; fall back to legacy temp root for resume compatibility
-            def _have_all(prefix_root):
+            def _inspect(prefix_root):
+                """(complete, ambiguous) for this job's shard under one temp root.
+
+                Two values rather than one, because they are not each other's negation and
+                the caller must combine them differently: completeness is an OR across the
+                two roots (either tree can supply the work), while ambiguity is an OR that
+                VETOES (either tree being unclear makes the job unclear). Collapsing them
+                into a single boolean is what let an ambiguous new root be overridden by a
+                complete legacy one -- reuse proceeded, the writer never ran, and the
+                ambiguity stayed on disk to warn on every future run while resolving nothing.
+                """
                 d = os.path.join(
                     prefix_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
                 )
                 p = os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
                 ok_path = f"{p}.ok"
                 have_expr = os.path.exists(f"{p}.quant.expr")
-                have_track = os.path.exists(f"{p}.quant.tracking")
+                have_track = os.path.exists(f"{p}{_tracking_suffix()}")
                 have_gtf = True if j["QUANT_ONLY"] else os.path.exists(f"{p}.gtf")
-                return os.path.exists(ok_path) and have_expr and have_track and have_gtf
+                complete = (
+                    os.path.exists(ok_path) and have_expr and have_track and have_gtf
+                )
+                if not complete:
+                    # An ordinary flag flip leaves only the OTHER encoding present, so
+                    # have_track is already False and reuse is already refused. Reporting
+                    # ambiguity here would announce "exists under both encodings" for the
+                    # common case where exactly one does -- one false alarm per shard per
+                    # flipped resume, which is how a true warning gets ignored.
+                    return False, False
 
-            if _have_all(tmp_root_new) or _have_all(tmp_root_old):
+                # A tracking file under the OTHER encoding means this shard's history is
+                # unknowable: some run wrote it with the flag set the other way, and the .ok
+                # checkpoint records no encoding. Reusing whichever file this run's suffix
+                # happens to name can splice rows from an older run into the merge silently.
+                stale_track = f"{p}{_stale_tracking_suffix()}"
+                if os.path.exists(stale_track):
+                    logger.warning(
+                        "shard %s has tracking under both encodings (%s); invalidating its "
+                        "checkpoint and recomputing, because which run wrote it cannot be "
+                        "determined",
+                        p,
+                        os.path.basename(stale_track),
+                    )
+                    _invalidate_ambiguous_shard(p, stale_track)
+                    return True, True
+                return True, False
+
+            complete_new, ambiguous_new = _inspect(tmp_root_new)
+            complete_old, ambiguous_old = _inspect(tmp_root_old)
+            # Ambiguity in EITHER tree vetoes reuse.
+            if (complete_new or complete_old) and not (ambiguous_new or ambiguous_old):
                 j["skip"] = True
+                # Record WHICH root satisfied the check. The merge otherwise re-derives the
+                # root with a different predicate -- it takes the new root when `.ok` OR
+                # `.quant.expr` is present, while this check demands all four files in one
+                # root -- so the two can disagree. Reachable: a legacy root complete under the
+                # plain suffix plus a new root complete under `.gz`, rerun with the flag off.
+                # Reuse is granted on the legacy root's strength while the merge reads the new
+                # root, whose tracking this run's suffix does not name.
+                j["resume_root"] = tmp_root_new if complete_new else tmp_root_old
                 resumed += 1
         if resumed:
             logger.info(
@@ -2540,11 +2984,22 @@ def _run_jobs_schedule_and_merge(
                     )
                     return os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
 
-                tmp_prefix = _prefix_for(tmp_root_new)
-                if not os.path.exists(f"{tmp_prefix}.ok") and not os.path.exists(
-                    f"{tmp_prefix}.quant.expr"
-                ):
-                    tmp_prefix = _prefix_for(tmp_root_old)
+                # A resumed job carries the root its completeness was actually established
+                # in. Honour it rather than re-deriving, because the two tests differ: this
+                # one accepts a root holding `.ok` OR `.quant.expr`, while the resume check
+                # requires expr, tracking under the current suffix, gtf and `.ok` together.
+                # A legacy root complete under the plain suffix beside a new root complete
+                # under `.gz`, rerun with the flag off, satisfies resume via legacy and this
+                # test via the new root -- and the new root has no tracking this run can read.
+                resume_root = j.get("resume_root")
+                if resume_root:
+                    tmp_prefix = _prefix_for(resume_root)
+                else:
+                    tmp_prefix = _prefix_for(tmp_root_new)
+                    if not os.path.exists(f"{tmp_prefix}.ok") and not os.path.exists(
+                        f"{tmp_prefix}.quant.expr"
+                    ):
+                        tmp_prefix = _prefix_for(tmp_root_old)
                 ok_path = f"{tmp_prefix}.ok"
                 if not os.path.exists(ok_path):
                     err_log = f"{tmp_prefix}.err.log"
@@ -2580,8 +3035,30 @@ def _run_jobs_schedule_and_merge(
 
     # Merge results
     quant_out_fn = f"{output_prefix}.quant.expr"
-    track_out_fn = f"{output_prefix}.quant.tracking"
-    merged_track_fh = open(track_out_fn, "wt")
+    track_out_fn = f"{output_prefix}{_tracking_suffix()}"
+    # The same trap as the shard-level one, at the level users actually consume: run once
+    # under an older LRAA that wrote tracking uncompressed, then again under this one, and
+    # both out.quant.tracking and out.quant.tracking.gz sit there, the uncompressed one a run
+    # old, with nothing marking which is current. Anything that globs for either name -- a
+    # pipeline step, a converter, a WDL gather -- could read the stale one and never know.
+    # Removed here rather than at write time so it also clears when this run produces no rows.
+    # Both published tracking artifacts, unconditionally. The pre-correction copy used to be
+    # cleared only inside the cross-gene EM branch, so a run that skipped that branch --
+    # --no_allow_secondary_alignments, --no_EM, or the early return when outputs are absent --
+    # left a run-old .gz sitting beside fresh outputs indefinitely.
+    for _stale_out in (
+        f"{output_prefix}{_stale_tracking_suffix()}",
+        f"{output_prefix}.pre-cross-gene-EM{_stale_tracking_suffix()}",
+    ):
+        try:
+            os.unlink(_stale_out)
+            logger.info(
+                "removed tracking output from a previous run under the other encoding: %s",
+                _stale_out,
+            )
+        except FileNotFoundError:
+            pass
+    merged_track_fh = _open_text(track_out_fn, "wt")
 
     # Headers
     quant_header_final = [
@@ -2610,6 +3087,24 @@ def _run_jobs_schedule_and_merge(
         "frac_assigned",
         "read_weight",
     ]
+    if LRAA_Globals.config.get("use_XW_read_weights_for_quant", False):
+        # The column contract is unchanged, so the WDL merge that requires identical
+        # headers across shards still works. Recorded in the file because the file
+        # outlives the command line that made it, and a consumer summing frac_assigned
+        # has no other way to learn that these rows describe the retained reads rather
+        # than the library.
+        #
+        # lraa_merge_header.py rebuilds the comment block rather than copying it, so it
+        # does not carry arbitrary comments through; it recognizes this marker
+        # specifically and re-emits it whenever any input bears it.
+        print(
+            "# WARNING: produced with --use_XW_read_weights_for_quant. Rows cover only "
+            "reads retained by coverage normalization, and frac_assigned is NOT weighted "
+            "by XW. Counts derived by summing frac_assigned understate the library, "
+            "unevenly, and most at high-coverage loci. The weighted estimates are the "
+            "counts in .quant.expr; do not derive counts from this file.",
+            file=merged_track_fh,
+        )
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     quant_expr_tmp_paths = list()
@@ -2624,7 +3119,7 @@ def _run_jobs_schedule_and_merge(
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
         _append_without_first_line(
-            f"{tmp_prefix}.quant.tracking",
+            f"{tmp_prefix}{_tracking_suffix()}",
             merged_track_fh,
             expected_num_fields=len(tracking_header_final),
         )
@@ -2716,7 +3211,10 @@ def _run_jobs_schedule_and_merge(
             )
             for pth in (
                 f"{tmp_prefix}.quant.expr",
-                f"{tmp_prefix}.quant.tracking",
+                f"{tmp_prefix}{_tracking_suffix()}",
+                # Both encodings: a shard left over from a run with the flag set the other
+                # way is exactly what a later run would mistake for its own finished work.
+                f"{tmp_prefix}{_stale_tracking_suffix()}",
                 f"{tmp_prefix}.gtf",
                 f"{tmp_prefix}.ok",
                 f"{tmp_prefix}.resources.tsv",
@@ -2928,7 +3426,24 @@ def _contig_job_runner(job):
 
     # prepare writers
     quant_expr_tmp = f"{tmp_prefix}.quant.expr"
-    quant_tracking_tmp = f"{tmp_prefix}.quant.tracking"
+    quant_tracking_tmp = f"{tmp_prefix}{_tracking_suffix()}"
+    # A leftover under the other encoding would be invisible to this run's existence check
+    # but findable by a later run that flips the flag back, which would then reuse a shard
+    # this run recomputed. Cleared here, where the shard is about to be rewritten anyway.
+    #
+    # Deliberately not swallowed, unlike the best-effort cleanups around it: failing to
+    # remove this file is the one outcome the deletion exists to prevent, so a silenced
+    # error leaves the trap armed while reporting success. The pre-reuse check refuses an
+    # ambiguous shard as a second line of defence, but that only helps if a later run gets
+    # far enough to consult it.
+    _stale_tracking_tmp = f"{tmp_prefix}{_stale_tracking_suffix()}"
+    try:
+        os.unlink(_stale_tracking_tmp)
+    except FileNotFoundError:
+        # Already absent, which is the goal state. Only this class is tolerated: a
+        # permissions or stale-handle failure still raises, since leaving the file is what
+        # the deletion exists to prevent.
+        pass
     genome_tx_arb_summary_tmp = f"{tmp_prefix}.genome_tx_arb.summary.tsv"
     try:
         if os.path.exists(genome_tx_arb_summary_tmp):
@@ -2967,7 +3482,7 @@ def _contig_job_runner(job):
     ofh_quant = open(quant_expr_tmp, "wt")
     print("\t".join(quant_header), file=ofh_quant)
 
-    ofh_track = open(quant_tracking_tmp, "wt")
+    ofh_track = _open_text(quant_tracking_tmp, "wt")
     print("\t".join(tracking_header), file=ofh_track)
 
     gtf_tmp = None
@@ -4338,11 +4853,20 @@ def run_quant_only(
                 genome_tx_arb_stats,
             )
     else:
+        # In streaming mode this first pass exists only to estimate abundances, so it reads
+        # the coverage-normalized bam: that is the whole saving, since the default path
+        # materializes every retained read of whichever bam it is given. The second pass
+        # below streams bam_file_for_quant and is what makes the tracking file complete.
+        bam_file_for_pass1 = (
+            bam_file_for_sg
+            if LRAA_Globals.config["stream_reads"]
+            else bam_file_for_quant
+        )
         mp_counter = lraa_obj._populate_read_multi_paths(
             contig_acc,
             contig_strand,
             contig_seq_str,
-            bam_file_for_quant,
+            bam_file_for_pass1,
             allow_spacers,
             restrict_splice_type=None,
         )
@@ -4415,6 +4939,44 @@ def run_quant_only(
         sg, input_transcripts, mp_counter
     )
 
+    # Optional dump of the table a streaming assignment pass would consult: the path a
+    # read maps to, and the fractional split across compatible transcripts settled on
+    # for it. Keyed on the canonical path, since multipath ids and node ids are both
+    # run-local counters and neither can be matched across runs.
+    _frac_dump_prefix = LRAA_Globals.config.get("dump_mp_fraction_table") or None
+    if _frac_dump_prefix:
+        by_path = defaultdict(list)
+        # canonical -> the raw simple paths that rendered to it. If any canonical key
+        # draws from more than one raw path the rendering is lossy, and every hit-rate
+        # or parity number computed from these dumps is inflated by the collision.
+        canon_to_raw = defaultdict(set)
+        for tx_id, mp_map in read_name_to_fractional_transcript_assignment.items():
+            for mp, frac in mp_map.items():
+                canon = sg.canonical_simple_path(mp.get_simple_path())
+                canon_to_raw[canon].add(mp.get_simple_path_tuple())
+                by_path[canon].append((tx_id, frac))
+        collisions = {c: r for c, r in canon_to_raw.items() if len(r) > 1}
+        if collisions:
+            raise RuntimeError(
+                "canonical path rendering is not injective: {} key(s) map to several "
+                "distinct simple paths, e.g. {}".format(
+                    len(collisions), next(iter(collisions))
+                )
+            )
+        out = f"{_frac_dump_prefix}.{contig_acc}.{contig_strand}.mp_fractions.tsv"
+        with open(out, "wt") as fh:
+            for path, pairs in by_path.items():
+                fh.write(
+                    "{}\t{}\n".format(
+                        path, ";".join(f"{t}:{f:.6f}" for t, f in sorted(pairs))
+                    )
+                )
+        logger.info(
+            "wrote %d path->fraction rows to %s (canonical rendering injective over "
+            "%d raw paths)",
+            len(by_path), out, sum(len(r) for r in canon_to_raw.values()),
+        )
+
     if LRAA_Globals.DEBUG:
         q.dump_mp_to_transcripts_to_file(
             "__QUANTIFY_mp_to_transcripts_and_reads.tsv",
@@ -4422,7 +4984,44 @@ def run_quant_only(
             contig_strand,
         )
 
-    if report_quants:
+    if report_quants and LRAA_Globals.config["stream_reads"]:
+        # Second pass. The first pass above estimated abundances from the normalized bam;
+        # this one walks the full bam and writes a tracking row per (read, isoform) without
+        # retaining any read, so the tracking file covers every read while peak memory stays
+        # bounded by the annotation rather than the library.
+        import StreamingQuant
+
+        theta = q.get_transcript_id_to_theta()
+        em_was_run = q.em_was_run()
+        table = StreamingQuant.AssignmentTable.build(
+            sg,
+            q.get_mp_to_transcripts(),
+            theta,
+            em_was_run,
+            q.get_unassigned_mp_count_pairs(),
+        )
+        # Same splice graph, same Quantify object, same transcript set as the table: the
+        # resolver must answer for an unseen path exactly as the first pass would have.
+        resolver = StreamingQuant.make_path_resolver(sg, q, theta, em_was_run)
+        totals = StreamingQuant.stream_assign(
+            bam_file_for_quant,
+            contig_acc,
+            contig_strand,
+            contig_seq_str,
+            lraa_obj,
+            table,
+            ofh_quant_read_tracker,
+            resolver=resolver,
+            region_lend=restrict_region_lend,
+            region_rend=restrict_region_rend,
+            max_fallback_path_frac=LRAA_Globals.config[
+                "stream_reads_max_unseen_path_read_frac"
+            ],
+        )
+        StreamingQuant.write_expr(
+            input_transcripts, totals, ofh_quant_output, quant_only=True
+        )
+    elif report_quants:
         q.report_quant_results(
             input_transcripts,
             read_name_to_fractional_transcript_assignment,

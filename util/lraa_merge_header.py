@@ -23,6 +23,20 @@ import sys
 CMD_PREFIX = "# LRAA CMD: "
 VARIES_PLACEHOLDER = "<varies>"
 
+# Substring identifying a tracking file whose rows cover only the reads coverage
+# normalization retained. Such a file understates any count derived by summing
+# frac_assigned, so the warning has to reach the merged output: this header is
+# reconstructed rather than copied, and a dropped warning leaves a file that is
+# incomplete with nothing about it to say so. One incomplete input is enough, since
+# the merge inherits its gaps.
+INCOMPLETE_TRACKING_MARKER = "use_XW_read_weights_for_quant"
+INCOMPLETE_TRACKING_COMMENT = (
+    "# WARNING: produced with --use_XW_read_weights_for_quant. Rows cover only reads "
+    "retained by coverage normalization, and frac_assigned is NOT weighted by XW. "
+    "Counts derived by summing frac_assigned understate the library, unevenly, and most "
+    "at high-coverage loci. Do not derive counts from this file."
+)
+
 
 def _open_text(path):
     if path.endswith(".gz"):
@@ -86,6 +100,16 @@ def _contig_values(argvs):
     return contigs
 
 
+def _marks_incomplete_tracking(path):
+    """Whether this input declares that its rows cover only retained reads."""
+    try:
+        return any(
+            INCOMPLETE_TRACKING_MARKER in line for line in leading_comments(path)
+        )
+    except OSError:
+        return False
+
+
 def merge_header_lines(version_comment, input_files):
     lines = [version_comment]
 
@@ -122,6 +146,12 @@ def merge_header_lines(version_comment, input_files):
         for note in notes:
             merge_note += "; " + note
         lines.append(merge_note)
+
+    # Carried explicitly because this header is rebuilt, not copied: an input's own
+    # warning would otherwise be dropped and the merged file would understate counts
+    # with nothing about it to say so.
+    if any(_marks_incomplete_tracking(path) for path in input_files):
+        lines.append(INCOMPLETE_TRACKING_COMMENT)
 
     return lines
 

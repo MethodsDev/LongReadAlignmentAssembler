@@ -21,7 +21,12 @@ or if the rates are recorded so they can be divided back out. LRAA does the latt
 
 ## Procedure
 
-Two sequential passes over each strand-specific BAM.
+Two sequential passes over each strand-specific BAM, over exactly the records the consumer
+will read. That set is defined once, in `Bam_alignment_extractor.alignment_filter_reason`, and
+the normalizer mirrors it: supplementary alignments are excluded unconditionally; secondaries
+per `--alignment_filter_mode`; and improper pairs, duplicates, QC failures, alignments below
+`--min_mapping_quality` and alignments below `--min_per_id` are all excluded, because the
+extractor excludes them too. Measuring depth over records that
 
 **Pass 1 — measure.** Read depth is accumulated per 100 bp window (`--depth_window`) from
 aligned blocks, and junction support is counted exactly. Both come from one CIGAR-only scan.
@@ -98,18 +103,41 @@ itself to a single rate per unit of comparison.
 | `--normalize_max_cov_level` | 1000 | target read depth; `0` disables normalization entirely |
 | `--depth_window` | 100 | resolution in bases at which depth is measured |
 | `--random_seed` | 42 | seed for the per-read draw |
+| `--alignment_filter_mode` | `with_secondary` | which records are evidence: `primary`, or also secondaries. Supplementary records are excluded either way. The driver sets this from `allow_secondary_alignments`. |
+| `--min_per_id` | 0 | percent-identity floor; must match the consumer's `min_per_id` (97 in HiFi mode, else 80). 0 disables. |
+| `--min_mapping_quality` | 0 | MAPQ floor; must match the consumer's. Bites hardest when set, since multimapping reads carry MAPQ 0 at exactly the paralogous loci where thinning decisions matter. 0 disables. |
 
 ## Caching and method changes
 
 Both the driver and the utility checkpoint their work, and a checkpoint is trusted on sight, so
 every name has to carry whatever determines the contents.
 
-`Util_funcs.splice_graph_norm_cache_stem` names the cached BAM and its work directory:
+`Util_funcs.splice_graph_norm_cache_stem` names the cached BAM and its work directory. The
+driver returns as soon as it sees this stem's checkpoint, so it never runs the utility and
+never consults the utility's own finer-grained token — anything missing from this name is
+invisible:
 
 ```
-<source>.norm_<target>.<method>.<identity>.bam    sample.quant.norm_1000.cov1.a56fdafac29c.bam
-work_<source>.norm_<target>.<method>.<identity>/  the utility runs here
+<source>.norm_<target>.<method>.<filter>.pid<min_per_id>.mapq<min_mapq>.w<window>.s<seed>.<identity>.bam
+    sample.quant.norm_1000.cov4.primary.pid97.mapq0.w100.s42.a56fdafac29c.bam
+work_<source>.norm_<target>.<method>.<filter>.pid<...>.mapq<...>.w<...>.s<...>.<identity>/
 ```
+
+Every component is required rather than defaulted, because a caller that omits one keys a BAM
+by a name that does not describe it, and the omission surfaces as a silently reused cache
+rather than an error.
+
+`<filter>` is `--alignment_filter_mode`; `pid` and `mapq` are the percent-identity and
+mapping-quality floors. All three define the evidence universe, so two runs differing only in
+one of them produce different BAMs from the same source and target. The identity floor is why
+a HiFi run must not share a cache with a default one: 97 against 80 admits a materially
+different read population.
+
+`w` and `s` are `--depth_window` and `--random_seed`. The driver holds both fixed
+(`NORM_DEPTH_WINDOW`, `NORM_RANDOM_SEED` in `LRAA`), which is exactly why omitting them from
+the name would go unnoticed: the seed salts the per-read acceptance draw and the window
+changes measured depth, so either would silently invalidate every existing cache the day a
+default changed.
 
 **Bump `LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD` whenever the normalizer changes which
 reads it keeps or what it records on them.** No consumer can detect a stale cache for itself: a
@@ -126,10 +154,14 @@ more than the step being cached, to cover what the stat pair already catches.
 The utility keys its own checkpoints separately, because the two stages depend on different
 things. The strand split depends only on the input, so it is keyed on `<identity>` alone and is
 reused across settings. Sampling, merge, and index are keyed on a digest of the input identity,
-target depth, `--depth_window`, `--random_seed`, the method, and the output path — every flag
-that changes which reads are kept or where they land. The driver holds the window and seed
-fixed, but both are exposed on the command line, and without this a second invocation in the
-same directory would silently reuse the first one's sample.
+target depth, `--depth_window`, `--random_seed`, the method, `--alignment_filter_mode`, the
+identity and mapping-quality floors, and the
+output path — every flag that changes which reads are kept or where they land. The driver holds
+the window and seed fixed, but both are exposed on the command line, and without this a second
+invocation in the same directory would silently reuse the first one's sample. The filter mode is
+in both keys for the same reason: it changes the measured depth as well as which records are
+written, so a primary-only run and a with-secondary run at one target disagree on every
+acceptance probability and must never share a cache.
 
 ## Why read-start binning was replaced
 

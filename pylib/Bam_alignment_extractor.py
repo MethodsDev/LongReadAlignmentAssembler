@@ -15,11 +15,52 @@ import Util_funcs
 logger = logging.getLogger(__name__)
 
 
+def alignment_filter_reason(read, contig_strand=None, primary_alignments_only=False):
+    """Why this record is not usable evidence, or None when it is.
+
+    The single definition of which alignments quantification consumes. Returned as a
+    reason string so callers can keep their own per-reason tallies, which a boolean
+    would lose.
+
+    Extracted so that a streaming assignment pass applies exactly these rules rather
+    than its own copy of them. Reimplementing this filter is how the normalizer came to
+    measure depth over reads the extractor rejects; the same divergence between a
+    streaming pass and this loop would silently assign reads the default mode drops, or
+    drop reads it assigns.
+    """
+    if contig_strand is not None:
+        if read.is_forward and contig_strand != "+":
+            return "wrong_strand"
+        if read.is_reverse and contig_strand != "-":
+            return "wrong_strand"
+    if read.mapping_quality < LRAA_Globals.config["min_mapping_quality"]:
+        return "min_mapping_quality"
+    if read.is_paired and not read.is_proper_pair:
+        return "improper_pair"
+    if read.is_duplicate:
+        return "duplicate"
+    if read.is_qcfail:
+        return "qcfail"
+    if read.is_supplementary:
+        return "supplementary"
+    if read.is_secondary and (
+        primary_alignments_only
+        or not LRAA_Globals.config.get("allow_secondary_alignments", False)
+    ):
+        return "secondary"
+    per_id = Util_funcs.alignment_per_id(read)
+    if per_id is not None and per_id < LRAA_Globals.config["min_per_id"]:
+        return "low_perID"
+    return None
+
+
 class Bam_alignment_extractor:
 
     # ---------------
     # class variables
     # ---------------
+
+
 
     def __init__(self, alignments_bam_filename):
 
@@ -114,73 +155,23 @@ class Bam_alignment_extractor:
         for read in read_fetcher:
             processed += 1
 
-            if contig_strand is not None:
-                if read.is_forward and contig_strand != "+":
-                    continue
-                if read.is_reverse and contig_strand != "-":
-                    continue
-
-            if read.mapping_quality < MIN_MAPPING_QUALITY:
-                discarded_read_counter["min_mapping_quality"] += 1
+            # One shared definition of which alignments are usable evidence, so a
+            # streaming assignment pass cannot drift from this loop. The reason string
+            # keeps the per-reason tallies a boolean would lose.
+            reason = alignment_filter_reason(
+                read, contig_strand, primary_alignments_only
+            )
+            if reason == "wrong_strand":
                 continue
-
-            if read.is_paired and not read.is_proper_pair:
-                discarded_read_counter["improper_pair"] += 1
-                continue
-
-            if read.is_duplicate:
-                discarded_read_counter["duplicate"] += 1
-                continue
-
-            if read.is_qcfail:
-                discarded_read_counter["qcfail"] += 1
-                continue
-
-            if read.is_supplementary:
-                discarded_read_counter["supplementary"] += 1
-                continue
-
-            if read.is_secondary and (
-                primary_alignments_only
-                or not LRAA_Globals.config.get("allow_secondary_alignments", False)
-            ):
-                discarded_read_counter["secondary"] += 1
-                continue
-
-            # determine min per_id based on read type:
-            min_per_id = LRAA_Globals.config["min_per_id"]
-
-            # check read alignment percent identity
-            cigar_stats = read.get_cigar_stats()
-            aligned_base_count = cigar_stats[0][0]
-            if aligned_base_count == 0:
-                aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-
-            mismatch_count = None
-            if read.has_tag("NM"):
-                mismatch_count = int(read.get_tag("NM"))
-            elif read.has_tag("nM"):
-                mismatch_count = int(read.get_tag("nM"))
-            if mismatch_count is not None:
-                per_id = 100 - (mismatch_count / aligned_base_count) * 100
-                # logger.info(f"-read per_id: {per_id}")
-                if per_id < min_per_id:
+            if reason is not None:
+                discarded_read_counter[reason] += 1
+                if reason == "low_perID":
                     read_name = Util_funcs.get_read_name_include_sc_encoding(read)
-                    logger.debug(
-                        "read {} has insufficient per_id {}, < min {} required ".format(
-                            read_name, per_id, min_per_id
-                        )
-                    )
-                    discarded_read_counter["low_perID"] += 1
-                    self._last_discarded_read_names_by_reason["low_perID"].add(
-                        read_name
-                    )
-                    # print(read)
-                    # print("Cigar_stats: " + str(cigar_stats))
+                    self._last_discarded_read_names_by_reason["low_perID"].add(read_name)
                     num_alignments_per_id_fail += 1
-                    continue
-                else:
-                    num_alignments_per_id_ok += 1
+                continue
+            if Util_funcs.alignment_per_id(read) is not None:
+                num_alignments_per_id_ok += 1
 
             if pretty:
                 # Build Pretty_alignment on the fly. Immediately lighten non-candidates for
@@ -250,7 +241,11 @@ class Bam_alignment_extractor:
             ):
                 # raise RuntimeError(f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
                 logger.debug(
-                    f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments"
+                    f"Error, would appear only {frac_alignments_fail_per_id_check} on "
+                    f"{contig_acc} have at least "
+                    f"{LRAA_Globals.config['min_per_id']} percent identity. Please "
+                    "reevaluate your --min_per_id setting for application of LRAA with "
+                    "these alignments"
                 )
 
         if pretty:

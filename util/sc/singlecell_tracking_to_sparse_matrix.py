@@ -183,6 +183,44 @@ class LevelAccumulator:
         )
         return counts_df, matrix, feature_arr, barcode_arr
 
+
+WEIGHTED_TRACKING_MARKER = "use_XW_read_weights_for_quant"
+
+
+def _reject_if_weighted_tracking(filename, opener):
+    """Refuse a tracking file whose rows cover only normalization-retained reads.
+
+    Counts here are sums of frac_assigned, one row per read, and XW is never consulted.
+    A tracking file produced with XW weighting holds rows for the reads coverage
+    normalization kept and none for the reads it discarded, so every cell would come out
+    short -- unevenly, and worst at the high-coverage loci that weighting exists to
+    correct. That is a wrong matrix with nothing about it to look wrong.
+
+    LRAA marks such files in their leading comment block, and this reads it before pandas
+    does, because the parser is configured to treat '#' as a comment and would drop the
+    warning silently.
+    """
+    try:
+        with opener(filename, "rt") as handle:
+            for line in handle:
+                if not line.startswith("#"):
+                    break
+                if WEIGHTED_TRACKING_MARKER in line:
+                    sys.exit(
+                        "Error, {} was produced with --{}.\n"
+                        "Its rows cover only the reads retained by coverage "
+                        "normalization, and frac_assigned is not weighted by XW, so "
+                        "per-cell counts summed from it understate every cell -- most at "
+                        "high-coverage loci. Re-run quantification without that flag to "
+                        "build single-cell matrices.".format(
+                            filename, WEIGHTED_TRACKING_MARKER
+                        )
+                    )
+    except OSError:
+        # unreadable input is the caller's problem to report, not this check's
+        return
+
+
 def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
     """
     Stream the tracking file once and aggregate mapping, gene, isoform,
@@ -216,6 +254,8 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
         "num_exons": np.int64,
         "frac_assigned": np.float32,
     }
+
+    _reject_if_weighted_tracking(filename, opener)
 
     with opener(filename, "rt") as handle:
         read_csv_kwargs = {

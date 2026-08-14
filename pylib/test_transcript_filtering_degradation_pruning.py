@@ -19,6 +19,10 @@ class _DummyMP:
     def get_read_count(self):
         return self._read_count
 
+    def get_read_weight(self):
+        # no read here carried a normalization weight, so weight is the count
+        return float(self._read_count)
+
 
 def _build_transcript(transcript_id, exons, simple_path, read_count):
     transcript = Transcript("chr1", exons, "-")

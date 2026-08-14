@@ -36,14 +36,56 @@ def main():
     parser.add_argument("--normalize_max_cov_level", type=int, default=1000, help="target read depth; coverage above this is thinned, coverage below it is left alone (default: 1000)")
     parser.add_argument("--depth_window", type=int, default=100, help="resolution in bases at which read depth is measured")
     parser.add_argument("--random_seed", type=int, default=42, help="random seed for reproducible sampling (default: 42)")
+    parser.add_argument(
+        "--alignment_filter_mode",
+        type=str,
+        choices=["primary", "with_secondary"],
+        default="with_secondary",
+        help=(
+            "which alignment records constitute the evidence being thinned. Must match "
+            "what the consumer will read: depth and junction support measured over "
+            "records the consumer discards yield acceptance probabilities, and so XW "
+            "weights, for a universe that does not exist downstream. 'primary' counts "
+            "primary alignments only; 'with_secondary' also counts secondaries. "
+            "Supplementary records are excluded either way -- no consumer reads them. "
+            "(default: with_secondary)"
+        ),
+    )
+    parser.add_argument(
+        "--min_per_id",
+        type=float,
+        default=0,
+        help=(
+            "discard alignments below this percent identity when measuring depth and "
+            "when writing output. Must match the consumer's min_per_id (LRAA HiFi mode "
+            "uses 97, the default elsewhere is 80): depth measured over reads the "
+            "consumer rejects yields acceptance probabilities, and so XW weights, for a "
+            "coverage level nothing downstream sees. 0 disables. (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--min_mapping_quality",
+        type=int,
+        default=0,
+        help=(
+            "discard alignments below this MAPQ when measuring depth and when writing "
+            "output. Must match the consumer's min_mapping_quality: multimapping reads "
+            "carry MAPQ 0 at exactly the paralogous loci where thinning decisions "
+            "matter, so counting reads the consumer rejects inflates depth there and "
+            "inflates every surviving read's XW weight. 0 disables. (default: 0)"
+        ),
+    )
 
     args = parser.parse_args()
-    
+
     input_bam_filename = args.input_bam
     output_bam_filename = args.output_bam
     normalize_max_cov_level = args.normalize_max_cov_level
     depth_window = args.depth_window
     random_seed = args.random_seed
+    alignment_filter_mode = args.alignment_filter_mode
+    min_per_id = args.min_per_id
+    min_mapping_quality = args.min_mapping_quality
 
     # sampling is keyed on a hash of the read name, so a read's fate depends on
     # neither its position in the file nor the order reads are visited in
@@ -60,7 +102,10 @@ def main():
 
     # Sampling, merge and index additionally depend on every flag that changes
     # which reads are kept or where they land. The driver holds the window and
-    # seed fixed, but both are exposed on this command line.
+    # seed fixed, but both are exposed on this command line. The filter mode and
+    # per-identity floor belong here too: each changes both the measured depth and
+    # which records are written, so a run at one setting must never reuse another's
+    # sample.
     run_token = Util_funcs.get_hash_code(
         "|".join(
             [
@@ -69,6 +114,9 @@ def main():
                 str(depth_window),
                 str(random_seed),
                 METHOD,
+                alignment_filter_mode,
+                str(min_per_id),
+                str(min_mapping_quality),
                 os.path.realpath(output_bam_filename),
             ]
         )
@@ -101,7 +149,16 @@ def main():
         norm_bam_checkpoint = norm_bam_filename + ".ok"
 
         if not os.path.exists(norm_bam_checkpoint):
-            sift_bam(SS_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed)
+            sift_bam(
+                SS_bam_file,
+                norm_bam_filename,
+                normalize_max_cov_level,
+                depth_window,
+                random_seed,
+                alignment_filter_mode,
+                min_per_id,
+                min_mapping_quality,
+            )
             subprocess.check_call("touch {}".format(norm_bam_checkpoint), shell=True)
         
         SS_norm_bam_files.append(norm_bam_filename)
@@ -144,8 +201,49 @@ def _window_span(lend, rend, depth_window, anchor):
     return range((lend - anchor) // depth_window, (rend - 1 - anchor) // depth_window + 1)
 
 
+def _record_is_evidence(
+    read, alignment_filter_mode, min_per_id=0, min_mapping_quality=0
+):
+    """Whether this record is part of the evidence the consumer will read.
+
+    This must admit exactly what Bam_alignment_extractor.alignment_filter_reason admits.
+    It cannot simply call it: that reads its thresholds from LRAA_Globals.config, and this
+    runs as a separate process whose config holds defaults rather than the caller's
+    settings -- which is why the thresholds arrive as arguments instead.
+
+    Every criterion matters for one reason. A record the consumer discards but this counts
+    inflates measured depth, which lowers acceptance probability, which inflates every
+    surviving read's XW weight at that locus -- describing coverage that does not exist
+    downstream. Supplementary records are never evidence; secondaries are evidence only
+    when the consumer keeps them; and the mapping-quality floor, the duplicate and qcfail
+    flags and the identity floor each exclude reads the extractor also excludes.
+
+    Mapping quality bites hardest when set, because multimapping reads carry MAPQ 0
+    exactly at the paralogous loci where thinning decisions matter most. Percent identity
+    bites most often: on an ONT chr20 bam at the default floor of 80 it is 8% of reads.
+    """
+    if read.is_unmapped or read.is_supplementary:
+        return False
+    if read.is_secondary and alignment_filter_mode == "primary":
+        return False
+    if read.is_paired and not read.is_proper_pair:
+        return False
+    if min_mapping_quality and read.mapping_quality < min_mapping_quality:
+        return False
+    if read.is_duplicate or read.is_qcfail:
+        return False
+    return Util_funcs.alignment_passes_per_id(read, min_per_id)
+
+
 def sift_bam(
-    SS_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed
+    SS_bam_file,
+    norm_bam_filename,
+    normalize_max_cov_level,
+    depth_window,
+    random_seed,
+    alignment_filter_mode="with_secondary",
+    min_per_id=0,
+    min_mapping_quality=0,
 ):
     """Thin coverage toward a target depth, recording each read's sampling weight.
 
@@ -185,7 +283,9 @@ def sift_bam(
         contig_length = dict(zip(reader.references, reader.lengths))
 
         for read in reader.fetch(until_eof=True):
-            if read.is_unmapped:
+            if not _record_is_evidence(
+                read, alignment_filter_mode, min_per_id, min_mapping_quality
+            ):
                 continue
 
             contig = read.reference_name
@@ -209,8 +309,10 @@ def sift_bam(
                 junction_support[(contig, junction)] += 1
 
     logger.info(
-        "measured depth over {} contig(s), {} distinct junction(s)".format(
-            len(window_bases), len(junction_support)
+        "measured depth over {} contig(s), {} distinct junction(s), "
+        "filter={} min_per_id={} min_mapq={}".format(
+            len(window_bases), len(junction_support), alignment_filter_mode,
+            min_per_id, min_mapping_quality,
         )
     )
 
@@ -220,7 +322,9 @@ def sift_bam(
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
         with pysam.AlignmentFile(norm_bam_filename, "wb", template=reader) as writer:
             for read in reader.fetch(until_eof=True):
-                if read.is_unmapped:
+                if not _record_is_evidence(
+                    read, alignment_filter_mode, min_per_id, min_mapping_quality
+                ):
                     continue
                 total += 1
 

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
 import csv
+import gzip
 from collections import defaultdict
 
 
 def read_tsv(path):
-    with open(path, "rt", newline="") as fh:
+    # Tracking is always gzipped; expr is not. Selected by suffix so one reader serves both.
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", newline="") as fh:
         return list(csv.DictReader(iter_non_comment_lines(fh), delimiter="\t"))
 
 
@@ -24,8 +27,8 @@ def assert_close(actual, expected, tol=1e-6):
 def main():
     raw_expr = read_tsv("LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.expr")
     corrected_expr = read_tsv("LRAA.LRAA.quant-only.quant.expr")
-    raw_tracking = read_tsv("LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.tracking")
-    corrected_tracking = read_tsv("LRAA.LRAA.quant-only.quant.tracking")
+    raw_tracking = read_tsv("LRAA.LRAA.quant-only.pre-cross-gene-EM.quant.tracking.gz")
+    corrected_tracking = read_tsv("LRAA.LRAA.quant-only.quant.tracking.gz")
 
     raw_expr_by_tx = {row["transcript_id"]: row for row in raw_expr}
     corrected_expr_by_tx = {row["transcript_id"]: row for row in corrected_expr}

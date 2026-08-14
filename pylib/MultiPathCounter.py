@@ -17,7 +17,7 @@ class MultiPathCountPair:
         self._multipath = multipath
         self.reset_count()
 
-    def increment(self, increment=1):
+    def increment(self, increment=1, weight=None):
         # Keep the pair count and the underlying multipath's internal read_count in sync
         try:
             inc = int(increment)
@@ -27,9 +27,10 @@ class MultiPathCountPair:
             return
         self._count += inc
         # Also bump the multipath's internal count so downstream users of mp.get_read_count()
-        # (e.g., EM, equal assignment) see the aggregated count
+        # (e.g., EM, equal assignment) see the aggregated count. `weight` carries the
+        # normalization weight of those same reads so get_read_weight() stays in step.
         try:
-            self._multipath.include_read_count(inc)
+            self._multipath.include_read_count(inc, weight=weight)
         except Exception:
             pass
 
@@ -91,18 +92,23 @@ class MultiPathCounter:
                 incoming_ids = set()
 
             if incoming_ids:
-                # merge provenance IDs first and learn how many were genuinely new
+                # merge provenance IDs first and learn how many were genuinely new,
+                # plus the normalization weight those new reads carry
+                newly_added = 0
+                newly_added_weight = 0.0
                 try:
                     if hasattr(orig_mp, "merge_read_ids"):
-                        newly_added = orig_mp.merge_read_ids(incoming_ids)
-                    else:
-                        newly_added = 0
+                        newly_added, newly_added_weight = orig_mp.merge_read_ids(
+                            incoming_ids
+                        )
                 except Exception:
-                    newly_added = 0
+                    newly_added, newly_added_weight = 0, 0.0
 
                 # increment count only by truly new unique IDs
                 if newly_added and newly_added > 0:
-                    orig_mp_count_pair.increment(newly_added)
+                    orig_mp_count_pair.increment(
+                        newly_added, weight=newly_added_weight
+                    )
 
                 # DEBUG guardrail: ensure count equals number of unique IDs
                 if LRAA_Globals.DEBUG:

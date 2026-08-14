@@ -304,6 +304,46 @@ class Pretty_alignment:
         )
         return left_ok or right_ok
 
+
+    def prune_long_terminal_introns_single(self, prefix=""):
+        """Prune this alignment's over-long terminal introns. Returns True if trimmed.
+
+        The per-alignment core of prune_long_terminal_introns, split out so a streaming
+        pass can call it per read without the batch banner. `prefix` is empty by default
+        precisely so the streaming caller emits nothing: at a billion reads a single INFO
+        line per call is a billion lines of log.
+        """
+        alignment_segments = self.get_pretty_alignment_segments()
+        intron_segments = self.get_introns()
+        trimmed = False
+        max_intron_length = LRAA_Globals.config["max_intron_length"]
+
+        if len(intron_segments) > 0:
+            leftmost_intron = intron_segments.pop(0)
+            if leftmost_intron[1] - leftmost_intron[0] + 1 > max_intron_length:
+                if prefix:
+                    logger.info(
+                        f"{prefix}-pruning long intron {leftmost_intron} from left of "
+                        f"pretty alignment {self}"
+                    )
+                alignment_segments.pop(0)
+                trimmed = True
+
+        if len(intron_segments) > 0:
+            rightmost_intron = intron_segments.pop()
+            if rightmost_intron[1] - rightmost_intron[0] + 1 > max_intron_length:
+                if prefix:
+                    logger.info(
+                        f"{prefix}-pruning long intron {rightmost_intron} from right of "
+                        f"pretty alignment {self}"
+                    )
+                alignment_segments.pop()
+                trimmed = True
+
+        if trimmed:
+            self.set_pretty_alignment_segments(alignment_segments)
+
+        return trimmed
     @classmethod
     def prune_long_terminal_introns(cls, pretty_alignments, splice_graph):
         # Prefix logs with contig/strand when available via splice_graph
@@ -351,14 +391,26 @@ class Pretty_alignment:
         return
 
     @classmethod
-    def try_correct_alignments(cls, pretty_alignments_list, splice_graph, contig_seq):
-        try:
-            ca = splice_graph.get_contig_acc() if splice_graph else None
-            cs = splice_graph.get_contig_strand() if splice_graph else None
-            prefix = f"[{ca}{cs}] " if ca and cs else ""
-        except Exception:
-            prefix = ""
-        logger.info(f"{prefix}Attempting to correct alignments at soft-clips")
+    def try_correct_alignments(
+        cls, pretty_alignments_list, splice_graph, contig_seq, quiet=False
+    ):
+        """Correct soft-clipped alignments against the graph's introns.
+
+        `quiet` suppresses the banner, the progress bar and the completion summary. A
+        streaming caller invokes this one alignment at a time, where the per-call banner
+        and a freshly constructed tqdm would cost one log line and one progress object per
+        candidate read -- tens of millions of each on a billion-read library. The
+        correction itself is per-alignment and unaffected.
+        """
+        prefix = ""
+        if not quiet:
+            try:
+                ca = splice_graph.get_contig_acc() if splice_graph else None
+                cs = splice_graph.get_contig_strand() if splice_graph else None
+                prefix = f"[{ca}{cs}] " if ca and cs else ""
+            except Exception:
+                prefix = ""
+            logger.info(f"{prefix}Attempting to correct alignments at soft-clips")
 
         max_softclip_realign_test = LRAA_Globals.config["max_softclip_realign_test"]
         min_softclip_realign_test = LRAA_Globals.config["min_softclip_realign_test"]
@@ -371,7 +423,11 @@ class Pretty_alignment:
         total = len(pretty_alignments_list) if pretty_alignments_list is not None else 0
         # Optional progress bar via tqdm, imported lazily to avoid hard dependency
         tqdm_fn = None
-        if os.environ.get("LRAA_PROGRESS_TQDM", "1") == "1" and total > 0:
+        if (
+            not quiet
+            and os.environ.get("LRAA_PROGRESS_TQDM", "1") == "1"
+            and total > 0
+        ):
             try:
                 from tqdm import tqdm as tqdm_fn  # type: ignore
             except Exception:
@@ -394,6 +450,8 @@ class Pretty_alignment:
 
         def _update_progress():
             nonlocal last_log_t
+            if quiet:
+                return
             if use_tqdm and pbar is not None:
                 pbar.update(1)
             else:
@@ -606,10 +664,11 @@ class Pretty_alignment:
             except Exception:
                 pass
 
-        logger.info(
-            f"completed try_correct_alignments: processed={processed}, corrected={corrected}, sec={time.time()-start_t:.2f}"
-        )
-        return
+        if not quiet:
+            logger.info(
+                f"completed try_correct_alignments: processed={processed}, corrected={corrected}, sec={time.time()-start_t:.2f}"
+            )
+        return corrected
 
     def to_corrected_pysam_alignment(self, orig_alignment=None):
         """
