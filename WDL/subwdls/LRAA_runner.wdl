@@ -16,7 +16,6 @@ task LRAA_runner_task {
         # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
         Boolean no_parallelize_contigs = false
         String? contig
-        Int? num_parallel_contigs
         
         Int? num_total_reads
         File? cell_list
@@ -40,8 +39,11 @@ task LRAA_runner_task {
 
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
-        # CPU cores per contig worker (passed to --num_threads_per_worker)
-        Int numThreadsPerWorker
+        # TOTAL cores for this task: both the runtime cpu request and the --cpu_budget
+        # that LRAA divides across its work units. One declaration, so the cores the
+        # task is given and the cores LRAA believes it has cannot disagree. This is what
+        # numThreadsPerWorker and num_parallel_contigs used to MULTIPLY into.
+        Int cpu
         Int? memoryGB
         Int diskSizeGB = 128
         Int progress_report_interval_seconds = 300
@@ -184,7 +186,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_per_id) then "--min_per_id " + min_per_id else ""} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
-                                 --num_threads_per_worker ~{numThreadsPerWorker} \
+                                 --cpu_budget ~{cpu} \
                                  ~{true='' false='--no_rescue_unassigned_reads_via_transcriptome_alignment' rescue_unassigned_reads_via_transcriptome_alignment} \
                                  ~{"--min_mapping_quality " + min_mapping_quality} \
                                  ~{"--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant} \
@@ -199,7 +201,6 @@ task LRAA_runner_task {
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
-                                 ~{if defined(num_parallel_contigs) then "--num_parallel_contigs " + num_parallel_contigs else ""} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
         )
@@ -247,7 +248,7 @@ task LRAA_runner_task {
                 fi
                 mv "${normalized_sg_bams[0]}" "$normalized_sg_bam_out"
                 if [[ ! -f "${normalized_sg_bam_out}.bai" ]]; then
-                    samtools index -@ ~{numThreadsPerWorker} "$normalized_sg_bam_out"
+                    samtools index -@ ~{cpu} "$normalized_sg_bam_out"
                 fi
             fi
         fi
@@ -268,7 +269,7 @@ task LRAA_runner_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 30
-        cpu: "~{numThreadsPerWorker}"
+        cpu: cpu
         memory: "~{effective_memoryGB} GiB"
         disks: "local-disk ~{diskSizeGB} HDD"
     }
@@ -291,7 +292,6 @@ workflow LRAA_runner {
         # Expose toggle to workflow as well; default on to match current LRAA quant defaults.
         Boolean no_parallelize_contigs = false
         String? contig
-        Int? num_parallel_contigs
         
         Int? num_total_reads
         File? cell_list
@@ -313,8 +313,8 @@ workflow LRAA_runner {
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
-        # CPU cores per contig worker (passed to --num_threads_per_worker)
-        Int numThreadsPerWorker
+        # TOTAL cores for the run: the task's cpu request and its --cpu_budget.
+        Int cpu
     
         Int? memoryGB
         Int diskSizeGB = 128
@@ -335,7 +335,6 @@ workflow LRAA_runner {
             oversimplify = oversimplify,
             no_parallelize_contigs = no_parallelize_contigs,
             contig = contig,
-            num_parallel_contigs = num_parallel_contigs,
             num_total_reads=num_total_reads,
             cell_list=cell_list,
             min_per_id=min_per_id,
@@ -354,7 +353,7 @@ workflow LRAA_runner {
             read_umi_tag = read_umi_tag,
             shardno=shardno,
             docker=docker,
-            numThreadsPerWorker=numThreadsPerWorker,
+            cpu=cpu,
             memoryGB=memoryGB,
             diskSizeGB=diskSizeGB,
             region=region,

@@ -26,10 +26,11 @@ workflow LRAA_cell_cluster_guided {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
         
-        Int numThreadsPerWorker = 2
+        # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides
+        # across work units. There is no second knob to multiply it by.
+        Int cpu = 2
         # Used only when main_chromosomes is non-empty and inner LRAA.wdl calls are chromosome-sharded.
-        Int numThreadsPerWorkerScattered = 9
-        Int num_parallel_contigs = 3
+        Int cpuScattered = 9
         # Optional override for direct inner LRAA.wdl runs.
         Int? memoryGB
         # Optional override for chromosome-sharded inner LRAA.wdl workers only.
@@ -99,9 +100,8 @@ workflow LRAA_cell_cluster_guided {
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    numThreadsPerWorker = numThreadsPerWorker,
-                    numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-                    num_parallel_contigs = num_parallel_contigs,
+                    cpu = cpu,
+                    cpuScattered = cpuScattered,
                     memoryGB = memoryGB,
                     memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
                     docker = docker
@@ -159,9 +159,8 @@ workflow LRAA_cell_cluster_guided {
             main_chromosomes = main_chromosomes,
             cell_barcode_tag = cell_barcode_tag,
             read_umi_tag = read_umi_tag,
-            num_threads_per_worker = numThreadsPerWorker,
-            num_threads_per_worker_scattered = numThreadsPerWorkerScattered,
-            num_parallel_contigs = num_parallel_contigs,
+            cpu = cpu,
+            cpu_scattered = cpuScattered,
             memoryGB_normalize = memoryGBquantNormalize,
             memoryGB_merge = memoryGBquantMerge,
             memoryGB_quant = memoryGBquantFinal,

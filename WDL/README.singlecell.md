@@ -24,7 +24,7 @@ Optional:
 - `region` – restricts run to a specific region (forces direct mode)
 
 Resources:
-- `numThreadsPerWorker` and `numThreadsPerWorkerScattered` control LRAA worker threads for direct and chromosome-sharded runs, respectively
+- `cpu` and `cpuScattered` are the core counts for direct and chromosome-sharded LRAA tasks. Each is the task's `cpu` runtime request and the `--cpu_budget` LRAA divides across its work units, so the cores requested and the cores LRAA spends are the same number. They replace `numThreadsPerWorker`, `numThreadsPerWorkerScattered` and `num_parallel_contigs`, which were multiplied rather than divided: `numThreadsPerWorker 5` alongside `num_parallel_contigs 3` let LRAA start three workers of five threads on a five-core task
 - `memoryGB` is an optional override for direct LRAA runs; when unset, `LRAA.wdl` computes memory as `max(64 GiB, ceil(1.5 x input BAM size in GiB))`
 - `memoryGBPerWorkerScattered` is an optional override for chromosome-sharded LRAA workers only; when unset, each shard self-sizes in `subwdls/LRAA_runner.wdl` with a `32 GiB` floor and larger allocations for mid-size and large shard BAMs
 - `main_chromosomes` determines whether LRAA runs direct or chromosome-sharded; if empty, `memoryGBPerWorkerScattered` has no effect because the run stays in direct mode

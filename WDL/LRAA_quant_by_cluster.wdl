@@ -37,8 +37,9 @@ workflow LRAA_quant_by_cluster {
         # Chromosome splitting parameters for LRAA quantification
         String main_chromosomes = "" # Set to split by chromosomes, leave empty to run without splitting
         
-        Int num_threads_per_worker = 2
-        Int num_parallel_contigs = 3
+        # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides
+        # across work units. There is no second knob to multiply it by.
+        Int cpu = 2
         Int memoryGB_normalize = 8
         Int memoryGB_merge = 16
         # Optional override for direct quant-only LRAA.wdl calls per cluster.
@@ -47,7 +48,7 @@ workflow LRAA_quant_by_cluster {
         # This applies only when main_chromosomes is non-empty for the per-cluster quantification calls below.
         Int? memoryGB_quant_scattered
         # Used only for chromosome-sharded per-cluster quantification runs.
-        Int num_threads_per_worker_scattered = 2
+        Int cpu_scattered = 2
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
@@ -140,9 +141,8 @@ workflow LRAA_quant_by_cluster {
                 main_chromosomes = main_chromosomes,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
-                numThreadsPerWorker = num_threads_per_worker,
-                numThreadsPerWorkerScattered = num_threads_per_worker_scattered,
-                num_parallel_contigs = num_parallel_contigs,
+                cpu = cpu,
+                cpuScattered = cpu_scattered,
                 memoryGB = memoryGB_quant,
                 memoryGBPerWorkerScattered = memoryGB_quant_scattered,
                 docker = docker

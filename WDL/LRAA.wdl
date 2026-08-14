@@ -41,12 +41,14 @@ workflow LRAA_wf {
         String read_umi_tag = "XM"
 
         #  non-scattered runs
-        Int numThreadsPerWorker = 5
+        # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across
+        # work units. numThreadsPerWorker and num_parallel_contigs multiplied instead:
+        # 5 x 3 asked LRAA for up to fifteen cores on a five-core task.
+        Int cpu = 5
         Int? memoryGB
-        Int num_parallel_contigs = 3
 
         # scattered runs
-        Int numThreadsPerWorkerScattered = 5
+        Int cpuScattered = 5
         Int? memoryGBPerWorkerScattered
         
         
@@ -112,7 +114,6 @@ workflow LRAA_wf {
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,
                     contig = contig_name,
-                    num_parallel_contigs = num_parallel_contigs,
                     num_total_reads = scatter_num_total_reads,
                     cell_list = cell_list,
                     min_per_id = min_per_id,
@@ -124,7 +125,7 @@ workflow LRAA_wf {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    numThreadsPerWorker = numThreadsPerWorkerScattered,
+                    cpu = cpuScattered,
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
@@ -180,8 +181,7 @@ workflow LRAA_wf {
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
-                numThreadsPerWorker = numThreadsPerWorker,
-                num_parallel_contigs = num_parallel_contigs,
+                cpu = cpu,
                 num_total_reads = num_total_reads,
                 cell_list = cell_list,
                 min_mapping_quality = min_mapping_quality,
