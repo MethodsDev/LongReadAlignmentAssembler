@@ -10,7 +10,7 @@ test: clean
 		--bam data/ENSMUST00000177779.8.rescued_original_alignments.bam \
 		--no_norm \
 		--no_parallelize_contigs \
-		--num_threads_per_worker 1 \
+		--cpu_budget 1 \
 		--output_prefix $(PREFIX)
 	$(MAKE) validate
 
@@ -28,8 +28,6 @@ clean:
 	rm -rf __$(OUT_PREFIX).* \
 		$(OUT_PREFIX).* \
 		tx_rescue.* \
-		reassign_multigene_tracking.* \
-		*.quant.secondary_rescue.bam.count \
 		__init_clusters.tsv \
 		$(PREFIX).* \
 		__$(PREFIX).*

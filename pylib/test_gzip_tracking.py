@@ -66,23 +66,14 @@ def _write_bam(path, gtf, genome):
     return path
 
 
-def _run(tmp_path, prefix, extra, allow_secondary=False):
-    """Run LRAA on the fixture.
-
-    `allow_secondary` leaves the secondary-alignment policy at its default (enabled), which
-    is what turns on the final cross-gene EM step. It defaults to False here only because
-    most of these tests want the shortest path to a tracking file; any test that means to
-    exercise the correction branch MUST pass allow_secondary=True, or it silently checks the
-    branch it was written to cover being skipped.
-    """
+def _run(tmp_path, prefix, extra):
+    """Run LRAA on the fixture."""
     gtf, genome = _write_inputs(tmp_path)
     bam = _write_bam(tmp_path / "r.bam", gtf, genome)
     cmd = [sys.executable, LRAA, "--quant_only",
            "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / prefix),
            "--no_cleanup", "--no_parallelize_contigs"]
-    if not allow_secondary:
-        cmd.append("--no_allow_secondary_alignments")
     cmd += extra
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     return r
@@ -140,45 +131,6 @@ def test_compressed_tracking_decompresses_to_stable_content(tmp_path):
     assert rows_b == rows_a, "two runs over the same input produced different tracking content"
 
 
-def test_gzip_survives_cross_gene_em_with_secondary_alignments(tmp_path):
-    """The default path runs cross-gene EM, which MOVES the tracking file before rewriting it.
-
-    allow_secondary_alignments defaults to True, so _maybe_run_cross_gene_em_for_secondary_
-    alignments moves the finished tracking file to a pre-correction name and hands that path
-    to reassign_multigene_tracking_reads.py, which chooses its reader from the suffix alone.
-    Dropping .gz from that intermediate name fed gzip magic to a UTF-8 decoder:
-
-        UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b in position 1
-
-    Every other test in this file passes --no_allow_secondary_alignments and so never
-    reaches that branch, which is exactly how the bug survived them. This one deliberately
-    leaves secondaries at their default, and asserts the pre-correction artifact exists and
-    is real gzip -- not merely that the run exited 0, since a run that skipped the correction
-    entirely would also exit 0.
-    """
-    r = _run(tmp_path, "out", [], allow_secondary=True)
-    assert r.returncode == 0, (
-        "gzip run failed under the default secondary-alignment policy:\n"
-        + r.stderr[-3000:]
-    )
-
-    final = tmp_path / "out.LRAA.quant-only.quant.tracking.gz"
-    pre = tmp_path / "out.LRAA.quant-only.pre-cross-gene-EM.quant.tracking.gz"
-
-    assert final.exists(), "final gzipped tracking missing"
-    assert pre.exists(), (
-        "no pre-correction tracking file, so cross-gene EM never ran and this test proved "
-        "nothing about the path that was broken"
-    )
-    assert not (tmp_path / "out.LRAA.quant-only.pre-cross-gene-EM.quant.tracking").exists(), (
-        "pre-correction file written without .gz: the utility will parse gzip bytes as text"
-    )
-
-    for path in (final, pre):
-        with open(path, "rb") as fh:
-            assert fh.read(2) == b"\x1f\x8b", f"{path.name} is not gzip"
-        assert _content_rows(path), f"{path.name} decompressed to no rows"
-
 
 def test_no_shard_tracking_of_either_encoding_survives_a_cleanup_run(tmp_path):
     """After a cleaning run, no shard tracking survives under either encoding.
@@ -205,7 +157,7 @@ def test_no_shard_tracking_of_either_encoding_survives_a_cleanup_run(tmp_path):
     cmd = [sys.executable, LRAA, "--quant_only",
            "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--no_parallelize_contigs", "--no_allow_secondary_alignments",
+           "--no_parallelize_contigs",
            "--clean_parallel_tmp", "--no_cleanup"]
     # First pass with --no_cleanup so a shard tree exists, then plant a plain sibling beside
     # each .gz so the cleanup list's stale-suffix entry has something to remove. Without this
@@ -264,8 +216,7 @@ def test_legacy_uncompressed_shard_is_cleared_when_the_shard_is_rewritten(tmp_pa
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(tmp_path / "out"),
-            "--no_cleanup", "--no_parallelize_contigs",
-            "--no_allow_secondary_alignments"]
+            "--no_cleanup", "--no_parallelize_contigs"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -315,8 +266,7 @@ def test_ambiguous_shard_with_both_encodings_is_not_reused(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_cleanup", "--no_parallelize_contigs",
-            "--no_allow_secondary_alignments"]
+            "--no_cleanup", "--no_parallelize_contigs"]
     r1 = subprocess.run(base + [], capture_output=True, text=True,
                         cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -372,12 +322,10 @@ def test_legacy_uncompressed_output_is_removed_from_the_prefix(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_parallelize_contigs", "--no_allow_secondary_alignments"]
+            "--no_parallelize_contigs"]
 
     plain = tmp_path / "out.LRAA.quant-only.quant.tracking"
-    pre_plain = tmp_path / "out.LRAA.quant-only.pre-cross-gene-EM.quant.tracking"
     plain.write_text("legacy\tuncompressed\tfinal\trow\n")
-    pre_plain.write_text("legacy\tuncompressed\tpre\trow\n")
 
     r = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-2000:]
@@ -387,9 +335,6 @@ def test_legacy_uncompressed_output_is_removed_from_the_prefix(tmp_path):
     assert not plain.exists(), (
         "the older version's uncompressed tracking survived beside the compressed one: a "
         "consumer globbing *.quant.tracking would read a stale file with no indication"
-    )
-    assert not pre_plain.exists(), (
-        "the older version's uncompressed pre-correction tracking survived"
     )
 
 
@@ -413,8 +358,7 @@ def test_ambiguous_new_root_is_not_overridden_by_complete_legacy_root(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_cleanup", "--no_parallelize_contigs",
-            "--no_allow_secondary_alignments"]
+            "--no_cleanup", "--no_parallelize_contigs"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -504,8 +448,7 @@ def test_shard_without_ok_is_refused_even_when_tracking_matches(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(tmp_path / "out"),
-            "--no_cleanup", "--no_parallelize_contigs",
-            "--no_allow_secondary_alignments"]
+            "--no_cleanup", "--no_parallelize_contigs"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]

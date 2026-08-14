@@ -1,6 +1,8 @@
 
 test:
 
+include ../../lraa_test_docker.mk
+
 MINIWDL_CFG = ../../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 
@@ -8,18 +10,18 @@ test_wdls:  test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl te
 
 
 test_full_sc_pipe_basic_wdl:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.inputs.json -d sc_pipe_outdir-basic --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.inputs.json -d sc_pipe_outdir-basic $(LRAA_WDL_DOCKER_CORE_SC) --verbose
 
 
 test_full_sc_pipe_basic_wdl_QOnly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.inputs.json  -d sc_pipe_outdir-basic-QOnly  --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.inputs.json  -d sc_pipe_outdir-basic-QOnly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
 
 
 test_full_sc_pipe_cluster_guided_wdl:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided $(LRAA_WDL_DOCKER_CORE_SC) --verbose
 
 test_full_sc_pipe_cluster_guided_wdl_QOnly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
 
 
 

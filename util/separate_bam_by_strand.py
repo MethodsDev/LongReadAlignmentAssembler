@@ -14,6 +14,7 @@ sys.path.insert(
 )
 from Pretty_alignment import Pretty_alignment
 import Util_funcs
+import LRAA_Globals
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +22,59 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# The intron-length rule lives in pylib/Util_funcs.py, which is the single
+# implementation shared with pylib/Bam_alignment_extractor.py so that the
+# splice-graph input and read assignment always see one record set.  Re-bound here
+# because it is part of this module's filtering vocabulary.
+get_longest_intron_length = Util_funcs.get_longest_intron_length
+
+# reasons for discarding an input record, in the order they are tested.
+# Each discarded record is counted under exactly one reason, so that the
+# discard counts plus the written records sum to the records read.
+DISCARD_REASONS = (
+    "unmapped",
+    "no_chromosome",
+    "secondary",
+    "supplementary",
+    "duplicate",
+    "qcfail",
+    "long_intron",
+)
+
+
+def discard_counter_name(discard_reason):
+    return "num_records_discarded_" + discard_reason
+
+
+def get_discard_reason(read, max_intron_length):
+    """returns the reason for discarding the read, or None if the read is retained.
+
+    max_intron_length <= 0 disables intron length filtering.
+    """
+
+    if read.is_unmapped:
+        return "unmapped"
+
+    if read.reference_id < 0:
+        return "no_chromosome"
+
+    if read.is_secondary:
+        return "secondary"
+
+    if read.is_supplementary:
+        return "supplementary"
+
+    if read.is_duplicate:
+        return "duplicate"
+
+    if read.is_qcfail:
+        return "qcfail"
+
+    if Util_funcs.has_disqualifying_long_intron(read, max_intron_length):
+        return "long_intron"
+
+    return None
 
 
 def main():
@@ -60,6 +114,13 @@ def main():
         help="genome fasta file, required if --infer_read_orient",
     )
 
+    parser.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+        help="alignments containing any intron (CIGAR 'N' operation) longer than this are discarded; set to 0 or a negative value to disable intron length filtering",
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.bam
@@ -68,6 +129,7 @@ def main():
     infer_read_orient_flag = args.infer_read_orient
     genome_fasta = args.genome
     gtf_file = args.gtf
+    max_intron_length = args.max_intron_length
 
     #########
     ### begin
@@ -81,10 +143,60 @@ def main():
         if gtf_file:
             chrom_to_itree = build_chrom_itrees(gtf_file)
 
-    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
-
     top_strand_bam_filename = output_prefix + ".+.bam"
     bottom_strand_bam_filename = output_prefix + ".-.bam"
+
+    output_bam_files = (top_strand_bam_filename, bottom_strand_bam_filename)
+
+    if max_intron_length > 0:
+        logger.info(
+            "-discarding alignments having any intron longer than {}".format(
+                max_intron_length
+            )
+        )
+    else:
+        logger.info("-intron length filtering disabled")
+
+    counters = split_bam_by_strand(
+        input_bam_filename,
+        top_strand_bam_filename,
+        bottom_strand_bam_filename,
+        max_intron_length,
+        infer_read_orient_flag=infer_read_orient_flag,
+        genome_fasta=genome_fasta,
+        chrom_to_itree=chrom_to_itree,
+    )
+
+    if counters["num_records"] == 0:
+        logger.warning("No records detected for {}".format(input_bam_filename))
+    else:
+        logger.info(build_report(counters, infer_read_orient_flag))
+
+    # index the bams
+    for output_bam_file in output_bam_files:
+        subprocess.check_call("samtools index {}".format(output_bam_file), shell=True)
+
+    sys.exit(0)
+
+
+def split_bam_by_strand(
+    input_bam_filename,
+    top_strand_bam_filename,
+    bottom_strand_bam_filename,
+    max_intron_length,
+    infer_read_orient_flag=False,
+    genome_fasta=None,
+    chrom_to_itree=None,
+):
+    """writes the retained records of the input bam to the strand-specific bam files
+    and returns the record accounting as a dict of counters.
+
+    Only primary, non-supplementary alignments passing the intron length
+    criterion are retained; every other input record is discarded here and so
+    excluded from all downstream processing.
+    """
+
+    bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
 
     top_strand_bamfile_writer = pysam.AlignmentFile(
         top_strand_bam_filename, "wb", template=bamfile_reader
@@ -93,32 +205,36 @@ def main():
         bottom_strand_bam_filename, "wb", template=bamfile_reader
     )
 
-    output_bam_files = (top_strand_bam_filename, bottom_strand_bam_filename)
-
     chrom_seq = None
     prev_chrom = None
 
-    # general stats
-    num_records = 0
-    num_forward = 0
-    num_reverse = 0
-    num_neither = 0
+    counters = {
+        # general stats
+        "num_records": 0,
+        "num_forward": 0,
+        "num_reverse": 0,
+        "num_neither": 0,
+        # infer stats
+        "num_inferred_by_splice_dinucs": 0,
+        "num_inferred_by_annot_overlap": 0,
+        "num_records_strand_flipped": 0,
+        "num_records_strand_uncertain": 0,
+    }
 
-    # infer stats
-    num_inferred_by_splice_dinucs = 0
-    num_inferred_by_annot_overlap = 0
-    num_records_strand_flipped = 0
-    num_records_strand_uncertain = 0
+    # discard stats, one counter per discard reason
+    for discard_reason in DISCARD_REASONS:
+        counters[discard_counter_name(discard_reason)] = 0
 
     for read in bamfile_reader:
 
-        chrom = bamfile_reader.get_reference_name(read.reference_id)
+        counters["num_records"] += 1
 
-        if chrom is None:
+        discard_reason = get_discard_reason(read, max_intron_length)
+        if discard_reason is not None:
+            counters[discard_counter_name(discard_reason)] += 1
             continue
-            # raise RuntimeError("Error, read has no chromosome assignment: " + str(read))
 
-        num_records += 1
+        chrom = bamfile_reader.get_reference_name(read.reference_id)
 
         strand = "+" if read.is_forward else "-"
         init_strand = strand
@@ -136,89 +252,98 @@ def main():
             # first try by dinuc splice sites of spliced introns from read
             strand = infer_spliced_orient(pretty_alignment, chrom_seq)
             if strand != "?":
-                num_inferred_by_splice_dinucs += 1
+                counters["num_inferred_by_splice_dinucs"] += 1
             elif chrom_to_itree is not None:
                 # try by annotation mapping
                 strand = infer_transcribed_orient_via_annotation_mapping(
                     pretty_alignment, chrom_to_itree[chrom]
                 )
                 if strand != "?":
-                    num_inferred_by_annot_overlap += 1
+                    counters["num_inferred_by_annot_overlap"] += 1
 
             # fix strand setting in the read alignment record
             if strand != "?" and strand != init_strand:
                 read.is_reverse = True if strand == "-" else False
-                num_records_strand_flipped += 1
+                counters["num_records_strand_flipped"] += 1
 
         if strand == "?":
-            num_records_strand_uncertain += 1
+            counters["num_records_strand_uncertain"] += 1
             # set to aligned orientation
             strand = init_strand
 
         # write strand-specific records
         if strand == "+":
             top_strand_bamfile_writer.write(read)
-            num_forward += 1
+            counters["num_forward"] += 1
 
         elif strand == "-":
             bottom_strand_bamfile_writer.write(read)
-            num_reverse += 1
+            counters["num_reverse"] += 1
 
         else:
-            num_neither += 1
+            counters["num_neither"] += 1
 
     top_strand_bamfile_writer.close()
     bottom_strand_bamfile_writer.close()
+    bamfile_reader.close()
 
-    # assert num_records > 0, "No records read from input bam file: {}".format(input_bam_filename)
+    return counters
 
-    if num_records == 0:
-        logger.warning("No aligned reads detected for {}".format(input_bam_filename))
 
-    else:
+def build_report(counters, infer_read_orient_flag=False):
+    """record accounting summary, every count reported against the number of
+    records read as denominator"""
 
-        report_vals = [
-            "Num input bam records: {}".format(num_records),
-            "Num top strand: {} = {:.1f}%".format(
-                num_forward, num_forward / num_records * 100
+    num_records = counters["num_records"]
+
+    def as_pct_of_total(count):
+        return "{} = {:.1f}% of {}".format(
+            count, count / num_records * 100, num_records
+        )
+
+    report_vals = ["Num input bam records: {}".format(num_records)]
+
+    num_records_discarded = 0
+    for discard_reason in DISCARD_REASONS:
+        count = counters[discard_counter_name(discard_reason)]
+        num_records_discarded += count
+        report_vals.append(
+            "Num records discarded as {}: {}".format(
+                discard_reason, as_pct_of_total(count)
+            )
+        )
+
+    report_vals += [
+        "Num records discarded (all reasons): {}".format(
+            as_pct_of_total(num_records_discarded)
+        ),
+        "Num records retained: {}".format(
+            as_pct_of_total(num_records - num_records_discarded)
+        ),
+        "Num top strand: {}".format(as_pct_of_total(counters["num_forward"])),
+        "Num bottom strand: {}".format(as_pct_of_total(counters["num_reverse"])),
+        "Num neither strand and ignored: {}".format(
+            as_pct_of_total(counters["num_neither"])
+        ),
+    ]
+
+    if infer_read_orient_flag:
+        report_vals += [
+            "Num read orientations inferred by dinuc splice sites: {}".format(
+                as_pct_of_total(counters["num_inferred_by_splice_dinucs"])
             ),
-            "Num bottom strand: {} = {:.1f}%".format(
-                num_reverse, num_reverse / num_records * 100
+            "Num read orientations inferred by annotation overlap: {}".format(
+                as_pct_of_total(counters["num_inferred_by_annot_overlap"])
             ),
-            "Num neither strand and ignored: {} = {:.1f}%".format(
-                num_neither, num_neither / num_records
+            "Num read orientations flipped: {}".format(
+                as_pct_of_total(counters["num_records_strand_flipped"])
+            ),
+            "Num reads with uncertain orientation: {}".format(
+                as_pct_of_total(counters["num_records_strand_uncertain"])
             ),
         ]
 
-        if infer_read_orient_flag:
-            report_vals += [
-                "Num read orientations inferred by dinuc splice sites: {} = {:.1f}%".format(
-                    num_inferred_by_splice_dinucs,
-                    num_inferred_by_splice_dinucs / num_records * 100,
-                ),
-                "Num read orientations inferred by annotation overlap: {} = {:.1f}%".format(
-                    num_inferred_by_annot_overlap,
-                    num_inferred_by_annot_overlap / num_records * 100,
-                ),
-                "Num read orientations flipped: {} = {:.1f}%".format(
-                    num_records_strand_flipped,
-                    num_records_strand_flipped / num_records * 100,
-                ),
-                "Num reads with uncertaion orientation: {} = {:.1f}%".format(
-                    num_records_strand_uncertain,
-                    num_records_strand_uncertain / num_records * 100,
-                ),
-            ]
-
-        report = "\n".join(report_vals)
-
-        logger.info(report)
-
-    # index the bams
-    for output_bam_file in output_bam_files:
-        subprocess.check_call("samtools index {}".format(output_bam_file), shell=True)
-
-    sys.exit(0)
+    return "\n".join(report_vals)
 
 
 def infer_spliced_orient(pretty_alignment, contig_seq):

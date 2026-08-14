@@ -134,7 +134,7 @@ def test_supplementary_records_do_not_inflate_depth(tmp_path):
     src = tmp_path / "sup.bam"
     _write_bam(src, reads)
     out = tmp_path / "sup.norm.bam"
-    norm.sift_bam(str(src), str(out), 100, 100, 42, "primary")
+    norm.sift_bam(str(src), str(out), 100, 100, 42)
 
     kept = _load(out)
     assert not any(k.startswith("suppl") for k in kept), "supplementary records are not evidence"
@@ -143,12 +143,17 @@ def test_supplementary_records_do_not_inflate_depth(tmp_path):
     assert all(w == pytest.approx(1.0) for w, _ in real.values())
 
 
-def test_secondary_records_count_only_when_the_consumer_keeps_them(tmp_path):
-    """The filter mode must decide, because the consumer's policy decides.
+def test_secondary_records_never_count_as_depth(tmp_path):
+    """Secondaries are not evidence, unconditionally -- there is no mode that admits them.
 
-    Under primary-only the secondaries are neither counted nor written, so the locus
-    stays under target. With secondaries retained they are part of the evidence and
-    the same locus is over target, so it thins.
+    Alignment intake is primary non-supplementary only and is not configurable, so a
+    secondary record is one no consumer ever sees. Counting one would inflate measured
+    depth, lower the acceptance probability, and inflate every surviving read's XW weight
+    at that locus.
+
+    This fixture is load-bearing beyond its own assertion: the real test corpora contain
+    zero secondary records, so the secondary branch of the retention predicate is reachable
+    only from hand-built flags like these.
     """
     header = _header()
     reads = [_read(header, f"real{i}", 50000 + (i % 20), f"{READ_LEN}M") for i in range(40)]
@@ -159,24 +164,21 @@ def test_secondary_records_count_only_when_the_consumer_keeps_them(tmp_path):
     src = tmp_path / "sec.bam"
     _write_bam(src, reads)
 
-    prim = tmp_path / "sec.primary.bam"
-    norm.sift_bam(str(src), str(prim), 100, 100, 42, "primary")
-    kept_prim = _load(prim)
-    assert not any(k.startswith("sec") for k in kept_prim)
-    assert len([k for k in kept_prim if k.startswith("real")]) == 40
-    assert all(w == pytest.approx(1.0) for w, _ in kept_prim.values())
-
-    both = tmp_path / "sec.with.bam"
-    norm.sift_bam(str(src), str(both), 100, 100, 42, "with_secondary")
-    kept_both = _load(both)
-    assert len(kept_both) < 440, "counted as evidence, the locus is over target and thins"
-    assert any(w > 1.0 for w, _ in kept_both.values()), "thinned reads must carry a weight"
+    out = tmp_path / "sec.norm.bam"
+    norm.sift_bam(str(src), str(out), 100, 100, 42)
+    kept = _load(out)
+    assert not any(k.startswith("sec") for k in kept), "secondary records are not evidence"
+    # 440 records at this locus would be over target; the 40 real ones are not, so they
+    # pass through unthinned and unweighted. That is the whole point: the 400 secondaries
+    # must not have been counted.
+    assert len([k for k in kept if k.startswith("real")]) == 40
+    assert all(w == pytest.approx(1.0) for w, _ in kept.values())
 
 
 def test_records_the_consumer_rejects_do_not_inflate_depth(tmp_path):
     """Depth must be measured over exactly the records quantification consumes.
 
-    Bam_alignment_extractor rejects supplementary, secondary (primary-only), improper-pair,
+    Util_funcs.quant_discard_reason rejects supplementary, secondary, improper-pair,
     low-MAPQ, duplicate, qcfail and sub-identity alignments. Every one of those counted
     into depth here would raise measured coverage above anything downstream sees, lower the
     acceptance probability, and inflate every surviving read's XW weight at that locus.
@@ -222,7 +224,9 @@ def test_records_the_consumer_rejects_do_not_inflate_depth(tmp_path):
     src = tmp_path / "rejects.bam"
     _write_bam(src, reads)
     out = tmp_path / "rejects.norm.bam"
-    norm.sift_bam(str(src), str(out), 100, 100, 42, "primary", 97.0, 10)
+    norm.sift_bam(
+        str(src), str(out), 100, 100, 42, min_per_id=97.0, min_mapping_quality=10
+    )
 
     kept = _load(out)
     for prefix in ("suppl", "sec", "dup", "qcf", "pair", "lowq", "lowid"):
@@ -258,7 +262,7 @@ def test_low_identity_reads_do_not_inflate_depth(tmp_path):
     _write_bam(src, reads)
 
     out = tmp_path / "perid.norm.bam"
-    norm.sift_bam(str(src), str(out), 100, 100, 42, "primary", 97.0)
+    norm.sift_bam(str(src), str(out), 100, 100, 42, min_per_id=97.0)
     kept = _load(out)
     assert not any(k.startswith("noisy") for k in kept), "sub-floor reads are not evidence"
     clean = {k: v for k, v in kept.items() if k.startswith("clean")}
@@ -267,7 +271,7 @@ def test_low_identity_reads_do_not_inflate_depth(tmp_path):
 
     # with the floor disabled the noisy reads count, and the locus thins
     out0 = tmp_path / "perid.nofloor.bam"
-    norm.sift_bam(str(src), str(out0), 100, 100, 42, "primary", 0)
+    norm.sift_bam(str(src), str(out0), 100, 100, 42, min_per_id=0)
     kept0 = _load(out0)
     assert len(kept0) < 440, "counted as evidence, the locus is over target"
     assert any(w > 1.0 for w, _ in kept0.values()), "thinned reads must carry a weight"
@@ -364,13 +368,13 @@ def source_bam(tmp_path):
     return p
 
 
-def _stem(source, level=1000, filter_mode="with_secondary", min_per_id=0,
-          min_mapping_quality=0, depth_window=100, random_seed=42):
+def _stem(source, level=1000, max_intron_length=200000, min_per_id=0,
+          min_mapping_quality=0, depth_window=100, random_seed=42, window_origin=0):
     import Util_funcs
 
     return Util_funcs.splice_graph_norm_cache_stem(
-        "s.quant", level, str(source), filter_mode, min_per_id,
-        min_mapping_quality, depth_window, random_seed,
+        "s.quant", level, str(source), max_intron_length, min_per_id,
+        min_mapping_quality, depth_window, random_seed, window_origin,
     )
 
 
@@ -379,17 +383,19 @@ def test_cache_name_distinguishes_every_parameter_that_changes_the_bam(source_ba
 
     Anything that changes which reads the utility keeps but is absent from this name is
     invisible: the run inherits a bam that does not match its settings, and no consumer
-    can tell. The mapping-quality floor, the depth window and the seed are all in that
-    category -- the driver holds the last two fixed today, which is exactly why leaving
-    them out would go unnoticed until someone changed a default.
+    can tell. The mapping-quality floor, the intron cap, the depth window and the seed are
+    all in that category -- the driver holds several of them fixed today, which is exactly
+    why leaving them out would go unnoticed until someone changed a default.
     """
     base = _stem(source_bam)
     assert _stem(source_bam, min_mapping_quality=30) != base
     assert _stem(source_bam, depth_window=50) != base
     assert _stem(source_bam, random_seed=7) != base
+    assert _stem(source_bam, max_intron_length=100000) != base
     assert "mapq30" in _stem(source_bam, min_mapping_quality=30)
     assert "w50" in _stem(source_bam, depth_window=50)
     assert "s7" in _stem(source_bam, random_seed=7)
+    assert "maxintron_100000" in _stem(source_bam, max_intron_length=100000)
 
 
 def test_cache_name_distinguishes_the_per_id_floor(source_bam):
@@ -404,18 +410,18 @@ def test_cache_name_distinguishes_the_per_id_floor(source_bam):
     assert "pid97" in _stem(source_bam, min_per_id=97)
 
 
-def test_cache_name_distinguishes_the_alignment_filter_mode(source_bam):
-    """Two filter modes yield different bams from one source, so one key cannot serve both.
+def test_cache_name_separates_the_absolute_grid_from_the_per_contig_anchor(source_bam):
+    """An unset window origin is a different placement from the absolute grid at 0.
 
-    The mode decides which records count toward depth and which get written, so a
-    primary-only run and a with-secondary run at the same target disagree on every
-    acceptance probability. Sharing a key would let whichever ran first hand its bam
-    to the other, and nothing downstream could tell.
+    Unset anchors the depth-window grid on the first aligned base seen on each contig, so
+    window boundaries become a function of which records are present and the same absolute
+    locus can fall in a different window than it would at origin 0. The two produce
+    different bams, and canonicalizing None to 0 in the name -- the obvious way to write
+    this -- would let them share one.
     """
-    assert _stem(source_bam, filter_mode="primary") != _stem(
-        source_bam, filter_mode="with_secondary"
-    )
-    assert "primary" in _stem(source_bam, filter_mode="primary")
+    assert _stem(source_bam, window_origin=None) != _stem(source_bam, window_origin=0)
+    assert ".o0." in _stem(source_bam, window_origin=0)
+    assert ".onone." in _stem(source_bam, window_origin=None)
 
 
 def test_cache_name_distinguishes_the_method(source_bam):
@@ -442,6 +448,18 @@ def test_cache_name_distinguishes_the_method(source_bam):
 def test_cache_name_distinguishes_the_target_depth(source_bam):
     """Also scopes the work directory, whose checkpoints are otherwise shared."""
     assert _stem(source_bam, 1000) != _stem(source_bam, 5000)
+
+
+def test_cache_name_distinguishes_the_intron_cap(source_bam):
+    """The cap decides which records the split emits, so it changes the contents.
+
+    A run that lowers --max_intron_length must not be handed the bam built when
+    the cap was higher: the long-intron records it is meant to exclude would
+    still be there, and nothing downstream can tell.
+    """
+    assert _stem(source_bam, max_intron_length=200000) != _stem(
+        source_bam, max_intron_length=50000
+    )
 
 
 def test_cache_name_distinguishes_inputs_sharing_a_basename(tmp_path, source_bam):

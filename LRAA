@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.18.3"
+VERSION = "v0.19.1"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -42,6 +42,7 @@ from IsoformReadRescue import (
 from ResourceMonitor import ResourceMonitor
 import TranscriptFiltering
 import Util_funcs
+import CpuBudget
 import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
@@ -66,9 +67,20 @@ UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 # defaults in util/normalize_bam_by_strand.py.
 NORM_DEPTH_WINDOW = 100
 NORM_RANDOM_SEED = 42
+# Absolute depth-window grid: the driver normalizes whole contigs, so position 0 of the
+# input is reference coordinate 0. Passed explicitly rather than left unset, because an
+# unset origin anchors the grid on the first aligned base seen and so makes window
+# boundaries a function of which records happen to be present.
+NORM_WINDOW_ORIGIN = 0
 
-default_threads_per_worker = 1
-CPU = default_threads_per_worker  # legacy global name retained for compatibility
+# One authoritative budget, set after CLI parsing, divided by CpuBudget.allocate().
+CPU_BUDGET = None
+# CEILING on component-worker forks per unit, not a reservation: the actual grant is
+# whatever CpuBudget.CoreLease finds free when an eligible component appears, capped by
+# the unit's outstanding eligible-component count. None means "up to whatever is free".
+COMPONENT_WORKERS = None
+# Shared free-core count, created by the scheduler and inherited by every unit worker.
+CORE_LEASE = None
 TOTAL_THREADS_FOR_SINGLETON_STAGE = None  # computed after CLI parsing
 allow_spacers = False
 single_best_only = False
@@ -267,7 +279,7 @@ def main():
         Common examples:
           LRAA --genome ref.fa --bam reads.bam -o sample
           LRAA --genome ref.fa --bam reads.bam --gtf ref.gtf --quant_only -o sample
-          LRAA --genome ref.fa --bam reads.bam --HiFi --num_parallel_contigs 4 --num_threads_per_worker 2 -o sample
+          LRAA --genome ref.fa --bam reads.bam --HiFi --cpu_budget 16 -o sample
         """
     )
 
@@ -312,16 +324,16 @@ def main():
 
         lite_parallel = lite_parser.add_argument_group("parallelization")
         lite_parallel.add_argument(
-            "--num_parallel_contigs",
+            "--cpu_budget",
             type=int,
-            default=4,
-            help="maximum number of contig/strand workers to launch concurrently",
+            default=None,
+            help="TOTAL cores this run may use, divided across work units (default: all cores this process may run on)",
         )
         lite_parallel.add_argument(
-            "--num_threads_per_worker",
+            "--component_workers",
             type=int,
-            default=default_threads_per_worker,
-            help="CPU cores to dedicate to each contig/strand worker",
+            default=None,
+            help="CEILING on component-assembly forks per work unit; the grant is whatever the budget has free at the time (default: whatever is free)",
         )
         lite_parallel.add_argument(
             "--no_parallelize_contigs",
@@ -369,13 +381,6 @@ def main():
                 "rescue_unassigned_reads_via_transcriptome_alignment"
             ],
             help="disable transcriptome rescue for unassigned reads",
-        )
-        lite_quant.add_argument(
-            "--no_allow_secondary_alignments",
-            dest="allow_secondary_alignments",
-            action="store_false",
-            default=LRAA_Globals.config["allow_secondary_alignments"],
-            help=argparse.SUPPRESS,
         )
 
         lite_target = lite_parser.add_argument_group("region / single-cell")
@@ -508,20 +513,6 @@ def main():
         help="during assembly, keep only the single best isoform per gene",
     )
     primary.add_argument(
-        "--num_threads_per_worker",
-        type=int,
-        default=default_threads_per_worker,
-        help="CPU cores to dedicate to each contig/strand worker",
-    )
-    # Backward compatibility: accept legacy --CPU flag without advertising it
-    primary.add_argument(
-        "--CPU",
-        type=int,
-        dest="num_threads_per_worker",
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
         "--ME_only",
         action="store_true",
         default=False,
@@ -546,7 +537,6 @@ def main():
             "bam instead of the original, so RPM_total_reads is scaled wrong unless you "
             "supply -N yourself. Per-read tracking and uniq_reads still describe the "
             "reads that survived thinning, not the population the weights estimate. "
-            "Requires primary-only alignments (--no_allow_secondary_alignments) "
             f"(default: {LRAA_Globals.config['use_XW_read_weights_for_quant']})"
         ),
     )
@@ -561,11 +551,15 @@ def main():
             "no per-read state, so peak memory does not grow with library size -- "
             "intended for libraries too large to hold a shard's alignments. Reports one "
             "expectation step at the first pass's abundances rather than re-estimating "
-            "them, so counts are close to but not identical with the default: measured on "
-            "ONT chr20, gene totals are preserved and 22 of 1785 expressed transcripts sit "
-            "more than 5% apart at the isoform level. Requires --quant_only, coverage "
-            "normalization, --quant_read_assignment_mode genome, and "
-            f"--no_allow_secondary_alignments (default: {LRAA_Globals.config['stream_reads']})"
+            "them, so counts are close to but not identical with the default. Measured on "
+            "ONT chr20 against the default path in the same assignment mode: every read is "
+            "assigned to the same genes, and read-sharing COMPONENT totals are preserved, "
+            "but a gene's share within a multi-gene component can move materially -- 2 of "
+            "1,480 genes, the two members of one component, differed by 394 reads -- and 29 "
+            "of 5,822 transcripts sit more than 5% apart at the isoform level. Requires "
+            "--quant_only, a first-pass bam thinner than the streamed one, and "
+            "--quant_read_assignment_mode genome "
+            f"(default: {LRAA_Globals.config['stream_reads']})"
         ),
     )
     primary.add_argument(
@@ -626,42 +620,6 @@ def main():
         default=False,
         help="do not run EM; divide ambiguous read support equally among assigned isoforms",
     )
-    primary.add_argument(
-        "--no_cross_gene_EM",
-        dest="run_cross_gene_EM_for_secondary_alignments",
-        action="store_false",
-        default=LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"],
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
-        "--no_allow_secondary_alignments",
-        dest="allow_secondary_alignments",
-        action="store_false",
-        default=LRAA_Globals.config["allow_secondary_alignments"],
-        help=(
-            "disable retention of secondary alignments during BAM ingestion "
-            f"(default: {LRAA_Globals.config['allow_secondary_alignments']})"
-        ),
-    )
-    primary.add_argument(
-        "--allow_secondary_alignments",
-        dest="allow_secondary_alignments",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
-        "--secondary_alignment_mode",
-        type=str,
-        choices=["all", "heuristic"],
-        default=LRAA_Globals.config["secondary_alignment_mode"],
-        help=(
-            "policy for retaining secondary alignments when enabled: "
-            "'all' keeps all secondary alignments that pass other filters; "
-            "'heuristic' preprocesses the BAM so all mapped non-supplementary primary alignments are retained and only secondary alignments passing the secondary-rescue heuristic are retained "
-            f"(default: {LRAA_Globals.config['secondary_alignment_mode']})"
-        ),
-    )
 
     parser.add_argument(
         "--HiFi",
@@ -691,19 +649,42 @@ def main():
         help="display version: {}".format(VERSION),
     )
 
-    # Parallelization strategy
+    # Parallelization strategy: ONE budget, divided across a flat queue of work units.
+    # See pylib/CpuBudget.py for the allocation rule and why the levels are flattened.
     parser.add_argument(
         "--no_parallelize_contigs",
         action="store_true",
         default=False,
-        help="disable contig/strand-level parallelization (overrides --num_parallel_contigs); use --CPU for within-contig/component multithreading",
+        help="run one work unit at a time; the whole --cpu_budget then goes to native tool steps inside that single worker",
     )
 
     parser.add_argument(
-        "--num_parallel_contigs",
+        "--cpu_budget",
         type=int,
-        default=4,
-        help="maximum number of contig/strand workers to launch concurrently (default: 4)",
+        default=None,
+        help=(
+            "TOTAL cores this invocation may use. Divided across the flat queue of "
+            "(contig, strand, chunk) work units: units run one per core, and whatever "
+            "the unit count cannot claim is lent to native tool steps (samtools, "
+            "minimap2) inside each worker. This is a hard cap, not a utilisation "
+            "target. Default: every core this process may actually run on, so a cpuset "
+            "is respected without restating it"
+        ),
+    )
+
+    parser.add_argument(
+        "--component_workers",
+        type=int,
+        default=None,
+        help=(
+            "CEILING on how many processes one work unit may fork to assemble its large "
+            "multipath-graph components concurrently. This is NOT a reservation: the grant "
+            "is whatever --cpu_budget has FREE when an eligible component appears, so it is "
+            "zero while the unit queue is full and the spare budget once the queue drains. "
+            "It is also capped by the unit's outstanding eligible-component count, because "
+            "forking runs different components concurrently and cannot subdivide one. "
+            "Default: up to whatever is free"
+        ),
     )
 
     parser.add_argument(
@@ -725,12 +706,6 @@ def main():
         action="store_true",
         default=False,
         help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
-    )
-    parser.add_argument(
-        "--no_shuffle_parallel_jobs",
-        action="store_true",
-        default=False,
-        help="preserve contig/strand job submission order (shuffling is enabled by default)",
     )
 
     ## debug params
@@ -979,7 +954,42 @@ def main():
         "--no_filter_internal_priming",
         action="store_true",
         default=False,
-        help="do not filter isoforms that appear to derive from internal priming events",
+        help="do not delete transcripts whose 3' end sits in A-rich genomic context "
+        "(the InternalPriming attribute is still recorded, and A-rich read-derived "
+        "PolyA sites are still rejected during PolyA site identification)",
+    )
+
+    config_group.add_argument(
+        "--no_spare_polyA_veto_at_known_3prime",
+        action="store_true",
+        default=False,
+        help="veto A-rich read-derived PolyA candidates even where the supplied "
+        "reference annotation calls a 3' end within max_dist_between_alt_polyA_sites/2 "
+        "(25 nt) of them; without this the reference is treated as independent evidence "
+        "of cleavage and the veto is waived there (no effect without --gtf)",
+    )
+
+    config_group.add_argument(
+        "--polyA_signal_motifs",
+        default=None,
+        help="comma- or space-separated polyadenylation signal motifs to annotate, all "
+        "of one length; defaults to the human canonical pair {}".format(
+            ",".join(LRAA_Globals.config["polyA_signal_motifs"])
+        ),
+    )
+
+    config_group.add_argument(
+        "--polyA_signal_window",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("LOW", "HIGH"),
+        help="transcript-sense window relative to the 3' end in which to search for a "
+        "signal motif, given as two integers; offsets are negative because the signal "
+        "is upstream, and the motif must fit entirely inside the window, so LOW HIGH of "
+        "-40 -10 admits 6-mer starts of -40..-15 (default: {} {})".format(
+            *LRAA_Globals.config["polyA_signal_window"]
+        ),
     )
 
     config_group.add_argument(
@@ -1102,6 +1112,22 @@ def main():
         default=None,
         help="space or comma-separated list of chromosome names to process; chromosomes not in this list will be skipped (ex: 'chr1 chr2 chr3' or 'chr1,chr2,chr3')",
     )
+    contig_group_setting.add_argument(
+        "--approx_MB_per_cut",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut"],
+        help="chunked parallelism: approximate MEGABASES between cut points when splitting a contig-strand into independently processed chunks (default: {})".format(
+            LRAA_Globals.config["approx_MB_per_cut"]
+        ),
+    )
+    contig_group_setting.add_argument(
+        "--approx_MB_per_cut_wiggle_window",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
+        help="chunked parallelism: TOTAL width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched over [T - w/2, T + w/2] (default: {})".format(
+            LRAA_Globals.config["approx_MB_per_cut_wiggle_window"]
+        ),
+    )
 
     ## generic config update via json
     parser.add_argument(
@@ -1168,14 +1194,20 @@ def main():
     genome_fasta_filename = args.genome
     bam_filename = args.bam
     # ensure global vars used by helper functions are updated
-    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
+    global single_best_only, CPU_BUDGET, COMPONENT_WORKERS, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
     single_best_only = args.single_best_only
-    CPU = args.num_threads_per_worker
-    if CPU < 1:
-        sys.exit("Error: --num_threads_per_worker must be at least 1")
-    NUM_PARALLEL_CONTIGS = args.num_parallel_contigs
-    if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS < 1:
-        sys.exit("Error: --num_parallel_contigs must be at least 1")
+    if args.cpu_budget is None:
+        CPU_BUDGET = CpuBudget.default_budget()
+        logger.info(
+            "--cpu_budget not set; using %d core(s) this process may run on", CPU_BUDGET
+        )
+    else:
+        CPU_BUDGET = args.cpu_budget
+        if CPU_BUDGET < 1:
+            sys.exit("Error: --cpu_budget must be at least 1")
+    COMPONENT_WORKERS = args.component_workers
+    if COMPONENT_WORKERS is not None and COMPONENT_WORKERS < 0:
+        sys.exit("Error: --component_workers must be 0 or more")
     QUANT_ONLY = args.quant_only
     TAG_BAM = args.tag_bam
     input_gtf = args.gtf
@@ -1195,49 +1227,53 @@ def main():
         if oversimplify_contigs:
             LRAA_Globals.config["oversimplify_enabled"] = True
             LRAA_Globals.config["oversimplify_contigs"] = oversimplify_contigs
+    if args.no_spare_polyA_veto_at_known_3prime:
+        LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = False
+    # PolyA signal annotation settings.  Resolved and validated here so a bad organism
+    # configuration fails immediately rather than part-way through a contig.
+    if args.polyA_signal_motifs is not None:
+        LRAA_Globals.config["polyA_signal_motifs"] = args.polyA_signal_motifs
+    if args.polyA_signal_window is not None:
+        LRAA_Globals.config["polyA_signal_window"] = args.polyA_signal_window
+    try:
+        _pas_motifs, _pas_window = Util_funcs.resolve_polyA_signal_settings()
+    except ValueError as e:
+        sys.exit(f"Error, invalid polyA signal configuration: {e}")
+    LRAA_Globals.config["polyA_signal_motifs"] = list(_pas_motifs)
+    LRAA_Globals.config["polyA_signal_window"] = list(_pas_window)
+    logger.info(
+        "PolyA signal annotation: motifs %s in transcript-sense window %s",
+        list(_pas_motifs),
+        list(_pas_window),
+    )
+
     NO_NORM = args.no_norm
     ME_only = args.ME_only
     SE_only = args.SE_only
 
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
+    LRAA_Globals.config["filter_internal_priming"] = (
+        not args.no_filter_internal_priming
+    )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
-    # By default, parallelize contigs; allow explicit opt-out
+    # By default, parallelize work units; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
-    if not CONTIG_PARALLEL:
-        if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS != 1:
-            logger.info(
-                "--no_parallelize_contigs specified; forcing --num_parallel_contigs to 1"
-            )
-        NUM_PARALLEL_CONTIGS = 1
 
-    # Compute total threads available when performing single-shot pre-run tasks (e.g., BAM counting)
-    workers_for_singleton = NUM_PARALLEL_CONTIGS if CONTIG_PARALLEL else 1
-    if workers_for_singleton is None:
-        workers_for_singleton = 1
-    try:
-        workers_for_singleton = int(workers_for_singleton)
-    except Exception:
-        workers_for_singleton = 1
-    if workers_for_singleton < 1:
-        workers_for_singleton = 1
-    try:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = max(1, int(CPU)) * workers_for_singleton
-    except Exception:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = workers_for_singleton
-    if TOTAL_THREADS_FOR_SINGLETON_STAGE < 1:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = 1
+    # Single-shot PRE-RUN tasks (BAM read counting, indexing) are the serial prep phase:
+    # they are native tool invocations with nothing else competing, so the whole budget
+    # goes to them. One step, so allocate_prep hands over the lot.
+    prep = CpuBudget.allocate_prep(CPU_BUDGET, 1)
+    TOTAL_THREADS_FOR_SINGLETON_STAGE = prep.threads[0]
     logger.debug(
-        "Pre-run tasks will use up to %d threads (workers=%d, threads_per_worker=%s)",
+        "Pre-run serial tasks will use up to %d thread(s) of the %d-core budget",
         TOTAL_THREADS_FOR_SINGLETON_STAGE,
-        workers_for_singleton,
-        CPU,
+        CPU_BUDGET,
     )
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
     LRAA_Globals.config["no_cleanup"] = bool(NO_CLEANUP)
     MONITOR_RESOURCES = not args.no_monitor_resources
-    SHUFFLE_PARALLEL_JOBS = not args.no_shuffle_parallel_jobs
 
     if args.quant_only and input_gtf is None:
         sys.exit(
@@ -1250,13 +1286,21 @@ def main():
     LRAA_Globals.config["min_path_score"] = args.min_path_score
     LRAA_Globals.config["min_per_id"] = args.min_per_id
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
+    LRAA_Globals.config["approx_MB_per_cut"] = args.approx_MB_per_cut
+    LRAA_Globals.config["approx_MB_per_cut_wiggle_window"] = (
+        args.approx_MB_per_cut_wiggle_window
+    )
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
     )
-    LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
-    LRAA_Globals.config["secondary_alignment_mode"] = args.secondary_alignment_mode
-    LRAA_Globals.config["num_threads_per_worker"] = int(CPU)
+    LRAA_Globals.config["cpu_budget"] = int(CPU_BUDGET)
+    # Provisional until the flat queue is known; _run_jobs_schedule_and_merge overwrites
+    # both from the allocation and pushes them into every job's config snapshot. Seeded
+    # here so a code path reached before scheduling (e.g. the prep stage) still reads a
+    # value that fits the budget rather than a stale per-worker guess.
+    LRAA_Globals.config["tool_threads"] = int(TOTAL_THREADS_FOR_SINGLETON_STAGE)
+    LRAA_Globals.config["component_workers"] = 0
     quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
     if quant_read_assignment_mode == "rescue_unassigned" and not rescue_enabled:
@@ -1268,21 +1312,6 @@ def main():
     _require_minimap2_for_transcriptome_alignment(
         rescue_enabled, quant_read_assignment_mode
     )
-    if args.allow_secondary_alignments:
-        logger.info(
-            "Secondary alignments enabled; forcing min_mapping_quality and min_mapping_quality_for_final_quant to 0"
-        )
-        LRAA_Globals.config["min_mapping_quality"] = 0
-        LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 0
-        if args.secondary_alignment_mode == "heuristic":
-            logger.info(
-                "Secondary alignments will be restricted by the secondary-rescue heuristic via BAM preprocessing"
-            )
-    elif args.secondary_alignment_mode != "all":
-        logger.info(
-            "Secondary alignment mode '%s' requested, but secondary alignments are disabled; ignoring the mode",
-            args.secondary_alignment_mode,
-        )
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(
             args.min_isoform_fraction,
@@ -1313,26 +1342,12 @@ def main():
     LRAA_Globals.config["rescue_unassigned_max_indel_length"] = (
         args.rescue_unassigned_max_indel_length
     )
-    LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
-        args.run_cross_gene_EM_for_secondary_alignments
-    )
-    LRAA_Globals.config["filter_internal_priming"] = not args.no_filter_internal_priming
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
     )
     LRAA_Globals.config["use_XW_read_weights_for_quant"] = (
         args.use_XW_read_weights_for_quant
     )
-    if args.stream_reads and args.allow_secondary_alignments:
-        sys.exit(
-            "Error, --stream_reads requires --no_allow_secondary_alignments.\n"
-            "Streaming handles one alignment record at a time. The default path first "
-            "groups a read's records by name and span and then lets one of them "
-            "represent it; in a coordinate-sorted bam a read's other placements can sit "
-            "arbitrarily far away, so a streaming pass cannot reproduce that grouping "
-            "without buffering unboundedly. With secondaries enabled it would instead "
-            "emit a tracking row per placement and assign the same read more than once."
-        )
     if args.stream_reads and not args.quant_only:
         # Discovery quantifies repeatedly over changing transcript sets while selecting
         # isoforms; the streaming pass is a final accounting over a settled set. Wiring it
@@ -1341,15 +1356,29 @@ def main():
             "Error, --stream_reads requires --quant_only. The streaming pass is a final "
             "read accounting over a settled transcript set, not part of isoform selection."
         )
-    if args.stream_reads and args.normalize_max_cov_level <= 0:
-        # Both passes would read the same bam: the first would materialize every read of it,
-        # which is the cost the mode exists to avoid, and the table would then match every
-        # read trivially. Nothing is gained and the run is slower than the default path.
-        sys.exit(
-            "Error, --stream_reads requires coverage normalization (--normalize_max_cov_level "
-            "> 0). Its first pass reads the normalized bam and its second streams the full "
-            "one; with normalization off both are the same bam and the mode only adds work."
+    if args.stream_reads:
+        # The invariant is that pass 1 reads a THINNER bam than pass 2, not that this process
+        # is the one that thinned it. Two ways to satisfy it: normalize here, or be handed an
+        # already-normalized bam as --bam_for_sg, which is what the chunked pipeline does --
+        # it normalizes per chunk and then runs stage 5 with --bam_for_sg <normalized>
+        # --no_norm. Keying on --normalize_max_cov_level alone rejected that composition.
+        #
+        # Refused when they resolve to one file: pass 1 would materialize every read of the
+        # same bam pass 2 streams, which is the cost the mode exists to avoid, and the table
+        # would then match every read trivially. Nothing gained, and slower than the default.
+        _sg_bam = getattr(args, "bam_for_sg", None)
+        _will_normalize = (not args.no_norm) and args.normalize_max_cov_level > 0
+        _distinct_sg = bool(_sg_bam) and os.path.realpath(_sg_bam) != os.path.realpath(
+            args.bam
         )
+        if not (_will_normalize or _distinct_sg):
+            sys.exit(
+                "Error, --stream_reads needs a first-pass bam thinner than the one it "
+                "streams. Either enable coverage normalization "
+                "(--normalize_max_cov_level > 0 without --no_norm), or pass an "
+                "already-normalized bam as --bam_for_sg. Given neither, both passes read "
+                "the same bam and the mode only adds work."
+            )
     if args.stream_reads and args.quant_read_assignment_mode != "genome":
         # The streaming pass maps every record genomically through _map_read_to_graph and
         # runs no transcriptome alignment. Under the default rescue_unassigned mode the
@@ -1609,32 +1638,8 @@ def main():
             os.getcwd(), f"__{_safe_token(output_prefix)}.norm_cache"
         )
         Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
-    bam_preproc_cache_dir = os.path.join(
-        os.getcwd(), f"__{_safe_token(output_prefix)}.bam_preproc_cache"
-    )
-    Path(bam_preproc_cache_dir).mkdir(parents=True, exist_ok=True)
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
-
-    # TPM's denominator must describe the library, not the alignment policy applied
-    # to it. The secondary-rescue filter below rewrites bam_filename and drops
-    # unmapped and supplementary records, so counting the filtered file would make
-    # num_total_reads -- and therefore every expression value and the
-    # min_monoexonic_TPM gate -- depend on --secondary_alignment_mode. Retain the
-    # original path and count genome-mapped reads from it.
-    bam_filename_for_read_count = bam_filename
-
-    bam_filename = _filter_bam_for_secondary_alignment_policy(
-        bam_filename,
-        bam_preproc_cache_dir,
-        label="quant",
-    )
-    if bam_for_sg_cli:
-        bam_for_sg_cli = _filter_bam_for_secondary_alignment_policy(
-            bam_for_sg_cli,
-            bam_preproc_cache_dir,
-            label="splice_graph",
-        )
 
     if not os.path.exists(bam_filename + ".bai"):
         logger.info(
@@ -1661,6 +1666,7 @@ def main():
                 bam_for_sg_cli,
                 runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
+                QUANT_ONLY,
             )
             logger.info(
                 "splice-graph evidence will use normalized user-supplied BAM: %s",
@@ -1678,6 +1684,7 @@ def main():
                 bam_filename,
                 runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
+                QUANT_ONLY,
             )
             logger.info(
                 "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
@@ -1686,12 +1693,10 @@ def main():
             bam_file_for_sg = bam_filename
 
     if args.num_total_reads is None:
-        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-            bam_filename_for_read_count
-        )
+        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(bam_filename)
         logger.info(
             "genome-mapped reads counted from {} as: {}".format(
-                bam_filename_for_read_count, LRAA_Globals.config["num_total_reads"]
+                bam_filename, LRAA_Globals.config["num_total_reads"]
             )
         )
 
@@ -1815,9 +1820,15 @@ def main():
     _register_splice_graph_cache_dir(splice_graph_cache_root)
 
     ##----------------------------------------------
-    ## Begin, target each contig separately
+    ## Build the FLAT queue of work units and hand it to one scheduler
 
-    # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
+    # Cost proxy first: the scheduler launches longest-first, and on a mixed reference
+    # (chr1 at 248 Mb beside chrM at 16 kb) construction order would leave the most
+    # expensive unit for the tail of the run.
+    contig_costs = _contig_cost_proxy(
+        bam_file_for_quant, genome_fasta_filename, genome_contigs_list
+    )
+
     jobs = []
     for contig_acc in genome_contigs_list:
         for contig_strand in ("+", "-"):
@@ -1826,8 +1837,27 @@ def main():
                 and restrict_to_contig_orient != contig_strand
             ):
                 continue
+            # One flat-queue unit per (contig, strand, chunk). A contig-strand yields
+            # exactly one unit today; pylib/CpuBudget.py records what emitting several
+            # chunk units per contig-strand still needs before it can be turned on.
+            unit = CpuBudget.WorkUnit(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                chunk_index=0,
+                region=(
+                    (restrict_region_lend, restrict_region_rend)
+                    if restrict_region_lend is not None
+                    and restrict_region_rend is not None
+                    else None
+                ),
+                cost=contig_costs.get(contig_acc, 0.0),
+            )
             jobs.append(
                 dict(
+                    # Stable per-job id, assigned in canonical construction
+                    # order and unaffected by the longest-first launch order below.
+                    unit_id=len(jobs),
+                    work_unit=unit,
                     contig_acc=contig_acc,
                     contig_strand=contig_strand,
                     genome_fasta_filename=genome_fasta_filename,
@@ -1862,15 +1892,14 @@ def main():
         quant_only=QUANT_ONLY,
         tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
         CONTIG_PARALLEL=CONTIG_PARALLEL,
-        NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
-        CPU=CPU,
+        CPU_BUDGET=CPU_BUDGET,
+        COMPONENT_WORKERS=COMPONENT_WORKERS,
         NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
         CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
         NO_CLEANUP=NO_CLEANUP,
         DEBUG=LRAA_Globals.DEBUG,
         INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
         VERBOSE=VERBOSE,
-        SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
     )
 
     _cleanup_registered_splice_graph_caches(
@@ -1884,9 +1913,43 @@ def _safe_token(token):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
 
 
-SPLICE_GRAPH_CACHE_VERSION = 2
+# Bumped to 5: min_mapping_quality is keyed, so entries written while it was absent
+# were built to an unrecorded ingestion threshold and cannot be trusted to match a
+# run that states one.  The changed config digest already misses them; the version
+# is what keeps that true if a config key is ever removed and the digest reverts to
+# a value some earlier build already wrote under.
+#
+# Bumped to 3: PolyA site identification now rejects internally primed candidates
+# (Splice_graph._incorporate_PolyA_objects).
+#
+# MAINTENANCE: the cache signature identifies inputs and config, never code. A change
+# to graph construction that adds no config key -- like the internal-priming gate -- is
+# invisible to the signature, so a graph cached by the previous code is an exact match
+# for the new code and the change is silently skipped on every warm locus. When graph
+# construction changes, BOTH of these must be maintained: add any new config key to
+# _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
+# version is part of the signature, so entries built by different versions get
+# different cache paths and cannot be confused for one another.
+SPLICE_GRAPH_CACHE_VERSION = 5
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
+    # Ingestion rather than construction: this decides which alignments reach the
+    # graph at all (Bam_alignment_extractor.py:58), where every other entry below
+    # tunes how a graph is built from whatever arrives.  That category difference
+    # is why it was absent -- this list was assembled from Splice_graph's own
+    # parameters, and the extractor's were not considered.  Two runs differing
+    # only in --min_mapping_quality computed one key and the second was served the
+    # first's graph, built from alignments its own filter excludes.
+    #
+    # This is the EFFECTIVE threshold, not the discovery one: run_quant_only swaps
+    # min_mapping_quality_for_final_quant into this key at LRAA:4128, before the
+    # cache entry is computed, so the digest reads whichever value the stage
+    # actually filters on.  That ordering is load bearing -- moving the swap below
+    # the cache lookup hands a stricter final quant the permissive discovery graph.
+    # Keying the final-quant setting separately would be wrong for the same reason
+    # this entry was needed: it cannot change a discovery graph, and a signature
+    # that names a non-determining input is as defective as one missing a field.
+    "min_mapping_quality",
     "min_alt_splice_freq",
     "min_alt_unspliced_freq",
     "min_feature_frac_overlap",
@@ -1905,6 +1968,7 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "infer_PolyA",
     "max_dist_between_alt_polyA_sites",
     "min_alignments_define_polyA_site",
+    "spare_polyA_veto_at_known_3prime",
     "min_frac_alignments_define_polyA_site",
     "min_PolyA_ident_length",
     "min_PolyA_iso_fraction",
@@ -1979,6 +2043,92 @@ def _snapshot_splice_graph_params():
     }
 
 
+def _guide_structure_digest(transcripts, contig_strand):
+    """Stable digest of the reference structures that shape this contig/strand's graph.
+
+    The guide is an INPUT to graph construction -- it contributes introns, coverage and,
+    since spare_polyA_veto_at_known_3prime, the 3' coordinates that waive the
+    internal-priming veto -- so it has to be part of the cache key. It was not, and the
+    cache root is only per-output-prefix, so two ref-guided runs sharing a prefix with
+    different GTFs could reuse each other's graphs.
+
+    Digests exon segments as well as termini: the termini alone are what the veto reads,
+    but the intron chains they imply shape the rest of the graph, and a digest that
+    covers both cannot be silently right for one and wrong for the other.
+    """
+
+    if not transcripts:
+        return None
+
+    def _guarded(getter, default="ERR"):
+        """Guard each FIELD rather than the whole transcript.
+
+        A catch-all around the record would drop transcripts silently and could degrade
+        the digest to None, which fails OPEN and reinstates exactly the stale-cache
+        collision this function exists to prevent.  get_TPM and the read-count fallbacks
+        can still reach into a multipath/splice-graph that a bare guide has not got.
+        """
+        try:
+            return getter()
+        except Exception:
+            return default
+
+    structures = []
+    for transcript in transcripts:
+        try:
+            if transcript.get_strand() != contig_strand:
+                continue
+            segments = sorted(
+                [int(segment[0]), int(segment[1])]
+                for segment in transcript.get_exon_segments()
+            )
+        except Exception:
+            # No usable structure: nothing to contribute, and unlike the boundary fields
+            # this genuinely cannot be recorded.
+            continue
+
+        # Exon segments alone underdetermine the graph.
+        # _integrate_input_transcript_structures turns these boundary flags, their read
+        # counts and the annotated TPM into TSS/PolyA evidence, so two guides with
+        # identical segments and different boundary metadata build different graphs.
+        # Over-inclusion here only costs a cache miss; under-inclusion reuses a wrong graph.
+        #
+        # NOT has_TSS/has_PolyA.  Those are graph-derived: with no imported value they
+        # read self._simplepath and assert when there is none, so a directly constructed
+        # Transcript yields "ERR" for every record and the field distinguishes nothing;
+        # and where a simple path DOES exist they report state derived from a graph,
+        # i.e. an output, in the key for the graph being built.
+        #
+        # has_source_annotated_*, not has_annotated_*, because the digest has to survive
+        # remapping.  LRAA.assign_transcripts_paths_in_graph calls
+        # refresh_boundary_annotations_from_simple_path, which CLEARS _imported_has_TSS
+        # and _imported_has_POLYA -- and build_ME_transcripts/build_SE_transcripts remap
+        # the reference objects in place before run_transcript_assembly computes the
+        # final graph's cache entry over those same objects.  By then has_annotated_PolyA
+        # is False for the whole reference set, so two GTFs differing only in a PolyA
+        # flag collide again.  _source_has_annotated_* is set once by the parser and never
+        # cleared, and falls back to has_annotated_* for anything that did not come from
+        # a GTF, so it is defined everywhere and still says what the guide asserted.
+        boundary = [
+            _guarded(transcript.has_source_annotated_TSS),
+            _guarded(transcript.has_source_annotated_PolyA),
+            _guarded(transcript.get_TSS_read_count),
+            _guarded(transcript.get_PolyA_read_count),
+            (
+                _guarded(transcript.get_TPM)
+                if _guarded(transcript.has_annotated_TPM, False)
+                else None
+            ),
+        ]
+        structures.append([segments, [str(value) for value in boundary]])
+
+    structures.sort()
+    payload = json.dumps(structures, separators=(",", ":"))
+    return "{}:{}".format(
+        len(structures), hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    )
+
+
 def _compute_splice_graph_cache_entry(
     contig_acc,
     contig_strand,
@@ -1987,6 +2137,7 @@ def _compute_splice_graph_cache_entry(
     restrict_region_rend,
     transcripts,
     quant_mode,
+    reference_transcripts=None,
 ):
     sg_params = _snapshot_splice_graph_params()
     if isinstance(bam_file_for_sg, (list, tuple, set)):
@@ -1996,12 +2147,42 @@ def _compute_splice_graph_cache_entry(
     else:
         bam_value = os.path.realpath(str(bam_file_for_sg))
     signature = {
+        # NOT keyed, deliberately: restrict_splice_type.  It genuinely changes which
+        # alignments build the graph -- "ME" and "SE" select disjoint sets through
+        # Splice_graph.build_splice_graph_for_contig -> retrieve_pretty_alignments --
+        # but every call site that reaches this cache builds with it None (:4181 and
+        # :4581 are the only two), and the ME/SE rounds at :5233 and :5321 bypass the
+        # cache entirely.  Keying a value that is always None would change every key
+        # and separate nothing.  If caching is ever extended to those rounds this MUST
+        # become a signature field first: the two rounds share contig, strand, bam,
+        # region and quant_mode, so today only their differing guide subsets would
+        # keep them apart, and that is the same accident quant_mode relied on below.
+        # The only element that identifies CODE rather than inputs or config. Without it
+        # an unconditional change to graph construction leaves the key unchanged and a
+        # stale cache entry is a valid hit. See SPLICE_GRAPH_CACHE_VERSION.
+        "cache_version": SPLICE_GRAPH_CACHE_VERSION,
         "contig": contig_acc,
         "strand": contig_strand,
         "bam": bam_value,
         "region": [restrict_region_lend, restrict_region_rend],
         "config_digest": _splice_graph_config_digest(),
         "sg_params": sg_params,
+        # quant_mode changes CONSTRUCTION, not just consumption: it gates pruning at
+        # pylib/Splice_graph.py:327-328 and :332-333.  Omitting it let the assembly build
+        # (quant_mode=False) and the final-quant build (quant_mode=True) collide on one key,
+        # so the quant stage was handed the discovery graph and every read mapped to a
+        # SPACER path.  guide_digest incidentally separated them for ref-guided runs once it
+        # existed; this makes the separation intentional rather than a side effect.
+        "quant_mode": bool(quant_mode),
+        # Two digests, because two different things are decided.  The integrated set
+        # determines graph STRUCTURE; the genuine reference subset determines which
+        # A-rich PolyA candidates have their veto waived.  Identical combined structures
+        # can arise with different provenance splits and then build different graphs, so
+        # one digest over the mixture cannot stand in for both.
+        "guide_digest": _guide_structure_digest(transcripts, contig_strand),
+        "reference_digest": _guide_structure_digest(
+            reference_transcripts, contig_strand
+        ),
     }
     cache_key = hashlib.sha256(
         json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -2120,6 +2301,7 @@ def _normalize_bam_for_splice_graph(
     input_bam,
     normalize_max_cov_level,
     cache_dir,
+    quant_only,
     label=None,
 ):
     if normalize_max_cov_level <= 0:
@@ -2136,44 +2318,77 @@ def _normalize_bam_for_splice_graph(
     if label:
         base_root = f"{base_root}.{_safe_token(label)}"
 
-    # The normalizer must measure depth over the same records the splice graph will
-    # read, or acceptance probabilities describe a coverage level nothing downstream
-    # sees. Supplementary records are excluded by the utility either way; secondaries
-    # follow the ingestion policy.
-    alignment_filter_mode = (
-        "with_secondary"
-        if LRAA_Globals.config.get("allow_secondary_alignments", False)
-        else "primary"
-    )
-
-    # The consumer's per-identity and mapping-quality floors are part of the evidence
-    # definition: alignments below either are discarded before quantification sees them,
-    # so depth measured over them describes coverage nothing downstream has. HiFi mode
-    # raises the identity floor to 97.
+    # The normalizer must measure depth over the same records its consumer will read, or
+    # acceptance probabilities -- and so the XW weights derived from them -- describe a
+    # coverage level nothing downstream sees. The identity floor is part of that evidence
+    # definition too; HiFi mode raises it to 97.
     norm_min_per_id = LRAA_Globals.config.get("min_per_id", 0) or 0
-    norm_min_mapq = LRAA_Globals.config.get("min_mapping_quality", 0) or 0
 
-    # Held fixed here, but named rather than implied: both change which reads the utility
-    # keeps, both are in the cache stem, and a future default change must not be able to
+    # Mapping quality is not simply config["min_mapping_quality"] here. This runs before
+    # run_quant_only, which swaps min_mapping_quality_for_final_quant into that key for the
+    # whole quant stage -- and the quant stage is where the normalized bam is read, since
+    # run_quant_only builds its splice graph from it and, under --stream_reads, the first
+    # pass extracts it there as well.
+    #
+    # Which floor is correct depends on the consumer set, and that is decided by
+    # --quant_only rather than by --stream_reads:
+    #
+    #   under --quant_only there is no discovery pass, so every read of this bam happens
+    #   inside the swap and enforces the final-quant floor. Measuring at the discovery
+    #   floor mismeasures the only consumer there is. (--stream_reads requires
+    #   --quant_only, so it is covered by this branch rather than needing its own.)
+    #
+    #   otherwise discovery builds a splice graph from this bam outside the swap, at the
+    #   permissive floor, while the final quant stage reads it inside. The floor applies to
+    #   what gets WRITTEN as well as to what gets counted, so taking the stricter value
+    #   would delete evidence the discovery consumer wants -- worse than over-counting
+    #   depth for the quant one. Take the more permissive value and say so, rather than
+    #   silently serving one consumer at the other's expense.
+    norm_min_mapq_discovery = int(LRAA_Globals.config.get("min_mapping_quality", 0) or 0)
+    norm_min_mapq_final = int(
+        LRAA_Globals.config.get("min_mapping_quality_for_final_quant", 0) or 0
+    )
+    if quant_only:
+        norm_min_mapq = norm_min_mapq_final
+    else:
+        norm_min_mapq = min(norm_min_mapq_discovery, norm_min_mapq_final)
+        if norm_min_mapq_discovery != norm_min_mapq_final:
+            logger.warning(
+                "--min_mapping_quality %d and --min_mapping_quality_for_final_quant %d "
+                "differ, and both discovery and final quant read the normalized bam. "
+                "Depth is measured at the permissive floor %d so no evidence is withheld "
+                "from discovery; the quant stage therefore sees depth counted over records "
+                "it rejects, which inflates XW weights where MAPQ is below %d.",
+                norm_min_mapq_discovery,
+                norm_min_mapq_final,
+                norm_min_mapq,
+                norm_min_mapq_final,
+            )
+
+    # Held fixed here, but named rather than implied: each changes which reads the utility
+    # keeps, each is in the cache stem, and a future default change must not be able to
     # reuse a bam built under the old one.
     norm_depth_window = NORM_DEPTH_WINDOW
     norm_random_seed = NORM_RANDOM_SEED
+    norm_window_origin = NORM_WINDOW_ORIGIN
 
+    max_intron_length = int(LRAA_Globals.config["max_intron_length"])
     cache_stem = Util_funcs.splice_graph_norm_cache_stem(
         base_root,
         normalize_max_cov_level,
         input_path,
-        alignment_filter_mode,
+        max_intron_length,
         norm_min_per_id,
         norm_min_mapq,
         norm_depth_window,
         norm_random_seed,
+        norm_window_origin,
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
     # scoped by the same stem: the utility keeps its own checkpoints here, and a
-    # strand split or merge done for a different depth or method must not be
-    # picked up by this run
+    # strand split or merge done for a different depth, intron cap, or method must
+    # not be picked up by this run
     work_dir = cache_path / f"work_{cache_stem}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2192,21 +2407,29 @@ def _normalize_bam_for_splice_graph(
             str(input_path),
             "--normalize_max_cov_level",
             str(normalize_max_cov_level),
-            "--alignment_filter_mode",
-            alignment_filter_mode,
             "--min_per_id",
             str(norm_min_per_id),
             "--min_mapping_quality",
             str(norm_min_mapq),
+            "--window_origin",
+            str(norm_window_origin),
             "--depth_window",
             str(norm_depth_window),
             "--random_seed",
             str(norm_random_seed),
             "--output_bam",
             str(normalized_path),
+            "--max_intron_length",
+            str(max_intron_length),
         ]
         logger.info(
-            "Running splice-graph BAM normalization; final quantification will continue to use the quant BAM, not this normalized BAM"
+            "Running splice-graph BAM normalization: %s",
+            (
+                "the streaming first pass quantifies against this normalized BAM and the "
+                "second pass streams the full quant BAM"
+                if LRAA_Globals.config.get("stream_reads", False)
+                else "final quantification reads the quant BAM, not this normalized BAM"
+            ),
         )
         logger.debug("Normalization command: %s", " ".join(cmd))
         subprocess.check_call(cmd, cwd=str(work_dir))
@@ -2216,12 +2439,13 @@ def _normalize_bam_for_splice_graph(
 
 
 def _resolve_singleton_stage_threads():
+    """Native-tool threads for a single-shot prep step run before the queue exists."""
     threads = 1
     try:
         total_threads = (
             TOTAL_THREADS_FOR_SINGLETON_STAGE
             if TOTAL_THREADS_FOR_SINGLETON_STAGE
-            else CPU
+            else LRAA_Globals.config.get("tool_threads", 1)
         )
         threads = int(total_threads)
     except Exception:
@@ -2229,7 +2453,9 @@ def _resolve_singleton_stage_threads():
     if threads < 1:
         threads = 1
     try:
-        max_hw_threads = os.cpu_count()
+        # affinity-aware: cpu_count() counts CPUs this process may not be allowed to use,
+        # which oversubscribes the pool under any cpuset (containers, Slurm, taskset)
+        max_hw_threads = Util_funcs.available_cpus()
         if max_hw_threads:
             threads = min(threads, max_hw_threads)
     except Exception:
@@ -2237,80 +2463,19 @@ def _resolve_singleton_stage_threads():
     return threads
 
 
-def _filter_bam_for_secondary_alignment_policy(
-    input_bam,
-    cache_dir,
-    label=None,
-):
-    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
-        return input_bam
-
-    secondary_alignment_mode = LRAA_Globals.config.get(
-        "secondary_alignment_mode", "heuristic"
-    )
-    if secondary_alignment_mode == "all":
-        return input_bam
-    if secondary_alignment_mode != "heuristic":
-        raise RuntimeError(
-            f"Unsupported secondary_alignment_mode: {secondary_alignment_mode}"
-        )
-
-    input_path = Path(input_bam).resolve()
-    cache_path = Path(cache_dir).resolve()
-    cache_path.mkdir(parents=True, exist_ok=True)
-
-    base_root = input_path.name
-    if base_root.endswith(".bam"):
-        base_root = base_root[: -len(".bam")]
-    base_root = _safe_token(base_root)
-    if label:
-        base_root = f"{base_root}.{_safe_token(label)}"
-
-    filtered_path = cache_path / f"{base_root}.secondary_rescue.bam"
-    summary_path = cache_path / f"{base_root}.secondary_rescue.summary.tsv"
-    checkpoint_path = filtered_path.parent / (filtered_path.name + ".ok")
-    work_dir = cache_path / f"work_{base_root}"
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    if not checkpoint_path.exists():
-        threads = _resolve_singleton_stage_threads()
-        cmd = [
-            sys.executable,
-            os.path.join(UTILDIR, "filter_bam_to_secondary_rescue.py"),
-            "--input_bam",
-            str(input_path),
-            "--output_bam",
-            str(filtered_path),
-            "--summary_tsv",
-            str(summary_path),
-            "--threads",
-            str(threads),
-            "--workdir",
-            str(work_dir),
-        ]
-        logger.info(
-            "filtering BAM to secondary-rescue heuristic alignments: %s (threads=%d)",
-            input_path.name,
-            threads,
-        )
-        logger.debug("Secondary-filter command: %s", " ".join(cmd))
-        subprocess.check_call(cmd, cwd=str(work_dir))
-        checkpoint_path.touch()
-
-    return str(filtered_path)
-
-
 def _tracking_suffix():
     """`.quant.tracking.gz`. Tracking is always written compressed.
 
-    One definition, because the suffix is built in eight places: the per-shard temp path, the
-    shard writer, the merge source, the merge destination, the cleanup list, the completeness
-    check that decides whether a finished shard can be reused, the pre-correction name the
-    cross-gene EM step moves the file to, and the stale-sibling clears.
+    One definition, because the suffix is built everywhere this file is named: the
+    per-shard temp path, the shard writer, the merge source, the merge destination, the
+    cleanup list, the completeness check that decides whether a finished shard can be
+    reused, and the stale-sibling clears.
 
-    That cross-gene one is not hypothetical: it once lacked `.gz`, and because
-    reassign_multigene_tracking_reads.py picks its reader from the suffix alone it parsed gzip
-    magic as UTF-8 and killed every run. Anything that names this file belongs here.
+    Having one definition is not cosmetic. A consumer that picks its reader from the
+    suffix alone will parse gzip magic as UTF-8 and kill the run if any one of those
+    places disagrees; that happened, at the site that named the pre-correction file
+    before the cross-gene correction was removed. Anything that names this file belongs
+    here.
 
     Compressed unconditionally rather than behind a flag, because this file holds one row per
     (read, isoform) and is the only artifact that scales with library size: ~140 bytes per row
@@ -2379,7 +2544,6 @@ def _invalidate_ambiguous_shard(shard_prefix, stale_track):
             os.unlink(victim)
         except FileNotFoundError:
             pass
-
 
 def _append_without_first_line(
     src_path, dst_fh, expected_num_fields=None, missing_value="1.000000"
@@ -2531,105 +2695,6 @@ def _append_lraa_output_mode_suffix(output_prefix, quant_only, input_gtf):
     return f"{output_prefix}.{suffix}"
 
 
-def _maybe_run_cross_gene_em_for_secondary_alignments(
-    output_prefix, quant_expr_path, tracking_path
-):
-    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
-        return
-    if not LRAA_Globals.config.get("run_EM", True):
-        logger.info("Skipping final cross-gene EM because --no_EM was requested")
-        return
-    if not LRAA_Globals.config.get("run_cross_gene_EM_for_secondary_alignments", True):
-        logger.info("Skipping final cross-gene EM for secondary alignments")
-        return
-    if not os.path.exists(quant_expr_path) or not os.path.exists(tracking_path):
-        # Raise only when the TRACKING file is the missing one and a copy sits under the
-        # other encoding. Gating on the tracking path specifically, because this branch also
-        # fires for a missing expr file, and a stale .gz relic beside a present tracking file
-        # would otherwise produce a confident error about a file that is right there.
-        #
-        # Loud rather than skipped, because skipping means reporting uncorrected abundances
-        # as final: measured on ONT chr20, the correction moves 11.2% of tracking fractions
-        # and 2.7% of total fractional mass.
-        stale = f"{output_prefix}{_stale_tracking_suffix()}"
-        if not os.path.exists(tracking_path) and os.path.exists(stale):
-            raise RuntimeError(
-                "cross-gene EM cannot find {} but {} exists. Either a tracking path was "
-                "built without _tracking_suffix(), or this prefix holds output from an "
-                "earlier LRAA version that wrote it uncompressed. Skipping the "
-                "correction would report uncorrected abundances as final.".format(
-                    tracking_path, stale
-                )
-            )
-        logger.warning(
-            "Skipping final cross-gene EM because quant outputs are missing: %s, %s",
-            quant_expr_path,
-            tracking_path,
-        )
-        return
-
-    raw_expr_path = f"{output_prefix}.pre-cross-gene-EM.quant.expr"
-    # Suffix carried through, because the next two lines MOVE the finished tracking file
-    # here and reassign_multigene_tracking_reads.py decides how to open it from the suffix
-    # alone. Naming a gzipped file without .gz hands it deflate bytes to parse as text.
-    raw_tracking_path = f"{output_prefix}.pre-cross-gene-EM{_tracking_suffix()}"
-    # Both encodings: this artifact is published beside the final outputs, so a copy left
-    # under the other suffix by an earlier run is as misleading here as at the final level.
-    for path in (
-        raw_expr_path,
-        raw_tracking_path,
-        f"{output_prefix}.pre-cross-gene-EM{_stale_tracking_suffix()}",
-    ):
-        if os.path.exists(path):
-            os.remove(path)
-
-    shutil.move(quant_expr_path, raw_expr_path)
-    shutil.move(tracking_path, raw_tracking_path)
-
-    cmd = [
-        sys.executable,
-        os.path.join(UTILDIR, "reassign_multigene_tracking_reads.py"),
-        "--quant_expr",
-        raw_expr_path,
-        "--tracking",
-        raw_tracking_path,
-        "--output_expr",
-        quant_expr_path,
-        "--output_tracking",
-        tracking_path,
-        "--max_iter",
-        str(LRAA_Globals.config.get("max_EM_iterations_quant_only", 250)),
-        "--alpha",
-        str(LRAA_Globals.config["EM_alpha"]),
-        "--tol",
-        str(LRAA_Globals.config["EM_convergence_tol"]),
-        "--min_expr",
-        str(LRAA_Globals.config["cross_gene_EM_min_abundance"]),
-        "--min_uniq_frac",
-        str(LRAA_Globals.config["unique_read_report_min_frac"]),
-        "--tmp_dir",
-        ".",
-    ]
-    logger.info(
-        "Running final cross-gene EM for secondary alignments; preserving pre-correction outputs as %s and %s",
-        raw_expr_path,
-        raw_tracking_path,
-    )
-    logger.debug("Cross-gene EM command: %s", " ".join(cmd))
-    try:
-        subprocess.check_call(cmd)
-    except Exception:
-        if not os.path.exists(quant_expr_path) and os.path.exists(raw_expr_path):
-            shutil.copyfile(raw_expr_path, quant_expr_path)
-        if not os.path.exists(tracking_path) and os.path.exists(raw_tracking_path):
-            shutil.copyfile(raw_tracking_path, tracking_path)
-        raise
-
-    # The pre-correction outputs are moved into place before the EM runs, so they
-    # bypass the stamping applied to the final quant files below.
-    _ensure_lraa_version_comment(raw_expr_path)
-    _ensure_lraa_version_comment(raw_tracking_path)
-
 
 def _parse_input_transcripts_for_cs(
     input_gtf, contig_acc, contig_strand, restrict_region_lend, restrict_region_rend
@@ -2650,22 +2715,19 @@ def _parse_input_transcripts_for_cs(
     return txs
 
 
-def _ensure_contig_tmp(output_prefix, contig_acc, contig_strand):
-    """Ensure per-(contig,strand) tmp dir exists, set LRAA_TMP_DIR, and return (tmp_dir, tmp_prefix)."""
-    tmp_root = f"__{output_prefix}.contigtmp"
-    try:
-        os.makedirs(tmp_root, exist_ok=True)
-    except Exception:
-        if not os.path.isdir(tmp_root):
-            raise
-    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
-    os.makedirs(tmp_dir, exist_ok=True)
-    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
-    try:
-        os.environ["LRAA_TMP_DIR"] = tmp_dir
-    except Exception:
-        pass
-    return tmp_dir, tmp_prefix
+def _unit_tmp_paths(tmp_root, unit):
+    """Temp directory and ARTIFACT PREFIX for one work unit under a temp root.
+
+    The directory stays per-(contig, strand) so every unit of one contig-strand keeps
+    its artifacts together. The file STEM carries the unit's own token, which is what
+    stops two chunks of one contig-strand from overwriting each other's quant.expr,
+    quant.tracking, gtf, .ok checkpoint, error log and resource trace.
+
+    A whole-contig-strand unit produces exactly the historical `{contig}.{strand}` stem,
+    so resume from an older run still matches.
+    """
+    tmp_dir = os.path.join(tmp_root, unit.contig_acc, unit.contig_strand)
+    return tmp_dir, os.path.join(tmp_dir, unit.artifact_token)
 
 
 def _maybe_start_monitor(monitor_path, note):
@@ -2740,19 +2802,21 @@ def _run_jobs_schedule_and_merge(
     quant_only,
     tag_bam_path,
     CONTIG_PARALLEL,
-    NUM_PARALLEL_CONTIGS,
-    CPU,
+    CPU_BUDGET,
+    COMPONENT_WORKERS,
     NO_RESUME_PARALLEL,
     CLEAN_PARALLEL_TMP,
     NO_CLEANUP,
     DEBUG,
     INCLUDE_PRELIM_TRANSCRIPTS,
     VERBOSE=False,
-    SHUFFLE_JOBS=False,
 ):
-    """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging.
+    """Unified execution pipeline: schedule the flat work-unit queue, merge outputs,
+    optional GTF/BED, resource summary, cleanup, and BAM tagging.
 
-    Respects NUM_PARALLEL_CONTIGS for worker concurrency; each worker receives the full --num_threads_per_worker allotment.
+    Concurrency and per-worker native-tool threads are DERIVED from CPU_BUDGET and the
+    length of the queue by CpuBudget.allocate(); no level is sized independently, so no
+    two levels can multiply past the budget.
     """
 
     if not jobs:
@@ -2782,44 +2846,62 @@ def _run_jobs_schedule_and_merge(
     except Exception:
         pass
 
-    # Determine pool size and cores per worker
-    threads_per_worker = CPU if CPU and CPU > 0 else 1
+    # Divide the budget across the flat queue. Nothing here is a second knob: the queue
+    # length and the budget are the only inputs, and max_unit_workers exists only for
+    # callers that MUST serialise -- --no_parallelize_contigs, or --debug/--include_prelim_
+    # transcripts, whose debug artifacts clobber each other across concurrent workers.
+    max_unit_workers = None
+    if not CONTIG_PARALLEL:
+        max_unit_workers = 1
+    if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+        max_unit_workers = 1
 
-    if CONTIG_PARALLEL:
-        if NUM_PARALLEL_CONTIGS is not None:
-            pool_target = max(1, NUM_PARALLEL_CONTIGS)
-        else:
-            pool_target = 1
-            if len(jobs) > 1:
-                logger.info(
-                    "--num_parallel_contigs not set; defaulting to sequential contig processing (set flag to enable parallel workers)."
-                )
-        pool_size = min(pool_target, len(jobs))
-        pool_size = max(1, pool_size)
-        if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
-            pool_size = 1
-    else:
-        pool_size = 1
+    allocation = CpuBudget.allocate(
+        budget=CPU_BUDGET,
+        num_units=len(jobs),
+        max_unit_workers=max_unit_workers,
+        max_component_workers=COMPONENT_WORKERS,
+    )
+    pool_size = allocation.unit_workers
 
-    # Set per-job CPU and whether worker should redirect stderr to per-contig log
+    logger.info(CpuBudget.format_allocation(allocation, phase="main"))
+    shortfall = CpuBudget.budget_shortfall_note(allocation)
+    if shortfall:
+        logger.info(shortfall)
+    if allocation.component_workers:
+        logger.info(
+            "Component assembly may fork up to %d worker(s) per unit, granted from the "
+            "%d-core budget only when cores are actually FREE and only when a unit has "
+            "several eligible components outstanding; nothing is reserved for it",
+            allocation.component_workers,
+            allocation.budget,
+        )
+
+    # The shared free-core count. Unit workers hold a permit each; a component grant takes
+    # more, temporarily, and hands them back. This is what keeps the cap honest across the
+    # two levels of process parallelism.
+    core_lease = CpuBudget.CoreLease(allocation.budget)
+
+    # Set per-job allocation and whether worker should redirect stderr to per-unit log
     # We only redirect when running multiple workers concurrently; unless --verbose is set, in which case keep terminal output.
     redirect_stderr = True if (pool_size > 1 and not VERBOSE) else False
     for j in jobs:
-        j["CPU_inner"] = threads_per_worker
+        j["TOOL_THREADS"] = allocation.tool_threads
+        j["COMPONENT_WORKERS"] = allocation.component_workers
+        j["core_lease"] = core_lease
+        # config_overrides was snapshotted before the queue length was known, so the
+        # allocation has to be written into it here or the forked worker would read the
+        # provisional prep-stage values.
+        overrides = j.get("config_overrides")
+        if overrides is not None:
+            overrides["tool_threads"] = allocation.tool_threads
+            overrides["component_workers"] = allocation.component_workers
         j["REDIRECT_STDERR"] = redirect_stderr
         j["VERBOSE"] = VERBOSE
         j["NO_CLEANUP"] = bool(NO_CLEANUP)
 
-    logger.info(
-        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; threads per worker={threads_per_worker} (mode={'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
-    )
-    if pool_size > 1:
-        try:
-            logger.info(
-                f"Estimated total cores in use (workers × threads per worker): {pool_size * threads_per_worker}"
-            )
-        except Exception:
-            pass
+    LRAA_Globals.config["tool_threads"] = allocation.tool_threads
+    LRAA_Globals.config["component_workers"] = allocation.component_workers
     # Explicitly report how logs will be routed for this run
     try:
         logger.info(
@@ -2847,10 +2929,7 @@ def _run_jobs_schedule_and_merge(
                 complete legacy one -- reuse proceeded, the writer never ran, and the
                 ambiguity stayed on disk to warn on every future run while resolving nothing.
                 """
-                d = os.path.join(
-                    prefix_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                p = os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                _d, p = _unit_tmp_paths(prefix_root, j["work_unit"])
                 ok_path = f"{p}.ok"
                 have_expr = os.path.exists(f"{p}.quant.expr")
                 have_track = os.path.exists(f"{p}{_tracking_suffix()}")
@@ -2902,23 +2981,31 @@ def _run_jobs_schedule_and_merge(
                 f"Resuming {resumed} completed contig/strand jobs from previous run"
             )
 
-    # Launch order is shuffled for load balancing; `jobs` itself is left in its
-    # canonical (contig, strand) construction order.  Shuffling `jobs` in place
-    # also reordered the merge loops below, which concatenate each worker's temp
-    # GTF / quant.expr / quant.tracking in list order -- so an unseeded global
-    # RNG decided which strand block came first in every output file, and two
-    # runs with identical content produced different bytes.
+    # Launch order is LONGEST-FIRST on the unit cost proxy; `jobs` itself is left in its
+    # canonical (contig, strand, chunk) construction order.  Reordering `jobs` in place
+    # would also reorder the merge loops below, which concatenate each worker's temp
+    # GTF / quant.expr / quant.tracking in list order.
+    #
+    # This replaces an unseeded random.shuffle that was there for load balancing. The
+    # shuffle made launch order -- and so which worker won a race on any shared artifact
+    # -- depend on a global RNG; longest-first is deterministic and is also the standard
+    # makespan heuristic, which is what the shuffle was reaching for. It only changes
+    # wall time when the queue is longer than the pool, so it pays off on whole-genome
+    # and small-contig references and is inert on a per-chromosome sharded run.
     launch_order = jobs
-    if SHUFFLE_JOBS and pool_size > 1:
-        launch_order = list(jobs)
-        random.shuffle(launch_order)
+    if pool_size > 1 and len(jobs) > 1:
+        launch_order = CpuBudget.order_longest_first(
+            [j["work_unit"] for j in jobs]
+        )
+        by_unit = {j["work_unit"]: j for j in jobs}
+        launch_order = [by_unit[u] for u in launch_order]
         logger.info(
-            "Shuffled contig/strand job launch order for load balancing ({} jobs); "
-            "output merge order remains canonical".format(len(jobs))
+            "Launching %d work unit(s) longest-first by cost proxy; output merge order remains canonical",
+            len(jobs),
         )
 
     # Launch jobs via rolling scheduler
-    logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
+    logger.info("Using MultiProcessManager rolling scheduler for the work-unit queue")
     mgr = mpm.MultiProcessManager(pool_size)
     try:
         for j in launch_order:
@@ -2933,7 +3020,7 @@ def _run_jobs_schedule_and_merge(
                 p = Process(target=_contig_job_runner, name=_pname, args=(j,))
             else:
                 p = Process(target=_contig_job_runner, args=(j,))
-            mgr.launch_process(p)
+            mgr.launch_process(p, unit_id=j["unit_id"])
         errs = mgr.wait_for_remaining_processes()
     except KeyboardInterrupt:
         # Propagate Ctrl-C: terminate children and wait for full pruning before exit
@@ -2979,10 +3066,7 @@ def _run_jobs_schedule_and_merge(
 
                 # Try new tmp location first, then legacy
                 def _prefix_for(root):
-                    d = os.path.join(
-                        root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                    )
-                    return os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                    return _unit_tmp_paths(root, j["work_unit"])[1]
 
                 # A resumed job carries the root its completeness was actually established
                 # in. Honour it rather than re-deriving, because the two tests differ: this
@@ -3042,14 +3126,7 @@ def _run_jobs_schedule_and_merge(
     # old, with nothing marking which is current. Anything that globs for either name -- a
     # pipeline step, a converter, a WDL gather -- could read the stale one and never know.
     # Removed here rather than at write time so it also clears when this run produces no rows.
-    # Both published tracking artifacts, unconditionally. The pre-correction copy used to be
-    # cleared only inside the cross-gene EM branch, so a run that skipped that branch --
-    # --no_allow_secondary_alignments, --no_EM, or the early return when outputs are absent --
-    # left a run-old .gz sitting beside fresh outputs indefinitely.
-    for _stale_out in (
-        f"{output_prefix}{_stale_tracking_suffix()}",
-        f"{output_prefix}.pre-cross-gene-EM{_stale_tracking_suffix()}",
-    ):
+    for _stale_out in (f"{output_prefix}{_stale_tracking_suffix()}",):
         try:
             os.unlink(_stale_out)
             logger.info(
@@ -3112,10 +3189,8 @@ def _run_jobs_schedule_and_merge(
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
         tmp_root_old = f"{j['output_prefix']}.contigtmp"
-        dnew = os.path.join(tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        dold = os.path.join(tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
-        pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+        pnew = _unit_tmp_paths(tmp_root_new, j["work_unit"])[1]
+        pold = _unit_tmp_paths(tmp_root_old, j["work_unit"])[1]
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
         _append_without_first_line(
@@ -3131,9 +3206,6 @@ def _run_jobs_schedule_and_merge(
     _merge_genome_tx_arb_summary_files(
         genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
     )
-    _maybe_run_cross_gene_em_for_secondary_alignments(
-        output_prefix, quant_out_fn, track_out_fn
-    )
     _ensure_lraa_version_comment(quant_out_fn)
     _ensure_lraa_version_comment(track_out_fn)
 
@@ -3145,14 +3217,8 @@ def _run_jobs_schedule_and_merge(
             for j in jobs:
                 tmp_root_new = f"__{j['output_prefix']}.contigtmp"
                 tmp_root_old = f"{j['output_prefix']}.contigtmp"
-                dnew = os.path.join(
-                    tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                dold = os.path.join(
-                    tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
-                pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+                pnew = _unit_tmp_paths(tmp_root_new, j["work_unit"])[1]
+                pold = _unit_tmp_paths(tmp_root_old, j["work_unit"])[1]
                 tmp_prefix = pnew if os.path.exists(f"{pnew}.gtf") else pold
                 gtf_tmp = f"{tmp_prefix}.gtf"
                 if os.path.exists(gtf_tmp):
@@ -3195,7 +3261,7 @@ def _run_jobs_schedule_and_merge(
     # Resource summary
     try:
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
-            _summarize_contig_resource_logs(output_prefix, jobs, parallel_mode=True)
+            _summarize_contig_resource_logs(output_prefix, jobs)
     except Exception:
         pass
 
@@ -3203,12 +3269,7 @@ def _run_jobs_schedule_and_merge(
     if CLEAN_PARALLEL_TMP:
         for j in jobs:
             tmp_root = f"__{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(
-                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-            )
-            tmp_prefix = os.path.join(
-                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-            )
+            tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, j["work_unit"])
             for pth in (
                 f"{tmp_prefix}.quant.expr",
                 f"{tmp_prefix}{_tracking_suffix()}",
@@ -3258,6 +3319,22 @@ def _run_jobs_schedule_and_merge(
 
 def _contig_job_runner(job):
     # Module-scope function so it can be pickled by multiprocessing on macOS/Windows (spawn start method)
+    work_unit = job["work_unit"]
+    # This unit holds one permit for its own single-core assembly and quant work, so a
+    # component grant taken later cannot push the total past the budget. Taking it is
+    # non-blocking on purpose: if an outstanding, unpreemptable component grant has
+    # temporarily consumed the spare budget, the unit runs anyway rather than deadlocking
+    # behind children it does not own -- brief oversubscription is ACCEPTED and reported.
+    global CORE_LEASE
+    CORE_LEASE = job.get("core_lease")
+    unit_permit = CORE_LEASE.take(1) if CORE_LEASE is not None else 0
+    if CORE_LEASE is not None and unit_permit == 0:
+        logger.info(
+            "[%s] no free core permit at launch; an outstanding component grant has the "
+            "budget briefly oversubscribed (component work is not checkpointable, so it is "
+            "never preempted)",
+            work_unit.artifact_token,
+        )
     contig_acc = job["contig_acc"]
     contig_strand = job["contig_strand"]
     genome_fasta = job["genome_fasta_filename"]
@@ -3292,6 +3369,9 @@ def _contig_job_runner(job):
         LRAA_Globals.config.update(job["config_overrides"])
     if job.get("splice_graph_params"):
         Splice_graph.init_sg_params(job["splice_graph_params"])
+    # Unique per-unit name for anything a worker writes outside its tmp prefix. Two
+    # chunks of one contig-strand would otherwise share a name here too.
+    LRAA_Globals.config["unit_artifact_token"] = work_unit.artifact_token
 
     input_transcripts = None
     if job["input_gtf"]:
@@ -3308,15 +3388,14 @@ def _contig_job_runner(job):
         if input_transcripts is not None and len(input_transcripts) == 0:
             input_transcripts = None
 
-    # Use a structured temp dir for contig/strand results
+    # Use a structured temp dir for this work unit's results
     try:
         os.makedirs(tmp_root, exist_ok=True)
     except Exception:
         if not os.path.isdir(tmp_root):
             raise
-    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+    tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, work_unit)
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
     splice_graph_cache_dir = job.get("splice_graph_cache_dir")
 
@@ -3405,11 +3484,10 @@ def _contig_job_runner(job):
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
             tmp_root_m = f"__{job['output_prefix']}.contigtmp"
             os.makedirs(tmp_root_m, exist_ok=True)
-            tmp_dir_m = os.path.join(tmp_root_m, f"{contig_acc}", f"{contig_strand}")
+            tmp_dir_m, tmp_prefix_m = _unit_tmp_paths(tmp_root_m, work_unit)
             os.makedirs(tmp_dir_m, exist_ok=True)
-            tmp_prefix_m = os.path.join(tmp_dir_m, f"{contig_acc}.{contig_strand}")
             monitor_path = f"{tmp_prefix_m}.resources.tsv"
-            note = f"worker:{contig_acc}:{contig_strand}"
+            note = f"worker:{work_unit.artifact_token}"
             worker_monitor = ResourceMonitor(
                 monitor_path,
                 interval_sec=float(
@@ -3588,12 +3666,15 @@ def _contig_job_runner(job):
                     input_transcripts,
                     ofh_quant,
                     ofh_track,
-                    job["CPU_inner"],
+                    job["COMPONENT_WORKERS"],
                     job["run_EM"],
                     job["prereconstruct_info_dir"],
                     report_quants=True,
                     splice_graph_cache_dir=splice_graph_cache_dir,
                     arb_summary_path=genome_tx_arb_summary_tmp,
+                    # QUANT_ONLY is only reachable with --gtf, so here
+                    # input_transcripts really is the user's annotation.
+                    reference_transcripts=input_transcripts,
                 )
             else:
                 run_transcript_assembly(
@@ -3608,7 +3689,7 @@ def _contig_job_runner(job):
                     ofh_gtf_local,
                     ofh_quant,
                     ofh_track,
-                    job["CPU_inner"],
+                    job["COMPONENT_WORKERS"],
                     job["run_EM"],
                     job["single_best_only"],
                     job["NO_FILTER_ISOFORMS"],
@@ -3633,16 +3714,11 @@ def _contig_job_runner(job):
         except Exception:
             pass
     except Exception:
-        # Write per-(contig,strand) error log to help users diagnose failures
+        # Write per-unit error log to help users diagnose failures
         try:
             import traceback  # local import to avoid polluting module scope
 
-            err_path = os.path.join(
-                tmp_root,
-                f"{contig_acc}",
-                f"{contig_strand}",
-                f"{contig_acc}.{contig_strand}.err.log",
-            )
+            err_path = "{}.err.log".format(_unit_tmp_paths(tmp_root, work_unit)[1])
             with open(err_path, "at") as efh:
                 efh.write(traceback.format_exc())
         except Exception:
@@ -3671,6 +3747,8 @@ def _contig_job_runner(job):
                 worker_monitor.stop()
         except Exception:
             pass
+        if CORE_LEASE is not None and unit_permit:
+            CORE_LEASE.give_back(unit_permit)
         # Flush and close error log last (only if used)
         if job.get("REDIRECT_STDERR", True):
             try:
@@ -3728,7 +3806,6 @@ def _run_oversimplify_best_overlap(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
-        primary_alignments_only=True,
     )
 
     # Precompute transcript exon intervals and maps
@@ -3941,7 +4018,6 @@ def _run_oversimplify_aggregate(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
-        primary_alignments_only=True,
     )
 
     read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))
@@ -4037,10 +4113,8 @@ def _run_oversimplify_aggregate(
     return
 
 
-def _summarize_contig_resource_logs(
-    output_prefix, jobs_or_contigs, parallel_mode=False
-):
-    """Write a consolidated summary TSV across per-(contig,strand) resource logs if monitoring enabled.
+def _summarize_contig_resource_logs(output_prefix, jobs):
+    """Write a consolidated summary TSV across per-work-unit resource logs if monitoring enabled.
     Writes: <output_prefix>.resources.summary.tsv
     """
     try:
@@ -4063,15 +4137,12 @@ def _summarize_contig_resource_logs(
                 )
                 + "\n"
             )
-            for item in jobs_or_contigs:
-                if parallel_mode:
-                    contig_acc = item["contig_acc"]
-                    contig_strand = item["contig_strand"]
-                else:
-                    contig_acc, contig_strand = item
+            for job in jobs:
+                work_unit = job["work_unit"]
+                contig_acc = work_unit.contig_acc
+                contig_strand = work_unit.contig_strand
                 tmp_root = f"__{output_prefix}.contigtmp"
-                tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
-                tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+                tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, work_unit)
                 log_path = f"{tmp_prefix}.resources.tsv"
                 if not os.path.exists(log_path):
                     continue
@@ -4649,13 +4720,14 @@ def run_quant_only(
     input_transcripts,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    CPU,
+    component_workers,
     run_EM,
     prereconstruct_info_dir,
     report_quants=True,
     prebuilt_splice_graph=None,
     splice_graph_cache_dir=None,
     arb_summary_path=None,
+    reference_transcripts=None,
 ):
 
     # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
@@ -4691,6 +4763,7 @@ def run_quant_only(
             restrict_region_rend,
             input_transcripts,
             quant_mode=True,
+            reference_transcripts=reference_transcripts,
         )
         if sg is None:
             sg = _load_splice_graph_from_cache(
@@ -4708,6 +4781,11 @@ def run_quant_only(
             restrict_region_lend,
             restrict_region_rend,
             input_transcripts,
+            # NOT input_transcripts: run_quant_only is also called from
+            # run_transcript_assembly with the models LRAA just built, and treating those
+            # as a reference would let a model waive the veto on the A-rich vertex its own
+            # terminus came from.  Only a genuine annotation, passed explicitly.
+            reference_transcripts=reference_transcripts,
             quant_mode=True,
             restrict_splice_type=None,
         )
@@ -4733,7 +4811,7 @@ def run_quant_only(
             pad=1,
         )
 
-    lraa_obj = LRAA(sg, CPU)
+    lraa_obj = LRAA(sg, component_workers, core_lease=CORE_LEASE)
     logger.info("\n//SECTION QUANT: Assigning input transcript paths in graph")
     input_transcripts = lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
 
@@ -4761,7 +4839,11 @@ def run_quant_only(
         base_root = os.environ.get("LRAA_TMP_DIR", os.getcwd())
         base_dir = os.path.join(base_root, "__read_tracking")
         os.makedirs(base_dir, exist_ok=True)
-        token = f"{contig_acc}.{contig_strand}"
+        # The tmp dir is shared by every unit of one contig-strand, so the store name has
+        # to carry the unit token rather than just the contig and strand.
+        token = LRAA_Globals.config.get(
+            "unit_artifact_token", f"{contig_acc}.{contig_strand}"
+        )
         LG.READ_NAME_STORE = ReadNameStore(
             os.path.join(base_dir, f"read_names.{token}")
         )
@@ -4993,16 +5075,23 @@ def run_quant_only(
 
         theta = q.get_transcript_id_to_theta()
         em_was_run = q.em_was_run()
+        # The EM unit is a read-sharing component of genes, so theta is normalized within a
+        # component and every per-read split below needs that grouping rather than gene ids.
+        transcript_id_to_component_id = q.get_transcript_id_to_component_id()
         table = StreamingQuant.AssignmentTable.build(
             sg,
             q.get_mp_to_transcripts(),
             theta,
             em_was_run,
             q.get_unassigned_mp_count_pairs(),
+            transcript_id_to_component_id,
         )
-        # Same splice graph, same Quantify object, same transcript set as the table: the
-        # resolver must answer for an unseen path exactly as the first pass would have.
-        resolver = StreamingQuant.make_path_resolver(sg, q, theta, em_was_run)
+        # Same splice graph, same Quantify object, same transcript set and same component
+        # grouping as the table: the resolver must answer for an unseen path exactly as the
+        # first pass would have.
+        resolver = StreamingQuant.make_path_resolver(
+            sg, q, theta, em_was_run, transcript_id_to_component_id
+        )
         totals = StreamingQuant.stream_assign(
             bam_file_for_quant,
             contig_acc,
@@ -5063,7 +5152,7 @@ def run_transcript_assembly(
     ofh_gtf,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    CPU,
+    component_workers,
     run_EM,
     single_best_only,
     NO_FILTER_ISOFORMS,
@@ -5172,6 +5261,7 @@ def run_transcript_assembly(
             restrict_region_rend,
             transcripts_incl_in_graph,
             quant_mode=False,
+            reference_transcripts=reference_transcripts_incl_in_graph,
         )
         sg_all = _load_splice_graph_from_cache(
             splice_graph_cache_dir, cache_key, cache_signature
@@ -5188,6 +5278,9 @@ def run_transcript_assembly(
             restrict_region_lend,
             restrict_region_rend,
             transcripts_incl_in_graph,
+            # the mixture above is what gets INTEGRATED into the graph; only the genuine
+            # annotation may waive the internal-priming veto
+            reference_transcripts=reference_transcripts_incl_in_graph,
             quant_mode=False,
             restrict_splice_type=None,
         )
@@ -5201,7 +5294,7 @@ def run_transcript_assembly(
                 splice_graph_cache_dir, cache_key, cache_signature, sg_all
             )
 
-    lraa_all_obj = LRAA(sg_all, CPU)
+    lraa_all_obj = LRAA(sg_all, component_workers, core_lease=CORE_LEASE)
 
     mapped_transcripts = lraa_all_obj.assign_transcripts_paths_in_graph(
         transcripts_incl_in_graph
@@ -5555,37 +5648,42 @@ def run_transcript_assembly(
                 return
 
         ####################################################################
-        # Filter isoforms apparently derived from internal priming artifacts
-        if LRAA_Globals.config["filter_internal_priming"]:
+        # Internal priming. The gate in Splice_graph._incorporate_PolyA_objects has
+        # already stopped A-rich READ-DERIVED candidates becoming vertices. This stage
+        # judges the model's own emitted 3' terminus, which reconstruction may have put
+        # somewhere no rejected candidate sat -- on chr20 that leaves 123 monoexonic
+        # models in A-rich context, only 2.4% of which end near a measured cleavage site
+        # against 52.4% of unflagged monoexonic models. Annotation is always applied so
+        # the InternalPriming attribute round-trips; deletion is policy.
+        transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
+            transcripts,
+            contig_seq_str,
+            contig_strand,
+            input_transcripts,
+            restrict_filter_to_monoexonic=LRAA_Globals.config[
+                "restrict_internal_priming_filter_to_monoexonic"
+            ],
+            spare_monoexonic_with_known_3prime=LRAA_Globals.config[
+                "spare_monoexonic_internal_priming_with_known_3prime"
+            ],
+            delete=LRAA_Globals.config["filter_internal_priming"],
+        )
+        if len(transcripts) < 1:
             logger.info(
-                f"[{contig_acc}{contig_strand}] \n// -filtering out internal priming"
-            )
-            logger.info(
-                f"[{contig_acc}{contig_strand}] Before filtering, have {len(transcripts)} transcripts"
-            )
-            transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
-                transcripts,
-                contig_seq_str,
-                contig_strand,
-                input_transcripts,
-                restrict_filter_to_monoexonic=LRAA_Globals.config[
-                    "restrict_internal_priming_filter_to_monoexonic"
-                ],
-                spare_monoexonic_with_known_3prime=LRAA_Globals.config[
-                    "spare_monoexonic_internal_priming_with_known_3prime"
-                ],
-            )
-            logger.info(
-                f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts"
-            )
-            if len(transcripts) < 1:
-                logger.info(
-                    "-no transcripts on contig {} {} survived internal priming filtering".format(
-                        contig_acc, contig_strand
-                    )
+                "-no transcripts on contig {} {} survived internal-priming filtering".format(
+                    contig_acc, contig_strand
                 )
-                # continue
-                return
+            )
+            return
+
+        ####################################################################
+        # Canonical PAS upstream of each 3' end.  Unconditional: this is
+        # annotation, not policy, and it is independent of the internal-priming
+        # decision -- that reads the genome downstream of the terminus, this reads
+        # upstream, and a terminus can carry both signals.
+        transcripts = TranscriptFiltering.annotate_polyA_signal(
+            transcripts, contig_seq_str, contig_strand
+        )
 
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(
@@ -5617,12 +5715,15 @@ def run_transcript_assembly(
         transcripts,
         ofh_quant_output,
         ofh_quant_read_tracker,
-        CPU,
+        component_workers,
         run_EM,
         prereconstruct_info_dir,
         report_quants=False,
         splice_graph_cache_dir=splice_graph_cache_dir,
         arb_summary_path=arb_summary_path,
+        # `transcripts` above are the models LRAA just assembled; the genuine annotation
+        # is the reference subset, and only it may waive the internal-priming veto.
+        reference_transcripts=reference_transcripts_incl_in_graph,
     )
 
     # reset
@@ -5752,6 +5853,56 @@ def get_genome_contigs_listing(genome_fasta_filename):
     return contigs_list
 
 
+def _contig_cost_proxy(bam_filename, genome_fasta_filename, contig_accs):
+    """Cheap per-contig scheduling proxy: retained alignments, else contig span.
+
+    Longest-first ordering needs a cost for every unit, and both sources here are free.
+    pysam's index statistics come straight out of the .bai with no BAM pass and give
+    mapped alignments per contig, which is the direct proxy for how much work a
+    contig-strand unit does. Span from the .fai is the fallback when the index is absent
+    or unreadable: a worse proxy, since a short highly-expressed contig can outweigh a
+    long quiet one, but it still sorts chr1 ahead of chrM.
+
+    A contig's two strand units share its proxy. Splitting the count by strand would
+    cost a BAM pass, and ordering only needs one contig's units to sort together rather
+    than to be told apart.
+    """
+
+    wanted = set(contig_accs)
+    costs = dict()
+
+    if bam_filename:
+        try:
+            with pysam.AlignmentFile(bam_filename, "rb") as fh:
+                for stat in fh.get_index_statistics():
+                    if stat.contig in wanted:
+                        costs[stat.contig] = float(stat.mapped)
+        except Exception as e:
+            logger.debug(
+                "index statistics unavailable for %s (%s); ordering work units by contig span instead",
+                bam_filename,
+                e,
+            )
+
+    if costs:
+        return costs
+
+    try:
+        with open("{}.fai".format(genome_fasta_filename)) as fh:
+            for line in fh:
+                vals = line.split("\t")
+                if vals[0] in wanted:
+                    costs[vals[0]] = float(vals[1])
+    except Exception as e:
+        logger.debug(
+            "no .fai for %s (%s); work units will launch in construction order",
+            genome_fasta_filename,
+            e,
+        )
+
+    return costs
+
+
 def report_transcript_paths_in_graph(transcripts, filename):
 
     with open(filename, "at") as ofh:
@@ -5831,6 +5982,8 @@ def build_ME_transcripts(
         restrict_region_lend,
         restrict_region_rend,
         input_transcripts,
+        # caller passes ME_input_transcripts, the intron-bearing reference subset
+        reference_transcripts=input_transcripts,
         quant_mode=False,
         restrict_splice_type="ME",
     )
@@ -5848,8 +6001,14 @@ def build_ME_transcripts(
             pad=1,
         )
 
-    # Incorporate reference transcripts if provided
-    lraa_ME_obj = LRAA(sg_ME, CPU)
+    # Incorporate reference transcripts if provided. The component-fork grant comes from
+    # config rather than a parameter, because these builders are reached from several
+    # depths and the grant is a property of the run's allocation, not of this call.
+    lraa_ME_obj = LRAA(
+        sg_ME,
+        LRAA_Globals.config.get("component_workers", 0),
+        core_lease=CORE_LEASE,
+    )
 
     if input_transcripts:
         lraa_ME_obj.assign_transcripts_paths_in_graph(
@@ -5917,6 +6076,8 @@ def build_SE_transcripts(
         restrict_region_lend,
         restrict_region_rend,
         transcripts_incl_in_graph,
+        # caller passes SE_input_transcripts, the single-exon reference subset
+        reference_transcripts=transcripts_incl_in_graph,
         quant_mode=False,
         restrict_splice_type="SE",
         SE_read_encapsulation_mask=SE_read_encapsulation_mask,
@@ -5936,7 +6097,11 @@ def build_SE_transcripts(
         )
 
     # Incorporate reference transcripts if provided
-    lraa_SE_obj = LRAA(sg_SE, CPU)
+    lraa_SE_obj = LRAA(
+        sg_SE,
+        LRAA_Globals.config.get("component_workers", 0),
+        core_lease=CORE_LEASE,
+    )
 
     if transcripts_incl_in_graph:
         lraa_SE_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph)

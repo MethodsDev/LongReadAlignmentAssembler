@@ -15,45 +15,6 @@ import Util_funcs
 logger = logging.getLogger(__name__)
 
 
-def alignment_filter_reason(read, contig_strand=None, primary_alignments_only=False):
-    """Why this record is not usable evidence, or None when it is.
-
-    The single definition of which alignments quantification consumes. Returned as a
-    reason string so callers can keep their own per-reason tallies, which a boolean
-    would lose.
-
-    Extracted so that a streaming assignment pass applies exactly these rules rather
-    than its own copy of them. Reimplementing this filter is how the normalizer came to
-    measure depth over reads the extractor rejects; the same divergence between a
-    streaming pass and this loop would silently assign reads the default mode drops, or
-    drop reads it assigns.
-    """
-    if contig_strand is not None:
-        if read.is_forward and contig_strand != "+":
-            return "wrong_strand"
-        if read.is_reverse and contig_strand != "-":
-            return "wrong_strand"
-    if read.mapping_quality < LRAA_Globals.config["min_mapping_quality"]:
-        return "min_mapping_quality"
-    if read.is_paired and not read.is_proper_pair:
-        return "improper_pair"
-    if read.is_duplicate:
-        return "duplicate"
-    if read.is_qcfail:
-        return "qcfail"
-    if read.is_supplementary:
-        return "supplementary"
-    if read.is_secondary and (
-        primary_alignments_only
-        or not LRAA_Globals.config.get("allow_secondary_alignments", False)
-    ):
-        return "secondary"
-    per_id = Util_funcs.alignment_per_id(read)
-    if per_id is not None and per_id < LRAA_Globals.config["min_per_id"]:
-        return "low_perID"
-    return None
-
-
 class Bam_alignment_extractor:
 
     # ---------------
@@ -87,7 +48,6 @@ class Bam_alignment_extractor:
         per_id_QC_raise_error=False,
         config=LRAA_Globals.config,
         force_lighten_all=False,
-        primary_alignments_only=False,
     ):
 
         discarded_read_counter = defaultdict(int)
@@ -98,6 +58,7 @@ class Bam_alignment_extractor:
         pretty_alignments = [] if pretty else None
 
         MIN_MAPPING_QUALITY = int(LRAA_Globals.config["min_mapping_quality"])
+        MAX_INTRON_LENGTH = int(LRAA_Globals.config["max_intron_length"])
 
         # parse read alignments, capture introns and genome coverage info.
         read_fetcher = None
@@ -115,8 +76,15 @@ class Bam_alignment_extractor:
                     )
                 )
 
+            # region_lend/region_rend arrive 1-based inclusive, straight from
+            # --region contig:lend-rend.  pysam.fetch takes 0-based half-open
+            # [start, stop), so passing region_lend unconverted started the
+            # window one base late and silently dropped any alignment whose only
+            # overlap with the region was its first base.  The right edge needs no
+            # adjustment: 1-based region_rend is 0-based region_rend - 1, which is
+            # below the exclusive stop and therefore included.
             read_fetcher = self._pysam_reader.fetch(
-                contig_acc, region_lend, region_rend
+                contig_acc, region_lend - 1, region_rend
             )
         else:
             logger.debug(
@@ -155,22 +123,46 @@ class Bam_alignment_extractor:
         for read in read_fetcher:
             processed += 1
 
-            # One shared definition of which alignments are usable evidence, so a
-            # streaming assignment pass cannot drift from this loop. The reason string
-            # keeps the per-reason tallies a boolean would lose.
-            reason = alignment_filter_reason(
-                read, contig_strand, primary_alignments_only
+            # The retention policy lives in Util_funcs.quant_discard_reason, which
+            # this loop is the reference consumer of.  It was inline here, which
+            # meant nothing else could ask what this loop keeps: cut selection, the
+            # strand split and depth measurement each grew their own approximation,
+            # and a filter added here would silently not reach any of them.
+            #
+            # The reasons are this counter's keys, so the tallies are unchanged.
+            reason = Util_funcs.quant_discard_reason(
+                read,
+                contig_strand,
+                max_intron_length=MAX_INTRON_LENGTH,
+                min_mapping_quality=MIN_MAPPING_QUALITY,
+                min_per_id=LRAA_Globals.config["min_per_id"],
             )
-            if reason == "wrong_strand":
+
+            # A strand mismatch is not a discard: this contig-strand simply is not
+            # this read's, and the opposite-strand pass will take it.  Counting it
+            # would report half the library as dropped.
+            if reason == "wrong_strand" or reason == "unmapped":
                 continue
             if reason is not None:
                 discarded_read_counter[reason] += 1
                 if reason == "low_perID":
                     read_name = Util_funcs.get_read_name_include_sc_encoding(read)
-                    self._last_discarded_read_names_by_reason["low_perID"].add(read_name)
+                    logger.debug(
+                        "read {} has insufficient per_id, < min {} required ".format(
+                            read_name, LRAA_Globals.config["min_per_id"]
+                        )
+                    )
+                    self._last_discarded_read_names_by_reason["low_perID"].add(
+                        read_name
+                    )
                     num_alignments_per_id_fail += 1
                 continue
-            if Util_funcs.alignment_per_id(read) is not None:
+
+            # Retained, and its identity was measurable: the QC ratio below is over
+            # alignments that carried NM or nM, so a read without either is neither
+            # a pass nor a failure.  Two tag probes rather than recomputing the
+            # identity the predicate already evaluated.
+            if read.has_tag("NM") or read.has_tag("nM"):
                 num_alignments_per_id_ok += 1
 
             if pretty:

@@ -8,8 +8,6 @@
     "LRAA_singlecell_wf.initial_annot_gtf": "data/chr1_2_3_M.mini.gtf.gz",
   
     "LRAA_singlecell_wf.HiFi": true,
-    "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing",
-    "LRAA_singlecell_wf.docker_sc": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:testing",
 
     "LRAA_singlecell_wf.main_chromosomes" : "chr1 chr2 chr3 chrM",
     

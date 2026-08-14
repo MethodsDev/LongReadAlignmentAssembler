@@ -80,12 +80,20 @@ RUN Rscript --vanilla -e 'install.packages("BiocManager", repos="https://cloud.r
 # (pandas/scipy), plotting (matplotlib/seaborn), differential usage
 # (statsmodels), and pytest, which pylib/SQANTI_like_annotator.py imports at
 # module scope.
+#
+# scikit-learn is here for the isoform-classification work: gradient-boosted
+# models and cross-validated feature ranking over per-isoform feature tables
+# (the DegradationDiscrimination and IsoformFeatureML investigations).  Nothing
+# in the repository imports it yet; it is installed so that analysis running in
+# this image does not have to pip-install into a running container, which is
+# how environments silently diverge between the container and the host.
 RUN pip install --no-cache-dir --break-system-packages \
     pandas \
     scipy \
     matplotlib \
     seaborn \
     statsmodels \
+    scikit-learn \
     pytest
 
 ARG LRAA_VERSION
@@ -93,8 +101,12 @@ ARG LRAA_CO
 ENV LRAA_VERSION=${LRAA_VERSION}
 ENV LRAA_CO=${LRAA_CO}
 
+# Real provenance, and the only provenance: the SHA the checkout below was
+# fetched with.  Readable without running the image, unlike an ENV.
+LABEL org.opencontainers.image.revision=${LRAA_CO}
+
 # Last layer, so a version bump reuses everything above.
-RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; the build scripts pass git rev-parse HEAD" >&2; exit 1; fi; \
     cd ${SRC} && \
     curl -sSL https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz -o lraa.tar.gz && \
     tar xzf lraa.tar.gz && \

@@ -18,7 +18,7 @@ smoke:
 		--bam ../sirvs/data/sim.fasta.mm2.bam \
 		--gtf ../sirvs/data/SIRVs1-7.annot.gtf \
 		--replicates 3 \
-		--threads 2 \
+		--cpu_budget 2 \
 		-- --HiFi
 
 # Strong guard.  Requires a region known to carry genuine content churn, not
@@ -40,7 +40,7 @@ strong:
 		$(if $(GTF),--gtf $(GTF),) \
 		--region $(if $(REGION),$(REGION),chr20:36000000-37000000) \
 		--replicates 3 \
-		--threads 4 \
+		--cpu_budget 4 \
 		-- --HiFi
 
 clean:

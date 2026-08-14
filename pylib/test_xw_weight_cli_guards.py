@@ -61,8 +61,7 @@ def _run(bam, *extra, gtf=None, genome=None, tmp=None):
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp / "out"),
-           "--use_XW_read_weights_for_quant",
-           "--no_allow_secondary_alignments"] + list(extra)
+           "--use_XW_read_weights_for_quant"] + list(extra)
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp))
 
 
@@ -137,32 +136,10 @@ def test_weighted_quant_refuses_discovery_mode(tmp_path, inputs):
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
     cmd = [sys.executable, LRAA, "--bam", str(bam), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--use_XW_read_weights_for_quant", "--library_type", "bulk",
-           "--no_allow_secondary_alignments"]
+           "--use_XW_read_weights_for_quant", "--library_type", "bulk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "supported only with --quant_only" in (r.stdout + r.stderr)
-
-
-def test_stream_reads_refuses_secondary_alignments(tmp_path, inputs):
-    """Streaming cannot reproduce the default path's per-read grouping.
-
-    The default path groups a read's alignment records by name and span, then lets one
-    represent it. A streaming pass sees one record at a time, and a coordinate-sorted bam
-    can place a read's other alignments arbitrarily far away, so reconstructing that
-    grouping would need unbounded buffering. Left enabled, streaming would emit a
-    tracking row per placement and count the read more than once -- so the combination is
-    refused rather than approximated.
-    """
-    gtf, genome = inputs
-    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
-    cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
-           "--gtf", str(gtf), "--genome", str(genome),
-           "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads", "--allow_secondary_alignments"]
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
-    assert r.returncode != 0
-    assert "--stream_reads requires --no_allow_secondary_alignments" in (r.stdout + r.stderr)
 
 
 def test_stream_reads_requires_genome_assignment_mode(tmp_path, inputs):
@@ -179,7 +156,7 @@ def test_stream_reads_requires_genome_assignment_mode(tmp_path, inputs):
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads", "--no_allow_secondary_alignments",
+           "--stream_reads",
            "--quant_read_assignment_mode", "rescue_unassigned"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
@@ -189,19 +166,60 @@ def test_stream_reads_requires_genome_assignment_mode(tmp_path, inputs):
     assert not list(tmp_path.glob("out*quant.expr")), "and must not emit results"
 
 
-def test_stream_reads_requires_coverage_normalization(tmp_path, inputs):
-    """With normalization off both passes read the same bam, so the mode only adds work."""
+def test_stream_reads_needs_a_thinner_first_pass_bam(tmp_path, inputs):
+    """With nothing to thin pass 1, both passes read the same bam and the mode only adds work."""
     gtf, genome = inputs
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads", "--no_allow_secondary_alignments",
+           "--stream_reads",
            "--quant_read_assignment_mode", "genome",
            "--normalize_max_cov_level", "0"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
-    assert "--stream_reads requires coverage normalization" in (r.stdout + r.stderr)
+    assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
+
+
+def test_stream_reads_accepts_an_externally_normalized_bam_for_sg(tmp_path, inputs):
+    """A pre-normalized --bam_for_sg satisfies the gate, which is how chunking composes.
+
+    The chunked pipeline normalizes each chunk itself and then runs its quant stage with
+    --bam_for_sg <normalized> --no_norm. Keying the gate on --normalize_max_cov_level alone
+    rejected every one of those calls, because the thinning had already happened in another
+    process. What the mode actually needs is that pass 1 read a thinner bam than pass 2, and
+    a distinct --bam_for_sg is exactly that.
+
+    Asserts only that the gate lets the run proceed -- it must not fail on THIS check.
+    """
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    sg_bam = _bam(tmp_path / "thinned.bam", single_cell=False)
+    cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
+           "--bam_for_sg", str(sg_bam), "--no_norm",
+           "--gtf", str(gtf), "--genome", str(genome),
+           "--output_prefix", str(tmp_path / "out"),
+           "--stream_reads",
+           "--quant_read_assignment_mode", "genome"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
+    assert "needs a first-pass bam thinner than the one it streams" not in (
+        r.stdout + r.stderr
+    )
+
+
+def test_stream_reads_refuses_when_bam_for_sg_is_the_streamed_bam(tmp_path, inputs):
+    """The same bam under both flags is the case the gate exists for, spelled differently."""
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
+           "--bam_for_sg", str(bam), "--no_norm",
+           "--gtf", str(gtf), "--genome", str(genome),
+           "--output_prefix", str(tmp_path / "out"),
+           "--stream_reads",
+           "--quant_read_assignment_mode", "genome"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode != 0
+    assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
 
 
 def test_stream_reads_refuses_tag_bam(tmp_path, inputs):
@@ -215,7 +233,7 @@ def test_stream_reads_refuses_tag_bam(tmp_path, inputs):
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads", "--no_allow_secondary_alignments",
+           "--stream_reads",
            "--quant_read_assignment_mode", "genome", "--tag_bam"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0

@@ -84,6 +84,24 @@ def _sum_fracs_by_gene(rows):
     return sums
 
 
+
+def _build(sg, mp_to_transcripts, theta, em_was_run, unassigned=(), components=None):
+    """AssignmentTable.build, defaulting every transcript into ONE component.
+
+    One component is the state pass 1 produces whenever a read is compatible with several
+    transcripts: that compatibility is exactly what joins their genes into a component. Tests
+    that mean to exercise the cross-component refusal pass `components` explicitly.
+    """
+    if components is None:
+        components = {
+            t.get_transcript_id(): "comp0"
+            for transcripts in mp_to_transcripts.values()
+            for t in transcripts
+        }
+    return AssignmentTable.build(
+        sg, mp_to_transcripts, theta, em_was_run, unassigned, components
+    )
+
 def test_theta_split_assigns_each_read_exactly_once():
     """Fractions over one gene's isoforms must sum to 1.0 and follow theta."""
     sg = _FakeSpliceGraph()
@@ -95,7 +113,7 @@ def test_theta_split_assigns_each_read_exactly_once():
     old = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = False
     try:
-        table = AssignmentTable.build(sg, {mp: [t1, t2]}, theta, True, ())
+        table = _build(sg, {mp: [t1, t2]}, theta, True, ())
     finally:
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old
 
@@ -117,7 +135,7 @@ def test_equal_split_without_theta_divides_by_transcript_count():
     old = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = False
     try:
-        table = AssignmentTable.build(sg, {mp: [t1, t2]}, {}, False, ())
+        table = _build(sg, {mp: [t1, t2]}, {}, False, ())
     finally:
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old
 
@@ -128,11 +146,15 @@ def test_equal_split_without_theta_divides_by_transcript_count():
     assert _sum_fracs_by_gene(rows)["g1"] == pytest.approx(1.0)
 
 
-def test_two_overlapping_genes_each_sum_to_one():
-    """A path compatible with two genes gets one full split per gene, not one pooled.
+def test_two_genes_in_one_component_share_a_single_split():
+    """A read compatible with two genes is assigned ONCE across the component, not per gene.
 
-    Theta is normalized within a gene, so pooling across genes would divide numbers that
-    were never normalized together.
+    Genes are joined into a component precisely because a read is compatible with isoforms
+    of both, and EM then runs once over the whole component -- so theta is normalized within
+    the component, not within each gene. Splitting per gene renormalizes a subset of theta:
+    each gene's group sums to 1 and the read is counted twice. Nothing in the tracking file
+    looks wrong when that happens, which is why it is pinned here with exact values rather
+    than with a per-gene sum that both behaviours satisfy.
     """
     sg = _FakeSpliceGraph()
     mp = _FakeMP(["E:1", "E:2"], "MP1")
@@ -144,14 +166,73 @@ def test_two_overlapping_genes_each_sum_to_one():
     old = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = False
     try:
-        table = AssignmentTable.build(sg, {mp: [a1, a2, b1]}, theta, True, ())
+        table = _build(sg, {mp: [a1, a2, b1]}, theta, True, ())
     finally:
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old
 
     rows = table.lookup("canon:E:1,E:2")
+    got = {r[TX_IDX]: r[FRAC_IDX] for r in rows}
+
+    # one denominator over the component: 0.6 + 0.4 + 1.0
+    assert got["a1"] == pytest.approx(0.3)
+    assert got["a2"] == pytest.approx(0.2)
+    assert got["b1"] == pytest.approx(0.5)
+    assert sum(got.values()) == pytest.approx(1.0), "the read is assigned exactly once"
+
+    # the per-gene sums are the halves of one split, not two whole ones
     sums = _sum_fracs_by_gene(rows)
-    assert sums["gA"] == pytest.approx(1.0)
-    assert sums["gB"] == pytest.approx(1.0)
+    assert sums["gA"] == pytest.approx(0.5)
+    assert sums["gB"] == pytest.approx(0.5)
+
+
+def test_transcripts_from_two_components_are_refused():
+    """Two separately quantified components cannot be pooled or split separately.
+
+    Reachable only through the resolver: coverage normalization can sample away the one read
+    that bridged two genes, so the first pass quantifies them as two components with
+    independently normalized thetas, and then the full bam produces a read compatible with
+    both. Pooling compares numbers from two normalizations; splitting each separately assigns
+    the read once per component. Refused, because neither is a defensible approximation and
+    the unseen-path-rate guard cannot detect it -- that bounds how much resolution happened,
+    not whether a split meant anything.
+    """
+    sg = _FakeSpliceGraph()
+    mp = _FakeMP(["E:1", "E:2"], "MP1")
+    a1 = _FakeTranscript("a1", "gA")
+    b1 = _FakeTranscript("b1", "gB")
+
+    with pytest.raises(RuntimeError, match="separately quantified components"):
+        _build(
+            sg,
+            {mp: [a1, b1]},
+            {"a1": 0.5, "b1": 0.5},
+            True,
+            (),
+            components={"a1": "compA", "b1": "compB"},
+        )
+
+
+def test_missing_component_id_is_refused_rather_than_defaulted():
+    """A component map that does not cover the assignments does not belong to them.
+
+    Defaulting the absent transcript to a component of its own would hand it a denominator
+    of one and a fraction of 1.0 -- a well-formed row that no consumer can tell from a
+    genuinely unambiguous assignment.
+    """
+    sg = _FakeSpliceGraph()
+    mp = _FakeMP(["E:1", "E:2"], "MP1")
+    t1 = _FakeTranscript("t1", "g1")
+    t2 = _FakeTranscript("t2", "g1")
+
+    with pytest.raises(RuntimeError, match="no component id for t2"):
+        _build(
+            sg,
+            {mp: [t1, t2]},
+            {"t1": 0.5, "t2": 0.5},
+            True,
+            (),
+            components={"t1": "comp0"},
+        )
 
 
 def test_duplicate_transcript_in_group_is_refused():
@@ -163,7 +244,7 @@ def test_duplicate_transcript_in_group_is_refused():
     t2 = _FakeTranscript("t2", "g1")
 
     with pytest.raises(RuntimeError, match="duplicate transcript ids"):
-        AssignmentTable.build(sg, {mp: [t1, t1_again, t2]}, {"t1": 0.75, "t2": 0.25}, True, ())
+        _build(sg, {mp: [t1, t1_again, t2]}, {"t1": 0.75, "t2": 0.25}, True, ())
 
 
 def test_same_transcript_under_two_genes_is_refused():
@@ -181,7 +262,7 @@ def test_same_transcript_under_two_genes_is_refused():
     t_b = _FakeTranscript("shared", "gB")
 
     with pytest.raises(RuntimeError, match="two gene ids"):
-        AssignmentTable.build(sg, {mp: [t_a, t_b]}, {"shared": 1.0}, True, ())
+        _build(sg, {mp: [t_a, t_b]}, {"shared": 1.0}, True, ())
 
 
 def test_zero_denominator_matches_default_path_rather_than_summing_to_one():
@@ -202,7 +283,7 @@ def test_zero_denominator_matches_default_path_rather_than_summing_to_one():
     old = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = False
     try:
-        table = AssignmentTable.build(sg, {mp: [t1, t2]}, {"t1": 0.0, "t2": 0.0}, True, ())
+        table = _build(sg, {mp: [t1, t2]}, {"t1": 0.0, "t2": 0.0}, True, ())
     finally:
         LRAA_Globals.config["weight_reads_by_3prime_agreement"] = old
 
@@ -220,7 +301,7 @@ def test_missing_theta_is_refused_rather_than_assigned_zero():
     t2 = _FakeTranscript("t2", "g1")
 
     with pytest.raises(RuntimeError, match="no EM theta"):
-        AssignmentTable.build(sg, {mp: [t1, t2]}, {"t1": 0.75}, True, ())
+        _build(sg, {mp: [t1, t2]}, {"t1": 0.75}, True, ())
 
 
 def test_empty_theta_with_em_run_is_refused_not_equal_split():
@@ -237,7 +318,7 @@ def test_empty_theta_with_em_run_is_refused_not_equal_split():
     t2 = _FakeTranscript("t2", "g1")
 
     with pytest.raises(RuntimeError, match="EM ran but no theta"):
-        AssignmentTable.build(sg, {mp: [t1, t2]}, {}, True, ())
+        _build(sg, {mp: [t1, t2]}, {}, True, ())
 
 
 def test_two_multipaths_on_one_canonical_path_are_refused():
@@ -248,4 +329,4 @@ def test_two_multipaths_on_one_canonical_path_are_refused():
     t1 = _FakeTranscript("t1", "g1")
 
     with pytest.raises(RuntimeError, match="two multipaths map to canonical path"):
-        AssignmentTable.build(sg, {mp_a: [t1], mp_b: [t1]}, {"t1": 1.0}, True, ())
+        _build(sg, {mp_a: [t1], mp_b: [t1]}, {"t1": 1.0}, True, ())

@@ -10,7 +10,7 @@ test: clean
 		--bam data/AT3G28550.2.rescued_original_alignments.bam \
 		--no_norm \
 		--no_parallelize_contigs \
-		--num_threads_per_worker 1 \
+		--cpu_budget 1 \
 		--output_prefix $(PREFIX)
 	$(MAKE) validate
 
@@ -22,15 +22,13 @@ validate:
 		--expected_total_reads 141 \
 		--expected_rescue_requested 141 \
 		--expected_rescued 141 \
-		--expected_rescue_requested_failed_genome 141 \
-		--expected_rescue_requested_unassigned_quant 0
+		--expected_rescue_requested_failed_genome 0 \
+		--expected_rescue_requested_unassigned_quant 141
 
 clean:
 	rm -rf __$(OUT_PREFIX).* \
 		$(OUT_PREFIX).* \
 		tx_rescue.* \
-		reassign_multigene_tracking.* \
-		*.quant.secondary_rescue.bam.count \
 		__init_clusters.tsv \
 		$(PREFIX).* \
 		__$(PREFIX).*

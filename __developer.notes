@@ -50,7 +50,12 @@ mpg.write_mp_graph_nodes_to_gtf("mpgns.post_length_filter.gtf")
 # each component is then targeted for transcript reconstruction using multithreading:
 foreach mpg_component:
 	p = Process(target=self._reconstruct_isoforms_single_component,
-              args=(q, mpg_component, component_counter, mpg_token, single_best_only) )
+              args=(shard_store, mpg_component, component_counter, mpg_token, single_best_only) )
+
+# each worker publishes its own result file rather than putting it on a shared queue:
+#   write unit.<component_counter>.<pid>.tmp ; fsync ; close ; rename -> unit.<component_counter>.done
+# the parent requires unit.<component_counter>.done of every worker that exited 0,
+# and concatenates in component_counter order.  see pylib/MultiProcessManager.py:ShardStore
 
 ## reconstruction:
 

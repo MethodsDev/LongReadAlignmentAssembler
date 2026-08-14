@@ -128,7 +128,6 @@ workflow LRAA_singlecell_wf {
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
-    Boolean allow_secondary_alignments = true
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
@@ -143,10 +142,12 @@ workflow LRAA_singlecell_wf {
     String read_umi_tag = "XM"
 
     # Resources and docker (propagated to subcalls where applicable)
-    Int numThreadsPerWorker = 5
+    # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides across
+    # work units. One value each for direct and chromosome-sharded runs; there is no
+    # second knob to multiply it by.
+    Int cpu = 5
     # Used only when main_chromosomes is non-empty and LRAA runs are chromosome-sharded.
-    Int numThreadsPerWorkerScattered = 5
-    Int num_parallel_contigs = 3
+    Int cpuScattered = 5
     # Optional override for direct LRAA runs. When unset, LRAA.wdl uses max(64 GiB, ceil(1.5 x input BAM GiB)).
     Int? memoryGB
     # Optional override for chromosome-sharded LRAA workers only. Has no effect when main_chromosomes is empty.
@@ -202,13 +203,11 @@ workflow LRAA_singlecell_wf {
         region = region,
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
-        allow_secondary_alignments = allow_secondary_alignments,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
-        numThreadsPerWorker = numThreadsPerWorker,
-        numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-        num_parallel_contigs = num_parallel_contigs,
+        cpu = cpu,
+        cpuScattered = cpuScattered,
         memoryGB = memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
         diskSizeGB = diskSizeGB,
@@ -288,9 +287,8 @@ workflow LRAA_singlecell_wf {
         main_chromosomes = main_chromosomes,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
-        numThreadsPerWorker = numThreadsPerWorker,
-        numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-        num_parallel_contigs = num_parallel_contigs,
+        cpu = cpu,
+        cpuScattered = cpuScattered,
         memoryGB = memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
         memoryGBmergeGTFs = memoryGBmergeGTFs,

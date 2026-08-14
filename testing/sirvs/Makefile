@@ -5,14 +5,14 @@ test: test_ref_free_ID test_quant test_ref_guided_ID test_unsupported_ref_model
 
 test_ref_free_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs --config_update SIRVs.LRAA_config_update.json
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --config_update SIRVs.LRAA_config_update.json
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-free.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-free.gtf.refmap
 	diff gffcompare.LRAA.LRAA.ref-free.gtf.refmap.full.summary.tsv data/latest_summary.tsv
 
 test_quant:
 	make clean
-	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf --HiFi --verbose --no_cleanup
 	./eval/validate_quant_expr.py LRAA.LRAA.quant-only.quant.expr data/latest_quant_info.tsv
 
 
@@ -73,7 +73,7 @@ test_quant:
 # accounts for all 551.
 test_ref_guided_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-guided.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-guided.gtf.refmap
 	diff gffcompare.LRAA.LRAA.ref-guided.gtf.refmap.full.summary.tsv data/latest_refguided_summary.tsv
@@ -98,12 +98,14 @@ test_ref_guided_ID:
 # would pass even when the model is wrongly reconstructed.
 test_unsupported_ref_model:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.no_SIRV311.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs --include_prelim_transcripts
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.no_SIRV311.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --include_prelim_transcripts
 	@echo "checking that unsupported SIRV311 was never reconstructed"
 	! awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=4590 && $$5<=4780 {found=1} END{exit !found}' __PRE-Tx-Filtering.transcripts.gtf
 	@echo "checking that the neighboring supported SIRV3 locus still reconstructs"
 	awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=8700 && $$5<=10000 {n++} END{exit !(n>=2)}' __PRE-Tx-Filtering.transcripts.gtf
 
+
+include ../lraa_test_docker.mk
 
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
@@ -111,29 +113,10 @@ MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 # call cache: a cache hit skips the task and the assertion checks nothing.
 MINIWDL_RUN_UNCACHED = miniwdl run
 
-test_docker: test_docker_direct_cross_gene_EM_gating test_docker_normalized_sg_bam
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json
-
-
-# Both runs reuse data/input_quant_only.json, which leaves main_chromosomes unset, so
-# LRAA.wdl takes the direct (non-scattered) branch; the flag under test is supplied as a
-# miniwdl CLI override rather than a new input file, since testing/** is gitignored.
-# LRAA writes *.pre-cross-gene-EM.quant.* only when secondary alignments are on, EM is on,
-# AND the cross-gene pass is enabled -- see
-# _maybe_run_cross_gene_em_for_secondary_alignments in ../../LRAA. LRAA.wdl used to hardcode
-# run_final_cross_gene_EM=true on the direct branch while LRAA_runner asserted the file's
-# existence off that flag alone, so --no_EM and --no_allow_secondary_alignments each killed
-# an otherwise successful run in the task's post-processing block, after all compute was
-# done and with every output discarded. The scattered path was never affected: it passes
-# run_final_cross_gene_EM=false and gates the merge on allow_secondary_alignments && !no_EM.
-# Each run must therefore succeed and report a null preCrossGeneEMQuantExpr.
-test_docker_direct_cross_gene_EM_gating:
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json no_EM=true
-	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); assert o.get("LRAA_wf.mergedQuantExpr"), "no_EM: quant expr missing"; assert o.get("LRAA_wf.preCrossGeneEMQuantExpr") is None, "no_EM: pre-cross-gene-EM output should be absent"; print("  no_EM gating ok")'
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json allow_secondary_alignments=false
-	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); assert o.get("LRAA_wf.mergedQuantExpr"), "no_secondary: quant expr missing"; assert o.get("LRAA_wf.preCrossGeneEMQuantExpr") is None, "no_secondary: pre-cross-gene-EM output should be absent"; print("  no_secondary gating ok")'
+test_docker: test_docker_normalized_sg_bam
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json $(LRAA_WDL_DOCKER)
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refGuided_asm.json $(LRAA_WDL_DOCKER)
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER)
 
 
 # LRAA builds the splice graph -- and therefore identifies isoforms -- from a depth-normalized
@@ -144,14 +127,14 @@ test_docker_direct_cross_gene_EM_gating:
 # hence one BAM per shard rather than one whole-genome BAM. The last run pins the opt-out that
 # the single-cell workflows pass, so they do not delocalize a BAM they never surface.
 test_docker_normalized_sg_bam:
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER)
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==1 and len(i)==1, "direct: expected one normalized BAM, got {}".format(len(b)); print("  direct normalized BAM ok")'
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json 'main_chromosomes=SIRV1 SIRV2 SIRV3'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER) 'main_chromosomes=SIRV1 SIRV2 SIRV3'
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; i=o["LRAA_wf.normalizedSpliceGraphBais"]; assert len(b)==3 and len(i)==3, "scatter: expected one normalized BAM per shard, got {}".format(len(b)); print("  scattered per-shard normalized BAMs ok")'
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json retain_normalized_splice_graph_bam=false
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i data/input_quant_only.json $(LRAA_WDL_DOCKER) retain_normalized_splice_graph_bam=false
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; assert b==[], "opt-out: expected no normalized BAM, got {}".format(b); print("  retain_normalized_splice_graph_bam=false ok")'
 
 
 clean:
 	rm -rf ./gffcompare* ./LRAA.* ./__* ./*_lraa_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache \
-		./tx_rescue.* ./reassign_multigene_tracking.* ./*.bam.count
+		./tx_rescue.* ./*.bam.count

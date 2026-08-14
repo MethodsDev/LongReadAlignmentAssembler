@@ -15,8 +15,8 @@ test_parallel:
 # Quick timing harness to compare serial vs parallelized contig processing
 # Produces: bench.summary.tsv with real/user/sys times for both modes
 bench: bench_clean
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --num_threads_per_worker 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup ) 2> serial.time.txt
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --num_threads_per_worker 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup ) 2> parallel.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup ) 2> serial.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup ) 2> parallel.time.txt
 	@echo -e "mode\tCPU\treal\tuser\tsys" > bench.summary.tsv
 	@SER_REAL=`grep '^real' serial.time.txt | awk '{print $$2}'`; \
 	 SER_USER=`grep '^user' serial.time.txt | awk '{print $$2}'`; \
@@ -35,6 +35,8 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 ##########
 # wdls
 
+include ../lraa_test_docker.mk
+
 MINIWDL_CFG = ../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 
@@ -42,13 +44,13 @@ test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
 
 test_wdl_quant_only:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.quant-only.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.quant-only.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ref_guided:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-guided.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-guided.json $(LRAA_WDL_DOCKER) --verbose
 
 test_wdl_ref_free:
-	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-free.json  --verbose
+	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wf.ref-free.json $(LRAA_WDL_DOCKER) --verbose
 
 
 

@@ -20,18 +20,26 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 #
 #   startbin1  read starts binned per 100 bp, each bin capped, no weights
 #   cov1       depth-targeted sampling, scarce junctions kept whole, XW weights
-#   cov2       as cov1, but depth and junction support are measured only over the
-#              records the consumer actually reads: supplementary alignments are
-#              excluded unconditionally, and secondaries per the filter mode.
-#   cov3       as cov2, plus the consumer's min_per_id floor.
-#   cov4       full parity with Bam_alignment_extractor's evidence definition: adds the
-#              mapping-quality floor, and the improper-pair, duplicate and qcfail
-#              rejections. Each excludes reads the extractor also excludes, so counting
-#              them measured a coverage level nothing downstream has -- 8% of reads on an
-#              ONT chr20 bam from the identity floor alone, and mapping quality bites
-#              hardest when set, since multimapping reads carry MAPQ 0 at exactly the
-#              paralogous loci where thinning decisions matter most.
-SPLICE_GRAPH_NORMALIZATION_METHOD = "cov4"
+#   cov2       two independent meanings, because the branches below were developed in
+#              parallel and both bumped cov1. On devel: the strand split first drops
+#              secondary, supplementary, duplicate, qcfail and unmapped records, and any
+#              alignment carrying an intron longer than max_intron_length. On the
+#              normalization branch: depth and junction support are measured only over the
+#              records the consumer actually reads.
+#   cov3       normalization branch only -- as its cov2, plus the consumer's min_per_id
+#              floor.
+#   cov4       normalization branch only -- adds the mapping-quality floor and the
+#              improper-pair, duplicate and qcfail rejections.
+#   cov5       both of the above, and measurement no longer reimplements the retention
+#              rules: it calls Util_funcs.quant_discard_reason, the one policy
+#              quantification itself consumes, which additionally excludes unmapped,
+#              unplaced and long-intron records. Counting records the consumer discards
+#              measured a coverage level nothing downstream has -- 8% of reads on an ONT
+#              chr20 bam from the identity floor alone, and mapping quality bites hardest
+#              when set, since multimapping reads carry MAPQ 0 at exactly the paralogous
+#              loci where thinning decisions matter most. Neither cov2 nor cov4 describes
+#              this, so reusing either token would be a stale hit rather than a miss.
+SPLICE_GRAPH_NORMALIZATION_METHOD = "cov5"
 
 config = {
     #########################
@@ -40,9 +48,14 @@ config = {
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
-    "allow_secondary_alignments": True,  # retain secondary alignments by default, filtered by secondary_alignment_mode
-    "secondary_alignment_mode": "heuristic",  # all|heuristic ; heuristic keeps all primaries and only secondary alignments passing the secondary-rescue rule; "none" is expressed by allow_secondary_alignments=False
-    "num_threads_per_worker": 1,
+    # CPU budget, and the two things the old "num_threads_per_worker" conflated. The
+    # budget is the total for the invocation; "tool_threads" is what a unit worker may
+    # pass to a native tool (samtools -@, minimap2 -t); "component_workers" is how many
+    # processes it may fork for large multipath-graph components, 0 meaning none. All
+    # three are derived from --cpu_budget by pylib/CpuBudget.py, never set independently.
+    "cpu_budget": 1,
+    "tool_threads": 1,
+    "component_workers": 0,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
     "min_softclip_realign_test": 5,
@@ -169,13 +182,31 @@ config = {
     # reference-matching monoexons against an absolute bar was stable -- 98% at 3
     # cells, 92% at 5, 73% at 10. 0 disables.
     "min_monoexonic_supporting_cells": 5,
+    # Internal priming is rejected during PolyA site identification
     "filter_internal_priming": True,
     "restrict_internal_priming_filter_to_monoexonic": True,
     # When True, a monoexonic transcript that looks internally primed is retained if its
-    # 3' end agrees with a reference annotation 3' end, the same reprieve multi-exonic
-    # transcripts get. Off by default: a monoexonic model has no intron chain
-    # corroborating it, so agreement alone is weaker evidence there.
+    # 3' end agrees with a reference annotation 3' end -- proximity to a known_transcripts
+    # terminus, not to any measured cleavage atlas. Off by default: a monoexonic model has
+    # no intron chain corroborating it, so agreement alone is weaker evidence there.
     "spare_monoexonic_internal_priming_with_known_3prime": False,
+    # Internal-priming veto at PolyA site identification: when a READ-DERIVED candidate
+    # sits at a 3' end the supplied reference annotation also calls, the reference is
+    # independent evidence that cleavage happens there, so the A-rich context veto is
+    # waived.  Inert without a reference -- ref-free runs have no known 3' ends -- so
+    # this only ever loosens a ref-guided run.
+    #
+    # "Also calls" means within max_dist_between_alt_polyA_sites / 2 (25 nt), not an
+    # exact coordinate match: the candidate coordinate is the most-supported read end in
+    # a 50 nt aggregation window, so it is not base-precise the way the annotation is,
+    # and this is the window the transcript-level reprieve
+    # (spare_monoexonic_internal_priming_with_known_3prime, and the multi-exonic rule
+    # above it in TranscriptFiltering) already uses for the same question.  Measured
+    # exposure on chr20: of 3,138,689 positions both strands where the veto would fire,
+    # an exact match waives 193 and +/-25 waives 7,644.
+    #
+    # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
+    "spare_polyA_veto_at_known_3prime": True,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,
@@ -208,11 +239,29 @@ config = {
     "normalize_max_cov_level": 1000,
     "restrict_asm_to_collapse": True,  # if True, no chaining of overlapping/extended paths
     #
+    ###############################################
+    # chunked parallelism: cutting a contig-strand
+    #
+    # A contig-strand is split into chunks that are normalized and processed
+    # independently, then merged. Both values below are in MEGABASES.
+    #
+    # Target cut positions sit at multiples of this across the contig, so a
+    # contig gets roughly length / approx_MB_per_cut chunks with no cap: chr20
+    # (64.4 Mb) gets 6, chr1 (248.9 Mb) gets 25. Sizing is by SPAN, not by
+    # alignment or gene count, so a chunk's coordinates are predictable from the
+    # contig length alone.
+    "approx_MB_per_cut": 10,
+    # TOTAL width of the search window centred on each target, in megabases --
+    # the whole window, not the half-width. A target at T is searched over
+    # [T - wiggle/2, T + wiggle/2], so the default 1 means T +/- 0.5 Mb. Within
+    # that window the cut is placed where it severs the fewest retained primary
+    # alignments; the window is never widened to find a zero-crossing position.
+    "approx_MB_per_cut_wiggle_window": 1,
+    #
     #######
     # quant
     "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records
     "run_EM": True,
-    "run_cross_gene_EM_for_secondary_alignments": True,
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
@@ -292,8 +341,6 @@ config = {
     "stream_reads_max_unseen_path_read_frac": 0.25,
     "EM_alpha": 0.01,  # regularization
     "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
-    # cross-gene EM correction (util/reassign_multigene_tracking_reads.py)
-    "cross_gene_EM_min_abundance": 1e-8,  # expectation-step floor keeping zero-support candidates recoverable
     # assignment fraction at or above which a read counts as uniquely assigned.
     # Reporting requires a whole read; isoform filtering tolerates EM rounding.
     "unique_read_report_min_frac": 1.0,
@@ -387,6 +434,15 @@ config = {
     # will bypass graph/EM and assign each read to the single best-overlapping reference transcript.
     "oversimplify_enabled": False,
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
+    # Polyadenylation signal annotation.  Defaults are human: the two canonical hexamers
+    # and the transcript-sense window LRAA's own PAS analyses used.  Both are settable
+    # for other organisms -- plant and many invertebrate signals are more degenerate and
+    # sit at different spacings -- via --polyA_signal_motifs / --polyA_signal_window.
+    # All motifs must share one length, since the containment bound is derived from it.
+    # Purely annotation: these affect the PAS and PAS_offset GTF attributes and nothing
+    # else, so they are not part of the splice-graph cache key.
+    "polyA_signal_motifs": ["AATAAA", "ATTAAA"],
+    "polyA_signal_window": [-40, -10],
 }
 
 

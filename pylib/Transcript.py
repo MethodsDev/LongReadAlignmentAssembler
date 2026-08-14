@@ -74,6 +74,8 @@ class Transcript(GenomeFeature):
         self._PolyA_read_count = None
 
         self._likely_internal_primed = None
+        self._polyA_signal = None          # canonical PAS hexamer, transcript sense
+        self._polyA_signal_offset = None   # signed nt from the 3' end to its first base
 
         self._scored_path_obj = (
             None  # optional - useful if transcript obj was built based on a scored path
@@ -346,6 +348,18 @@ class Transcript(GenomeFeature):
         # indicate if the transcript looks like it's internally primed.
         self._likely_internal_primed = TorF_boolean
 
+    def set_polyA_signal(self, hexamer, offset):
+        """Record the canonical polyadenylation signal found upstream of this model's
+        3' terminus, or its documented absence.
+
+        `hexamer` is None when the check ran and found nothing, which is emitted as
+        PAS "none" rather than by omitting the attribute -- absence of a key would be
+        indistinguishable from a GTF written before this existed.
+        """
+        self._polyA_signal = hexamer
+        self._polyA_signal_offset = offset
+        self._polyA_signal_evaluated = True
+
     def __repr__(self):
 
         text = "Transcript: {} {}-{} [{}] {} {} segs: {}".format(
@@ -566,6 +580,21 @@ class Transcript(GenomeFeature):
             misc_transcript_features["InternalPriming"] = str(
                 self._meta["InternalPriming"]
             )
+
+        # Canonical PAS upstream of the 3' end.  Independent of InternalPriming: that
+        # asks whether the genome DOWNSTREAM looks like an oligo-dT template, this asks
+        # whether the signal a real cleavage site needs is present UPSTREAM.  A terminus
+        # can carry both.
+        if getattr(self, "_polyA_signal_evaluated", False):
+            misc_transcript_features["PAS"] = (
+                self._polyA_signal if self._polyA_signal is not None else "none"
+            )
+            if self._polyA_signal_offset is not None:
+                misc_transcript_features["PAS_offset"] = str(self._polyA_signal_offset)
+        elif self._meta and "PAS" in self._meta:
+            misc_transcript_features["PAS"] = str(self._meta["PAS"])
+            if "PAS_offset" in self._meta:
+                misc_transcript_features["PAS_offset"] = str(self._meta["PAS_offset"])
 
         for misc_feature, misc_val in misc_transcript_features.items():
             gtf_text += ' {} "{}";'.format(misc_feature, misc_val)
@@ -833,6 +862,11 @@ class GTF_contig_to_transcripts:
         transcript_id_to_meta = defaultdict(dict)
         transcript_id_to_genome_info = defaultdict(dict)
 
+        # Transcripts with at least one feature row outside a restricted region.
+        # Their contained rows are parsed and then discarded after grouping, because
+        # keeping them would yield a transcript truncated to the window.
+        uncontained_transcript_ids = set()
+
         local_debug = False
 
         opener = gzip.open if re.search("\\.gz$", gtf_filename) is not None else open
@@ -880,8 +914,30 @@ class GTF_contig_to_transcripts:
                             )
                         continue
 
+                # Containment is a property of a transcript's whole span, and a
+                # per-row test cannot enforce it.  Skipping only the rows outside the
+                # window leaves the contained exon rows to populate coords, so the
+                # locus does not vanish -- it comes back TRUNCATED: a shorter isoform
+                # than the annotation holds, invented by the window and
+                # indistinguishable downstream from a real one.  An exon-only GTF
+                # truncates with no row crossing a bound at all.
+                #
+                # So an uncontained row disqualifies its whole transcript and the
+                # drop happens after grouping, where the full span is known.
+                #
+                # Overlap is not the alternative: it would keep the locus in BOTH
+                # neighbours and double-count its reads, which is worse for the
+                # chunked case containment exists to serve.  Chunked runs need
+                # neither, because same-strand gene spans block absolutely and only
+                # the gaps between islands are admissible cuts -- see
+                # util/misc/extract_contig_region_inputs.py.  A hand-supplied
+                # --region carries no such guarantee, which is why this must be safe
+                # on its own.
                 if lend_restrict is not None and rend_restrict is not None:
                     if lend < lend_restrict or rend > rend_restrict:
+                        uncontained_id = cls._parse_info(vals[8]).get("transcript_id")
+                        if uncontained_id is not None:
+                            uncontained_transcript_ids.add(uncontained_id)
                         if local_debug:
                             logger.debug(
                                 "skipping {} as lend {} and rend {} are not within range {}-{}".format(
@@ -928,11 +984,18 @@ class GTF_contig_to_transcripts:
         # convert to transcript objects
 
         contig_to_transcripts = defaultdict(list)
+        truncated_transcript_ids = list()
 
         if LRAA_Globals.DEBUG:
             debug_fh = open("__transcript_gtf_features_parsed.tsv", "wt")
 
         for transcript_id in transcript_id_to_genome_info:
+            # Present here only because some of its rows were contained; the rest
+            # were outside the window, so this would be a truncated isoform.
+            if transcript_id in uncontained_transcript_ids:
+                truncated_transcript_ids.append(transcript_id)
+                continue
+
             transcript_info_dict = transcript_id_to_genome_info[transcript_id]
             contig = transcript_info_dict["contig"]
             strand = transcript_info_dict["strand"]
@@ -984,6 +1047,16 @@ class GTF_contig_to_transcripts:
                     True if transcript_meta["InternalPriming"] == "True" else False
                 )
 
+            # same for PAS, so a value written by an earlier run survives a
+            # quant-only pass rather than being silently dropped on re-export
+            if "PAS" in transcript_meta:
+                hexamer = transcript_meta["PAS"]
+                offset = transcript_meta.get("PAS_offset")
+                transcript_obj.set_polyA_signal(
+                    None if hexamer in ("none", "None", "") else hexamer,
+                    int(offset) if offset not in (None, "", "None") else None,
+                )
+
             contig_to_transcripts[contig].append(transcript_obj)
 
             if LRAA_Globals.DEBUG:
@@ -996,6 +1069,20 @@ class GTF_contig_to_transcripts:
 
         if LRAA_Globals.DEBUG:
             debug_fh.close()
+
+        if truncated_transcript_ids:
+            # Not debug-only: the region excluded annotated loci the caller asked
+            # for, and nothing downstream can tell they were ever in the GTF.
+            logger.warning(
+                "%d transcript(s) dropped from %s: partly outside the restricted "
+                "region %s-%s, and a partial isoform would be indistinguishable from "
+                "a real one. First few: %s",
+                len(truncated_transcript_ids),
+                os.path.basename(gtf_filename),
+                lend_restrict,
+                rend_restrict,
+                ", ".join(sorted(truncated_transcript_ids)[:5]),
+            )
 
         return contig_to_transcripts
 

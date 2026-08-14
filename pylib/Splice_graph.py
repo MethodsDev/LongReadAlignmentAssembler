@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re, time
+import bisect
 import subprocess
 import logging
 import string
@@ -12,9 +13,24 @@ import intervaltree as itree
 from GenomeFeature import *
 from Pretty_alignment_manager import Pretty_alignment_manager
 import LRAA_Globals
+import Util_funcs
 import statistics
 
 logger = logging.getLogger(__name__)
+
+
+def _describe_transcript(transcript):
+    """Best-effort identifier for a reference transcript in a diagnostic.
+
+    Used when the transcript is already known to be malformed, so its id accessor may
+    fail too; the fallback keeps the WARNING informative instead of replacing it with a
+    second exception.
+    """
+
+    try:
+        return str(transcript.get_transcript_id())
+    except Exception:
+        return "<unidentifiable {}>".format(type(transcript).__name__)
 
 
 class Splice_graph:
@@ -218,6 +234,20 @@ class Splice_graph:
 
         return overlapping_introns
 
+    def get_intron_coords(self):
+        """Sorted (lend, rend) of every intron reachable through get_overlapping_introns.
+
+        Read from the interval tree rather than from self._intron_objs, so that this is
+        the read surface of get_overlapping_introns rather than a second view of it that
+        could drift. Pretty_alignment_manager digests this to name the graph that a
+        cached corrected alignment was corrected against.
+        """
+        if self._itree_introns is None:
+            return []
+        return sorted(
+            (interval.begin, interval.end - 1) for interval in self._itree_introns
+        )
+
     def build_splice_graph_for_contig(
         self,
         contig_acc,
@@ -230,6 +260,11 @@ class Splice_graph:
         quant_mode=False,
         restrict_splice_type=None,
         SE_read_encapsulation_mask=None,
+        # LAST, always: a new parameter inserted before an existing one silently
+        # rebinds any positional caller.  quant_mode used to sit here, so a caller
+        # passing it positionally got quant_mode=False and its transcripts treated as
+        # a reference set.  Additions to this signature go on the end.
+        reference_transcripts=None,
     ):
 
         # allow single BAM path or a list/tuple of BAM paths for accumulation
@@ -269,6 +304,19 @@ class Splice_graph:
         # - stores intron objs in self._intron_objs
         # - base coverage incremented under self._contig_base_cov
         # - defines and stores TSS and PolyA objects
+
+        # Reference 3' ends must be known BEFORE reads are processed, because the
+        # internal-priming veto fires during read-derived PolyA identification inside
+        # _populate_exon_coverage_and_extract_introns -- which runs before
+        # _integrate_input_transcript_structures folds the annotation in.
+        # reference_transcripts, NOT input_transcripts: the final build is handed
+        # all_transcripts + reference_transcripts, so input_transcripts is a MIXTURE of
+        # LRAA's own reconstructions and the annotation.  Letting a reconstruction
+        # endorse a site is circular -- a model whose terminus came from an A-rich vertex
+        # would waive the veto on that vertex at the next build.
+        self._reference_three_prime_ends = self._collect_reference_three_prime_ends(
+            reference_transcripts, contig_strand
+        )
 
         if bam_files:
             # accumulate coverage/intron/TSS/PolyA evidence across all bam inputs
@@ -784,8 +832,90 @@ class Splice_graph:
 
         return
 
+    def _collect_reference_three_prime_ends(self, reference_transcripts, contig_strand):
+        """Sorted 3' end coordinates of the USER-SUPPLIED annotation on this strand.
+
+        Must be given the reference set explicitly.  Empty when there is none or the
+        exemption is off, which makes every downstream check a cheap no-op and leaves
+        ref-free behaviour bit-identical.
+
+        A reference transcript that yields no usable 3' end is COUNTED and reported at
+        WARNING.  Dropping it silently shrinks the exemption -- sites the annotation
+        does endorse get vetoed as internal priming instead -- and that is a behaviour
+        change with no trace in the log, indistinguishable from the annotation simply
+        not calling an end there.
+        """
+
+        if not reference_transcripts:
+            return []
+        if not LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime", False):
+            return []
+
+        ends = set()
+        unusable = []
+        for transcript in reference_transcripts:
+            try:
+                strand = transcript.get_strand()
+                transcript_lend, transcript_rend = transcript.get_coords()
+            except Exception as exc:
+                unusable.append("{}: {}".format(_describe_transcript(transcript), exc))
+                continue
+            # Wrong strand is not malformed: the annotation is fine, it just has nothing
+            # to say about this strand's candidates.
+            if strand != contig_strand:
+                continue
+            ends.add(transcript_rend if contig_strand == "+" else transcript_lend)
+
+        if unusable:
+            logger.warning(
+                "[%s%s] spare_polyA_veto_at_known_3prime: %d of %d reference "
+                "transcripts yielded no usable 3' end and therefore endorse nothing; "
+                "A-rich candidates at those ends will be vetoed. First %d: %s",
+                getattr(self, "_contig_acc", "?"),
+                contig_strand,
+                len(unusable),
+                len(reference_transcripts),
+                min(len(unusable), 10),
+                "; ".join(unusable[:10]),
+            )
+
+        return sorted(ends)
+
+    def _reference_endorses_polyA_site(self, position):
+        """True when the reference annotation calls a 3' end within +/-25 nt.
+
+        The reference asserting a transcript ends here is evidence about cleavage that
+        is independent of the genomic context the veto inspects, so it outranks an
+        A-rich window.  Without this a read-derived candidate on an annotated 3' end is
+        still vetoed -- the DCT case on chr13, where the veto discarded a site GENCODE
+        calls to the base because 15 of the 20 downstream bases were T.
+
+        Tolerance is max_dist_between_alt_polyA_sites / 2, NOT an exact coordinate
+        match, for two reasons.  The compared coordinates are not equally precise: the
+        annotation names a base, but `position` came from aggregate_sites_within_window,
+        which reports the single most-supported read end within a 50 nt window and
+        absorbs the rest, so which base it names is decided by read-level noise and one
+        read can move it.  Exact equality would therefore gate the exemption on a
+        coincidence rather than on agreement.  And this is the same half-window
+        TranscriptFiltering.filter_internally_primed_transcripts already uses to ask the
+        same question of the same annotation, so a second convention here would be a
+        drift hazard for no gain.
+
+        The cost is measured, not assumed.  On chr20, of 3,138,689 genomic positions
+        both strands where the veto would fire, exact matching to a GENCODE 3' end
+        waives 193 and +/-25 waives 7,644 -- 39.6x more, still 0.24% of them.
+        """
+
+        ends = getattr(self, "_reference_three_prime_ends", None)
+        if not ends:
+            return False
+
+        tolerance = int(LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2)
+        i = bisect.bisect_left(ends, position - tolerance)
+        return i < len(ends) and ends[i] <= position + tolerance
+
     def _incorporate_PolyA_objects(
-        self, contig_acc, contig_strand, polyA_position_counter
+        self, contig_acc, contig_strand, polyA_position_counter, from_reads=True
     ):
 
         if LRAA_Globals.DEBUG:
@@ -802,10 +932,49 @@ class Splice_graph:
             LRAA_Globals.config["min_alignments_define_polyA_site"],
         )
 
+        n_internally_primed = 0
+        n_reference_spared = 0
+
         for polyA_site_grouping in PolyA_grouped_positions:
             position, count = polyA_site_grouping
+
+            # Reject a candidate whose downstream genome is itself A-rich: the oligo-dT
+            # primer had a template there, so this is internal priming and not cleavage.
+            #
+            # This is the only genomic-context check on the path from a read's soft clip
+            # to a PolyA graph vertex. Without it the site becomes an absorbing vertex --
+            # in-degree or out-degree 0 on its transcript-interior side -- so no path can
+            # read through it and every model overlapping the locus is truncated onto an
+            # artifact. The same rule used to be applied only at transcript filtering,
+            # long after the vertex had already constrained assembly.
+            #
+            # Read-derived candidates only. `from_reads=False` marks the coordinates
+            # folded in from a reference annotation by
+            # _integrate_input_transcript_structures: those are assertions about a
+            # transcript rather than inferences from a soft clip, and vetoing them would
+            # make a ref-guided run delete annotated 3' ends.
+            if from_reads and Util_funcs.looks_internally_primed(
+                self._contig_seq_str, position, contig_strand
+            ):
+                if self._reference_endorses_polyA_site(position):
+                    # A-rich, but the reference calls a 3' end here: independent
+                    # evidence of cleavage outranks genomic context.
+                    n_reference_spared += 1
+                else:
+                    n_internally_primed += 1
+                    continue
+
             self._PolyA_objs.append(
                 PolyAsite(contig_acc, position, position, contig_strand, count)
+            )
+
+        if from_reads:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] PolyA sites: "
+                f"{len(PolyA_grouped_positions)} candidates, "
+                f"{n_internally_primed} rejected as internally primed, "
+                f"{n_reference_spared} A-rich but spared on reference agreement, "
+                f"{len(PolyA_grouped_positions) - n_internally_primed} retained"
             )
 
         if LRAA_Globals.DEBUG:
@@ -1018,7 +1187,7 @@ class Splice_graph:
 
         if LRAA_Globals.config["infer_PolyA"] and len(PolyA_evidence_counter) > 0:
             self._incorporate_PolyA_objects(
-                contig_acc, contig_strand, PolyA_evidence_counter
+                contig_acc, contig_strand, PolyA_evidence_counter, from_reads=False
             )
 
         if pbar is not None:

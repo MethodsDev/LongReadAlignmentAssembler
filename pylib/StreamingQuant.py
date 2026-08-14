@@ -35,7 +35,6 @@ from collections import defaultdict
 
 import pysam
 
-import Bam_alignment_extractor
 import LRAA_Globals
 import MultiPath
 import Util_funcs
@@ -73,7 +72,7 @@ class AssignmentTable:
 
     @classmethod
     def build(cls, splice_graph, mp_to_transcripts, theta, em_was_run,
-              unassigned_mp_count_pairs):
+              unassigned_mp_count_pairs, transcript_id_to_component_id):
         """Collapse a finished quantification into the rows a streaming pass emits.
 
         Fractions are recomputed from the converged theta rather than reused from the ones EM
@@ -88,9 +87,10 @@ class AssignmentTable:
         it means seen and resolved paths still run through a single expression, which is what
         makes them comparable at all.
 
-        The denominator is per gene, since EM runs per gene and theta is normalized within
-        each. A path compatible with isoforms of two overlapping genes therefore gets one
-        split per gene, never one pooled across both.
+        The denominator is per read-sharing COMPONENT, because that is the unit EM runs on
+        and therefore the unit theta is normalized within. A path compatible with isoforms
+        of two genes in one component gets ONE split across all of them; per-gene groups
+        would each sum to 1 and count the read twice.
 
         With no theta -- run_EM False -- the split is equal across a gene's compatible
         isoforms, which is what _estimate_isoform_read_support does in that mode. Falling
@@ -123,6 +123,20 @@ class AssignmentTable:
             )
         have_theta = bool(theta)
 
+        # No default when a transcript is absent. Every transcript this quantification
+        # assigned has a component id, so a missing one means the component map does not
+        # belong to the run that produced these assignments -- and a fabricated id would
+        # silently give that transcript a denominator of its own.
+        def _component_of(transcript):
+            tid = transcript.get_transcript_id()
+            try:
+                return transcript_id_to_component_id[tid]
+            except KeyError:
+                raise RuntimeError(
+                    "no component id for {}: this component map does not belong to the "
+                    "quantification that produced these assignments".format(tid)
+                )
+
         for mp, transcripts_assigned in mp_to_transcripts.items():
             canon = splice_graph.canonical_simple_path(mp.get_simple_path())
             # One row set per path. Two multipaths reaching one canonical path would append
@@ -142,6 +156,7 @@ class AssignmentTable:
                 em_was_run,
                 use_3p,
                 lambda t, _mp=mp: float(t.get_multipath_weight(_mp)),
+                _component_of,
             )
 
         for canon, entries in rows.items():
@@ -176,7 +191,8 @@ class AssignmentTable:
         return table
 
 
-def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weight_of):
+def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weight_of,
+                       component_of):
     """The tracking rows one multipath contributes: (gene, tx, hash, exons, mp, frac, w).
 
     The single definition of the split, called both when precomputing the table from a
@@ -191,27 +207,75 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
     while the resolver computes it for a path that has none. Both values come from
     Quantify._assign_read_weights_based_on_read_end_agreement, which is a function of path
     geometry alone, so they agree by construction rather than by coincidence.
+
+    `component_of(transcript)` supplies the read-sharing component the transcript was
+    quantified in. The denominator is per COMPONENT, not per gene: EM runs once per component
+    of genes joined by shared reads, so theta is normalized within a component and a per-gene
+    denominator would renormalize a subset of it. For a read compatible with isoforms of two
+    genes in one component that mistake is not subtle -- each gene's group sums to 1 and the
+    read is counted twice.
+
+    With no theta -- run_EM False -- the split is equal across the component's compatible
+    isoforms, which is what _estimate_isoform_read_support does in that mode, called once per
+    component.
     """
-    by_gene = defaultdict(list)
+    by_component = defaultdict(list)
     gene_of_tid = {}
+    component_of_tid = {}
     for t in transcripts_assigned:
         tid = t.get_transcript_id()
         gene_id = t.get_gene_id()
-        # Tripwire for the stated invariant that isoforms are unique per gene. Grouping is
-        # by gene id, so a transcript under two gene ids puts one copy in each group and
-        # every group still looks internally unique -- the per-gene check below cannot see
-        # it. Quantify validates this at indexing time; this catches a caller that assembled
-        # the list some other way.
+        # Tripwire for the stated invariant that isoforms are unique per gene. Independent of
+        # grouping now that grouping is by component, but still worth catching: Quantify
+        # validates this at indexing time, and this catches a caller that assembled the list
+        # some other way.
         prior = gene_of_tid.setdefault(tid, gene_id)
         if prior != gene_id:
             raise RuntimeError(
                 "transcript {} appears under two gene ids ({}, {}): isoforms must be "
                 "unique per gene".format(tid, prior, gene_id)
             )
-        by_gene[gene_id].append(t)
+        component_id = component_of(t)
+        prior_component = component_of_tid.setdefault(tid, component_id)
+        if prior_component != component_id:
+            raise RuntimeError(
+                "transcript {} appears under two component ids ({}, {}): the split "
+                "denominator would depend on which copy was read".format(
+                    tid, prior_component, component_id
+                )
+            )
+        by_component[component_id].append(t)
+
+    # A path compatible with isoforms from more than one component cannot be split at all.
+    #
+    # Pass 1 cannot produce this: a multipath compatible with two genes' isoforms is exactly
+    # what joins those genes into one component, so anything it saw is single-component by
+    # construction. It arises when the streaming pass resolves a path the first pass never
+    # saw, because coverage normalization sampled away the only read bridging two genes.
+    # Those components then carry independently normalized thetas: pooling them compares
+    # numbers from two different normalizations, and splitting each separately sums the read's
+    # fractions to the number of components.
+    #
+    # Neither is an approximation worth making, so the run is refused. The normalized bam is
+    # not a sufficient foundation for this locus, and the unseen-path-rate guard cannot speak
+    # to it -- that bounds how much resolution happened, not whether a split was meaningful.
+    if len(by_component) > 1:
+        raise RuntimeError(
+            "path {} is compatible with isoforms from {} separately quantified components "
+            "({}). Their abundances were normalized independently, so this read cannot be "
+            "split across them: pooling mixes two normalizations, and splitting per "
+            "component assigns the read once per component. Coverage normalization removed "
+            "the read that would have joined these genes into one component, so the "
+            "normalized bam is an insufficient foundation here -- raise "
+            "--normalize_max_cov_level, or run without --stream_reads.".format(
+                mp.get_simple_path(),
+                len(by_component),
+                ",".join(sorted(str(c) for c in by_component)),
+            )
+        )
 
     out = []
-    for group in by_gene.values():
+    for group in by_component.values():
         # Everything below derives from this mapping rather than the list, so a repeat
         # cannot emit a row twice or skew a denominator by list length.
         by_tid = {}
@@ -219,7 +283,7 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
             by_tid[t.get_transcript_id()] = t
         if len(by_tid) != len(group):
             raise RuntimeError(
-                "duplicate transcript ids in one gene's candidate group: {}".format(
+                "duplicate transcript ids in one component's candidate group: {}".format(
                     sorted(t.get_transcript_id() for t in group)
                 )
             )
@@ -281,6 +345,7 @@ def _splice_hash_code(transcript, num_exons):
 
 
 def make_path_resolver(splice_graph, quantify_obj, theta, em_was_run,
+                       transcript_id_to_component_id,
                        fraction_read_align_overlap=None):
     """Resolve a splice-graph path the first pass never saw, as that pass would have.
 
@@ -301,6 +366,19 @@ def make_path_resolver(splice_graph, quantify_obj, theta, em_was_run,
     if fraction_read_align_overlap is None:
         fraction_read_align_overlap = LRAA_Globals.config["fraction_read_align_overlap"]
     use_3p = LRAA_Globals.config["weight_reads_by_3prime_agreement"]
+
+    # Same no-default rule as the table's: an unseen path's candidate isoforms all come from
+    # the first pass, so each has a component id. A fabricated one would hand a transcript a
+    # denominator of its own and hide the cross-component case this must refuse.
+    def _component_of(transcript):
+        tid = transcript.get_transcript_id()
+        try:
+            return transcript_id_to_component_id[tid]
+        except KeyError:
+            raise RuntimeError(
+                "no component id for {}: this component map does not belong to the "
+                "quantification whose transcripts this resolver anchors against".format(tid)
+            )
 
     def resolve(simple_path):
         # A single-read multipath standing for this path. Read count 1: the resolver
@@ -339,6 +417,7 @@ def make_path_resolver(splice_graph, quantify_obj, theta, em_was_run,
             em_was_run,
             use_3p,
             lambda t: weight_by_tid[t.get_transcript_id()],
+            _component_of,
         )
 
     return resolve
@@ -447,7 +526,6 @@ def dump_streaming_paths(
     parity number describes production code rather than a copy of it.
     """
     splice_graph = lraa_obj._splice_graph
-    primary_only = not LRAA_Globals.config.get("allow_secondary_alignments", False)
     n = 0
     with pysam.AlignmentFile(bam_file, "rb") as reader:
         if region_lend is not None and region_rend is not None:
@@ -456,9 +534,12 @@ def dump_streaming_paths(
             fetcher = reader.fetch(contig_acc)
         with open(out_path, "wt") as fh:
             for read in fetcher:
-                if Bam_alignment_extractor.alignment_filter_reason(
-                    read, contig_strand, primary_only
-                ) is not None:
+                # Runs inside run_quant_only's mapping-quality swap, so config already
+                # holds min_mapping_quality_for_final_quant -- the value the first pass
+                # extracted under. Explicit thresholds must not be hoisted here: they
+                # would pin the discovery value and diverge from the pass this
+                # reproduces.
+                if Util_funcs.quant_discard_reason(read, contig_strand) is not None:
                     continue
                 path = streaming_read_path(
                     read, lraa_obj, splice_graph, contig_seq, try_correct_alignments
@@ -503,21 +584,12 @@ def stream_assign(
     tolerable before the run is refused, since a table built from too thin a normalized
     bam would degrade into re-resolving everything.
 
-    Requires primary-only alignments, and refuses otherwise -- see the check below.
+    One record per read is a structural guarantee rather than a check:
+    Util_funcs.quant_discard_reason rejects secondary and supplementary alignments,
+    so there is no grouping for a one-record-at-a-time pass to reconstruct.
     """
     totals = StreamingTotals()
     splice_graph = lraa_obj._splice_graph
-    if LRAA_Globals.config.get("allow_secondary_alignments", False):
-        # Not merely unvalidated -- unreproducible. The default path groups a read's
-        # records by (name, span) and lets one represent it; a coordinate-sorted bam can
-        # place a read's alternatives arbitrarily far apart, so a pass that handles one
-        # record at a time cannot reconstruct that grouping without unbounded buffering.
-        # Proceeding would emit a tracking row per placement and count the read twice.
-        raise RuntimeError(
-            "streaming assignment requires primary-only alignments; "
-            "allow_secondary_alignments is enabled"
-        )
-    primary_only = True
 
     # Paths resolved during this stream. Bounded by the number of distinct novel paths,
     # not by reads, and needed so a path's later reads are attributed to the fallback
@@ -532,13 +604,13 @@ def stream_assign(
             fetcher = reader.fetch(contig_acc)
 
         for read in fetcher:
-            # exactly the filter the default path applies, shared rather than copied
-            if (
-                Bam_alignment_extractor.alignment_filter_reason(
-                    read, contig_strand, primary_only
-                )
-                is not None
-            ):
+            # Exactly the filter the first pass applied, shared rather than copied.
+            # Config is read rather than passed: this runs inside run_quant_only's
+            # mapping-quality swap, so it already holds
+            # min_mapping_quality_for_final_quant. Pinning explicit thresholds here
+            # would reintroduce the discovery value and drop or admit reads the pass
+            # this stream extends did not.
+            if Util_funcs.quant_discard_reason(read, contig_strand) is not None:
                 totals.reads_filtered += 1
                 continue
 

@@ -26,7 +26,6 @@ workflow LRAA_wf {
         # workflows that call this one set this false; they never surface the file, and
         # delocalizing it would cost them storage for nothing.
         Boolean retain_normalized_splice_graph_bam = true
-        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -42,12 +41,14 @@ workflow LRAA_wf {
         String read_umi_tag = "XM"
 
         #  non-scattered runs
-        Int numThreadsPerWorker = 5
+        # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across
+        # work units. numThreadsPerWorker and num_parallel_contigs multiplied instead:
+        # 5 x 3 asked LRAA for up to fifteen cores on a five-core task.
+        Int cpu = 5
         Int? memoryGB
-        Int num_parallel_contigs = 3
 
         # scattered runs
-        Int numThreadsPerWorkerScattered = 5
+        Int cpuScattered = 5
         Int? memoryGBPerWorkerScattered
         
         
@@ -84,33 +85,13 @@ workflow LRAA_wf {
 
         Int scatter_num_total_reads = select_first([num_total_reads, count_bam.count])
 
-        if (allow_secondary_alignments) {
-            call filterBamToSecondaryRescue as preScatterSecondaryRescue {
-                input:
-                    inputBAM = inputBAM,
-                    outputFilePrefix = sample_id + ".pre_scatter",
-                    threads = countBamThreads,
-                    docker = docker
-            }
-        }
-
-        if (allow_secondary_alignments && defined(bam_for_sg)) {
-            call filterBamToSecondaryRescue as preScatterSecondaryRescueForSG {
-                input:
-                    inputBAM = select_first([bam_for_sg]),
-                    outputFilePrefix = sample_id + ".pre_scatter.splice_graph",
-                    threads = countBamThreads,
-                    docker = docker
-            }
-        }
-
         
         ## Split inputs by main chromosomes
         
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
-                inputBAM = select_first([preScatterSecondaryRescue.filteredBam, inputBAM]),
-                bam_for_sg = if defined(bam_for_sg) then select_first([preScatterSecondaryRescueForSG.filteredBam, bam_for_sg]) else bam_for_sg,
+                inputBAM = inputBAM,
+                bam_for_sg = bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = main_chromosomes,
@@ -133,7 +114,6 @@ workflow LRAA_wf {
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,
                     contig = contig_name,
-                    num_parallel_contigs = num_parallel_contigs,
                     num_total_reads = scatter_num_total_reads,
                     cell_list = cell_list,
                     min_per_id = min_per_id,
@@ -141,14 +121,11 @@ workflow LRAA_wf {
                     HiFi = HiFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
-                    run_final_cross_gene_EM = false,
                     retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
-                    allow_secondary_alignments = allow_secondary_alignments,
-                    secondary_alignment_mode = "all",
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    numThreadsPerWorker = numThreadsPerWorkerScattered,
+                    cpu = cpuScattered,
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
@@ -163,7 +140,6 @@ workflow LRAA_wf {
                 quantExprFiles = LRAA_scatter.LRAA_quant_expr,
                 quantTrackingFiles = LRAA_scatter.LRAA_quant_tracking,
                 outputFilePrefix = LRAA_output_prefix,
-                runCrossGeneEM = allow_secondary_alignments && !no_EM,
                 docker = docker,
         }
 
@@ -201,15 +177,11 @@ workflow LRAA_wf {
                 HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
-                run_final_cross_gene_EM = allow_secondary_alignments && !no_EM,
                 retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
-                allow_secondary_alignments = allow_secondary_alignments,
-                secondary_alignment_mode = "heuristic",
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
-                numThreadsPerWorker = numThreadsPerWorker,
-                num_parallel_contigs = num_parallel_contigs,
+                cpu = cpu,
                 num_total_reads = num_total_reads,
                 cell_list = cell_list,
                 min_mapping_quality = min_mapping_quality,
@@ -224,12 +196,7 @@ workflow LRAA_wf {
     output {
     File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
     File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
-    File? preCrossGeneEMQuantExpr = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_expr else mergeQuantResults.preCrossGeneEMQuantExprFile
-    File? preCrossGeneEMQuantTracking = if (run_without_splitting) then LRAA_direct.LRAA_pre_cross_gene_EM_quant_tracking else mergeQuantResults.preCrossGeneEMQuantTrackingFile
     File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
-    Array[File] secondaryRescueBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bam]) else select_all([preScatterSecondaryRescue.filteredBam])
-    Array[File] secondaryRescueBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_bai]) else select_all([preScatterSecondaryRescue.filteredBai])
-    Array[File] secondaryRescueSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_secondary_rescue_summary]) else select_all([preScatterSecondaryRescue.summaryTsv])
     Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
     File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
     # The depth-normalized BAM(s) the splice graph -- and therefore isoform identification --
@@ -289,26 +256,14 @@ task mergeQuantResults {
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
         String outputFilePrefix
-        Boolean runCrossGeneEM = false
         String docker
     }
 
     Float quantExprGB = size(quantExprFiles, "GB")
     Float quantTrackingGB = size(quantTrackingFiles, "GB")
-    Float quantMergeInputGB = quantExprGB + quantTrackingGB
-    Float quantExprGiB = size(quantExprFiles, "GiB")
-    Float quantTrackingGiB = size(quantTrackingFiles, "GiB")
-    Float quantMergeInputGiB = quantExprGiB + quantTrackingGiB
-    Float mergeMemoryRawGiB = if runCrossGeneEM then quantMergeInputGiB * 30.0 + 8.0 else 4.0
-    Float mergeMemoryCappedGiB = if mergeMemoryRawGiB > 64.0 then 64.0 else mergeMemoryRawGiB
-    Int mergeMemoryGiB = if mergeMemoryCappedGiB > 4.0 then ceil(mergeMemoryCappedGiB) else 4
-    # Tracking files are gzip-compressed; the cross-gene EM pass decompresses them to disk for
-    # external sort, then writes merge-sort temp files at the same uncompressed size, plus a
-    # deduplicated sorted copy and the final output.  Compression ratio on these TSVs is ~15-20x,
-    # so we need roughly: localized inputs + 4 * uncompressed_tracking.
-    # Using 60x on the compressed tracking size (15x ratio * 4 copies) covers the temp overhead.
-    # The non-EM path just concatenates and copies, so 2.2x on total input suffices there.
-    Float mergeDiskRawGB = if runCrossGeneEM then quantTrackingGB * 60.0 + quantExprGB * 2.2 + 30.0 else quantMergeInputGB * 2.2 + 5.0
+    # The merge concatenates the shard expr files and streams the shard trackings into one
+    # gzip, so disk needs the localized inputs plus a copy of them: 2.2x total input.
+    Float mergeDiskRawGB = (quantExprGB + quantTrackingGB) * 2.2 + 5.0
 
     command <<<
     set -eo pipefail
@@ -331,36 +286,11 @@ task mergeQuantResults {
         mv "$tmp" "$path"
     }
 
-    prepend_lraa_merge_header_gzip() {
-        local path="$1"
-        local tmp="${path}.with_lraa_header"
-        python <<PYCODE
-import gzip
-import os
-import shutil
-
-path = "${path}"
-tmp = "${tmp}"
-version_comment = os.environ["LRAA_VERSION_COMMENT"]
-
-with gzip.open(path, "rt") as inp, gzip.open(tmp, "wt") as out:
-    first = inp.readline()
-    if first.rstrip("\\r\\n") != version_comment:
-        with open("merge_header.txt", "rt") as header_fh:
-            shutil.copyfileobj(header_fh, out)
-    if first:
-        out.write(first)
-    shutil.copyfileobj(inp, out)
-
-os.replace(tmp, path)
-PYCODE
-    }
-
     merge_LRAA_quant_expr.py \
-        --output "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
+        --output "~{outputFilePrefix}.quant.expr" \
         --quant_files ~{sep=' ' quantExprFiles}
 
-    prepend_lraa_merge_header "~{outputFilePrefix}.pre_cross_gene_em.quant.expr"
+    prepend_lraa_merge_header "~{outputFilePrefix}.quant.expr"
 
     python <<CODE
 import json
@@ -370,7 +300,7 @@ tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
 tracking_files_list = json.loads(tracking_files_json)
 header_lines = open("merge_header.txt", "rt").read()
 
-with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") as ofh:
+with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
     ofh.write(header_lines)
     wrote_header = False
     expected_header = None
@@ -398,34 +328,17 @@ with gzip.open("~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz", "wt") 
                 print(line, file=ofh, end='')
 CODE
 
-    if [[ "~{runCrossGeneEM}" == "true" ]]; then
-        reassign_multigene_tracking_reads.py \
-            --quant_expr "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" \
-            --tracking "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" \
-            --output_expr "~{outputFilePrefix}.quant.expr" \
-            --output_tracking "~{outputFilePrefix}.quant.tracking.gz" \
-            --tmp_dir "."
-        prepend_lraa_merge_header "~{outputFilePrefix}.quant.expr"
-        prepend_lraa_merge_header_gzip "~{outputFilePrefix}.quant.tracking.gz"
-        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
-        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
-    else
-        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.expr" "~{outputFilePrefix}.quant.expr"
-        cp "~{outputFilePrefix}.pre_cross_gene_em.quant.tracking.gz" "~{outputFilePrefix}.quant.tracking.gz"
-    fi
     >>>
 
     output {
         File mergedQuantExprFile = "~{outputFilePrefix}.quant.expr"
         File mergedQuantTrackingFile = "~{outputFilePrefix}.quant.tracking.gz"
-        File? preCrossGeneEMQuantExprFile = "~{outputFilePrefix}.pre-cross-gene-EM.quant.expr"
-        File? preCrossGeneEMQuantTrackingFile = "~{outputFilePrefix}.pre-cross-gene-EM.quant.tracking.gz"
     }
     
     runtime {
         docker: docker
         cpu: 1
-        memory: mergeMemoryGiB + " GiB"
+        memory: "4 GiB"
         disks: "local-disk " + ceil(mergeDiskRawGB) + " SSD"
     }
 }
@@ -577,42 +490,3 @@ task count_bam {
   }
 }
 
-
-task filterBamToSecondaryRescue {
-    input {
-        File inputBAM
-        String outputFilePrefix
-        Int threads = 16
-        String docker
-    }
-
-    Float inputBamGB = size(inputBAM, "GB")
-    Int memoryGB = if inputBamGB > 16.0 then ceil(inputBamGB) else 16
-    Int diskGB = ceil(inputBamGB * 6.0 + 50.0)
-
-    command <<<
-        set -euo pipefail
-
-        mkdir -p secondary_rescue_work
-
-        filter_bam_to_secondary_rescue.py \
-            --input_bam "~{inputBAM}" \
-            --output_bam "~{outputFilePrefix}.secondary_rescue.bam" \
-            --summary_tsv "~{outputFilePrefix}.secondary_rescue.summary.tsv" \
-            --threads "~{threads}" \
-            --workdir secondary_rescue_work
-    >>>
-
-    output {
-        File filteredBam = "~{outputFilePrefix}.secondary_rescue.bam"
-        File filteredBai = "~{outputFilePrefix}.secondary_rescue.bam.bai"
-        File summaryTsv = "~{outputFilePrefix}.secondary_rescue.summary.tsv"
-    }
-
-    runtime {
-        docker: docker
-        cpu: threads
-        memory: memoryGB + " GiB"
-        disks: "local-disk " + diskGB + " SSD"
-    }
-}

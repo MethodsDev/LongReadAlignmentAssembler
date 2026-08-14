@@ -22,11 +22,13 @@ or if the rates are recorded so they can be divided back out. LRAA does the latt
 ## Procedure
 
 Two sequential passes over each strand-specific BAM, over exactly the records the consumer
-will read. That set is defined once, in `Bam_alignment_extractor.alignment_filter_reason`, and
-the normalizer mirrors it: supplementary alignments are excluded unconditionally; secondaries
-per `--alignment_filter_mode`; and improper pairs, duplicates, QC failures, alignments below
-`--min_mapping_quality` and alignments below `--min_per_id` are all excluded, because the
-extractor excludes them too. Measuring depth over records that
+will read. That set is not redefined here: the normalizer calls
+`Util_funcs.quant_discard_reason`, the single retention policy quantification itself consumes,
+so the two cannot drift. Unmapped, secondary, supplementary, duplicate and QC-failed records,
+improper pairs, and alignments below `--min_mapping_quality` or `--min_per_id` are all
+excluded; over-long introns are dropped earlier, at the strand split. Measuring depth over
+records the consumer discards would raise measured coverage above anything downstream sees,
+lower the acceptance probability, and inflate every surviving read's weight at that locus.
 
 **Pass 1 — measure.** Read depth is accumulated per 100 bp window (`--depth_window`) from
 aligned blocks, and junction support is counted exactly. Both come from one CIGAR-only scan.
@@ -40,6 +42,18 @@ Windows are offset from the contig's first aligned base, not from coordinate zer
 partition travels with the reads. Translate a locus and every read lands in the window it was
 in before, giving the same depth estimate and the same acceptance probability. See the origin
 section below for why that matters.
+
+That default makes the boundaries a function of which records are in the input, which is right
+for a whole input and wrong for a chunk of one: a chunk begins at some other read, so the same
+absolute locus bins differently than it did whole. `--window_origin` replaces the implicit
+anchor with the caller's grid. Its value is the absolute 0-based reference coordinate that
+position 0 of the input maps to — `0` for a whole-contig BAM, the rebase offset for a chunk
+extracted by `util/misc/extract_contig_region_inputs.py` (its manifest's `offset`, which is
+`region.lend - 1`). Boundaries then sit at absolute multiples of `--depth_window` whatever the
+input contains, so a chunk measures the same windows a whole-contig run measures. Two conditions
+come with it: cuts must fall on multiples of `--depth_window`, or a window draws its bases from
+two chunks; and a whole-contig control run must be given `--window_origin 0`, because on its
+default it keeps the first-aligned-base anchor and no chunk grid can match it.
 
 **Pass 2 — sample.** Each read is kept with probability `p` and, if kept, records `1/p`:
 
@@ -103,9 +117,11 @@ itself to a single rate per unit of comparison.
 | `--normalize_max_cov_level` | 1000 | target read depth; `0` disables normalization entirely |
 | `--depth_window` | 100 | resolution in bases at which depth is measured |
 | `--random_seed` | 42 | seed for the per-read draw |
-| `--alignment_filter_mode` | `with_secondary` | which records are evidence: `primary`, or also secondaries. Supplementary records are excluded either way. The driver sets this from `allow_secondary_alignments`. |
 | `--min_per_id` | 0 | percent-identity floor; must match the consumer's `min_per_id` (97 in HiFi mode, else 80). 0 disables. |
-| `--min_mapping_quality` | 0 | MAPQ floor; must match the consumer's. Bites hardest when set, since multimapping reads carry MAPQ 0 at exactly the paralogous loci where thinning decisions matter. 0 disables. |
+| `--min_mapping_quality` | 0 | MAPQ floor; must match whichever value the consumer will actually enforce, which under the quant stage is `--min_mapping_quality_for_final_quant` rather than `--min_mapping_quality`. Bites hardest when set, since multimapping reads carry MAPQ 0 at exactly the paralogous loci where thinning decisions matter. 0 disables. |
+| `--max_intron_length` | `config` | alignments containing a longer intron are dropped at the strand split; 0 or negative disables |
+| `--window_origin` | unset | absolute coordinate of the input's position 0; pins the window grid to the absolute grid. Unset: anchored on the contig's first aligned base |
+| `--input_is_single_strand` | off | the input is already orientation-pure: normalize it directly, skipping the strand split and the merge |
 
 ## Caching and method changes
 
@@ -118,26 +134,33 @@ never consults the utility's own finer-grained token — anything missing from t
 invisible:
 
 ```
-<source>.norm_<target>.<method>.<filter>.pid<min_per_id>.mapq<min_mapq>.w<window>.s<seed>.<identity>.bam
-    sample.quant.norm_1000.cov4.primary.pid97.mapq0.w100.s42.a56fdafac29c.bam
-work_<source>.norm_<target>.<method>.<filter>.pid<...>.mapq<...>.w<...>.s<...>.<identity>/
+<source>.norm_<target>.maxintron_<cap>.<method>.pid<min_per_id>.mapq<min_mapq>.w<window>.s<seed>.o<origin>.<identity>.bam
+    sample.quant.norm_1000.maxintron_200000.cov5.pid97.mapq0.w100.s42.o0.a56fdafac29c.bam
+work_<source>.norm_<target>.maxintron_<cap>.<method>.pid<...>.mapq<...>.w<...>.s<...>.o<...>.<identity>/
 ```
 
 Every component is required rather than defaulted, because a caller that omits one keys a BAM
 by a name that does not describe it, and the omission surfaces as a silently reused cache
 rather than an error.
 
-`<filter>` is `--alignment_filter_mode`; `pid` and `mapq` are the percent-identity and
-mapping-quality floors. All three define the evidence universe, so two runs differing only in
-one of them produce different BAMs from the same source and target. The identity floor is why
-a HiFi run must not share a cache with a default one: 97 against 80 admits a materially
-different read population.
+`pid` and `mapq` are the percent-identity and mapping-quality floors, and `maxintron_` the
+intron cap. Each defines the evidence universe, so two runs differing only in one of them
+produce different BAMs from the same source and target. The identity floor is why a HiFi run
+must not share a cache with a default one: 97 against 80 admits a materially different read
+population. `mapq` is the value the consumer will actually enforce, which under the quant
+stage is `--min_mapping_quality_for_final_quant`, not `--min_mapping_quality`.
 
 `w` and `s` are `--depth_window` and `--random_seed`. The driver holds both fixed
 (`NORM_DEPTH_WINDOW`, `NORM_RANDOM_SEED` in `LRAA`), which is exactly why omitting them from
 the name would go unnoticed: the seed salts the per-read acceptance draw and the window
 changes measured depth, so either would silently invalidate every existing cache the day a
 default changed.
+
+`o` is `--window_origin`, and it is rendered `onone` when unset rather than `o0`. Unset
+anchors the window grid on each contig's first aligned base, which is a different placement
+from the absolute grid at coordinate 0, so collapsing the two would let them share one cached
+BAM. The driver passes `0` explicitly (`NORM_WINDOW_ORIGIN`) because it normalizes whole
+contigs.
 
 **Bump `LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD` whenever the normalizer changes which
 reads it keeps or what it records on them.** No consumer can detect a stale cache for itself: a
@@ -152,16 +175,22 @@ one's cache. Contents are not hashed — reading a multi-gigabyte BAM on every s
 more than the step being cached, to cover what the stat pair already catches.
 
 The utility keys its own checkpoints separately, because the two stages depend on different
-things. The strand split depends only on the input, so it is keyed on `<identity>` alone and is
-reused across settings. Sampling, merge, and index are keyed on a digest of the input identity,
-target depth, `--depth_window`, `--random_seed`, the method, `--alignment_filter_mode`, the
-identity and mapping-quality floors, and the
-output path — every flag that changes which reads are kept or where they land. The driver holds
-the window and seed fixed, but both are exposed on the command line, and without this a second
-invocation in the same directory would silently reuse the first one's sample. The filter mode is
-in both keys for the same reason: it changes the measured depth as well as which records are
-written, so a primary-only run and a with-secondary run at one target disagree on every
-acceptance probability and must never share a cache.
+things. The strand split depends on the input and on `--max_intron_length`, which decides which
+records it emits. Sampling, merge, and index are keyed on a digest of the input identity, the
+intron cap, target depth, `--depth_window`, `--random_seed`, the method, and the output path —
+every flag that changes which reads are kept or where they land. The driver holds the window and
+seed fixed, but both are exposed on the command line, and without this a second invocation in
+the same directory would silently reuse the first one's sample.
+
+`--window_origin` and `--input_is_single_strand` are in both tokens: the origin decides which
+reads survive, and the single-strand flag decides whether the split stage runs at all. Each is
+appended to the hashed string only when supplied, so a run passing neither hashes exactly what
+it hashed before the options existed and keeps hitting the caches it already has.
+
+The identity and mapping-quality floors are appended to the sampling token only, on the same
+when-supplied basis. They change both the measured depth and which records are written, so a
+HiFi run must never inherit a default run's sample — but the strand split applies no threshold
+of its own, so including them there would invalidate a split that does not depend on them.
 
 ## Why read-start binning was replaced
 
@@ -182,7 +211,9 @@ approximately so.
 
 This is why extracted sub-regions could not be trusted to reproduce whole-genome behaviour:
 rebasing a window to position 1 is exactly the translation above, so at any deep locus the
-extraction changed the answer for reasons unrelated to its read content.
+extraction changed the answer for reasons unrelated to its read content. `--window_origin` is
+what resolves that — given the chunk's rebase offset, a chunk and the whole contig assign the
+same absolute locus to the same window, and the reads retained there are identical.
 
 **It did not bound coverage.** Starts were capped per bin while depth accumulates across bins.
 Across fifteen high-expression loci, depth after "capping at 1000" ranged to 3,793.

@@ -35,7 +35,23 @@ quantification only requires the input alignment bam and refernece genome files.
 Filtering of alignments: Stringent quality filters are applied during read ingestion. Reads
 below minimum mapping quality (1) are discarded. In HiFi mode, reads below 98% identity are
 filtered to leverage high base accuracy and reduce alignment artifacts; for ONT data, this
-threshold is relaxed to 80%. Secondary, duplicate, and QC-failed alignments are excluded.
+threshold is relaxed to 80%. LRAA processes primary, non-supplementary alignments only, and this
+is not configurable: secondary and supplementary records are discarded both where the BAM is
+split by alignment orientation (`util/separate_bam_by_strand.py:62-66`) and again at read
+ingestion (`pylib/Bam_alignment_extractor.py:139-145`), alongside duplicate, QC-failed, and
+unmapped records. Both stages additionally discard outright any alignment carrying an intron
+(CIGAR `N` operation) longer than `--max_intron_length`, default 200,000
+(`util/separate_bam_by_strand.py:74-75`, `pylib/Bam_alignment_extractor.py:147-154`); 0 or a
+negative value disables that filter. Discarding the alignment is a change in kind rather than
+degree: the same threshold otherwise only prunes an overlong intron from either terminus of a
+pretty alignment (`pylib/Pretty_alignment.py:330,341`) and drops the overlong intron edge from
+the splice graph (`pylib/Splice_graph.py:1515`), leaving an alignment that still spans the
+distance and still contributes its remaining structure as evidence. The two stages share one
+implementation of the rule, `Util_funcs.has_disqualifying_long_intron`, so an alignment whose
+intron the graph declines to model is also unavailable to read assignment. The strand split is
+the first stage of depth normalization and so is skipped by `--no_norm` or
+`--normalize_max_cov_level 0` (`LRAA:1385-1440`); read ingestion is not, so the discard governs
+abundance estimation regardless of normalization settings.
 
 Rescue of structurally problematic reads: An optional rescue pass
 (`--rescue_unassigned_reads_via_transcriptome_alignment`) realigns reads that fail normal
@@ -62,15 +78,19 @@ assigned in a separate post-processing step.
 
 Normalization of read coverage for isoform discovery: To reduce computational requirements in
 ultra-high-coverage regions, alignments are thinned toward a target read depth of 1000x before
-splice-graph construction, independently per strand. Acceptance follows local depth, so reads
-are retained in full wherever coverage already sits below the target and thinned only where it
-does not. Because any depth-dependent acceptance rate varies along the genome, each retained
-read records the reciprocal of its acceptance probability, and the splice graph sums those
-weights rather than counting reads; support therefore remains on the scale of the original BAM,
-and the relative quantities that graph filtering compares are preserved. Reads carrying a
-junction supported by fewer reads than the target are retained in full, making support for
-scarce junctions exact rather than estimated. The original unnormalized BAM is used for isoform
-abundance estimation, ensuring quantification accuracy is preserved. See
+splice-graph construction, independently per alignment orientation: the BAM is split on
+`read.is_forward` (`util/separate_bam_by_strand.py:239`), and nothing in the default path infers
+a transcribed or biological strand. Acceptance follows local depth, so reads are retained in
+full wherever coverage already sits below the target and thinned only where it does not. Because
+any depth-dependent acceptance rate varies along the genome, each retained read records the
+reciprocal of its acceptance probability, and the splice graph sums those weights rather than
+counting reads; support therefore remains on the scale of the original BAM, and the relative
+quantities that graph filtering compares are preserved. Reads carrying a junction supported by
+fewer reads than the target are retained in full, making support for scarce junctions exact
+rather than estimated. That exemption is unconditional, and acceptance is a per-read random draw
+rather than a quota, so `--normalize_max_cov_level` is a target and not a ceiling: realised depth
+can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). The original unnormalized
+BAM is used for isoform abundance estimation, ensuring quantification accuracy is preserved. See
 `docs/coverage_normalization.md` for the procedure, the `XW` tag, and its parameters.
 
 Correction of alignments at soft-clipped termini: Long reads often contain soft-clipped bases
@@ -388,41 +408,7 @@ computed. Isoform filtering applies a slightly looser unique-read criterion of $
 read. In the final expression report, TPM is normalized over the final reported transcripts;
 the separate `RPM_total_reads` column scales against `num_total_reads`, the count of
 genome-mapped reads in the input BAM. That count excludes unmapped, secondary, and
-supplementary records, so each aligned read contributes once, and it is taken before any
-alignment-policy preprocessing so that neither it nor any absolute expression threshold derived
-from it varies with `--secondary_alignment_mode`.
-
-## Cross-Gene EM Correction
-
-Retained secondary alignments can make a read compatible with isoforms in more than one
-preliminary gene locus, which the per-locus EM cannot resolve because each locus is solved
-independently. When secondary alignments and EM are both enabled, LRAA runs a final cross-gene
-correction (`util/reassign_multigene_tracking_reads.py`) over the per-locus quantification
-output.
-
-Reads whose candidate assignments span multiple gene IDs link those genes into connected
-components. Within each affected component, EM is rerun over every candidate-bearing read,
-while assignments outside the affected components stay fixed and their counts pass through
-unchanged.
-
-The correction reuses the read-to-isoform assignments and 3'-agreement weights already recorded
-in the tracking file rather than recomputing compatibility. It differs from the per-locus EM in
-representation: it operates on individual reads rather than RCCs, and it keeps abundances on
-the read-count scale instead of renormalizing proportions to sum to one.
-
-Neither difference changes the estimator. The expectation step
-$$\gamma_{ri} = \frac{a_i \cdot w_{ri}}{\sum_{j} a_j \cdot w_{rj}}$$
-is invariant to rescaling the abundance vector $$\mathbf{a}$$, so carrying raw counts rather
-than normalized proportions leaves every responsibility unchanged. Expanding an RCC of $$n_r$$
-reads into $$n_r$$ individually tracked reads sharing one weight vector contributes the same
-expected counts, and the prior matches as well: each ambiguous read adds $$\alpha$$ to each of
-its candidate isoforms, which is the per-read form of $$\alpha_i = \alpha \cdot A_i$$.
-
-Both passes run under the same settings. Regularization uses `EM_alpha`, the iteration cap is
-the final-quantification limit, convergence is the same $$10^{-6}$$ L2 test
-(`EM_convergence_tol`) applied to the normalized abundances, and unique reads are counted under
-the same whole-read requirement. One detail is specific to this pass: because a component is
-initialized from its previous counts rather than uniformly, the expectation step floors
-abundances at $$10^{-8}$$ (`cross_gene_EM_min_abundance`) so that a candidate arriving with no
-support can still regain reads. Per-read fractions and weights are written with six decimals,
-enough that re-reading the tracking file does not perturb the inputs or the recomputed counts.
+supplementary records (`samtools view -c -F 0x904`, `LRAA:5137-5163`), so each aligned read
+contributes once. It is taken from the input BAM itself, so neither it nor any absolute
+expression threshold derived from it moves when a later filter — the intron-length discard at
+the strand split, for instance — removes an alignment from splice-graph evidence.

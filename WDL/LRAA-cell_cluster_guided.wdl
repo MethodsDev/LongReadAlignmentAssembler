@@ -19,7 +19,6 @@ workflow LRAA_cell_cluster_guided {
         
         Boolean HiFi = false
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
-        Boolean allow_secondary_alignments = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
@@ -27,10 +26,11 @@ workflow LRAA_cell_cluster_guided {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
         
-        Int numThreadsPerWorker = 2
+        # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides
+        # across work units. There is no second knob to multiply it by.
+        Int cpu = 2
         # Used only when main_chromosomes is non-empty and inner LRAA.wdl calls are chromosome-sharded.
-        Int numThreadsPerWorkerScattered = 9
-        Int num_parallel_contigs = 3
+        Int cpuScattered = 9
         # Optional override for direct inner LRAA.wdl runs.
         Int? memoryGB
         # Optional override for chromosome-sharded inner LRAA.wdl workers only.
@@ -95,15 +95,13 @@ workflow LRAA_cell_cluster_guided {
                     oversimplify = oversimplify,
                     # single-cell: this workflow never surfaces the normalized splice-graph BAM
                     retain_normalized_splice_graph_bam = false,
-                    allow_secondary_alignments = allow_secondary_alignments,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     main_chromosomes = main_chromosomes,
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    numThreadsPerWorker = numThreadsPerWorker,
-                    numThreadsPerWorkerScattered = numThreadsPerWorkerScattered,
-                    num_parallel_contigs = num_parallel_contigs,
+                    cpu = cpu,
+                    cpuScattered = cpuScattered,
                     memoryGB = memoryGB,
                     memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
                     docker = docker
@@ -156,15 +154,13 @@ workflow LRAA_cell_cluster_guided {
             pre_normalized_cluster_bais = pre_normalized_cluster_bais,
             HiFi = HiFi,
             oversimplify = oversimplify,
-            allow_secondary_alignments = allow_secondary_alignments,
             rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
             normalize_max_cov_level = normalize_max_cov_level,
             main_chromosomes = main_chromosomes,
             cell_barcode_tag = cell_barcode_tag,
             read_umi_tag = read_umi_tag,
-            num_threads_per_worker = numThreadsPerWorker,
-            num_threads_per_worker_scattered = numThreadsPerWorkerScattered,
-            num_parallel_contigs = num_parallel_contigs,
+            cpu = cpu,
+            cpu_scattered = cpuScattered,
             memoryGB_normalize = memoryGBquantNormalize,
             memoryGB_merge = memoryGBquantMerge,
             memoryGB_quant = memoryGBquantFinal,

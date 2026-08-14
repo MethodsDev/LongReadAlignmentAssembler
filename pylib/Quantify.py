@@ -65,6 +65,17 @@ class Quantify:
         # emptiness cannot distinguish "no EM" from "never published" or "invalidated". The
         # flag can.
         self._theta_valid = False
+        # Component identity, for consumers that re-derive a per-read isoform
+        # split.  Rebuilt per quantify() call rather than updated; see there.
+        self._transcript_id_to_component_id = dict()
+        self._component_id_to_gene_ids = dict()
+
+        # Whether the two maps above describe a completed quantification.  A flag
+        # rather than an emptiness check: a successful quantify() always yields at
+        # least one component, so empty does mean invalid today, but that follows
+        # from an assert 200 lines away and would stop being true the moment
+        # someone relaxed it.  Stating it directly costs one line.
+        self._component_identity_valid = False
 
         self._quant_mode = quant_mode
 
@@ -72,16 +83,47 @@ class Quantify:
 
     def quantify(self, splice_graph, transcripts, mp_counter):
 
-        # FIRST executable statement, above the argument validation below. Those asserts index
-        # transcripts[0], so quantify(sg, [], mp) raises before anything runs -- and with the
-        # invalidation placed after them, a previous call's theta would stay readable and
-        # marked valid. Same reasoning as restoring validity only at the successful exit: the
-        # guard belongs before anything that can fail, not after.
+        # FIRST executable statements, above the argument validation below. Those asserts
+        # index transcripts[0], so quantify(sg, [], mp) raises before anything runs -- and
+        # with an invalidation placed after them, a previous call's theta and component
+        # identity would both stay readable and marked valid. Same reasoning as restoring
+        # validity only at the successful exit: the guard belongs before anything that can
+        # fail, not after. Neither assignment can itself fail, so their order relative to
+        # each other does not matter; nothing that can fail may precede them.
         self._theta_valid = False
+        self._component_identity_valid = False
 
         assert type(transcripts) == list
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
+
+        # Every container below describes ONE quantification and is rebuilt by the
+        # assignment steps in this call.  quantify() runs up to three times on one
+        # object over a shrinking transcript set -- de novo calls it after
+        # degradation pruning and again after isoform-fraction filtering -- so an
+        # entry that survives describes transcripts this call does not contain.
+        #
+        # _mp_to_transcripts is the one that changes an answer.  Component
+        # construction unions the genes of every retained entry, and the guard
+        # there only skips genes absent from this call; a stale multipath bridging
+        # two genes that both still have isoforms fuses them into one component
+        # this call's reads no longer bridge.  It can only over-fuse, so theta is
+        # normalized across genes that should not share a denominator.
+        #
+        # The gene indexes fuse nothing but keep filtered-out transcripts alive as
+        # read-assignment candidates.  _unassigned_mp_count_pairs already reset
+        # itself per call, which is the semantics the rest of these now match.
+        self._path_node_id_to_gene_ids = defaultdict(set)
+        self._gene_id_to_transcript_objs = defaultdict(dict)
+        self._read_name_to_multipath = dict()
+        self._mp_to_transcripts = dict()
+        self._unassigned_mp_count_pairs = list()
+
+        # Read after the call by consumers recomputing a per-read isoform split.
+        # Cleared here rather than where they are filled so a call that raises
+        # earlier answers empty: empty is a visible failure, stale is not.
+        self._transcript_id_to_component_id = dict()
+        self._component_id_to_gene_ids = dict()
 
         contig_acc = splice_graph.get_contig_acc()
         contig_strand = splice_graph.get_contig_strand()
@@ -133,36 +175,86 @@ class Quantify:
 
         self._assign_reads_to_transcripts(splice_graph, mp_counter)
 
+        # The EM unit is a read-sharing component of genes, not a single gene: a
+        # read compatible with transcripts in two genes has to be apportioned by
+        # one converged EM rather than handed to each gene by two independent
+        # ones.  Reporting below stays strictly gene-scoped.
+        gene_components = self._build_read_sharing_gene_components(gene_to_transcripts)
+
+        num_multigene_components = sum(1 for x in gene_components if len(x) > 1)
+        if num_multigene_components > 0:
+            logger.info(
+                "[%s%s] %d of %d quant component(s) hold more than one gene; "
+                "each such component is quantified as one joint EM.",
+                contig_acc,
+                contig_strand,
+                num_multigene_components,
+                len(gene_components),
+            )
+
+        # Component identity, exposed because theta is normalized over a whole
+        # component and not over a gene.  A consumer that renormalizes per gene
+        # gives a read compatible with transcripts of two genes in one component
+        # a split summing to 2, which is arithmetically plausible and silent.
+        # Both maps were cleared at entry above.
+        for component_gene_ids in gene_components:
+            # Leftmost gene of the component, made canonical by the sort in
+            # _build_read_sharing_gene_components.  Components partition the
+            # genes, so this is unique; treat it as an opaque handle.
+            component_id = component_gene_ids[0]
+            self._component_id_to_gene_ids[component_id] = list(component_gene_ids)
+            for gene_id in component_gene_ids:
+                for transcript in gene_to_transcripts[gene_id]:
+                    self._transcript_id_to_component_id[
+                        transcript.get_transcript_id()
+                    ] = component_id
+
         transcript_to_fractional_read_assignment = dict()
 
-        for gene_id, transcripts_list in gene_to_transcripts.items():
+        for component_gene_ids in gene_components:
+
+            transcripts_list = list()
+            for gene_id in component_gene_ids:
+                transcripts_list.extend(gene_to_transcripts[gene_id])
 
             trans_coords = list()
             for transcript in transcripts_list:
                 trans_coords.extend(transcript.get_coords())
 
             trans_coords = sorted(trans_coords)
-            gene_lend = trans_coords[0]
-            gene_rend = trans_coords[-1]
+            component_lend = trans_coords[0]
+            component_rend = trans_coords[-1]
+
+            # Single-gene components keep the original log line verbatim so an
+            # ordinary run reads exactly as before; a joint EM is named as such,
+            # with its member genes and combined span, because that is precisely
+            # what someone chasing an unexpected number needs to see.
+            if len(component_gene_ids) > 1:
+                component_descr = "read-sharing component of {} genes {{{}}}".format(
+                    len(component_gene_ids), ",".join(component_gene_ids)
+                )
+            else:
+                component_descr = component_gene_ids[0]
+
             try:
                 logger.info(
                     "[%s%s] quant estimates for isoforms of %s %s%s:%d-%d",
                     contig_acc,
                     contig_strand,
-                    gene_id,
+                    component_descr,
                     contig_acc,
                     contig_strand,
-                    gene_lend,
-                    gene_rend,
+                    component_lend,
+                    component_rend,
                 )
             except Exception:
                 logger.info(
                     "quant estimates for isoforms of %s %s%s:%d-%d",
-                    gene_id,
+                    component_descr,
                     contig_acc,
                     contig_strand,
-                    gene_lend,
-                    gene_rend,
+                    component_lend,
+                    component_rend,
                 )
 
             # build a contig/strand prefix for downstream logs
@@ -171,7 +263,14 @@ class Quantify:
             except Exception:
                 prefix_str = None
 
-            gene_transcript_to_fractional_read_assignment = (
+            # One joint EM over every transcript of every gene in the component.
+            # _estimate_isoform_read_support() computes isoform fractions per
+            # gene_id internally, so widening the EM does not widen them.
+            #
+            # Theta is a different matter: it is normalized within the EM unit, which is
+            # now the component rather than the gene, so a consumer splitting a read by
+            # theta must use a per-component denominator. StreamingQuant's table does.
+            component_transcript_to_fractional_read_assignment = (
                 self._estimate_isoform_read_support(
                     transcripts_list,
                     prefix_str=prefix_str,
@@ -181,9 +280,9 @@ class Quantify:
                 )
             )
             # copy over to the full data structure
-            for transcript_id in gene_transcript_to_fractional_read_assignment:
+            for transcript_id in component_transcript_to_fractional_read_assignment:
                 transcript_to_fractional_read_assignment[transcript_id] = (
-                    gene_transcript_to_fractional_read_assignment[transcript_id]
+                    component_transcript_to_fractional_read_assignment[transcript_id]
                 )
 
         # Marked valid only here, after every EM unit has been accumulated. Set at entry it
@@ -192,6 +291,10 @@ class Quantify:
         self._theta_valid = True
 
         # see documentation for _estimate_isoform_read_support() below
+
+        # Only here: every path that reaches this point built the maps from this
+        # call's components.
+        self._component_identity_valid = True
 
         return transcript_to_fractional_read_assignment
 
@@ -262,6 +365,28 @@ class Quantify:
         mp_counter,
         fraction_read_align_overlap=None,
     ):
+        # FIRST statement, above the argument handling below.  This method writes
+        # _mp_to_transcripts (:611), which is the input
+        # _build_read_sharing_gene_components unions over -- so it mutates what
+        # component identity is DERIVED FROM, and a map built before it no longer
+        # describes the object's assignment state.
+        #
+        # Every caller today reaches it on a fresh object (pylib/LRAA.py:279,
+        # LRAA:4596, both rescue probes) or from inside quantify() itself, so
+        # nothing is broken now.  It is guarded anyway: "no caller reaches it with a
+        # valid map" is a claim about callers, and it has already been wrong twice
+        # on this pattern.  Publication happening in one place is not mutation
+        # happening in one place.
+        #
+        # Guarding rather than passing the union input as an argument, which was the
+        # alternative offered: that would make the derivation explicit without
+        # removing the staleness, since the map is stored on self either way.
+        self._component_identity_valid = False
+        # Theta derives from the same write: EM's per-multipath input is built from
+        # _mp_to_transcripts, so an estimate made before this call no longer describes the
+        # object's assignment state either. Same claim-about-callers reasoning as above.
+        self._theta_valid = False
+
         if fraction_read_align_overlap is None:
             fraction_read_align_overlap = LRAA_Globals.config[
                 "fraction_read_align_overlap"
@@ -584,6 +709,89 @@ class Quantify:
             logging.getLogger().setLevel(logging_orig_setting)
 
         return
+
+    def _build_read_sharing_gene_components(self, gene_to_transcripts):
+        """Group gene_ids into components of genes that share at least one read.
+
+        The EM apportions each read across the transcripts it is compatible with,
+        so genes whose transcripts compete for the same read have to be solved in
+        one joint EM.  Quantifying them one gene at a time hands the whole read to
+        each gene independently, which a deleted post-hoc pass used to try to
+        repair after the fact.  Overlapping annotation is enough to produce this,
+        and is what does produce it in practice: an ordinary read compatible with
+        one transcript of a readthrough gene model and one transcript of its
+        constituent gene, e.g. PEDS1-UBE2V1 against UBE2V1.  No unusual alignment
+        is involved -- on a chr20 measurement of that population the median
+        aligned span was 1,325 bp with a median longest intron of zero.
+
+        Genes are joined when one multipath is compatible with transcripts in both
+        of them, read off the compatibility _assign_reads_to_transcripts already
+        produced.  There is no second pass over the BAM and no recomputed
+        compatibility, and genes sharing no read stay singletons, which is the
+        overwhelming majority.
+
+        Returns a list of lists of gene_ids.  Components are ordered by leftmost
+        transcript coordinate then gene_id, and genes within a component likewise,
+        so neither the EM order nor the transcript order within an EM depends on
+        dict or set iteration order.
+        """
+
+        gene_id_to_lend = dict()
+        for gene_id, transcripts_of_gene in gene_to_transcripts.items():
+            gene_id_to_lend[gene_id] = min(
+                transcript.get_coords()[0] for transcript in transcripts_of_gene
+            )
+
+        # union-find over gene_ids
+        gene_id_to_parent = dict((gene_id, gene_id) for gene_id in gene_to_transcripts)
+
+        def _find(gene_id):
+            root = gene_id
+            while gene_id_to_parent[root] != root:
+                root = gene_id_to_parent[root]
+            while gene_id_to_parent[gene_id] != root:
+                gene_id_to_parent[gene_id], gene_id = root, gene_id_to_parent[gene_id]
+            return root
+
+        def _union(gene_id_a, gene_id_b):
+            root_a, root_b = _find(gene_id_a), _find(gene_id_b)
+            if root_a != root_b:
+                gene_id_to_parent[root_b] = root_a
+
+        for transcripts_assigned in self._mp_to_transcripts.values():
+            anchor_gene_id = None
+            for transcript in transcripts_assigned:
+                gene_id = transcript.get_gene_id()
+                if gene_id not in gene_id_to_parent:
+                    # transcript held over from an earlier quantify() call on this
+                    # object; not part of this quantification.
+                    continue
+                if anchor_gene_id is None:
+                    anchor_gene_id = gene_id
+                else:
+                    _union(anchor_gene_id, gene_id)
+
+        root_to_gene_ids = defaultdict(list)
+        for gene_id in gene_id_to_parent:
+            root_to_gene_ids[_find(gene_id)].append(gene_id)
+
+        gene_components = list()
+        for component_gene_ids in root_to_gene_ids.values():
+            component_gene_ids.sort(
+                key=lambda gene_id: (gene_id_to_lend[gene_id], gene_id)
+            )
+            gene_components.append(component_gene_ids)
+
+        # leftmost gene of each component is now its first, so this orders
+        # components by leftmost coordinate then gene_id.
+        gene_components.sort(
+            key=lambda component_gene_ids: (
+                gene_id_to_lend[component_gene_ids[0]],
+                component_gene_ids[0],
+            )
+        )
+
+        return gene_components
 
     def _get_gene_with_best_node_matches_to_simplepath(self, simplepath):
 
@@ -1298,14 +1506,30 @@ class Quantify:
 
         """
 
+        # FIRST statement, unconditionally. This method is also a public entry point in
+        # practice: run_quant_only completes quantify() and returns its Quantify, and later
+        # callers drive this estimator directly -- TranscriptFiltering's isoform-fraction
+        # filtering and LRAA's post-assembly filtering step -- over a transcript set that
+        # may have been filtered since. Such a call updates theta and the assignments while
+        # the component map still describes the set quantify() saw, so a consumer pairing
+        # the two gets this run's theta against an earlier grouping. Publishing the map only
+        # from quantify() does not prevent that; an already-valid map simply stays
+        # serveable.
+        #
+        # Unconditional is safe: quantify() invalidates at its own entry and marks valid
+        # only at its successful exit, so the calls it makes here are already invalid and
+        # nothing it does is undone.
+        self._component_identity_valid = False
+
         if not accumulate_theta:
-            # Invalidated at ENTRY, before any logging or EM, and only on this branch.
+            # Theta is invalidated at ENTRY too, before any logging or EM, but only on this
+            # branch.
             #
-            # A caller that is not publishing is about to run EM over its own transcript set,
-            # so whatever the aggregate holds already describes something else. Doing it after
-            # EM returns -- as this first did -- leaves the old theta valid and serveable if EM
-            # raises, which is the same failed-call hole as inheriting validity across
-            # quantify() calls, one level down.
+            # A caller that is not publishing is about to run EM over its own transcript
+            # set, so whatever the aggregate holds already describes something else. Doing
+            # it after EM returns -- as this first did -- leaves the old theta valid and
+            # serveable if EM raises, which is the same failed-call hole as inheriting
+            # validity across quantify() calls, one level down.
             #
             # Never on the accumulate branch: quantify() calls this once per EM unit and the
             # units must add up, so clearing here would leave only the last one.
@@ -1418,6 +1642,11 @@ class Quantify:
                 )
 
         ## assign final read counts to each transcript object.
+        # The transcripts handed here are a read-sharing component of genes, which
+        # is the EM unit but is NOT the reporting unit.  isoform_fraction is a
+        # transcript's share of its OWN gene, so the regrouping by gene_id below is
+        # load-bearing rather than incidental bookkeeping: it is what keeps the
+        # fraction gene-scoped while the EM that produced the counts was not.
         gene_to_transcripts = defaultdict(list)
         for transcript in transcripts:
             transcript_id = transcript.get_transcript_id()
@@ -1515,6 +1744,41 @@ class Quantify:
 
     def get_unassigned_mp_count_pairs(self):
         return list(self._unassigned_mp_count_pairs)
+
+    def _assert_component_identity_valid(self):
+        if not self._component_identity_valid:
+            raise RuntimeError(
+                "component identity is not available: quantify() has not completed "
+                "on this object. Returning an empty mapping instead would be read as "
+                "'no components', and a consumer renormalizing per gene on that "
+                "basis inflates any read compatible with two genes."
+            )
+
+    def get_transcript_id_to_component_id(self):
+        """transcript_id -> opaque id of the read-sharing component holding it.
+
+        The EM unit is a component of genes joined by shared reads, so theta is
+        normalized over a component and not over a gene.  A consumer computing a
+        per-read isoform split must renormalize over a component's transcripts;
+        renormalizing over a gene's gives a read spanning two genes of one
+        component a split summing to 2.
+
+        Every quantified transcript appears, singletons included.  Rebuilt by each
+        quantify() call, so it never carries an entry from a previous call.
+
+        Raises before the first call and after a failed one, rather than returning
+        an empty mapping a caller could mistake for a real answer.
+        """
+        self._assert_component_identity_valid()
+        return dict(self._transcript_id_to_component_id)
+
+    def get_component_id_to_gene_ids(self):
+        """component_id -> the gene_ids it holds, ordered leftmost gene first."""
+        self._assert_component_identity_valid()
+        return dict(
+            (component_id, list(gene_ids))
+            for component_id, gene_ids in self._component_id_to_gene_ids.items()
+        )
 
     def get_unassigned_read_names(self):
         read_names = set()
