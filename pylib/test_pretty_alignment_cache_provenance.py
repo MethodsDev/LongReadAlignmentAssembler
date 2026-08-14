@@ -194,3 +194,56 @@ def test_changing_max_intron_length_does_not_reuse_the_cache(tmp_path, monkeypat
     _retrieve(bam_path, cache_dir)
 
     assert _cache_stems(cache_dir) - default_cap, "changing the cap must not hit the cache"
+
+
+
+def _retrieve_correcting(bam_path, cache_dir, splice_graph=None, contig_seq=None, **kwargs):
+    manager = Pretty_alignment_manager(
+        Splice_graph() if splice_graph is None else splice_graph,
+        alignment_cache_dir=str(cache_dir),
+    )
+    alignments = manager.retrieve_pretty_alignments(
+        "chr1", "+", contig_seq, str(bam_path), use_cache=True, **kwargs
+    )
+    return manager, alignments
+
+
+def test_the_token_is_built_only_after_correction_is_finally_decided(tmp_path, monkeypatch):
+    """Oversimplify force-disables correction, and the token must already know that.
+
+    While the override ran after the token had been assembled, an oversimplify contig
+    wrote UNCORRECTED alignments under a stem that said corrected: a later ordinary
+    corrected run found a valid hit and was served content that had never been through
+    the corrector. That entry is poisoned rather than stale -- wrong, not merely old,
+    and nothing about it looks wrong.
+
+    Asserted on stem equality rather than on any particular field, so the invariant
+    survives a change of token format: an oversimplify run must land where a run with
+    correction switched off lands, and away from a run that really does correct.
+    """
+    bam_path = _one_alignment_bam(tmp_path)
+
+    def stems_written(cache_name, oversimplify, try_correct_alignments):
+        monkeypatch.setitem(LRAA_Globals.config, "oversimplify_enabled", oversimplify)
+        monkeypatch.setitem(
+            LRAA_Globals.config, "oversimplify_contigs", ["chr1"] if oversimplify else []
+        )
+        cache_dir = tmp_path / cache_name
+        _retrieve_correcting(
+            bam_path, cache_dir, try_correct_alignments=try_correct_alignments
+        )
+        return _cache_stems(cache_dir)
+
+    oversimplified = stems_written("oversimplified", True, True)
+    uncorrected = stems_written("uncorrected", False, False)
+    corrected = stems_written("corrected", False, True)
+
+    assert oversimplified, "the oversimplify run must have written a cache to compare"
+    assert oversimplified == uncorrected, (
+        "oversimplify stores uncorrected alignments, so it must share the stem of a run "
+        f"that asked for none: {sorted(oversimplified)} vs {sorted(uncorrected)}"
+    )
+    assert oversimplified.isdisjoint(corrected), (
+        "a genuinely corrected run must not read the oversimplify run's pickle: "
+        f"{sorted(oversimplified)} vs {sorted(corrected)}"
+    )

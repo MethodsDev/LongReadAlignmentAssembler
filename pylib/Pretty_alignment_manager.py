@@ -155,6 +155,25 @@ class Pretty_alignment_manager:
         # flag and one without differ in which alignments survive, and while it was
         # absent from this token the second of the two read the first one's pickle.
         # Anything added to that extraction path belongs here too.
+        # Oversimplify is settled here, before the token, because it force-disables
+        # correction. While that happened further down -- after the token was already
+        # built -- an oversimplify contig wrote UNCORRECTED alignments under a
+        # corr-True stem, and the next ordinary run over the same bam read them back
+        # as corrected. That is a poisoned cache, not a stale one: the entry is wrong
+        # rather than merely old, and nothing about it looks wrong.
+        #
+        # The rule the ordering enforces: every value the token names must be final
+        # before the token is built. Anything below this point may read
+        # try_correct_alignments but may not change it.
+        oversimplify_enabled = bool(LRAA_Globals.config.get("oversimplify_enabled", False))
+        oversimplify_contigs = set(LRAA_Globals.config.get("oversimplify_contigs", []) or [])
+        oversimplify_this_contig = oversimplify_enabled and (contig_acc in oversimplify_contigs)
+        if oversimplify_this_contig and try_correct_alignments:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] oversimplify enabled for this contig: disabling alignment correction and forcing lightened pretty alignments"
+            )
+            try_correct_alignments = False
+
         extraction_token = (
             f"{contig_strand_token}.{bam_identity}.pretty_alignments"
             f".v{EXTRACTION_METHOD_VERSION}"
@@ -224,16 +243,6 @@ class Pretty_alignment_manager:
             self._log_mem("init Bam_alignment_extractor")
             bam_extractor = Bam_alignment_extractor(bam_file)
             self._log_mem("created Bam_alignment_extractor")
-
-            # If oversimplify mode is enabled and this contig is listed, skip error correction
-            # and do not retain pysam SAM records within Pretty_alignment objects at all.
-            oversimplify_enabled = bool(LRAA_Globals.config.get("oversimplify_enabled", False))
-            oversimplify_contigs = set(LRAA_Globals.config.get("oversimplify_contigs", []) or [])
-            oversimplify_this_contig = oversimplify_enabled and (contig_acc in oversimplify_contigs)
-            # Force-disable correction if oversimplify applies
-            if oversimplify_this_contig and try_correct_alignments:
-                logger.info(f"[{contig_acc}{contig_strand}] oversimplify enabled for this contig: disabling alignment correction and forcing lightened pretty alignments")
-                try_correct_alignments = False
 
             t0 = time.time()
             logger.info("[%s%s] begin get_read_alignments (pretty=True)", contig_acc, contig_strand)
