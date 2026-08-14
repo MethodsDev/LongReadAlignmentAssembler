@@ -93,3 +93,55 @@ def test_cache_without_discard_provenance_is_reextracted(tmp_path, monkeypatch):
     assert manager.get_last_discarded_read_names_by_reason().get("low_perID") == {
         "low_identity"
     }
+
+
+def test_two_bams_sharing_a_basename_do_not_share_a_cache(tmp_path, monkeypatch):
+    """The cache is keyed on file identity, not on `os.path.basename(bam_file)`.
+
+    sampleA/aligned.bam and sampleB/aligned.bam are the ordinary shape of a cohort,
+    and while the key carried only the basename the second run read the first one's
+    extraction. One alignment each, at different positions, so a collision returns
+    the wrong read rather than merely the wrong count.
+    """
+    cache_dir = tmp_path / "cache"
+    first = tmp_path / "sampleA" / "aligned.bam"
+    second = tmp_path / "sampleB" / "aligned.bam"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    _write_bam(first, [_alignment("from_A", 0, 100, [(0, 50)], "A" * 50, 0)])
+    _write_bam(second, [_alignment("from_B", 0, 400, [(0, 50)], "A" * 50, 0)])
+
+    _, first_alignments = _retrieve(first, cache_dir)
+    _, second_alignments = _retrieve(second, cache_dir)
+
+    assert [a.get_read_name() for a in first_alignments] == ["from_A"]
+    assert [a.get_read_name() for a in second_alignments] == ["from_B"]
+
+
+def test_a_cache_from_an_earlier_extraction_version_is_not_reused(tmp_path, monkeypatch):
+    """A code change to what extraction returns leaves every other key field alone.
+
+    Without a method version in the token, a pickle written before such a change is
+    a valid hit, so the change is silently undone on any resumed or --no_cleanup run
+    -- which is exactly how the region off-by-one would have survived its own fix.
+    Here the cache is written, then the version is bumped, and the stale entry must
+    be ignored rather than served.
+    """
+    import Pretty_alignment_manager as pam
+
+    cache_dir = tmp_path / "cache"
+    bam_path = tmp_path / "reads.bam"
+    _write_bam(bam_path, [_alignment("only", 0, 100, [(0, 50)], "A" * 50, 0)])
+
+    _retrieve(bam_path, cache_dir)
+    written = sorted(p.name for p in cache_dir.iterdir())
+    assert any(f".v{pam.EXTRACTION_METHOD_VERSION}." in name for name in written)
+
+    monkeypatch.setattr(
+        pam, "EXTRACTION_METHOD_VERSION", pam.EXTRACTION_METHOD_VERSION + 1
+    )
+    _, alignments = _retrieve(bam_path, cache_dir)
+
+    assert [a.get_read_name() for a in alignments] == ["only"]
+    after = sorted(p.name for p in cache_dir.iterdir())
+    assert len(after) > len(written), "bumping the version must not reuse the old stem"

@@ -10,8 +10,20 @@ from Pretty_alignment import Pretty_alignment
 import Splice_graph
 import intervaltree as itree
 from Bam_alignment_extractor import Bam_alignment_extractor
+import Util_funcs
 import pickle
 from typing import Any
+
+
+# Bump whenever extraction changes WHICH alignments come back for identical inputs
+# and identical settings. Nothing else in the cache token identifies the code, so
+# without a bump a pickle written by the previous behaviour is a valid hit.
+#
+#   v1  original
+#   v2  region fetch converts 1-based inclusive bounds to pysam's 0-based
+#       half-open window, so an alignment ending exactly at region_lend is no
+#       longer dropped
+EXTRACTION_METHOD_VERSION = 2
 
 
 logger = logging.getLogger(__name__)
@@ -115,7 +127,7 @@ class Pretty_alignment_manager:
         t_start = time.time()
         self._log_mem("start retrieve_pretty_alignments")
 
-        bam_file_basename = os.path.basename(bam_file)
+        bam_identity = Util_funcs.file_identity_token(bam_file)
 
         contig_strand_token = f"{contig_acc}^{contig_strand}"
         alignment_cache_dir = self._alignment_cache_dir
@@ -126,8 +138,19 @@ class Pretty_alignment_manager:
         # Extraction identity: every parameter that changes which alignments the
         # extractor returns or discards. The ME/SE/masked pickles are partitions of a
         # single extraction, so they share this stem and its discard-provenance sidecar.
+        #
+        # The bam is named by identity rather than basename. Two runs over different
+        # inputs that happen to share a filename -- sampleA/aligned.bam and
+        # sampleB/aligned.bam -- previously reused each other's extraction, and a bam
+        # replaced in place was not noticed at all.
+        #
+        # EXTRACTION_METHOD_VERSION covers the code, which no parameter does. A change
+        # to what extraction returns for identical inputs and settings leaves every
+        # other field of this token unchanged, so a stale pickle is a valid hit and the
+        # fix is silently undone on any resumed or --no_cleanup run.
         extraction_token = (
-            f"{contig_strand_token}.{bam_file_basename}.pretty_alignments"
+            f"{contig_strand_token}.{bam_identity}.pretty_alignments"
+            f".v{EXTRACTION_METHOD_VERSION}"
             f".mapq-{LRAA_Globals.config['min_mapping_quality']}"
             f".corr-{try_correct_alignments}"
             f".qcerr-{per_id_QC_raise_error}"
