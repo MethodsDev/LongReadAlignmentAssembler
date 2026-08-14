@@ -192,7 +192,6 @@ class Pretty_alignment_manager:
         all_alignment_cache_file = variant_cache_file(None)
         ME_alignment_cache_file = variant_cache_file("ME")
         SE_alignment_cache_file = variant_cache_file("SE")
-        SE_masked_alignment_cache_file = variant_cache_file("SE-masked")
 
         # Read names dropped during extraction (currently low percent identity) are
         # consumed downstream as transcriptome-rescue candidates, so they must survive a
@@ -207,10 +206,9 @@ class Pretty_alignment_manager:
         if restrict_splice_type == "ME":
             alignment_cache_file = ME_alignment_cache_file
         elif restrict_splice_type == "SE":
-            if SE_read_encapsulation_mask is None:
-                alignment_cache_file = SE_alignment_cache_file
-            else:
-                alignment_cache_file = SE_masked_alignment_cache_file
+            # There is deliberately no SE-masked variant: the mask is applied per run
+            # to this one. See the mask block at the end of this method.
+            alignment_cache_file = SE_alignment_cache_file
 
         if (
             use_cache
@@ -393,45 +391,32 @@ class Pretty_alignment_manager:
         if SE_read_encapsulation_mask is not None:
             assert restrict_splice_type == "SE"
 
-            if (
-                use_cache
-                and self._cache_ready(SE_masked_alignment_cache_file)
-                and self._cache_ready(discard_cache_file)
-            ):
-                logger.info(
-                    "[%s%s] reusing earlier-generated pretty alignments",
-                    contig_acc,
-                    contig_strand,
-                )
-                pretty_alignments = self._load_pickle_cache(
-                    SE_masked_alignment_cache_file
-                )
-                self._last_discarded_read_names_by_reason = self._load_discard_cache(
-                    discard_cache_file
-                )
-                self._log_mem(
-                    "loaded SE masked alignments from cache",
-                    extra={"n": len(pretty_alignments)},
-                )
-            else:
-                # apply ME mask of encapsulated SEs
-                self._log_mem(
-                    "before apply_SE_read_encapsulation_mask",
-                    extra={"n": len(pretty_alignments)},
-                )
-                pretty_alignments = self.apply_SE_read_encapsulation_mask(
-                    pretty_alignments, SE_read_encapsulation_mask
-                )
-                self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
-
-                if use_cache:
-                    self._write_pickle_cache(SE_masked_alignment_cache_file, pretty_alignments)
-                    logger.info(
-                        "[%s%s] Saved corrected alignments to cache: %s",
-                        contig_acc,
-                        contig_strand,
-                        SE_masked_alignment_cache_file,
-                    )
+            # Derived per run, never stored.
+            #
+            # The mask is the multi-exon transcript set this run assembled (LRAA:4515),
+            # so two runs over one bam carry different masks whenever their guide
+            # annotation or their assembly differs -- and every mask shared the single
+            # filename `restrict-SE-masked`, so whichever run went second was served
+            # the other one's masked SE reads. Keying a digest of the mask would close
+            # that collision; not storing the result removes the question, because the
+            # mask is then not an input to anything on disk.
+            #
+            # Affordable because it is a pure interval-tree filter over already
+            # lightened alignments and needs no pysam record. Measured on chr19 2Mb
+            # (315,867 alignments, 31,146 of them SE): 0.3-0.5s for an
+            # annotation-sized mask of 367 multi-exon transcripts and 1.5s at 5,000,
+            # against 17.9s for the extraction the cache is there to avoid. Needing no
+            # pysam record is also what makes it derivable at all: soft-clip correction
+            # reads one, and a Pretty_alignment still holding a pysam record cannot be
+            # pickled at all, which is why lighten() exists.
+            self._log_mem(
+                "before apply_SE_read_encapsulation_mask",
+                extra={"n": len(pretty_alignments)},
+            )
+            pretty_alignments = self.apply_SE_read_encapsulation_mask(
+                pretty_alignments, SE_read_encapsulation_mask
+            )
+            self._log_mem("after apply_SE_read_encapsulation_mask", extra={"n": len(pretty_alignments)})
 
         self._log_mem("end retrieve_pretty_alignments", extra={"n": len(pretty_alignments), "sec": f"{(time.time()-t_start):.2f}"})
         return pretty_alignments

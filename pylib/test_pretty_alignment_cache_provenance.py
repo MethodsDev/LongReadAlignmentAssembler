@@ -196,8 +196,7 @@ def test_changing_max_intron_length_does_not_reuse_the_cache(tmp_path, monkeypat
     assert _cache_stems(cache_dir) - default_cap, "changing the cap must not hit the cache"
 
 
-
-def _retrieve_correcting(bam_path, cache_dir, splice_graph=None, contig_seq=None, **kwargs):
+def _retrieve_with(bam_path, cache_dir, splice_graph=None, contig_seq=None, **kwargs):
     manager = Pretty_alignment_manager(
         Splice_graph() if splice_graph is None else splice_graph,
         alignment_cache_dir=str(cache_dir),
@@ -229,7 +228,7 @@ def test_the_token_is_built_only_after_correction_is_finally_decided(tmp_path, m
             LRAA_Globals.config, "oversimplify_contigs", ["chr1"] if oversimplify else []
         )
         cache_dir = tmp_path / cache_name
-        _retrieve_correcting(
+        _retrieve_with(
             bam_path, cache_dir, try_correct_alignments=try_correct_alignments
         )
         return _cache_stems(cache_dir)
@@ -246,4 +245,64 @@ def test_the_token_is_built_only_after_correction_is_finally_decided(tmp_path, m
     assert oversimplified.isdisjoint(corrected), (
         "a genuinely corrected run must not read the oversimplify run's pickle: "
         f"{sorted(oversimplified)} vs {sorted(corrected)}"
+    )
+
+
+class _MaskTranscript:
+    """Stands in for an assembled multi-exon transcript in an encapsulation mask.
+
+    apply_SE_read_encapsulation_mask asks a mask entry for get_exon_segments() and
+    nothing else, so this is the whole of the interface under test.
+    """
+
+    def __init__(self, exon_segments):
+        self._exon_segments = exon_segments
+
+    def get_exon_segments(self):
+        return self._exon_segments
+
+
+def test_two_different_SE_masks_do_not_share_a_cached_result(tmp_path):
+    """Nothing on disk may depend on the SE encapsulation mask.
+
+    The mask is the multi-exon transcript set the run assembled, so it differs between
+    two runs over one bam whose guide annotation or assembly differs. Every mask shared
+    the single filename `restrict-SE-masked`, so the second run was handed the first
+    one's masked reads: here that means being told its own surviving read had been
+    masked out, and a read masked out is a read absent from quantification.
+
+    Asserted twice over, because a keyed filename and no filename are different
+    remedies and this is the second: each mask gets its own answer, AND the second run
+    writes nothing new, which is what makes a collision unreachable rather than merely
+    avoided.
+    """
+    cache_dir = tmp_path / "cache"
+    bam_path = tmp_path / "reads.bam"
+    _write_bam(
+        bam_path,
+        [
+            _alignment("left_read", 0, 100, [(0, 50)], "A" * 50, 0),
+            _alignment("right_read", 0, 500, [(0, 50)], "A" * 50, 0),
+        ],
+    )
+
+    def retrieve(mask_exon):
+        _, alignments = _retrieve_with(
+            bam_path,
+            cache_dir,
+            restrict_splice_type="SE",
+            SE_read_encapsulation_mask=[_MaskTranscript([mask_exon])],
+        )
+        return [a.get_read_name() for a in alignments]
+
+    # 1-based, and each mask exon covers exactly one of the two reads
+    masks_left = retrieve([101, 150])
+    written = sorted(p.name for p in cache_dir.iterdir())
+    masks_right = retrieve([501, 550])
+
+    assert masks_left == ["right_read"], masks_left
+    assert masks_right == ["left_read"], masks_right
+    assert sorted(p.name for p in cache_dir.iterdir()) == written, (
+        "the mask must not name any file: applying a different one wrote "
+        f"{set(p.name for p in cache_dir.iterdir()) - set(written)}"
     )
