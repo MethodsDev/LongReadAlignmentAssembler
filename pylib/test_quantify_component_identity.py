@@ -162,13 +162,14 @@ def test_component_identity_does_not_survive_into_a_later_call():
     assert quantify.get_component_id_to_gene_ids() == {"g9": ["g9"]}
 
 
-def test_a_call_that_fails_before_component_construction_leaves_nothing_stale():
-    """Cleared at entry, so a failed call answers empty rather than with the last one.
+def test_a_call_that_fails_before_component_construction_refuses_rather_than_answers():
+    """A failed call must not serve the previous call's components.
 
-    Clearing where the maps are filled would leave both accessors exposing the
-    previous call's components after any failure earlier in quantify(), which is
-    the stale-entry hazard in its quietest form: a consumer sees a complete,
-    plausible mapping belonging to a transcript set that is no longer loaded.
+    Invalidated at entry, before any work that can fail, so a raise anywhere in
+    quantify() leaves the accessors refusing.  Invalidating where the maps are
+    filled would expose the earlier call's components in the quietest possible
+    form: a complete, plausible mapping belonging to a transcript set the object
+    no longer holds, with no error to notice.
     """
 
     quantify = Quantify(False, 1)
@@ -180,19 +181,27 @@ def test_a_call_that_fails_before_component_construction_leaves_nothing_stale():
 
     quantify._assign_reads_to_transcripts = _fail
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="read assignment failed"):
         quantify.quantify(*_build([2], [("g9", "t9", [2])]))
 
-    assert quantify.get_transcript_id_to_component_id() == {}, (
-        "a failed call must not leave the previous call's component ids readable"
-    )
-    assert quantify.get_component_id_to_gene_ids() == {}
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_transcript_id_to_component_id()
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_component_id_to_gene_ids()
 
 
-def test_the_accessors_are_empty_before_the_first_call():
+def test_the_accessors_refuse_before_the_first_call():
+    """An empty mapping reads as "no components"; a refusal cannot be misread.
+
+    A consumer treating empty as a real answer would renormalize per gene and
+    inflate every read compatible with two genes in one component.
+    """
+
     quantify = Quantify(False, 1)
-    assert quantify.get_transcript_id_to_component_id() == {}
-    assert quantify.get_component_id_to_gene_ids() == {}
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_transcript_id_to_component_id()
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_component_id_to_gene_ids()
 
 
 def test_the_accessors_hand_back_copies():

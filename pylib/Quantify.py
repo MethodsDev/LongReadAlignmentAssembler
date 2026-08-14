@@ -44,6 +44,13 @@ class Quantify:
         self._transcript_id_to_component_id = dict()
         self._component_id_to_gene_ids = dict()
 
+        # Whether the two maps above describe a completed quantification.  A flag
+        # rather than an emptiness check: a successful quantify() always yields at
+        # least one component, so empty does mean invalid today, but that follows
+        # from an assert 200 lines away and would stop being true the moment
+        # someone relaxed it.  Stating it directly costs one line.
+        self._component_identity_valid = False
+
         self._quant_mode = quant_mode
 
         return
@@ -81,6 +88,10 @@ class Quantify:
         # earlier answers empty: empty is a visible failure, stale is not.
         self._transcript_id_to_component_id = dict()
         self._component_id_to_gene_ids = dict()
+        # Invalidated BEFORE any work that can fail, never after.  A raise between
+        # here and the successful exit below must leave the accessors refusing, not
+        # answering with the previous call's components.
+        self._component_identity_valid = False
 
         contig_acc = splice_graph.get_contig_acc()
         contig_strand = splice_graph.get_contig_strand()
@@ -210,6 +221,10 @@ class Quantify:
                 )
 
         # see documentation for _estimate_isoform_read_support() below
+
+        # Only here: every path that reaches this point built the maps from this
+        # call's components.
+        self._component_identity_valid = True
 
         return transcript_to_fractional_read_assignment
 
@@ -1476,6 +1491,15 @@ class Quantify:
     def get_unassigned_mp_count_pairs(self):
         return list(self._unassigned_mp_count_pairs)
 
+    def _assert_component_identity_valid(self):
+        if not self._component_identity_valid:
+            raise RuntimeError(
+                "component identity is not available: quantify() has not completed "
+                "on this object. Returning an empty mapping instead would be read as "
+                "'no components', and a consumer renormalizing per gene on that "
+                "basis inflates any read compatible with two genes."
+            )
+
     def get_transcript_id_to_component_id(self):
         """transcript_id -> opaque id of the read-sharing component holding it.
 
@@ -1486,13 +1510,17 @@ class Quantify:
         component a split summing to 2.
 
         Every quantified transcript appears, singletons included.  Rebuilt by each
-        quantify() call, so it is empty before the first and never carries an entry
-        from a previous call.
+        quantify() call, so it never carries an entry from a previous call.
+
+        Raises before the first call and after a failed one, rather than returning
+        an empty mapping a caller could mistake for a real answer.
         """
+        self._assert_component_identity_valid()
         return dict(self._transcript_id_to_component_id)
 
     def get_component_id_to_gene_ids(self):
         """component_id -> the gene_ids it holds, ordered leftmost gene first."""
+        self._assert_component_identity_valid()
         return dict(
             (component_id, list(gene_ids))
             for component_id, gene_ids in self._component_id_to_gene_ids.items()
