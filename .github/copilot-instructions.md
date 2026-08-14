@@ -64,7 +64,7 @@ pip install pysam networkx intervaltree tqdm
 - On macOS with Homebrew Python, use the full path if needed: `/opt/homebrew/bin/python3 -m venv .venv`
 - If `pysam` installation fails, ensure you have build tools (Xcode on macOS, build-essential on Linux)
 - The `.venv` directory is git-ignored; recreate it as needed
-- Always activate the venv before running `LRAA` or utility scripts directly (e.g., `../../util/correct_bam_alignments.py`)
+- Always activate the venv before running `LRAA` or utility scripts directly (e.g., `../../util/normalize_bam_by_strand.py`)
 - For containerized environments, use `Docker/Dockerfile` which contains the complete dependency list
 
 ## Testing and examples
