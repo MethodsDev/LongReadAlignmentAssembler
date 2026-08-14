@@ -74,7 +74,7 @@ fi
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
 
-build_and_push() {
+build_image() {
     local name=$1
     local dockerfile=$2
 
@@ -84,14 +84,35 @@ build_and_push() {
         --build-arg LRAA_CO=${LRAA_CO} \
         -t ${REGISTRY}/${name}:${VERSION} \
         -t ${REGISTRY}/${name}:${VERSIONED_TAG} .
-    docker push ${REGISTRY}/${name}:${VERSION}
-    docker push ${REGISTRY}/${name}:${VERSIONED_TAG}
 }
 
-build_and_push lraa-core     Dockerfile.core
-build_and_push lraa-sc       Dockerfile.sc
-build_and_push lraa-orf      Dockerfile.orf
-build_and_push lraa-combined Dockerfile
+# Every image is built and checked before ANY of them is pushed.  Pushing inside
+# the build loop publishes each image as it completes, so a check that fails on
+# the last one leaves the registry holding a partial set: some tags moved to this
+# commit, some still on the previous, and nothing recording which.  The tags a
+# test harness follows are exactly the ones that must not be half updated.
+IMAGES="lraa-core lraa-sc lraa-orf lraa-combined"
+
+build_image lraa-core     Dockerfile.core
+build_image lraa-sc       Dockerfile.sc
+build_image lraa-orf      Dockerfile.orf
+build_image lraa-combined Dockerfile
+
+# Every image must carry the commit this build was told to use.  Checking one and
+# assuming the rest is what let four images drift apart before: they share a base
+# and a build arg but nothing structurally forces the checkout to match, so the
+# assertion has to name each of them.
+for name in ${IMAGES}; do
+    STAMPED=`docker inspect ${REGISTRY}/${name}:${VERSION} \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+    if [ "${STAMPED}" != "${LRAA_CO}" ]; then
+        set +x
+        echo "" >&2
+        echo "${name}:${VERSION} is stamped ${STAMPED}, expected ${LRAA_CO}." >&2
+        echo "Nothing has been pushed.  A stale cached layer is the usual cause." >&2
+        exit 1
+    fi
+done
 
 # No 'lraa:testing' alias.  The plain name is what pipelines that have not named
 # an image end up pulling, and its tags are release aliases of lraa-core; a
@@ -116,3 +137,10 @@ if [ "${REPORTED}" != "${EXPECTED}" ]; then
     exit 1
 fi
 echo "lraa-core:${VERSION} reports ${REPORTED}, built from ${LRAA_CO}"
+
+# Only now.  Every image exists locally, every one is stamped with this commit,
+# and lraa-core reports the expected version.
+for name in ${IMAGES}; do
+    docker push ${REGISTRY}/${name}:${VERSION}
+    docker push ${REGISTRY}/${name}:${VERSIONED_TAG}
+done

@@ -69,7 +69,7 @@ BASE_IMAGE=lraa-base:${VERSION}
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
 
-build_and_push() {
+build_image() {
     local name=$1
     local dockerfile=$2
 
@@ -78,7 +78,6 @@ build_and_push() {
         --build-arg LRAA_VERSION=v${VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
         -t ${REGISTRY}/${name}:${VERSION} .
-    docker push ${REGISTRY}/${name}:${VERSION}
 }
 
 # 'lraa' is an alias for 'lraa-core', not a separate build.  Every pull off the
@@ -91,12 +90,50 @@ alias_core() {
     docker push ${REGISTRY}/lraa:${tag}
 }
 
-build_and_push lraa-core     Dockerfile.core
-build_and_push lraa-sc       Dockerfile.sc
-build_and_push lraa-orf      Dockerfile.orf
-build_and_push lraa-combined Dockerfile
+# Every image is built and stamped-checked before ANY of them is pushed.  Pushing
+# inside the build loop publishes each as it completes, so a check failing on the
+# last one leaves the registry holding a partial set: some tags on this commit,
+# some on the previous, nothing recording which.  For release tags that is worse
+# than for testing tags, because :latest is what every WDL default resolves to.
+IMAGES="lraa-core lraa-sc lraa-orf lraa-combined"
+
+build_image lraa-core     Dockerfile.core
+build_image lraa-sc       Dockerfile.sc
+build_image lraa-orf      Dockerfile.orf
+build_image lraa-combined Dockerfile
+
+# Each image separately: they share a base and a build arg, but nothing
+# structurally forces the checkout to match, which is how four images drifted
+# apart before.
+for name in ${IMAGES}; do
+    STAMPED=`docker inspect ${REGISTRY}/${name}:${VERSION} \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+    if [ "${STAMPED}" != "${LRAA_CO}" ]; then
+        set +x
+        echo "" >&2
+        echo "${name}:${VERSION} is stamped ${STAMPED}, expected ${LRAA_CO}." >&2
+        echo "Nothing has been pushed.  A stale cached layer is the usual cause." >&2
+        exit 1
+    fi
+done
+
+# The version too, and also before the push: an image can build and run while
+# carrying the wrong checkout, and the reported version is compiled into that
+# checkout.  Printing it after publication tells you what you already shipped.
+EXPECTED="LRAA VERSION: v${VERSION}"
+REPORTED=`docker run --rm ${REGISTRY}/lraa-core:${VERSION} /usr/local/src/LRAA/LRAA --version`
+if [ "${REPORTED}" != "${EXPECTED}" ]; then
+    set +x
+    echo "" >&2
+    echo "lraa-core:${VERSION} reports '${REPORTED}', expected '${EXPECTED}'." >&2
+    echo "Built from ${LRAA_CO}.  Nothing has been pushed." >&2
+    exit 1
+fi
+echo "lraa-core:${VERSION} reports ${REPORTED}, built from ${LRAA_CO}"
+
+for name in ${IMAGES}; do
+    docker push ${REGISTRY}/${name}:${VERSION}
+done
 
 alias_core ${VERSION}
 
-# verify
-docker run --rm ${REGISTRY}/lraa-core:${VERSION} /usr/local/src/LRAA/LRAA --version

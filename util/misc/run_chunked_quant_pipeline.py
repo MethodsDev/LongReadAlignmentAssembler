@@ -330,7 +330,10 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
         tag = STRAND_TAG[strand]
         prefix = os.path.join(cut_dir, tag)
         log = os.path.join(outdir, "logs", "stage2_cuts_{}.log".format(tag))
-        token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}".format(
+        # ".sev" is a version marker, not an input: this stage now also emits
+        # <prefix>.severed_reads.bam, so a checkpoint written before that would
+        # skip the step and leave the file absent while reporting the stage reused.
+        token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev".format(
             tag,
             args.approx_MB_per_cut,
             args.approx_MB_per_cut_wiggle_window,
@@ -358,6 +361,15 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
             str(args.margin),
             "--max_intron_length",
             str(args.max_intron_length),
+            # Always, not on request.  A consumer deciding whether a chunk boundary
+            # dissolved a read-sharing component needs the severed alignments
+            # themselves: names cannot be fetched from a coordinate-indexed bam,
+            # and a span cannot answer compatibility, which follows exon blocks.
+            # Without it the only alternative is trusting per-chunk components
+            # silently, and the set is small by construction -- a cut severing many
+            # reads is one the selector rejects.
+            "--severed_reads_bam",
+            "{}.severed_reads.bam".format(prefix),
             "--output_prefix",
             prefix,
         ]
