@@ -206,6 +206,20 @@ class Splice_graph:
 
         return overlapping_introns
 
+    def get_intron_coords(self):
+        """Sorted (lend, rend) of every intron reachable through get_overlapping_introns.
+
+        Read from the interval tree rather than from self._intron_objs, so that this is
+        the read surface of get_overlapping_introns rather than a second view of it that
+        could drift. Pretty_alignment_manager digests this to name the graph that a
+        cached corrected alignment was corrected against.
+        """
+        if self._itree_introns is None:
+            return []
+        return sorted(
+            (interval.begin, interval.end - 1) for interval in self._itree_introns
+        )
+
     def build_splice_graph_for_contig(
         self,
         contig_acc,

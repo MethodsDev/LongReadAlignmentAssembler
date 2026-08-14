@@ -3,6 +3,8 @@
 
 import os
 import time
+import hashlib
+import json
 import pysam
 import LRAA_Globals
 import logging
@@ -15,18 +17,44 @@ import pickle
 from typing import Any
 
 
-# Bump whenever extraction changes WHICH alignments come back for identical inputs
-# and identical settings. Nothing else in the cache token identifies the code, so
-# without a bump a pickle written by the previous behaviour is a valid hit.
+# Bump whenever a change alters WHAT A RUN STORES in these pickles for identical
+# inputs and identical settings.
+#
+# The name is deliberately not "extraction": the pickle is not raw extraction
+# output. It is extracted, then soft-clip corrected, then terminal-intron pruned,
+# then lightened, and this constant is the only element of the cache token that
+# identifies ANY of that code. A change to the corrector counts as much as a
+# change to the extractor -- without a bump, a pickle written by the previous
+# behaviour is a valid hit and the change is silently undone on any resumed or
+# --no_cleanup run.
 #
 #   v1  original
 #   v2  region fetch converts 1-based inclusive bounds to pysam's 0-based
 #       half-open window, so an alignment ending exactly at region_lend is no
 #       longer dropped
-EXTRACTION_METHOD_VERSION = 2
+CACHED_ALIGNMENT_METHOD_VERSION = 2
 
 
 logger = logging.getLogger(__name__)
+
+
+def _contig_seq_digest(contig_seq):
+    """Identity of the genome sequence the soft-clip corrector compared reads against.
+
+    Hashed in 1 MB slices rather than with one contig_seq.encode(): a 250 Mb
+    chromosome would allocate a second full copy of itself, inside the per-contig
+    worker whose peak RSS is already the reason alignments are lightened before they
+    are stored. Measured on a 250 Mb string the whole digest costs ~0.8s, against
+    minutes of extraction for a contig that size, and it is skipped entirely unless
+    correction runs.
+    """
+    if contig_seq is None:
+        return None
+    hasher = hashlib.sha256()
+    chunk = 1 << 20
+    for offset in range(0, len(contig_seq), chunk):
+        hasher.update(contig_seq[offset : offset + chunk].encode("ascii", "replace"))
+    return f"{len(contig_seq)}:{hasher.hexdigest()[:16]}"
 
 
 class Pretty_alignment_manager:
@@ -135,32 +163,12 @@ class Pretty_alignment_manager:
         if region_lend is not None and region_rend is not None:
             contig_strand_token = f"{contig_acc}^{contig_strand}:{region_lend}-{region_rend}"
 
-        # Extraction identity: every parameter that changes which alignments the
-        # extractor returns or discards. The ME/SE/masked pickles are partitions of a
-        # single extraction, so they share this stem and its discard-provenance sidecar.
-        #
-        # The bam is named by identity rather than basename. Two runs over different
-        # inputs that happen to share a filename -- sampleA/aligned.bam and
-        # sampleB/aligned.bam -- previously reused each other's extraction, and a bam
-        # replaced in place was not noticed at all.
-        # EXTRACTION_METHOD_VERSION covers the code, which no parameter does. A change
-        # to what extraction returns for identical inputs and settings leaves every
-        # other field of this token unchanged, so a stale pickle is a valid hit and the
-        # fix is silently undone on any resumed or --no_cleanup run.
-        #
-        # The three settings below are every config value extraction reads that changes
-        # which alignments come back: min_mapping_quality and max_intron_length at
-        # Bam_alignment_extractor.py:58-59, min_per_id at :164. min_per_id is the one
-        # that bites in practice -- --HiFi raises it from 80 to 97, so a run with the
-        # flag and one without differ in which alignments survive, and while it was
-        # absent from this token the second of the two read the first one's pickle.
-        # Anything added to that extraction path belongs here too.
         # Oversimplify is settled here, before the token, because it force-disables
         # correction. While that happened further down -- after the token was already
-        # built -- an oversimplify contig wrote UNCORRECTED alignments under a
-        # corr-True stem, and the next ordinary run over the same bam read them back
-        # as corrected. That is a poisoned cache, not a stale one: the entry is wrong
-        # rather than merely old, and nothing about it looks wrong.
+        # built -- an oversimplify contig wrote UNCORRECTED alignments under a stem that
+        # recorded correction as having run, and the next ordinary run over the same bam
+        # read them back as corrected. That is a poisoned cache, not a stale one: the
+        # entry is wrong rather than merely old, and nothing about it looks wrong.
         #
         # The rule the ordering enforces: every value the token names must be final
         # before the token is built. Anything below this point may read
@@ -174,19 +182,39 @@ class Pretty_alignment_manager:
             )
             try_correct_alignments = False
 
-        extraction_token = (
+        signature = self._cached_alignment_signature(
+            contig_acc,
+            contig_strand,
+            contig_seq,
+            bam_identity,
+            region_lend,
+            region_rend,
+            try_correct_alignments,
+            per_id_QC_raise_error,
+        )
+
+        # A legible stem plus a digest of the whole signature. The stem is what makes a
+        # cache directory readable -- the bam by identity rather than basename, so that
+        # sampleA/aligned.bam and sampleB/aligned.bam cannot share an entry -- and the
+        # digest is what makes it sound.
+        #
+        # Every cache defect found in this codebase was a token naming the inputs
+        # someone remembered and omitting the rest, and a flat list of f-string
+        # fragments is what let that keep happening: nothing about it shows what is
+        # missing. The enumeration therefore lives in exactly one place, with a verdict
+        # recorded for every input including the ones deliberately absent -- see
+        # _cached_alignment_signature -- so a newly found input costs one dict entry.
+        #
+        # The ME and SE pickles are partitions of one extraction, so they share this
+        # stem and its discard-provenance sidecar.
+        cache_token = (
             f"{contig_strand_token}.{bam_identity}.pretty_alignments"
-            f".v{EXTRACTION_METHOD_VERSION}"
-            f".mapq-{LRAA_Globals.config['min_mapping_quality']}"
-            f".perid-{LRAA_Globals.config['min_per_id']}"
-            f".maxintron-{LRAA_Globals.config['max_intron_length']}"
-            f".corr-{try_correct_alignments}"
-            f".qcerr-{per_id_QC_raise_error}"
+            f".v{CACHED_ALIGNMENT_METHOD_VERSION}.{self._signature_digest(signature)}"
         )
 
         def variant_cache_file(restrict_token):
             return os.path.join(
-                alignment_cache_dir, f"{extraction_token}.restrict-{restrict_token}.pkl"
+                alignment_cache_dir, f"{cache_token}.restrict-{restrict_token}.pkl"
             )
 
         all_alignment_cache_file = variant_cache_file(None)
@@ -198,7 +226,7 @@ class Pretty_alignment_manager:
         # cache hit. Requiring this file for a hit makes caches from earlier builds
         # re-extract once instead of silently reporting no discards.
         discard_cache_file = os.path.join(
-            alignment_cache_dir, f"{extraction_token}.discards.pkl"
+            alignment_cache_dir, f"{cache_token}.discards.pkl"
         )
 
         alignment_cache_file = all_alignment_cache_file
@@ -484,6 +512,162 @@ class Pretty_alignment_manager:
         return(non_overlapping_pretty_alignments)
 
     # --- cache helpers ---
+
+    def _splice_graph_intron_digest(self):
+        """Identity of everything the soft-clip corrector can read from the graph.
+
+        Pretty_alignment.try_correct_alignments touches the splice graph through
+        get_overlapping_introns() and through nothing else, and uses only get_coords()
+        of what comes back (Pretty_alignment.py:473, 486, 551, 564). The intron
+        coordinate set is therefore not a proxy for the graph: it is exactly and
+        completely what the graph contributes to a corrected alignment, so two graphs
+        sharing this digest correct identically and two differing anywhere that matters
+        do not share it.
+
+        Deliberately not LRAA._compute_splice_graph_cache_entry, which digests the
+        graph's CONSTRUCTION inputs. That is a broader and weaker proxy for the same
+        thing -- two different guide annotations can yield one intron set -- it lives in
+        an extension-less driver script this module cannot import, and reusing it would
+        couple two cache systems' versioning, so a bump on that side would silently
+        invalidate every alignment pickle as well.
+        """
+        if self._splice_graph is None:
+            return None
+        intron_coords = self._splice_graph.get_intron_coords()
+        hasher = hashlib.sha256()
+        for intron_lend, intron_rend in intron_coords:
+            hasher.update(f"{intron_lend}-{intron_rend};".encode("ascii"))
+        return f"{len(intron_coords)}:{hasher.hexdigest()[:16]}"
+
+    def _cached_alignment_signature(
+        self,
+        contig_acc,
+        contig_strand,
+        contig_seq,
+        bam_identity,
+        region_lend,
+        region_rend,
+        try_correct_alignments,
+        per_id_QC_raise_error,
+    ):
+        """Every input that decides what a run would store, with a verdict for each.
+
+        The pickle is not raw extraction output, so "what extraction reads" is not the
+        boundary of this dict. Anything that changes a field of a stored
+        Pretty_alignment, or which alignments are stored at all, must be keyed here or
+        else eliminated as an input, as the SE encapsulation mask was. The audit below
+        is the point of this method: completeness can be checked against it without
+        re-deriving the call graph, and an input that is knowingly absent says so here
+        rather than by not appearing.
+
+        KEYED -- which alignments come back at all:
+          min_mapping_quality        Bam_alignment_extractor.py:58
+          max_intron_length          :59, and again Pretty_alignment.py:330, :341 where
+                                     it prunes terminal introns from stored segments
+          min_per_id                 :164; --HiFi raises it 80 -> 97
+
+        KEYED -- what each stored alignment holds:
+          read_aln_gap_merge_int     merges adjacent aligned blocks into one segment, so
+                                     it decides the segments themselves
+                                     (Pretty_alignment.py:893). Taken from the class
+                                     attribute, not from config: the attribute is bound
+                                     once at import (Pretty_alignment.py:35) and is what
+                                     :893 consults, so a config value written after
+                                     import is not the value that shaped the segments.
+                                     Keying the effective value stays honest whichever
+                                     way that wiring is later repaired.
+          cell_barcode_tag,          compose read_name as barcode^umi^query_name
+          read_umi_tag               (Util_funcs.py:83-90 via Pretty_alignment.py:56).
+                                     These decide read IDENTITY, so a collision here
+                                     does not perturb a fraction of a count, it merges
+                                     or splits reads for every downstream stage that
+                                     groups or quantifies by name.
+          min_PolyA_ident_length,    decide the stored left/right_soft_clipping by
+          min_soft_clip_PolyA_       stripping polyA and untemplated G runs
+            base_frac_for_           (Pretty_alignment.py:208-266). Those lengths are
+            conversion,              what the graph later infers TSS and PolyA sites
+          max_untemplated_G_at_TSS   from, and what selects correction candidates.
+
+        KEYED -- correction, which cannot be deferred to a cache hit.
+        try_correct_alignments corrects against the splice graph and the contig sequence
+        (Pretty_alignment.py:473-505, :551-579) by reading
+        pa._pysam_alignment.query_sequence and .get_aligned_pairs(). That record cannot
+        be stored at all: pickling a Pretty_alignment still holding one raises
+        "TypeError: self._delegate cannot be converted to a Python object for pickling",
+        which is why lighten() exists. So caching raw extraction and re-deriving
+        correction on every hit is not a cost trade-off, it is impossible, and the graph
+        and sequence that determined the correction have to be named instead. Without
+        them, two runs sharing the flag and differing in guide annotation reused each
+        other's corrected alignments.
+          try_correct_alignments     the post-override value; see the ordering rule at
+                                     the oversimplify block
+          min_softclip_realign_test, decide which alignments are corrected
+          max_softclip_realign_test  (Pretty_alignment.py:288-290, :363-364)
+          splice_graph_introns       see _splice_graph_intron_digest
+          contig_seq                 see _contig_seq_digest
+        The last four are None when correction is off, which is truthful -- an
+        uncorrected run reads none of them -- and avoids splitting every uncorrected
+        run's cache on values that did not reach it.
+
+        ELIMINATED -- no longer an input to anything stored:
+          SE_read_encapsulation_mask       applied per run; see the mask block in
+          min_SE_read_ME_exon_overlap_pct  retrieve_pretty_alignments, and note that the
+                                           pct is reached only by the mask
+
+        KNOWINGLY UNKEYED:
+          min_total_alignments_engage_frac_per_id_check,
+          min_frac_alignments_pass_per_id_check
+                                     read at Bam_alignment_extractor.py:254, :262 and
+                                     used only to compose a logger.debug line, so they
+                                     change nothing that is stored
+          oversimplify_enabled,      their only effect on stored content is to force
+          oversimplify_contigs       try_correct_alignments off, which the keyed
+                                     post-override value already carries. force_lighten_all
+                                     changes nothing else that survives: everything is
+                                     lightened before it is written either way.
+        """
+        config = LRAA_Globals.config
+        correcting = bool(try_correct_alignments)
+        return {
+            "contig": contig_acc,
+            "strand": contig_strand,
+            "region": [region_lend, region_rend],
+            "bam": bam_identity,
+            "min_mapping_quality": config["min_mapping_quality"],
+            "min_per_id": config["min_per_id"],
+            "max_intron_length": config["max_intron_length"],
+            "read_aln_gap_merge_int": Pretty_alignment.read_aln_gap_merge_int,
+            "cell_barcode_tag": config["cell_barcode_tag"],
+            "read_umi_tag": config["read_umi_tag"],
+            "min_PolyA_ident_length": config["min_PolyA_ident_length"],
+            "min_soft_clip_PolyA_base_frac_for_conversion": config[
+                "min_soft_clip_PolyA_base_frac_for_conversion"
+            ],
+            "max_untemplated_G_at_TSS": config["max_untemplated_G_at_TSS"],
+            "try_correct_alignments": correcting,
+            "min_softclip_realign_test": (
+                config["min_softclip_realign_test"] if correcting else None
+            ),
+            "max_softclip_realign_test": (
+                config["max_softclip_realign_test"] if correcting else None
+            ),
+            "splice_graph_introns": (
+                self._splice_graph_intron_digest() if correcting else None
+            ),
+            "contig_seq": _contig_seq_digest(contig_seq) if correcting else None,
+            # Over-keyed on purpose, and the one entry here that is not an input:
+            # per_id_QC_raise_error reaches Bam_alignment_extractor.get_read_alignments
+            # and is never read in its body, so it decides nothing that is stored.
+            # Over-keying costs a redundant pickle at worst, whereas dropping it would
+            # bet that the parameter stays dead.
+            "per_id_QC_raise_error": bool(per_id_QC_raise_error),
+        }
+
+    @staticmethod
+    def _signature_digest(signature) -> str:
+        return hashlib.sha256(
+            json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:16]
 
     def _cache_ready(self, cache_path: str) -> bool:
         """Return True when the pickle cache and its OK marker exist."""
