@@ -34,6 +34,15 @@ parameters that change its output, for those parameters, so changing a parameter
 invalidates the sentinel. To force a rerun, delete the sentinel or the output
 directory. Nothing here is deleted on success: every per-chunk log is kept.
 
+ONE CPU BUDGET, not two. ``--cpu_budget`` is the total for the whole pipeline. Chunk
+concurrency and the ``--cpu_budget`` handed to each per-chunk LRAA invocation are both
+DERIVED from it by ``pylib/CpuBudget.allocate``, so their product cannot exceed it. This
+replaces ``--concurrency`` plus a separately-specified ``--num_parallel_contigs`` and
+``--num_threads_per_worker``, which multiplied: nothing checked that the chunk pool times
+LRAA's own contig pool times its thread count fit the host. A chunk is single-contig and
+strand-pure, so LRAA's internal queue inside it is one unit and its own pool clamps to 1
+regardless -- the share is not double-counted against that.
+
 MEASUREMENT NOTES. Wall time is measured around each subprocess. Peak RSS is
 sampled from ``/proc`` at ``--rss_sample_interval`` over the step's whole
 process tree and summed across that tree, so a chunk's figure already includes
@@ -57,7 +66,8 @@ sys.path.insert(
     0,
     os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "..", "..", "pylib"]),
 )
-import Util_funcs  # noqa: E402  (path insert must precede the import)
+import CpuBudget  # noqa: E402  (path insert must precede the import)
+import Util_funcs  # noqa: E402
 
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")
@@ -446,7 +456,16 @@ def stage_extract_chunks(args, ckpt, outdir, timing, strand_bams, selections, rs
 # ---------------------------------------------------------------- stages 4 + 5
 
 
-def lraa_cmd(args, bam_for_quant, bam_for_sg, genome, gtf, out_prefix, num_total_reads):
+def lraa_cmd(
+    args, bam_for_quant, bam_for_sg, genome, gtf, out_prefix, num_total_reads, cpu_budget
+):
+    """One LRAA invocation. ``cpu_budget`` is this invocation's SHARE of the total.
+
+    A chunk is single-contig and strand-pure, so LRAA's own flat queue inside it has
+    exactly one unit: CpuBudget.allocate() gives 1 unit worker and lends the whole share
+    to that worker's native tool steps. Nothing is double-counted, because the share is
+    already what this pipeline's own chunk concurrency left over.
+    """
     cmd = [
         sys.executable,
         LRAA,
@@ -462,10 +481,8 @@ def lraa_cmd(args, bam_for_quant, bam_for_sg, genome, gtf, out_prefix, num_total
         "--no_norm",
         "--num_total_reads",
         str(num_total_reads),
-        "--num_parallel_contigs",
-        str(args.num_parallel_contigs),
-        "--num_threads_per_worker",
-        str(args.num_threads_per_worker),
+        "--cpu_budget",
+        str(cpu_budget),
         "--output_prefix",
         out_prefix,
     ]
@@ -474,8 +491,11 @@ def lraa_cmd(args, bam_for_quant, bam_for_sg, genome, gtf, out_prefix, num_total
     return cmd
 
 
-def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval):
-    """Stages 4 and 5 for one chunk. Everything goes to the chunk's own log."""
+def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_budget):
+    """Stages 4 and 5 for one chunk. Everything goes to the chunk's own log.
+
+    ``cpu_budget`` is this chunk's share of the total, handed down by the scheduler.
+    """
 
     cid = chunk["chunk_id"]
     log = chunk["log"]
@@ -533,6 +553,7 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval):
         gtf="{}.gtf".format(prefix),
         out_prefix="chunk_quant",
         num_total_reads=num_total_reads,
+        cpu_budget=cpu_budget,
     )
     if ckpt.done(quant_token):
         steps.append({"step": "stage5_quant", "reused": True, "cmd": quant_cmd})
@@ -564,7 +585,18 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval):
 
 
 def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_interval):
-    """Run every chunk's stages 4-5, at most --concurrency at a time.
+    """Run every chunk's stages 4-5, scheduling the flat unit queue from ONE budget.
+
+    Concurrency is not a knob here any more. A chunk is one unit of the same flat queue
+    LRAA schedules internally, so CpuBudget.allocate() derives both how many chunks run
+    at once and the share each one's LRAA invocation is given. Their product cannot
+    exceed the budget, which is what --concurrency and LRAA's own contig pool could
+    previously do to each other.
+
+    Launch order is longest-first on retained alignments per chunk, which the extractor
+    already counted, so no extra pass is needed. Span would be the wrong proxy: it does
+    not bound read count, and a short highly expressed chunk can outweigh a long quiet
+    one.
 
     A chunk failure is fatal: the exception names the chunk and its log, and no
     merge is attempted. Chunks already running are allowed to finish so their
@@ -572,6 +604,25 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
     """
 
     from concurrent.futures import ThreadPoolExecutor
+
+    units = [
+        CpuBudget.WorkUnit(
+            contig_acc=chunk["chrom"],
+            contig_strand=chunk["strand"],
+            chunk_index=chunk["index"],
+            region=(chunk["manifest"]["partition_lend"], chunk["manifest"]["partition_rend"]),
+            cost=chunk["manifest"]["counts"]["alignments_emitted"],
+        )
+        for chunk in chunks
+    ]
+    allocation = CpuBudget.allocate(budget=args.cpu_budget, num_units=len(units))
+    print(CpuBudget.format_allocation(allocation, phase="chunks"), flush=True)
+    shortfall = CpuBudget.budget_shortfall_note(allocation)
+    if shortfall:
+        print(shortfall, flush=True)
+
+    by_unit = dict(zip(units, chunks))
+    launch_order = [by_unit[u] for u in CpuBudget.order_longest_first(units)]
 
     results = {}
     failures = []
@@ -582,7 +633,15 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
         if abort.is_set():
             return
         try:
-            record = chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval)
+            record = chunk_worker(
+                args,
+                ckpt,
+                outdir,
+                chunk,
+                num_total_reads,
+                rss_interval,
+                cpu_budget=allocation.tool_threads,
+            )
             with lock:
                 results[chunk["chunk_id"]] = record
         except Exception as err:  # noqa: BLE001 - reported, then re-raised below
@@ -591,8 +650,8 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
                 failures.append((chunk["chunk_id"], chunk["log"], str(err)))
 
     started = time.time()
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        list(pool.map(task, chunks))
+    with ThreadPoolExecutor(max_workers=allocation.unit_workers) as pool:
+        list(pool.map(task, launch_order))
     makespan = time.time() - started
 
     if failures:
@@ -611,7 +670,7 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
             "result".format(len(results), len(chunks))
         )
     ordered = [results[c["chunk_id"]] for c in chunks]
-    return ordered, makespan
+    return ordered, makespan, allocation
 
 
 # --------------------------------------------------------------------- stage 6
@@ -873,6 +932,10 @@ def run_baseline(args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_i
         gtf=os.path.abspath(args.gtf),
         out_prefix="baseline_quant",
         num_total_reads=num_total_reads,
+        # The control is the only thing running, so it gets the whole budget. Its own
+        # flat queue is the two strands of one contig, and LRAA divides the budget across
+        # those two units itself -- this is exactly the chromosome-shard shape.
+        cpu_budget=args.cpu_budget,
     )
     if args.contig:
         quant_cmd += ["--contig", args.contig]
@@ -923,10 +986,12 @@ def main(argv=None):
         "--output_dir", required=True, help="output directory; created if absent"
     )
     parser.add_argument(
-        "--concurrency",
+        "--cpu_budget",
         type=int,
-        default=4,
-        help="how many chunks run stages 4-5 at once",
+        default=None,
+        help="TOTAL cores this pipeline may use. Chunk concurrency and each chunk's own "
+        "LRAA budget are DERIVED from it, so the two cannot multiply past it. "
+        "Default: all cores this process may run on",
     )
     parser.add_argument(
         "--arm",
@@ -948,18 +1013,6 @@ def main(argv=None):
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
-    parser.add_argument(
-        "--num_parallel_contigs",
-        type=int,
-        default=2,
-        help="LRAA --num_parallel_contigs, identical in both arms",
-    )
-    parser.add_argument(
-        "--num_threads_per_worker",
-        type=int,
-        default=1,
-        help="LRAA --num_threads_per_worker, identical in both arms",
-    )
     parser.add_argument("--approx_MB_per_cut", type=float, default=10)
     parser.add_argument("--approx_MB_per_cut_wiggle_window", type=float, default=1)
     parser.add_argument("--depth_window", type=int, default=100)
@@ -977,8 +1030,10 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    if args.concurrency < 1:
-        parser.error("--concurrency must be >= 1")
+    if args.cpu_budget is None:
+        args.cpu_budget = CpuBudget.default_budget()
+    elif args.cpu_budget < 1:
+        parser.error("--cpu_budget must be >= 1")
 
     outdir = os.path.abspath(args.output_dir)
     os.makedirs(os.path.join(outdir, "logs"), exist_ok=True)
@@ -992,7 +1047,7 @@ def main(argv=None):
     timing["invocation"] = sys.argv
     timing["resumable"] = True
     timing["checkpoint_dir"] = ckpt.root
-    timing["concurrency"] = args.concurrency
+    timing["cpu_budget"] = args.cpu_budget
     timing["arm"] = args.arm
 
     for tool in (SEPARATE_BAM, SELECT_CUTS, EXTRACT_CHUNK, NORMALIZE_BAM, LRAA):
@@ -1055,7 +1110,7 @@ def main(argv=None):
         arm_sampler = RssSampler(os.getpid(), rss)
         arm_sampler.start()
         try:
-            chunk_records, makespan = run_chunks_concurrently(
+            chunk_records, makespan, chunk_allocation = run_chunks_concurrently(
                 args, ckpt, outdir, chunks, num_total_reads, rss
             )
         finally:
@@ -1064,7 +1119,10 @@ def main(argv=None):
 
         merged = merge_and_translate(outdir, chunks)
         timing.setdefault("arms", {})["chunked"] = {
-            "concurrency": args.concurrency,
+            "cpu_budget": chunk_allocation.budget,
+            "concurrent_chunk_workers": chunk_allocation.unit_workers,
+            "cpu_budget_per_chunk": chunk_allocation.tool_threads,
+            "unallocated_cores": chunk_allocation.unallocated_cores,
             "makespan_s": round(makespan, 3),
             "summed_wall_s": round(sum(c["wall_s"] for c in chunk_records), 3),
             "chunks": chunk_records,

@@ -41,6 +41,7 @@ from IsoformReadRescue import (
 from ResourceMonitor import ResourceMonitor
 import TranscriptFiltering
 import Util_funcs
+import CpuBudget
 import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
@@ -59,8 +60,14 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 
 UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 
-default_threads_per_worker = 1
-CPU = default_threads_per_worker  # legacy global name retained for compatibility
+# One authoritative budget, set after CLI parsing, divided by CpuBudget.allocate().
+CPU_BUDGET = None
+# CEILING on component-worker forks per unit, not a reservation: the actual grant is
+# whatever CpuBudget.CoreLease finds free when an eligible component appears, capped by
+# the unit's outstanding eligible-component count. None means "up to whatever is free".
+COMPONENT_WORKERS = None
+# Shared free-core count, created by the scheduler and inherited by every unit worker.
+CORE_LEASE = None
 TOTAL_THREADS_FOR_SINGLETON_STAGE = None  # computed after CLI parsing
 allow_spacers = False
 single_best_only = False
@@ -233,7 +240,7 @@ def main():
         Common examples:
           LRAA --genome ref.fa --bam reads.bam -o sample
           LRAA --genome ref.fa --bam reads.bam --gtf ref.gtf --quant_only -o sample
-          LRAA --genome ref.fa --bam reads.bam --HiFi --num_parallel_contigs 4 --num_threads_per_worker 2 -o sample
+          LRAA --genome ref.fa --bam reads.bam --HiFi --cpu_budget 16 -o sample
         """
     )
 
@@ -278,16 +285,16 @@ def main():
 
         lite_parallel = lite_parser.add_argument_group("parallelization")
         lite_parallel.add_argument(
-            "--num_parallel_contigs",
+            "--cpu_budget",
             type=int,
-            default=4,
-            help="maximum number of contig/strand workers to launch concurrently",
+            default=None,
+            help="TOTAL cores this run may use, divided across work units (default: all cores this process may run on)",
         )
         lite_parallel.add_argument(
-            "--num_threads_per_worker",
+            "--component_workers",
             type=int,
-            default=default_threads_per_worker,
-            help="CPU cores to dedicate to each contig/strand worker",
+            default=None,
+            help="CEILING on component-assembly forks per work unit; the grant is whatever the budget has free at the time (default: whatever is free)",
         )
         lite_parallel.add_argument(
             "--no_parallelize_contigs",
@@ -467,20 +474,6 @@ def main():
         help="during assembly, keep only the single best isoform per gene",
     )
     primary.add_argument(
-        "--num_threads_per_worker",
-        type=int,
-        default=default_threads_per_worker,
-        help="CPU cores to dedicate to each contig/strand worker",
-    )
-    # Backward compatibility: accept legacy --CPU flag without advertising it
-    primary.add_argument(
-        "--CPU",
-        type=int,
-        dest="num_threads_per_worker",
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
         "--ME_only",
         action="store_true",
         default=False,
@@ -566,19 +559,42 @@ def main():
         help="display version: {}".format(VERSION),
     )
 
-    # Parallelization strategy
+    # Parallelization strategy: ONE budget, divided across a flat queue of work units.
+    # See pylib/CpuBudget.py for the allocation rule and why the levels are flattened.
     parser.add_argument(
         "--no_parallelize_contigs",
         action="store_true",
         default=False,
-        help="disable contig/strand-level parallelization (overrides --num_parallel_contigs); use --CPU for within-contig/component multithreading",
+        help="run one work unit at a time; the whole --cpu_budget then goes to native tool steps inside that single worker",
     )
 
     parser.add_argument(
-        "--num_parallel_contigs",
+        "--cpu_budget",
         type=int,
-        default=4,
-        help="maximum number of contig/strand workers to launch concurrently (default: 4)",
+        default=None,
+        help=(
+            "TOTAL cores this invocation may use. Divided across the flat queue of "
+            "(contig, strand, chunk) work units: units run one per core, and whatever "
+            "the unit count cannot claim is lent to native tool steps (samtools, "
+            "minimap2) inside each worker. This is a hard cap, not a utilisation "
+            "target. Default: every core this process may actually run on, so a cpuset "
+            "is respected without restating it"
+        ),
+    )
+
+    parser.add_argument(
+        "--component_workers",
+        type=int,
+        default=None,
+        help=(
+            "CEILING on how many processes one work unit may fork to assemble its large "
+            "multipath-graph components concurrently. This is NOT a reservation: the grant "
+            "is whatever --cpu_budget has FREE when an eligible component appears, so it is "
+            "zero while the unit queue is full and the spare budget once the queue drains. "
+            "It is also capped by the unit's outstanding eligible-component count, because "
+            "forking runs different components concurrently and cannot subdivide one. "
+            "Default: up to whatever is free"
+        ),
     )
 
     parser.add_argument(
@@ -600,12 +616,6 @@ def main():
         action="store_true",
         default=False,
         help="do not delete per-(contig,strand) temp directories on success; by default, temporary trees under __<output_prefix>.contigtmp are removed unless --debug is set",
-    )
-    parser.add_argument(
-        "--no_shuffle_parallel_jobs",
-        action="store_true",
-        default=False,
-        help="preserve contig/strand job submission order (shuffling is enabled by default)",
     )
 
     ## debug params
@@ -1094,14 +1104,20 @@ def main():
     genome_fasta_filename = args.genome
     bam_filename = args.bam
     # ensure global vars used by helper functions are updated
-    global single_best_only, CPU, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
+    global single_best_only, CPU_BUDGET, COMPONENT_WORKERS, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
     single_best_only = args.single_best_only
-    CPU = args.num_threads_per_worker
-    if CPU < 1:
-        sys.exit("Error: --num_threads_per_worker must be at least 1")
-    NUM_PARALLEL_CONTIGS = args.num_parallel_contigs
-    if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS < 1:
-        sys.exit("Error: --num_parallel_contigs must be at least 1")
+    if args.cpu_budget is None:
+        CPU_BUDGET = CpuBudget.default_budget()
+        logger.info(
+            "--cpu_budget not set; using %d core(s) this process may run on", CPU_BUDGET
+        )
+    else:
+        CPU_BUDGET = args.cpu_budget
+        if CPU_BUDGET < 1:
+            sys.exit("Error: --cpu_budget must be at least 1")
+    COMPONENT_WORKERS = args.component_workers
+    if COMPONENT_WORKERS is not None and COMPONENT_WORKERS < 0:
+        sys.exit("Error: --component_workers must be 0 or more")
     QUANT_ONLY = args.quant_only
     TAG_BAM = args.tag_bam
     input_gtf = args.gtf
@@ -1150,43 +1166,24 @@ def main():
         not args.no_filter_internal_priming
     )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
-    # By default, parallelize contigs; allow explicit opt-out
+    # By default, parallelize work units; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
-    if not CONTIG_PARALLEL:
-        if NUM_PARALLEL_CONTIGS is not None and NUM_PARALLEL_CONTIGS != 1:
-            logger.info(
-                "--no_parallelize_contigs specified; forcing --num_parallel_contigs to 1"
-            )
-        NUM_PARALLEL_CONTIGS = 1
 
-    # Compute total threads available when performing single-shot pre-run tasks (e.g., BAM counting)
-    workers_for_singleton = NUM_PARALLEL_CONTIGS if CONTIG_PARALLEL else 1
-    if workers_for_singleton is None:
-        workers_for_singleton = 1
-    try:
-        workers_for_singleton = int(workers_for_singleton)
-    except Exception:
-        workers_for_singleton = 1
-    if workers_for_singleton < 1:
-        workers_for_singleton = 1
-    try:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = max(1, int(CPU)) * workers_for_singleton
-    except Exception:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = workers_for_singleton
-    if TOTAL_THREADS_FOR_SINGLETON_STAGE < 1:
-        TOTAL_THREADS_FOR_SINGLETON_STAGE = 1
+    # Single-shot PRE-RUN tasks (BAM read counting, indexing) are the serial prep phase:
+    # they are native tool invocations with nothing else competing, so the whole budget
+    # goes to them. One step, so allocate_prep hands over the lot.
+    prep = CpuBudget.allocate_prep(CPU_BUDGET, 1)
+    TOTAL_THREADS_FOR_SINGLETON_STAGE = prep.threads[0]
     logger.debug(
-        "Pre-run tasks will use up to %d threads (workers=%d, threads_per_worker=%s)",
+        "Pre-run serial tasks will use up to %d thread(s) of the %d-core budget",
         TOTAL_THREADS_FOR_SINGLETON_STAGE,
-        workers_for_singleton,
-        CPU,
+        CPU_BUDGET,
     )
     NO_RESUME_PARALLEL = args.no_resume_parallel
     CLEAN_PARALLEL_TMP = args.clean_parallel_tmp
     NO_CLEANUP = args.no_cleanup
     LRAA_Globals.config["no_cleanup"] = bool(NO_CLEANUP)
     MONITOR_RESOURCES = not args.no_monitor_resources
-    SHUFFLE_PARALLEL_JOBS = not args.no_shuffle_parallel_jobs
 
     if args.quant_only and input_gtf is None:
         sys.exit(
@@ -1207,7 +1204,13 @@ def main():
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
     )
-    LRAA_Globals.config["num_threads_per_worker"] = int(CPU)
+    LRAA_Globals.config["cpu_budget"] = int(CPU_BUDGET)
+    # Provisional until the flat queue is known; _run_jobs_schedule_and_merge overwrites
+    # both from the allocation and pushes them into every job's config snapshot. Seeded
+    # here so a code path reached before scheduling (e.g. the prep stage) still reads a
+    # value that fits the budget rather than a stale per-worker guess.
+    LRAA_Globals.config["tool_threads"] = int(TOTAL_THREADS_FOR_SINGLETON_STAGE)
+    LRAA_Globals.config["component_workers"] = 0
     quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
     if quant_read_assignment_mode == "rescue_unassigned" and not rescue_enabled:
@@ -1591,9 +1594,15 @@ def main():
     _register_splice_graph_cache_dir(splice_graph_cache_root)
 
     ##----------------------------------------------
-    ## Begin, target each contig separately
+    ## Build the FLAT queue of work units and hand it to one scheduler
 
-    # Build contig/strand jobs and use a unified parallel scheduler (pool size may be 1)
+    # Cost proxy first: the scheduler launches longest-first, and on a mixed reference
+    # (chr1 at 248 Mb beside chrM at 16 kb) construction order would leave the most
+    # expensive unit for the tail of the run.
+    contig_costs = _contig_cost_proxy(
+        bam_file_for_quant, genome_fasta_filename, genome_contigs_list
+    )
+
     jobs = []
     for contig_acc in genome_contigs_list:
         for contig_strand in ("+", "-"):
@@ -1602,11 +1611,27 @@ def main():
                 and restrict_to_contig_orient != contig_strand
             ):
                 continue
+            # One flat-queue unit per (contig, strand, chunk). A contig-strand yields
+            # exactly one unit today; pylib/CpuBudget.py records what emitting several
+            # chunk units per contig-strand still needs before it can be turned on.
+            unit = CpuBudget.WorkUnit(
+                contig_acc=contig_acc,
+                contig_strand=contig_strand,
+                chunk_index=0,
+                region=(
+                    (restrict_region_lend, restrict_region_rend)
+                    if restrict_region_lend is not None
+                    and restrict_region_rend is not None
+                    else None
+                ),
+                cost=contig_costs.get(contig_acc, 0.0),
+            )
             jobs.append(
                 dict(
                     # Stable per-job id, assigned in canonical construction
-                    # order and unaffected by the launch-order shuffle below.
+                    # order and unaffected by the longest-first launch order below.
                     unit_id=len(jobs),
+                    work_unit=unit,
                     contig_acc=contig_acc,
                     contig_strand=contig_strand,
                     genome_fasta_filename=genome_fasta_filename,
@@ -1641,15 +1666,14 @@ def main():
         quant_only=QUANT_ONLY,
         tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
         CONTIG_PARALLEL=CONTIG_PARALLEL,
-        NUM_PARALLEL_CONTIGS=NUM_PARALLEL_CONTIGS,
-        CPU=CPU,
+        CPU_BUDGET=CPU_BUDGET,
+        COMPONENT_WORKERS=COMPONENT_WORKERS,
         NO_RESUME_PARALLEL=NO_RESUME_PARALLEL,
         CLEAN_PARALLEL_TMP=CLEAN_PARALLEL_TMP,
         NO_CLEANUP=NO_CLEANUP,
         DEBUG=LRAA_Globals.DEBUG,
         INCLUDE_PRELIM_TRANSCRIPTS=INCLUDE_PRELIM_TRANSCRIPTS,
         VERBOSE=VERBOSE,
-        SHUFFLE_JOBS=SHUFFLE_PARALLEL_JOBS,
     )
 
     _cleanup_registered_splice_graph_caches(
@@ -2110,12 +2134,13 @@ def _normalize_bam_for_splice_graph(
 
 
 def _resolve_singleton_stage_threads():
+    """Native-tool threads for a single-shot prep step run before the queue exists."""
     threads = 1
     try:
         total_threads = (
             TOTAL_THREADS_FOR_SINGLETON_STAGE
             if TOTAL_THREADS_FOR_SINGLETON_STAGE
-            else CPU
+            else LRAA_Globals.config.get("tool_threads", 1)
         )
         threads = int(total_threads)
     except Exception:
@@ -2265,22 +2290,19 @@ def _parse_input_transcripts_for_cs(
     return txs
 
 
-def _ensure_contig_tmp(output_prefix, contig_acc, contig_strand):
-    """Ensure per-(contig,strand) tmp dir exists, set LRAA_TMP_DIR, and return (tmp_dir, tmp_prefix)."""
-    tmp_root = f"__{output_prefix}.contigtmp"
-    try:
-        os.makedirs(tmp_root, exist_ok=True)
-    except Exception:
-        if not os.path.isdir(tmp_root):
-            raise
-    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
-    os.makedirs(tmp_dir, exist_ok=True)
-    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
-    try:
-        os.environ["LRAA_TMP_DIR"] = tmp_dir
-    except Exception:
-        pass
-    return tmp_dir, tmp_prefix
+def _unit_tmp_paths(tmp_root, unit):
+    """Temp directory and ARTIFACT PREFIX for one work unit under a temp root.
+
+    The directory stays per-(contig, strand) so every unit of one contig-strand keeps
+    its artifacts together. The file STEM carries the unit's own token, which is what
+    stops two chunks of one contig-strand from overwriting each other's quant.expr,
+    quant.tracking, gtf, .ok checkpoint, error log and resource trace.
+
+    A whole-contig-strand unit produces exactly the historical `{contig}.{strand}` stem,
+    so resume from an older run still matches.
+    """
+    tmp_dir = os.path.join(tmp_root, unit.contig_acc, unit.contig_strand)
+    return tmp_dir, os.path.join(tmp_dir, unit.artifact_token)
 
 
 def _maybe_start_monitor(monitor_path, note):
@@ -2355,19 +2377,21 @@ def _run_jobs_schedule_and_merge(
     quant_only,
     tag_bam_path,
     CONTIG_PARALLEL,
-    NUM_PARALLEL_CONTIGS,
-    CPU,
+    CPU_BUDGET,
+    COMPONENT_WORKERS,
     NO_RESUME_PARALLEL,
     CLEAN_PARALLEL_TMP,
     NO_CLEANUP,
     DEBUG,
     INCLUDE_PRELIM_TRANSCRIPTS,
     VERBOSE=False,
-    SHUFFLE_JOBS=False,
 ):
-    """Unified execution pipeline: schedule contig/strand jobs, merge outputs, optional GTF/BED, resource summary, cleanup, and BAM tagging.
+    """Unified execution pipeline: schedule the flat work-unit queue, merge outputs,
+    optional GTF/BED, resource summary, cleanup, and BAM tagging.
 
-    Respects NUM_PARALLEL_CONTIGS for worker concurrency; each worker receives the full --num_threads_per_worker allotment.
+    Concurrency and per-worker native-tool threads are DERIVED from CPU_BUDGET and the
+    length of the queue by CpuBudget.allocate(); no level is sized independently, so no
+    two levels can multiply past the budget.
     """
 
     if not jobs:
@@ -2397,44 +2421,62 @@ def _run_jobs_schedule_and_merge(
     except Exception:
         pass
 
-    # Determine pool size and cores per worker
-    threads_per_worker = CPU if CPU and CPU > 0 else 1
+    # Divide the budget across the flat queue. Nothing here is a second knob: the queue
+    # length and the budget are the only inputs, and max_unit_workers exists only for
+    # callers that MUST serialise -- --no_parallelize_contigs, or --debug/--include_prelim_
+    # transcripts, whose debug artifacts clobber each other across concurrent workers.
+    max_unit_workers = None
+    if not CONTIG_PARALLEL:
+        max_unit_workers = 1
+    if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
+        max_unit_workers = 1
 
-    if CONTIG_PARALLEL:
-        if NUM_PARALLEL_CONTIGS is not None:
-            pool_target = max(1, NUM_PARALLEL_CONTIGS)
-        else:
-            pool_target = 1
-            if len(jobs) > 1:
-                logger.info(
-                    "--num_parallel_contigs not set; defaulting to sequential contig processing (set flag to enable parallel workers)."
-                )
-        pool_size = min(pool_target, len(jobs))
-        pool_size = max(1, pool_size)
-        if DEBUG or INCLUDE_PRELIM_TRANSCRIPTS:
-            pool_size = 1
-    else:
-        pool_size = 1
+    allocation = CpuBudget.allocate(
+        budget=CPU_BUDGET,
+        num_units=len(jobs),
+        max_unit_workers=max_unit_workers,
+        max_component_workers=COMPONENT_WORKERS,
+    )
+    pool_size = allocation.unit_workers
 
-    # Set per-job CPU and whether worker should redirect stderr to per-contig log
+    logger.info(CpuBudget.format_allocation(allocation, phase="main"))
+    shortfall = CpuBudget.budget_shortfall_note(allocation)
+    if shortfall:
+        logger.info(shortfall)
+    if allocation.component_workers:
+        logger.info(
+            "Component assembly may fork up to %d worker(s) per unit, granted from the "
+            "%d-core budget only when cores are actually FREE and only when a unit has "
+            "several eligible components outstanding; nothing is reserved for it",
+            allocation.component_workers,
+            allocation.budget,
+        )
+
+    # The shared free-core count. Unit workers hold a permit each; a component grant takes
+    # more, temporarily, and hands them back. This is what keeps the cap honest across the
+    # two levels of process parallelism.
+    core_lease = CpuBudget.CoreLease(allocation.budget)
+
+    # Set per-job allocation and whether worker should redirect stderr to per-unit log
     # We only redirect when running multiple workers concurrently; unless --verbose is set, in which case keep terminal output.
     redirect_stderr = True if (pool_size > 1 and not VERBOSE) else False
     for j in jobs:
-        j["CPU_inner"] = threads_per_worker
+        j["TOOL_THREADS"] = allocation.tool_threads
+        j["COMPONENT_WORKERS"] = allocation.component_workers
+        j["core_lease"] = core_lease
+        # config_overrides was snapshotted before the queue length was known, so the
+        # allocation has to be written into it here or the forked worker would read the
+        # provisional prep-stage values.
+        overrides = j.get("config_overrides")
+        if overrides is not None:
+            overrides["tool_threads"] = allocation.tool_threads
+            overrides["component_workers"] = allocation.component_workers
         j["REDIRECT_STDERR"] = redirect_stderr
         j["VERBOSE"] = VERBOSE
         j["NO_CLEANUP"] = bool(NO_CLEANUP)
 
-    logger.info(
-        f"Running {len(jobs)} contig/strand jobs with up to {pool_size} concurrent processes; threads per worker={threads_per_worker} (mode={'contig-parallel' if CONTIG_PARALLEL else 'inner-parallel'})"
-    )
-    if pool_size > 1:
-        try:
-            logger.info(
-                f"Estimated total cores in use (workers × threads per worker): {pool_size * threads_per_worker}"
-            )
-        except Exception:
-            pass
+    LRAA_Globals.config["tool_threads"] = allocation.tool_threads
+    LRAA_Globals.config["component_workers"] = allocation.component_workers
     # Explicitly report how logs will be routed for this run
     try:
         logger.info(
@@ -2452,10 +2494,7 @@ def _run_jobs_schedule_and_merge(
 
             # Prefer new location; fall back to legacy temp root for resume compatibility
             def _have_all(prefix_root):
-                d = os.path.join(
-                    prefix_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                p = os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                _d, p = _unit_tmp_paths(prefix_root, j["work_unit"])
                 ok_path = f"{p}.ok"
                 have_expr = os.path.exists(f"{p}.quant.expr")
                 have_track = os.path.exists(f"{p}.quant.tracking")
@@ -2470,23 +2509,31 @@ def _run_jobs_schedule_and_merge(
                 f"Resuming {resumed} completed contig/strand jobs from previous run"
             )
 
-    # Launch order is shuffled for load balancing; `jobs` itself is left in its
-    # canonical (contig, strand) construction order.  Shuffling `jobs` in place
-    # also reordered the merge loops below, which concatenate each worker's temp
-    # GTF / quant.expr / quant.tracking in list order -- so an unseeded global
-    # RNG decided which strand block came first in every output file, and two
-    # runs with identical content produced different bytes.
+    # Launch order is LONGEST-FIRST on the unit cost proxy; `jobs` itself is left in its
+    # canonical (contig, strand, chunk) construction order.  Reordering `jobs` in place
+    # would also reorder the merge loops below, which concatenate each worker's temp
+    # GTF / quant.expr / quant.tracking in list order.
+    #
+    # This replaces an unseeded random.shuffle that was there for load balancing. The
+    # shuffle made launch order -- and so which worker won a race on any shared artifact
+    # -- depend on a global RNG; longest-first is deterministic and is also the standard
+    # makespan heuristic, which is what the shuffle was reaching for. It only changes
+    # wall time when the queue is longer than the pool, so it pays off on whole-genome
+    # and small-contig references and is inert on a per-chromosome sharded run.
     launch_order = jobs
-    if SHUFFLE_JOBS and pool_size > 1:
-        launch_order = list(jobs)
-        random.shuffle(launch_order)
+    if pool_size > 1 and len(jobs) > 1:
+        launch_order = CpuBudget.order_longest_first(
+            [j["work_unit"] for j in jobs]
+        )
+        by_unit = {j["work_unit"]: j for j in jobs}
+        launch_order = [by_unit[u] for u in launch_order]
         logger.info(
-            "Shuffled contig/strand job launch order for load balancing ({} jobs); "
-            "output merge order remains canonical".format(len(jobs))
+            "Launching %d work unit(s) longest-first by cost proxy; output merge order remains canonical",
+            len(jobs),
         )
 
     # Launch jobs via rolling scheduler
-    logger.info("Using MultiProcessManager rolling scheduler for contig/strand jobs")
+    logger.info("Using MultiProcessManager rolling scheduler for the work-unit queue")
     mgr = mpm.MultiProcessManager(pool_size)
     try:
         for j in launch_order:
@@ -2547,10 +2594,7 @@ def _run_jobs_schedule_and_merge(
 
                 # Try new tmp location first, then legacy
                 def _prefix_for(root):
-                    d = os.path.join(
-                        root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                    )
-                    return os.path.join(d, f"{j['contig_acc']}.{j['contig_strand']}")
+                    return _unit_tmp_paths(root, j["work_unit"])[1]
 
                 tmp_prefix = _prefix_for(tmp_root_new)
                 if not os.path.exists(f"{tmp_prefix}.ok") and not os.path.exists(
@@ -2629,10 +2673,8 @@ def _run_jobs_schedule_and_merge(
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
         tmp_root_old = f"{j['output_prefix']}.contigtmp"
-        dnew = os.path.join(tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        dold = os.path.join(tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}")
-        pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
-        pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+        pnew = _unit_tmp_paths(tmp_root_new, j["work_unit"])[1]
+        pold = _unit_tmp_paths(tmp_root_old, j["work_unit"])[1]
         tmp_prefix = pnew if os.path.exists(f"{pnew}.quant.expr") else pold
         quant_expr_tmp_paths.append(f"{tmp_prefix}.quant.expr")
         _append_without_first_line(
@@ -2659,14 +2701,8 @@ def _run_jobs_schedule_and_merge(
             for j in jobs:
                 tmp_root_new = f"__{j['output_prefix']}.contigtmp"
                 tmp_root_old = f"{j['output_prefix']}.contigtmp"
-                dnew = os.path.join(
-                    tmp_root_new, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                dold = os.path.join(
-                    tmp_root_old, f"{j['contig_acc']}", f"{j['contig_strand']}"
-                )
-                pnew = os.path.join(dnew, f"{j['contig_acc']}.{j['contig_strand']}")
-                pold = os.path.join(dold, f"{j['contig_acc']}.{j['contig_strand']}")
+                pnew = _unit_tmp_paths(tmp_root_new, j["work_unit"])[1]
+                pold = _unit_tmp_paths(tmp_root_old, j["work_unit"])[1]
                 tmp_prefix = pnew if os.path.exists(f"{pnew}.gtf") else pold
                 gtf_tmp = f"{tmp_prefix}.gtf"
                 if os.path.exists(gtf_tmp):
@@ -2709,7 +2745,7 @@ def _run_jobs_schedule_and_merge(
     # Resource summary
     try:
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
-            _summarize_contig_resource_logs(output_prefix, jobs, parallel_mode=True)
+            _summarize_contig_resource_logs(output_prefix, jobs)
     except Exception:
         pass
 
@@ -2717,12 +2753,7 @@ def _run_jobs_schedule_and_merge(
     if CLEAN_PARALLEL_TMP:
         for j in jobs:
             tmp_root = f"__{j['output_prefix']}.contigtmp"
-            tmp_dir = os.path.join(
-                tmp_root, f"{j['contig_acc']}", f"{j['contig_strand']}"
-            )
-            tmp_prefix = os.path.join(
-                tmp_dir, f"{j['contig_acc']}.{j['contig_strand']}"
-            )
+            tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, j["work_unit"])
             for pth in (
                 f"{tmp_prefix}.quant.expr",
                 f"{tmp_prefix}.quant.tracking",
@@ -2769,6 +2800,22 @@ def _run_jobs_schedule_and_merge(
 
 def _contig_job_runner(job):
     # Module-scope function so it can be pickled by multiprocessing on macOS/Windows (spawn start method)
+    work_unit = job["work_unit"]
+    # This unit holds one permit for its own single-core assembly and quant work, so a
+    # component grant taken later cannot push the total past the budget. Taking it is
+    # non-blocking on purpose: if an outstanding, unpreemptable component grant has
+    # temporarily consumed the spare budget, the unit runs anyway rather than deadlocking
+    # behind children it does not own -- brief oversubscription is ACCEPTED and reported.
+    global CORE_LEASE
+    CORE_LEASE = job.get("core_lease")
+    unit_permit = CORE_LEASE.take(1) if CORE_LEASE is not None else 0
+    if CORE_LEASE is not None and unit_permit == 0:
+        logger.info(
+            "[%s] no free core permit at launch; an outstanding component grant has the "
+            "budget briefly oversubscribed (component work is not checkpointable, so it is "
+            "never preempted)",
+            work_unit.artifact_token,
+        )
     contig_acc = job["contig_acc"]
     contig_strand = job["contig_strand"]
     genome_fasta = job["genome_fasta_filename"]
@@ -2803,6 +2850,9 @@ def _contig_job_runner(job):
         LRAA_Globals.config.update(job["config_overrides"])
     if job.get("splice_graph_params"):
         Splice_graph.init_sg_params(job["splice_graph_params"])
+    # Unique per-unit name for anything a worker writes outside its tmp prefix. Two
+    # chunks of one contig-strand would otherwise share a name here too.
+    LRAA_Globals.config["unit_artifact_token"] = work_unit.artifact_token
 
     input_transcripts = None
     if job["input_gtf"]:
@@ -2819,15 +2869,14 @@ def _contig_job_runner(job):
         if input_transcripts is not None and len(input_transcripts) == 0:
             input_transcripts = None
 
-    # Use a structured temp dir for contig/strand results
+    # Use a structured temp dir for this work unit's results
     try:
         os.makedirs(tmp_root, exist_ok=True)
     except Exception:
         if not os.path.isdir(tmp_root):
             raise
-    tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
+    tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, work_unit)
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
 
     splice_graph_cache_dir = job.get("splice_graph_cache_dir")
 
@@ -2916,11 +2965,10 @@ def _contig_job_runner(job):
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
             tmp_root_m = f"__{job['output_prefix']}.contigtmp"
             os.makedirs(tmp_root_m, exist_ok=True)
-            tmp_dir_m = os.path.join(tmp_root_m, f"{contig_acc}", f"{contig_strand}")
+            tmp_dir_m, tmp_prefix_m = _unit_tmp_paths(tmp_root_m, work_unit)
             os.makedirs(tmp_dir_m, exist_ok=True)
-            tmp_prefix_m = os.path.join(tmp_dir_m, f"{contig_acc}.{contig_strand}")
             monitor_path = f"{tmp_prefix_m}.resources.tsv"
-            note = f"worker:{contig_acc}:{contig_strand}"
+            note = f"worker:{work_unit.artifact_token}"
             worker_monitor = ResourceMonitor(
                 monitor_path,
                 interval_sec=float(
@@ -3082,7 +3130,7 @@ def _contig_job_runner(job):
                     input_transcripts,
                     ofh_quant,
                     ofh_track,
-                    job["CPU_inner"],
+                    job["COMPONENT_WORKERS"],
                     job["run_EM"],
                     job["prereconstruct_info_dir"],
                     report_quants=True,
@@ -3105,7 +3153,7 @@ def _contig_job_runner(job):
                     ofh_gtf_local,
                     ofh_quant,
                     ofh_track,
-                    job["CPU_inner"],
+                    job["COMPONENT_WORKERS"],
                     job["run_EM"],
                     job["single_best_only"],
                     job["NO_FILTER_ISOFORMS"],
@@ -3130,16 +3178,11 @@ def _contig_job_runner(job):
         except Exception:
             pass
     except Exception:
-        # Write per-(contig,strand) error log to help users diagnose failures
+        # Write per-unit error log to help users diagnose failures
         try:
             import traceback  # local import to avoid polluting module scope
 
-            err_path = os.path.join(
-                tmp_root,
-                f"{contig_acc}",
-                f"{contig_strand}",
-                f"{contig_acc}.{contig_strand}.err.log",
-            )
+            err_path = "{}.err.log".format(_unit_tmp_paths(tmp_root, work_unit)[1])
             with open(err_path, "at") as efh:
                 efh.write(traceback.format_exc())
         except Exception:
@@ -3168,6 +3211,8 @@ def _contig_job_runner(job):
                 worker_monitor.stop()
         except Exception:
             pass
+        if CORE_LEASE is not None and unit_permit:
+            CORE_LEASE.give_back(unit_permit)
         # Flush and close error log last (only if used)
         if job.get("REDIRECT_STDERR", True):
             try:
@@ -3532,10 +3577,8 @@ def _run_oversimplify_aggregate(
     return
 
 
-def _summarize_contig_resource_logs(
-    output_prefix, jobs_or_contigs, parallel_mode=False
-):
-    """Write a consolidated summary TSV across per-(contig,strand) resource logs if monitoring enabled.
+def _summarize_contig_resource_logs(output_prefix, jobs):
+    """Write a consolidated summary TSV across per-work-unit resource logs if monitoring enabled.
     Writes: <output_prefix>.resources.summary.tsv
     """
     try:
@@ -3558,15 +3601,12 @@ def _summarize_contig_resource_logs(
                 )
                 + "\n"
             )
-            for item in jobs_or_contigs:
-                if parallel_mode:
-                    contig_acc = item["contig_acc"]
-                    contig_strand = item["contig_strand"]
-                else:
-                    contig_acc, contig_strand = item
+            for job in jobs:
+                work_unit = job["work_unit"]
+                contig_acc = work_unit.contig_acc
+                contig_strand = work_unit.contig_strand
                 tmp_root = f"__{output_prefix}.contigtmp"
-                tmp_dir = os.path.join(tmp_root, f"{contig_acc}", f"{contig_strand}")
-                tmp_prefix = os.path.join(tmp_dir, f"{contig_acc}.{contig_strand}")
+                tmp_dir, tmp_prefix = _unit_tmp_paths(tmp_root, work_unit)
                 log_path = f"{tmp_prefix}.resources.tsv"
                 if not os.path.exists(log_path):
                     continue
@@ -4144,7 +4184,7 @@ def run_quant_only(
     input_transcripts,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    CPU,
+    component_workers,
     run_EM,
     prereconstruct_info_dir,
     report_quants=True,
@@ -4235,7 +4275,7 @@ def run_quant_only(
             pad=1,
         )
 
-    lraa_obj = LRAA(sg, CPU)
+    lraa_obj = LRAA(sg, component_workers, core_lease=CORE_LEASE)
     logger.info("\n//SECTION QUANT: Assigning input transcript paths in graph")
     input_transcripts = lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
 
@@ -4263,7 +4303,11 @@ def run_quant_only(
         base_root = os.environ.get("LRAA_TMP_DIR", os.getcwd())
         base_dir = os.path.join(base_root, "__read_tracking")
         os.makedirs(base_dir, exist_ok=True)
-        token = f"{contig_acc}.{contig_strand}"
+        # The tmp dir is shared by every unit of one contig-strand, so the store name has
+        # to carry the unit token rather than just the contig and strand.
+        token = LRAA_Globals.config.get(
+            "unit_artifact_token", f"{contig_acc}.{contig_strand}"
+        )
         LG.READ_NAME_STORE = ReadNameStore(
             os.path.join(base_dir, f"read_names.{token}")
         )
@@ -4481,7 +4525,7 @@ def run_transcript_assembly(
     ofh_gtf,
     ofh_quant_output,
     ofh_quant_read_tracker,
-    CPU,
+    component_workers,
     run_EM,
     single_best_only,
     NO_FILTER_ISOFORMS,
@@ -4623,7 +4667,7 @@ def run_transcript_assembly(
                 splice_graph_cache_dir, cache_key, cache_signature, sg_all
             )
 
-    lraa_all_obj = LRAA(sg_all, CPU)
+    lraa_all_obj = LRAA(sg_all, component_workers, core_lease=CORE_LEASE)
 
     mapped_transcripts = lraa_all_obj.assign_transcripts_paths_in_graph(
         transcripts_incl_in_graph
@@ -5044,7 +5088,7 @@ def run_transcript_assembly(
         transcripts,
         ofh_quant_output,
         ofh_quant_read_tracker,
-        CPU,
+        component_workers,
         run_EM,
         prereconstruct_info_dir,
         report_quants=False,
@@ -5182,6 +5226,56 @@ def get_genome_contigs_listing(genome_fasta_filename):
     return contigs_list
 
 
+def _contig_cost_proxy(bam_filename, genome_fasta_filename, contig_accs):
+    """Cheap per-contig scheduling proxy: retained alignments, else contig span.
+
+    Longest-first ordering needs a cost for every unit, and both sources here are free.
+    pysam's index statistics come straight out of the .bai with no BAM pass and give
+    mapped alignments per contig, which is the direct proxy for how much work a
+    contig-strand unit does. Span from the .fai is the fallback when the index is absent
+    or unreadable: a worse proxy, since a short highly-expressed contig can outweigh a
+    long quiet one, but it still sorts chr1 ahead of chrM.
+
+    A contig's two strand units share its proxy. Splitting the count by strand would
+    cost a BAM pass, and ordering only needs one contig's units to sort together rather
+    than to be told apart.
+    """
+
+    wanted = set(contig_accs)
+    costs = dict()
+
+    if bam_filename:
+        try:
+            with pysam.AlignmentFile(bam_filename, "rb") as fh:
+                for stat in fh.get_index_statistics():
+                    if stat.contig in wanted:
+                        costs[stat.contig] = float(stat.mapped)
+        except Exception as e:
+            logger.debug(
+                "index statistics unavailable for %s (%s); ordering work units by contig span instead",
+                bam_filename,
+                e,
+            )
+
+    if costs:
+        return costs
+
+    try:
+        with open("{}.fai".format(genome_fasta_filename)) as fh:
+            for line in fh:
+                vals = line.split("\t")
+                if vals[0] in wanted:
+                    costs[vals[0]] = float(vals[1])
+    except Exception as e:
+        logger.debug(
+            "no .fai for %s (%s); work units will launch in construction order",
+            genome_fasta_filename,
+            e,
+        )
+
+    return costs
+
+
 def report_transcript_paths_in_graph(transcripts, filename):
 
     with open(filename, "at") as ofh:
@@ -5280,8 +5374,14 @@ def build_ME_transcripts(
             pad=1,
         )
 
-    # Incorporate reference transcripts if provided
-    lraa_ME_obj = LRAA(sg_ME, CPU)
+    # Incorporate reference transcripts if provided. The component-fork grant comes from
+    # config rather than a parameter, because these builders are reached from several
+    # depths and the grant is a property of the run's allocation, not of this call.
+    lraa_ME_obj = LRAA(
+        sg_ME,
+        LRAA_Globals.config.get("component_workers", 0),
+        core_lease=CORE_LEASE,
+    )
 
     if input_transcripts:
         lraa_ME_obj.assign_transcripts_paths_in_graph(
@@ -5370,7 +5470,11 @@ def build_SE_transcripts(
         )
 
     # Incorporate reference transcripts if provided
-    lraa_SE_obj = LRAA(sg_SE, CPU)
+    lraa_SE_obj = LRAA(
+        sg_SE,
+        LRAA_Globals.config.get("component_workers", 0),
+        core_lease=CORE_LEASE,
+    )
 
     if transcripts_incl_in_graph:
         lraa_SE_obj.assign_transcripts_paths_in_graph(transcripts_incl_in_graph)

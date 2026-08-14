@@ -154,7 +154,7 @@ def main():
         cmd = [sys.executable, args.lraa,
                "--genome", genome, "--bam", bam,
                "--output_prefix", prefix,
-               "--num_threads_per_worker", "1",
+               "--cpu_budget", "1",
                "--min_mapping_quality", "0",
                "--min_mapping_quality_for_final_quant", "0",
                "--HiFi",

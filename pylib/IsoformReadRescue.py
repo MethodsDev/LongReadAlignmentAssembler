@@ -274,9 +274,7 @@ def build_transcriptome_alignment_multipaths(
 def _run_minimap2_transcriptome_alignment(transcript_fa, reads_fa, rescue_sam, minimap2_exe):
     preset = _resolve_rescue_minimap2_preset()
     try:
-        minimap_threads = max(
-            1, int(LRAA_Globals.config.get("num_threads_per_worker", 1))
-        )
+        minimap_threads = max(1, int(LRAA_Globals.config.get("tool_threads", 1)))
     except Exception:
         minimap_threads = 1
     cmd = [
@@ -1097,7 +1095,7 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
 # -----------------------
 # _run_minimap2_transcriptome_alignment() runs minimap2 against the local
 # transcript FASTA with secondary alignments enabled. The rescue alignment uses
-# the per-worker thread count from LRAA_Globals.config["num_threads_per_worker"],
+# the NATIVE TOOL thread count from LRAA_Globals.config["tool_threads"],
 # retains up to 50 secondary alignments (-N 50), and uses the configured minimap2
 # filter fraction, defaulting to -f 0 for permissive rescue sensitivity.
 #

@@ -47,9 +47,11 @@ PRINCIPAL_SUFFIXES = (
     ".quant.expr",
     ".quant.tracking",
     # Pure per-job concatenation, so it is the output most sensitive to merge
-    # ordering -- it was the single file that --no_shuffle_parallel_jobs was
-    # shown to stabilise while content elsewhere still varied.  Omitting it
-    # would drop the most direct witness of the bug this test guards.
+    # ordering -- it was the single file shown to be stabilised by pinning the
+    # per-job launch order while content elsewhere still varied.  Omitting it
+    # would drop the most direct witness of the bug this test guards.  Launch
+    # order is now deterministic unconditionally (longest-first on a cost proxy,
+    # replacing an unseeded shuffle), so this file has no remaining knob.
     ".genome_tx_arb.summary.tsv",
 )
 
@@ -91,7 +93,7 @@ def run_once(args, replicate, workroot):
         "--genome", os.path.abspath(args.genome),
         "--bam", os.path.abspath(args.bam),
         "--output_prefix", args.output_prefix,
-        "--num_threads_per_worker", str(args.threads),
+        "--cpu_budget", str(args.cpu_budget),
     ]
     if args.gtf:
         cmd += ["--gtf", os.path.abspath(args.gtf)]
@@ -124,7 +126,8 @@ def main():
     ap.add_argument("--gtf")
     ap.add_argument("--region", help="e.g. chr20:36000000-37000000")
     ap.add_argument("--replicates", type=int, default=3)
-    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--cpu_budget", type=int, default=4,
+                    help="LRAA --cpu_budget for every replicate")
     ap.add_argument("--output-prefix", dest="output_prefix", default="det")
     ap.add_argument("--workdir", default="det_work")
     ap.add_argument("--keep", action="store_true")

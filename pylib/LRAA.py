@@ -26,6 +26,7 @@ import time
 from multiprocessing import Process
 import traceback
 from MultiProcessManager import MultiProcessManager, ShardStore
+import CpuBudget
 from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
@@ -107,7 +108,7 @@ class LRAA:
 
     max_contained_to_be_a_pasa_vertex = 10
 
-    def __init__(self, splice_graph, num_parallel_processes=1):
+    def __init__(self, splice_graph, component_workers=0, core_lease=None):
 
         self._splice_graph = splice_graph
 
@@ -118,7 +119,17 @@ class LRAA:
         self._contig_strand = None  # set under build_multipath_graph()
         self._restrict_splice_type = None  # set under build_multipath_graph()
 
-        self._num_parallel_processes = num_parallel_processes
+        # CEILING on how many processes this instance may fork to assemble a large
+        # multipath-graph component, and the shared lease it must draw them from. Nothing
+        # is reserved: the actual grant is whatever the lease finds FREE at the moment an
+        # eligible component appears, so it is zero while the unit queue is full and the
+        # spare budget once the queue has drained -- which is the same moment a large
+        # component is what bounds the node's latency.
+        #
+        # The ceiling used to be the native-tool thread count, so raising threads for BAM
+        # I/O silently switched component multiprocessing on. Those are separate now.
+        self._component_workers = component_workers
+        self._core_lease = core_lease
 
         # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
         # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
@@ -346,7 +357,34 @@ class LRAA:
 
         all_reconstructed_transcripts = list()
 
-        USE_MULTIPROCESSOR = self._num_parallel_processes > 1
+        # Component forking is DEMAND-DRIVEN. Eligibility by component size is a HINT, not
+        # a gate on its own: forking a modest component costs nothing when the alternative
+        # is idle cores, and it is refused outright when no core is free. So the manager
+        # and its result transport are built only once BOTH an eligible component exists
+        # and the lease actually hands over workers.
+        min_component_size_for_spawn = LRAA_Globals.config[
+            "min_mpgn_component_size_for_spawn"
+        ]
+        largest_component_size = max((len(c) for c in mpg_components), default=0)
+        eligible_components = sum(
+            1 for c in mpg_components if len(c) >= min_component_size_for_spawn
+        )
+        eligible_component_exists = eligible_components > 0
+
+        component_workers_granted = 0
+        release_component_workers = lambda: None
+        if eligible_component_exists:
+            component_workers_granted, release_component_workers = (
+                CpuBudget.component_worker_grant(
+                    self._core_lease,
+                    self._component_workers,
+                    eligible_components,
+                    log=lambda msg: logger.info(
+                        "[%s%s] -%s", self._contig_acc, self._contig_strand, msg
+                    ),
+                )
+            )
+        USE_MULTIPROCESSOR = component_workers_granted > 1
 
         global RECONSTRUCT_ROUND
         RECONSTRUCT_ROUND += 1
@@ -354,11 +392,18 @@ class LRAA:
         shard_store = None
         mpm = None
         if USE_MULTIPROCESSOR:
-            logger.info("[%s%s] -Running assembly jobs with multiprocessing", self._contig_acc, self._contig_strand)
-            # Workers publish each component's transcripts as their own file,
-            # renamed into place, instead of putting them on a shared queue.  The
-            # directory name records what determines its contents: which contig
-            # and strand, which reconstruction round, and which process opened it.
+            logger.info(
+                "[%s%s] -Component assembly granted %d worker(s) from free budget; largest component is %d mpgn nodes against a spawn hint of %d",
+                self._contig_acc,
+                self._contig_strand,
+                component_workers_granted,
+                largest_component_size,
+                min_component_size_for_spawn,
+            )
+            # Workers publish each component's transcripts as their own file, renamed
+            # into place, instead of putting them on a shared queue. The directory name
+            # records what determines its contents: which contig and strand, which
+            # splice-type and reconstruction round, and which process opened it.
             shard_store = ShardStore.create(
                 "{}.{}.{}.round{}.pid{}".format(
                     self._contig_acc,
@@ -374,13 +419,25 @@ class LRAA:
                 self._contig_strand,
                 shard_store.directory,
             )
-            mpm = MultiProcessManager(self._num_parallel_processes, shard_store)
-        else:
+            # The granted workers are the pool width AND the permits held from the core
+            # lease: every component worker is charged to the budget for its lifetime.
+            mpm = MultiProcessManager(component_workers_granted, shard_store)
+        elif eligible_component_exists:
             logger.info(
-                "[%s%s] -Running using single thread, so multiprocessing disabled here.",
+                "[%s%s] -An eligible component exists (largest %d mpgn nodes, hint %d) but no core is free to fork onto; assembling every component in-process",
                 self._contig_acc,
                 self._contig_strand,
-            )  # easier for debugging sometimes
+                largest_component_size,
+                min_component_size_for_spawn,
+            )
+        else:
+            logger.info(
+                "[%s%s] -No component reaches the spawn hint of %d (largest is %d); assembling every component in-process",
+                self._contig_acc,
+                self._contig_strand,
+                min_component_size_for_spawn,
+                largest_component_size,
+            )
 
         def get_mpgn_list_coord_span(mpgn_list):
 
@@ -413,6 +470,7 @@ class LRAA:
         # order-sensitive stage downstream of it, a function of worker scheduling.
         component_results = list()
         component_counter = 0
+        num_failures = 0
         try:
             for mpg_component in mpg_components:
 
@@ -443,8 +501,7 @@ class LRAA:
 
                 if (
                     USE_MULTIPROCESSOR
-                    and mpg_component_size
-                    >= LRAA_Globals.config["min_mpgn_component_size_for_spawn"]
+                    and mpg_component_size >= min_component_size_for_spawn
                 ):
                     p = Process(
                         target=self._reconstruct_isoforms_single_component,
@@ -508,31 +565,44 @@ class LRAA:
 
                 if USE_MULTIPROCESSOR:
                     component_results.extend(mpm.retrieve_unit_results(clear=True))
-        except KeyboardInterrupt:
-            # Ensure all spawned component workers are pruned before bubbling up
+
+            if USE_MULTIPROCESSOR and mpm is not None:
+                logger.info(
+                    "[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS",
+                    self._contig_acc,
+                    self._contig_strand,
+                )
+                # The drain sits INSIDE this handler deliberately.
+                # wait_for_remaining_processes is where the shard accounting is enforced,
+                # and it RAISES WorkUnitAccountingError when a unit exited 0 without
+                # publishing. Draining after the handler -- which is where it sat before
+                # the two changes met -- would let that raise skip the release and leak
+                # the grant for the rest of the run.
+                num_failures = mpm.wait_for_remaining_processes()
+                logger.info(
+                    "[%s%s] %s",
+                    self._contig_acc,
+                    self._contig_strand,
+                    mpm.summarize_status(),
+                )
+                component_results.extend(mpm.retrieve_unit_results(clear=True))
+                # Workers are joined, so the grant is spent whether or not any of them failed.
+                release_component_workers()
+        except BaseException:
+            # Ensure all spawned component workers are pruned before bubbling up, and the
+            # granted cores return to the lease. A permit leaked on abnormal termination
+            # silently shrinks the node's capacity for the rest of the run.
             if mpm is not None:
                 try:
-                    logger.error("[%s%s] KeyboardInterrupt during assembly: terminating workers and waiting for exit", self._contig_acc, self._contig_strand)
+                    logger.error("[%s%s] assembly aborted: terminating component workers and waiting for exit", self._contig_acc, self._contig_strand)
                     mpm.terminate_all_processes()
                     mpm.wait_for_remaining_processes()
                 except Exception:
                     pass
+            release_component_workers()
             raise
 
         if USE_MULTIPROCESSOR and mpm is not None:
-            logger.info(
-                "[%s%s] WAITING ON REMAINING MULTIPROCESSING JOBS",
-                self._contig_acc,
-                self._contig_strand,
-            )
-            num_failures = mpm.wait_for_remaining_processes()
-            logger.info(
-                "[%s%s] %s",
-                self._contig_acc,
-                self._contig_strand,
-                mpm.summarize_status(),
-            )
-            component_results.extend(mpm.retrieve_unit_results(clear=True))
             if num_failures:
                 # The shard directory is deliberately left in place: it sits with
                 # the failing worker's stderr log, and any .tmp still in it names
@@ -541,6 +611,11 @@ class LRAA:
                     "Error, {} component failures encountered".format(num_failures)
                 )
             shard_store.discard()
+
+        # The grant is temporary: these cores go back to the lease the moment component
+        # assembly is done with them, so a later unit -- or a later component in this one --
+        # can be granted them in turn.
+        release_component_workers()
 
         # component_counter is assigned in mpg_components order, which is itself
         # coordinate/id-stabilised, so this restores a scheduling-independent

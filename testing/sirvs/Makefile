@@ -5,14 +5,14 @@ test: test_ref_free_ID test_quant test_ref_guided_ID test_unsupported_ref_model
 
 test_ref_free_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs --config_update SIRVs.LRAA_config_update.json
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --HiFi --verbose --no_cleanup --config_update SIRVs.LRAA_config_update.json
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-free.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-free.gtf.refmap
 	diff gffcompare.LRAA.LRAA.ref-free.gtf.refmap.full.summary.tsv data/latest_summary.tsv
 
 test_quant:
 	make clean
-	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --quant_only --tag_bam --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --gtf data/SIRVs1-7.annot.gtf --HiFi --verbose --no_cleanup
 	./eval/validate_quant_expr.py LRAA.LRAA.quant-only.quant.expr data/latest_quant_info.tsv
 
 
@@ -73,7 +73,7 @@ test_quant:
 # accounts for all 551.
 test_ref_guided_ID:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup
 	gffcompare -r data/SIRVs1-7.annot.gtf LRAA.LRAA.ref-guided.gtf -o gffcompare
 	./eval/eval_sirvs.py data/SIRVs1-7.gene_trans_map gffcompare.LRAA.LRAA.ref-guided.gtf.refmap
 	diff gffcompare.LRAA.LRAA.ref-guided.gtf.refmap.full.summary.tsv data/latest_refguided_summary.tsv
@@ -98,7 +98,7 @@ test_ref_guided_ID:
 # would pass even when the model is wrongly reconstructed.
 test_unsupported_ref_model:
 	make clean
-	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.no_SIRV311.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --no_shuffle_parallel_jobs --include_prelim_transcripts
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.no_SIRV311.bam --norm 0 --gtf data/SIRVs1-7.annot.half.gtf --HiFi --verbose --no_cleanup --include_prelim_transcripts
 	@echo "checking that unsupported SIRV311 was never reconstructed"
 	! awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=4590 && $$5<=4780 {found=1} END{exit !found}' __PRE-Tx-Filtering.transcripts.gtf
 	@echo "checking that the neighboring supported SIRV3 locus still reconstructs"

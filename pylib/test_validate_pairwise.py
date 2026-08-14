@@ -51,7 +51,7 @@ def test_validate_pairwise_prunes_contained_when_collapse_enabled():
     # ensure collapse mode enabled
     LRAA_Globals.config["restrict_asm_to_collapse"] = True
 
-    lraa = LRAA(splice_graph=sg, num_parallel_processes=1)
+    lraa = LRAA(splice_graph=sg, component_workers=0)
 
     paths = [sp_long, sp_short]
     lraa._validate_pairwise_incompatibilities(paths)
