@@ -39,6 +39,11 @@ class Quantify:
         self._mp_to_transcripts = dict()
         self._unassigned_mp_count_pairs = list()
 
+        # Component identity, for consumers that re-derive a per-read isoform
+        # split.  Rebuilt per quantify() call rather than updated; see there.
+        self._transcript_id_to_component_id = dict()
+        self._component_id_to_gene_ids = dict()
+
         self._quant_mode = quant_mode
 
         return
@@ -92,6 +97,29 @@ class Quantify:
                 num_multigene_components,
                 len(gene_components),
             )
+
+        # Component identity, exposed because theta is normalized over a whole
+        # component and not over a gene.  A consumer that renormalizes per gene
+        # gives a read compatible with transcripts of two genes in one component
+        # a split summing to 2, which is arithmetically plausible and silent.
+        #
+        # Rebuilt rather than updated: quantify() may be called more than once on
+        # one object over a shrinking transcript set, and a stale entry would pair
+        # this run's theta with a previous run's component.  _mp_to_transcripts
+        # defends the same carryover at its own read site above.
+        self._transcript_id_to_component_id = dict()
+        self._component_id_to_gene_ids = dict()
+        for component_gene_ids in gene_components:
+            # Leftmost gene of the component, made canonical by the sort in
+            # _build_read_sharing_gene_components.  Components partition the
+            # genes, so this is unique; treat it as an opaque handle.
+            component_id = component_gene_ids[0]
+            self._component_id_to_gene_ids[component_id] = list(component_gene_ids)
+            for gene_id in component_gene_ids:
+                for transcript in gene_to_transcripts[gene_id]:
+                    self._transcript_id_to_component_id[
+                        transcript.get_transcript_id()
+                    ] = component_id
 
         transcript_to_fractional_read_assignment = dict()
 
@@ -1425,6 +1453,28 @@ class Quantify:
 
     def get_unassigned_mp_count_pairs(self):
         return list(self._unassigned_mp_count_pairs)
+
+    def get_transcript_id_to_component_id(self):
+        """transcript_id -> opaque id of the read-sharing component holding it.
+
+        The EM unit is a component of genes joined by shared reads, so theta is
+        normalized over a component and not over a gene.  A consumer computing a
+        per-read isoform split must renormalize over a component's transcripts;
+        renormalizing over a gene's gives a read spanning two genes of one
+        component a split summing to 2.
+
+        Every quantified transcript appears, singletons included.  Rebuilt by each
+        quantify() call, so it is empty before the first and never carries an entry
+        from a previous call.
+        """
+        return dict(self._transcript_id_to_component_id)
+
+    def get_component_id_to_gene_ids(self):
+        """component_id -> the gene_ids it holds, ordered leftmost gene first."""
+        return dict(
+            (component_id, list(gene_ids))
+            for component_id, gene_ids in self._component_id_to_gene_ids.items()
+        )
 
     def get_unassigned_read_names(self):
         read_names = set()
