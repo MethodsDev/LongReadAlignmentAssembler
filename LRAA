@@ -1884,6 +1884,13 @@ def _compute_splice_graph_cache_entry(
         "region": [restrict_region_lend, restrict_region_rend],
         "config_digest": _splice_graph_config_digest(),
         "sg_params": sg_params,
+        # quant_mode changes CONSTRUCTION, not just consumption: it gates pruning at
+        # pylib/Splice_graph.py:327-328 and :332-333.  Omitting it let the assembly build
+        # (quant_mode=False) and the final-quant build (quant_mode=True) collide on one key,
+        # so the quant stage was handed the discovery graph and every read mapped to a
+        # SPACER path.  guide_digest incidentally separated them for ref-guided runs once it
+        # existed; this makes the separation intentional rather than a side effect.
+        "quant_mode": bool(quant_mode),
         # Two digests, because two different things are decided.  The integrated set
         # determines graph STRUCTURE; the genuine reference subset determines which
         # A-rich PolyA candidates have their veto waived.  Identical combined structures

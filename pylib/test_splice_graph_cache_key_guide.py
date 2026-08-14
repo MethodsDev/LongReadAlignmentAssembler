@@ -37,7 +37,7 @@ def _guide(transcript_id, exons, strand="+"):
     return transcript
 
 
-def _key(transcripts, reference_transcripts=None):
+def _key(transcripts, reference_transcripts=None, quant_mode=False):
     cache_key, _signature = lraa._compute_splice_graph_cache_entry(
         "chr1",
         "+",
@@ -45,10 +45,25 @@ def _key(transcripts, reference_transcripts=None):
         1,
         100000,
         transcripts,
-        False,
+        quant_mode,
         reference_transcripts=reference_transcripts,
     )
     return cache_key
+
+
+def test_quant_mode_changes_the_key():
+    """The assembly build and the final-quant build must not share a cache entry.
+
+    quant_mode gates pruning during construction (Splice_graph.py:327-328, :332-333), so
+    the two stages build different graphs from the same inputs.  While it was absent from
+    the signature the keys collided and the quant stage loaded the discovery graph: every
+    read then mapped to a SPACER path, was recorded as having no usable genome path, and
+    was sent to transcriptome rescue for the wrong reason.  Guide digests happened to
+    separate the two stages for ref-guided runs, which is why this went unnoticed -- so
+    hold the invariant directly, with an identical transcript set on both sides.
+    """
+    guides = [_guide("t1", [[500, 1000], [1500, 2000]])]
+    assert _key(guides, quant_mode=False) != _key(guides, quant_mode=True)
 
 
 def test_changing_a_guide_three_prime_end_changes_the_key():

@@ -22,8 +22,8 @@ validate:
 		--expected_total_reads 141 \
 		--expected_rescue_requested 141 \
 		--expected_rescued 141 \
-		--expected_rescue_requested_failed_genome 141 \
-		--expected_rescue_requested_unassigned_quant 0
+		--expected_rescue_requested_failed_genome 0 \
+		--expected_rescue_requested_unassigned_quant 141
 
 clean:
 	rm -rf __$(OUT_PREFIX).* \
