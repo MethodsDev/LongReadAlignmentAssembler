@@ -32,8 +32,14 @@ Read ingestion is implemented in `pylib/Bam_alignment_extractor.py`. LRAA filter
   `min_mapping_quality_for_final_quant`).
 - Alignment percent identity derived from the `NM`/`nM` tag and the aligned-base count. Reads
   below `config['min_per_id']` are discarded.
-- Secondary, duplicate, and QC-failed alignments are excluded. Paired-end flags are respected
-  when present.
+- Primary, non-supplementary alignments only, and this is not configurable. Secondary and
+  supplementary records are dropped both where the BAM is split by alignment orientation
+  (`util/separate_bam_by_strand.py:62-66`) and again during ingestion
+  (`pylib/Bam_alignment_extractor.py:139-145`), as are duplicate, QC-failed, and unmapped
+  records. Paired-end flags are respected when present.
+- Alignments carrying any intron longer than `config['max_intron_length']` are discarded at the
+  strand split (`util/separate_bam_by_strand.py:74-75`) and again during ingestion
+  (`pylib/Bam_alignment_extractor.py:147-154`); see the configuration section below.
 
 In quantification-only mode, LRAA also supports an optional transcriptome rescue pass
 (`--rescue_unassigned_reads_via_transcriptome_alignment`). This pass retries reads that fail
@@ -173,6 +179,18 @@ many values directly, and additional overrides can be provided via `--config_upd
 Notable keys include:
 
 - Read filtering: `min_mapping_quality`, `min_mapping_quality_for_final_quant`, `min_per_id`.
+- Intron length: `max_intron_length` (default 200,000). Any alignment containing an intron
+  (CIGAR `N` operation) longer than this is discarded whole, both at the strand split that opens
+  depth normalization (`util/separate_bam_by_strand.py:74-75`) and at read ingestion
+  (`pylib/Bam_alignment_extractor.py:147-154`); `0` or a negative value disables the filter.
+  Both call sites share one implementation, `Util_funcs.has_disqualifying_long_intron`, so the
+  splice-graph evidence and the reads offered to assignment cannot disagree about which
+  alignments are modellable. Ingestion is on the path of every quantified read, so the discard
+  holds under `--no_norm` and `--normalize_max_cov_level 0`, which skip the strand split
+  entirely (`LRAA:1385-1440`). This differs in kind from the earlier use of the same threshold,
+  which pruned only an overlong intron at an alignment terminus
+  (`pylib/Pretty_alignment.py:330,341`) and dropped the overlong intron edge from the graph
+  (`pylib/Splice_graph.py:1515`) while the alignment itself still spanned the distance.
 - Graph scale: `max_path_nodes_per_component`, thresholds controlling junction/exon evidence.
 - Assignment/EM: `fraction_read_align_overlap`, `weight_reads_by_3prime_agreement`, `EM_alpha`.
 - Monoexonic isoform confidence: `min_monoexonic_TPM`, plus
@@ -188,10 +206,14 @@ Notable keys include:
   `rescue_unassigned_min_aligned_read_frac`, `rescue_unassigned_min_per_id`.
 - Parallelism: `CPU`, `min_mpgn_component_size_for_spawn`.
 - Coverage normalization: `normalize_max_cov_level` sets the read depth that splice-graph
-  evidence is thinned toward, per strand; `0` disables it. Coverage below the target is
-  retained in full, and retained reads carry the reciprocal of their acceptance probability in
-  the `XW` tag so support stays on the scale of the original BAM. Quantification always reads
-  the unnormalized BAM. See `docs/coverage_normalization.md`.
+  evidence is thinned toward, per alignment orientation — the BAM is split on `read.is_forward`
+  (`util/separate_bam_by_strand.py:239`), not on an inferred transcribed strand; `0` disables it.
+  Coverage below the target is retained in full, and retained reads carry the reciprocal of their
+  acceptance probability in the `XW` tag so support stays on the scale of the original BAM. The
+  level is a target rather than a ceiling: reads carrying a junction supported by fewer reads than
+  the level are kept unconditionally and acceptance is a per-read random draw, so realised depth
+  can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). Quantification always
+  reads the unnormalized BAM. See `docs/coverage_normalization.md`.
 - Debug: `--debug` enables extensive intermediate artifacts.
 
 Splice-graph parameters are set via `Splice_graph.init_sg_params(...)` inside `LRAA` to keep
@@ -213,8 +235,9 @@ are candidates for soft-clip realignment.
   `RPM_total_reads`) and `LRAA.quant.tracking` (read-to-transcript compatibility/assignment
   details). The `TPM` column is normalized over final reported transcripts; `RPM_total_reads`
   scales against `num_total_reads`, the number of genome-mapped reads in the input BAM
-  (unmapped, secondary, and supplementary records excluded), counted before alignment-policy
-  preprocessing so it does not depend on `--secondary_alignment_mode`.
+  (unmapped, secondary, and supplementary records excluded; `LRAA:5137-5163`), counted from the
+  input BAM itself so it does not move when a later filter drops an alignment from splice-graph
+  evidence.
 - Debug (optional): `__*` files including component descriptions and intermediate GTF/BEDs of
   MultiPath graphs and trellis selections.
 
