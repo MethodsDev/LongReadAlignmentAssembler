@@ -256,6 +256,32 @@ def test_a_direct_estimator_call_invalidates_a_published_map():
         quantify.get_component_id_to_gene_ids()
 
 
+def test_a_direct_read_assignment_call_invalidates_a_published_map():
+    """The third mutating entry point: it rewrites what components derive FROM.
+
+    _assign_reads_to_transcripts writes _mp_to_transcripts, which is the input
+    _build_read_sharing_gene_components unions over.  A map built before that call
+    no longer describes the object's assignment state, so it must stop answering.
+
+    Every caller today reaches this on a fresh object, so nothing depends on the
+    guard yet.  It is held anyway: "no caller reaches it with a valid map" is a
+    claim about callers, and the equivalent claim has already been wrong twice.
+    """
+
+    quantify = Quantify(False, 1)
+    splice_graph, transcripts, mp_counter = _build(*_SHARED_READ)
+    quantify.quantify(splice_graph, transcripts, mp_counter)
+    assert set(quantify.get_transcript_id_to_component_id()) == {"t1", "t2"}
+
+    _, _, other_counter = _build(*_UNSHARED_READ)
+    quantify._assign_reads_to_transcripts(splice_graph, other_counter)
+
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_transcript_id_to_component_id()
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_component_id_to_gene_ids()
+
+
 def test_the_accessors_hand_back_copies():
     quantify = Quantify(False, 1)
     quantify.quantify(*_build(*_SHARED_READ))

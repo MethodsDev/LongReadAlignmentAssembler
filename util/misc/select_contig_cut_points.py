@@ -675,18 +675,19 @@ def select_cut_points(
                 dropped_read_names.setdefault(aln.query_name, []).append(cut.position)
                 if severed_sink is None:
                     continue
-                # One record per ALIGNMENT, not per cut it crosses and not per name.
-                # A read severed by two cuts is still one alignment, so a duplicate
-                # would be double-counted downstream; but two retained records can
-                # legitimately share a query name, and keying on the name alone
-                # would silently discard the second.
-                identity = (
-                    aln.reference_id,
-                    aln.reference_start,
-                    aln.flag,
-                    aln.cigarstring,
-                    aln.query_name,
-                )
+                # One record per ALIGNMENT: a read severed by two cuts is fetched
+                # once per cut and would otherwise be written twice.
+                #
+                # Keyed on the whole serialized record, not a tuple of coordinate
+                # fields.  Two retained records can share a query name AND a
+                # position AND a CIGAR while being different reads -- single-cell
+                # input composes read identity from cell_barcode_tag and
+                # read_umi_tag, so records differing only in CB or UB are different
+                # reads from different cells.  A coordinate key would silently drop
+                # one of them, which relocates a UMI rather than perturbing a count.
+                # to_string() covers tags, mate fields and sequence, so the only
+                # thing it collapses is the same record seen twice.
+                identity = aln.to_string()
                 if identity not in seen_alignments:
                     seen_alignments.add(identity)
                     severed_sink.append(aln)

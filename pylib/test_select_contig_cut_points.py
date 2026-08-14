@@ -887,3 +887,49 @@ def test_no_sink_means_no_collection(tmp_path):
 
     selection = _select(fixture, segment_span=3000, wiggle=0, minimum_span=1000)
     assert selection.dropped_read_names, "expected a severed read to be named"
+
+
+def test_two_cells_sharing_coordinates_and_a_query_name_both_survive(tmp_path):
+    """Single-cell input composes read identity from CB and UB, not query_name.
+
+    Two records can share position, CIGAR and query name while being different
+    reads from different cells.  A dedupe keyed on coordinate fields collapses
+    them, which relocates a UMI rather than perturbing a count -- so the key has
+    to cover the tags.
+    """
+
+    bam_path = tmp_path / "cells.bam"
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chrT", "LN": 5000}]}
+    with pysam.AlignmentFile(str(bam_path), "wb", header=header) as out:
+        for barcode, umi in (("AAACCCAAA", "TTTTTTTTTT"), ("GGGTTTGGG", "CCCCCCCCCC")):
+            aln = pysam.AlignedSegment()
+            aln.query_name = "shared_name"
+            aln.flag = 0
+            aln.reference_id = 0
+            aln.reference_start = 2599
+            aln.mapping_quality = 60
+            aln.cigar = [(0, 1000)]
+            aln.query_sequence = "A" * 1000
+            aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+            aln.set_tag("NM", 0)
+            aln.set_tag("CB", barcode)
+            aln.set_tag("UB", umi)
+            out.write(aln)
+    pysam.index(str(bam_path))
+
+    sink = []
+    selector.select_cut_points(
+        bam_filename=str(bam_path),
+        chrom="chrT",
+        contig_length=5000,
+        strand="+",
+        segment_span=3000,
+        wiggle=0,
+        depth_window=100,
+        margin=0,
+        minimum_span=1000,
+        severed_sink=sink,
+    )
+
+    assert len(sink) == 2, "records differing only in CB/UB are different reads"
+    assert {aln.get_tag("CB") for aln in sink} == {"AAACCCAAA", "GGGTTTGGG"}

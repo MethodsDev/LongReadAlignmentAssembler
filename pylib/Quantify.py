@@ -260,6 +260,24 @@ class Quantify:
         mp_counter,
         fraction_read_align_overlap=None,
     ):
+        # FIRST statement, above the argument handling below.  This method writes
+        # _mp_to_transcripts (:611), which is the input
+        # _build_read_sharing_gene_components unions over -- so it mutates what
+        # component identity is DERIVED FROM, and a map built before it no longer
+        # describes the object's assignment state.
+        #
+        # Every caller today reaches it on a fresh object (pylib/LRAA.py:279,
+        # LRAA:4596, both rescue probes) or from inside quantify() itself, so
+        # nothing is broken now.  It is guarded anyway: "no caller reaches it with a
+        # valid map" is a claim about callers, and it has already been wrong twice
+        # on this pattern.  Publication happening in one place is not mutation
+        # happening in one place.
+        #
+        # Guarding rather than passing the union input as an argument, which was the
+        # alternative offered: that would make the derivation explicit without
+        # removing the staleness, since the map is stored on self either way.
+        self._component_identity_valid = False
+
         if fraction_read_align_overlap is None:
             fraction_read_align_overlap = LRAA_Globals.config[
                 "fraction_read_align_overlap"
