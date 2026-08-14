@@ -57,6 +57,12 @@ class Quantify:
 
     def quantify(self, splice_graph, transcripts, mp_counter):
 
+        # FIRST executable statement, above even argument validation.  The asserts
+        # below index transcripts[0], so quantify(sg, [], mp) raises before running
+        # anything -- and an invalidation placed after them would leave the previous
+        # call's components readable and marked valid.  Nothing may precede this.
+        self._component_identity_valid = False
+
         assert type(transcripts) == list
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
@@ -88,10 +94,6 @@ class Quantify:
         # earlier answers empty: empty is a visible failure, stale is not.
         self._transcript_id_to_component_id = dict()
         self._component_id_to_gene_ids = dict()
-        # Invalidated BEFORE any work that can fail, never after.  A raise between
-        # here and the successful exit below must leave the accessors refusing, not
-        # answering with the previous call's components.
-        self._component_identity_valid = False
 
         contig_acc = splice_graph.get_contig_acc()
         contig_strand = splice_graph.get_contig_strand()

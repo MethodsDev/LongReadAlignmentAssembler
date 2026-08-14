@@ -204,6 +204,30 @@ def test_the_accessors_refuse_before_the_first_call():
         quantify.get_component_id_to_gene_ids()
 
 
+def test_a_call_rejected_by_argument_validation_still_invalidates():
+    """The narrowest window: a raise ABOVE the body, in the asserts themselves.
+
+    quantify() indexes transcripts[0], so an empty list raises before any work
+    runs at all.  An invalidation placed after argument validation -- the obvious
+    place, since nothing has happened yet -- leaves the previous call's components
+    readable and marked valid, which is the same stale answer as any other failure
+    path and the easiest one to overlook.
+    """
+
+    quantify = Quantify(False, 1)
+    splice_graph, transcripts, mp_counter = _build(*_SHARED_READ)
+    quantify.quantify(splice_graph, transcripts, mp_counter)
+    assert set(quantify.get_transcript_id_to_component_id()) == {"t1", "t2"}
+
+    with pytest.raises((AssertionError, IndexError)):
+        quantify.quantify(splice_graph, [], mp_counter)
+
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_transcript_id_to_component_id()
+    with pytest.raises(RuntimeError, match="quantify\\(\\) has not completed"):
+        quantify.get_component_id_to_gene_ids()
+
+
 def test_the_accessors_hand_back_copies():
     quantify = Quantify(False, 1)
     quantify.quantify(*_build(*_SHARED_READ))
