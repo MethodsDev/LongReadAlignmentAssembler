@@ -577,7 +577,9 @@ class LRAA:
                 # and it RAISES WorkUnitAccountingError when a unit exited 0 without
                 # publishing. Draining after the handler -- which is where it sat before
                 # the two changes met -- would let that raise skip the release and leak
-                # the grant for the rest of the run.
+                # the grant for the rest of the run. Pinned by
+                # test_a_core_lease_permit_is_released_when_the_shard_accounting_raises,
+                # which reports 2 free permits of 4 if this call moves back out.
                 num_failures = mpm.wait_for_remaining_processes()
                 logger.info(
                     "[%s%s] %s",
