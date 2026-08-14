@@ -128,7 +128,6 @@ workflow LRAA_singlecell_wf {
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
-    Boolean allow_secondary_alignments = true
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
@@ -202,7 +201,6 @@ workflow LRAA_singlecell_wf {
         region = region,
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
-        allow_secondary_alignments = allow_secondary_alignments,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,

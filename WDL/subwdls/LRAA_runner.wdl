@@ -23,12 +23,9 @@ task LRAA_runner_task {
         Float? min_per_id
         Boolean no_EM 
         Boolean no_norm 
-        Boolean run_final_cross_gene_EM = true
         # Export the depth-normalized splice-graph BAM as a task output. Bulk runs keep it;
         # single-cell callers turn it off so they do not pay to delocalize a BAM they never surface.
         Boolean retain_normalized_splice_graph_bam = true
-        Boolean allow_secondary_alignments = true
-        String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -67,12 +64,7 @@ task LRAA_runner_task {
 
     String no_norm_flag = if (no_norm) then "--no_norm" else ""
     String no_EM_flag = if (no_EM) then "--no_EM" else ""
-    String no_cross_gene_EM_flag = if (run_final_cross_gene_EM) then "" else "--no_cross_gene_EM"
-    # LRAA skips the cross-gene EM pass -- and therefore writes no pre-cross-gene-EM
-    # outputs -- when secondary alignments are disabled or EM is off, independently of
-    # --no_cross_gene_EM (see _maybe_run_cross_gene_em_for_secondary_alignments in LRAA).
-    # The existence check below must gate on all three or it fails a successful run.
-    Boolean expect_pre_cross_gene_EM = run_final_cross_gene_EM && allow_secondary_alignments && !no_EM
+
 
     String output_prefix_use = if defined(shardno) then "${sample_id}.shardno-${shardno}" else sample_id
     
@@ -192,10 +184,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_per_id) then "--min_per_id " + min_per_id else ""} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
-                                 ~{no_cross_gene_EM_flag} \
                                  --num_threads_per_worker ~{numThreadsPerWorker} \
-                                 ~{true='' false='--no_allow_secondary_alignments' allow_secondary_alignments} \
-                                 --secondary_alignment_mode ~{secondary_alignment_mode} \
                                  ~{true='' false='--no_rescue_unassigned_reads_via_transcriptome_alignment' rescue_unassigned_reads_via_transcriptome_alignment} \
                                  ~{"--min_mapping_quality " + min_mapping_quality} \
                                  ~{"--min_mapping_quality_for_final_quant " + min_mapping_quality_for_final_quant} \
@@ -231,17 +220,6 @@ task LRAA_runner_task {
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
         fi
 
-        pre_cross_gene_em_tracking_src="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking"
-        pre_cross_gene_em_tracking_gz_src="${pre_cross_gene_em_tracking_src}.gz"
-        pre_cross_gene_em_tracking_out="~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
-        if [[ "~{expect_pre_cross_gene_EM}" == "true" ]]; then
-            if [[ -f "$pre_cross_gene_em_tracking_src" ]]; then
-                gzip -c "$pre_cross_gene_em_tracking_src" > "$pre_cross_gene_em_tracking_out"
-            elif [[ ! -f "$pre_cross_gene_em_tracking_gz_src" ]]; then
-                echo "Expected pre-cross-gene-EM tracking file not found: $pre_cross_gene_em_tracking_src or $pre_cross_gene_em_tracking_gz_src" >&2
-                exit 1
-            fi
-        fi
     
         # only create GTF file when not in quant-only mode
         if [[ "~{quant_only}" != "true" ]]; then
@@ -252,23 +230,6 @@ task LRAA_runner_task {
             fi
         fi
 
-        quant_secondary_bam_out="~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam"
-        quant_secondary_summary_out="~{output_prefix_use}.~{output_suffix}.secondary_rescue.summary.tsv"
-        shopt -s nullglob
-        quant_secondary_bams=(__*.bam_preproc_cache/*.quant.secondary_rescue.bam)
-        quant_secondary_summaries=(__*.bam_preproc_cache/*.quant.secondary_rescue.summary.tsv)
-        shopt -u nullglob
-        if (( ${#quant_secondary_bams[@]} > 0 )); then
-            cp "${quant_secondary_bams[0]}" "$quant_secondary_bam_out"
-            if [[ -f "${quant_secondary_bams[0]}.bai" ]]; then
-                cp "${quant_secondary_bams[0]}.bai" "${quant_secondary_bam_out}.bai"
-            else
-                samtools index -@ ~{numThreadsPerWorker} "$quant_secondary_bam_out"
-            fi
-        fi
-        if (( ${#quant_secondary_summaries[@]} > 0 )); then
-            cp "${quant_secondary_summaries[0]}" "$quant_secondary_summary_out"
-        fi
 
         # The depth-normalized BAM that the splice graph -- and therefore isoform
         # identification -- is built from. LRAA leaves it in its own cache dir, which is not
@@ -298,11 +259,6 @@ task LRAA_runner_task {
         File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
-        File? LRAA_pre_cross_gene_EM_quant_expr = "~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.expr"
-        File? LRAA_pre_cross_gene_EM_quant_tracking = "~{output_prefix_use}.~{output_suffix}.pre-cross-gene-EM.quant.tracking.gz"
-        File? LRAA_secondary_rescue_bam = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam"
-        File? LRAA_secondary_rescue_bai = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.bam.bai"
-        File? LRAA_secondary_rescue_summary = "~{output_prefix_use}.~{output_suffix}.secondary_rescue.summary.tsv"
         File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
         File? LRAA_normalized_splice_graph_bam = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam"
         File? LRAA_normalized_splice_graph_bai = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam.bai"
@@ -342,10 +298,7 @@ workflow LRAA_runner {
         Float? min_per_id
         Boolean no_EM
         Boolean no_norm
-        Boolean run_final_cross_gene_EM = true
         Boolean retain_normalized_splice_graph_bam = true
-        Boolean allow_secondary_alignments = true
-        String secondary_alignment_mode = "heuristic"
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -388,10 +341,7 @@ workflow LRAA_runner {
             min_per_id=min_per_id,
             no_EM=no_EM,
             no_norm=no_norm,
-            run_final_cross_gene_EM=run_final_cross_gene_EM,
             retain_normalized_splice_graph_bam=retain_normalized_splice_graph_bam,
-            allow_secondary_alignments=allow_secondary_alignments,
-            secondary_alignment_mode=secondary_alignment_mode,
             rescue_unassigned_reads_via_transcriptome_alignment=rescue_unassigned_reads_via_transcriptome_alignment,
             min_mapping_quality=min_mapping_quality,
             min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,
@@ -417,11 +367,6 @@ workflow LRAA_runner {
         File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
         File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
         File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
-        File? LRAA_pre_cross_gene_EM_quant_expr = LRAA_runner_task.LRAA_pre_cross_gene_EM_quant_expr
-        File? LRAA_pre_cross_gene_EM_quant_tracking = LRAA_runner_task.LRAA_pre_cross_gene_EM_quant_tracking
-        File? LRAA_secondary_rescue_bam = LRAA_runner_task.LRAA_secondary_rescue_bam
-        File? LRAA_secondary_rescue_bai = LRAA_runner_task.LRAA_secondary_rescue_bai
-        File? LRAA_secondary_rescue_summary = LRAA_runner_task.LRAA_secondary_rescue_summary
         File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
         File? LRAA_normalized_splice_graph_bam = LRAA_runner_task.LRAA_normalized_splice_graph_bam
         File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
