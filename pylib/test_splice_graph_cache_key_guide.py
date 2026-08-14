@@ -15,6 +15,7 @@ import os
 
 import pytest
 
+import LRAA_Globals
 from Transcript import Transcript
 
 
@@ -213,3 +214,55 @@ def test_graph_derived_boundary_state_does_not_enter_the_key():
     with_path = _guide("t1", [[500, 1000]])
     with_path.set_simple_path(["POLYA:chr1:1000:+", "E:1"])
     assert _key([plain]) == _key([with_path])
+
+
+def test_min_mapping_quality_changes_the_key():
+    """The threshold decides which alignments exist, so it must decide the key.
+
+    Every other config entry in the signature tunes how a graph is built from the
+    alignments that arrive; this one decides which arrive at all
+    (Bam_alignment_extractor.py:58).  While it was absent, two runs differing only
+    in --min_mapping_quality computed one key, and the second was served a graph
+    built from alignments its own filter excludes.  Nothing downstream could
+    detect it: the graph is well formed, just built to the other run's threshold.
+    """
+    guides = [_guide("t1", [[500, 1000], [1500, 2000]])]
+    saved = LRAA_Globals.config["min_mapping_quality"]
+    try:
+        LRAA_Globals.config["min_mapping_quality"] = 0
+        permissive = _key(guides)
+        LRAA_Globals.config["min_mapping_quality"] = 30
+        strict = _key(guides)
+    finally:
+        LRAA_Globals.config["min_mapping_quality"] = saved
+
+    assert permissive != strict
+
+
+def test_the_effective_threshold_is_what_the_key_reads():
+    """run_quant_only swaps the final-quant threshold in before computing the key.
+
+    The digest reads config["min_mapping_quality"], so it is stage-correct only
+    because that swap (LRAA:4128) happens above the cache lookup.  Pinning the
+    read here means a refactor that moves the swap below the lookup -- handing a
+    stricter final quant the permissive discovery graph -- changes a test rather
+    than only a result.  min_mapping_quality_for_final_quant is deliberately not
+    keyed itself: it cannot change a discovery graph.
+    """
+    guides = [_guide("t1", [[500, 1000], [1500, 2000]])]
+    saved = dict(LRAA_Globals.config)
+    try:
+        LRAA_Globals.config["min_mapping_quality"] = 0
+        LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 30
+        before_swap = _key(guides, quant_mode=True)
+
+        # exactly what run_quant_only does before it looks in the cache
+        LRAA_Globals.config["min_mapping_quality"] = LRAA_Globals.config[
+            "min_mapping_quality_for_final_quant"
+        ]
+        after_swap = _key(guides, quant_mode=True)
+    finally:
+        LRAA_Globals.config.clear()
+        LRAA_Globals.config.update(saved)
+
+    assert before_swap != after_swap

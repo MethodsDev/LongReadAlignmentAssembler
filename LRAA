@@ -1663,6 +1663,12 @@ def _safe_token(token):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", token)
 
 
+# Bumped to 5: min_mapping_quality is keyed, so entries written while it was absent
+# were built to an unrecorded ingestion threshold and cannot be trusted to match a
+# run that states one.  The changed config digest already misses them; the version
+# is what keeps that true if a config key is ever removed and the digest reverts to
+# a value some earlier build already wrote under.
+#
 # Bumped to 3: PolyA site identification now rejects internally primed candidates
 # (Splice_graph._incorporate_PolyA_objects).
 #
@@ -1674,9 +1680,26 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 4
+SPLICE_GRAPH_CACHE_VERSION = 5
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
+    # Ingestion rather than construction: this decides which alignments reach the
+    # graph at all (Bam_alignment_extractor.py:58), where every other entry below
+    # tunes how a graph is built from whatever arrives.  That category difference
+    # is why it was absent -- this list was assembled from Splice_graph's own
+    # parameters, and the extractor's were not considered.  Two runs differing
+    # only in --min_mapping_quality computed one key and the second was served the
+    # first's graph, built from alignments its own filter excludes.
+    #
+    # This is the EFFECTIVE threshold, not the discovery one: run_quant_only swaps
+    # min_mapping_quality_for_final_quant into this key at LRAA:4128, before the
+    # cache entry is computed, so the digest reads whichever value the stage
+    # actually filters on.  That ordering is load bearing -- moving the swap below
+    # the cache lookup hands a stricter final quant the permissive discovery graph.
+    # Keying the final-quant setting separately would be wrong for the same reason
+    # this entry was needed: it cannot change a discovery graph, and a signature
+    # that names a non-determining input is as defective as one missing a field.
+    "min_mapping_quality",
     "min_alt_splice_freq",
     "min_alt_unspliced_freq",
     "min_feature_frac_overlap",
@@ -1874,6 +1897,16 @@ def _compute_splice_graph_cache_entry(
     else:
         bam_value = os.path.realpath(str(bam_file_for_sg))
     signature = {
+        # NOT keyed, deliberately: restrict_splice_type.  It genuinely changes which
+        # alignments build the graph -- "ME" and "SE" select disjoint sets through
+        # Splice_graph.build_splice_graph_for_contig -> retrieve_pretty_alignments --
+        # but every call site that reaches this cache builds with it None (:4181 and
+        # :4581 are the only two), and the ME/SE rounds at :5233 and :5321 bypass the
+        # cache entirely.  Keying a value that is always None would change every key
+        # and separate nothing.  If caching is ever extended to those rounds this MUST
+        # become a signature field first: the two rounds share contig, strand, bam,
+        # region and quant_mode, so today only their differing guide subsets would
+        # keep them apart, and that is the same accident quant_mode relied on below.
         # The only element that identifies CODE rather than inputs or config. Without it
         # an unconditional change to graph construction leaves the key unchanged and a
         # stale cache entry is a valid hit. See SPLICE_GRAPH_CACHE_VERSION.
