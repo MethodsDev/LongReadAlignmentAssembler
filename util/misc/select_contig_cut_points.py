@@ -1,0 +1,1065 @@
+#!/usr/bin/env python3
+
+"""Choose the cut points that split a contig-strand into independently
+processable chunks.
+
+The pipeline this feeds is: split the BAM by orientation, choose cut points per
+(contig, orientation), extract rebased chunks, normalize and run downstream PER
+CHUNK in parallel, then merge and translate coordinates back. Normalization moves
+inside the chunk because it is ~61 s of serial work that otherwise blocks
+everything else, and per-chunk normalization parallelizes it.
+
+Sizing is by SPAN, not by alignment or gene count
+-------------------------------------------------
+Targets sit at multiples of ``approx_MB_per_cut`` (default 10 Mb) across the
+contig, with no cap on chunks per contig: chr20 at 64.4 Mb gets 6, chr1 at 248.9
+Mb gets 25. Span-based sizing makes a chunk's coordinates a function of the contig
+length alone, so they can be computed without reading the BAM and are stable
+across runs and across samples.
+
+Around each target the position is searched over a window of total width
+``approx_MB_per_cut_wiggle_window`` (default 1 Mb) CENTRED on the target, i.e.
+target +/- 0.5 Mb. The window is never widened to find a better position.
+
+Three conditions on a position, in order of authority
+-----------------------------------------------------
+1. GRID ALIGNMENT, mechanical. ``(b - grid_origin) % depth_window == 0`` for a
+   1-based cut ``b``, where the left chunk is ``[.., b]`` and the right chunk
+   begins at ``b + 1``. This is what lets per-chunk normalization reproduce
+   whole-contig normalization: if a depth window straddled a boundary it would
+   draw aligned bases from two chunks, so its median, the acceptance probability
+   derived from it, and the reads kept near that threshold would all differ.
+   ``b`` is the LAST base of a window and ``b + 1`` the first base of the next --
+   requiring ``b`` to START a window would instead put a window across every cut.
+   The pipeline pins ``grid_origin`` to absolute 0, which reduces the condition to
+   ``b % depth_window == 0``; the parameter exists so the frame is explicit and
+   the relative form is what gets tested.
+
+2. THE ANNOTATION, a hard constraint. When a GTF is supplied a cut may never fall
+   inside an annotated locus, and a target with no compliant position in its
+   window is REPORTED, never silently skipped. Unlike a read, a locus cannot be
+   dropped and accounted for: ``genes_contained`` emits a gene whole or not at
+   all, so a locus straddling a boundary is contained by neither neighbour and
+   both omit it. Enforced via ``find_islands``/``cut_zones`` from the extractor,
+   the same primitives emission itself checks, so a position this module chooses
+   cannot be one the extractor then refuses.
+
+3. SPANNING ALIGNMENTS, a soft objective. Among compliant positions, minimise the
+   number of retained primary alignments the cut severs, since each one is a read
+   that gets dropped. Ties go to the position nearest the target, then to the
+   lower coordinate, so the result is deterministic. The window is not widened to
+   reach a zero-crossing position: staying inside it keeps chunk spans predictable,
+   and the price is counted rather than hidden.
+
+Selection is JOINT, not per-target
+----------------------------------
+Positions must be strictly increasing and no realised chunk may fall below
+``minimum_span``, which defaults to half the nominal segment length (floored to a
+``depth_window`` multiple, never below one window). Reasoning: with the shipped
+defaults adjacent positions are already at least ``segment - wiggle`` = 9 Mb
+apart, so the constraint never binds and costs nothing; it becomes active only
+when the wiggle window is widened until windows overlap, which is exactly the
+regime where two targets could otherwise collapse into a sliver. Half the nominal
+span is the natural statement of "no chunk may be less than half the size it was
+asked to be", and it is always satisfiable in isolation because placing every
+position at its target satisfies it.
+
+The same floor applies to the tail: a trailing target whose residual would be
+below ``minimum_span`` is merged into its predecessor rather than left as a
+sliver, and the merge is reported. On chr20 that is what turns 6 targets into 5
+cuts and 6 chunks, at the cost of a final chunk of 14.4 Mb.
+
+A dynamic program does the joint choice, minimising in lexicographic order:
+targets left unplaced, then total spanning alignments, then total distance from
+target, then total coordinate. Ordering "unplaced" first means the selector never
+trades a cut away to save a few reads. When windows are disjoint and the span
+floor does not bind, the program reduces exactly to the per-target argmin over
+``(spanning, |offset|, position)`` described above.
+
+Accounting
+----------
+Every count carries its denominator and nothing is dropped silently. Per cut:
+target, chosen position, offset from target, spanning alignments dropped, whether
+the annotation forced a compromise, and how many grid positions the annotation
+removed from the window. Per contig-strand: realised chunk spans, the total
+dropped against the total retained primary alignments, and every unplaced target
+with the reason. The dropped read NAMES are written out, because the comparison
+methodology builds a pruned baseline BAM from exactly that set and a count alone
+would not let anyone reproduce it.
+
+Measured on chr20, and what it means for wiring the pipeline
+------------------------------------------------------------
+At the shipped defaults on ``rescue_probe_chr20/mini`` (10 Mb span, 1 Mb wiggle,
+depth_window 100, margin 200), both orientations place 5 cuts into 6 chunks and
+drop ZERO alignments:
+
+  chr20+  9,985,800 (-14,200) | 20,361,000 (+361,000) | 30 Mb | 40 Mb | 50 Mb
+  chr20-  10 Mb | 20 Mb | 30 Mb | 40 Mb | 50 Mb, every one exactly on target
+
+The denominator is 319,698 retained primary alignments = 174,106 (+) + 145,592
+(-). That is NOT the 320,240 figure quoted elsewhere: 320,240 counts mapped
+primaries BEFORE the intron filter, and 542 of them (340 on +, 202 on -) carry an
+intron over ``max_intron_length`` and are discarded at the strand split. Anything
+downstream of that split must use 319,698, and a pruned comparison baseline built
+against 320,240 would be wrong.
+
+Consequence for the verification arms, stated because it is easy to over-read:
+with nothing dropped, pruning removes nothing, so ON THIS DATASET the pruned
+baseline is just the ordinary intron-filtered baseline and the "what did dropping
+cost" comparison is trivially zero. The chunked-versus-baseline arm can therefore
+run at zero tolerance with no pruning step, provided the whole-contig control is
+given ``--window_origin 0`` -- its unset default anchors on the first aligned base
+per contig and no chunk grid can match that. This is a property of this dataset at
+these settings, not of the design: at a 0.02 Mb wiggle the 20 Mb target lands at
+20,004,500 and drops 2 named alignments, and at wiggle 0 the 10 Mb and 20 Mb
+targets are annotation-blocked outright and come back as unplaced.
+
+That the search earns its keep is measurable rather than assumed. In the 20 Mb
+window 7,993 of 10,001 grid positions are annotation-blocked, the worst compliant
+position carries 1,861 spanning alignments, and the target itself is both blocked
+AND would have severed 46 reads -- yet 1,280 zero-cost compliant positions exist,
+the nearest at 20,361,000. Removing the GTF moves that cut to 20,166,800 and the
+10 Mb cut to exactly 10,000,000, which isolates the annotation as the sole cause
+of both offsets.
+
+The 14.44 Mb final chunk is the anti-sliver floor, not a malfunction: the 60 Mb
+target would have left a 4.44 Mb residual against a 5 Mb minimum span, so it is
+merged into its predecessor and reported as ``tail_merged``. The tail is the ONLY
+place that floor can act at the shipped defaults -- a 1 Mb wiggle leaves adjacent
+cuts at least ``span - wiggle`` = 9 Mb apart, comfortably above 5 Mb -- so between
+targets the constraint is provably slack and only an enlarged wiggle can engage it.
+"""
+
+import argparse
+import bisect
+import collections
+import importlib.util
+import json
+import os
+import sys
+from importlib.machinery import SourceFileLoader
+
+import pysam
+
+sys.path.insert(
+    0,
+    os.path.sep.join(
+        [os.path.dirname(os.path.realpath(__file__)), "..", "..", "pylib"]
+    ),
+)
+
+import LRAA_Globals
+
+
+def _load_extractor():
+    """Load the sibling extractor as a module.
+
+    It is a script rather than a package member, so it cannot simply be
+    imported. Sharing it matters: the annotation hard constraint and the
+    retention filter must be the SAME code the extractor enforces, or this
+    module could choose a position the extractor then refuses.
+    """
+
+    path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "extract_contig_region_inputs.py"
+    )
+    loader = SourceFileLoader("extract_contig_region_inputs", path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+extractor = _load_extractor()
+
+ExtractionError = extractor.ExtractionError
+
+MB = 1000000
+
+# The depth-window grid is pinned to absolute 0-based coordinate 0. Chunks are
+# rebased, and normalize_bam_by_strand.py is told the rebase offset via
+# --window_origin, so chunk-local windows ARE the absolute windows. Anything else
+# would make the grid depend on which read happened to come first.
+DEFAULT_GRID_ORIGIN = 0
+
+# Resolution at which read depth is measured, from normalize_bam_by_strand.py's
+# --depth_window default. Cuts land on this grid so no window spans one.
+DEFAULT_DEPTH_WINDOW = 100
+
+
+class SelectionError(RuntimeError):
+    """Parameters that cannot describe a partitioning."""
+
+
+CutChoice = collections.namedtuple(
+    "CutChoice",
+    "index target position offset spanning_dropped compromised "
+    "window_lend window_rend grid_positions annotation_blocked "
+    "unconstrained_best_spanning",
+)
+
+UnplacedTarget = collections.namedtuple(
+    "UnplacedTarget",
+    "index target window_lend window_rend grid_positions annotation_blocked reason",
+)
+
+Segment = collections.namedtuple("Segment", "index lend rend span")
+
+Selection = collections.namedtuple(
+    "Selection",
+    "chrom strand contig_length depth_window grid_origin segment_span wiggle "
+    "minimum_span targets cuts segments unplaced tail_merged "
+    "total_retained_primary total_dropped dropped_read_names",
+)
+
+
+def grid_positions(lend, rend, depth_window, grid_origin=DEFAULT_GRID_ORIGIN):
+    """1-based cut positions in ``[lend, rend]`` that end a depth window.
+
+    ``(b - grid_origin) % depth_window == 0``. Returned in increasing order, so
+    the list is an arithmetic sequence with step ``depth_window`` and callers may
+    index into it arithmetically.
+    """
+
+    if depth_window < 1:
+        raise SelectionError("depth_window must be >= 1")
+    if rend < lend:
+        return []
+    # smallest b >= lend with (b - grid_origin) divisible by depth_window
+    first = lend + (grid_origin - lend) % depth_window
+    if first > rend:
+        return []
+    return list(range(first, rend + 1, depth_window))
+
+
+def minimum_span_for(segment_span, depth_window):
+    """Half the nominal segment, floored to a whole depth window.
+
+    Never below one window, so the floor cannot be degenerate, and always a
+    multiple of ``depth_window`` so it cannot fight grid alignment.
+    """
+
+    half = (segment_span // 2 // depth_window) * depth_window
+    return max(depth_window, half)
+
+
+def cut_targets(contig_length, segment_span, minimum_span):
+    """Target cut positions, and the trailing targets merged away.
+
+    Targets are the multiples of ``segment_span`` strictly inside the contig. A
+    trailing target whose residual tail would be shorter than ``minimum_span`` is
+    merged into its predecessor: the same anti-sliver rule the joint constraint
+    applies between targets, applied to the end of the contig where there is no
+    successor to collide with. Returns ``(targets, merged)``, and ``merged`` is
+    reported rather than discarded.
+    """
+
+    if segment_span < 1:
+        raise SelectionError("segment_span must be >= 1")
+
+    targets = list(range(segment_span, max(contig_length, 1), segment_span))
+    merged = []
+    while targets and contig_length - targets[-1] < minimum_span:
+        merged.append(targets.pop())
+    # a first target closer to the contig start than the floor is a sliver too
+    while targets and targets[0] < minimum_span:
+        merged.append(targets.pop(0))
+    merged.sort()
+    return targets, merged
+
+
+def _blocked_by_annotation(positions, zones):
+    """Split ``positions`` into (compliant, blocked) against admissible zones.
+
+    ``zones`` are the inclusive ranges of positions no annotated locus forbids,
+    from ``extractor.cut_zones``, in increasing order.
+    """
+
+    if not zones:
+        return [], list(positions)
+    starts = [lo for lo, _ in zones]
+    compliant = []
+    blocked = []
+    for position in positions:
+        index = bisect.bisect_right(starts, position) - 1
+        if index >= 0 and position <= zones[index][1]:
+            compliant.append(position)
+        else:
+            blocked.append(position)
+    return compliant, blocked
+
+
+def spanning_counts(bam, chrom, strand, positions, max_intron_length=None):
+    """Retained primary alignments severed by each position in one window.
+
+    ``positions`` must be an increasing arithmetic sequence, as returned by
+    ``grid_positions``. An alignment spanning 1-based ``[s, e]`` is severed by a
+    cut at ``b`` exactly when ``s <= b < e``, so it contributes to the position
+    range ``[s, e - 1]``; the contributions are accumulated as a difference array
+    over the candidate grid rather than tested position by position, which keeps
+    this linear in the alignments overlapping the window rather than quadratic.
+    """
+
+    if not positions:
+        return []
+
+    first = positions[0]
+    last = positions[-1]
+    step = positions[1] - positions[0] if len(positions) > 1 else 1
+    diff = [0] * (len(positions) + 1)
+
+    # every severing alignment satisfies s <= last and e >= first + 1, hence
+    # overlaps 1-based [first, last + 1]; fetch is a superset of that
+    for aln in bam.fetch(chrom, max(0, first - 1), last + 1):
+        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
+            continue
+        start = aln.reference_start + 1
+        end = aln.reference_end
+        lo = max(start, first)
+        hi = min(end - 1, last)
+        if hi < lo:
+            continue
+        lo_index = -(-(lo - first) // step)  # ceil
+        hi_index = (hi - first) // step
+        if hi_index < lo_index:
+            continue
+        diff[lo_index] += 1
+        diff[hi_index + 1] -= 1
+
+    counts = []
+    running = 0
+    for value in diff[:-1]:
+        running += value
+        counts.append(running)
+    return counts
+
+
+def spanning_read_names(bam, chrom, strand, position, max_intron_length=None):
+    """Names of the retained primary alignments a cut at ``position`` severs.
+
+    The set the extractor will drop at this boundary, named so a pruned
+    comparison baseline can be built from exactly it.
+    """
+
+    names = []
+    for aln in bam.fetch(chrom, max(0, position - 1), position + 1):
+        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
+            continue
+        start = aln.reference_start + 1
+        end = aln.reference_end
+        if start <= position < end:
+            names.append(aln.query_name)
+    return names
+
+
+def count_retained_primary(bam, chrom, strand, max_intron_length=None):
+    """The denominator: retained primary alignments on this contig-strand."""
+
+    total = 0
+    for aln in bam.fetch(chrom):
+        if extractor.retained_for_extraction(aln, strand, max_intron_length):
+            total += 1
+    return total
+
+
+def _solve(candidates, costs, targets, minimum_span, contig_length):
+    """Joint choice of one position per target, or fewer.
+
+    Lexicographic minimisation of (unplaced, spanning, distance from target,
+    coordinate) over chains that are strictly increasing and leave every realised
+    chunk at least ``minimum_span`` long. Returns the list of chosen
+    ``(target_index, position, cost)`` in increasing order.
+
+    A dynamic program rather than a per-target argmin because the constraints
+    couple neighbours: with overlapping windows the cheapest position for one
+    target can crowd out its successor. Each node contributes the additive vector
+    ``(-1, cost, |position - target|, position)``, so "fewest unplaced" is
+    "most placed" and the key stays additive -- which is what allows the
+    predecessor search to be a prefix minimum over positions instead of a scan
+    over pairs.
+    """
+
+    # nodes flattened, grouped by target, each with the best key of a chain
+    # ending there and a backpointer
+    best = []  # per target: list of (key, prev_target, prev_index)
+    # sorted (position, prefix-min key, target, index) over targets already seen
+    seen_positions = []
+    seen_keys = []
+    seen_refs = []
+
+    for t_index, (positions, position_costs) in enumerate(zip(candidates, costs)):
+        row = []
+        for p_index, position in enumerate(positions):
+            contribution = (
+                -1,
+                position_costs[p_index],
+                abs(position - targets[t_index]),
+                position,
+            )
+            # predecessor must sit at most position - minimum_span
+            limit = position - minimum_span
+            key = None
+            ref = (None, None)
+            if limit >= 0:
+                cut = bisect.bisect_right(seen_positions, limit) - 1
+                if cut >= 0:
+                    key = seen_keys[cut]
+                    ref = seen_refs[cut]
+                elif position >= minimum_span:
+                    # start the chain here: the first chunk is [1, position]
+                    key = (0, 0, 0, 0)
+            # no "start fresh" alternative is considered when a predecessor
+            # exists: every predecessor key has placed >= 1, hence a first
+            # component <= -1, so it always beats the empty chain's (0, ...)
+            if key is None:
+                row.append(None)
+                continue
+            row.append(
+                (
+                    tuple(a + b for a, b in zip(key, contribution)),
+                    ref[0],
+                    ref[1],
+                )
+            )
+        best.append(row)
+
+        # fold this target's nodes into the prefix-min structure for later targets
+        merged_positions = []
+        merged_keys = []
+        merged_refs = []
+        i = j = 0
+        own = [
+            (positions[p], row[p][0], (t_index, p))
+            for p in range(len(positions))
+            if row[p] is not None
+        ]
+        while i < len(seen_positions) or j < len(own):
+            take_own = j < len(own) and (
+                i >= len(seen_positions) or own[j][0] <= seen_positions[i]
+            )
+            if take_own:
+                merged_positions.append(own[j][0])
+                merged_keys.append(own[j][1])
+                merged_refs.append(own[j][2])
+                j += 1
+            else:
+                merged_positions.append(seen_positions[i])
+                merged_keys.append(seen_keys[i])
+                merged_refs.append(seen_refs[i])
+                i += 1
+        # running prefix minimum, so a lookup is one bisect
+        running_key = None
+        running_ref = None
+        for k in range(len(merged_positions)):
+            if running_key is None or merged_keys[k] < running_key:
+                running_key = merged_keys[k]
+                running_ref = merged_refs[k]
+            merged_keys[k] = running_key
+            merged_refs[k] = running_ref
+        seen_positions, seen_keys, seen_refs = (
+            merged_positions,
+            merged_keys,
+            merged_refs,
+        )
+
+    # finish: the last chunk runs from the final position + 1 to contig_length
+    final_key = (0, 0, 0, 0)
+    final_ref = (None, None)
+    for t_index, row in enumerate(best):
+        for p_index, entry in enumerate(row):
+            if entry is None:
+                continue
+            if contig_length - candidates[t_index][p_index] < minimum_span:
+                continue
+            if entry[0] < final_key:
+                final_key = entry[0]
+                final_ref = (t_index, p_index)
+
+    chosen = []
+    t_index, p_index = final_ref
+    while t_index is not None:
+        position = candidates[t_index][p_index]
+        chosen.append((t_index, position, costs[t_index][p_index]))
+        _, prev_t, prev_p = best[t_index][p_index]
+        t_index, p_index = prev_t, prev_p
+    chosen.reverse()
+    return chosen
+
+
+def select_cut_points(
+    bam_filename,
+    chrom,
+    contig_length,
+    strand="",
+    gtf=None,
+    segment_span=None,
+    wiggle=None,
+    depth_window=DEFAULT_DEPTH_WINDOW,
+    grid_origin=DEFAULT_GRID_ORIGIN,
+    margin=None,
+    minimum_span=None,
+    max_intron_length=None,
+    annotation=None,
+    count_denominator=True,
+):
+    """Choose cut points for one contig-strand. Returns a ``Selection``.
+
+    ``segment_span`` and ``wiggle`` are in BASES here; the megabase values live
+    in the config and are converted by the CLI, so this function has one unit.
+    """
+
+    if segment_span is None:
+        segment_span = int(LRAA_Globals.config["approx_MB_per_cut"] * MB)
+    if wiggle is None:
+        wiggle = int(LRAA_Globals.config["approx_MB_per_cut_wiggle_window"] * MB)
+    if margin is None:
+        margin = extractor.DEFAULT_MARGIN
+    if wiggle < 0:
+        raise SelectionError("wiggle window must be >= 0")
+    if minimum_span is None:
+        minimum_span = minimum_span_for(segment_span, depth_window)
+
+    if annotation is None:
+        annotation = (
+            extractor.load_gtf(gtf, chrom, strand) if gtf else extractor.Annotation()
+        )
+    islands = extractor.find_islands(annotation, chrom, strand, margin)
+    zones = extractor.cut_zones(islands, 1, contig_length)
+
+    targets, tail_merged = cut_targets(contig_length, segment_span, minimum_span)
+
+    half = wiggle // 2
+    windows = []
+    for target in targets:
+        window_lend = max(1, target - half)
+        window_rend = min(contig_length - 1, target + half)
+        windows.append((window_lend, window_rend))
+
+    candidates = []
+    costs = []
+    unconstrained_best = []
+    blocked_counts = []
+    all_grid_counts = []
+
+    with pysam.AlignmentFile(bam_filename, "rb") as bam:
+        for target, (window_lend, window_rend) in zip(targets, windows):
+            on_grid = grid_positions(window_lend, window_rend, depth_window, grid_origin)
+            all_grid_counts.append(len(on_grid))
+            compliant, blocked = _blocked_by_annotation(on_grid, zones)
+            blocked_counts.append(len(blocked))
+
+            # the annotation-free optimum, so a compromise can be quantified
+            # rather than asserted
+            grid_costs = spanning_counts(
+                bam, chrom, strand, on_grid, max_intron_length
+            )
+            unconstrained_best.append(min(grid_costs) if grid_costs else None)
+
+            if compliant == on_grid:
+                compliant_costs = grid_costs
+            else:
+                keep = set(compliant)
+                compliant_costs = [
+                    cost
+                    for position, cost in zip(on_grid, grid_costs)
+                    if position in keep
+                ]
+            candidates.append(compliant)
+            costs.append(compliant_costs)
+
+        chosen = _solve(candidates, costs, targets, minimum_span, contig_length)
+        placed = {t_index: (position, cost) for t_index, position, cost in chosen}
+
+        cuts = []
+        unplaced = []
+        for t_index, target in enumerate(targets):
+            window_lend, window_rend = windows[t_index]
+            if t_index not in placed:
+                if not candidates[t_index]:
+                    reason = (
+                        "no position in the window is both on the {} bp depth-window "
+                        "grid and outside every annotated locus ({} grid positions, "
+                        "all blocked)".format(depth_window, all_grid_counts[t_index])
+                    )
+                else:
+                    reason = (
+                        "{} compliant position(s) exist but none can be used without "
+                        "leaving a chunk shorter than the {} bp minimum span".format(
+                            len(candidates[t_index]), minimum_span
+                        )
+                    )
+                unplaced.append(
+                    UnplacedTarget(
+                        index=t_index,
+                        target=target,
+                        window_lend=window_lend,
+                        window_rend=window_rend,
+                        grid_positions=all_grid_counts[t_index],
+                        annotation_blocked=blocked_counts[t_index],
+                        reason=reason,
+                    )
+                )
+                continue
+            position, cost = placed[t_index]
+            reference = unconstrained_best[t_index]
+            cuts.append(
+                CutChoice(
+                    index=t_index,
+                    target=target,
+                    position=position,
+                    offset=position - target,
+                    spanning_dropped=cost,
+                    compromised=reference is not None and cost > reference,
+                    window_lend=window_lend,
+                    window_rend=window_rend,
+                    grid_positions=all_grid_counts[t_index],
+                    annotation_blocked=blocked_counts[t_index],
+                    unconstrained_best_spanning=reference,
+                )
+            )
+
+        dropped_read_names = collections.OrderedDict()  # name -> [cut positions]
+        for cut in cuts:
+            for name in spanning_read_names(
+                bam, chrom, strand, cut.position, max_intron_length
+            ):
+                dropped_read_names.setdefault(name, []).append(cut.position)
+
+        total_retained = (
+            count_retained_primary(bam, chrom, strand, max_intron_length)
+            if count_denominator
+            else None
+        )
+
+    segments = []
+    start = 1
+    for cut in cuts:
+        segments.append(
+            Segment(
+                index=len(segments),
+                lend=start,
+                rend=cut.position,
+                span=cut.position - start + 1,
+            )
+        )
+        start = cut.position + 1
+    segments.append(
+        Segment(
+            index=len(segments),
+            lend=start,
+            rend=contig_length,
+            span=contig_length - start + 1,
+        )
+    )
+
+    return Selection(
+        chrom=chrom,
+        strand=strand,
+        contig_length=contig_length,
+        depth_window=depth_window,
+        grid_origin=grid_origin,
+        segment_span=segment_span,
+        wiggle=wiggle,
+        minimum_span=minimum_span,
+        targets=targets,
+        cuts=cuts,
+        segments=segments,
+        unplaced=unplaced,
+        tail_merged=tail_merged,
+        total_retained_primary=total_retained,
+        total_dropped=sum(cut.spanning_dropped for cut in cuts),
+        dropped_read_names=dropped_read_names,
+    )
+
+
+def selection_to_dict(selection):
+    """JSON-shaped manifest. Every count carries its denominator."""
+
+    return {
+        "chrom": selection.chrom,
+        "strand": selection.strand,
+        "contig_length": selection.contig_length,
+        "params": {
+            "segment_span": selection.segment_span,
+            "wiggle_window": selection.wiggle,
+            "depth_window": selection.depth_window,
+            "grid_origin": selection.grid_origin,
+            "minimum_span": selection.minimum_span,
+        },
+        "targets": selection.targets,
+        "tail_merged_targets": selection.tail_merged,
+        "cuts": [
+            {
+                "target": cut.target,
+                "position": cut.position,
+                "offset_from_target": cut.offset,
+                "spanning_alignments_dropped": cut.spanning_dropped,
+                "hard_constraint_compromise": cut.compromised,
+                "window": [cut.window_lend, cut.window_rend],
+                "grid_positions_in_window": cut.grid_positions,
+                "grid_positions_blocked_by_annotation": cut.annotation_blocked,
+                "best_spanning_ignoring_annotation": cut.unconstrained_best_spanning,
+                # what to pass extract_contig_region_inputs.py, and what the
+                # chunk starting here must pass the normalizer
+                "window_origin_for_next_chunk": cut.position,
+            }
+            for cut in selection.cuts
+        ],
+        "segments": [
+            {
+                "region": "{}{}:{}-{}".format(
+                    selection.chrom, selection.strand, segment.lend, segment.rend
+                ),
+                "lend": segment.lend,
+                "rend": segment.rend,
+                "span": segment.span,
+                "window_origin": segment.lend - 1,
+            }
+            for segment in selection.segments
+        ],
+        "unplaced_targets": [
+            {
+                "target": item.target,
+                "window": [item.window_lend, item.window_rend],
+                "grid_positions_in_window": item.grid_positions,
+                "grid_positions_blocked_by_annotation": item.annotation_blocked,
+                "reason": item.reason,
+            }
+            for item in selection.unplaced
+        ],
+        "counts": {
+            "targets": len(selection.targets),
+            "cuts_placed": len(selection.cuts),
+            "targets_unplaced": len(selection.unplaced),
+            "targets_tail_merged": len(selection.tail_merged),
+            "segments": len(selection.segments),
+            "retained_primary_alignments": selection.total_retained_primary,
+            "alignments_dropped_at_cuts": selection.total_dropped,
+            "distinct_dropped_read_names": len(selection.dropped_read_names),
+        },
+    }
+
+
+def _as_selections(selections):
+    return [selections] if isinstance(selections, Selection) else list(selections)
+
+
+def write_dropped_read_names(selections, path):
+    """One read name per line, sorted, deduplicated across every selection.
+
+    Plain names because that is what ``samtools view -N`` and the equivalent
+    filters consume: the point is to build a pruned baseline BAM from exactly
+    this set, so the file has to be directly usable as the filter input.
+
+    Deduplicated because a read severed by a cut is dropped by BOTH neighbouring
+    chunks -- it is contained by neither -- so the same name is reported twice by
+    per-chunk accounting and must appear once in a filter set.
+    """
+
+    every = set()
+    for selection in _as_selections(selections):
+        every.update(selection.dropped_read_names)
+    with open(path, "wt") as ofh:
+        for name in sorted(every):
+            print(name, file=ofh)
+    return path
+
+
+def write_dropped_read_detail(selections, path):
+    """Attribution for each dropped name: which cut or cuts severed it."""
+
+    with open(path, "wt") as ofh:
+        print("read_name\tchrom\tstrand\tcut_positions", file=ofh)
+        for selection in _as_selections(selections):
+            for name in sorted(selection.dropped_read_names):
+                print(
+                    "{}\t{}\t{}\t{}".format(
+                        name,
+                        selection.chrom,
+                        selection.strand or ".",
+                        ",".join(
+                            str(p) for p in selection.dropped_read_names[name]
+                        ),
+                    ),
+                    file=ofh,
+                )
+    return path
+
+
+def format_report(selection):
+    """Human-readable report. Reports what happened; tunes nothing."""
+
+    lines = []
+    label = "{}{}".format(selection.chrom, selection.strand or "")
+    lines.append(
+        "# {} length {} bp; segment span {} bp; wiggle window {} bp (target +/- {}); "
+        "depth_window {} bp; grid origin {}; minimum span {} bp".format(
+            label,
+            selection.contig_length,
+            selection.segment_span,
+            selection.wiggle,
+            selection.wiggle // 2,
+            selection.depth_window,
+            selection.grid_origin,
+            selection.minimum_span,
+        )
+    )
+    lines.append(
+        "# {} target(s), {} cut(s) placed, {} unplaced, {} tail-merged -> {} "
+        "segment(s)".format(
+            len(selection.targets),
+            len(selection.cuts),
+            len(selection.unplaced),
+            len(selection.tail_merged),
+            len(selection.segments),
+        )
+    )
+    if selection.tail_merged:
+        lines.append(
+            "# tail-merged target(s) {}: the residual would have been shorter than "
+            "the {} bp minimum span".format(
+                ", ".join(str(t) for t in selection.tail_merged), selection.minimum_span
+            )
+        )
+
+    lines.append(
+        "#target\tposition\toffset\tdropped\tgrid_in_window\tannot_blocked\t"
+        "best_ignoring_annot\tcompromised"
+    )
+    for cut in selection.cuts:
+        lines.append(
+            "{}\t{}\t{:+d}\t{}\t{}\t{}\t{}\t{}".format(
+                cut.target,
+                cut.position,
+                cut.offset,
+                cut.spanning_dropped,
+                cut.grid_positions,
+                cut.annotation_blocked,
+                cut.unconstrained_best_spanning,
+                "yes" if cut.compromised else "no",
+            )
+        )
+
+    for item in selection.unplaced:
+        lines.append(
+            "# UNPLACED target {} (window {}-{}): {}".format(
+                item.target, item.window_lend, item.window_rend, item.reason
+            )
+        )
+
+    lines.append("#segment\tregion\tspan\twindow_origin")
+    for segment in selection.segments:
+        lines.append(
+            "{}\t{}{}:{}-{}\t{}\t{}".format(
+                segment.index,
+                selection.chrom,
+                selection.strand,
+                segment.lend,
+                segment.rend,
+                segment.span,
+                segment.lend - 1,
+            )
+        )
+
+    spans = [segment.span for segment in selection.segments]
+    if spans:
+        lines.append(
+            "# realised spans: min {} bp, max {} bp, mean {:.0f} bp; nominal {} bp "
+            "(max deviation {:+.1f}%)".format(
+                min(spans),
+                max(spans),
+                sum(spans) / len(spans),
+                selection.segment_span,
+                100.0
+                * max(
+                    (span - selection.segment_span) / selection.segment_span
+                    for span in spans
+                ),
+            )
+        )
+    denominator = selection.total_retained_primary
+    lines.append(
+        "# dropped {} alignment(s) at {} cut(s), {} distinct read name(s), out of "
+        "{} retained primary alignment(s){}".format(
+            selection.total_dropped,
+            len(selection.cuts),
+            len(selection.dropped_read_names),
+            denominator if denominator is not None else "not counted",
+            ""
+            if not denominator
+            else " ({:.4f}%)".format(100.0 * selection.total_dropped / denominator),
+        )
+    )
+    return "\n".join(lines)
+
+
+def main(argv=None):
+
+    parser = argparse.ArgumentParser(
+        description="choose cut points splitting a contig-strand into chunks: "
+        "targets at multiples of --approx_MB_per_cut, each searched over a "
+        "window of total width --approx_MB_per_cut_wiggle_window centred on it, "
+        "for a depth-window-aligned position outside every annotated locus that "
+        "the fewest retained primary alignments span",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--bam", type=str, required=True, help="bam aligned reads")
+    parser.add_argument(
+        "--genome_fa",
+        type=str,
+        required=False,
+        help="genome fasta, for contig lengths. Defaults to the bam header.",
+    )
+    parser.add_argument("--gtf", type=str, required=False, help="gtf annotation")
+    parser.add_argument(
+        "--contig",
+        type=str,
+        default=None,
+        help="restrict to one contig. Default: every contig in the bam header.",
+    )
+    parser.add_argument(
+        "--strand",
+        type=str,
+        default=None,
+        choices=("+", "-"),
+        help="orientation to select for. Omit for an already strand-split bam, "
+        "in which case every record counts.",
+    )
+    parser.add_argument(
+        "--approx_MB_per_cut",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut"],
+        help="approximate MEGABASES between cut points",
+    )
+    parser.add_argument(
+        "--approx_MB_per_cut_wiggle_window",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
+        help="TOTAL width in MEGABASES of the window centred on each target, not "
+        "the half-width",
+    )
+    parser.add_argument(
+        "--depth_window",
+        type=int,
+        default=DEFAULT_DEPTH_WINDOW,
+        help="resolution in bases at which read depth is measured; cuts land on "
+        "this grid so no depth window spans one. Must match "
+        "normalize_bam_by_strand.py --depth_window.",
+    )
+    parser.add_argument(
+        "--grid_origin",
+        type=int,
+        default=DEFAULT_GRID_ORIGIN,
+        help="0-based reference coordinate of a depth-window boundary; only its "
+        "remainder modulo --depth_window matters. The pipeline pins this to 0.",
+    )
+    parser.add_argument(
+        "--margin",
+        type=int,
+        default=extractor.DEFAULT_MARGIN,
+        help="clearance demanded either side of a cut from annotated loci, in bp. "
+        "Must match extract_contig_region_inputs.py --margin.",
+    )
+    parser.add_argument(
+        "--minimum_span",
+        type=int,
+        default=None,
+        help="shortest permitted chunk, in bases. Default: half the segment span, "
+        "floored to a depth_window multiple.",
+    )
+    parser.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+        help="alignments carrying a longer intron are excluded, matching the "
+        "strand split. 0 disables.",
+    )
+    parser.add_argument(
+        "--output_prefix",
+        type=str,
+        required=True,
+        help="writes <prefix>.cuts.json, <prefix>.cuts.txt, "
+        "<prefix>.dropped_reads.txt and <prefix>.dropped_reads.tsv",
+    )
+
+    args = parser.parse_args(argv)
+
+    segment_span = int(args.approx_MB_per_cut * MB)
+    wiggle = int(args.approx_MB_per_cut_wiggle_window * MB)
+    strand = args.strand or ""
+
+    if args.genome_fa:
+        with pysam.FastaFile(args.genome_fa) as fasta:
+            lengths = dict(zip(fasta.references, fasta.lengths))
+    else:
+        with pysam.AlignmentFile(args.bam, "rb") as bam:
+            lengths = dict(zip(bam.references, bam.lengths))
+
+    if args.contig:
+        if args.contig not in lengths:
+            raise SelectionError(
+                "contig {} is absent; known: {}".format(
+                    args.contig, ", ".join(sorted(lengths))
+                )
+            )
+        contigs = [args.contig]
+    else:
+        contigs = sorted(lengths)
+
+    selections = []
+    for chrom in contigs:
+        annotation = (
+            extractor.load_gtf(args.gtf, chrom, strand)
+            if args.gtf
+            else extractor.Annotation()
+        )
+        selections.append(
+            select_cut_points(
+                bam_filename=args.bam,
+                chrom=chrom,
+                contig_length=lengths[chrom],
+                strand=strand,
+                segment_span=segment_span,
+                wiggle=wiggle,
+                depth_window=args.depth_window,
+                grid_origin=args.grid_origin,
+                margin=args.margin,
+                minimum_span=args.minimum_span,
+                max_intron_length=args.max_intron_length,
+                annotation=annotation,
+            )
+        )
+
+    report = "\n".join(format_report(selection) for selection in selections)
+    print(report)
+
+    with open("{}.cuts.txt".format(args.output_prefix), "wt") as ofh:
+        print(report, file=ofh)
+    with open("{}.cuts.json".format(args.output_prefix), "wt") as ofh:
+        json.dump(
+            [selection_to_dict(selection) for selection in selections],
+            ofh,
+            indent=2,
+            sort_keys=True,
+        )
+        print("", file=ofh)
+
+    write_dropped_read_names(
+        selections, "{}.dropped_reads.txt".format(args.output_prefix)
+    )
+    write_dropped_read_detail(
+        selections, "{}.dropped_reads.tsv".format(args.output_prefix)
+    )
+
+    unplaced = sum(len(selection.unplaced) for selection in selections)
+    if unplaced:
+        print(
+            "WARNING: {} target(s) could not be placed; see the report. These are "
+            "reported rather than skipped silently.".format(unplaced),
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

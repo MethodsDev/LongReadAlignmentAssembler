@@ -36,6 +36,18 @@ partition travels with the reads. Translate a locus and every read lands in the 
 in before, giving the same depth estimate and the same acceptance probability. See the origin
 section below for why that matters.
 
+That default makes the boundaries a function of which records are in the input, which is right
+for a whole input and wrong for a chunk of one: a chunk begins at some other read, so the same
+absolute locus bins differently than it did whole. `--window_origin` replaces the implicit
+anchor with the caller's grid. Its value is the absolute 0-based reference coordinate that
+position 0 of the input maps to — `0` for a whole-contig BAM, the rebase offset for a chunk
+extracted by `util/misc/extract_contig_region_inputs.py` (its manifest's `offset`, which is
+`region.lend - 1`). Boundaries then sit at absolute multiples of `--depth_window` whatever the
+input contains, so a chunk measures the same windows a whole-contig run measures. Two conditions
+come with it: cuts must fall on multiples of `--depth_window`, or a window draws its bases from
+two chunks; and a whole-contig control run must be given `--window_origin 0`, because on its
+default it keeps the first-aligned-base anchor and no chunk grid can match it.
+
 **Pass 2 — sample.** Each read is kept with probability `p` and, if kept, records `1/p`:
 
 | condition | `p` | rationale |
@@ -98,6 +110,8 @@ itself to a single rate per unit of comparison.
 | `--normalize_max_cov_level` | 1000 | target read depth; `0` disables normalization entirely |
 | `--depth_window` | 100 | resolution in bases at which depth is measured |
 | `--random_seed` | 42 | seed for the per-read draw |
+| `--window_origin` | unset | absolute coordinate of the input's position 0; pins the window grid to the absolute grid. Unset: anchored on the contig's first aligned base |
+| `--input_is_single_strand` | off | the input is already orientation-pure: normalize it directly, skipping the strand split and the merge |
 
 ## Caching and method changes
 
@@ -124,12 +138,17 @@ one's cache. Contents are not hashed — reading a multi-gigabyte BAM on every s
 more than the step being cached, to cover what the stat pair already catches.
 
 The utility keys its own checkpoints separately, because the two stages depend on different
-things. The strand split depends only on the input, so it is keyed on `<identity>` alone and is
-reused across settings. Sampling, merge, and index are keyed on a digest of the input identity,
-target depth, `--depth_window`, `--random_seed`, the method, and the output path — every flag
-that changes which reads are kept or where they land. The driver holds the window and seed
-fixed, but both are exposed on the command line, and without this a second invocation in the
-same directory would silently reuse the first one's sample.
+things. The strand split depends on the input and on `--max_intron_length`, which decides which
+records it emits. Sampling, merge, and index are keyed on a digest of the input identity, the
+intron cap, target depth, `--depth_window`, `--random_seed`, the method, and the output path —
+every flag that changes which reads are kept or where they land. The driver holds the window and
+seed fixed, but both are exposed on the command line, and without this a second invocation in
+the same directory would silently reuse the first one's sample.
+
+`--window_origin` and `--input_is_single_strand` are in both tokens: the origin decides which
+reads survive, and the single-strand flag decides whether the split stage runs at all. Each is
+appended to the hashed string only when supplied, so a run passing neither hashes exactly what
+it hashed before the options existed and keeps hitting the caches it already has.
 
 ## Why read-start binning was replaced
 
@@ -150,7 +169,9 @@ approximately so.
 
 This is why extracted sub-regions could not be trusted to reproduce whole-genome behaviour:
 rebasing a window to position 1 is exactly the translation above, so at any deep locus the
-extraction changed the answer for reasons unrelated to its read content.
+extraction changed the answer for reasons unrelated to its read content. `--window_origin` is
+what resolves that — given the chunk's rebase offset, a chunk and the whole contig assign the
+same absolute locus to the same window, and the reads retained there are identical.
 
 **It did not bound coverage.** Starts were capped per bin while depth accumulates across bins.
 Across fifteen high-expression loci, depth after "capping at 1000" ranged to 3,793.
