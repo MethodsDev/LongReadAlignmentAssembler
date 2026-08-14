@@ -77,13 +77,22 @@ which names the core, sc and orf images and the tag they share.
 |---|---|---|---|
 | `latest` | `build_docker.latest.sh` | `LRAA_CO.txt` | defaults written inside the `.wdl` files |
 | `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `LRAA_CO.txt` | release pins |
-| `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | the WDL test targets, through `testing/lraa_test_docker.mk` |
+| `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | local WDL test targets, through `testing/lraa_test_docker.mk` |
+| `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving tag, e.g. runs dispatched to VMs |
 
-`testing` images are built from whatever commit you are sitting on and are not
-release artifacts. The tag names the last commit someone validated, it is
-overwritten as often as anyone runs the script, and nothing outside `testing/`
-should point at it. A release is reachable as `:latest` and as its version; no
-release build writes `testing`.
+Neither testing tag is a release artifact. Both come out of the same build, so
+they cannot drift apart, and only the release scripts write `latest` or a bare
+version.
+
+`testing` is a moving pointer: it names the last commit someone validated and is
+overwritten as often as anyone runs the script. That is what the local test
+targets want, since they are checking the tree in front of you.
+
+`<version>-testing` exists for testing that has to remain identifiable after
+`testing` has moved on -- a run dispatched to a VM, or two candidates compared
+against each other. The suffix is the point: a bare version tag promises a
+published release, and someone pulling `0.19.0` has no way to tell it was cut
+mid-development. Production work uses a release tag, never either of these.
 
 ## Building
 

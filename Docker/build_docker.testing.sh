@@ -9,6 +9,13 @@ unset DOCKER_API_VERSION
 VERSION=testing
 LRAA_VERSION=`cat VERSION.txt`
 
+# A versioned image built for testing carries the suffix so it cannot be mistaken
+# for the published release of the same version.  Only the release scripts write
+# a bare version tag.  Local test_wdls follow the moving :testing tag; a run on a
+# VM should pin ${LRAA_VERSION}-testing instead, so the image under test is still
+# identifiable after :testing has moved on.
+VERSIONED_TAG=${LRAA_VERSION}-testing
+
 # The one difference that matters from the other two scripts: the checkout comes
 # from the commit you are sitting on, not from LRAA_CO.txt.  LRAA_CO.txt names
 # the commit of the last release, so an image built from it cannot fail on a
@@ -55,9 +62,17 @@ fi
 # different commit rebuilds one small layer per image rather than recompiling
 # Seurat.  That is what makes a per-commit build cheap enough to be routine.
 #
-# Only :testing is written.  :latest and the version tags are release artifacts
-# built from LRAA_CO.txt by the other two scripts; a build from an arbitrary
-# commit must never be reachable under a name that promises a release.
+# Two tags are written, both unmistakably non-release.  :testing is the moving
+# pointer test harnesses follow; ${LRAA_VERSION}-testing is version-bearing, for
+# pinning a specific candidate or comparing two of them.  Both come out of the
+# same build, so they cannot drift apart.
+#
+# The suffix is the point of the second one.  A bare version tag promises a
+# published release, and an image built from an arbitrary commit must never be
+# reachable under a name that makes that promise -- someone pulling 0.19.0 has
+# no way to tell it was cut mid-development.  So a versioned image built for
+# testing carries -testing, and :latest and the bare version tags stay the
+# exclusive property of the release scripts building from LRAA_CO.txt.
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
 
@@ -69,8 +84,10 @@ build_and_push() {
         --build-arg LRAA_BASE_IMAGE=${BASE_IMAGE} \
         --build-arg LRAA_VERSION=v${LRAA_VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
-        -t ${REGISTRY}/${name}:${VERSION} .
+        -t ${REGISTRY}/${name}:${VERSION} \
+        -t ${REGISTRY}/${name}:${VERSIONED_TAG} .
     docker push ${REGISTRY}/${name}:${VERSION}
+    docker push ${REGISTRY}/${name}:${VERSIONED_TAG}
 }
 
 build_and_push lraa-core     Dockerfile.core
