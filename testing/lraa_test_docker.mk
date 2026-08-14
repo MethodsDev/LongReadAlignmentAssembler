@@ -3,11 +3,12 @@
 # edit instead of once per directory.
 #
 # Why an override is needed at all: the WDLs default every image input to
-# :latest, which is built from Docker/LRAA_CO.txt -- the last release.  A test
-# run left on the defaults exercises released code, so it cannot fail on
-# anything broken since the release, and it passes just as happily when the WDL
-# and the code it drives have gone out of step.  :testing is built from the
-# current commit by Docker/build_docker.testing.sh.
+# :latest, which the release script writes -- so it names whatever commit was
+# last released, not the one in front of you.  A test run left on the defaults
+# exercises released code, so it cannot fail on anything broken since, and it
+# passes just as happily when the WDL and the code it drives have gone out of
+# step.  :testing is built from the current commit by
+# Docker/build_docker.testing.sh.
 #
 # Any of these can be overridden on the command line for a one-off image:
 #

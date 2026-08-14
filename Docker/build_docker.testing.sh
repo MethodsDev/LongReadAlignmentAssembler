@@ -16,10 +16,8 @@ LRAA_VERSION=`cat VERSION.txt`
 # identifiable after :testing has moved on.
 VERSIONED_TAG=${LRAA_VERSION}-testing
 
-# The one difference that matters from the other two scripts: the checkout comes
-# from the commit you are sitting on, not from LRAA_CO.txt.  LRAA_CO.txt names
-# the commit of the last release, so an image built from it cannot fail on a
-# regression introduced since -- which is the whole point of a testing build.
+# The checkout comes from the commit you are sitting on, which all three scripts
+# now do.  They differ only in the tags they write.
 LRAA_CO=`git rev-parse HEAD`
 
 REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
@@ -72,7 +70,7 @@ fi
 # reachable under a name that makes that promise -- someone pulling 0.19.0 has
 # no way to tell it was cut mid-development.  So a versioned image built for
 # testing carries -testing, and :latest and the bare version tags stay the
-# exclusive property of the release scripts building from LRAA_CO.txt.
+# exclusive property of the release scripts.
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
 

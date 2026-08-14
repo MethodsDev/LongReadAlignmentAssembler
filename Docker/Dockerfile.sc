@@ -101,8 +101,12 @@ ARG LRAA_CO
 ENV LRAA_VERSION=${LRAA_VERSION}
 ENV LRAA_CO=${LRAA_CO}
 
+# Real provenance, and the only provenance: the SHA the checkout below was
+# fetched with.  Readable without running the image, unlike an ENV.
+LABEL org.opencontainers.image.revision=${LRAA_CO}
+
 # Last layer, so a version bump reuses everything above.
-RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; the build scripts pass git rev-parse HEAD" >&2; exit 1; fi; \
     cd ${SRC} && \
     curl -sSL https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz -o lraa.tar.gz && \
     tar xzf lraa.tar.gz && \

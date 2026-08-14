@@ -75,8 +75,8 @@ which names the core, sc and orf images and the tag they share.
 
 | tag | set by | built from | used by |
 |---|---|---|---|
-| `latest` | `build_docker.latest.sh` | `LRAA_CO.txt` | defaults written inside the `.wdl` files |
-| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `LRAA_CO.txt` | release pins |
+| `latest` | `build_docker.latest.sh` | `git rev-parse HEAD` | defaults written inside the `.wdl` files |
+| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `git rev-parse HEAD` | release pins |
 | `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | local WDL test targets, through `testing/lraa_test_docker.mk` |
 | `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving tag, e.g. runs dispatched to VMs |
 
@@ -96,14 +96,14 @@ mid-development. Production work uses a release tag, never either of these.
 
 ## Building
 
-Three paths. They differ only in the tag they write and the commit the checkout
-comes from:
+Three paths. All three build the commit you are sitting on; they differ only in
+the tag they write:
 
 ```bash
 cd Docker
 bash build_docker.testing.sh     # testing,   from git HEAD
-bash build_docker.versioned.sh   # <version>, from LRAA_CO.txt
-bash build_docker.latest.sh      # latest,    from LRAA_CO.txt
+bash build_docker.versioned.sh   # <version>, from git HEAD
+bash build_docker.latest.sh      # latest,    from git HEAD
 ```
 
 Use `build_docker.testing.sh` to validate the commit you are on before it is
@@ -119,12 +119,21 @@ version and the commit are passed as `--build-arg LRAA_VERSION=` and
 `--build-arg LRAA_CO=`, so the SHA lives in one place instead of four
 Dockerfiles that can drift apart.
 
-The release scripts read that SHA from `LRAA_CO.txt`. The testing script asks
-git instead, and refuses to build a commit GitHub cannot serve: the Dockerfiles
-fetch the checkout by SHA, so an unpushed commit fails several layers in with an
-error naming a tarball rather than the mistake. It also asserts the version the
-built image reports, which catches a stale cached layer or a `VERSION.txt` that
-has drifted from the `VERSION` in the `LRAA` script.
+All three ask git for the SHA, and all three refuse to build a commit GitHub
+cannot serve: the Dockerfiles fetch the checkout by SHA, so an unpushed commit
+fails several layers in with an error naming a tarball rather than the mistake.
+The testing script additionally asserts the version the built image reports,
+which catches a stale cached layer or a `VERSION.txt` that has drifted from the
+`VERSION` in the `LRAA` script.
+
+There is no pinned-SHA file. One existed, `Docker/LRAA_CO.txt`, and it drifted:
+it named a 0.18.3-era commit while `VERSION.txt` said 0.19.0, so the release
+scripts would have published 0.19.0 images built from code predating the
+release. It also shipped inside every image as part of the checkout, where it
+read like provenance while describing a different commit than the surrounding
+code. A build now describes the tree it was run from, and the SHA it used is
+recorded in each image twice: `ENV LRAA_CO`, and the OCI label
+`org.opencontainers.image.revision` for reading without running the image.
 
 Only the release scripts retag the core image as plain `lraa` and push that too,
 so the alias never drifts from `lraa-core`. `testing` gets no such alias: the
@@ -145,11 +154,12 @@ what makes a per-commit testing build cheap enough to be routine.
    `bash build_docker.testing.sh`, then the WDL test targets under `testing/`,
    which run against `:testing`. A green run against `:latest` would only tell
    you the previous release still works.
-4. Put the commit SHA you just pushed in `Docker/LRAA_CO.txt`. The images fetch
+4. Run both release build scripts. They build the commit you just pushed and
+   fetch it as
    `https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz`
-   rather than cloning, so this one line decides which code ships.
-5. Commit the pin, then run both release build scripts.
-6. Confirm what shipped:
+   rather than cloning, so what ships is the tree you validated in step 3 --
+   provided you have not committed anything since.
+5. Confirm what shipped:
 
 ```bash
 docker run --rm <registry>/lraa-core:<version> \

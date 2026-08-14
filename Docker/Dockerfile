@@ -231,12 +231,16 @@ ARG LRAA_CO
 ENV LRAA_VERSION=${LRAA_VERSION}
 ENV LRAA_CO=${LRAA_CO}
 
+# Real provenance, and the only provenance: the SHA the checkout below was
+# fetched with.  Readable without running the image, unlike an ENV.
+LABEL org.opencontainers.image.revision=${LRAA_CO}
+
 
 # The pinned commit as a source archive rather than a clone: no runtime code
 # consults git, and a clone of this repository carries ~85MB of pack history.
 # testing/ holds ~155MB of fixture data that only the repo's own Makefiles read,
 # from a host checkout, so it is not shipped.
-RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; see Docker/LRAA_CO.txt" >&2; exit 1; fi; \
+RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; the build scripts pass git rev-parse HEAD" >&2; exit 1; fi; \
     wget -q https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz && \
     tar xzf ${LRAA_CO}.tar.gz && \
     mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \

@@ -9,7 +9,33 @@ unset DOCKER_API_VERSION
 
 VERSION=latest
 LRAA_VERSION=`cat VERSION.txt`
-LRAA_CO=`cat LRAA_CO.txt`
+# Must stay in step with the URL the Dockerfiles curl the checkout from; the
+# reachability check below is worthless if it probes a different repository.
+GITHUB_REPO=MethodsDev/LongReadAlignmentAssembler
+
+# The checkout is the commit you are sitting on.  There is no pinned SHA file:
+# one existed, and it drifted -- it named a 0.18.3-era commit while VERSION.txt
+# said 0.19.0, so this script would have published 0.19.0 images containing code
+# from before the release.  A build describes the tree it was run from, and the
+# SHA is stamped into every image as ENV LRAA_CO and as an OCI revision label.
+LRAA_CO=`git rev-parse HEAD`
+
+# The Dockerfiles fetch the checkout by SHA from GitHub, so an unpushed commit
+# does not build: the fetch 404s a few layers in, long after the expensive ones,
+# and the error names a tarball rather than the mistake.  Worse, a SHA that
+# happens to exist upstream but is not what you have locally builds something
+# that is not your working tree.  Fail here instead.
+if ! curl -sSf -o /dev/null -L https://github.com/${GITHUB_REPO}/archive/${LRAA_CO}.tar.gz; then
+    set +x
+    echo "" >&2
+    echo "commit ${LRAA_CO} is not fetchable from ${GITHUB_REPO}." >&2
+    echo "The Dockerfiles fetch the LRAA checkout by SHA from GitHub, so this" >&2
+    echo "commit must be pushed before it can be built.  Push it and re-run:" >&2
+    echo "" >&2
+    echo "    git push origin HEAD" >&2
+    echo "" >&2
+    exit 1
+fi
 
 REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
 
@@ -35,7 +61,7 @@ BASE_IMAGE=lraa-base:${LRAA_VERSION}
 #   lraa-combined   Dockerfile        (everything in one image)
 #
 # Every image takes the LRAA checkout as its final layer, from the commit named
-# in LRAA_CO.txt, so bumping a version rebuilds one small layer per image rather
+# by the LRAA_CO build arg, so bumping a version rebuilds one small layer rather
 # than recompiling Seurat.
 
 docker build -f Dockerfile.base -t ${BASE_IMAGE} .
