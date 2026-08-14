@@ -74,8 +74,15 @@ class Bam_alignment_extractor:
                     )
                 )
 
+            # region_lend/region_rend arrive 1-based inclusive, straight from
+            # --region contig:lend-rend.  pysam.fetch takes 0-based half-open
+            # [start, stop), so passing region_lend unconverted started the
+            # window one base late and silently dropped any alignment whose only
+            # overlap with the region was its first base.  The right edge needs no
+            # adjustment: 1-based region_rend is 0-based region_rend - 1, which is
+            # below the exclusive stop and therefore included.
             read_fetcher = self._pysam_reader.fetch(
-                contig_acc, region_lend, region_rend
+                contig_acc, region_lend - 1, region_rend
             )
         else:
             logger.debug(

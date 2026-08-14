@@ -53,6 +53,35 @@ def test_secondary_and_supplementary_alignments_are_always_discarded(tmp_path):
     assert read_flags == [0]
 
 
+def test_an_alignment_ending_at_the_region_start_is_retained(tmp_path):
+    """`--region` boundaries are 1-based inclusive; pysam.fetch is 0-based half-open.
+
+    Passing region_lend straight through started the window one base late, so an
+    alignment whose only overlap with the region was its final base was silently
+    dropped. Read A below ends exactly at 1-based 200 and read B starts at 201;
+    a region of 200-300 must return both, and returned only B before the fix.
+
+    This is reachable without chunking: any region-restricted run lost alignments
+    ending at its start, and those runs get compared against whole-contig ones,
+    which take the unrestricted fetch branch and lose nothing.
+    """
+    bam_path = tmp_path / "boundary.bam"
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
+    with pysam.AlignmentFile(bam_path, "wb", header=header) as outf:
+        outf.write(_alignment("A", 0, 0, 150))  # 0-based 150-199 -> 1-based 151-200
+        outf.write(_alignment("B", 0, 0, 200))  # 0-based 200-249 -> 1-based 201-250
+    pysam.index(str(bam_path))
+
+    names = [
+        read.query_name
+        for read in Bam_alignment_extractor(str(bam_path)).get_read_alignments(
+            "chr1", region_lend=200, region_rend=300
+        )
+    ]
+
+    assert names == ["A", "B"]
+
+
 def test_discard_counters_name_the_reason_for_each_dropped_record(tmp_path, caplog):
     """The per-reason tally is the only place a dropped record is accounted for.
 
