@@ -4,6 +4,10 @@
 __pycache__/
 *.pyc
 
+# Written to the current working directory by Transcript.py's clustering debug dump,
+# so it lands wherever pytest happened to run. Not an input to anything.
+__init_clusters.tsv
+
 # Ignore all untracked files generated under testing
 testing/**
 !testing/lraa_test_docker.mk
