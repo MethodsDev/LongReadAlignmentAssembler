@@ -667,7 +667,7 @@ def select_cut_points(
             )
 
         dropped_read_names = collections.OrderedDict()  # name -> [cut positions]
-        seen_alignments = set()
+        cut_positions = [cut.position for cut in cuts]  # strictly increasing
         for cut in cuts:
             for aln in spanning_alignments(
                 bam, chrom, strand, cut.position, max_intron_length
@@ -675,21 +675,22 @@ def select_cut_points(
                 dropped_read_names.setdefault(aln.query_name, []).append(cut.position)
                 if severed_sink is None:
                     continue
-                # One record per ALIGNMENT: a read severed by two cuts is fetched
-                # once per cut and would otherwise be written twice.
+                # An alignment spanning several cuts is fetched once per cut, so
+                # something has to collapse the repeats.  Not identity: two BAM rows
+                # can be byte-identical and still be two retained alignments, so
+                # hashing the record -- however completely -- destroys multiplicity
+                # and the emitted BAM stops representing every alignment the cuts
+                # sever.
                 #
-                # Keyed on the whole serialized record, not a tuple of coordinate
-                # fields.  Two retained records can share a query name AND a
-                # position AND a CIGAR while being different reads -- single-cell
-                # input composes read identity from cell_barcode_tag and
-                # read_umi_tag, so records differing only in CB or UB are different
-                # reads from different cells.  A coordinate key would silently drop
-                # one of them, which relocates a UMI rather than perturbing a count.
-                # to_string() covers tags, mate fields and sequence, so the only
-                # thing it collapses is the same record seen twice.
-                identity = aln.to_string()
-                if identity not in seen_alignments:
-                    seen_alignments.add(identity)
+                # Ownership instead.  Each alignment is emitted only at the FIRST
+                # selected cut inside its span, which is a property of coordinates
+                # rather than content: repeats collapse because the later cuts are
+                # not the owner, while two identical rows are both yielded at the
+                # owning cut and both survive.
+                owner = cut_positions[
+                    bisect.bisect_left(cut_positions, aln.reference_start + 1)
+                ]
+                if cut.position == owner:
                     severed_sink.append(aln)
 
         total_retained = (

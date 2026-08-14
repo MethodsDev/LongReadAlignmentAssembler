@@ -889,19 +889,19 @@ def test_no_sink_means_no_collection(tmp_path):
     assert selection.dropped_read_names, "expected a severed read to be named"
 
 
-def test_two_cells_sharing_coordinates_and_a_query_name_both_survive(tmp_path):
-    """Single-cell input composes read identity from CB and UB, not query_name.
+def test_byte_identical_rows_are_both_emitted(tmp_path):
+    """Multiplicity is data: two identical BAM rows are two severed alignments.
 
-    Two records can share position, CIGAR and query name while being different
-    reads from different cells.  A dedupe keyed on coordinate fields collapses
-    them, which relocates a UMI rather than perturbing a count -- so the key has
-    to cover the tags.
+    Any dedupe keyed on record content collapses them -- however complete the key
+    -- and the emitted BAM then stops representing every alignment the cuts sever.
+    Repeats are collapsed by cut ownership instead, which is a property of
+    coordinates and so cannot confuse two rows with one row seen twice.
     """
 
-    bam_path = tmp_path / "cells.bam"
+    bam_path = tmp_path / "identical.bam"
     header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chrT", "LN": 5000}]}
     with pysam.AlignmentFile(str(bam_path), "wb", header=header) as out:
-        for barcode, umi in (("AAACCCAAA", "TTTTTTTTTT"), ("GGGTTTGGG", "CCCCCCCCCC")):
+        for _ in range(2):
             aln = pysam.AlignedSegment()
             aln.query_name = "shared_name"
             aln.flag = 0
@@ -912,8 +912,6 @@ def test_two_cells_sharing_coordinates_and_a_query_name_both_survive(tmp_path):
             aln.query_sequence = "A" * 1000
             aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
             aln.set_tag("NM", 0)
-            aln.set_tag("CB", barcode)
-            aln.set_tag("UB", umi)
             out.write(aln)
     pysam.index(str(bam_path))
 
@@ -931,5 +929,41 @@ def test_two_cells_sharing_coordinates_and_a_query_name_both_survive(tmp_path):
         severed_sink=sink,
     )
 
-    assert len(sink) == 2, "records differing only in CB/UB are different reads"
-    assert {aln.get_tag("CB") for aln in sink} == {"AAACCCAAA", "GGGTTTGGG"}
+    assert len(sink) == 2, "two identical rows are two alignments, not one"
+
+
+def test_an_alignment_spanning_two_cuts_is_emitted_once(tmp_path):
+    """The repeat that ownership exists to collapse, in the same run as the above."""
+
+    bam_path = tmp_path / "wide.bam"
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chrT", "LN": 9000}]}
+    with pysam.AlignmentFile(str(bam_path), "wb", header=header) as out:
+        aln = pysam.AlignedSegment()
+        aln.query_name = "wide"
+        aln.flag = 0
+        aln.reference_id = 0
+        aln.reference_start = 2499
+        aln.mapping_quality = 60
+        aln.cigar = [(0, 4000)]
+        aln.query_sequence = "A" * 4000
+        aln.query_qualities = pysam.qualitystring_to_array("I" * 4000)
+        aln.set_tag("NM", 0)
+        out.write(aln)
+    pysam.index(str(bam_path))
+
+    sink = []
+    selection = selector.select_cut_points(
+        bam_filename=str(bam_path),
+        chrom="chrT",
+        contig_length=9000,
+        strand="+",
+        segment_span=3000,
+        wiggle=0,
+        depth_window=100,
+        margin=0,
+        minimum_span=1000,
+        severed_sink=sink,
+    )
+
+    assert len(selection.dropped_read_names["wide"]) == 2, "must span two cuts"
+    assert len(sink) == 1, "one alignment, emitted at the first cut it spans"
