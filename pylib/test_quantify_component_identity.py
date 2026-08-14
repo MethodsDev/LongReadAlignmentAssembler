@@ -162,6 +162,33 @@ def test_component_identity_does_not_survive_into_a_later_call():
     assert quantify.get_component_id_to_gene_ids() == {"g9": ["g9"]}
 
 
+def test_a_call_that_fails_before_component_construction_leaves_nothing_stale():
+    """Cleared at entry, so a failed call answers empty rather than with the last one.
+
+    Clearing where the maps are filled would leave both accessors exposing the
+    previous call's components after any failure earlier in quantify(), which is
+    the stale-entry hazard in its quietest form: a consumer sees a complete,
+    plausible mapping belonging to a transcript set that is no longer loaded.
+    """
+
+    quantify = Quantify(False, 1)
+    quantify.quantify(*_build(*_SHARED_READ))
+    assert set(quantify.get_transcript_id_to_component_id()) == {"t1", "t2"}
+
+    def _fail(*args, **kwargs):
+        raise RuntimeError("read assignment failed")
+
+    quantify._assign_reads_to_transcripts = _fail
+
+    with pytest.raises(RuntimeError):
+        quantify.quantify(*_build([2], [("g9", "t9", [2])]))
+
+    assert quantify.get_transcript_id_to_component_id() == {}, (
+        "a failed call must not leave the previous call's component ids readable"
+    )
+    assert quantify.get_component_id_to_gene_ids() == {}
+
+
 def test_the_accessors_are_empty_before_the_first_call():
     quantify = Quantify(False, 1)
     assert quantify.get_transcript_id_to_component_id() == {}

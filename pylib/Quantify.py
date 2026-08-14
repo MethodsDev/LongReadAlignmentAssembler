@@ -54,6 +54,16 @@ class Quantify:
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
 
+        # Cleared at entry, not where they are filled: a consumer reads these
+        # after the call, and if a later call raises anywhere before the component
+        # index is built, answering with the previous call's components pairs this
+        # run's theta with a previous run's grouping.  Empty is a visible failure;
+        # stale is not.  quantify() runs repeatedly on one object over a shrinking
+        # transcript set, so this is a live path, and _mp_to_transcripts defends
+        # the same carryover where the component builder reads it.
+        self._transcript_id_to_component_id = dict()
+        self._component_id_to_gene_ids = dict()
+
         contig_acc = splice_graph.get_contig_acc()
         contig_strand = splice_graph.get_contig_strand()
 
@@ -102,13 +112,7 @@ class Quantify:
         # component and not over a gene.  A consumer that renormalizes per gene
         # gives a read compatible with transcripts of two genes in one component
         # a split summing to 2, which is arithmetically plausible and silent.
-        #
-        # Rebuilt rather than updated: quantify() may be called more than once on
-        # one object over a shrinking transcript set, and a stale entry would pair
-        # this run's theta with a previous run's component.  _mp_to_transcripts
-        # defends the same carryover at its own read site above.
-        self._transcript_id_to_component_id = dict()
-        self._component_id_to_gene_ids = dict()
+        # Both maps were cleared at entry above.
         for component_gene_ids in gene_components:
             # Leftmost gene of the component, made canonical by the sort in
             # _build_read_sharing_gene_components.  Components partition the
