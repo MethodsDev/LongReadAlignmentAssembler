@@ -54,13 +54,31 @@ class Quantify:
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
 
-        # Cleared at entry, not where they are filled: a consumer reads these
-        # after the call, and if a later call raises anywhere before the component
-        # index is built, answering with the previous call's components pairs this
-        # run's theta with a previous run's grouping.  Empty is a visible failure;
-        # stale is not.  quantify() runs repeatedly on one object over a shrinking
-        # transcript set, so this is a live path, and _mp_to_transcripts defends
-        # the same carryover where the component builder reads it.
+        # Every container below describes ONE quantification and is rebuilt by the
+        # assignment steps in this call.  quantify() runs up to three times on one
+        # object over a shrinking transcript set -- de novo calls it after
+        # degradation pruning and again after isoform-fraction filtering -- so an
+        # entry that survives describes transcripts this call does not contain.
+        #
+        # _mp_to_transcripts is the one that changes an answer.  Component
+        # construction unions the genes of every retained entry, and the guard
+        # there only skips genes absent from this call; a stale multipath bridging
+        # two genes that both still have isoforms fuses them into one component
+        # this call's reads no longer bridge.  It can only over-fuse, so theta is
+        # normalized across genes that should not share a denominator.
+        #
+        # The gene indexes fuse nothing but keep filtered-out transcripts alive as
+        # read-assignment candidates.  _unassigned_mp_count_pairs already reset
+        # itself per call, which is the semantics the rest of these now match.
+        self._path_node_id_to_gene_ids = defaultdict(set)
+        self._gene_id_to_transcript_objs = defaultdict(dict)
+        self._read_name_to_multipath = dict()
+        self._mp_to_transcripts = dict()
+        self._unassigned_mp_count_pairs = list()
+
+        # Read after the call by consumers recomputing a per-read isoform split.
+        # Cleared here rather than where they are filled so a call that raises
+        # earlier answers empty: empty is a visible failure, stale is not.
         self._transcript_id_to_component_id = dict()
         self._component_id_to_gene_ids = dict()
 

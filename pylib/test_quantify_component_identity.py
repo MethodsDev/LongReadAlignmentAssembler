@@ -204,3 +204,37 @@ def test_the_accessors_hand_back_copies():
 
     assert quantify.get_transcript_id_to_component_id()["t1"] == "g1"
     assert quantify.get_component_id_to_gene_ids()["g1"] == ["g1", "g2"]
+
+
+def test_a_bridge_from_an_earlier_call_does_not_fuse_two_surviving_genes():
+    """The stale entry that changes an answer rather than merely lingering.
+
+    Component construction unions the genes of every retained _mp_to_transcripts
+    entry, and its guard only skips genes absent from the current call.  Two genes
+    that both keep isoforms are therefore still eligible to be fused by a multipath
+    from a previous call, which is reachable: de novo runs quantify() three times on
+    one object, after degradation pruning and after isoform-fraction filtering, and
+    a bridging transcript removed by either one leaves its multipath behind.
+
+    The fusion only ever adds genes to a component, so theta is normalized across
+    genes that no longer share a read and every fraction in both is depressed.
+    Nothing in the output marks it: the component is well formed, just not this
+    call's.
+    """
+
+    quantify = Quantify(False, 1)
+
+    # call 1 genuinely bridges g1 and g2
+    quantify.quantify(*_build(*_SHARED_READ))
+    fused = quantify.get_transcript_id_to_component_id()
+    assert fused["t1"] == fused["t2"]
+
+    # call 2 keeps both genes and both isoforms; only the bridging read is gone
+    quantify.quantify(*_build(*_UNSHARED_READ))
+
+    tx_to_component = quantify.get_transcript_id_to_component_id()
+    assert tx_to_component["t1"] != tx_to_component["t2"], (
+        "a multipath from an earlier call must not fuse genes this call's reads "
+        "leave separate"
+    )
+    assert quantify.get_component_id_to_gene_ids() == {"g1": ["g1"], "g2": ["g2"]}
