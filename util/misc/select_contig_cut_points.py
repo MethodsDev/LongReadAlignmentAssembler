@@ -334,6 +334,24 @@ def spanning_counts(bam, chrom, strand, positions, max_intron_length=None):
     return counts
 
 
+def spanning_alignments(bam, chrom, strand, position, max_intron_length=None):
+    """The retained primary alignments a cut at ``position`` severs.
+
+    Yields the pysam records themselves.  ``spanning_read_names`` is this filter
+    with the names taken off, so the predicate deciding what the extractor drops
+    exists once: a second copy would be free to drift, and the whole value of the
+    manifest is that it names exactly the set the extractor will lose.
+    """
+
+    for aln in bam.fetch(chrom, max(0, position - 1), position + 1):
+        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
+            continue
+        start = aln.reference_start + 1
+        end = aln.reference_end
+        if start <= position < end:
+            yield aln
+
+
 def spanning_read_names(bam, chrom, strand, position, max_intron_length=None):
     """Names of the retained primary alignments a cut at ``position`` severs.
 
@@ -341,15 +359,44 @@ def spanning_read_names(bam, chrom, strand, position, max_intron_length=None):
     comparison baseline can be built from exactly it.
     """
 
-    names = []
-    for aln in bam.fetch(chrom, max(0, position - 1), position + 1):
-        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
-            continue
-        start = aln.reference_start + 1
-        end = aln.reference_end
-        if start <= position < end:
-            names.append(aln.query_name)
-    return names
+    return [
+        aln.query_name
+        for aln in spanning_alignments(bam, chrom, strand, position, max_intron_length)
+    ]
+
+
+def write_severed_alignments_bam(header, alignments, path):
+    """A coordinate-sorted, indexed BAM of the alignments the cuts sever.
+
+    Names alone cannot answer what a severed read was compatible with.  Transcript
+    compatibility is a function of exon blocks and junctions, not extent, so two
+    reads with identical start and end can match different genes -- and for the
+    cross-gene question the junction structure is precisely what decides it.  A
+    span would give silent mis-attribution rather than an answer.
+
+    Names also cannot be looked up: a coordinate-indexed BAM cannot fetch by query
+    name, so attribution from the manifest alone costs a full pass over the source
+    however few names it holds.  Emitting the records while they are in hand is
+    what keeps that check local.
+
+    Takes a header rather than an open file because the caller writes ONCE across
+    every contig it selected on; a path threaded into per-contig selection would
+    leave only the last contig's reads behind.
+
+    Sorted in memory rather than by an external sort: cuts ascend, but reads
+    severed by a later cut can start before those severed by an earlier one, and
+    the set is small by construction -- a cut severing many reads is one the
+    selector rejects.
+    """
+
+    by_position = sorted(
+        alignments, key=lambda aln: (aln.reference_id, aln.reference_start, aln.query_name)
+    )
+    with pysam.AlignmentFile(path, "wb", header=header) as out:
+        for aln in by_position:
+            out.write(aln)
+    pysam.index(str(path))
+    return len(by_position)
 
 
 def count_retained_primary(bam, chrom, strand, max_intron_length=None):
@@ -501,6 +548,7 @@ def select_cut_points(
     max_intron_length=None,
     annotation=None,
     count_denominator=True,
+    severed_sink=None,
 ):
     """Choose cut points for one contig-strand. Returns a ``Selection``.
 
@@ -619,11 +667,29 @@ def select_cut_points(
             )
 
         dropped_read_names = collections.OrderedDict()  # name -> [cut positions]
+        seen_alignments = set()
         for cut in cuts:
-            for name in spanning_read_names(
+            for aln in spanning_alignments(
                 bam, chrom, strand, cut.position, max_intron_length
             ):
-                dropped_read_names.setdefault(name, []).append(cut.position)
+                dropped_read_names.setdefault(aln.query_name, []).append(cut.position)
+                if severed_sink is None:
+                    continue
+                # One record per ALIGNMENT, not per cut it crosses and not per name.
+                # A read severed by two cuts is still one alignment, so a duplicate
+                # would be double-counted downstream; but two retained records can
+                # legitimately share a query name, and keying on the name alone
+                # would silently discard the second.
+                identity = (
+                    aln.reference_id,
+                    aln.reference_start,
+                    aln.flag,
+                    aln.cigarstring,
+                    aln.query_name,
+                )
+                if identity not in seen_alignments:
+                    seen_alignments.add(identity)
+                    severed_sink.append(aln)
 
         total_retained = (
             count_retained_primary(bam, chrom, strand, max_intron_length)
@@ -981,6 +1047,18 @@ def main(argv=None):
         help="writes <prefix>.cuts.json, <prefix>.cuts.txt, "
         "<prefix>.dropped_reads.txt and <prefix>.dropped_reads.tsv",
     )
+    parser.add_argument(
+        "--severed_reads_bam",
+        type=str,
+        required=False,
+        default=None,
+        help="also write the severed primary alignments themselves to this BAM, "
+        "coordinate-sorted and indexed. The names in <prefix>.dropped_reads.tsv "
+        "cannot be fetched from a coordinate-indexed BAM, and a span cannot answer "
+        "what a read was compatible with -- compatibility follows exon blocks and "
+        "junctions -- so a consumer asking which severed reads linked two genes "
+        "needs the records.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1007,6 +1085,9 @@ def main(argv=None):
         contigs = sorted(lengths)
 
     selections = []
+    # One sink for every contig, written once below.  Per-contig writing would
+    # leave only the last contig's severed reads on disk.
+    severed_sink = [] if args.severed_reads_bam else None
     for chrom in contigs:
         annotation = (
             extractor.load_gtf(args.gtf, chrom, strand)
@@ -1027,6 +1108,19 @@ def main(argv=None):
                 minimum_span=args.minimum_span,
                 max_intron_length=args.max_intron_length,
                 annotation=annotation,
+                severed_sink=severed_sink,
+            )
+        )
+
+    if severed_sink is not None:
+        with pysam.AlignmentFile(args.bam, "rb") as bam:
+            header = bam.header
+        written = write_severed_alignments_bam(
+            header, severed_sink, args.severed_reads_bam
+        )
+        print(
+            "-wrote {} severed alignment(s) to {}".format(
+                written, args.severed_reads_bam
             )
         )
 

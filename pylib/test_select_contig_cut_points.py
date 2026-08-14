@@ -808,3 +808,82 @@ def test_long_intron_alignments_do_not_influence_selection(tmp_path):
     )
     assert loose.total_retained_primary == 1
     assert loose.cuts[0].spanning_dropped == 1
+
+
+# -- severed alignment emission -------------------------------------------------
+
+
+def test_the_severed_reads_bam_preserves_junction_structure(tmp_path):
+    """Spans cannot answer compatibility; exon blocks and junctions decide it.
+
+    A consumer asking which severed reads linked two genes needs the block
+    structure, not the extent: two reads with identical start and end can be
+    compatible with different genes.  So the emission has to be the records.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    # one spliced read across the only target, its intron away from the boundary
+    fixture.add_read("spliced", "+", [(2600, 2900), (3300, 3600)])
+    fixture.build()
+
+    out_bam = tmp_path / "severed.bam"
+    sink = []
+    # wiggle 0 leaves the target itself as the only candidate, so the read cannot
+    # be dodged and the cut is forced through it
+    selection = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=0,
+        minimum_span=1000,
+        severed_sink=sink,
+    )
+
+    assert "spliced" in selection.dropped_read_names, (
+        "fixture must actually sever the spliced read for this to test anything"
+    )
+
+    selector.write_severed_alignments_bam(
+        pysam.AlignmentFile(fixture.bam, "rb").header, sink, str(out_bam)
+    )
+
+    with pysam.AlignmentFile(str(out_bam), "rb") as bam:
+        emitted = list(bam.fetch())
+
+    assert [aln.query_name for aln in emitted] == ["spliced"]
+    # the junction survives: two blocks with an N between them, not one span
+    assert emitted[0].get_blocks() == [(2599, 2900), (3299, 3600)]
+    assert 3 in [op for op, _length in emitted[0].cigartuples]
+
+
+def test_a_read_severed_by_two_cuts_is_emitted_once(tmp_path):
+    """One record per alignment, or a consumer double-counts it."""
+
+    fixture = Fixture(tmp_path, length=9000)
+    # long read reaching across two adjacent targets
+    fixture.add_read("long", "+", [(2500, 6500)])
+    fixture.build()
+
+    sink = []
+    selection = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=500,
+        minimum_span=1000,
+        severed_sink=sink,
+    )
+
+    assert len(selection.dropped_read_names["long"]) == 2, (
+        "fixture must sever the same read at two cuts"
+    )
+    assert [aln.query_name for aln in sink] == ["long"]
+
+
+def test_no_sink_means_no_collection(tmp_path):
+    """The default path must not pay for records nobody asked for."""
+
+    fixture = Fixture(tmp_path, length=5000)
+    fixture.spanning_read("severed", 3000)
+    fixture.build()
+
+    selection = _select(fixture, segment_span=3000, wiggle=0, minimum_span=1000)
+    assert selection.dropped_read_names, "expected a severed read to be named"
