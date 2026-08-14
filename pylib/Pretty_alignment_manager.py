@@ -143,15 +143,24 @@ class Pretty_alignment_manager:
         # inputs that happen to share a filename -- sampleA/aligned.bam and
         # sampleB/aligned.bam -- previously reused each other's extraction, and a bam
         # replaced in place was not noticed at all.
-        #
         # EXTRACTION_METHOD_VERSION covers the code, which no parameter does. A change
         # to what extraction returns for identical inputs and settings leaves every
         # other field of this token unchanged, so a stale pickle is a valid hit and the
         # fix is silently undone on any resumed or --no_cleanup run.
+        #
+        # The three settings below are every config value extraction reads that changes
+        # which alignments come back: min_mapping_quality and max_intron_length at
+        # Bam_alignment_extractor.py:58-59, min_per_id at :164. min_per_id is the one
+        # that bites in practice -- --HiFi raises it from 80 to 97, so a run with the
+        # flag and one without differ in which alignments survive, and while it was
+        # absent from this token the second of the two read the first one's pickle.
+        # Anything added to that extraction path belongs here too.
         extraction_token = (
             f"{contig_strand_token}.{bam_identity}.pretty_alignments"
             f".v{EXTRACTION_METHOD_VERSION}"
             f".mapq-{LRAA_Globals.config['min_mapping_quality']}"
+            f".perid-{LRAA_Globals.config['min_per_id']}"
+            f".maxintron-{LRAA_Globals.config['max_intron_length']}"
             f".corr-{try_correct_alignments}"
             f".qcerr-{per_id_QC_raise_error}"
         )

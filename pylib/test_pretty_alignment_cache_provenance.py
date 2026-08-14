@@ -145,3 +145,52 @@ def test_a_cache_from_an_earlier_extraction_version_is_not_reused(tmp_path, monk
     assert [a.get_read_name() for a in alignments] == ["only"]
     after = sorted(p.name for p in cache_dir.iterdir())
     assert len(after) > len(written), "bumping the version must not reuse the old stem"
+
+
+def _one_alignment_bam(tmp_path):
+    bam_path = tmp_path / "reads.bam"
+    _write_bam(bam_path, [_alignment("only", 0, 100, [(0, 50)], "A" * 50, 0)])
+    return bam_path
+
+
+def _cache_stems(cache_dir):
+    return {p.name.split(".restrict-")[0] for p in cache_dir.iterdir() if p.suffix == ".pkl"}
+
+
+def test_changing_min_per_id_does_not_reuse_the_cache(tmp_path, monkeypatch):
+    """--HiFi raises min_per_id from 80 to 97, so it changes which alignments survive.
+
+    Extraction reads it at Bam_alignment_extractor.py:164. While it was absent from the
+    cache token, a run with --HiFi and one without shared a stem, and whichever ran
+    second was served the first one's alignments.
+    """
+    bam_path = _one_alignment_bam(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    monkeypatch.setitem(LRAA_Globals.config, "min_per_id", 80)
+    _retrieve(bam_path, cache_dir)
+    lenient = _cache_stems(cache_dir)
+
+    monkeypatch.setitem(LRAA_Globals.config, "min_per_id", 97)
+    _retrieve(bam_path, cache_dir)
+
+    assert _cache_stems(cache_dir) - lenient, "raising min_per_id must not hit the cache"
+
+
+def test_changing_max_intron_length_does_not_reuse_the_cache(tmp_path, monkeypatch):
+    """Extraction discards alignments carrying an intron over the cap, at :58-59.
+
+    Sweeping the cap is the obvious way to ask what it costs, and while it was absent
+    from the token every value after the first answered with the first one's pickle.
+    """
+    bam_path = _one_alignment_bam(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    monkeypatch.setitem(LRAA_Globals.config, "max_intron_length", 200000)
+    _retrieve(bam_path, cache_dir)
+    default_cap = _cache_stems(cache_dir)
+
+    monkeypatch.setitem(LRAA_Globals.config, "max_intron_length", 10000)
+    _retrieve(bam_path, cache_dir)
+
+    assert _cache_stems(cache_dir) - default_cap, "changing the cap must not hit the cache"
