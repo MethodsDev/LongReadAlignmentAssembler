@@ -3,20 +3,24 @@
 """Work-unit accounting and reaping order in MultiProcessManager.
 
 The manager's job is not just to keep a pool full; it is to guarantee that every
-unit submitted comes back exactly once.  Two things break that guarantee and
-both are silent, which is why they are pinned down here:
+unit submitted comes back exactly once.  Results travel as per-unit shard files
+published by atomic rename (see test_shard_publication.py for the transport
+itself); what is pinned here is the bookkeeping around it:
 
-  * reaping order -- draining the result queue before checking which children
-    have died lets a child flush its payload and exit in the gap, so the parent
-    joins it as a success with its bytes still unread;
-  * untagged, unaudited results -- a payload that never arrives is
+  * reaping order -- a result must be collected after the process that produced
+    it has been joined, never on a schedule of the parent's own;
+  * tagged, audited results -- a result that never arrives is otherwise
     indistinguishable from a unit that had nothing to say.
+
+Every test has a deadline.  The failure being guarded against is a parent that
+never finishes, so a suite that could hang would hide it.
 """
 
 import multiprocessing
+import os
+import signal
 import sys
 from pathlib import Path
-from queue import Empty as QueueEmpty
 
 import pytest
 
@@ -24,7 +28,35 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "pylib") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "pylib"))
 
-from MultiProcessManager import MultiProcessManager, WorkUnitAccountingError
+from MultiProcessManager import MultiProcessManager, ShardStore, WorkUnitAccountingError
+
+TEST_DEADLINE_SEC = 60.0
+
+
+@pytest.fixture(autouse=True)
+def fail_rather_than_hang():
+    def _expired(signum, frame):
+        raise AssertionError(
+            "test exceeded its {}s deadline".format(TEST_DEADLINE_SEC)
+        )
+
+    previous_handler = signal.signal(signal.SIGALRM, _expired)
+    signal.setitimer(signal.ITIMER_REAL, TEST_DEADLINE_SEC)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        for child in multiprocessing.active_children():
+            child.terminate()
+            child.join(timeout=5)
+
+
+@pytest.fixture
+def store(tmp_path):
+    shard_store = ShardStore.create("chr1.fwd.ME.round1", base_dir=str(tmp_path))
+    yield shard_store
+    shard_store.discard()
 
 
 # ---------------------------------------------------------------------------
@@ -32,24 +64,15 @@ from MultiProcessManager import MultiProcessManager, WorkUnitAccountingError
 # ---------------------------------------------------------------------------
 
 
-def _worker_put(q, unit_id):
-    q.put((unit_id, "payload-{}".format(unit_id)))
+def _worker_publish(shard_store, unit_id):
+    shard_store.publish(unit_id, "payload-{}".format(unit_id), token="unit")
 
 
-def _worker_exit_clean_without_payload(q, unit_id):
+def _worker_exit_clean_without_publishing(shard_store, unit_id):
     return
 
 
-def _worker_put_twice(q, unit_id):
-    q.put((unit_id, "payload-{}".format(unit_id)))
-    q.put((unit_id, "payload-{}-again".format(unit_id)))
-
-
-def _worker_put_foreign_id(q, unit_id, foreign_unit_id):
-    q.put((foreign_unit_id, "payload-{}".format(foreign_unit_id)))
-
-
-def _worker_die(q, unit_id):
+def _worker_die(shard_store, unit_id):
     raise RuntimeError("unit {} is meant to fail".format(unit_id))
 
 
@@ -57,29 +80,32 @@ def _worker_noop():
     return
 
 
-def _worker_gated_put(q, unit_id, gate):
+def _worker_gated_publish(shard_store, unit_id, gate):
     gate.wait(60)
-    q.put((unit_id, "payload-{}".format(unit_id)))
+    shard_store.publish(unit_id, "payload-{}".format(unit_id), token="unit")
 
 
-def _worker_chained_put(q, unit_id, my_gate, next_gate, arrival_counter):
-    """Put only when released, then release the next unit in the chain.
+def _worker_chained_publish(
+    shard_store, unit_id, my_gate, next_gate, completion_counter
+):
+    """Publish only when released, then release the next unit in the chain.
 
-    Chaining the gates makes arrival order a property of the test rather than of
-    the scheduler, so the ordering assertion below has nothing to be flaky about.
+    Chaining the gates makes completion order a property of the test rather than
+    of the scheduler, so the ordering assertion below has nothing to be flaky
+    about.
     """
     my_gate.wait(60)
-    with arrival_counter.get_lock():
-        arrival_counter.value += 1
-        arrival_rank = arrival_counter.value
-    q.put((unit_id, arrival_rank))
+    with completion_counter.get_lock():
+        completion_counter.value += 1
+        completion_rank = completion_counter.value
+    shard_store.publish(unit_id, completion_rank, token="unit")
     if next_gate is not None:
         next_gate.set()
 
 
-def _spawn(q, target, unit_id, name, extra_args=()):
+def _spawn(shard_store, target, unit_id, name, extra_args=()):
     return multiprocessing.Process(
-        target=target, name=name, args=(q, unit_id) + tuple(extra_args)
+        target=target, name=name, args=(shard_store, unit_id) + tuple(extra_args)
     )
 
 
@@ -88,112 +114,60 @@ def _spawn(q, target, unit_id, name, extra_args=()):
 # ---------------------------------------------------------------------------
 
 
-class _FlushOnDeathQueue:
-    """Queue stub whose payload becomes readable exactly when the process dies.
+class _ProcessPublishingAsItIsJoined:
+    """Process stub that publishes its shard from inside join().
 
-    A worker hands its payload to the queue's feeder thread and then exits, so
-    the bytes can reach the pipe at any point up to the instant the parent
-    observes the process gone.  This stub pins that instant down: nothing is
-    readable until `flush`, which the process stub below calls from is_alive().
-
-    A manager that drains before taking the liveness snapshot therefore sees an
-    empty queue, then sees a dead process, and joins it as a success with the
-    payload still unread.  A manager that snapshots first cannot lose it.
+    A worker renames its shard and then exits, so the last possible instant at
+    which the result can appear is the instant the process goes away.  Collecting
+    after join() therefore cannot miss it, and collecting anywhere else can: the
+    result queue this replaced was drained on the parent's own schedule, and a
+    child that flushed and exited in the gap was joined as a success with its
+    payload unread.
     """
 
-    def __init__(self, pending):
-        self._pending = list(pending)
-        self._readable = []
-
-    def flush(self):
-        self._readable.extend(self._pending)
-        self._pending = []
-
-    def empty(self):
-        return not self._readable
-
-    def get(self, block=True, timeout=None):
-        if not self._readable:
-            raise QueueEmpty
-        return self._readable.pop(0)
-
-    def get_nowait(self):
-        return self.get(block=False)
-
-
-class _ProcessDeadOnFirstLook:
-    """Process stub that completes its queue flush as it is checked for liveness."""
-
-    def __init__(self, name, flush_on_death_queue):
+    def __init__(self, name, shard_store, unit_id, payload):
         self.name = name
         self.pid = -1
         self.exitcode = 0
-        self._queue = flush_on_death_queue
+        self._shard_store = shard_store
+        self._unit_id = unit_id
+        self._payload = payload
+        self.published = False
 
     def start(self):
         pass
 
     def is_alive(self):
-        self._queue.flush()
         return False
 
     def join(self, timeout=None):
-        pass
+        if not self.published:
+            self._shard_store.publish(self._unit_id, self._payload, token="unit")
+            self.published = True
 
 
-def test_payload_flushed_at_the_moment_of_death_is_not_reaped_past():
-    """The liveness snapshot must be taken before the drain, not after."""
+def test_a_shard_published_at_the_moment_of_death_is_collected(store):
+    """Collection must happen after the join, not on the parent's own schedule."""
 
-    q = _FlushOnDeathQueue([(1, "payload-1")])
-    mgr = MultiProcessManager(1, q)
+    mgr = MultiProcessManager(1, store)
 
     # Drive the screening pass directly: the interleaving under test is between
     # two statements inside it, and there is no way to schedule a real worker
     # into that gap on demand.
-    process = _ProcessDeadOnFirstLook("chr1+:100-200:1", q)
+    process = _ProcessPublishingAsItIsJoined(
+        "chr1+:100-200:1", store, 1, "payload-1"
+    )
     mgr.submitted_unit_ids = {1}
+    mgr.process_to_unit_id[process] = 1
     mgr.process_list.add(process)
     mgr.num_running = 1
 
     mgr._screen_running_processes()
 
-    assert mgr.retrieve_queue_contents() == [(1, "payload-1")]
+    assert mgr.retrieve_unit_results() == [(1, "payload-1")]
     assert mgr.num_running == 0
     assert mgr.num_successes == 1
-
-
-class _EmptyIsATripwireQueue:
-    """Delegating queue proxy that fails the test if empty() is consulted."""
-
-    def __init__(self, wrapped):
-        self._wrapped = wrapped
-
-    def empty(self):
-        raise AssertionError(
-            "Queue.empty() lags put() by the feeder thread and must never gate draining"
-        )
-
-    def put(self, *args, **kwargs):
-        return self._wrapped.put(*args, **kwargs)
-
-    def get(self, *args, **kwargs):
-        return self._wrapped.get(*args, **kwargs)
-
-    def get_nowait(self):
-        return self._wrapped.get_nowait()
-
-
-def test_draining_never_consults_queue_empty():
-    real_q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, _EmptyIsATripwireQueue(real_q))
-
-    for unit_id in (1, 2):
-        mgr.launch_process(
-            _spawn(real_q, _worker_put, unit_id, "chr1+"), unit_id=unit_id
-        )
-
-    assert mgr.wait_for_remaining_processes() == 0
-    assert mgr.retrieve_queue_contents() == [(1, "payload-1"), (2, "payload-2")]
+    mgr.verify_units_accounted()
 
 
 # ---------------------------------------------------------------------------
@@ -201,84 +175,71 @@ def test_draining_never_consults_queue_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_clean_exit_without_a_payload_is_not_a_silent_success():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, q)
+def test_clean_exit_without_a_result_is_not_a_silent_success(store):
+    mgr = MultiProcessManager(2, store)
 
-    mgr.launch_process(_spawn(q, _worker_put, 1, "chr1+"), unit_id=1)
+    mgr.launch_process(_spawn(store, _worker_publish, 1, "chr1+"), unit_id=1)
     mgr.launch_process(
-        _spawn(q, _worker_exit_clean_without_payload, 2, "chr1+"), unit_id=2
+        _spawn(store, _worker_exit_clean_without_publishing, 2, "chr1+"), unit_id=2
     )
 
     with pytest.raises(WorkUnitAccountingError) as excinfo:
         mgr.wait_for_remaining_processes()
 
     message = str(excinfo.value)
-    assert "exited 0 but returned no payload" in message
-    assert "[2]" in message, message
+    assert "published no result shard" in message
+    assert "2 (exit 0" in message, message
     # The unit really did exit cleanly; that is precisely what made the loss
     # invisible before.
     assert mgr.num_errors == 0
     assert mgr.num_successes == 2
 
 
-def test_a_unit_returning_two_payloads_is_rejected():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, q)
+def test_two_unit_ids_that_share_a_shard_name_are_rejected_at_launch(store):
+    """Distinct units must be distinct on disk.
 
-    mgr.launch_process(_spawn(q, _worker_put, 1, "chr1+"), unit_id=1)
-    mgr.launch_process(_spawn(q, _worker_put_twice, 7, "chr1+"), unit_id=7)
+    A unit publishes to a file named after its id, so two ids that reduce to one
+    name -- 1 and "1" -- would have the second silently overwrite the first.  The
+    queue keyed a dict and could not care; a filesystem can, so this is checked
+    at launch, before either worker starts.
+    """
 
+    mgr = MultiProcessManager(2, store)
+
+    mgr.launch_process(_spawn(store, _worker_publish, 1, "chr1+"), unit_id=1)
     with pytest.raises(WorkUnitAccountingError) as excinfo:
-        mgr.wait_for_remaining_processes()
+        mgr.launch_process(_spawn(store, _worker_publish, "00000001", "chr1+"), unit_id="00000001")
 
     message = str(excinfo.value)
-    assert "returned more than one payload" in message
-    assert "[7]" in message, message
+    assert "publish to shard" in message, message
+    assert "unit.00000001" in message, message
+
+    assert mgr.wait_for_remaining_processes() == 0
 
 
-def test_payload_tagged_with_an_unsubmitted_id_is_rejected():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(1, q)
+def test_resubmitting_a_unit_id_is_rejected_at_launch(store):
+    mgr = MultiProcessManager(2, store)
 
-    mgr.launch_process(
-        _spawn(q, _worker_put_foreign_id, 1, "chr1+", extra_args=(99,)), unit_id=1
-    )
-
+    mgr.launch_process(_spawn(store, _worker_publish, 3, "chr1+"), unit_id=3)
     with pytest.raises(WorkUnitAccountingError) as excinfo:
-        mgr.wait_for_remaining_processes()
-
-    message = str(excinfo.value)
-    assert "never-submitted unit id" in message
-    assert "[99]" in message, message
-
-
-def test_resubmitting_a_unit_id_is_rejected_at_launch():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, q)
-
-    mgr.launch_process(_spawn(q, _worker_put, 3, "chr1+"), unit_id=3)
-    with pytest.raises(WorkUnitAccountingError) as excinfo:
-        mgr.launch_process(_spawn(q, _worker_put, 3, "chr1+"), unit_id=3)
+        mgr.launch_process(_spawn(store, _worker_publish, 3, "chr1+"), unit_id=3)
     assert "submitted more than once" in str(excinfo.value)
 
     assert mgr.wait_for_remaining_processes() == 0
 
 
-def test_a_result_queue_requires_a_unit_id():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(1, q)
+def test_a_shard_store_requires_a_unit_id(store):
+    mgr = MultiProcessManager(1, store)
 
     with pytest.raises(ValueError):
-        mgr.launch_process(_spawn(q, _worker_put, 1, "chr1+"))
+        mgr.launch_process(_spawn(store, _worker_publish, 1, "chr1+"))
 
 
-def test_failed_unit_owes_no_payload_but_is_named_in_the_failure_record():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, q)
+def test_failed_unit_owes_no_result_but_is_named_in_the_failure_record(store):
+    mgr = MultiProcessManager(2, store)
 
-    mgr.launch_process(_spawn(q, _worker_put, 1, "chr1+"), unit_id=1)
-    mgr.launch_process(_spawn(q, _worker_die, 2, "chr1+"), unit_id=2)
+    mgr.launch_process(_spawn(store, _worker_publish, 1, "chr1+"), unit_id=1)
+    mgr.launch_process(_spawn(store, _worker_die, 2, "chr1+"), unit_id=2)
 
     assert mgr.wait_for_remaining_processes() == 1
 
@@ -287,7 +248,7 @@ def test_failed_unit_owes_no_payload_but_is_named_in_the_failure_record():
     assert failure["name"] == "chr1+:2"
     assert failure["exitcode"] != 0
     assert failure["duration_sec"] is not None
-    assert mgr.retrieve_queue_contents() == [(1, "payload-1")]
+    assert mgr.retrieve_unit_results() == [(1, "payload-1")]
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +256,17 @@ def test_failed_unit_owes_no_payload_but_is_named_in_the_failure_record():
 # ---------------------------------------------------------------------------
 
 
-def test_process_names_are_unique_across_concurrently_submitted_units():
-    q = multiprocessing.Queue()
+def test_process_names_are_unique_across_concurrently_submitted_units(store):
     gate = multiprocessing.Event()
-    mgr = MultiProcessManager(4, q)
+    mgr = MultiProcessManager(4, store)
 
     # Every component of a contig/strand is named after the same mpg token in
     # LRAA, so the shared base name here is the realistic case.
     processes = []
     for unit_id in range(4):
-        process = _spawn(q, _worker_gated_put, unit_id, "chr1+:100-200", (gate,))
+        process = _spawn(
+            store, _worker_gated_publish, unit_id, "chr1+:100-200", (gate,)
+        )
         mgr.launch_process(process, unit_id=unit_id)
         processes.append(process)
 
@@ -324,23 +286,22 @@ def test_process_names_are_unique_across_concurrently_submitted_units():
     assert mgr.wait_for_remaining_processes() == 0
 
 
-def test_results_are_ordered_by_unit_id_not_by_arrival():
+def test_results_are_ordered_by_unit_id_not_by_completion(store):
     unit_ids = [0, 1, 2, 3]
-    q = multiprocessing.Queue()
     gates = [multiprocessing.Event() for _ in unit_ids]
-    arrival_counter = multiprocessing.Value("i", 0)
-    mgr = MultiProcessManager(len(unit_ids), q)
+    completion_counter = multiprocessing.Value("i", 0)
+    mgr = MultiProcessManager(len(unit_ids), store)
 
-    # Unit i is released by unit i+1, so payloads arrive 3, 2, 1, 0.
+    # Unit i is released by unit i+1, so results are published 3, 2, 1, 0.
     for unit_id in unit_ids:
         next_gate = gates[unit_id - 1] if unit_id > 0 else None
         mgr.launch_process(
             _spawn(
-                q,
-                _worker_chained_put,
+                store,
+                _worker_chained_publish,
                 unit_id,
                 "chr1+:100-200",
-                (gates[unit_id], next_gate, arrival_counter),
+                (gates[unit_id], next_gate, completion_counter),
             ),
             unit_id=unit_id,
         )
@@ -348,42 +309,42 @@ def test_results_are_ordered_by_unit_id_not_by_arrival():
     gates[unit_ids[-1]].set()
     assert mgr.wait_for_remaining_processes() == 0
 
-    results = mgr.retrieve_queue_contents()
+    results = mgr.retrieve_unit_results()
     assert [unit_id for unit_id, _ in results] == unit_ids
-    # Payload is the arrival rank: descending, so submission order was recovered
-    # rather than merely echoed back.
-    assert [arrival_rank for _, arrival_rank in results] == [4, 3, 2, 1]
+    # Payload is the completion rank: descending, so submission order was
+    # recovered rather than merely echoed back.
+    assert [completion_rank for _, completion_rank in results] == [4, 3, 2, 1]
 
 
-def test_retrieve_queue_contents_clears_only_the_buffer_not_the_audit():
-    q = multiprocessing.Queue()
-    mgr = MultiProcessManager(2, q)
+def test_retrieving_results_clears_only_the_buffer_not_the_audit(store):
+    mgr = MultiProcessManager(2, store)
 
     for unit_id in (1, 2):
-        mgr.launch_process(_spawn(q, _worker_put, unit_id, "chr1+"), unit_id=unit_id)
+        mgr.launch_process(
+            _spawn(store, _worker_publish, unit_id, "chr1+"), unit_id=unit_id
+        )
 
     assert mgr.wait_for_remaining_processes() == 0
 
-    assert mgr.retrieve_queue_contents(clear=True) == [
+    assert mgr.retrieve_unit_results(clear=True) == [
         (1, "payload-1"),
         (2, "payload-2"),
     ]
-    assert mgr.retrieve_queue_contents() == []
-    # Draining incrementally must not make the completeness check forget what
+    assert mgr.retrieve_unit_results() == []
+    # Collecting incrementally must not make the completeness check forget what
     # already came back.
     mgr.verify_units_accounted()
 
 
-def test_per_unit_start_times_are_not_overwritten_by_later_launches():
-    q = multiprocessing.Queue()
+def test_per_unit_start_times_are_not_overwritten_by_later_launches(store):
     gate = multiprocessing.Event()
-    mgr = MultiProcessManager(2, q)
+    mgr = MultiProcessManager(2, store)
 
-    slow = _spawn(q, _worker_gated_put, 1, "chr1+:100-200", (gate,))
+    slow = _spawn(store, _worker_gated_publish, 1, "chr1+:100-200", (gate,))
     mgr.launch_process(slow, unit_id=1)
     first_start = mgr.process_start_time[slow]
 
-    fast = _spawn(q, _worker_gated_put, 2, "chr1+:100-200", (gate,))
+    fast = _spawn(store, _worker_gated_publish, 2, "chr1+:100-200", (gate,))
     mgr.launch_process(fast, unit_id=2)
 
     # Both workers share a base name; keying start times by name collapsed them
@@ -396,11 +357,12 @@ def test_per_unit_start_times_are_not_overwritten_by_later_launches():
 
 
 # ---------------------------------------------------------------------------
-# queue-less pools (the contig/strand scheduler in the LRAA driver)
+# pools with no shard store (the contig/strand scheduler in the LRAA driver,
+# which publishes its own per-unit files and needs no results back)
 # ---------------------------------------------------------------------------
 
 
-def test_queueless_pool_needs_no_payloads():
+def test_storeless_pool_needs_no_results():
     mgr = MultiProcessManager(2)
 
     for unit_id in (0, 1):
@@ -411,3 +373,24 @@ def test_queueless_pool_needs_no_payloads():
 
     assert mgr.wait_for_remaining_processes() == 0
     assert mgr.num_successes == 2
+
+
+def test_a_torn_down_run_is_exempt_from_the_completeness_check(store):
+    """terminate_all_processes means the run is being abandoned, so the units it
+    killed owe nothing.  Without the exemption every teardown would raise on the
+    way out and bury the error that caused it."""
+
+    gate = multiprocessing.Event()
+    mgr = MultiProcessManager(2, store)
+
+    for unit_id in (1, 2):
+        mgr.launch_process(
+            _spawn(store, _worker_gated_publish, unit_id, "chr1+:100-200", (gate,)),
+            unit_id=unit_id,
+        )
+
+    mgr.terminate_all_processes()
+    mgr.wait_for_remaining_processes()
+
+    assert mgr.returned_unit_ids == set()
+    assert not os.path.exists(store.done_path(1))

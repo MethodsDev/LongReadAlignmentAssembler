@@ -23,9 +23,9 @@ from Pretty_alignment_manager import Pretty_alignment_manager
 from Scored_path import Scored_path
 from shutil import rmtree
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Process
 import traceback
-from MultiProcessManager import MultiProcessManager, ResultQueue
+from MultiProcessManager import MultiProcessManager, ShardStore
 from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 ## BIG TODO:// move functionality related to mapping features to the splicegraph to the actual splicegraph class instead of using all the wrapper functions herein.
 
 ITER = 0
+
+# Counts calls to reconstruct_isoforms within this process.  It appears in the
+# shard directory name, which must record everything that determines the shards
+# it holds: a worker reconstructs twice, once restricted to ME reads and once to
+# SE, so a directory keyed on contig and strand alone would have the second round
+# looking at the first round's files.
+RECONSTRUCT_ROUND = 0
 
 
 def _detach_rescued_reads_from_original_paths(
@@ -109,6 +116,7 @@ class LRAA:
 
         self._contig_acc = None  # set under build_multipath_graph()
         self._contig_strand = None  # set under build_multipath_graph()
+        self._restrict_splice_type = None  # set under build_multipath_graph()
 
         self._num_parallel_processes = num_parallel_processes
 
@@ -139,6 +147,10 @@ class LRAA:
             raise RuntimeError(
                 "Error, can only apply SE_read_encapsulation_mask when restricting to SE read alignments"
             )
+
+        # Recorded for the shard directory name: it is what distinguishes the ME
+        # reconstruction round from the SE round.
+        self._restrict_splice_type = restrict_splice_type
         # Synthetic input-transcript reads are registered per graph; drop any from a
         # previously built graph so their IDs cannot suppress scoring here.
         LRAA_Globals.SYNTHETIC_READ_IDS.clear()
@@ -336,12 +348,33 @@ class LRAA:
 
         USE_MULTIPROCESSOR = self._num_parallel_processes > 1
 
-        q = None
+        global RECONSTRUCT_ROUND
+        RECONSTRUCT_ROUND += 1
+
+        shard_store = None
         mpm = None
         if USE_MULTIPROCESSOR:
             logger.info("[%s%s] -Running assembly jobs with multiprocessing", self._contig_acc, self._contig_strand)
-            q = ResultQueue()
-            mpm = MultiProcessManager(self._num_parallel_processes, q)
+            # Workers publish each component's transcripts as their own file,
+            # renamed into place, instead of putting them on a shared queue.  The
+            # directory name records what determines its contents: which contig
+            # and strand, which reconstruction round, and which process opened it.
+            shard_store = ShardStore.create(
+                "{}.{}.{}.round{}.pid{}".format(
+                    self._contig_acc,
+                    "fwd" if self._contig_strand == "+" else "rev",
+                    self._restrict_splice_type or "all",
+                    RECONSTRUCT_ROUND,
+                    os.getpid(),
+                )
+            )
+            logger.info(
+                "[%s%s] -component results are published as shards under %s",
+                self._contig_acc,
+                self._contig_strand,
+                shard_store.directory,
+            )
+            mpm = MultiProcessManager(self._num_parallel_processes, shard_store)
         else:
             logger.info(
                 "[%s%s] -Running using single thread, so multiprocessing disabled here.",
@@ -372,12 +405,12 @@ class LRAA:
                     print(str(mpgn), file=ofh)
 
         # Component results are keyed by component_counter and flattened in that
-        # order at the end, rather than appended as they arrive.  Components at
-        # or above min_mpgn_component_size_for_spawn are reconstructed in forked
-        # workers and come back through a Queue in completion order, interleaved
-        # with the smaller components handled in-process; appending in arrival
-        # order made the transcript list, and therefore every order-sensitive
-        # stage downstream of it, a function of worker scheduling.
+        # order at the end, rather than appended as they are collected.
+        # Components at or above min_mpgn_component_size_for_spawn are
+        # reconstructed in forked workers and are collected in completion order,
+        # interleaved with the smaller components handled in-process; appending in
+        # completion order made the transcript list, and therefore every
+        # order-sensitive stage downstream of it, a function of worker scheduling.
         component_results = list()
         component_counter = 0
         try:
@@ -417,7 +450,7 @@ class LRAA:
                         target=self._reconstruct_isoforms_single_component,
                         name=mpg_token,
                         args=(
-                            q,
+                            shard_store,
                             mpg_component,
                             component_counter,
                             mpg_token,
@@ -425,9 +458,9 @@ class LRAA:
                         ),
                     )
 
-                    # component_counter is this unit's id: the worker tags its
-                    # payload with it and the manager keys, orders and audits
-                    # the results by it.
+                    # component_counter is this unit's id: the worker publishes
+                    # unit.<component_counter>.done and the manager keys, orders
+                    # and audits the results by it.
                     mpm.launch_process(p, unit_id=component_counter)
 
                 else:
@@ -474,7 +507,7 @@ class LRAA:
                 )
 
                 if USE_MULTIPROCESSOR:
-                    component_results.extend(mpm.retrieve_queue_contents(clear=True))
+                    component_results.extend(mpm.retrieve_unit_results(clear=True))
         except KeyboardInterrupt:
             # Ensure all spawned component workers are pruned before bubbling up
             if mpm is not None:
@@ -499,11 +532,15 @@ class LRAA:
                 self._contig_strand,
                 mpm.summarize_status(),
             )
-            component_results.extend(mpm.retrieve_queue_contents(clear=True))
+            component_results.extend(mpm.retrieve_unit_results(clear=True))
             if num_failures:
+                # The shard directory is deliberately left in place: it sits with
+                # the failing worker's stderr log, and any .tmp still in it names
+                # the unit that was killed while writing.
                 raise RuntimeError(
                     "Error, {} component failures encountered".format(num_failures)
                 )
+            shard_store.discard()
 
         # component_counter is assigned in mpg_components order, which is itself
         # coordinate/id-stabilised, so this restores a scheduling-independent
@@ -556,7 +593,12 @@ class LRAA:
         return template_only, nodes_with_reads, real_reads
 
     def _reconstruct_isoforms_single_component(
-        self, q, mpg_component, component_counter, mpg_token, single_best_only=False
+        self,
+        shard_store,
+        mpg_component,
+        component_counter,
+        mpg_token,
+        single_best_only=False,
     ):
 
         start_time = time.time()
@@ -564,7 +606,7 @@ class LRAA:
         contig_acc = self._splice_graph.get_contig_acc()
         contig_strand = self._splice_graph.get_contig_strand()
 
-        using_multiprocessing = q is not None
+        using_multiprocessing = shard_store is not None
         component_size = len(mpg_component)
         logger.info(
             "[%s%s] ISOFORM RECONSTRUCTION. multiprocessing[%s] %s component_size: %d",
@@ -1019,23 +1061,19 @@ class LRAA:
 
         logger.info(f"Assembly time for {mpg_token} is {asm_time_min:.2f} min.")
 
-        if q is not None:
-            # using MultiProcessing Queue.  The component index travels with the
-            # payload so the parent can restore submission order regardless of
-            # which worker finishes first.
-            q.put((component_counter, transcripts))
-
-            # Flush while this process is still alive.  put() is asynchronous, so
-            # without this the pickling happens inside util._exit_function()
-            # during interpreter shutdown, where Queue._feed takes the
-            # `if is_exiting(): return` branch and skips
-            # _on_queue_feeder_error entirely -- a serialisation failure would be
-            # dropped with no report anywhere, which is exactly the case
-            # ResultQueue exists to report.  Normal exit performs this same
-            # flush; doing it here only changes when, which is what makes the
-            # failure reportable.
-            q.close()
-            q.join_thread()
+        if shard_store is not None:
+            # Publish this component's transcripts as their own file, made visible
+            # to the parent by a rename that either happens or does not.  A worker
+            # killed before the rename leaves scratch the parent will not read; a
+            # worker whose payload cannot be pickled fails here, in its own stack,
+            # with the unit id in the message.  Neither outcome can be mistaken
+            # for a result, which is what a queue could not promise: put() pickles
+            # on a feeder thread, so it dropped an unserialisable payload while the
+            # worker still exited 0, and a frame truncated by SIGKILL left the
+            # parent blocked in _recv_bytes with no timeout to rescue it.  The
+            # component index travels with the payload so the parent can restore
+            # submission order regardless of which worker finishes first.
+            shard_store.publish(component_counter, transcripts, token=mpg_token)
         else:
             return transcripts
 
