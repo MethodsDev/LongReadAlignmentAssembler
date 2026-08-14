@@ -120,9 +120,11 @@ first aligned base per contig and no chunk grid can match it.
 
 Normalization scope otherwise: a mini contig is a different input, so whatever a
 downstream run derives from its input as a whole is derived over the chunk
-instead -- the mapped-primary library count and the secondary-rescue read
-grouping. A chunked run should pass the global count with ``--num_total_reads``
-and slice a globally rescued BAM with ``--secondary_alignment_mode all``.
+instead -- notably the mapped-primary library count. A chunked run should pass
+the global count with ``--num_total_reads``, or per-chunk TPM denominators will
+each be scaled to their own chunk. Secondary alignments need no such care: LRAA
+processes primary non-supplementary alignments only, so there is no rescue
+grouping left to span a boundary.
 """
 
 import argparse
