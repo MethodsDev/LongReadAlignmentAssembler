@@ -20,7 +20,10 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 #
 #   startbin1  read starts binned per 100 bp, each bin capped, no weights
 #   cov1       depth-targeted sampling, scarce junctions kept whole, XW weights
-SPLICE_GRAPH_NORMALIZATION_METHOD = "cov1"
+#   cov2       as cov1, but the strand split first drops secondary, supplementary,
+#              duplicate, qcfail and unmapped records, and any alignment carrying
+#              an intron longer than max_intron_length
+SPLICE_GRAPH_NORMALIZATION_METHOD = "cov2"
 
 config = {
     #########################
@@ -29,8 +32,6 @@ config = {
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired
-    "allow_secondary_alignments": True,  # retain secondary alignments by default, filtered by secondary_alignment_mode
-    "secondary_alignment_mode": "heuristic",  # all|heuristic ; heuristic keeps all primaries and only secondary alignments passing the secondary-rescue rule; "none" is expressed by allow_secondary_alignments=False
     "num_threads_per_worker": 1,
     "try_correct_alignments": True,
     "max_softclip_realign_test": 20,
@@ -215,11 +216,29 @@ config = {
     "normalize_max_cov_level": 1000,
     "restrict_asm_to_collapse": True,  # if True, no chaining of overlapping/extended paths
     #
+    ###############################################
+    # chunked parallelism: cutting a contig-strand
+    #
+    # A contig-strand is split into chunks that are normalized and processed
+    # independently, then merged. Both values below are in MEGABASES.
+    #
+    # Target cut positions sit at multiples of this across the contig, so a
+    # contig gets roughly length / approx_MB_per_cut chunks with no cap: chr20
+    # (64.4 Mb) gets 6, chr1 (248.9 Mb) gets 25. Sizing is by SPAN, not by
+    # alignment or gene count, so a chunk's coordinates are predictable from the
+    # contig length alone.
+    "approx_MB_per_cut": 10,
+    # TOTAL width of the search window centred on each target, in megabases --
+    # the whole window, not the half-width. A target at T is searched over
+    # [T - wiggle/2, T + wiggle/2], so the default 1 means T +/- 0.5 Mb. Within
+    # that window the cut is placed where it severs the fewest retained primary
+    # alignments; the window is never widened to find a zero-crossing position.
+    "approx_MB_per_cut_wiggle_window": 1,
+    #
     #######
     # quant
     "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records
     "run_EM": True,
-    "run_cross_gene_EM_for_secondary_alignments": True,
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
@@ -255,8 +274,6 @@ config = {
     "weight_reads_by_3prime_agreement": True,
     "EM_alpha": 0.01,  # regularization
     "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
-    # cross-gene EM correction (util/reassign_multigene_tracking_reads.py)
-    "cross_gene_EM_min_abundance": 1e-8,  # expectation-step floor keeping zero-support candidates recoverable
     # assignment fraction at or above which a read counts as uniquely assigned.
     # Reporting requires a whole read; isoform filtering tolerates EM rounding.
     "unique_read_report_min_frac": 1.0,

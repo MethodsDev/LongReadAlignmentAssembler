@@ -96,7 +96,6 @@ class Pretty_alignment_manager:
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
-        primary_alignments_only=False,
     ):
 
         # progress/logging: starting pretty alignment retrieval for this contig/strand (and region if set)
@@ -131,7 +130,6 @@ class Pretty_alignment_manager:
             f"{contig_strand_token}.{bam_file_basename}.pretty_alignments"
             f".mapq-{LRAA_Globals.config['min_mapping_quality']}"
             f".corr-{try_correct_alignments}"
-            f".primary-{primary_alignments_only}"
             f".qcerr-{per_id_QC_raise_error}"
         )
 
@@ -215,7 +213,6 @@ class Pretty_alignment_manager:
                 pretty=True,
                 per_id_QC_raise_error=per_id_QC_raise_error,
                 force_lighten_all=oversimplify_this_contig,
-                primary_alignments_only=primary_alignments_only,
             )
             self._last_discarded_read_names_by_reason = (
                 bam_extractor.get_last_discarded_read_names_by_reason()

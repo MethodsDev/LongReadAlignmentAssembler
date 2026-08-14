@@ -46,7 +46,6 @@ class Bam_alignment_extractor:
         per_id_QC_raise_error=False,
         config=LRAA_Globals.config,
         force_lighten_all=False,
-        primary_alignments_only=False,
     ):
 
         discarded_read_counter = defaultdict(int)
@@ -57,6 +56,7 @@ class Bam_alignment_extractor:
         pretty_alignments = [] if pretty else None
 
         MIN_MAPPING_QUALITY = int(LRAA_Globals.config["min_mapping_quality"])
+        MAX_INTRON_LENGTH = int(LRAA_Globals.config["max_intron_length"])
 
         # parse read alignments, capture introns and genome coverage info.
         read_fetcher = None
@@ -140,11 +140,17 @@ class Bam_alignment_extractor:
                 discarded_read_counter["supplementary"] += 1
                 continue
 
-            if read.is_secondary and (
-                primary_alignments_only
-                or not LRAA_Globals.config.get("allow_secondary_alignments", False)
-            ):
+            if read.is_secondary:
                 discarded_read_counter["secondary"] += 1
+                continue
+
+            # A read carrying an intron longer than max_intron_length cannot be
+            # assigned to any transcript, because the splice graph declines to model
+            # that intron.  Discarding it here rather than only when building the
+            # graph input keeps read assignment and graph construction on one record
+            # set, and applies regardless of whether normalization runs.
+            if Util_funcs.has_disqualifying_long_intron(read, MAX_INTRON_LENGTH):
+                discarded_read_counter["long_intron"] += 1
                 continue
 
             # determine min per_id based on read type:

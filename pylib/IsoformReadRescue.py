@@ -133,9 +133,6 @@ def build_transcriptome_alignment_multipaths(
                 transcript_models,
                 target_read_names=read_names,
                 target_strand=target_strand,
-                include_secondary_candidates=LRAA_Globals.config.get(
-                    "allow_secondary_alignments", False
-                ),
             )
         )
         primary_considered = gating_stats["primary_considered"]
@@ -149,7 +146,7 @@ def build_transcriptome_alignment_multipaths(
             else 0.0
         )
         logger.info(
-            "[%s%s] %s genome gating: primary_retained=%d/%d (%.3f), candidate_reads=%d, candidate_alignments(primary=%d secondary=%d), avg_targets_per_read=%.2f",
+            "[%s%s] %s genome gating: primary_retained=%d/%d (%.3f), candidate_reads=%d, candidate_primary_alignments=%d, avg_targets_per_read=%.2f",
             splice_graph.get_contig_acc(),
             splice_graph.get_contig_strand(),
             log_label,
@@ -158,7 +155,6 @@ def build_transcriptome_alignment_multipaths(
             retain_frac,
             gating_stats["candidate_reads"],
             gating_stats["candidate_primary_alignments"],
-            gating_stats["candidate_secondary_alignments"],
             avg_targets_per_read,
         )
     else:
@@ -363,7 +359,6 @@ def _collect_genome_gated_read_targets(
     transcript_models,
     target_read_names=None,
     target_strand=None,
-    include_secondary_candidates=False,
 ):
     exon_overlap_index = _build_exon_overlap_index(transcript_models)
     remaining = None if target_read_names is None else set(target_read_names)
@@ -372,7 +367,6 @@ def _collect_genome_gated_read_targets(
     read_name_to_primary_score = {}
     read_name_to_primary_per_id = {}
     candidate_rows = []
-    min_per_id = float(_resolve_rescue_min_per_id())
 
     stats = {
         "primary_considered": 0,
@@ -380,7 +374,6 @@ def _collect_genome_gated_read_targets(
         "candidate_reads": 0,
         "candidate_target_links": 0,
         "candidate_primary_alignments": 0,
-        "candidate_secondary_alignments": 0,
     }
 
     with pysam.AlignmentFile(bam_file, "rb") as bam_reader:
@@ -398,9 +391,7 @@ def _collect_genome_gated_read_targets(
                 if read.is_reverse and target_strand != "-":
                     continue
 
-            if read.is_unmapped or read.is_supplementary:
-                continue
-            if read.is_secondary and not include_secondary_candidates:
+            if read.is_unmapped or read.is_supplementary or read.is_secondary:
                 continue
             if read.is_paired and not read.is_proper_pair:
                 continue
@@ -408,23 +399,12 @@ def _collect_genome_gated_read_targets(
                 continue
             if read.mapping_quality < int(LRAA_Globals.config["min_mapping_quality"]):
                 continue
-            passes_per_id = _passes_percent_identity(read, min_per_id)
-            if read.is_secondary and not passes_per_id:
-                continue
-            if not read.is_secondary and not passes_per_id:
-                # Keep low-perID primary alignments available for transcriptome
-                # arbitration/rescue when the genome-derived path is unusable.
-                # Secondary candidate generation remains stricter to limit noise.
-                pass
-            elif not passes_per_id:
-                continue
 
             read_name = Util_funcs.get_read_name_include_sc_encoding(read)
             if remaining is not None and read_name not in remaining:
                 continue
 
-            if not read.is_secondary:
-                stats["primary_considered"] += 1
+            stats["primary_considered"] += 1
 
             target_id_to_overlap_bp = _get_alignment_overlapping_targets(
                 read, exon_overlap_index
@@ -432,22 +412,18 @@ def _collect_genome_gated_read_targets(
             if not target_id_to_overlap_bp:
                 continue
 
-            if read.is_secondary:
-                stats["candidate_secondary_alignments"] += 1
-            else:
-                stats["candidate_primary_alignments"] += 1
+            stats["candidate_primary_alignments"] += 1
 
-            if not read.is_secondary:
-                seq = read.query_sequence
-                if seq and read_name not in read_name_to_seq:
-                    if read.is_reverse:
-                        seq = _reverse_complement(seq)
-                    read_name_to_seq[read_name] = seq
-                    stats["primary_retained_for_fastq"] += 1
-                if remaining is not None:
-                    remaining.discard(read_name)
-                read_name_to_primary_score[read_name] = _alignment_score(read)
-                read_name_to_primary_per_id[read_name] = _gap_aware_identity(read)
+            seq = read.query_sequence
+            if seq and read_name not in read_name_to_seq:
+                if read.is_reverse:
+                    seq = _reverse_complement(seq)
+                read_name_to_seq[read_name] = seq
+                stats["primary_retained_for_fastq"] += 1
+            if remaining is not None:
+                remaining.discard(read_name)
+            read_name_to_primary_score[read_name] = _alignment_score(read)
+            read_name_to_primary_per_id[read_name] = _gap_aware_identity(read)
 
             for target_id, overlap_bp in target_id_to_overlap_bp.items():
                 read_name_to_allowed_target_ids[read_name].add(target_id)
@@ -458,19 +434,12 @@ def _collect_genome_gated_read_targets(
                         "target_id": target_id,
                         "gene_id": model["gene_id"],
                         "transcript_id": model["transcript_id"],
-                        "is_primary": int(not read.is_secondary),
-                        "is_secondary": int(read.is_secondary),
                         "mapq": int(read.mapping_quality),
                         "genomic_lend": int(read.reference_start) + 1,
                         "genomic_rend": int(read.reference_end),
                         "overlap_bp": int(overlap_bp),
                     }
                 )
-
-            if remaining is not None and not remaining:
-                # Do not break here: secondary alignments for previously seen primary reads
-                # may still appear later in coordinate-sorted BAMs and should contribute candidates.
-                pass
 
     retained_read_names = set(read_name_to_seq.keys())
     read_name_to_allowed_target_ids = {
@@ -587,8 +556,6 @@ def _write_candidate_tsv(candidate_tsv, candidate_rows, retained_read_names=None
                     "target_id",
                     "gene_id",
                     "transcript_id",
-                    "is_primary",
-                    "is_secondary",
                     "mapq",
                     "genomic_lend",
                     "genomic_rend",
@@ -607,8 +574,6 @@ def _write_candidate_tsv(candidate_tsv, candidate_rows, retained_read_names=None
                         str(row["target_id"]),
                         str(row["gene_id"]),
                         str(row["transcript_id"]),
-                        str(row["is_primary"]),
-                        str(row["is_secondary"]),
                         str(row["mapq"]),
                         str(row["genomic_lend"]),
                         str(row["genomic_rend"]),

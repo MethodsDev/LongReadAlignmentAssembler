@@ -46,8 +46,6 @@ PRINCIPAL_SUFFIXES = (
     ".bed",
     ".quant.expr",
     ".quant.tracking",
-    ".pre-cross-gene-EM.quant.expr",
-    ".pre-cross-gene-EM.quant.tracking",
     # Pure per-job concatenation, so it is the output most sensitive to merge
     # ordering -- it was the single file that --no_shuffle_parallel_jobs was
     # shown to stabilise while content elsewhere still varied.  Omitting it

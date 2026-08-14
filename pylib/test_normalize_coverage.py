@@ -198,10 +198,12 @@ def source_bam(tmp_path):
     return p
 
 
-def _stem(source, level=1000):
+def _stem(source, level=1000, max_intron_length=200000):
     import Util_funcs
 
-    return Util_funcs.splice_graph_norm_cache_stem("s.quant", level, str(source))
+    return Util_funcs.splice_graph_norm_cache_stem(
+        "s.quant", level, str(source), max_intron_length
+    )
 
 
 def test_cache_name_distinguishes_the_method(source_bam):
@@ -228,6 +230,18 @@ def test_cache_name_distinguishes_the_method(source_bam):
 def test_cache_name_distinguishes_the_target_depth(source_bam):
     """Also scopes the work directory, whose checkpoints are otherwise shared."""
     assert _stem(source_bam, 1000) != _stem(source_bam, 5000)
+
+
+def test_cache_name_distinguishes_the_intron_cap(source_bam):
+    """The cap decides which records the split emits, so it changes the contents.
+
+    A run that lowers --max_intron_length must not be handed the bam built when
+    the cap was higher: the long-intron records it is meant to exclude would
+    still be there, and nothing downstream can tell.
+    """
+    assert _stem(source_bam, max_intron_length=200000) != _stem(
+        source_bam, max_intron_length=50000
+    )
 
 
 def test_cache_name_distinguishes_inputs_sharing_a_basename(tmp_path, source_bam):

@@ -93,6 +93,47 @@ def get_read_name_include_sc_encoding(pysam_read_alignment):
         return read.query_name
 
 
+# CIGAR operation 'N' = skipped region from the reference, ie. an intron.
+# Introns are identified from the CIGAR rather than from read.get_blocks(),
+# because get_blocks() reports an identical gap for a deletion ('D') as for an
+# intron of the same length, and additionally splits blocks at insertions.
+# The 'N' operations are exactly the introns, terminal and internal alike.
+INTRON_CIGAR_OP = 3
+
+
+def get_longest_intron_length(read):
+    """length of the longest intron (CIGAR 'N' operation) of the read, or zero if unspliced"""
+
+    cigartuples = read.cigartuples
+    if cigartuples is None:
+        return 0
+
+    longest_intron_length = 0
+    for cigar_op, cigar_op_length in cigartuples:
+        if cigar_op == INTRON_CIGAR_OP and cigar_op_length > longest_intron_length:
+            longest_intron_length = cigar_op_length
+
+    return longest_intron_length
+
+
+def has_disqualifying_long_intron(read, max_intron_length):
+    """True when the read carries an intron the pipeline declines to model.
+
+    An intron of exactly max_intron_length is acceptable; one base longer is not,
+    matching the thresholds enforced in Pretty_alignment and Splice_graph.
+    max_intron_length <= 0 disables intron length filtering.
+
+    This is the single implementation of the intron-length rule.  It governs both
+    the splice-graph input (util/separate_bam_by_strand.py) and read assignment
+    (Bam_alignment_extractor), so the two always see one record set.
+    """
+
+    if max_intron_length <= 0:
+        return False
+
+    return get_longest_intron_length(read) > max_intron_length
+
+
 def frac_base_composition(nuc_seq, nuc_base):
 
     assert len(nuc_seq) > 0, "Error, nuc_seq is empty"
@@ -192,7 +233,9 @@ def file_identity_token(path):
     return get_hash_code(identity)[:12]
 
 
-def splice_graph_norm_cache_stem(base_root, normalize_max_cov_level, source_bam):
+def splice_graph_norm_cache_stem(
+    base_root, normalize_max_cov_level, source_bam, max_intron_length
+):
     """Name for a normalized bam and its work directory.
 
     Everything that determines the contents belongs in the name, because a hit is
@@ -210,10 +253,15 @@ def splice_graph_norm_cache_stem(base_root, normalize_max_cov_level, source_bam)
     The target depth is here for the same reason, and it also scopes the work
     directory, whose checkpoints would otherwise let a run at one depth reuse the
     strand split and merge performed for another.
+
+    The intron cap decides which records the strand split emits at all, so two
+    runs differing only in --max_intron_length produce different normalized bams
+    and must not share a name.
     """
-    return "{}.norm_{}.{}.{}".format(
+    return "{}.norm_{}.maxintron_{}.{}.{}".format(
         base_root,
         normalize_max_cov_level,
+        max_intron_length,
         LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD,
         file_identity_token(source_bam),
     )

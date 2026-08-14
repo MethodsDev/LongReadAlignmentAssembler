@@ -336,13 +336,6 @@ def main():
             ],
             help="disable transcriptome rescue for unassigned reads",
         )
-        lite_quant.add_argument(
-            "--no_allow_secondary_alignments",
-            dest="allow_secondary_alignments",
-            action="store_false",
-            default=LRAA_Globals.config["allow_secondary_alignments"],
-            help=argparse.SUPPRESS,
-        )
 
         lite_target = lite_parser.add_argument_group("region / single-cell")
         lite_target.add_argument(
@@ -543,42 +536,6 @@ def main():
         action="store_true",
         default=False,
         help="do not run EM; divide ambiguous read support equally among assigned isoforms",
-    )
-    primary.add_argument(
-        "--no_cross_gene_EM",
-        dest="run_cross_gene_EM_for_secondary_alignments",
-        action="store_false",
-        default=LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"],
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
-        "--no_allow_secondary_alignments",
-        dest="allow_secondary_alignments",
-        action="store_false",
-        default=LRAA_Globals.config["allow_secondary_alignments"],
-        help=(
-            "disable retention of secondary alignments during BAM ingestion "
-            f"(default: {LRAA_Globals.config['allow_secondary_alignments']})"
-        ),
-    )
-    primary.add_argument(
-        "--allow_secondary_alignments",
-        dest="allow_secondary_alignments",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
-        "--secondary_alignment_mode",
-        type=str,
-        choices=["all", "heuristic"],
-        default=LRAA_Globals.config["secondary_alignment_mode"],
-        help=(
-            "policy for retaining secondary alignments when enabled: "
-            "'all' keeps all secondary alignments that pass other filters; "
-            "'heuristic' preprocesses the BAM so all mapped non-supplementary primary alignments are retained and only secondary alignments passing the secondary-rescue heuristic are retained "
-            f"(default: {LRAA_Globals.config['secondary_alignment_mode']})"
-        ),
     )
 
     parser.add_argument(
@@ -1055,6 +1012,22 @@ def main():
         default=None,
         help="space or comma-separated list of chromosome names to process; chromosomes not in this list will be skipped (ex: 'chr1 chr2 chr3' or 'chr1,chr2,chr3')",
     )
+    contig_group_setting.add_argument(
+        "--approx_MB_per_cut",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut"],
+        help="chunked parallelism: approximate MEGABASES between cut points when splitting a contig-strand into independently processed chunks (default: {})".format(
+            LRAA_Globals.config["approx_MB_per_cut"]
+        ),
+    )
+    contig_group_setting.add_argument(
+        "--approx_MB_per_cut_wiggle_window",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
+        help="chunked parallelism: TOTAL width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched over [T - w/2, T + w/2] (default: {})".format(
+            LRAA_Globals.config["approx_MB_per_cut_wiggle_window"]
+        ),
+    )
 
     ## generic config update via json
     parser.add_argument(
@@ -1226,12 +1199,14 @@ def main():
     LRAA_Globals.config["min_path_score"] = args.min_path_score
     LRAA_Globals.config["min_per_id"] = args.min_per_id
     LRAA_Globals.config["max_intron_length"] = args.max_intron_length
+    LRAA_Globals.config["approx_MB_per_cut"] = args.approx_MB_per_cut
+    LRAA_Globals.config["approx_MB_per_cut_wiggle_window"] = (
+        args.approx_MB_per_cut_wiggle_window
+    )
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
     )
-    LRAA_Globals.config["allow_secondary_alignments"] = args.allow_secondary_alignments
-    LRAA_Globals.config["secondary_alignment_mode"] = args.secondary_alignment_mode
     LRAA_Globals.config["num_threads_per_worker"] = int(CPU)
     quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
@@ -1244,21 +1219,6 @@ def main():
     _require_minimap2_for_transcriptome_alignment(
         rescue_enabled, quant_read_assignment_mode
     )
-    if args.allow_secondary_alignments:
-        logger.info(
-            "Secondary alignments enabled; forcing min_mapping_quality and min_mapping_quality_for_final_quant to 0"
-        )
-        LRAA_Globals.config["min_mapping_quality"] = 0
-        LRAA_Globals.config["min_mapping_quality_for_final_quant"] = 0
-        if args.secondary_alignment_mode == "heuristic":
-            logger.info(
-                "Secondary alignments will be restricted by the secondary-rescue heuristic via BAM preprocessing"
-            )
-    elif args.secondary_alignment_mode != "all":
-        logger.info(
-            "Secondary alignment mode '%s' requested, but secondary alignments are disabled; ignoring the mode",
-            args.secondary_alignment_mode,
-        )
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(
             args.min_isoform_fraction,
@@ -1288,9 +1248,6 @@ def main():
     )
     LRAA_Globals.config["rescue_unassigned_max_indel_length"] = (
         args.rescue_unassigned_max_indel_length
-    )
-    LRAA_Globals.config["run_cross_gene_EM_for_secondary_alignments"] = (
-        args.run_cross_gene_EM_for_secondary_alignments
     )
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
@@ -1454,32 +1411,8 @@ def main():
             os.getcwd(), f"__{_safe_token(output_prefix)}.norm_cache"
         )
         Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
-    bam_preproc_cache_dir = os.path.join(
-        os.getcwd(), f"__{_safe_token(output_prefix)}.bam_preproc_cache"
-    )
-    Path(bam_preproc_cache_dir).mkdir(parents=True, exist_ok=True)
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
-
-    # TPM's denominator must describe the library, not the alignment policy applied
-    # to it. The secondary-rescue filter below rewrites bam_filename and drops
-    # unmapped and supplementary records, so counting the filtered file would make
-    # num_total_reads -- and therefore every expression value and the
-    # min_monoexonic_TPM gate -- depend on --secondary_alignment_mode. Retain the
-    # original path and count genome-mapped reads from it.
-    bam_filename_for_read_count = bam_filename
-
-    bam_filename = _filter_bam_for_secondary_alignment_policy(
-        bam_filename,
-        bam_preproc_cache_dir,
-        label="quant",
-    )
-    if bam_for_sg_cli:
-        bam_for_sg_cli = _filter_bam_for_secondary_alignment_policy(
-            bam_for_sg_cli,
-            bam_preproc_cache_dir,
-            label="splice_graph",
-        )
 
     if not os.path.exists(bam_filename + ".bai"):
         logger.info(
@@ -1531,12 +1464,10 @@ def main():
             bam_file_for_sg = bam_filename
 
     if args.num_total_reads is None:
-        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(
-            bam_filename_for_read_count
-        )
+        LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(bam_filename)
         logger.info(
             "genome-mapped reads counted from {} as: {}".format(
-                bam_filename_for_read_count, LRAA_Globals.config["num_total_reads"]
+                bam_filename, LRAA_Globals.config["num_total_reads"]
             )
         )
 
@@ -2096,14 +2027,15 @@ def _normalize_bam_for_splice_graph(
     if label:
         base_root = f"{base_root}.{_safe_token(label)}"
 
+    max_intron_length = int(LRAA_Globals.config["max_intron_length"])
     cache_stem = Util_funcs.splice_graph_norm_cache_stem(
-        base_root, normalize_max_cov_level, input_path
+        base_root, normalize_max_cov_level, input_path, max_intron_length
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
     # scoped by the same stem: the utility keeps its own checkpoints here, and a
-    # strand split or merge done for a different depth or method must not be
-    # picked up by this run
+    # strand split or merge done for a different depth, intron cap, or method must
+    # not be picked up by this run
     work_dir = cache_path / f"work_{cache_stem}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2124,6 +2056,8 @@ def _normalize_bam_for_splice_graph(
             str(normalize_max_cov_level),
             "--output_bam",
             str(normalized_path),
+            "--max_intron_length",
+            str(max_intron_length),
         ]
         logger.info(
             "Running splice-graph BAM normalization; final quantification will continue to use the quant BAM, not this normalized BAM"
@@ -2157,69 +2091,6 @@ def _resolve_singleton_stage_threads():
     except Exception:
         pass
     return threads
-
-
-def _filter_bam_for_secondary_alignment_policy(
-    input_bam,
-    cache_dir,
-    label=None,
-):
-    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
-        return input_bam
-
-    secondary_alignment_mode = LRAA_Globals.config.get(
-        "secondary_alignment_mode", "heuristic"
-    )
-    if secondary_alignment_mode == "all":
-        return input_bam
-    if secondary_alignment_mode != "heuristic":
-        raise RuntimeError(
-            f"Unsupported secondary_alignment_mode: {secondary_alignment_mode}"
-        )
-
-    input_path = Path(input_bam).resolve()
-    cache_path = Path(cache_dir).resolve()
-    cache_path.mkdir(parents=True, exist_ok=True)
-
-    base_root = input_path.name
-    if base_root.endswith(".bam"):
-        base_root = base_root[: -len(".bam")]
-    base_root = _safe_token(base_root)
-    if label:
-        base_root = f"{base_root}.{_safe_token(label)}"
-
-    filtered_path = cache_path / f"{base_root}.secondary_rescue.bam"
-    summary_path = cache_path / f"{base_root}.secondary_rescue.summary.tsv"
-    checkpoint_path = filtered_path.parent / (filtered_path.name + ".ok")
-    work_dir = cache_path / f"work_{base_root}"
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    if not checkpoint_path.exists():
-        threads = _resolve_singleton_stage_threads()
-        cmd = [
-            sys.executable,
-            os.path.join(UTILDIR, "filter_bam_to_secondary_rescue.py"),
-            "--input_bam",
-            str(input_path),
-            "--output_bam",
-            str(filtered_path),
-            "--summary_tsv",
-            str(summary_path),
-            "--threads",
-            str(threads),
-            "--workdir",
-            str(work_dir),
-        ]
-        logger.info(
-            "filtering BAM to secondary-rescue heuristic alignments: %s (threads=%d)",
-            input_path.name,
-            threads,
-        )
-        logger.debug("Secondary-filter command: %s", " ".join(cmd))
-        subprocess.check_call(cmd, cwd=str(work_dir))
-        checkpoint_path.touch()
-
-    return str(filtered_path)
 
 
 def _append_without_first_line(
@@ -2333,79 +2204,6 @@ def _append_lraa_output_mode_suffix(output_prefix, quant_only, input_gtf):
     ):
         return output_prefix
     return f"{output_prefix}.{suffix}"
-
-
-def _maybe_run_cross_gene_em_for_secondary_alignments(
-    output_prefix, quant_expr_path, tracking_path
-):
-    if not LRAA_Globals.config.get("allow_secondary_alignments", False):
-        return
-    if not LRAA_Globals.config.get("run_EM", True):
-        logger.info("Skipping final cross-gene EM because --no_EM was requested")
-        return
-    if not LRAA_Globals.config.get("run_cross_gene_EM_for_secondary_alignments", True):
-        logger.info("Skipping final cross-gene EM for secondary alignments")
-        return
-    if not os.path.exists(quant_expr_path) or not os.path.exists(tracking_path):
-        logger.warning(
-            "Skipping final cross-gene EM because quant outputs are missing: %s, %s",
-            quant_expr_path,
-            tracking_path,
-        )
-        return
-
-    raw_expr_path = f"{output_prefix}.pre-cross-gene-EM.quant.expr"
-    raw_tracking_path = f"{output_prefix}.pre-cross-gene-EM.quant.tracking"
-    for path in (raw_expr_path, raw_tracking_path):
-        if os.path.exists(path):
-            os.remove(path)
-
-    shutil.move(quant_expr_path, raw_expr_path)
-    shutil.move(tracking_path, raw_tracking_path)
-
-    cmd = [
-        sys.executable,
-        os.path.join(UTILDIR, "reassign_multigene_tracking_reads.py"),
-        "--quant_expr",
-        raw_expr_path,
-        "--tracking",
-        raw_tracking_path,
-        "--output_expr",
-        quant_expr_path,
-        "--output_tracking",
-        tracking_path,
-        "--max_iter",
-        str(LRAA_Globals.config.get("max_EM_iterations_quant_only", 250)),
-        "--alpha",
-        str(LRAA_Globals.config["EM_alpha"]),
-        "--tol",
-        str(LRAA_Globals.config["EM_convergence_tol"]),
-        "--min_expr",
-        str(LRAA_Globals.config["cross_gene_EM_min_abundance"]),
-        "--min_uniq_frac",
-        str(LRAA_Globals.config["unique_read_report_min_frac"]),
-        "--tmp_dir",
-        ".",
-    ]
-    logger.info(
-        "Running final cross-gene EM for secondary alignments; preserving pre-correction outputs as %s and %s",
-        raw_expr_path,
-        raw_tracking_path,
-    )
-    logger.debug("Cross-gene EM command: %s", " ".join(cmd))
-    try:
-        subprocess.check_call(cmd)
-    except Exception:
-        if not os.path.exists(quant_expr_path) and os.path.exists(raw_expr_path):
-            shutil.copyfile(raw_expr_path, quant_expr_path)
-        if not os.path.exists(tracking_path) and os.path.exists(raw_tracking_path):
-            shutil.copyfile(raw_tracking_path, tracking_path)
-        raise
-
-    # The pre-correction outputs are moved into place before the EM runs, so they
-    # bypass the stamping applied to the final quant files below.
-    _ensure_lraa_version_comment(raw_expr_path)
-    _ensure_lraa_version_comment(raw_tracking_path)
 
 
 def _parse_input_transcripts_for_cs(
@@ -2809,9 +2607,6 @@ def _run_jobs_schedule_and_merge(
 
     _merge_genome_tx_arb_summary_files(
         genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
-    )
-    _maybe_run_cross_gene_em_for_secondary_alignments(
-        output_prefix, quant_out_fn, track_out_fn
     )
     _ensure_lraa_version_comment(quant_out_fn)
     _ensure_lraa_version_comment(track_out_fn)
@@ -3390,7 +3185,6 @@ def _run_oversimplify_best_overlap(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
-        primary_alignments_only=True,
     )
 
     # Precompute transcript exon intervals and maps
@@ -3603,7 +3397,6 @@ def _run_oversimplify_aggregate(
         try_correct_alignments=False,
         SE_read_encapsulation_mask=None,
         per_id_QC_raise_error=False,
-        primary_alignments_only=True,
     )
 
     read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))

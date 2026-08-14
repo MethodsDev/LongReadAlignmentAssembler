@@ -29,8 +29,6 @@ clean:
 	rm -rf __$(OUT_PREFIX).* \
 		$(OUT_PREFIX).* \
 		tx_rescue.* \
-		reassign_multigene_tracking.* \
-		*.quant.secondary_rescue.bam.count \
 		__init_clusters.tsv \
 		$(PREFIX).* \
 		__$(PREFIX).*

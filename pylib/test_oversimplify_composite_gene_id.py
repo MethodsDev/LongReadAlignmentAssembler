@@ -111,7 +111,6 @@ def test_oversimplify_best_overlap_uses_primary_alignment_only(tmp_path, monkeyp
     monkeypatch.setenv("LRAA_TMP_DIR", str(tmp_path))
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_enabled", True)
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_contigs", ["chrM"])
-    monkeypatch.setitem(LRAA_Globals.config, "allow_secondary_alignments", True)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     quant_output = StringIO()
@@ -151,7 +150,6 @@ def test_oversimplify_aggregate_uses_primary_alignment_only(tmp_path, monkeypatc
     monkeypatch.setenv("LRAA_TMP_DIR", str(tmp_path))
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_enabled", True)
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_contigs", ["chrM"])
-    monkeypatch.setitem(LRAA_Globals.config, "allow_secondary_alignments", True)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     gtf_output = StringIO()
@@ -189,7 +187,6 @@ def test_oversimplify_aggregate_gene_id_matches_mitochondrial_qc_pattern(
     monkeypatch.setenv("LRAA_TMP_DIR", str(tmp_path))
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_enabled", True)
     monkeypatch.setitem(LRAA_Globals.config, "oversimplify_contigs", ["chrM"])
-    monkeypatch.setitem(LRAA_Globals.config, "allow_secondary_alignments", True)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     gtf_output = StringIO()
