@@ -967,3 +967,96 @@ def test_an_alignment_spanning_two_cuts_is_emitted_once(tmp_path):
 
     assert len(selection.dropped_read_names["wide"]) == 2, "must span two cuts"
     assert len(sink) == 1, "one alignment, emitted at the first cut it spans"
+
+
+def _one_read_bam(tmp_path, name, nm, mapq=60, length=1000, start=2599):
+    """A single primary alignment whose NM tag sets its percent identity."""
+
+    bam_path = tmp_path / "{}.bam".format(name)
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chrT", "LN": 5000}]}
+    with pysam.AlignmentFile(str(bam_path), "wb", header=header) as out:
+        aln = pysam.AlignedSegment()
+        aln.query_name = name
+        aln.flag = 0
+        aln.reference_id = 0
+        aln.reference_start = start
+        aln.mapping_quality = mapq
+        aln.cigar = [(0, length)]
+        aln.query_sequence = "A" * length
+        aln.query_qualities = pysam.qualitystring_to_array("I" * length)
+        aln.set_tag("NM", nm)
+        out.write(aln)
+    pysam.index(str(bam_path))
+    return bam_path
+
+
+def _severed(bam_path, **kwargs):
+    sink = []
+    selection = selector.select_cut_points(
+        bam_filename=str(bam_path),
+        chrom="chrT",
+        contig_length=5000,
+        strand="+",
+        segment_span=3000,
+        wiggle=0,
+        depth_window=100,
+        margin=0,
+        minimum_span=1000,
+        severed_sink=sink,
+        **kwargs
+    )
+    return selection, sink
+
+
+def test_emission_applies_the_quant_percent_identity_threshold(tmp_path):
+    """A read the quant step rejects must not be offered as severed evidence.
+
+    Cut scoring deliberately uses a superset predicate omitting percent identity --
+    over-counting a cut's cost only biases toward safer positions.  Emission cannot
+    use it: a read rejected on identity never reaches a component, so offering it
+    as evidence a boundary dissolved one is a false positive, not a conservative
+    one.  NM=100 over 1000 aligned bases is 90% identity: kept at the default 80,
+    rejected at the 97 that --HiFi sets.
+    """
+
+    bam_path = _one_read_bam(tmp_path, "pid90", nm=100)
+
+    selection, sink = _severed(bam_path, min_per_id=80.0)
+    assert "pid90" in selection.dropped_read_names
+    assert [a.query_name for a in sink] == ["pid90"]
+
+    selection, sink = _severed(bam_path, min_per_id=97.0)
+    assert "pid90" in selection.dropped_read_names, (
+        "cost accounting still counts it: the superset is what scored the cut"
+    )
+    assert sink == [], "quant would reject it at 97, so it must not be emitted"
+
+
+def test_emission_applies_the_quant_mapping_quality_threshold(tmp_path):
+    bam_path = _one_read_bam(tmp_path, "mq5", nm=0, mapq=5)
+
+    _, sink = _severed(bam_path, min_mapping_quality=0)
+    assert [a.query_name for a in sink] == ["mq5"]
+
+    _, sink = _severed(bam_path, min_mapping_quality=30)
+    assert sink == [], "quant would reject mapq 5, so it must not be emitted"
+
+
+def test_the_emitted_bam_records_its_scope(tmp_path):
+    """The artifact states what it is, because consumers have over-read it."""
+
+    bam_path = _one_read_bam(tmp_path, "kept", nm=0)
+    _, sink = _severed(bam_path, min_per_id=80.0)
+    out = tmp_path / "severed.bam"
+    with pysam.AlignmentFile(str(bam_path), "rb") as src:
+        selector.write_severed_alignments_bam(
+            src.header, sink, str(out), min_per_id=80.0, min_mapping_quality=0
+        )
+
+    with pysam.AlignmentFile(str(out), "rb") as bam:
+        notes = "\n".join(bam.header.to_dict().get("CO", []))
+
+    assert "PRE-normalization" in notes
+    assert "min_per_id=80.0" in notes
+    assert "NOT the quant-visible set" in notes
+    assert "refuse rather than approximate" in notes

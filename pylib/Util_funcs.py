@@ -134,6 +134,87 @@ def has_disqualifying_long_intron(read, max_intron_length):
     return get_longest_intron_length(read) > max_intron_length
 
 
+def quant_discard_reason(
+    read,
+    contig_strand=None,
+    max_intron_length=None,
+    min_mapping_quality=None,
+    min_per_id=None,
+):
+    """Why quantification would discard this alignment, or None if it keeps it.
+
+    The full retention policy Bam_alignment_extractor applies, in one callable
+    place.  Reasons are the keys its discard counter uses, so a caller can report
+    them in the same vocabulary.
+
+    This exists because the policy was previously only expressed inline inside the
+    extractor's fetch loop, which meant nothing else could ask the question and
+    every other consumer reimplemented an approximation instead.  Cut selection's
+    ``retained_for_extraction`` is a deliberate superset -- it omits mapping
+    quality and percent identity, which is sound for BOUNDING the cost of a cut,
+    since over-counting only biases toward safer positions.  It is not sound for
+    naming the alignments quantification will actually use: a read this predicate
+    rejects is one no downstream stage ever sees, so attributing anything to it is
+    a false positive.
+
+    Percent identity is cheap here -- CIGAR stats plus the NM/nM tag, no sequence
+    -- so there is no cost argument for leaving it out.
+    """
+
+    if max_intron_length is None:
+        max_intron_length = LRAA_Globals.config["max_intron_length"]
+    if min_mapping_quality is None:
+        min_mapping_quality = int(LRAA_Globals.config["min_mapping_quality"])
+    if min_per_id is None:
+        min_per_id = LRAA_Globals.config["min_per_id"]
+
+    if read.is_unmapped:
+        return "unmapped"
+    if contig_strand is not None:
+        if read.is_forward and contig_strand != "+":
+            return "wrong_strand"
+        if read.is_reverse and contig_strand != "-":
+            return "wrong_strand"
+    if read.mapping_quality < min_mapping_quality:
+        return "min_mapping_quality"
+    if read.is_paired and not read.is_proper_pair:
+        return "improper_pair"
+    if read.is_duplicate:
+        return "duplicate"
+    if read.is_qcfail:
+        return "qcfail"
+    if read.is_supplementary:
+        return "supplementary"
+    if read.is_secondary:
+        return "secondary"
+    if has_disqualifying_long_intron(read, max_intron_length):
+        return "long_intron"
+
+    # Absent NM and nM there is nothing to measure, and the extractor keeps the
+    # read rather than guessing; identical behaviour here.
+    cigar_stats = read.get_cigar_stats()
+    aligned_base_count = cigar_stats[0][0]
+    if aligned_base_count == 0:
+        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
+    mismatch_count = None
+    if read.has_tag("NM"):
+        mismatch_count = int(read.get_tag("NM"))
+    elif read.has_tag("nM"):
+        mismatch_count = int(read.get_tag("nM"))
+    if mismatch_count is not None and aligned_base_count > 0:
+        per_id = 100 - (mismatch_count / aligned_base_count) * 100
+        if per_id < min_per_id:
+            return "low_perID"
+
+    return None
+
+
+def retained_for_quantification(read, contig_strand=None, **kwargs):
+    """True when quantification would use this alignment.  See quant_discard_reason."""
+
+    return quant_discard_reason(read, contig_strand, **kwargs) is None
+
+
 def frac_base_composition(nuc_seq, nuc_base):
 
     assert len(nuc_seq) > 0, "Error, nuc_seq is empty"

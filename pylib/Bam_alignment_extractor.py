@@ -121,79 +121,48 @@ class Bam_alignment_extractor:
         for read in read_fetcher:
             processed += 1
 
-            if contig_strand is not None:
-                if read.is_forward and contig_strand != "+":
-                    continue
-                if read.is_reverse and contig_strand != "-":
-                    continue
+            # The retention policy lives in Util_funcs.quant_discard_reason, which
+            # this loop is the reference consumer of.  It was inline here, which
+            # meant nothing else could ask what this loop keeps: cut selection, the
+            # strand split and depth measurement each grew their own approximation,
+            # and a filter added here would silently not reach any of them.
+            #
+            # The reasons are this counter's keys, so the tallies are unchanged.
+            reason = Util_funcs.quant_discard_reason(
+                read,
+                contig_strand,
+                max_intron_length=MAX_INTRON_LENGTH,
+                min_mapping_quality=MIN_MAPPING_QUALITY,
+                min_per_id=LRAA_Globals.config["min_per_id"],
+            )
 
-            if read.mapping_quality < MIN_MAPPING_QUALITY:
-                discarded_read_counter["min_mapping_quality"] += 1
+            # A strand mismatch is not a discard: this contig-strand simply is not
+            # this read's, and the opposite-strand pass will take it.  Counting it
+            # would report half the library as dropped.
+            if reason == "wrong_strand" or reason == "unmapped":
                 continue
 
-            if read.is_paired and not read.is_proper_pair:
-                discarded_read_counter["improper_pair"] += 1
-                continue
-
-            if read.is_duplicate:
-                discarded_read_counter["duplicate"] += 1
-                continue
-
-            if read.is_qcfail:
-                discarded_read_counter["qcfail"] += 1
-                continue
-
-            if read.is_supplementary:
-                discarded_read_counter["supplementary"] += 1
-                continue
-
-            if read.is_secondary:
-                discarded_read_counter["secondary"] += 1
-                continue
-
-            # A read carrying an intron longer than max_intron_length cannot be
-            # assigned to any transcript, because the splice graph declines to model
-            # that intron.  Discarding it here rather than only when building the
-            # graph input keeps read assignment and graph construction on one record
-            # set, and applies regardless of whether normalization runs.
-            if Util_funcs.has_disqualifying_long_intron(read, MAX_INTRON_LENGTH):
-                discarded_read_counter["long_intron"] += 1
-                continue
-
-            # determine min per_id based on read type:
-            min_per_id = LRAA_Globals.config["min_per_id"]
-
-            # check read alignment percent identity
-            cigar_stats = read.get_cigar_stats()
-            aligned_base_count = cigar_stats[0][0]
-            if aligned_base_count == 0:
-                aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-
-            mismatch_count = None
-            if read.has_tag("NM"):
-                mismatch_count = int(read.get_tag("NM"))
-            elif read.has_tag("nM"):
-                mismatch_count = int(read.get_tag("nM"))
-            if mismatch_count is not None:
-                per_id = 100 - (mismatch_count / aligned_base_count) * 100
-                # logger.info(f"-read per_id: {per_id}")
-                if per_id < min_per_id:
+            if reason is not None:
+                discarded_read_counter[reason] += 1
+                if reason == "low_perID":
                     read_name = Util_funcs.get_read_name_include_sc_encoding(read)
                     logger.debug(
-                        "read {} has insufficient per_id {}, < min {} required ".format(
-                            read_name, per_id, min_per_id
+                        "read {} has insufficient per_id, < min {} required ".format(
+                            read_name, LRAA_Globals.config["min_per_id"]
                         )
                     )
-                    discarded_read_counter["low_perID"] += 1
                     self._last_discarded_read_names_by_reason["low_perID"].add(
                         read_name
                     )
-                    # print(read)
-                    # print("Cigar_stats: " + str(cigar_stats))
                     num_alignments_per_id_fail += 1
-                    continue
-                else:
-                    num_alignments_per_id_ok += 1
+                continue
+
+            # Retained, and its identity was measurable: the QC ratio below is over
+            # alignments that carried NM or nM, so a read without either is neither
+            # a pass nor a failure.  Two tag probes rather than recomputing the
+            # identity the predicate already evaluated.
+            if read.has_tag("NM") or read.has_tag("nM"):
+                num_alignments_per_id_ok += 1
 
             if pretty:
                 # Build Pretty_alignment on the fly. Immediately lighten non-candidates for

@@ -149,6 +149,7 @@ sys.path.insert(
 )
 
 import LRAA_Globals
+import Util_funcs
 
 
 def _load_extractor():
@@ -334,17 +335,47 @@ def spanning_counts(bam, chrom, strand, positions, max_intron_length=None):
     return counts
 
 
-def spanning_alignments(bam, chrom, strand, position, max_intron_length=None):
-    """The retained primary alignments a cut at ``position`` severs.
+def spanning_alignments(
+    bam,
+    chrom,
+    strand,
+    position,
+    max_intron_length=None,
+    quant_only=False,
+    min_per_id=None,
+    min_mapping_quality=None,
+):
+    """The alignments a cut at ``position`` severs.
 
-    Yields the pysam records themselves.  ``spanning_read_names`` is this filter
-    with the names taken off, so the predicate deciding what the extractor drops
-    exists once: a second copy would be free to drift, and the whole value of the
-    manifest is that it names exactly the set the extractor will lose.
+    ``quant_only=False`` uses the same superset predicate the cost scoring uses,
+    so the names reported for a cut match the number reported against it.
+
+    ``quant_only=True`` restricts to alignments quantification would actually use,
+    via the shared policy in ``Util_funcs.quant_discard_reason``: mapping quality
+    and percent identity as well.  Emission needs that stricter set.  The superset
+    is sound for BOUNDING a cut's cost, because over-counting only biases toward
+    safer positions -- but a consumer asking which severed reads linked two genes
+    is asking about reads quantification sees, and one it would have rejected on
+    MAPQ or identity is a false positive there, not a conservative one.
+
+    The thresholds are arguments rather than config reads because the EFFECTIVE
+    values are decided by the invoking run, not by the defaults: --HiFi raises
+    min_per_id from 80 to 97 inside LRAA, so a selector reading its own config
+    would emit reads that run rejects.  Callers must pass what the quant step will
+    use.
     """
 
     for aln in bam.fetch(chrom, max(0, position - 1), position + 1):
-        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
+        if quant_only:
+            if not Util_funcs.retained_for_quantification(
+                aln,
+                strand,
+                max_intron_length=max_intron_length,
+                min_per_id=min_per_id,
+                min_mapping_quality=min_mapping_quality,
+            ):
+                continue
+        elif not extractor.retained_for_extraction(aln, strand, max_intron_length):
             continue
         start = aln.reference_start + 1
         end = aln.reference_end
@@ -365,7 +396,9 @@ def spanning_read_names(bam, chrom, strand, position, max_intron_length=None):
     ]
 
 
-def write_severed_alignments_bam(header, alignments, path):
+def write_severed_alignments_bam(
+    header, alignments, path, min_per_id=None, min_mapping_quality=None
+):
     """A coordinate-sorted, indexed BAM of the alignments the cuts sever.
 
     Names alone cannot answer what a severed read was compatible with.  Transcript
@@ -378,6 +411,9 @@ def write_severed_alignments_bam(header, alignments, path):
     name, so attribution from the manifest alone costs a full pass over the source
     however few names it holds.  Emitting the records while they are in hand is
     what keeps that check local.
+
+    What this is NOT: the set quantification used.  See the CO lines written into
+    the output for the scope a consumer has to respect.
 
     Takes a header rather than an open file because the caller writes ONCE across
     every contig it selected on; a path threaded into per-contig selection would
@@ -392,7 +428,29 @@ def write_severed_alignments_bam(header, alignments, path):
     by_position = sorted(
         alignments, key=lambda aln: (aln.reference_id, aln.reference_start, aln.query_name)
     )
-    with pysam.AlignmentFile(path, "wb", header=header) as out:
+    # The scope travels with the artifact, because every consumer so far has
+    # over-read it.  These records are what EXTRACTION would retain at the stated
+    # thresholds, taken from the pre-normalization strand split.  They are NOT the
+    # set quantification saw: normalization runs two stages later and samples by
+    # local depth, so some of these would have been dropped there.  Intersecting
+    # them with a per-chunk normalized bam finds nothing by construction -- chunk
+    # extraction discarded them before normalization ran -- so establishing that a
+    # severed read dissolved a component needs the whole-library normalized bam,
+    # which the chunked arm does not produce.
+    stamped = header.to_dict() if hasattr(header, "to_dict") else dict(header)
+    notes = list(stamped.get("CO", []))
+    notes.append(
+        "LRAA severed alignments: extraction-retained, PRE-normalization. "
+        "min_per_id={} min_mapping_quality={}".format(min_per_id, min_mapping_quality)
+    )
+    notes.append(
+        "LRAA severed alignments: NOT the quant-visible set. Zero records proves no "
+        "component dissolved. Nonzero requires a whole-library normalized bam to "
+        "attribute; without one, refuse rather than approximate."
+    )
+    stamped["CO"] = notes
+
+    with pysam.AlignmentFile(path, "wb", header=stamped) as out:
         for aln in by_position:
             out.write(aln)
     pysam.index(str(path))
@@ -549,6 +607,10 @@ def select_cut_points(
     annotation=None,
     count_denominator=True,
     severed_sink=None,
+    # The thresholds the quant step will apply, for the emitted set only.  Not
+    # config reads: --HiFi changes min_per_id inside LRAA, so the caller decides.
+    min_per_id=None,
+    min_mapping_quality=None,
 ):
     """Choose cut points for one contig-strand. Returns a ``Selection``.
 
@@ -669,12 +731,30 @@ def select_cut_points(
         dropped_read_names = collections.OrderedDict()  # name -> [cut positions]
         cut_positions = [cut.position for cut in cuts]  # strictly increasing
         for cut in cuts:
+            # Names follow the superset the cost scoring used, so the reads listed
+            # for a cut match the number reported against it.
             for aln in spanning_alignments(
                 bam, chrom, strand, cut.position, max_intron_length
             ):
                 dropped_read_names.setdefault(aln.query_name, []).append(cut.position)
-                if severed_sink is None:
-                    continue
+
+            if severed_sink is None:
+                continue
+
+            # Emission is stricter: only alignments quantification would use.  A
+            # read rejected on MAPQ or identity never reaches a component, so
+            # including it would let a consumer attribute a dissolved component to
+            # a read no downstream stage ever saw.
+            for aln in spanning_alignments(
+                bam,
+                chrom,
+                strand,
+                cut.position,
+                max_intron_length,
+                quant_only=True,
+                min_per_id=min_per_id,
+                min_mapping_quality=min_mapping_quality,
+            ):
                 # An alignment spanning several cuts is fetched once per cut, so
                 # something has to collapse the repeats.  Not identity: two BAM rows
                 # can be byte-identical and still be two retained alignments, so
@@ -1043,6 +1123,22 @@ def main(argv=None):
         "strand split. 0 disables.",
     )
     parser.add_argument(
+        "--min_per_id",
+        type=float,
+        default=LRAA_Globals.config["min_per_id"],
+        help="percent identity the quant step will require. Affects only which "
+        "alignments --severed_reads_bam emits, never cut placement. Must match the "
+        "run being selected for: --HiFi raises this to 97 inside LRAA, so leaving "
+        "the default of 80 would emit reads that run discards.",
+    )
+    parser.add_argument(
+        "--min_mapping_quality",
+        type=int,
+        default=int(LRAA_Globals.config["min_mapping_quality"]),
+        help="mapping quality the quant step will require. Emission only, as with "
+        "--min_per_id.",
+    )
+    parser.add_argument(
         "--output_prefix",
         type=str,
         required=True,
@@ -1111,6 +1207,8 @@ def main(argv=None):
                 max_intron_length=args.max_intron_length,
                 annotation=annotation,
                 severed_sink=severed_sink,
+                min_per_id=args.min_per_id,
+                min_mapping_quality=args.min_mapping_quality,
             )
         )
 
@@ -1118,7 +1216,11 @@ def main(argv=None):
         with pysam.AlignmentFile(args.bam, "rb") as bam:
             header = bam.header
         written = write_severed_alignments_bam(
-            header, severed_sink, args.severed_reads_bam
+            header,
+            severed_sink,
+            args.severed_reads_bam,
+            min_per_id=args.min_per_id,
+            min_mapping_quality=args.min_mapping_quality,
         )
         print(
             "-wrote {} severed alignment(s) to {}".format(

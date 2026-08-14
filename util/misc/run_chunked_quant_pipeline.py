@@ -68,6 +68,7 @@ sys.path.insert(
 )
 import CpuBudget  # noqa: E402  (path insert must precede the import)
 import Util_funcs  # noqa: E402
+import LRAA_Globals  # noqa: E402
 
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")
@@ -333,12 +334,19 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
         # ".sev" is a version marker, not an input: this stage now also emits
         # <prefix>.severed_reads.bam, so a checkpoint written before that would
         # skip the step and leave the file absent while reporting the stage reused.
-        token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev".format(
+        # --HiFi raises min_per_id to 97 inside LRAA, and the emitted severed set is
+        # filtered on the value the quant step will use, so the thresholds belong in
+        # the token: the same cuts with a different min_per_id emit a different bam.
+        effective_min_per_id = 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
+        effective_min_mapq = int(LRAA_Globals.config["min_mapping_quality"])
+        token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
             tag,
             args.approx_MB_per_cut,
             args.approx_MB_per_cut_wiggle_window,
             args.depth_window,
             args.margin,
+            effective_min_per_id,
+            effective_min_mapq,
         )
         cmd = [
             sys.executable,
@@ -370,6 +378,12 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
             # reads is one the selector rejects.
             "--severed_reads_bam",
             "{}.severed_reads.bam".format(prefix),
+            # The values LRAA will apply, not the selector's own defaults: --HiFi
+            # changes min_per_id downstream and the selector cannot see that flag.
+            "--min_per_id",
+            str(effective_min_per_id),
+            "--min_mapping_quality",
+            str(effective_min_mapq),
             "--output_prefix",
             prefix,
         ]
