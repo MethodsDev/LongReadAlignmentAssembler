@@ -363,12 +363,24 @@ def _make_transcript(splice_graph, exons, exon_indices, gene_id, transcript_id):
 
 
 def _make_read_multipath(splice_graph, exons, exon_indices, read_id, read_count=1):
+    """A multipath standing for `read_count` reads, with that many distinct read ids.
+
+    The ids matter, not just the count. Support is measured with get_read_weight(), which
+    sums the per-read normalization weight and falls back to the number of distinct read
+    ids when nothing was normalized. Handing one id a count of six would make weight and
+    count disagree -- a state the real pipeline does not produce (verified: zero diverging
+    multipaths over a real unnormalized chr20 region) but which a synthetic shortcut can
+    invent, and which would then quietly change what EM is given here and nowhere else.
+
+    Ids are spread by `read_id * 1000 + k` so two multipaths asking for overlapping ranges
+    cannot collide and silently merge each other's reads.
+    """
     node_ids = [exons[i].get_id() for i in exon_indices]
     return MultiPath(
         splice_graph,
         [node_ids],
         read_types={"PacBio"},
-        read_names={read_id},
+        read_names={read_id * 1000 + k for k in range(read_count)},
         read_count=read_count,
     )
 

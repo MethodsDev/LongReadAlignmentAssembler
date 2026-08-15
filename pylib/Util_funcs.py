@@ -15,6 +15,42 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 
+def alignment_per_id(read):
+    """Percent identity of an alignment, or None when it cannot be determined.
+
+    The single definition shared by everything that filters on identity. Coverage
+    normalization has to apply the same floor as alignment extraction, because depth
+    measured over reads the consumer rejects yields acceptance probabilities -- and so
+    XW weights -- for a coverage level nothing downstream sees. Two implementations
+    that agree today drift tomorrow, and the failure is silent: the bam still looks
+    normalized, its weights are just wrong.
+
+    None means no mismatch tag was present, which callers treat as passing rather than
+    failing -- absence of evidence is not evidence of a bad alignment.
+    """
+    stats = read.get_cigar_stats()
+    aligned_base_count = stats[0][0]
+    if aligned_base_count == 0:
+        aligned_base_count = stats[0][7] + stats[0][8]
+    if aligned_base_count == 0:
+        return None
+    if read.has_tag("NM"):
+        mismatch_count = int(read.get_tag("NM"))
+    elif read.has_tag("nM"):
+        mismatch_count = int(read.get_tag("nM"))
+    else:
+        return None
+    return 100 - (mismatch_count / aligned_base_count) * 100
+
+
+def alignment_passes_per_id(read, min_per_id):
+    """Whether this alignment clears the identity floor. No floor, or no tag, passes."""
+    if not min_per_id or min_per_id <= 0:
+        return True
+    per_id = alignment_per_id(read)
+    return per_id is None or per_id >= min_per_id
+
+
 def retrieve_contig_seq_from_fasta_file(contig_acc, fasta_filename):
 
     # samtools faidx <fasta> <region>
@@ -325,35 +361,69 @@ def file_identity_token(path):
 
 
 def splice_graph_norm_cache_stem(
-    base_root, normalize_max_cov_level, source_bam, max_intron_length
+    base_root,
+    normalize_max_cov_level,
+    source_bam,
+    max_intron_length,
+    min_per_id,
+    min_mapping_quality,
+    depth_window,
+    random_seed,
+    window_origin,
 ):
     """Name for a normalized bam and its work directory.
 
-    Everything that determines the contents belongs in the name, because a hit is
-    taken on trust and nothing downstream can audit it.
+    Everything that determines the contents belongs in the name, because a hit is taken on
+    trust and nothing downstream can audit it -- and because the driver returns on seeing
+    this stem's checkpoint, it never runs the utility and so never consults the utility's
+    own finer-grained token. Anything missing here is invisible.
 
-    The method matters most: reads selected by an algorithm no longer in the tree
-    are undetectable once written, since a bam from the read-start-binning era
-    carries no weight tag and an untagged read correctly weighs 1.
+    Every parameter is therefore required rather than defaulted: a caller that forgets one
+    would key a bam by a name that does not describe it, and the omission would surface as
+    a silently reused cache rather than an error.
 
-    The source is identified by content fingerprint rather than by name. base_root
-    is only a basename, so without this a second input called sample.bam from a
-    different directory, or the same path regenerated, would land on the cache
-    built for the first.
+    The method matters most: reads selected by an algorithm no longer in the tree are
+    undetectable once written, since a bam from the read-start-binning era carries no
+    weight tag and an untagged read correctly weighs 1.
 
-    The target depth is here for the same reason, and it also scopes the work
-    directory, whose checkpoints would otherwise let a run at one depth reuse the
-    strand split and merge performed for another.
+    The source is identified by content fingerprint rather than by name. base_root is only
+    a basename, so without this a second input called sample.bam from a different
+    directory, or the same path regenerated, would land on the cache built for the first.
 
-    The intron cap decides which records the strand split emits at all, so two
-    runs differing only in --max_intron_length produce different normalized bams
-    and must not share a name.
+    The target depth is here for the same reason, and it also scopes the work directory,
+    whose checkpoints would otherwise let a run at one depth reuse the strand split and
+    merge performed for another.
+
+    The intron cap decides which records the strand split emits at all, so two runs
+    differing only in --max_intron_length produce different normalized bams and must not
+    share a name.
+
+    The identity floor and the mapping-quality floor decide which records count toward
+    depth and which get written. The identity floor is why a HiFi run must not share a
+    cache with a default one: 97 against 80 admits a materially different read population.
+    The mapping-quality floor is whichever value the consumer will actually enforce, which
+    under the quant stage is --min_mapping_quality_for_final_quant rather than
+    --min_mapping_quality.
+
+    The window, the seed and the window origin change the contents too -- the seed salts
+    the per-read acceptance draw, while the window and its origin both move the
+    depth-window boundaries and so decide which reads survive. The driver holds them fixed
+    today, which is exactly why omitting them would be easy and would go unnoticed until
+    someone changed a default.
     """
-    return "{}.norm_{}.maxintron_{}.{}.{}".format(
+    return "{}.norm_{}.maxintron_{}.{}.pid{}.mapq{}.w{}.s{}.o{}.{}".format(
         base_root,
         normalize_max_cov_level,
         max_intron_length,
         LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD,
+        ("%g" % float(min_per_id or 0)),
+        int(min_mapping_quality or 0),
+        int(depth_window),
+        int(random_seed),
+        # "none" rather than 0: an unset origin anchors the grid per contig on the first
+        # aligned base seen there, which is a different placement from the absolute grid
+        # at 0, and collapsing the two here would let them share one cached bam.
+        ("none" if window_origin is None else int(window_origin)),
         file_identity_token(source_bam),
     )
 

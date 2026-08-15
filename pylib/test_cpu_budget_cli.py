@@ -265,5 +265,6 @@ def test_a_region_restricted_unit_keys_its_artifacts_on_the_region(tmp_path):
     names = sorted(p.name for p in tmp_root.iterdir() if p.is_file())
     assert names, "expected per-unit artifacts under {}".format(tmp_root)
     assert all(n.startswith("ctgA.+.chunk0_1-3000.") for n in names), names
-    for suffix in (".quant.expr", ".quant.tracking", ".ok"):
+    # tracking is always gzipped, including the per-unit temporaries the merge concatenates
+    for suffix in (".quant.expr", ".quant.tracking.gz", ".ok"):
         assert "ctgA.+.chunk0_1-3000" + suffix in names

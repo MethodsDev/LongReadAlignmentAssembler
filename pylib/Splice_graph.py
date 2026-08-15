@@ -120,6 +120,34 @@ class Splice_graph:
     def get_contig_strand(self):
         return self._contig_strand
 
+    def canonical_simple_path(self, simple_path):
+        """A simple path rendered so it can be compared across separate runs.
+
+        Node ids are process-global counters (GenomeFeature: E:n, I:n, TSS:n, POLYA:n),
+        so the same feature gets a different id in a different invocation -- exactly the
+        drift that makes multipath ids unusable across runs. Substituting the feature's
+        type and genomic coordinates makes the path a property of the graph's content
+        rather than of the order its nodes happened to be created in.
+
+        Raises on an unresolvable node rather than falling back to its id: a key that is
+        canonical for most paths and raw for a few is worse than no key at all, because
+        the mismatches look like genuine misses.
+
+        Every coordinate is rendered, not just the outer pair. Reducing a feature to its
+        span would let two nodes of one type sharing outer boundaries but differing inside
+        render identically, and a colliding key produces false matches -- which look like
+        agreement rather than like error.
+        """
+        parts = []
+        for node_id in simple_path:
+            if node_id == LRAA_Globals.SPACER:
+                parts.append("?")
+                continue
+            coords = self.get_node_obj_via_id(node_id).get_coords()
+            kind = str(node_id).split(":", 1)[0]
+            parts.append("{}:{}".format(kind, "-".join(str(c) for c in coords)))
+        return "{}{}|{}".format(self._contig_acc, self._contig_strand, ",".join(parts))
+
     def set_read_aln_gap_merge(self, read_aln_gap_merge_int):
 
         self._read_aln_gap_merge_int = read_aln_gap_merge_int

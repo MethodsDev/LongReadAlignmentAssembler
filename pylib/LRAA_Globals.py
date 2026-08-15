@@ -20,10 +20,26 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 #
 #   startbin1  read starts binned per 100 bp, each bin capped, no weights
 #   cov1       depth-targeted sampling, scarce junctions kept whole, XW weights
-#   cov2       as cov1, but the strand split first drops secondary, supplementary,
-#              duplicate, qcfail and unmapped records, and any alignment carrying
-#              an intron longer than max_intron_length
-SPLICE_GRAPH_NORMALIZATION_METHOD = "cov2"
+#   cov2       two independent meanings, because the branches below were developed in
+#              parallel and both bumped cov1. On devel: the strand split first drops
+#              secondary, supplementary, duplicate, qcfail and unmapped records, and any
+#              alignment carrying an intron longer than max_intron_length. On the
+#              normalization branch: depth and junction support are measured only over the
+#              records the consumer actually reads.
+#   cov3       normalization branch only -- as its cov2, plus the consumer's min_per_id
+#              floor.
+#   cov4       normalization branch only -- adds the mapping-quality floor and the
+#              improper-pair, duplicate and qcfail rejections.
+#   cov5       both of the above, and measurement no longer reimplements the retention
+#              rules: it calls Util_funcs.quant_discard_reason, the one policy
+#              quantification itself consumes, which additionally excludes unmapped,
+#              unplaced and long-intron records. Counting records the consumer discards
+#              measured a coverage level nothing downstream has -- 8% of reads on an ONT
+#              chr20 bam from the identity floor alone, and mapping quality bites hardest
+#              when set, since multimapping reads carry MAPQ 0 at exactly the paralogous
+#              loci where thinning decisions matter most. Neither cov2 nor cov4 describes
+#              this, so reusing either token would be a stale hit rather than a miss.
+SPLICE_GRAPH_NORMALIZATION_METHOD = "cov5"
 
 config = {
     #########################
@@ -279,6 +295,50 @@ config = {
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,
+    # Honor the XW coverage-normalization weight during quantification, so a
+    # multipath's support is the weight its reads stand for rather than a count of
+    # the reads that survived thinning. Off by default: quantification normally
+    # reads the unnormalized bam, where every weight is 1 and this changes nothing,
+    # and the paths that reconstruct multipaths from more than one alignment record
+    # per read have not been validated under weighting. Requires primary-only
+    # alignments; multi-record groups raise rather than produce a weighted number
+    # from a configuration that was never checked.
+    "use_XW_read_weights_for_quant": False,
+    # Diagnostic dumps for evaluating a streaming assignment pass, both off unless set
+    # to an output prefix via --config_update. They must exist here with defaults or
+    # --config_update rejects them as unknown keys.
+    #
+    # dump_read_path_map      read name -> the canonical path chosen to represent it
+    # dump_mp_fraction_table  canonical path -> the fractional split over transcripts
+    #
+    # Both are keyed on canonical paths (feature type plus genomic coordinates) rather
+    # than node or multipath ids, since those are process-global counters and drift
+    # between runs.
+    "dump_read_path_map": None,
+    "dump_mp_fraction_table": None,
+    # Two-pass alternative to the default final quantification, off by default. The
+    # first pass quantifies normally against the coverage-normalized bam; the second
+    # streams the full bam, looks each read's path up in the table the first pass
+    # produced, writes its tracking row and forgets it. Nothing per-read is retained,
+    # which is what makes a billion-read library tractable -- the default path holds
+    # each shard's alignments and every read name it will report.
+    #
+    # This reports one expectation step at the first pass's abundances, where the
+    # default path re-estimates them, so its counts are close to but not identical
+    # with the default's. Left off so the standard behaviour is untouched.
+    "stream_reads": False,
+    # Refuse the run when more than this share of streamed reads land on paths the table
+    # never saw. Not a correctness bound: those reads are resolved in-stream by the same
+    # cascade and theta the first pass would have used, so they are assigned, not dropped.
+    # It is a "the table is not doing its job" tripwire -- a graph mismatch, or a first pass
+    # thinned so far it precomputed nothing useful, shows up here as a rate near 100%.
+    #
+    # Measured on ONT chr20 with the default target of 1000: 7.39% of reads on chr20+ and
+    # 7.55% on chr20- landed on unseen paths, across 985 and 998 distinct paths against
+    # tables of 4724 and 4621. Resolution is cached per path, so that is ~4.6 reads per
+    # resolve and roughly 21% extra cascade work rather than 7.5%. The earlier 2% default
+    # was calibrated against a different quantity and fired on healthy data.
+    "stream_reads_max_unseen_path_read_frac": 0.25,
     "EM_alpha": 0.01,  # regularization
     "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
     # assignment fraction at or above which a read counts as uniquely assigned.
@@ -406,6 +466,76 @@ if "LRAA_READSTORE_BACKEND" not in os.environ:
 # in-memory read name retention is disabled.
 READ_NAME_STORE = None  # type: ignore
 MP_READ_ID_STORE = None  # type: ignore
+
+# Per-run map from compact read ID to the coverage-normalization weight the read
+# carries -- the reciprocal of its acceptance probability, taken from the bam's XW
+# tag. Summing these rather than counting reads is what recovers the support an
+# unnormalized bam would have shown, so quantification must consult it wherever a
+# multipath's read tally stands in for abundance.
+#
+# Keyed on the ID rather than the name because MultiPath._coerce_read_identifier is
+# a pure function of the read name: every path that rebuilds a multipath -- the
+# genome pass, transcriptome rescue after minimap2 has discarded the tag, and any
+# split or clone -- arrives at the same key without having to carry the weight
+# along. A read absent from the registry weighs 1, so an unnormalized bam and a bam
+# predating the tag both quantify exactly as they did before.
+READ_WEIGHT_REGISTRY = {}  # type: ignore
+
+
+def reset_read_weight_registry():
+    """Drop every recorded weight. Call when a quant pass starts reading a bam.
+
+    Weights belong to one bam. A run can pass over several -- the splice graph reads
+    the normalized bam while quantification reads the original, and discovery quants
+    twice -- and a weight surviving from one into another would be applied to reads
+    that never carried it, silently scaling support in the arm that is supposed to be
+    the control.
+    """
+    READ_WEIGHT_REGISTRY.clear()
+
+
+def register_read_weight(read_id, weight):
+    """Record one read's normalization weight; the last write wins.
+
+    Acceptance probability is a property of an alignment record, not of a read, so a
+    read with several records has several candidate weights. The caller resolves that
+    by writing exactly one authoritative value: the weight of the record whose path
+    was actually chosen to represent the read. Overwriting rather than combining
+    keeps this honest -- a maximum or a sum over competing records would describe a
+    read that was never observed that way.
+
+    Under DEBUG a repeat write must agree with what is already recorded. The only
+    legitimate repeat is the provisional write for a read whose chosen record turns
+    out to be the one already used, so a disagreement means a read is being described
+    two different ways.
+    """
+    if read_id is None:
+        return
+    try:
+        w = float(weight)
+    except (TypeError, ValueError):
+        return
+    if not (w > 0.0):
+        return
+    key = int(read_id)
+    if DEBUG:
+        prior = READ_WEIGHT_REGISTRY.get(key)
+        if prior is not None and abs(prior - w) > 1e-9:
+            raise RuntimeError(
+                "conflicting normalization weights for read id {}: {} then {}".format(
+                    key, prior, w
+                )
+            )
+    READ_WEIGHT_REGISTRY[key] = w
+
+
+def read_weight_for_id(read_id):
+    """This read's weight, or 1 when it was never thinned."""
+    try:
+        return READ_WEIGHT_REGISTRY.get(int(read_id), 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+
 
 # Read IDs of the synthetic multipaths injected for input transcripts. They give the
 # reference structure a template in the graph, but they are not observations, so path

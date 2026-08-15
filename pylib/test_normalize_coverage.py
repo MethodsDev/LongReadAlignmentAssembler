@@ -108,6 +108,176 @@ def normalized(tmp_path):
     return _load(out)
 
 
+def _flagged(header, name, start, cigar, *, secondary=False, supplementary=False):
+    a = _read(header, name, start, cigar)
+    a.is_secondary = secondary
+    a.is_supplementary = supplementary
+    return a
+
+
+def test_supplementary_records_do_not_inflate_depth(tmp_path):
+    """Depth must be measured over the records the consumer reads, and no others.
+
+    Every consumer discards supplementary alignments, so counting them raises the
+    measured depth above anything downstream sees. Acceptance probability is
+    target/depth, so the reads that remain are thinned harder than the target asks
+    and each surviving read's 1/p overstates what it stands for. Here the shallow
+    locus sits under the target on real records alone; padding it with supplementary
+    records must not push it over.
+    """
+    header = _header()
+    reads = [_read(header, f"real{i}", 50000 + (i % 20), f"{READ_LEN}M") for i in range(40)]
+    reads += [
+        _flagged(header, f"suppl{i}", 50000 + (i % 20), f"{READ_LEN}M", supplementary=True)
+        for i in range(400)
+    ]
+    src = tmp_path / "sup.bam"
+    _write_bam(src, reads)
+    out = tmp_path / "sup.norm.bam"
+    norm.sift_bam(str(src), str(out), 100, 100, 42)
+
+    kept = _load(out)
+    assert not any(k.startswith("suppl") for k in kept), "supplementary records are not evidence"
+    real = {k: v for k, v in kept.items() if k.startswith("real")}
+    assert len(real) == 40, "the real locus is under target and must pass through whole"
+    assert all(w == pytest.approx(1.0) for w, _ in real.values())
+
+
+def test_secondary_records_never_count_as_depth(tmp_path):
+    """Secondaries are not evidence, unconditionally -- there is no mode that admits them.
+
+    Alignment intake is primary non-supplementary only and is not configurable, so a
+    secondary record is one no consumer ever sees. Counting one would inflate measured
+    depth, lower the acceptance probability, and inflate every surviving read's XW weight
+    at that locus.
+
+    This fixture is load-bearing beyond its own assertion: the real test corpora contain
+    zero secondary records, so the secondary branch of the retention predicate is reachable
+    only from hand-built flags like these.
+    """
+    header = _header()
+    reads = [_read(header, f"real{i}", 50000 + (i % 20), f"{READ_LEN}M") for i in range(40)]
+    reads += [
+        _flagged(header, f"sec{i}", 50000 + (i % 20), f"{READ_LEN}M", secondary=True)
+        for i in range(400)
+    ]
+    src = tmp_path / "sec.bam"
+    _write_bam(src, reads)
+
+    out = tmp_path / "sec.norm.bam"
+    norm.sift_bam(str(src), str(out), 100, 100, 42)
+    kept = _load(out)
+    assert not any(k.startswith("sec") for k in kept), "secondary records are not evidence"
+    # 440 records at this locus would be over target; the 40 real ones are not, so they
+    # pass through unthinned and unweighted. That is the whole point: the 400 secondaries
+    # must not have been counted.
+    assert len([k for k in kept if k.startswith("real")]) == 40
+    assert all(w == pytest.approx(1.0) for w, _ in kept.values())
+
+
+def test_records_the_consumer_rejects_do_not_inflate_depth(tmp_path):
+    """Depth must be measured over exactly the records quantification consumes.
+
+    Util_funcs.quant_discard_reason rejects supplementary, secondary, improper-pair,
+    low-MAPQ, duplicate, qcfail and sub-identity alignments. Every one of those counted
+    into depth here would raise measured coverage above anything downstream sees, lower the
+    acceptance probability, and inflate every surviving read's XW weight at that locus.
+
+    The clean reads alone sit under the target; padding with rejects of each kind must not
+    push the locus over it, and none of the rejects may appear in the output.
+    """
+    header = _header()
+    reads = []
+    for i in range(40):
+        a = _read(header, f"clean{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 1)
+        reads.append(a)
+
+    def _pad(name, n, **flags):
+        for i in range(n):
+            a = _read(header, f"{name}{i}", 50000 + (i % 20), f"{READ_LEN}M")
+            a.set_tag("NM", 1)
+            for k, v in flags.items():
+                setattr(a, k, v)
+            reads.append(a)
+
+    _pad("suppl", 100, is_supplementary=True)
+    _pad("sec", 100, is_secondary=True)
+    _pad("dup", 100, is_duplicate=True)
+    _pad("qcf", 100, is_qcfail=True)
+    for i in range(100):                     # improper pair
+        a = _read(header, f"pair{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 1)
+        a.is_paired = True
+        a.is_proper_pair = False
+        reads.append(a)
+    for i in range(100):                     # below the MAPQ floor
+        a = _read(header, f"lowq{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 1)
+        a.mapping_quality = 3
+        reads.append(a)
+    for i in range(100):                     # below the identity floor
+        a = _read(header, f"lowid{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 30)
+        reads.append(a)
+
+    src = tmp_path / "rejects.bam"
+    _write_bam(src, reads)
+    out = tmp_path / "rejects.norm.bam"
+    norm.sift_bam(
+        str(src), str(out), 100, 100, 42, min_per_id=97.0, min_mapping_quality=10
+    )
+
+    kept = _load(out)
+    for prefix in ("suppl", "sec", "dup", "qcf", "pair", "lowq", "lowid"):
+        assert not any(k.startswith(prefix) for k in kept), (
+            f"{prefix} records are not evidence and must not be written"
+        )
+    clean = {k: v for k, v in kept.items() if k.startswith("clean")}
+    assert len(clean) == 40, "700 rejected records must not push a 40x locus over target"
+    assert all(w == pytest.approx(1.0) for w, _ in clean.values())
+
+
+def test_low_identity_reads_do_not_inflate_depth(tmp_path):
+    """Depth must be measured at the consumer's per-identity floor, not below it.
+
+    Bam_alignment_extractor discards alignments under config['min_per_id'] -- 97 in HiFi
+    mode -- before quantification sees them. Counting them here measures coverage that
+    does not exist downstream, so acceptance probability comes out too small and every
+    surviving read's 1/p too large. On an ONT chr20 bam at the default 80 this is 8% of
+    reads. Here the clean reads alone sit under target; noisy reads must not push the
+    locus over it.
+    """
+    header = _header()
+    reads = []
+    for i in range(40):
+        a = _read(header, f"clean{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 1)                     # ~99.7% identity
+        reads.append(a)
+    for i in range(400):
+        a = _read(header, f"noisy{i}", 50000 + (i % 20), f"{READ_LEN}M")
+        a.set_tag("NM", 30)                    # 90% identity, below a 97 floor
+        reads.append(a)
+    src = tmp_path / "perid.bam"
+    _write_bam(src, reads)
+
+    out = tmp_path / "perid.norm.bam"
+    norm.sift_bam(str(src), str(out), 100, 100, 42, min_per_id=97.0)
+    kept = _load(out)
+    assert not any(k.startswith("noisy") for k in kept), "sub-floor reads are not evidence"
+    clean = {k: v for k, v in kept.items() if k.startswith("clean")}
+    assert len(clean) == 40, "the clean locus is under target and must pass through whole"
+    assert all(w == pytest.approx(1.0) for w, _ in clean.values())
+
+    # with the floor disabled the noisy reads count, and the locus thins
+    out0 = tmp_path / "perid.nofloor.bam"
+    norm.sift_bam(str(src), str(out0), 100, 100, 42, min_per_id=0)
+    kept0 = _load(out0)
+    assert len(kept0) < 440, "counted as evidence, the locus is over target"
+    assert any(w > 1.0 for w, _ in kept0.values()), "thinned reads must carry a weight"
+
+
+
 def test_reads_below_the_target_are_all_kept_and_weigh_one(normalized):
     """Normalization, not downsampling: shallow coverage must pass through whole."""
     shallow = {k: v for k, v in normalized.items() if k.startswith("shallow")}
@@ -198,12 +368,60 @@ def source_bam(tmp_path):
     return p
 
 
-def _stem(source, level=1000, max_intron_length=200000):
+def _stem(source, level=1000, max_intron_length=200000, min_per_id=0,
+          min_mapping_quality=0, depth_window=100, random_seed=42, window_origin=0):
     import Util_funcs
 
     return Util_funcs.splice_graph_norm_cache_stem(
-        "s.quant", level, str(source), max_intron_length
+        "s.quant", level, str(source), max_intron_length, min_per_id,
+        min_mapping_quality, depth_window, random_seed, window_origin,
     )
+
+
+def test_cache_name_distinguishes_every_parameter_that_changes_the_bam(source_bam):
+    """The driver returns on this stem's checkpoint, so it never sees the utility's token.
+
+    Anything that changes which reads the utility keeps but is absent from this name is
+    invisible: the run inherits a bam that does not match its settings, and no consumer
+    can tell. The mapping-quality floor, the intron cap, the depth window and the seed are
+    all in that category -- the driver holds several of them fixed today, which is exactly
+    why leaving them out would go unnoticed until someone changed a default.
+    """
+    base = _stem(source_bam)
+    assert _stem(source_bam, min_mapping_quality=30) != base
+    assert _stem(source_bam, depth_window=50) != base
+    assert _stem(source_bam, random_seed=7) != base
+    assert _stem(source_bam, max_intron_length=100000) != base
+    assert "mapq30" in _stem(source_bam, min_mapping_quality=30)
+    assert "w50" in _stem(source_bam, depth_window=50)
+    assert "s7" in _stem(source_bam, random_seed=7)
+    assert "maxintron_100000" in _stem(source_bam, max_intron_length=100000)
+
+
+def test_cache_name_distinguishes_the_per_id_floor(source_bam):
+    """HiFi's floor of 97 admits a different read population than the default 80.
+
+    The driver returns as soon as it sees this stem's checkpoint, so it never runs the
+    utility and never consults the utility's own token. If the floor is absent here, a
+    HiFi run silently inherits the bam a default run normalized, whose depth was
+    measured over reads HiFi discards.
+    """
+    assert _stem(source_bam, min_per_id=97) != _stem(source_bam, min_per_id=80)
+    assert "pid97" in _stem(source_bam, min_per_id=97)
+
+
+def test_cache_name_separates_the_absolute_grid_from_the_per_contig_anchor(source_bam):
+    """An unset window origin is a different placement from the absolute grid at 0.
+
+    Unset anchors the depth-window grid on the first aligned base seen on each contig, so
+    window boundaries become a function of which records are present and the same absolute
+    locus can fall in a different window than it would at origin 0. The two produce
+    different bams, and canonicalizing None to 0 in the name -- the obvious way to write
+    this -- would let them share one.
+    """
+    assert _stem(source_bam, window_origin=None) != _stem(source_bam, window_origin=0)
+    assert ".o0." in _stem(source_bam, window_origin=0)
+    assert ".onone." in _stem(source_bam, window_origin=None)
 
 
 def test_cache_name_distinguishes_the_method(source_bam):

@@ -1,5 +1,12 @@
-# Ignore Python bytecode cache for pylib
-pylib/__pycache__/
+# Ignore Python bytecode cache anywhere in the tree. Was pylib-only, which left
+# util/, util/misc/, util/sc/ and the repo root uncovered -- an `add -A` swept 18
+# of them into a commit from there.
+__pycache__/
+*.pyc
+
+# Written to the current working directory by Transcript.py's clustering debug dump,
+# so it lands wherever pytest happened to run. Not an input to anything.
+__init_clusters.tsv
 
 # Ignore all untracked files generated under testing
 testing/**

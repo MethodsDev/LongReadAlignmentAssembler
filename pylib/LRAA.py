@@ -1180,6 +1180,23 @@ class LRAA:
         if bam_file is None:
             return mp_counter  # nothing to do here.
 
+        # Weights belong to the bam this pass is about to read, so clear unconditionally
+        # here. A run passes over several bams -- the splice graph reads the normalized
+        # one while quantification reads the original, and discovery quants twice -- and
+        # a weight surviving from one pass into another would scale reads that never
+        # bore it. Clearing even when weighting is off is what keeps a disabled pass
+        # from inheriting an enabled one's registry. Transcriptome rescue rebuilds
+        # multipaths later in this same pass, so it still finds what is registered below.
+        LRAA_Globals.reset_read_weight_registry()
+
+        use_XW_weights = bool(
+            LRAA_Globals.config.get("use_XW_read_weights_for_quant", False)
+        )
+        # No primary-only guard here any more: alignment intake discards secondary and
+        # supplementary records unconditionally, so the precondition XW weighting needs --
+        # one acceptance probability per read, not per placement -- holds by construction
+        # rather than by a flag a caller could get wrong.
+
         pretty_alignment_manager = Pretty_alignment_manager(self._splice_graph)
 
         pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(
@@ -1224,6 +1241,22 @@ class LRAA:
         # capture the read->path assignments:
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh = open(f"__read_graph_mappings.dat.{ITER}", "a")
+
+        # Optional read->path dump, off unless config['dump_read_path_map'] names a
+        # prefix (settable via --config_update). Diagnostic only: it exists to measure
+        # whether a streaming assignment pass can recompute paths read-locally.
+        #
+        # Appended, and tagged with the pass counter, because this function runs more
+        # than once per contig/strand in discovery and in genome_tx_arb -- truncating
+        # would silently leave only the last pass and make the dump look complete.
+        read_path_dump_fh = None
+        _dump_prefix = LRAA_Globals.config.get("dump_read_path_map") or None
+        if _dump_prefix:
+            read_path_dump_fh = open(
+                f"{_dump_prefix}.{contig_acc}.{contig_strand}.read_paths.tsv", "at"
+            )
+            read_path_dump_fh.write(f"# pass {ITER}\n")
+        canon_to_raw_seen = dict()
 
         logger.info(f"[{contig_acc}{contig_strand}] -start: mapping read alignments to the graph")
         num_alignments = len(grouped_alignments)
@@ -1303,8 +1336,26 @@ class LRAA:
 
             # print("{}\t{}".format(read_name, len(grouped_pretty_alignments)))
             paths_list = list()
-            path_candidates = list()  # (path, (lend, rend)) per pretty_alignment
+            path_candidates = list()  # (path, (lend, rend), norm_weight) per pretty_alignment
             read_type = None
+            read_id_for_weight = None
+            if use_XW_weights:
+                # Register before anything can reject this read: reads that fail graph
+                # mapping go to transcriptome rescue, which rebuilds their multipaths
+                # after minimap2 has discarded the bam tags. The registry is keyed on
+                # the read name's compact ID, so a weight recorded now is found there.
+                #
+                # Provisional, from the first record rather than combined across the
+                # group: acceptance probability belongs to a record, so a max or a sum
+                # would describe a read that was never observed. Under the primary-only
+                # requirement there is one record anyway; when a path is selected below,
+                # that record's own weight is written authoritatively.
+                read_id_for_weight = MultiPath._coerce_read_identifier(None, read_name)
+                LRAA_Globals.register_read_weight(
+                    read_id_for_weight,
+                    grouped_pretty_alignments[0].get_normalization_weight(),
+                )
+
             for pretty_alignment in grouped_pretty_alignments:
                 if read_type is None:
                     read_type = pretty_alignment.get_read_type()
@@ -1329,7 +1380,11 @@ class LRAA:
                         span = pretty_alignment.get_alignment_span()
                     except Exception:
                         span = None
-                    path_candidates.append((path, span))
+                    try:
+                        aln_weight = pretty_alignment.get_normalization_weight()
+                    except Exception:
+                        aln_weight = 1.0
+                    path_candidates.append((path, span, aln_weight))
 
             ## not allowing spacers in paths
             paths_list_no_spacers = list()
@@ -1359,11 +1414,37 @@ class LRAA:
 
             if paths_list_no_spacers:
                 # take first one to represent this read
-                chosen_path, chosen_span = candidates_no_spacers[0]
+                chosen_path, chosen_span, chosen_weight = candidates_no_spacers[0]
                 paths_list = [chosen_path]
                 num_kept += 1
                 if chosen_span is not None:
                     self._read_name_to_span[read_name] = chosen_span
+                if use_XW_weights:
+                    # This record is the read, so its weight is the read's weight; it
+                    # supersedes the provisional one registered above.
+                    LRAA_Globals.register_read_weight(
+                        read_id_for_weight, chosen_weight
+                    )
+                if read_path_dump_fh is not None:
+                    # read_name -> the path chosen to represent it, rendered by genomic
+                    # coordinates rather than node ids so it can be matched against
+                    # another run's. Written to measure whether a streaming assignment
+                    # pass can recompute paths read-locally, and how many full-bam reads
+                    # land on paths a normalized-bam pass already resolved.
+                    canon = self._splice_graph.canonical_simple_path(chosen_path)
+                    raw = tuple(chosen_path)
+                    prior = canon_to_raw_seen.get(canon)
+                    if prior is not None and prior != raw:
+                        # Checked over every path, assigned or not. Paths with no
+                        # compatible transcript are the majority of the cache a streaming
+                        # pass would consult, so a collision among those would inflate its
+                        # hit rate just as badly as one among the assigned paths.
+                        raise RuntimeError(
+                            "canonical path rendering is not injective: {} renders both "
+                            "{} and {}".format(canon, prior, raw)
+                        )
+                    canon_to_raw_seen[canon] = raw
+                    read_path_dump_fh.write("{}\t{}\n".format(read_name, canon))
             else:
                 num_no_path += 1
                 if LRAA_Globals.config.get(
@@ -1418,6 +1499,33 @@ class LRAA:
                         f"[{contig_acc}{contig_strand}] [map-reads] {i+1}/{num_alignments} ({frac*100:.2f}%) kept={num_kept} discard_spacer={num_discard_spacer} no_path={num_no_path} rate={rate:.2f}/s{mem_txt}"
                     )
                     last_log_emit = now
+
+        if read_path_dump_fh is not None:
+            read_path_dump_fh.close()
+            # Immediately re-derive every read's path the way a streaming pass would,
+            # against this same graph and this same LRAA object. Diffing the two dumps
+            # then isolates path computation: two separate invocations could not be
+            # compared, since node ids are process-global counters and independently
+            # built graphs may differ.
+            try:
+                import StreamingQuant
+
+                StreamingQuant.dump_streaming_paths(
+                    bam_file,
+                    contig_acc,
+                    contig_strand,
+                    contig_seq,
+                    self,
+                    f"{_dump_prefix}.{contig_acc}.{contig_strand}.stream_paths.tsv",
+                    try_correct_alignments=LRAA_Globals.config[
+                        "try_correct_alignments"
+                    ],
+                    region_lend=self._splice_graph._region_lend,
+                    region_rend=self._splice_graph._region_rend,
+                )
+            except Exception as exc:
+                logger.error("streaming path parity dump failed: %s", exc)
+                raise
 
         if LRAA_Globals.DEBUG:
             read_graph_mappings_ofh.close()

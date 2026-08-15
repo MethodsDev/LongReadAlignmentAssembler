@@ -2,6 +2,7 @@
 
 import sys, os, re
 import csv
+import gzip
 from collections import defaultdict
 import argparse
 import logging
@@ -14,6 +15,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def open_maybe_gzip(path, mode="rt"):
+    """Open a tracking file whether or not it is gzipped.
+
+    LRAA writes quant.tracking gzipped under --gzip_tracking, and the tracking file is the
+    one artifact that scales with library size, so at scale it is the compressed form that
+    exists. Detected by suffix, matching every other tracking reader in this repo
+    (annotate_bam_with_read_tracking_info.py, extract_tracked_reads_from_bam.py,
+    reassign_multigene_tracking_reads.py, singlecell_tracking_to_sparse_matrix.py).
+    """
+    if str(path).endswith(".gz"):
+        return gzip.open(path, mode, newline="")
+    return open(path, mode, newline="")
 
 def iter_non_comment_lines(fh):
     for line in fh:
@@ -80,7 +94,7 @@ def main():
 
     transcript_id_to_gene_id = dict()
 
-    with open(LRAA_tracking_file, "rt") as fh:
+    with open_maybe_gzip(LRAA_tracking_file, "rt") as fh:
         reader = csv.DictReader(iter_non_comment_lines(fh), delimiter="\t")
         for row in reader:
             gene_id = row["gene_id"]

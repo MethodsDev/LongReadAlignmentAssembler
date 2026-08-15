@@ -21,6 +21,8 @@ class Bam_alignment_extractor:
     # class variables
     # ---------------
 
+
+
     def __init__(self, alignments_bam_filename):
 
         self._alignments_bam_filename = alignments_bam_filename
@@ -141,7 +143,6 @@ class Bam_alignment_extractor:
             # would report half the library as dropped.
             if reason == "wrong_strand" or reason == "unmapped":
                 continue
-
             if reason is not None:
                 discarded_read_counter[reason] += 1
                 if reason == "low_perID":

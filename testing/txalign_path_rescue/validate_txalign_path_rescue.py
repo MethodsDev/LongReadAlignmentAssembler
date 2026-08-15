@@ -3,12 +3,16 @@
 import argparse
 import ast
 import csv
+import gzip
 import sys
 from pathlib import Path
 
 
 def read_tsv(path):
-    with path.open(newline="") as handle:
+    # Tracking is always gzipped; expr and the summary are not. Chosen by suffix.
+    opener = (lambda: gzip.open(path, "rt", newline="")) if str(path).endswith(".gz") \
+        else (lambda: path.open(newline=""))
+    with opener() as handle:
         reader = csv.DictReader(iter_non_comment_lines(handle), delimiter="\t")
         return list(reader)
 
@@ -62,7 +66,7 @@ def main():
 
     case_dir = Path(args.case_dir)
     summary_path = case_dir / f"{args.output_prefix}.genome_tx_arb.summary.tsv"
-    tracking_path = case_dir / f"{args.output_prefix}.quant.tracking"
+    tracking_path = case_dir / f"{args.output_prefix}.quant.tracking.gz"
     expr_path = case_dir / f"{args.output_prefix}.quant.expr"
     expected_names_path = case_dir / args.expected_read_names
 

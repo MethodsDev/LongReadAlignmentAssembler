@@ -81,7 +81,10 @@ def run_EM(
         indiv_mp_to_trans_assignments = list()
         indiv_mp_to_trans_weights = list()
 
-        num_reads_in_mp = mp.get_read_count()
+        # Weighted support, not a count of surviving reads: where coverage was thinned,
+        # the reads that remain each stand for several, and the E-step apportions this
+        # quantity directly. Equals the read count for an unnormalized bam.
+        num_reads_in_mp = mp.get_read_weight()
         mp_read_counts.append(num_reads_in_mp)
 
         for (
@@ -288,14 +291,22 @@ def em_algorithm_with_weights(
 
     transcript_sum_read_counts = defaultdict(float)
 
-    for iteration in range(max_iter):
-        # E-step: Calculate fractional assignments
+    def _e_step(theta):
+        """Fractional assignments and per-transcript counts implied by one abundance vector.
+
+        One definition, called inside the loop and once more afterwards. A second copy for the
+        final call would be free to drift from this one, and the drift would show up as
+        tracking fractions that disagree with the counts beside them in the same file.
+
+        Mutates transcript_sum_read_counts and fractional_mp_assignments in place, so both
+        always describe the theta most recently passed here.
+        """
         transcript_sum_read_counts.clear()
         for mp_i, mp_mapped_transcripts in enumerate(mp_assignments):
 
             # denominator for fractional assignment is the mp-weighted sum of expression for assigned transcripts
             total_weight = sum(
-                mp_weights[mp_i][j] * transcript_expression_levels[trans_id]
+                mp_weights[mp_i][j] * theta[trans_id]
                 for j, trans_id in enumerate(mp_mapped_transcripts)
             )
             for j, trans_id in enumerate(mp_mapped_transcripts):
@@ -304,9 +315,7 @@ def em_algorithm_with_weights(
                 # for each transcript this mp is assigned,
                 # assign a proportion of this mp according to its relative expression contribution.
                 frac_assignment = (
-                    weight * transcript_expression_levels[trans_id] / total_weight
-                    if total_weight > 0
-                    else 0
+                    weight * theta[trans_id] / total_weight if total_weight > 0 else 0
                 )
 
                 transcript_sum_read_counts[trans_id] += (
@@ -314,6 +323,10 @@ def em_algorithm_with_weights(
                 )
 
                 fractional_mp_assignments[mp_i][j] = frac_assignment
+
+    for iteration in range(max_iter):
+        # E-step: Calculate fractional assignments
+        _e_step(transcript_expression_levels)
 
         # M-step: Update expression levels
         transcript_expression_levels = np.array(
@@ -345,6 +358,22 @@ def em_algorithm_with_weights(
             break
 
         prev_expression_levels = transcript_expression_levels.copy()
+
+    # One more E-step, at the abundances actually being returned.
+    #
+    # The loop breaks AFTER its M-step, so without this the fractions and counts handed back
+    # were computed from the previous iteration's theta while the theta handed back is the
+    # updated one. Every consumer that recombines them -- a streaming pass splitting a read it
+    # has to resolve itself, or anyone comparing a tracking fraction against the abundance in
+    # quant.expr -- was mixing two different estimates, and nothing in the output said so.
+    #
+    # Bounded by EM_convergence_tol only when EM converged. On a gene that exhausts max_iter
+    # the two thetas can differ arbitrarily, and those are exactly the genes with many
+    # ambiguous reads: the ones where the split is hardest and matters most.
+    #
+    # Theta itself is NOT updated here, so abundances are unchanged; only the fractions and
+    # counts derived from them move, onto the same footing as the theta beside them.
+    _e_step(transcript_expression_levels)
 
     return (
         transcript_expression_levels,

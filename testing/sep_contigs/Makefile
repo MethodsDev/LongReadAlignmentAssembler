@@ -61,7 +61,7 @@ wdl_clean:
 	rm -rf  ./*_LRAA_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache
 
 clean: wdl_clean
-	rm -rf ./__*  ./LRAA.gtf ./LRAA.bed ./LRAA.quant.expr ./LRAA.quant.tracking \
+	rm -rf ./__*  ./LRAA.gtf ./LRAA.bed ./LRAA.quant.expr ./LRAA.quant.tracking.gz \
 		./LRAA.serial.* ./LRAA.par.* serial.time.txt parallel.time.txt bench.summary.tsv \
 		./LRAA.contigtmp ./LRAA.serial.contigtmp ./LRAA.par.contigtmp
 

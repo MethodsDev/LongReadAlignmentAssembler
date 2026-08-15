@@ -35,6 +35,7 @@ is a smoke test rather than a strong guard.  Point --genome/--bam/--region at a
 churn-carrying region for the strong version.
 """
 import argparse
+import gzip
 import hashlib
 import os
 import shutil
@@ -45,7 +46,10 @@ PRINCIPAL_SUFFIXES = (
     ".gtf",
     ".bed",
     ".quant.expr",
-    ".quant.tracking",
+    # Tracking is always written gzipped. Naming the uncompressed form here would find no
+    # file and silently shrink the comparison to the remaining outputs -- a determinism
+    # check that quietly stops checking the output most sensitive to merge ordering.
+    ".quant.tracking.gz",
     # Pure per-job concatenation, so it is the output most sensitive to merge
     # ordering -- it was the single file shown to be stabilised by pinning the
     # per-job launch order while content elsewhere still varied.  Omitting it
@@ -62,21 +66,33 @@ PRINCIPAL_SUFFIXES = (
 COMMENT_PREFIXES = ("# LRAA version", "# LRAA CMD:", "# LRAA merge:")
 
 
-def digest_bytes(path):
-    h = hashlib.sha256()
+def _read_all(path):
+    """Raw bytes, decompressing when the name says gzip.
+
+    Both digests below go through this. A gzip member embeds the compression timestamp in its
+    header, so two runs producing byte-identical content still produce different FILE bytes --
+    and a determinism check that compared those would report a difference on every single run,
+    for every gzipped output, forever. Comparing the decompressed payload is the only reading
+    of "identical" that means anything here.
+    """
+    if str(path).endswith(".gz"):
+        with gzip.open(path, "rb") as fh:
+            return fh.read()
     with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        return fh.read()
+
+
+def digest_bytes(path):
+    """sha256 of the payload -- decompressed for gzipped outputs, raw otherwise."""
+    return hashlib.sha256(_read_all(path)).hexdigest()
 
 
 def digest_content(path):
     """sha256 of the sorted, comment-stripped lines."""
-    with open(path, "rb") as fh:
-        lines = [
-            ln for ln in fh.read().splitlines()
-            if not any(ln.startswith(p.encode()) for p in COMMENT_PREFIXES)
-        ]
+    lines = [
+        ln for ln in _read_all(path).splitlines()
+        if not any(ln.startswith(p.encode()) for p in COMMENT_PREFIXES)
+    ]
     lines.sort()
     h = hashlib.sha256()
     for ln in lines:

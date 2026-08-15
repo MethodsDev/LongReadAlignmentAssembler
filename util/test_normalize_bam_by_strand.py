@@ -135,6 +135,30 @@ def test_single_strand_flag_invalidates_both_tokens(tmp_path):
     assert single_run != default_run
 
 
+def test_intron_length_does_not_key_a_run_whose_split_never_runs(tmp_path):
+    """--input_is_single_strand skips the split, so the intron cap decides nothing.
+
+    The split is the only place the threshold is enforced -- depth measurement passes
+    max_intron_length=0 explicitly, and on this path removing long-intron alignments is
+    the caller's documented responsibility. So two single-strand runs differing only in
+    --max_intron_length produce byte-identical output, and naming the threshold would key
+    every artifact on an input that cannot change them.
+
+    Over-keying is not the safe direction. It costs rebuilds, and it makes the name
+    unauditable: a field that sometimes determines the contents and always appears cannot
+    be checked against behaviour. This test fails if the gating is removed, which is the
+    only thing keeping the two claims in step.
+    """
+    filtered = _tokens(tmp_path, 200000, input_is_single_strand=True)
+    disabled = _tokens(tmp_path, 0, input_is_single_strand=True)
+    wildly_different = _tokens(tmp_path, 1, input_is_single_strand=True)
+
+    assert filtered == disabled == wildly_different
+
+    # and it must still key the mode where the split does enforce it
+    assert _tokens(tmp_path, 200000) != _tokens(tmp_path, 0)
+
+
 def test_the_two_new_options_are_distinguished_from_each_other(tmp_path):
     """Neither may be mistaken for the other, nor for both together."""
     origin_only = _tokens(tmp_path, 200000, window_origin=0)

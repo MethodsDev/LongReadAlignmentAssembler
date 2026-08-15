@@ -34,11 +34,37 @@ class Quantify:
         # transcript) while iterating in a stable insertion order.
         self._gene_id_to_transcript_objs = defaultdict(dict)
 
+        # transcript_id -> the one gene_id it belongs to. Backs the uniqueness check in
+        # _assign_path_nodes_to_gene, and persists across repeated calls to it so a
+        # collision is caught even when the two registrations arrive separately.
+        self._gene_id_of_transcript_id = dict()
+
         self._read_name_to_multipath = dict()
 
         self._mp_to_transcripts = dict()
         self._unassigned_mp_count_pairs = list()
 
+        # transcript_id -> EM's converged abundance estimate (theta), accumulated across
+        # the per-gene EM runs. Retained because a streaming assignment pass has to split a
+        # read across compatible isoforms the same way the E-step did, and needs theta to
+        # do it.
+        #
+        # This is NOT the reported isoform_fraction. The M-step forms theta as
+        # (C_t + alpha_t) / sum(C_u + alpha_u) with alpha proportional to a transcript's
+        # ambiguous read count, while isoform_fraction is recomputed afterwards from the
+        # returned counts alone and carries no alpha. They are close, and substituting one
+        # for the other would misplace reads worst at genes with many ambiguous reads --
+        # the genes whose isoforms are hardest to tell apart.
+        #
+        # Normalized within each gene, since EM runs once per gene, so fractions computed
+        # from it must use a per-gene denominator.
+        self._transcript_id_to_theta = dict()
+
+        # Whether the aggregate above describes one completed quantify(). Theta being empty is
+        # not the same question: with run_EM False an empty aggregate is the correct answer, so
+        # emptiness cannot distinguish "no EM" from "never published" or "invalidated". The
+        # flag can.
+        self._theta_valid = False
         # Component identity, for consumers that re-derive a per-read isoform
         # split.  Rebuilt per quantify() call rather than updated; see there.
         self._transcript_id_to_component_id = dict()
@@ -57,10 +83,14 @@ class Quantify:
 
     def quantify(self, splice_graph, transcripts, mp_counter):
 
-        # FIRST executable statement, above even argument validation.  The asserts
-        # below index transcripts[0], so quantify(sg, [], mp) raises before running
-        # anything -- and an invalidation placed after them would leave the previous
-        # call's components readable and marked valid.  Nothing may precede this.
+        # FIRST executable statements, above the argument validation below. Those asserts
+        # index transcripts[0], so quantify(sg, [], mp) raises before anything runs -- and
+        # with an invalidation placed after them, a previous call's theta and component
+        # identity would both stay readable and marked valid. Same reasoning as restoring
+        # validity only at the successful exit: the guard belongs before anything that can
+        # fail, not after. Neither assignment can itself fail, so their order relative to
+        # each other does not matter; nothing that can fail may precede them.
+        self._theta_valid = False
         self._component_identity_valid = False
 
         assert type(transcripts) == list
@@ -97,6 +127,29 @@ class Quantify:
 
         contig_acc = splice_graph.get_contig_acc()
         contig_strand = splice_graph.get_contig_strand()
+
+        # State scoped to this call. The per-gene loops below accumulate into these, which
+        # is intended within one quantify(); carrying them across calls is not. Discovery
+        # quantifies several times over a changing transcript set, so without this a later
+        # reader could pair multipaths from an earlier pass with this pass's theta, or read
+        # a theta belonging to a transcript this run never quantified.
+        #
+        # The two gene indexes matter most, and least visibly: _assign_path_nodes_to_gene
+        # only ever adds, so a transcript dropped between calls stays a candidate at
+        # _get_all_genes_with_node_matches_to_simplepath and can still be handed fresh
+        # multipaths to test compatibility against. The result is not a stale leftover but
+        # a live assignment to an isoform this run does not have.
+        #
+        # Cleared here rather than in _assign_path_nodes_to_gene or
+        # _assign_reads_to_transcripts, which the rescue path (LRAA:4596, LRAA.py:266) and
+        # the tests call directly on throwaway probe objects.
+        self._transcript_id_to_theta.clear()
+        self._mp_to_transcripts.clear()
+        self._unassigned_mp_count_pairs.clear()
+        self._read_name_to_multipath.clear()
+        self._path_node_id_to_gene_ids.clear()
+        self._gene_id_to_transcript_objs.clear()
+        self._gene_id_of_transcript_id.clear()
 
         # init transcript quant info
         gene_to_transcripts = defaultdict(list)
@@ -213,14 +266,29 @@ class Quantify:
             # One joint EM over every transcript of every gene in the component.
             # _estimate_isoform_read_support() computes isoform fractions per
             # gene_id internally, so widening the EM does not widen them.
+            #
+            # Theta is a different matter: it is normalized within the EM unit, which is
+            # now the component rather than the gene, so a consumer splitting a read by
+            # theta must use a per-component denominator. StreamingQuant's table does.
             component_transcript_to_fractional_read_assignment = (
-                self._estimate_isoform_read_support(transcripts_list, prefix_str=prefix_str)
+                self._estimate_isoform_read_support(
+                    transcripts_list,
+                    prefix_str=prefix_str,
+                    # This loop is the one caller whose units are meant to aggregate: it
+                    # resets the aggregate at entry and covers every EM unit of the run.
+                    accumulate_theta=True,
+                )
             )
             # copy over to the full data structure
             for transcript_id in component_transcript_to_fractional_read_assignment:
                 transcript_to_fractional_read_assignment[transcript_id] = (
                     component_transcript_to_fractional_read_assignment[transcript_id]
                 )
+
+        # Marked valid only here, after every EM unit has been accumulated. Set at entry it
+        # would vouch for a partial aggregate if a unit raised; set anywhere else it would
+        # vouch for one no single call produced.
+        self._theta_valid = True
 
         # see documentation for _estimate_isoform_read_support() below
 
@@ -246,6 +314,43 @@ class Quantify:
 
             transcript_id = transcript.get_transcript_id()
             gene_id = transcript.get_gene_id()
+
+            # Isoforms are unique per gene. Validated here, at indexing time, because this
+            # is the one place every transcript is visited exactly once: the check is
+            # O(transcripts) and catches a malformed annotation globally, whether or not the
+            # two genes ever end up competing to anchor the same read.
+            #
+            # Downstream is too late and too narrow. candidate_isoforms_for_genes merges the
+            # per-gene tables into one dict keyed by transcript id, so it keeps whichever
+            # gene it visits last and drops the isoform from the other with no trace -- and
+            # it would only notice at all on those paths where both genes happen to be
+            # candidates, once per multipath, on the hot path.
+            prior_gene_id = self._gene_id_of_transcript_id.setdefault(
+                transcript_id, gene_id
+            )
+            if prior_gene_id != gene_id:
+                raise RuntimeError(
+                    "transcript {} is registered under two gene ids ({}, {}); isoforms "
+                    "must be unique per gene, and merging them by transcript id later "
+                    "would drop it from one gene silently".format(
+                        transcript_id, prior_gene_id, gene_id
+                    )
+                )
+
+            # Two distinct objects sharing an id under the SAME gene pass the check above,
+            # since the gene matches. The store would then keep the last and drop the first,
+            # while _path_node_id_to_gene_ids below has already been populated from both
+            # objects' simplepaths -- so reads matching the discarded structure still anchor
+            # to this gene and get tested against the survivor. Plausible assignments to the
+            # wrong isoform, and nothing anywhere records that a second structure existed.
+            existing = self._gene_id_to_transcript_objs[gene_id].get(transcript_id)
+            if existing is not None and existing is not transcript:
+                raise RuntimeError(
+                    "two distinct transcript objects share id {} under gene {}; isoform "
+                    "ids must be unique, and keeping either would silently discard the "
+                    "other's structure".format(transcript_id, gene_id)
+                )
+
             self._gene_id_to_transcript_objs[gene_id][transcript_id] = transcript
 
             for node_id in simplepath:
@@ -277,6 +382,10 @@ class Quantify:
         # alternative offered: that would make the derivation explicit without
         # removing the staleness, since the map is stored on self either way.
         self._component_identity_valid = False
+        # Theta derives from the same write: EM's per-multipath input is built from
+        # _mp_to_transcripts, so an estimate made before this call no longer describes the
+        # object's assignment state either. Same claim-about-callers reasoning as above.
+        self._theta_valid = False
 
         if fraction_read_align_overlap is None:
             fraction_read_align_overlap = LRAA_Globals.config[
@@ -464,18 +573,12 @@ class Quantify:
             num_read_counts_anchored_to_gene += count
 
             ## assign reads to transcripts
-            # Ordered dedupe across the (possibly overlapping) top genes; the
-            # resulting sequence is what read-to-transcript compatibility is
-            # built from, so it must not depend on address order.
-            gene_isoforms_by_id = dict()
-            for top_gene in top_genes:
-                gene_isoforms_by_id.update(self._gene_id_to_transcript_objs[top_gene])
-            gene_isoforms = list(gene_isoforms_by_id.values())
+            gene_isoforms = self.candidate_isoforms_for_genes(top_genes)
 
             logger.debug(
-                "mp_count_pair {} assigned to gene {} with isoforms to test for read assignment:\n\t{}".format(
+                "mp_count_pair {} assigned to genes {} with isoforms to test for read assignment:\n\t{}".format(
                     mp,
-                    top_gene,
+                    top_genes,
                     "\n\t".join(
                         [
                             "{}\t{}".format(x.get_transcript_id(), x._simplepath)
@@ -485,126 +588,9 @@ class Quantify:
                 )
             )
 
-            # most stringent test - exact match including PolyA and TSS where present.
-            transcripts_assigned = self._assign_path_to_transcript(
-                splice_graph,
-                mp,
-                gene_isoforms,
-                test_type="exact",
-                fraction_read_align_overlap=fraction_read_align_overlap,
-                trim_TSS_polyA=False,
-                anchor_PolyA_TSS=True,
+            transcripts_assigned = self.resolve_mp_to_transcripts(
+                splice_graph, mp, gene_isoforms, fraction_read_align_overlap
             )
-
-            if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="COMPATIBLE_CONTAINED",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=False,
-                    anchor_PolyA_TSS=True,
-                )
-
-            if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="INTRONS_CONTAINED",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=False,
-                    anchor_PolyA_TSS=True,
-                )
-
-            if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="other",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=False,
-                    anchor_PolyA_TSS=True,
-                )
-            if transcripts_assigned is None:
-                # keep TSS and PolyA features but disable required anchoring of TSS/PolyA, allow inexact but compatible
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="other",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=False,
-                    anchor_PolyA_TSS=False,
-                )
-
-            ##############################
-            ## With TSS and PolyA trimming
-            ##############################
-
-            if transcripts_assigned is None:
-                # TSS and polyA trimmed, and exact splice path matching required
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="exact",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=True,
-                    anchor_PolyA_TSS=False,
-                )
-
-            if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="COMPATIBLE_CONTAINED",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=True,
-                    anchor_PolyA_TSS=False,
-                )
-
-            if transcripts_assigned is None:
-                # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="INTRONS_CONTAINED",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=True,
-                    anchor_PolyA_TSS=False,
-                )
-
-            if transcripts_assigned is None:
-                # compatibile allowed with read alignment coverage check
-                transcripts_assigned = self._assign_path_to_transcript(
-                    splice_graph,
-                    mp,
-                    gene_isoforms,
-                    test_type="other",
-                    fraction_read_align_overlap=fraction_read_align_overlap,
-                    trim_TSS_polyA=True,
-                    anchor_PolyA_TSS=False,
-                )
-
-            if (
-                transcripts_assigned is None
-                and LRAA_Globals.config["aggressively_assign_reads"]
-            ):
-                # last resort, do majority voting
-                transcripts_assigned = (
-                    self._assign_path_to_transcript_by_majority_voting(
-                        splice_graph, mp, gene_isoforms
-                    )
-                )
 
             if transcripts_assigned is None:
                 logger.debug(
@@ -850,6 +836,168 @@ class Quantify:
                 gene_ranker.keys(), key=lambda x: (-gene_ranker[x], x)
             )
             return genes_ranked
+
+    def candidate_isoforms_for_genes(self, top_genes):
+        """The isoforms to test a path against, one per transcript id.
+
+        Keyed by transcript id rather than accumulated into a list, which is what makes the
+        result unique per transcript when the anchoring genes overlap. Downstream relies on
+        that: a repeat would be tested twice and emitted as two tracking rows for one read
+        and one isoform. Measured zero duplicate (read, transcript) pairs across 719k rows
+        on ONT and PacBio chr20, which holds because of this dict and not by accident.
+
+        Deliberately a plain merge with no validation. Merging by transcript id would be
+        lossy if one transcript were registered under two gene ids, but that is checked once
+        at indexing time in _assign_path_nodes_to_gene rather than here: this runs per
+        multipath, and it could only ever notice a collision on the subset of paths where
+        both of the offending genes happen to be candidates.
+
+        A dict also fixes iteration order to first-insertion rather than object address, so
+        the compatibility sequence does not vary between processes.
+        """
+        gene_isoforms_by_id = dict()
+        for top_gene in top_genes:
+            gene_isoforms_by_id.update(self._gene_id_to_transcript_objs[top_gene])
+        return list(gene_isoforms_by_id.values())
+
+    def resolve_mp_to_transcripts(
+        self, splice_graph, mp, gene_isoforms, fraction_read_align_overlap
+    ):
+        """Which of a gene's isoforms this multipath is compatible with, or None.
+
+        The compatibility cascade, tried most stringent first and stopping at the first
+        test that matches anything. Extracted from _assign_reads_to_transcripts so that a
+        streaming assignment pass resolving a path the first pass never saw runs exactly
+        these tests in exactly this order. A second copy would agree on the day it was
+        written and then drift, and the drift would surface as read assignments that differ
+        between two modes claiming to compute the same thing.
+
+        Order is load-bearing twice over: each step is a weaker test than the one above it,
+        and the first non-None result wins, so moving a step changes which isoform a read
+        lands on rather than merely how long the search takes.
+        """
+        # most stringent test - exact match including PolyA and TSS where present.
+        transcripts_assigned = self._assign_path_to_transcript(
+            splice_graph,
+            mp,
+            gene_isoforms,
+            test_type="exact",
+            fraction_read_align_overlap=fraction_read_align_overlap,
+            trim_TSS_polyA=False,
+            anchor_PolyA_TSS=True,
+        )
+
+        if transcripts_assigned is None:
+            # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="COMPATIBLE_CONTAINED",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=False,
+                anchor_PolyA_TSS=True,
+            )
+
+        if transcripts_assigned is None:
+            # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="INTRONS_CONTAINED",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=False,
+                anchor_PolyA_TSS=True,
+            )
+
+        if transcripts_assigned is None:
+            # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="other",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=False,
+                anchor_PolyA_TSS=True,
+            )
+        if transcripts_assigned is None:
+            # keep TSS and PolyA features but disable required anchoring of TSS/PolyA, allow inexact but compatible
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="other",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=False,
+                anchor_PolyA_TSS=False,
+            )
+
+        ##############################
+        ## With TSS and PolyA trimming
+        ##############################
+
+        if transcripts_assigned is None:
+            # TSS and polyA trimmed, and exact splice path matching required
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="exact",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=True,
+                anchor_PolyA_TSS=False,
+            )
+
+        if transcripts_assigned is None:
+            # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="COMPATIBLE_CONTAINED",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=True,
+                anchor_PolyA_TSS=False,
+            )
+
+        if transcripts_assigned is None:
+            # keep TSS,PolyA allow inexact but compatible and read alignment coverage check.
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="INTRONS_CONTAINED",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=True,
+                anchor_PolyA_TSS=False,
+            )
+
+        if transcripts_assigned is None:
+            # compatibile allowed with read alignment coverage check
+            transcripts_assigned = self._assign_path_to_transcript(
+                splice_graph,
+                mp,
+                gene_isoforms,
+                test_type="other",
+                fraction_read_align_overlap=fraction_read_align_overlap,
+                trim_TSS_polyA=True,
+                anchor_PolyA_TSS=False,
+            )
+
+        if (
+            transcripts_assigned is None
+            and LRAA_Globals.config["aggressively_assign_reads"]
+        ):
+            # last resort, do majority voting
+            transcripts_assigned = (
+                self._assign_path_to_transcript_by_majority_voting(
+                    splice_graph, mp, gene_isoforms
+                )
+            )
+
+        return transcripts_assigned
 
     def _assign_path_to_transcript(
         self,
@@ -1340,7 +1488,9 @@ class Quantify:
 
         return dist
 
-    def _estimate_isoform_read_support(self, transcripts, prefix_str=None):
+    def _estimate_isoform_read_support(
+        self, transcripts, prefix_str=None, accumulate_theta=False
+    ):
         """
 
         Given the reads assigned to the transcript (accessed with transcript.get_read_names() )
@@ -1356,20 +1506,35 @@ class Quantify:
 
         """
 
-        # FIRST statement, unconditionally.  This method is also a public entry
-        # point in practice: run_quant_only completes quantify() and returns its
-        # Quantify (LRAA:4433, :4469), and a later caller drives this directly
-        # (LRAA:5079) over a transcript set that may have been filtered since --
-        # the TODO there says as much.  That call updates theta and the assignments
-        # while the component map still describes the set quantify() saw, so a
-        # consumer pairing the two gets this run's theta against an earlier
-        # grouping.  Publishing the map only from quantify() does not prevent that;
-        # an already-valid map simply stays serveable.
+        # FIRST statement, unconditionally. This method is also a public entry point in
+        # practice: run_quant_only completes quantify() and returns its Quantify, and later
+        # callers drive this estimator directly -- TranscriptFiltering's isoform-fraction
+        # filtering and LRAA's post-assembly filtering step -- over a transcript set that
+        # may have been filtered since. Such a call updates theta and the assignments while
+        # the component map still describes the set quantify() saw, so a consumer pairing
+        # the two gets this run's theta against an earlier grouping. Publishing the map only
+        # from quantify() does not prevent that; an already-valid map simply stays
+        # serveable.
         #
-        # Unconditional is safe: quantify() invalidates at its own entry and marks
-        # valid only at its successful exit, so the calls it makes here are already
-        # invalid and nothing it does is undone.
+        # Unconditional is safe: quantify() invalidates at its own entry and marks valid
+        # only at its successful exit, so the calls it makes here are already invalid and
+        # nothing it does is undone.
         self._component_identity_valid = False
+
+        if not accumulate_theta:
+            # Theta is invalidated at ENTRY too, before any logging or EM, but only on this
+            # branch.
+            #
+            # A caller that is not publishing is about to run EM over its own transcript
+            # set, so whatever the aggregate holds already describes something else. Doing
+            # it after EM returns -- as this first did -- leaves the old theta valid and
+            # serveable if EM raises, which is the same failed-call hole as inheriting
+            # validity across quantify() calls, one level down.
+            #
+            # Never on the accumulate branch: quantify() calls this once per EM unit and the
+            # units must add up, so clearing here would leave only the last one.
+            self._transcript_id_to_theta.clear()
+            self._theta_valid = False
 
         try:
             if prefix_str:
@@ -1403,6 +1568,25 @@ class Quantify:
                 transcript_to_read_count,
             ) = EM.run_EM(transcripts, self._max_EM_iterations, prefix_str=prefix_str)
 
+            # Published into the object's aggregate only when a caller asked for it.
+            #
+            # This estimator has two kinds of caller. quantify() drives it once per EM unit
+            # and wants the units to accumulate, so the aggregate describes the whole run;
+            # it resets that aggregate at its own entry and passes accumulate_theta=True.
+            # TranscriptFiltering and LRAA's post-filter report drive it DIRECTLY, in a loop,
+            # on a Quantify object that never enters quantify() -- so no reset ever runs for
+            # them, and an unconditional update here would leave theta accumulating across
+            # filtering rounds. Nothing reads it off those objects today, which is the only
+            # reason that is latent rather than wrong.
+            #
+            # Clearing at this function's entry instead would be worse: quantify() calls it
+            # per unit, so the aggregate would retain only the last one and every streaming
+            # split outside that unit would silently lose its abundances.
+            if accumulate_theta:
+                # The non-publishing case is handled at entry instead, so it holds even when
+                # EM raises. Two sites doing it would be two places to keep in step.
+                self._transcript_id_to_theta.update(transcript_to_expr_val)
+
         else:
             # simple equal fractional assignment of reads to compatible transcripts
 
@@ -1415,10 +1599,10 @@ class Quantify:
                     mp_to_transcripts[mp].add((transcript))
                     all_mps.add(mp)
 
-            # get total read count
+            # get total weighted support (equals the read count for an unnormalized bam)
             total_mapped_reads = 0
             for mp in all_mps:
-                total_mapped_reads += mp.get_read_count()
+                total_mapped_reads += mp.get_read_weight()
 
             for transcript in transcripts:
                 transcript_read_count_total = 0
@@ -1440,7 +1624,7 @@ class Quantify:
                         else 0
                     )
 
-                    num_reads_in_mp = mp.get_read_count()
+                    num_reads_in_mp = mp.get_read_weight()
 
                     transcript_read_count_total += frac_mp_assignment * num_reads_in_mp
                     transcript_to_fractional_mp_assignment[transcript_id][
@@ -1521,7 +1705,42 @@ class Quantify:
         return transcript_to_fractional_mp_assignment
 
     def get_mp_to_transcripts(self):
-        return self._mp_to_transcripts
+        """Snapshot of this call's multipath -> compatible transcripts.
+
+        A copy, matching the other accessors here. The live dict is reset at quantify()
+        entry, so a caller that held the container itself -- a streaming pass builds its
+        lookup table from this -- would find it emptied in place by the next quantify() on
+        the same object, and produce a complete, empty, entirely plausible table rather than
+        an error. The copy is shallow, which is enough: a later call rebinds the transcript
+        lists rather than mutating them.
+        """
+        return dict(self._mp_to_transcripts)
+
+    def em_was_run(self):
+        """Whether theta comes from EM, for callers that must not infer it from emptiness.
+
+        An empty theta is ambiguous on its own: it means either run_EM=False, or EM ran and
+        the state was reset afterwards. A consumer that guesses from the dict silently takes
+        the equal-split path in the second case, which is a wrong answer that looks like a
+        legitimate no-EM run.
+        """
+        return bool(self._run_EM)
+
+    def get_transcript_id_to_theta(self):
+        """EM's converged abundance estimate per transcript, normalized within each gene.
+
+        Empty when run_EM is False. Use this, never the reported isoform_fraction: the
+        M-step's alpha regularization enters theta but not the returned counts the fraction
+        is derived from.
+        """
+        if not self._theta_valid:
+            raise RuntimeError(
+                "no valid EM theta on this Quantify object: it has not completed a "
+                "quantify() call, or a direct _estimate_isoform_read_support call has since "
+                "invalidated the aggregate. Returning an empty dict here would be read as "
+                "'no EM ran', which is a legitimate state this is not."
+            )
+        return dict(self._transcript_id_to_theta)
 
     def get_unassigned_mp_count_pairs(self):
         return list(self._unassigned_mp_count_pairs)
@@ -1771,7 +1990,7 @@ class Quantify:
         ) in frac_read_assignments.items():
             gene_id = transcript_id_to_transcript_obj[transcript_id].get_gene_id()
             for mp, frac_assigned in transcript_read_frac_assignments.items():
-                gene_id_to_read_count[gene_id] += frac_assigned * mp.get_read_count()
+                gene_id_to_read_count[gene_id] += frac_assigned * mp.get_read_weight()
 
         return gene_id_to_read_count
 

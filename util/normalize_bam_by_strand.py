@@ -36,17 +36,46 @@ def main():
     parser.add_argument("--normalize_max_cov_level", type=int, default=1000, help="target read depth; coverage above this is thinned, coverage below it is left alone (default: 1000)")
     parser.add_argument("--depth_window", type=int, default=100, help="resolution in bases at which read depth is measured")
     parser.add_argument("--random_seed", type=int, default=42, help="random seed for reproducible sampling (default: 42)")
+    parser.add_argument(
+        "--min_per_id",
+        type=float,
+        default=0,
+        help=(
+            "discard alignments below this percent identity when measuring depth and "
+            "when writing output. Must match the consumer's min_per_id (LRAA HiFi mode "
+            "uses 97, the default elsewhere is 80): depth measured over reads the "
+            "consumer rejects yields acceptance probabilities, and so XW weights, for a "
+            "coverage level nothing downstream sees. 0 disables. (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--min_mapping_quality",
+        type=int,
+        default=0,
+        help=(
+            "discard alignments below this MAPQ when measuring depth and when writing "
+            "output. Must match the MAPQ the consumer will actually apply, which is not "
+            "always LRAA's --min_mapping_quality: run_quant_only swaps in "
+            "--min_mapping_quality_for_final_quant for the whole quant stage, so a "
+            "consumer reading this bam there enforces that value instead. Multimapping "
+            "reads carry MAPQ 0 at exactly the paralogous loci where thinning decisions "
+            "matter, so counting reads the consumer rejects inflates depth there and "
+            "inflates every surviving read's XW weight. 0 disables. (default: 0)"
+        ),
+    )
     parser.add_argument("--max_intron_length", type=int, default=LRAA_Globals.config["max_intron_length"], help="alignments containing any intron longer than this are discarded during the strand split; set to 0 or a negative value to disable intron length filtering")
     parser.add_argument("--input_is_single_strand", action="store_true", help="the input is already orientation-pure (one strand only), as a per-chunk input from the partitioned pipeline is: normalize it directly, skipping the strand split and the merge that would otherwise write one populated bam plus one empty one and glue them back together")
     parser.add_argument("--window_origin", type=int, default=None, help="absolute reference coordinate (0-based) that position 0 of this input maps to: 0 for a whole-contig bam, the rebase offset for a rebased chunk. Aligns the depth-window grid to the absolute coordinate grid, so the same absolute locus lands in the same window whether it is normalized whole or as part of a chunk. Default (unset): the grid is anchored per contig on the first aligned base seen there, making window boundaries a function of which records happen to be in the input")
 
     args = parser.parse_args()
-    
+
     input_bam_filename = args.input_bam
     output_bam_filename = args.output_bam
     normalize_max_cov_level = args.normalize_max_cov_level
     depth_window = args.depth_window
     random_seed = args.random_seed
+    min_per_id = args.min_per_id
+    min_mapping_quality = args.min_mapping_quality
     input_is_single_strand = args.input_is_single_strand
     window_origin = args.window_origin
     if window_origin is not None and window_origin < 0:
@@ -68,6 +97,8 @@ def main():
         random_seed,
         window_origin=window_origin,
         input_is_single_strand=input_is_single_strand,
+        min_per_id=min_per_id,
+        min_mapping_quality=min_mapping_quality,
     )
 
     pipeliner = Pipeliner("__chckpts")
@@ -127,7 +158,7 @@ def main():
     for source_bam_file, norm_bam_filename, norm_bam_checkpoint in norm_jobs:
 
         if not os.path.exists(norm_bam_checkpoint):
-            sift_bam(source_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed, window_origin)
+            sift_bam(source_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed, window_origin, min_per_id, min_mapping_quality)
             subprocess.check_call("touch {}".format(norm_bam_checkpoint), shell=True)
 
         norm_bam_files.append(norm_bam_filename)
@@ -161,6 +192,8 @@ def compute_tokens(
     random_seed,
     window_origin=None,
     input_is_single_strand=False,
+    min_per_id=0,
+    min_mapping_quality=0,
 ):
     """Checkpoint tokens for the two stages of this script.
 
@@ -188,11 +221,34 @@ def compute_tokens(
     if window_origin is not None:
         variant_fields.append("window_origin={}".format(window_origin))
 
+    # The retention floors decide which records pass_2 counts as depth and which it
+    # writes, but the split applies no threshold of its own (see the predicate
+    # hierarchy in Util_funcs.quant_discard_reason), so these name the sampling
+    # artifacts only. Keeping them out of variant_fields is what stops a threshold
+    # change from needlessly invalidating a strand split that does not depend on it.
+    # Appended only when set, for the same cache-compatibility reason as above.
+    sampling_fields = list()
+    if min_per_id:
+        sampling_fields.append("min_per_id={}".format(min_per_id))
+    if min_mapping_quality:
+        sampling_fields.append("min_mapping_quality={}".format(min_mapping_quality))
+
     # The split also drops the records failing the intron length criterion, so
     # the threshold determines which records it emits and has to name the split's
     # outputs and checkpoint alongside the input identity.
+
+    # Named only when the split actually enforces it. Under --input_is_single_strand the
+    # split is skipped entirely, sift_bam receives the raw input, and depth measurement
+    # passes max_intron_length=0 -- so no code path in that mode consults the threshold,
+    # and naming it would key every artifact on an input that cannot change them.
+    #
+    # Over-keying is the mirror of under-keying, not a safe direction: it costs rebuilds,
+    # and it makes the key unauditable, because a field that sometimes determines the
+    # contents and always appears in the name cannot be checked against behaviour. The two
+    # modes still cannot collide -- variant_fields carries "single_strand".
+    intron_fields = [] if input_is_single_strand else [str(max_intron_length)]
     split_token = Util_funcs.get_hash_code(
-        "|".join([source_token, str(max_intron_length)] + variant_fields)
+        "|".join([source_token] + intron_fields + variant_fields)
     )[:12]
 
     # Sampling, merge and index consume the split's output, so they depend on the
@@ -203,7 +259,9 @@ def compute_tokens(
         "|".join(
             [
                 source_token,
-                str(max_intron_length),
+            ]
+            + intron_fields
+            + [
                 str(normalize_max_cov_level),
                 str(depth_window),
                 str(random_seed),
@@ -211,6 +269,7 @@ def compute_tokens(
                 os.path.realpath(output_bam_filename),
             ]
             + variant_fields
+            + sampling_fields
         )
     )[:12]
 
@@ -246,6 +305,39 @@ def _window_span(lend, rend, depth_window, anchor):
         can move inside a chunk at all.
     """
     return range((lend - anchor) // depth_window, (rend - 1 - anchor) // depth_window + 1)
+
+
+def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0):
+    """Whether this record is part of the evidence the consumer will read.
+
+    Delegates to the one retention policy so depth measurement cannot drift from what
+    quantification keeps. The thresholds arrive as arguments rather than being read from
+    config, for two independent reasons: this runs as a separate process whose
+    LRAA_Globals holds defaults instead of the caller's settings, and the MAPQ the
+    consumer enforces is not always LRAA's --min_mapping_quality -- run_quant_only swaps
+    in --min_mapping_quality_for_final_quant for the whole quant stage, so a consumer
+    reading this bam there applies that value.
+
+    A record the consumer discards but this counts inflates measured depth, which lowers
+    acceptance probability, which inflates every surviving read's XW weight at that
+    locus -- describing coverage that does not exist downstream. Mapping quality bites
+    hardest when set, because multimapping reads carry MAPQ 0 exactly at the paralogous
+    loci where thinning decisions matter most. Percent identity bites most often: on an
+    ONT chr20 bam at the default floor of 80 it is 8% of reads.
+
+    Intron length stays disabled here rather than threaded in. The strand split enforces
+    it, and on the --input_is_single_strand path removing long-intron alignments is the
+    caller's documented responsibility, so no record reaching this point can fail it.
+    """
+    return (
+        Util_funcs.quant_discard_reason(
+            read,
+            max_intron_length=0,
+            min_mapping_quality=min_mapping_quality,
+            min_per_id=min_per_id,
+        )
+        is None
+    )
 
 
 def _reject_read_before_anchor(read, contig, anchor, bam_file):
@@ -298,7 +390,6 @@ def _grow_windows(bases, window):
     target = max(window + 1, 2 * len(bases))
     bases.extend(array("q", bytes(8 * (target - len(bases)))))
 
-
 def sift_bam(
     SS_bam_file,
     norm_bam_filename,
@@ -306,6 +397,8 @@ def sift_bam(
     depth_window,
     random_seed,
     window_origin=None,
+    min_per_id=0,
+    min_mapping_quality=0,
 ):
     """Thin coverage toward a target depth, recording each read's sampling weight.
 
@@ -370,7 +463,7 @@ def sift_bam(
         max_overhang = 0
 
         for read in reader.fetch(until_eof=True):
-            if read.is_unmapped:
+            if not _record_is_evidence(read, min_per_id, min_mapping_quality):
                 continue
 
             contig = read.reference_name
@@ -412,8 +505,10 @@ def sift_bam(
         )
 
     logger.info(
-        "measured depth over {} contig(s), {} distinct junction(s)".format(
-            len(window_bases), len(junction_support)
+        "measured depth over {} contig(s), {} distinct junction(s), "
+        "min_per_id={} min_mapq={}".format(
+            len(window_bases), len(junction_support),
+            min_per_id, min_mapping_quality,
         )
     )
 
@@ -423,7 +518,7 @@ def sift_bam(
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
         with pysam.AlignmentFile(norm_bam_filename, "wb", template=reader) as writer:
             for read in reader.fetch(until_eof=True):
-                if read.is_unmapped:
+                if not _record_is_evidence(read, min_per_id, min_mapping_quality):
                     continue
                 total += 1
 

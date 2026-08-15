@@ -121,3 +121,77 @@ def test_an_alignment_without_nm_is_not_judged_on_identity():
     """No tag, nothing to measure: the extractor keeps it, so this must too."""
 
     assert Util_funcs.quant_discard_reason(_aln(tags=False), min_per_id=99.0) is None
+
+
+def _write_bam(path, records):
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": "chr1", "LN": 100000}],
+    }
+    with pysam.AlignmentFile(str(path), "wb", header=header) as fh:
+        for name, flag, mapq, nm in records:
+            aln = pysam.AlignedSegment(fh.header)
+            aln.query_name = name
+            aln.flag = flag
+            aln.reference_id = 0
+            aln.reference_start = 1000
+            aln.mapping_quality = mapq
+            aln.cigar = [(0, 1000)]
+            aln.query_sequence = "A" * 1000
+            aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+            aln.set_tag("NM", nm)
+            fh.write(aln)
+    pysam.index(str(path))
+    return path
+
+
+def test_records_parsed_from_a_bam_are_judged_the_same_as_hand_built_ones(tmp_path):
+    """Every branch, against records that went through pysam's BAM parser.
+
+    The cases above construct AlignedSegment objects directly, which is the cheap way to
+    reach a branch but not the way records actually arrive. A parsed record differs in the
+    places this predicate reads: NM comes back with whatever type serialization gave it,
+    get_cigar_stats() runs over parsed CIGAR ops, and reference_id and the pairing flags are
+    resolved against a real header. A policy that judged hand-built segments correctly and
+    parsed ones differently would be wrong exactly where it is used.
+
+    Worth having beyond the round-trip: the real corpora carry zero secondary records, so
+    these flags are the only way that branch is reached at all.
+    """
+    # name, flag, mapq, NM
+    records = [
+        ("keeper", 0, 60, 0),
+        ("secondary", 256, 60, 0),
+        ("supplementary", 2048, 60, 0),
+        ("duplicate", 1024, 60, 0),
+        ("qcfail", 512, 60, 0),
+        # paired (1) and mapped, but not flagged proper-pair (2)
+        ("improper", 1, 60, 0),
+        ("lowmapq", 0, 3, 0),
+        # 200 mismatches over 1000 aligned bases -> 80% identity
+        ("lowid", 0, 60, 200),
+    ]
+    bam = _write_bam(tmp_path / "cases.bam", records)
+
+    expected = {
+        "keeper": None,
+        "secondary": "secondary",
+        "supplementary": "supplementary",
+        "duplicate": "duplicate",
+        "qcfail": "qcfail",
+        "improper": "improper_pair",
+        "lowmapq": "min_mapping_quality",
+        "lowid": "low_perID",
+    }
+
+    seen = {}
+    with pysam.AlignmentFile(str(bam), "rb") as fh:
+        for read in fh.fetch(until_eof=True):
+            seen[read.query_name] = Util_funcs.quant_discard_reason(
+                read,
+                max_intron_length=200000,
+                min_mapping_quality=10,
+                min_per_id=90.0,
+            )
+
+    assert seen == expected
