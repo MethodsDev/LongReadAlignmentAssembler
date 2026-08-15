@@ -505,15 +505,20 @@ task sc_build_sparse_matrices {
             --csv_engine ~{csv_engine} \
             --gzip_level ~{gzip_level}
 
-        # Tar the generated sparse matrix directories for compact output
+        # Tar the generated sparse matrix directories for compact output.
+        # NOTE: archive filenames use "." rather than the "^" that
+        # singlecell_tracking_to_sparse_matrix.py uses for the source directory
+        # names: these tar.gz files are passed as File inputs to downstream tasks,
+        # and Apptainer's --bind spec parser mis-splits paths containing a literal
+        # "^" (Docker's bind mounts are unaffected, but the WDL must work under both).
         if command -v pigz >/dev/null 2>&1; then
-            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
-            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
-            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}.gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}.isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
+            tar --use-compress-program="pigz -~{gzip_level}" -cvf "~{output_prefix}.splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
         else
-            tar -zcvf "~{output_prefix}^gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
-            tar -zcvf "~{output_prefix}^isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
-            tar -zcvf "~{output_prefix}^splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
+            tar -zcvf "~{output_prefix}.gene-sparseM.tar.gz" "~{output_prefix}^gene-sparseM" || true
+            tar -zcvf "~{output_prefix}.isoform-sparseM.tar.gz" "~{output_prefix}^isoform-sparseM" || true
+            tar -zcvf "~{output_prefix}.splice_pattern-sparseM.tar.gz" "~{output_prefix}^splice_pattern-sparseM" || true
         fi
     >>>
 
@@ -524,9 +529,9 @@ task sc_build_sparse_matrices {
         File splice_pattern_counts = "~{output_prefix}.splice_pattern_cell_counts.tsv"
 
         # tar.gz of sparse matrix directories
-        File gene_sparse_dir_tgz = "~{output_prefix}^gene-sparseM.tar.gz"
-        File isoform_sparse_dir_tgz = "~{output_prefix}^isoform-sparseM.tar.gz"
-        File splice_pattern_sparse_dir_tgz = "~{output_prefix}^splice_pattern-sparseM.tar.gz"
+        File gene_sparse_dir_tgz = "~{output_prefix}.gene-sparseM.tar.gz"
+        File isoform_sparse_dir_tgz = "~{output_prefix}.isoform-sparseM.tar.gz"
+        File splice_pattern_sparse_dir_tgz = "~{output_prefix}.splice_pattern-sparseM.tar.gz"
     }
 
     runtime {
