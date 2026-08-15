@@ -1162,7 +1162,10 @@ def main(argv=None):
 
     segment_span = int(args.approx_MB_per_cut * MB)
     wiggle = int(args.approx_MB_per_cut_wiggle_window * MB)
-    strand = args.strand or ""
+    # Thread argparse's None through rather than coercing it, so the retention
+    # predicates receive the value their contract is written against. The two
+    # report sites that interpolate a strand supply their own placeholder.
+    strand = args.strand
 
     if args.genome_fa:
         with pysam.FastaFile(args.genome_fa) as fasta:

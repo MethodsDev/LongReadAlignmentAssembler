@@ -172,7 +172,15 @@ def quant_discard_reason(
         return "unmapped"
     if read.reference_id < 0:
         return "no_chromosome"
-    if contig_strand is not None:
+    # Truthiness, not `is not None`.  The other two members of this predicate
+    # family -- extract_contig_region_inputs.retained_for_extraction and its
+    # load_gtf -- already read a falsy strand as "any orientation", which is what
+    # an already strand-split bam wants.  This one alone demanded an exact match,
+    # so a caller passing "" got wrong_strand for EVERY record while the looser
+    # predicate beside it kept them all.  That is not a stricter subset, it is an
+    # empty one, and it silently emptied the severed-alignment bam for every run
+    # of the chunked pipeline, which omits --strand by design.
+    if contig_strand:
         if read.is_forward and contig_strand != "+":
             return "wrong_strand"
         if read.is_reverse and contig_strand != "-":

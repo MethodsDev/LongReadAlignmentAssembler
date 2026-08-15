@@ -150,6 +150,25 @@ class Fixture:
         return aln
 
 
+def _tag_mismatches(bam_path, mismatches_by_name):
+    """Rewrite a built fixture bam with per-read NM tags.
+
+    Fixture alignments are all NM 0, so nothing in them can fail an identity
+    floor; a test that emission stays stricter than the tally needs one record
+    that does.
+    """
+    with pysam.AlignmentFile(bam_path, "rb") as reader:
+        header = reader.header
+        records = list(reader.fetch(until_eof=True))
+    for aln in records:
+        if aln.query_name in mismatches_by_name:
+            aln.set_tag("NM", mismatches_by_name[aln.query_name])
+    with pysam.AlignmentFile(bam_path, "wb", header=header) as writer:
+        for aln in records:
+            writer.write(aln)
+    pysam.index(bam_path)
+
+
 def _select(fixture, **kwargs):
     kwargs.setdefault("strand", "+")
     kwargs.setdefault("depth_window", 100)
@@ -576,6 +595,84 @@ def test_dropped_read_names_are_emitted_and_match_the_per_cut_tally(tmp_path):
     ]
     assert {row[0] for row in rows} == {"severed_a", "severed_b"}
     assert all(row[3] == "3000" for row in rows)
+
+
+@pytest.mark.parametrize("strand", [None, ""], ids=["none", "empty"])
+def test_the_severed_bam_holds_what_the_tally_reports_without_a_strand(
+    tmp_path, strand
+):
+    """The count a cut is scored on and the records emitted for it must agree.
+
+    They did not.  Cost scoring uses retained_for_extraction, which reads a falsy
+    strand as "any orientation"; emission uses quant_discard_reason, which
+    required an exact match and so returned wrong_strand for every record.  The
+    chunked pipeline omits --strand deliberately -- its input is already
+    orientation-pure -- and the CLI turned argparse's None into "", so every run
+    reported reads dropped at its cuts and wrote an empty severed bam beside the
+    report.  A zero there reads as "no read was severed", which is the one
+    conclusion the artifact exists to support.
+
+    Both falsy spellings are covered because the CLI produced one and the
+    function signature documents the other.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for position in (2900, 3100):
+        for i in range(5):
+            fixture.spanning_read("blk_{}_{}".format(position, i), position)
+    fixture.spanning_read("severed_a", 3000)
+    fixture.spanning_read("severed_b", 3000)
+    fixture.build()
+
+    sink = []
+    selection = _select(
+        fixture,
+        strand=strand,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+        severed_sink=sink,
+        min_per_id=0,
+        min_mapping_quality=0,
+    )
+
+    assert selection.total_dropped == 2
+    assert len(sink) == selection.total_dropped
+    assert {aln.query_name for aln in sink} == {"severed_a", "severed_b"}
+
+
+def test_emission_stays_stricter_than_the_tally_it_accompanies(tmp_path):
+    """Falsy strand may not become a free pass: the thresholds still apply.
+
+    The fix widens what an unset strand means, so the test that it did not widen
+    anything else is the other half of it.  Scoring counts both reads; emission
+    keeps only the one quantification would use.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for position in (2900, 3100):
+        for i in range(5):
+            fixture.spanning_read("blk_{}_{}".format(position, i), position)
+    fixture.spanning_read("kept", 3000)
+    fixture.spanning_read("too_noisy", 3000)
+    fixture.build()
+
+    _tag_mismatches(fixture.bam, {"kept": 0, "too_noisy": 40})
+
+    sink = []
+    selection = _select(
+        fixture,
+        strand=None,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+        severed_sink=sink,
+        min_per_id=97,
+        min_mapping_quality=0,
+    )
+
+    assert selection.total_dropped == 2
+    assert {aln.query_name for aln in sink} == {"kept"}
 
 
 def test_every_count_carries_its_denominator(tmp_path):
