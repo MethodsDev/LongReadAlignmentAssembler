@@ -31,6 +31,10 @@ testing/multigene_secondary_quant/data/**
 !testing/DTU_eval/
 !testing/DTU_eval/testdata/
 !testing/DTU_eval/testdata/**
+!testing/ont_sep_contigs/
+!testing/ont_sep_contigs/minig-ENSG00000066135/
+!testing/ont_sep_contigs/minig-ENSG00000066135/data/
+!testing/ont_sep_contigs/minig-ENSG00000066135/data/**
 !testing/determinism/
 !testing/determinism/Makefile
 !testing/determinism/check_determinism.py
