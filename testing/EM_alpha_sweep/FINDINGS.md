@@ -362,18 +362,29 @@ strata because their optima sit at opposite ends of the grid.
 
 ## Could not determine
 
-* **The residual test does NOT generalise out of stratum, and I do not know
-  whether that is a failure of the test or a limit of its scope.** It was 8/8 on
-  SIRV; on the two MORF samples the profile split LOSES to the likelihood split
-  (misallocation 0.384 vs 0.308 on ont, 0.445 vs 0.371 on pacbio) while alpha
-  nevertheless helps on both. The coherent reading is that the test compares the
-  two ENDPOINTS, alpha=0 against alpha=infinity, so it can only predict a
-  boundary optimum — and both SIRV strata have boundary optima while both MORF
-  samples have interior ones at 0.3 with the curve already turning up by 1.0. If
-  MORF's alpha=infinity really is worse than its alpha=0, the test is right and
-  merely mute about interior optima. **Deciding that needs the MORF alpha=1e6
-  arms, which I did not run.** Until then the residual test is supported only
-  where the optimum is on a boundary.
+* **The residual test is an ENDPOINT predictor and is 9 of 10 across the corpus,
+  with one honest miss.** It predicts which of the two splits alpha interpolates
+  between — the likelihood split at alpha=0 or the profile split at
+  alpha=infinity — is closer to the ambiguous mass truth allots, so it can only
+  speak to the endpoint ordering, never to the location of an interior optimum.
+  Tested directly with alpha=1e6 arms on both MORF samples (run after the initial
+  0/2 looked like a failure):
+
+  | sample | misalloc says | MARD(0) | MARD(inf) | endpoint winner | verdict |
+  | --- | --- | --- | --- | --- | --- |
+  | 8x SIRV | matches | — | — | — | 8/8 HIT |
+  | morf2_pacbio | likelihood (0.371 vs 0.445) | 0.037223 | 0.039103 | likelihood | HIT |
+  | morf2_ont | likelihood (0.308 vs 0.384) | 0.060088 | 0.057338 | profile | **MISS** |
+
+  So my "0/2 on MORF" reading was wrong: pacbio confirms, and only morf2_ont
+  misses. The scope limit is real and separate — both MORF optima are INTERIOR at
+  0.3 with the curve turning up by 1.0, so on MORF the endpoint ordering was never
+  going to locate the optimum either way, and the test says nothing about 0.3.
+  For the one miss the likely cause is that misallocation is mass-weighted L1
+  while MARD is an unweighted mean over transcripts, so a small mass shift on
+  low-abundance transcripts moves MARD and not misallocation — the same
+  decoupling Quant3Prime hit between TVD and MARD on morf2_pacbio. Not verified,
+  and recorded as unverified.
 * **The profile-distance predictor DID generalise, 2 of 2 out of stratum.** I
   committed before looking that morf2_ont's profile-vs-truth distance would place
   it on one side of the 0.695/0.724 SIRV gap and that would predict its optimum.
