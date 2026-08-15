@@ -408,6 +408,54 @@ strata because their optima sit at opposite ends of the grid.
 * Pooled correlations are contaminated by the flatness confound running the same
   way and are **not** offered as support.
 
+## What actually orders the optimum: WITHIN-SET truth spread
+
+The corpus-wide flatness story reported above is a proxy, and it FAILS on MORF.
+Corpus-wide truth CV is 0.675 on SIRV E1, 1.375 on E2, and 1.39-1.65 on the
+MORFs — which groups MORF with E2 and predicts alpha=0 for it. The measured MORF
+optimum is 0.3. So corpus-wide flatness is the wrong variable.
+
+The right one is the spread of TRUE abundances *within each ambiguous candidate
+set* — the transcripts alpha actually has to choose between. alpha flattens the
+distribution inside a set, so it should help when the candidates in a set are
+genuinely comparable and hurt when they are skewed, regardless of what the
+library-wide distribution looks like. Measured with `within_set_spread.py`
+(definition shared verbatim with the arabidopsis measurement), read-weighted over
+the sets alpha acts on, decoys excluded:
+
+| corpus | median max/min | geomean max/min | median CV | % amb. reads in sets with ratio < 10 | measured alpha optimum |
+| --- | --- | --- | --- | --- | --- |
+| SIRV E1 (BT474) | 2.00 | 2.60 | 0.333 | 100.0 | 10 / limit |
+| SIRV E1 (HG002) | 2.00 | 2.57 | 0.333 | 100.0 | 10 / limit |
+| morf2_pacbio | 2.47 | 3.67 | 0.378 | 84.8 | **0.3** |
+| morf2_ont | 2.84 | 4.48 | 0.429 | 79.2 | **0.3** |
+| SIRV E2 (HG002) | 8.00 | 13.11 | 0.778 | 52.2 | 0.0 |
+| SIRV E2 (BT474) | 16.00 | 16.97 | 0.926 | 42.8 | 0.0 |
+
+**The ordering is monotone and MORF sits exactly where its intermediate optimum
+says it should**, between E1 (which wants unbounded alpha) and E2 (which wants
+none). One variable orders four corpora and six samples, including the one the
+corpus-wide story got wrong, and it does so on a quantity computable from read
+compatibility plus truth without running any sweep.
+
+Two structural notes that belong with it. First, MORF's ambiguous sets are almost
+decoy-free: only 0.81% (ont) and 0.21% (pacbio) of ambiguous reads see a set
+containing a transcript absent from truth, so the flattening channel here is
+purely among real candidates. Second, MORF has 4-8x more ambiguous read mass than
+a real transcriptome — 11.35% (ont) and 7.98% (pacbio) against 1.50% on
+arabidopsis and 2.97% on mouse — because it is a minigenome of ~1,566
+hand-selected loci, which concentrates related isoforms and manufactures
+ambiguity. Median set size is 2 on every corpus measured, so the excess is in how
+many reads are ambiguous, not in how hard each choice is.
+
+**Consequence for the recommendation, stated plainly.** If arabidopsis's
+within-set spread is wider than MORF's, then alpha=0.3 is calibrated to a
+minigenome's unusually even ambiguous sets and is a CORPUS ARTIFACT rather than a
+platform-independent optimum, and the recommendation should not ship as a global
+default. That comparison is pending from the arabidopsis measurement, whose
+early-scored 3p-ON arms already show MARD rising monotonically with alpha — the
+opposite sign to MORF. Read this table together with that result when it lands.
+
 ## Could not determine
 
 * **The residual test is an ENDPOINT predictor and is 9 of 10 across the corpus,
