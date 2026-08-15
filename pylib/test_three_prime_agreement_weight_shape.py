@@ -170,3 +170,79 @@ def test_spread_collapse_is_not_rescued_by_shrinking_P(monkeypatch):
     r20 = _weights_for([0, 300] + [150] * 18, P=5, monkeypatch=monkeypatch)
     assert max(r2) / min(r2) > 15.0
     assert max(r20) / min(r20) < 1.25
+
+
+def test_large_P_drives_weights_to_uniform(monkeypatch):
+    """P -> infinity sends every weight to 1/N regardless of the distances.
+
+    (d_i + P)/(sum_j d_j + N*P) -> 1/N as P dominates, so the raw weight tends to
+    1 - 1/N for every i and renormalizes to 1/N. Distance information is erased.
+
+    Convergence is O(d/(N*P)), NOT exact at any finite P: at P=1e6 with a 1200nt spread
+    the residual is still ~3e-5. That matters for interpreting a large-P run against the
+    off arm -- they converge, they do not coincide.
+    """
+    d = [0, 300, 1200, 75]
+    residuals = []
+    for P in (10**4, 10**5, 10**6):
+        w = _weights_for(d, P=P, monkeypatch=monkeypatch)
+        residuals.append(max(abs(x - 0.25) for x in w))
+    assert residuals == sorted(residuals, reverse=True), residuals
+    assert residuals[-1] < 1e-4
+    assert residuals[-1] > 0.0
+
+
+def test_uniform_weights_match_no_weighting_in_EM_to_rounding(monkeypatch):
+    """Uniform weights and all-ones weights give EM the same answer, to float rounding.
+
+    This is why the large-P limit is not a new regime but the OFF arm: the E-step forms
+    frac = w_i*theta_i / sum_j(w_j*theta_j), which is invariant under scaling every
+    weight of a multipath by the same constant, and disabling the feature simply sets
+    every weight to 1.0. So sweeping P upward interpolates between the shipped
+    behaviour and switching the feature off -- it cannot reach anything beyond that,
+    which puts a computable ceiling on how much large P can cost.
+
+    The equivalence is algebraic but NOT bit-exact in floating point: dividing by N and
+    renormalizing does not reassociate exactly, and this asserts 1-ULP agreement rather
+    than identity. Measured at 1 ULP on theta here. Pinned on EM directly rather than
+    argued, because the whole P analysis rests on it.
+    """
+    from EM import em_algorithm_with_weights
+
+    mp_assignments = [[0, 1], [1, 2], [0], [0, 1, 2], [2]]
+    mp_read_counts = [120.0, 45.0, 300.0, 17.0, 88.0]
+    ones = [[1.0] * len(mp) for mp in mp_assignments]
+    uniform = [[1.0 / len(mp)] * len(mp) for mp in mp_assignments]
+
+    theta_a, sums_a, fracs_a = em_algorithm_with_weights(
+        mp_assignments, ones, mp_read_counts, 3, max_iter=200, tol=1e-10
+    )
+    theta_b, sums_b, fracs_b = em_algorithm_with_weights(
+        mp_assignments, uniform, mp_read_counts, 3, max_iter=200, tol=1e-10
+    )
+
+    assert list(theta_b) == pytest.approx(list(theta_a), rel=1e-12)
+    # fracs is a ragged list-of-lists, one row per multipath; flatten to compare.
+    flat_a = [x for row in fracs_a for x in row]
+    flat_b = [x for row in fracs_b for x in row]
+    assert flat_b == pytest.approx(flat_a, rel=1e-12)
+    for t in sums_a:
+        assert sums_b[t] == pytest.approx(sums_a[t], rel=1e-12)
+
+
+def test_nonuniform_weights_do_change_EM(monkeypatch):
+    """Guard for the test above: it must not pass because EM ignores weights entirely."""
+    from EM import em_algorithm_with_weights
+
+    mp_assignments = [[0, 1], [1, 2], [0], [0, 1, 2], [2]]
+    mp_read_counts = [120.0, 45.0, 300.0, 17.0, 88.0]
+    ones = [[1.0] * len(mp) for mp in mp_assignments]
+    skewed = [[0.9, 0.1], [0.5, 0.5], [1.0], [0.7, 0.2, 0.1], [1.0]]
+
+    theta_a, _, _ = em_algorithm_with_weights(
+        mp_assignments, ones, mp_read_counts, 3, max_iter=200, tol=1e-10
+    )
+    theta_b, _, _ = em_algorithm_with_weights(
+        mp_assignments, skewed, mp_read_counts, 3, max_iter=200, tol=1e-10
+    )
+    assert list(theta_a) != list(theta_b)
