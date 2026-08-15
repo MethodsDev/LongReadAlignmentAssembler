@@ -251,6 +251,30 @@ class Checkpoints:
             print(note or time.strftime("%Y-%m-%d %H:%M:%S"), file=fh)
 
 
+def chain_token(local, parent, *opaque):
+    """A sentinel name that moves when this step's inputs or any upstream step's do.
+
+    Sentinels are named for the stage and for the parameters that change that
+    stage's output, which is only sound while every such parameter is re-listed at
+    every stage it reaches.  It was not.  ``baseline_norm`` named the coverage
+    target, window, seed and origin but not ``--max_intron_length``, which it hands
+    the normalizer, so changing the cap reran the merge into the same
+    ``whole.primary.bam`` and then reused a normalized bam built under the old one.
+    Neither quant stage named anything at all about the bams it reads, so the same
+    change left both quant results untouched as well.
+
+    Re-listing is the part that drifts.  A step now names its own inputs and
+    inherits its parent's token rather than repeating what the parent already
+    covers, so adding an input upstream invalidates everything downstream without
+    an edit to any of those stages.  ``local`` stays in the filename, because a
+    sentinel directory that cannot be read at a glance is its own hazard; the
+    digest is what carries the chain.  ``opaque`` is for inputs that determine
+    contents but cannot go in a filename, such as resolved paths and stat pairs.
+    """
+    payload = "|".join([parent or "root", local] + [str(f) for f in opaque])
+    return "{}.up_{}".format(local, Util_funcs.get_hash_code(payload)[:12])
+
+
 # ------------------------------------------------------------ coord translation
 
 _COORD_LIST = re.compile(r"\d+")
@@ -280,12 +304,15 @@ def _shift_coord_string(text, offset):
 # --------------------------------------------------------------------- stage 1
 
 
-def stage_strand_split(args, ckpt, outdir, timing, rss_interval):
+def stage_strand_split(args, ckpt, outdir, timing, rss_interval, inputs_token):
     split_dir = os.path.join(outdir, "strand_split")
     os.makedirs(split_dir, exist_ok=True)
     prefix = os.path.join(split_dir, "input")
     log = os.path.join(outdir, "logs", "stage1_strand_split.log")
-    token = "stage1_strand_split.maxintron_{}".format(args.max_intron_length)
+    token = chain_token(
+        "stage1_strand_split.maxintron_{}".format(args.max_intron_length),
+        inputs_token,
+    )
     cmd = [
         sys.executable,
         SEPARATE_BAM,
@@ -312,7 +339,7 @@ def stage_strand_split(args, ckpt, outdir, timing, rss_interval):
             raise PipelineError(
                 "stage 1 produced no {} bam at {}; log: {}".format(strand, path, log)
             )
-    return strand_bams
+    return strand_bams, token
 
 
 def count_records(bam):
@@ -323,10 +350,13 @@ def count_records(bam):
 # --------------------------------------------------------------------- stage 2
 
 
-def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
+def stage_select_cuts(
+    args, ckpt, outdir, timing, strand_bams, rss_interval, split_token
+):
     cut_dir = os.path.join(outdir, "cuts")
     os.makedirs(cut_dir, exist_ok=True)
     selections = {}
+    cuts_tokens = {}
     for strand, bam in strand_bams.items():
         tag = STRAND_TAG[strand]
         prefix = os.path.join(cut_dir, tag)
@@ -346,15 +376,19 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
         effective_min_mapq = int(
             LRAA_Globals.config["min_mapping_quality_for_final_quant"]
         )
-        token = "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
-            tag,
-            args.approx_MB_per_cut,
-            args.approx_MB_per_cut_wiggle_window,
-            args.depth_window,
-            args.margin,
-            effective_min_per_id,
-            effective_min_mapq,
+        token = chain_token(
+            "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
+                tag,
+                args.approx_MB_per_cut,
+                args.approx_MB_per_cut_wiggle_window,
+                args.depth_window,
+                args.margin,
+                effective_min_per_id,
+                effective_min_mapq,
+            ),
+            split_token,
         )
+        cuts_tokens[strand] = token
         cmd = [
             sys.executable,
             SELECT_CUTS,
@@ -413,13 +447,15 @@ def stage_select_cuts(args, ckpt, outdir, timing, strand_bams, rss_interval):
             ckpt.mark(token)
         with open("{}.cuts.json".format(prefix), "rt") as fh:
             selections[strand] = json.load(fh)
-    return selections, cut_dir
+    return selections, cut_dir, cuts_tokens
 
 
 # --------------------------------------------------------------------- stage 3
 
 
-def stage_extract_chunks(args, ckpt, outdir, timing, strand_bams, selections, rss):
+def stage_extract_chunks(
+    args, ckpt, outdir, timing, strand_bams, selections, rss, cuts_tokens
+):
     chunk_root = os.path.join(outdir, "chunks")
     os.makedirs(chunk_root, exist_ok=True)
     chunks = []
@@ -436,7 +472,10 @@ def stage_extract_chunks(args, ckpt, outdir, timing, strand_bams, selections, rs
                 os.makedirs(cdir, exist_ok=True)
                 prefix = os.path.join(cdir, "chunk")
                 log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
-                token = "stage3_extract_{}.margin_{}".format(chunk_id, args.margin)
+                token = chain_token(
+                    "stage3_extract_{}.margin_{}".format(chunk_id, args.margin),
+                    cuts_tokens[strand],
+                )
                 cmd = [
                     sys.executable,
                     EXTRACT_CHUNK,
@@ -478,6 +517,8 @@ def stage_extract_chunks(args, ckpt, outdir, timing, strand_bams, selections, rs
                         "offset": manifest["offset"],
                         "window_origin": manifest["window_origin"],
                         "extract": record,
+                        # what stages 4 and 5 chain their own sentinels onto
+                        "upstream_token": token,
                     }
                 )
     timing.setdefault("stages", {})["extract_chunks"] = [
@@ -538,12 +579,18 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
     steps = []
 
     norm_bam = os.path.join(cdir, "chunk.norm.bam")
-    norm_token = "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}".format(
-        cid,
-        args.normalize_max_cov_level,
-        args.depth_window,
-        args.random_seed,
-        chunk["window_origin"],
+    norm_token = chain_token(
+        # maxintron is passed to the normalizer below, so it decides these
+        # contents and has to name them
+        "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}".format(
+            cid,
+            args.normalize_max_cov_level,
+            args.depth_window,
+            args.random_seed,
+            chunk["window_origin"],
+            args.max_intron_length,
+        ),
+        chunk["upstream_token"],
     )
     norm_cmd = [
         sys.executable,
@@ -577,7 +624,10 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
     # produce nonsense paths like "__/abs/path.contigtmp" rooted at the cwd.
     # Give it a bare name and let cwd place the outputs.
     quant_prefix = os.path.join(cdir, "chunk_quant." + LRAA_QUANT_ONLY_SUFFIX)
-    quant_token = "stage5_quant_{}.N_{}_hifi_{}".format(cid, num_total_reads, args.HiFi)
+    quant_token = chain_token(
+        "stage5_quant_{}.N_{}_hifi_{}".format(cid, num_total_reads, args.HiFi),
+        norm_token,
+    )
     quant_cmd = lraa_cmd(
         args,
         bam_for_quant="{}.bam".format(prefix),
@@ -891,7 +941,9 @@ def merge_and_translate(outdir, chunks):
 # -------------------------------------------------------------- baseline arm
 
 
-def run_baseline(args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_interval):
+def run_baseline(
+    args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_interval, split_token
+):
     """Whole-contig control. Same substrate, same settings, no partitioning.
 
     ``--bam`` is the two orientation bams glued back together, which is exactly
@@ -907,7 +959,9 @@ def run_baseline(args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_i
     started = time.time()
     steps = []
 
-    merge_token = "baseline_merge.maxintron_{}".format(args.max_intron_length)
+    merge_token = chain_token(
+        "baseline_merge.maxintron_{}".format(args.max_intron_length), split_token
+    )
     merge_cmd = [
         "samtools",
         "merge",
@@ -924,8 +978,16 @@ def run_baseline(args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_i
         ckpt.mark(merge_token)
 
     norm_bam = os.path.join(bdir, "whole.norm.bam")
-    norm_token = "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0".format(
-        args.normalize_max_cov_level, args.depth_window, args.random_seed
+    norm_token = chain_token(
+        # maxintron is passed to the normalizer below; it was missing here, which
+        # is what let a new cap rerun the merge and then reuse this bam
+        "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0_maxintron_{}".format(
+            args.normalize_max_cov_level,
+            args.depth_window,
+            args.random_seed,
+            args.max_intron_length,
+        ),
+        merge_token,
     )
     norm_cmd = [
         sys.executable,
@@ -956,7 +1018,9 @@ def run_baseline(args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_i
     # bare prefix, cwd=bdir: see the note in chunk_worker about LRAA's scratch
     # roots being string concatenations on --output_prefix
     quant_prefix = os.path.join(bdir, "baseline_quant." + LRAA_QUANT_ONLY_SUFFIX)
-    quant_token = "baseline_quant.N_{}_hifi_{}".format(num_total_reads, args.HiFi)
+    quant_token = chain_token(
+        "baseline_quant.N_{}_hifi_{}".format(num_total_reads, args.HiFi), norm_token
+    )
     quant_cmd = lraa_cmd(
         args,
         bam_for_quant=whole_bam,
@@ -1091,7 +1155,23 @@ def main(argv=None):
 
     rss = args.rss_sample_interval
 
-    strand_bams = stage_strand_split(args, ckpt, outdir, timing, rss)
+    # The chain root. Every artifact below derives from these three files and the
+    # contig restriction, and none of the per-stage sentinels named any of them:
+    # pointing the same outdir at a different bam, genome or gtf reused the whole
+    # pipeline. Identity is the resolved path with size and mtime, not a content
+    # hash, because these run to gigabytes.
+    inputs_token = chain_token(
+        "inputs",
+        None,
+        Util_funcs.file_identity_token(args.bam),
+        Util_funcs.file_identity_token(args.genome_fa),
+        Util_funcs.file_identity_token(args.gtf),
+        args.contig or "",
+    )
+
+    strand_bams, split_token = stage_strand_split(
+        args, ckpt, outdir, timing, rss, inputs_token
+    )
     retained = {s: count_records(b) for s, b in strand_bams.items()}
     retained_total = sum(retained.values())
     timing["stage1_retained_records"] = {
@@ -1124,12 +1204,12 @@ def main(argv=None):
     flush()
 
     if args.arm in ("chunked", "both"):
-        selections, cut_dir = stage_select_cuts(
-            args, ckpt, outdir, timing, strand_bams, rss
+        selections, cut_dir, cuts_tokens = stage_select_cuts(
+            args, ckpt, outdir, timing, strand_bams, rss, split_token
         )
         flush()
         chunks = stage_extract_chunks(
-            args, ckpt, outdir, timing, strand_bams, selections, rss
+            args, ckpt, outdir, timing, strand_bams, selections, rss, cuts_tokens
         )
         flush()
         print(
@@ -1190,7 +1270,7 @@ def main(argv=None):
     if args.arm in ("baseline", "both"):
         load_before = loadavg()
         outputs["baseline"] = run_baseline(
-            args, ckpt, outdir, timing, strand_bams, num_total_reads, rss
+            args, ckpt, outdir, timing, strand_bams, num_total_reads, rss, split_token
         )
         timing["arms"]["baseline"]["loadavg_before"] = load_before
         timing["arms"]["baseline"]["loadavg_after"] = loadavg()
