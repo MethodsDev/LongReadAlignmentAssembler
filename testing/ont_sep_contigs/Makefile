@@ -1,3 +1,11 @@
+# `LRAA ... | tee run.log` reports tee's exit status, which is always 0, so a
+# crashed run reads as a pass here.  What then decides the result is whether
+# gffcompare happens to find a usable gtf -- present and complete from a run
+# that died later, or left over from a previous one.  pipefail puts LRAA's own
+# status back in charge.
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
+
 test:
 	../../LRAA --genome minigenome.fa --bam ONT_sim_alignments.mm2.bam -d --verbose --no_cleanup 2>&1 | tee run.log
 	gffcompare -r minigenome.gtf LRAA.LRAA.ref-free.gtf

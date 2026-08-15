@@ -1,3 +1,7 @@
+# See ../Makefile: without pipefail, tee's exit status hides a crashed LRAA.
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
+
 test:
 	../../../LRAA --genome minig-ENSG00000066135.genome.fa --bam minig-ENSG00000066135.mm2.bam -d 2>&1 | tee run.log
 	gffcompare -r minig-ENSG00000066135.annot.gtf LRAA.LRAA.ref-free.gtf
