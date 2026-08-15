@@ -94,6 +94,34 @@ against each other. The suffix is the point: a bare version tag promises a
 published release, and someone pulling `0.19.0` has no way to tell it was cut
 mid-development. Production work uses a release tag, never either of these.
 
+### What the registry actually holds, as of v0.20.0
+
+The table above says what each tag means. What is published diverges from it in
+two places, deliberately, and both are easy to misread:
+
+| repository | `:latest` serves | backed by a release? |
+|---|---|---|
+| `lraa` | **v0.17.7** | yes -- `origin/main` is v0.17.7, and its wdls hardcode `lraa:latest` in twenty places |
+| `lraa-core`, `lraa-sc`, `lraa-orf`, `lraa-combined` | 0.18.3-era digests | **no** |
+
+`lraa:latest` is the one public users resolve, and it is correct: it points at
+the image built for the last published GitHub release. Nothing on `main`
+references the four split repositories.
+
+Their `:latest` tags therefore assert something no release backs. They are left
+in place rather than deleted or moved, because only devel-branch wdls name them
+and those runs override the tag anyway through `testing/lraa_test_docker.mk`.
+Moving them to a development version would re-assert the same false claim about
+a newer commit; deleting them would break any internal caller that has quietly
+come to depend on them. Neither is worth doing until the release that closes the
+0.17.7-to-devel gap, which is when they should be pointed at that release and
+the claim becomes true again.
+
+`lraa:testing` is a third case: it holds a 0.18.3-era digest and **no current
+script writes it**. `build_docker.testing.sh` deliberately avoids the plain name,
+so nothing will ever move it. Treat it as stale. `lraa-sc:0.18.3-sklearn` is a
+hand-made tag outside this taxonomy from the same period.
+
 ## Building
 
 Three paths. All three build the commit you are sitting on; they differ only in
