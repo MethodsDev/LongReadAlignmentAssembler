@@ -218,21 +218,29 @@ class Bam_alignment_extractor:
             f"[{contig_acc}{contig_strand}] reads kept: {kept_count:,} and discarded: {dict(discarded_read_counter)} | candidates not lightened: {candidates_retained:,} ({frac_cand_final:.3f} of kept) (rss: {f'{final_mem:.1f} MB' if final_mem is not None else '<na>'})"
         )
 
+        checked = num_alignments_per_id_fail + num_alignments_per_id_ok
         if (
-            num_alignments_per_id_fail + num_alignments_per_id_ok
+            checked
             >= LRAA_Globals.config["min_total_alignments_engage_frac_per_id_check"]
         ):
-            frac_alignments_fail_per_id_check = num_alignments_per_id_fail / (
-                num_alignments_per_id_fail + num_alignments_per_id_ok
-            )
+            frac_pass = num_alignments_per_id_ok / checked
 
+            # Against the pass fraction, which is what the threshold is named
+            # for.  This compared the *failure* fraction to it, so it fired
+            # whenever fewer than 90% of alignments failed -- that is, on every
+            # healthy library -- and the message it then built referenced a
+            # local that no longer exists, raising NameError instead of
+            # reporting anything.  Not fatal by design: a low pass rate can be a
+            # deliberate setting for a noisy library, and refusing to run would
+            # leave no way to see what the threshold is doing.
             if (
-                frac_alignments_fail_per_id_check
+                frac_pass
                 < LRAA_Globals.config["min_frac_alignments_pass_per_id_check"]
             ):
-                # raise RuntimeError(f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments")
-                logger.debug(
-                    f"Error, would appear only {frac_alignments_fail_per_id_check} on {contig_acc} have at least {min_per_id} percent identity. Please reevaluate your --min_per_id setting for application of LRAA with these alignments"
+                logger.warning(
+                    f"Only {frac_pass:.3f} of {checked:,} identity-bearing alignments on "
+                    f"{contig_acc} meet the {LRAA_Globals.config['min_per_id']} percent "
+                    f"identity minimum. Please reevaluate --min_per_id for these alignments."
                 )
 
         if pretty:

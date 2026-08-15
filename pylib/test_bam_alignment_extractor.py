@@ -365,3 +365,69 @@ def test_intron_length_rule_has_a_single_implementation(tmp_path, caplog):
         Util_funcs.has_disqualifying_long_intron = original
 
     assert sbs.get_discard_reason(unspliced_read, MAX_INTRON) is None
+
+
+# The per-identity QC summary, which is reached only once enough alignments
+# carried NM or nM to make the ratio meaningful.  It shipped in v0.19.1 unable
+# to run at all: the branch fired on healthy libraries and then built its
+# message from a local the retention-policy refactor had removed, so a contig
+# with a thousand good alignments died on NameError inside a diagnostic.
+
+
+def _run_qc_extractor(tmp_path, mismatches_by_read_name, caplog, engage_at=4):
+    header = pysam.AlignmentHeader.from_references([CONTIG], [CONTIG_LENGTH])
+    bam_path = tmp_path / "perid.bam"
+    with pysam.AlignmentFile(str(bam_path), "wb", header=header) as writer:
+        for offset, (read_name, mismatches) in enumerate(
+            mismatches_by_read_name.items()
+        ):
+            aln = _spliced_alignment(
+                header, read_name, [(MATCH, 100)], reference_start=1000 + offset
+            )
+            aln.set_tag("NM", mismatches)
+            writer.write(aln)
+    pysam.index(str(bam_path))
+
+    original = LRAA_Globals.config["min_total_alignments_engage_frac_per_id_check"]
+    LRAA_Globals.config["min_total_alignments_engage_frac_per_id_check"] = engage_at
+    try:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="Bam_alignment_extractor"):
+            Bam_alignment_extractor(str(bam_path)).get_read_alignments(CONTIG)
+    finally:
+        LRAA_Globals.config["min_total_alignments_engage_frac_per_id_check"] = original
+
+    return " ".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    )
+
+
+def test_a_healthy_library_reaches_the_qc_summary_without_raising(tmp_path, caplog):
+    """Every alignment passes, so the summary has nothing to report -- and must
+    not fall over on the way to deciding that."""
+
+    warnings = _run_qc_extractor(
+        tmp_path, {"ok%d" % i: 0 for i in range(5)}, caplog
+    )
+
+    assert warnings == ""
+
+
+def test_a_library_below_the_identity_threshold_is_reported(tmp_path, caplog):
+    """One pass in five is 0.2, under the 0.9 the config asks for.
+
+    Teeth against the inverted comparison this replaced: that one tested the
+    failure fraction, so it stayed silent exactly here and fired on the healthy
+    case above.
+    """
+
+    reads = {"bad%d" % i: 50 for i in range(4)}
+    reads["good"] = 0
+
+    warnings = _run_qc_extractor(tmp_path, reads, caplog)
+
+    assert "0.200" in warnings
+    assert str(LRAA_Globals.config["min_per_id"]) in warnings
+    assert "--min_per_id" in warnings
