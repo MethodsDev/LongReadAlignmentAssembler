@@ -101,9 +101,18 @@ COPY --from=builder /usr/local/lib/ /usr/local/lib/
 # batch.  Pinned to the same release as the minimap2 binary above: mappy is built
 # from the minimap2 sources of its own version and the mapping heuristics change
 # between releases, so an unpinned mappy would silently disagree with the batch
-# rescue path it is compared against.  Installing compiles from source, which the
-# build stage's compiler and zlib headers already cover.
-RUN pip install --no-cache-dir --break-system-packages \
+# rescue path it is compared against.
+#
+# It ships no wheel for cp312, so pip compiles it from the sdist and needs a
+# compiler and Python headers.  This is the RUNTIME stage -- the builder's
+# toolchain is not in scope here, only what COPY --from brought over -- so the
+# toolchain is installed, used, and purged inside one layer.  Leaving it in
+# would put a C compiler in every published image for the sake of one binding.
+RUN apt-get -qq update && apt-get -qq -y install --no-install-recommends \
+        gcc \
+        python3-dev \
+        zlib1g-dev \
+ && pip install --no-cache-dir --break-system-packages \
     pysam \
     networkx \
     intervaltree \
@@ -113,7 +122,11 @@ RUN pip install --no-cache-dir --break-system-packages \
     numpy \
     igraph==0.11.4 \
     leidenalg==0.10.2 \
-    mappy==2.28
+    mappy==2.28 \
+ && python3 -c "import mappy; print('mappy', mappy.__version__)" \
+ && apt-get -qq -y purge gcc python3-dev zlib1g-dev \
+ && apt-get -qq -y autoremove \
+ && rm -rf /var/lib/apt/lists/*
 
 # Set here rather than beside the checkout so that a version bump does not
 # invalidate a layer.
