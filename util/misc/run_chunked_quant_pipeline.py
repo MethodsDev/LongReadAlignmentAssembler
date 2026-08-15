@@ -53,6 +53,7 @@ Sampling can miss a spike shorter than the interval.
 
 import argparse
 import collections
+import glob
 import json
 import os
 import re
@@ -61,6 +62,8 @@ import subprocess
 import sys
 import threading
 import time
+
+import pysam
 
 sys.path.insert(
     0,
@@ -345,6 +348,40 @@ def stage_strand_split(args, ckpt, outdir, timing, rss_interval, inputs_token):
 def count_records(bam):
     out = subprocess.check_output(["samtools", "view", "-c", bam], text=True)
     return int(out.strip())
+
+
+def severed_read_names(cut_dir):
+    """Every read the extractor drops at a cut, across both orientations.
+
+    Cut selection writes one of these per strand.  Their union is exactly the
+    difference between the two arms' inputs: measured on a 3.4 Mb contig cut into
+    seven segments per strand, the whole-contig bam held 2,266 records, the chunk
+    bams held 2,261, and these files named those 5 and nothing else.
+
+    The names rather than the severed bam beside them, because that bam is
+    deliberately narrower -- it holds only the severed alignments quantification
+    would have used, which is the right set for asking what a cut cost and the
+    wrong one for making the two arms consume the same records.
+    """
+    names = set()
+    for path in sorted(glob.glob(os.path.join(cut_dir, "*.dropped_reads.txt"))):
+        with open(path, "rt") as fh:
+            names.update(line.strip() for line in fh if line.strip())
+    return names
+
+
+def write_bam_excluding(source_bam, names, dest_bam):
+    """Copy ``source_bam`` without the named reads, indexed. Returns kept count."""
+    kept = 0
+    with pysam.AlignmentFile(source_bam, "rb") as reader:
+        with pysam.AlignmentFile(dest_bam, "wb", template=reader) as writer:
+            for read in reader.fetch(until_eof=True):
+                if read.query_name in names:
+                    continue
+                writer.write(read)
+                kept += 1
+    pysam.index(str(dest_bam))
+    return kept
 
 
 # --------------------------------------------------------------------- stage 2
@@ -942,14 +979,34 @@ def merge_and_translate(outdir, chunks):
 
 
 def run_baseline(
-    args, ckpt, outdir, timing, strand_bams, num_total_reads, rss_interval, split_token
+    args,
+    ckpt,
+    outdir,
+    timing,
+    strand_bams,
+    num_total_reads,
+    rss_interval,
+    split_token,
+    severed_names=None,
 ):
     """Whole-contig control. Same substrate, same settings, no partitioning.
 
-    ``--bam`` is the two orientation bams glued back together, which is exactly
-    the union of every chunk's mini bam expressed in genome coordinates (no read
-    is dropped at a cut on this input), so the arms differ in partitioning alone
-    rather than also in which records reach LRAA.
+    ``--bam`` is the two orientation bams glued back together, MINUS the reads a
+    cut severs, which is exactly the union of every chunk's mini bam expressed in
+    genome coordinates -- so the arms differ in partitioning alone rather than
+    also in which records reach LRAA.
+
+    The subtraction is the point.  A severed read is dropped from both
+    neighbouring chunks and is an accepted loss, but the whole-contig arm has no
+    cut to lose it at, so leaving it in makes the control read a record set the
+    chunked arm never saw and any difference between the two is confounded by
+    exactly those reads.  This claimed the arms already matched while doing
+    nothing to make them: on a 3.4 Mb contig cut seven ways it quantified 2,266
+    records against the chunked arm's 2,261.
+
+    ``severed_names`` absent means no cut selection has run in this output
+    directory, so there is no chunked arm to be comparable with and the whole
+    input is the right input.
     """
 
     bdir = os.path.join(outdir, "baseline")
@@ -977,6 +1034,32 @@ def run_baseline(
         steps.append(run_step("baseline_merge", merge_cmd, log, bdir, rss_interval))
         ckpt.mark(merge_token)
 
+    quant_bam = whole_bam
+    input_token = merge_token
+    if severed_names:
+        quant_bam = os.path.join(bdir, "whole.parity.bam")
+        # The names decide the contents, so they name the artifact.  A digest of
+        # the sorted set rather than the set itself: it is unbounded, and the
+        # count alone would collide between two runs severing different reads.
+        input_token = chain_token(
+            "baseline_parity.severed_{}".format(len(severed_names)),
+            merge_token,
+            Util_funcs.get_hash_code("|".join(sorted(severed_names))),
+        )
+        prune_step = {
+            "step": "baseline_parity_prune",
+            "excluded_read_names": len(severed_names),
+            "output": quant_bam,
+        }
+        if ckpt.done(input_token):
+            prune_step["reused"] = True
+        else:
+            prune_step["kept_records"] = write_bam_excluding(
+                whole_bam, severed_names, quant_bam
+            )
+            ckpt.mark(input_token)
+        steps.append(prune_step)
+
     norm_bam = os.path.join(bdir, "whole.norm.bam")
     norm_token = chain_token(
         # maxintron is passed to the normalizer below; it was missing here, which
@@ -987,13 +1070,13 @@ def run_baseline(
             args.random_seed,
             args.max_intron_length,
         ),
-        merge_token,
+        input_token,
     )
     norm_cmd = [
         sys.executable,
         NORMALIZE_BAM,
         "--input_bam",
-        whole_bam,
+        quant_bam,
         "--output_bam",
         norm_bam,
         "--normalize_max_cov_level",
@@ -1023,7 +1106,7 @@ def run_baseline(
     )
     quant_cmd = lraa_cmd(
         args,
-        bam_for_quant=whole_bam,
+        bam_for_quant=quant_bam,
         bam_for_sg=norm_bam,
         genome=os.path.abspath(args.genome_fa),
         gtf=os.path.abspath(args.gtf),
@@ -1268,9 +1351,22 @@ def main(argv=None):
         flush()
 
     if args.arm in ("baseline", "both"):
+        # Read from disk rather than carried down from the chunked arm, so a
+        # baseline run into an output directory whose cuts already exist is
+        # comparable with them even when the two arms ran as separate invocations.
+        severed = severed_read_names(os.path.join(outdir, "cuts"))
+        timing["baseline_excluded_severed_reads"] = len(severed)
         load_before = loadavg()
         outputs["baseline"] = run_baseline(
-            args, ckpt, outdir, timing, strand_bams, num_total_reads, rss, split_token
+            args,
+            ckpt,
+            outdir,
+            timing,
+            strand_bams,
+            num_total_reads,
+            rss,
+            split_token,
+            severed_names=severed,
         )
         timing["arms"]["baseline"]["loadavg_before"] = load_before
         timing["arms"]["baseline"]["loadavg_after"] = loadavg()
