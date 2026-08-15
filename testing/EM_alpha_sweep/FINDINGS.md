@@ -27,17 +27,35 @@ Result tables in `results/`. No LRAA default is changed by this work.
 3. **The recommendation depends on the corpus, not on the 3' weighting.** Argmin
    alpha is identical with 3' weighting on and off on all 9 samples measured;
    the interaction contrast is 0.2-1.5% of the main effect.
-4. **On the only corpus with a realistic abundance distribution that is finished
-   (morf2_ont), the optimum is alpha = 0.3, thirty times the shipped default**,
+4. **Both realistic-abundance samples put the optimum at alpha = 0.3, thirty
+   times the shipped default** — morf2_ont (ONT) and morf2_pacbio (HiFi), both
+   interior minima, both platforms, both 3' settings, four argmins one value,
    worth -7.6e-3 MARD, and it also removes every false negative.
 
 ## Recommendation
 
 | stratum | recommended alpha | status | evidence |
 | --- | --- | --- | --- |
-| ONT | **~0.3** | **CONDITIONAL — do not ship yet** | morf2_ont: interior MARD minimum, -7.615e-3 paired vs default, false negatives 2 -> 0. Every metric agrees 0.01 is far too low; they split only on how far. Blocked on the false-positive measurement below. |
-| HiFi | no change from 0.01 | not a positive result | The 8 HiFi SIRV samples are confounded (below); morf2_pacbio is incomplete, so HiFi rests on no realistic-abundance sample at all. |
-| pooled | do not set one value | — | The two SIRV strata recommend opposite extremes and cancel to nothing when pooled. |
+| ONT | **~0.3** | **CONDITIONAL — do not ship yet** | morf2_ont: interior MARD minimum, -7.615e-3 paired vs default, false negatives 2 -> 0. Blocked on the false-positive measurement below. |
+| HiFi | **~0.3** | **CONDITIONAL — same block** | morf2_pacbio: interior MARD minimum at the SAME alpha, -3.644e-3 paired, false negatives 32 -> 0. |
+| pooled | **~0.3 across both realistic-abundance samples** | **CONDITIONAL — same block** | 2 of 2 realistic samples, both platforms, both 3p settings, all four argmins = 0.3. |
+| SIRV-only | do not use | — | The two SIRV strata recommend opposite extremes and cancel to nothing when pooled. Seven strikes below. |
+
+**The two realistic-abundance samples agree exactly.** morf2_ont (ONT) and
+morf2_pacbio (HiFi) both put the MARD optimum at alpha = 0.3, both with a genuine
+interior minimum (1.0 is worse than 0.3 on both), and both give the same argmin
+with 3' weighting off. Four independent argmins, one value, across two platforms.
+So 0.3 is not ONT-specific, and the recommendation is platform-independent —
+which is the opposite of what the SIRV strata suggested, and the reason SIRVs are
+excluded from it.
+
+| morf2_pacbio, 3p on | MARD | delta vs default | truth-expressed called zero (of 2727) |
+| --- | --- | --- | --- |
+| alpha 0 | 0.037223 | +1.63e-03 | 32 |
+| alpha 0.01 (default) | 0.035598 | 0 | 0 |
+| alpha 0.1 | 0.032837 | -2.76e-03 | 0 |
+| **alpha 0.3** | **0.031954** | **-3.64e-03** | 0 |
+| alpha 1.0 | 0.032886 | -2.71e-03 | 0 |
 
 ### Why ONT is conditional and not ready to ship
 
@@ -205,13 +223,40 @@ predicted mass, so the library-wide figure is diluted by only 1.21-1.28x. SIRVs
 are an unusually dense annotation — nearly every transcript is ambiguous with
 another — and this is not representative.
 
-**Pre-registered, before the MORF partition is computed:** morf2_ont has ~2,900
-transcripts, mostly one per gene, and 88-92% of its read mass is compatible with
-exactly one transcript (Quant3Prime). I predict its reachable transcript
-fraction is well under half and its dilution factor is >= 3x, plausibly near the
-~10x the unique-mass figure implies. If that holds, the honest framing of the
-whole result is that alpha moves the genes it governs by roughly an order of
-magnitude more than any library-wide number quoted here.
+**MY PRE-REGISTERED PREDICTION WAS WRONG.** I committed in writing, before
+measuring, that MORF's dilution factor would be >= 3x and plausibly near 10x,
+reasoning from the 88-92% unique read MASS. Measured with Quant3Prime's
+`threeprime_stratified_effect.py` (b96c1b6) rather than my own partition, on the
+alpha 0.01 -> 0.3 contrast: the reachable strata (LEVER + TIED_ONLY) hold 1871 of
+2706 rows on morf2_ont and 1876 of 2727 on morf2_pacbio — 69% both times — giving
+a dilution of **1.45x on both**, essentially the same as SIRV's 1.21-1.28x rather
+than 3-10x higher.
+
+The prediction failed because I conflated read mass with transcript count. 88-92%
+of READS being uniquely assignable does not make 88-92% of TRANSCRIPTS
+unambiguous: most transcripts collect a few ambiguous reads even when most reads
+are unique. Only 31% of MORF rows are fully unambiguous.
+
+**But the effect IS concentrated, just not in the way I predicted.** The exact
+decomposition (checked to recombine to the library delta):
+
+| morf2_ont, alpha 0.01 -> 0.3 | rows | % rows | MARD at 0.01 | delta | % of library delta |
+| --- | --- | --- | --- | --- | --- |
+| LEVER | 738 | 27.3 | 0.06419 | -7.56e-03 | 27.1 |
+| TIED_ONLY | 1133 | 41.9 | 0.08466 | **-1.33e-02** | **73.2** |
+| UNAMBIGUOUS | 835 | 30.9 | 0.00957 | +5.26e-05 | -0.2 |
+
+TIED_ONLY — the irreducibly ambiguous stratum, alpha's exclusive territory — is
+both the worst-quantified stratum and the source of 73% of the total gain, from
+42% of rows, with an effect 1.75x the library-wide figure. On morf2_pacbio the
+split is 48.6% LEVER / 51.2% TIED_ONLY / 0.16% UNAMBIGUOUS.
+
+**Inertness reproduced independently on a realistic annotation.** UNAMBIGUOUS
+moves +5.26e-05 (ont) and -1.89e-05 (pacbio) against library effects of 7.6e-03
+and 3.6e-03 — 0.2% and 0.5% of the effect, contributing -0.2% and +0.16% of the
+delta. My SIRV inertness result (1e-7 against 1e-2) was on my own two-way
+partition; this is Quant3Prime's three-way partition, their code, a different
+corpus, same conclusion.
 
 ## Alpha x 3' weighting: measurably additive
 
@@ -317,11 +362,24 @@ strata because their optima sit at opposite ends of the grid.
 
 ## Could not determine
 
-* **morf2_pacbio is incomplete.** 1 of 18 arms finished when the workstation was
-  throttled from 6-way to 4-way; pacbio costs 2157 s per arm against morf2_ont's
-  750 s. Consequence: **the HiFi recommendation rests on no realistic-abundance
-  sample at all**, only on the confounded SIRVs, and the HiFi row above is
-  therefore "no change on present evidence" rather than a positive result.
+* **The residual test does NOT generalise out of stratum, and I do not know
+  whether that is a failure of the test or a limit of its scope.** It was 8/8 on
+  SIRV; on the two MORF samples the profile split LOSES to the likelihood split
+  (misallocation 0.384 vs 0.308 on ont, 0.445 vs 0.371 on pacbio) while alpha
+  nevertheless helps on both. The coherent reading is that the test compares the
+  two ENDPOINTS, alpha=0 against alpha=infinity, so it can only predict a
+  boundary optimum — and both SIRV strata have boundary optima while both MORF
+  samples have interior ones at 0.3 with the curve already turning up by 1.0. If
+  MORF's alpha=infinity really is worse than its alpha=0, the test is right and
+  merely mute about interior optima. **Deciding that needs the MORF alpha=1e6
+  arms, which I did not run.** Until then the residual test is supported only
+  where the optimum is on a boundary.
+* **The profile-distance predictor DID generalise, 2 of 2 out of stratum.** I
+  committed before looking that morf2_ont's profile-vs-truth distance would place
+  it on one side of the 0.695/0.724 SIRV gap and that would predict its optimum.
+  Measured: morf2_ont 0.672 and morf2_pacbio 0.678, both below 0.695, i.e. on the
+  E1 (alpha-helps-upward) side. Both optima are indeed above the default. Two
+  hits, on a corpus with a different truth and a different unique-mass fraction.
 * **The false-positive cost of the recommended move is UNMEASURED, and this is
   the blocking gap.** Raising alpha 30x is the exact regime where its known
   failure mode — mass on transcripts that are not expressed — should appear, and
@@ -340,11 +398,8 @@ strata because their optima sit at opposite ends of the grid.
 * **The metric split on morf2_ont is unresolved** (MARD 0.3; spearman and nrmse
   >= 1.0). It is a disagreement about magnitude, not direction — see above — so
   it does not threaten the "0.01 is too low" conclusion, only the value 0.3.
-* **The MORF partition analysis and MORF profile/residual tests are not run.**
-  Both need a tracking file, and the grid deletes tracking to keep ~250 arms on
-  disk. Two extra arms (~50 min) would supply it. The MORF dilution prediction
-  above is therefore committed but unchecked, as is whether the
-  unreachable-is-worse finding holds outside SIRVs.
+* **MORF alpha=1e6 limit arms were not run**, which is what blocks the residual
+  test above. Two arms, ~20 min.
 * **The depth probe covers only SIRV E2.** Both probed samples have boundary
   optima and neither has a realistic abundance distribution. An E1 subsample
   would have tested a top-edge optimum; a MORF subsample would have tested a

@@ -64,7 +64,14 @@ def _morf(plat, hifi):
         genome=MORF_GENOME,
         gtf=MORF_GTF,
         bam=os.path.join(INPUTS, f"morf2_{plat}_merged_annot_compat_sorted.bam"),
-        truth_gtf=os.path.join(d, "minigenome.UTRs_trimmed_1isoformref_expressed.gtf"),
+        # The two MORF benchmark dirs name their truth gtf differently: the
+        # pacbio one carries a _pacbio suffix.  Picking the wrong one fails
+        # loudly (FileNotFoundError inside the notebook), not silently.
+        truth_gtf=os.path.join(
+            d,
+            "minigenome.UTRs_trimmed_1isoformref_expressed_pacbio.gtf" if hifi
+            else "minigenome.UTRs_trimmed_1isoformref_expressed.gtf",
+        ),
         truth_quant=os.path.join(d, f"morf2_{plat}_merged_annot_compat_sorted_tn_counts.tsv"),
     )
 

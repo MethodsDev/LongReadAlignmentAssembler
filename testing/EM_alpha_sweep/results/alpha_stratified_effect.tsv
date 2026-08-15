@@ -1,0 +1,21 @@
+# morf2_ont: 2706 scored rows, 17 carrying >1 transcript_id; strata from /home/unix/bhaas/projects/LRAA_PAPER_Analyses/__LRAA_local_runs/alpha_grid_2026-08-15/probe/profile/morf2_ont/prof.LRAA.quant-only.quant.tracking.gz
+# LIBRARY-WIDE  mard_on=0.055905783  mard_off=0.048290537  delta=-7.615246e-03
+label	stratum	n_rows	pct_rows	mard_on	mard_off	delta	contrib_to_library_delta	pct_of_library_delta	sum_ref_tpm
+morf2_ont	LEVER	738	27.27	0.064193623	0.056638014	-7.555609e-03	-2.060621e-03	27.06	394635.7
+morf2_ont	TIED_ONLY	1133	41.87	0.084658588	0.071353454	-1.330513e-02	-5.570849e-03	73.15	335908.3
+morf2_ont	UNAMBIGUOUS	835	30.86	0.009566438	0.009619014	+5.257588e-05	+1.622352e-05	-0.21	269456.1
+# decomposition check: sum(contributions)=-7.615246e-03 vs library delta=-7.615246e-03 -> EXACT
+# morf2_pacbio: 2727 scored rows, 17 carrying >1 transcript_id; strata from /home/unix/bhaas/projects/LRAA_PAPER_Analyses/__LRAA_local_runs/alpha_grid_2026-08-15/probe/profile/morf2_pacbio/prof.LRAA.quant-only.quant.tracking.gz
+# LIBRARY-WIDE  mard_on=0.035598129  mard_off=0.031954055  delta=-3.644074e-03
+label	stratum	n_rows	pct_rows	mard_on	mard_off	delta	contrib_to_library_delta	pct_of_library_delta	sum_ref_tpm
+morf2_pacbio	LEVER	688	25.23	0.046728024	0.039707164	-7.020860e-03	-1.771306e-03	48.61	372888.1
+morf2_pacbio	TIED_ONLY	1188	43.56	0.052752020	0.048466741	-4.285279e-03	-1.866854e-03	51.23	349016.7
+morf2_pacbio	UNAMBIGUOUS	851	31.21	0.002653135	0.002634185	-1.894990e-05	-5.913591e-06	0.16	278095.2
+# decomposition check: sum(contributions)=-3.644074e-03 vs library delta=-3.644074e-03 -> EXACT
+# CL_BT474_E1_sirv: 60 scored rows, 1 carrying >1 transcript_id; strata from /home/unix/bhaas/projects/LRAA_PAPER_Analyses/__LRAA_local_runs/alpha_grid_2026-08-15/probe/profile/CL_BT474_E1_sirv/prof.LRAA.quant-only.quant.tracking.gz
+# LIBRARY-WIDE  mard_on=0.201674253  mard_off=0.198758861  delta=-2.915393e-03
+label	stratum	n_rows	pct_rows	mard_on	mard_off	delta	contrib_to_library_delta	pct_of_library_delta	sum_ref_tpm
+CL_BT474_E1_sirv	LEVER	47	78.33	0.192457670	0.188738064	-3.719606e-03	-2.913691e-03	99.94	778242.7
+CL_BT474_E1_sirv	TIED_ONLY	4	6.67	0.073960612	0.073927765	-3.284689e-05	-2.189793e-06	0.08	71129.7
+CL_BT474_E1_sirv	UNAMBIGUOUS	9	15.00	0.306566921	0.306570177	+3.256687e-06	+4.885031e-07	-0.02	150627.6
+# decomposition check: sum(contributions)=-2.915393e-03 vs library delta=-2.915393e-03 -> EXACT
