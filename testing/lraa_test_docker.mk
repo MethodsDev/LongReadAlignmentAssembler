@@ -118,3 +118,27 @@ check_test_image_revision:
 #
 # .NOTPARALLEL because that ordering is only guaranteed for a serial make.
 .NOTPARALLEL:
+
+
+# Run the same wdl targets under Apptainer/Singularity instead of Docker.
+#
+#     make test_wdls_apptainer
+#
+# The only difference is which miniwdl config is used, and a command-line
+# variable assignment beats a Makefile's own `=` AND propagates into sub-makes,
+# so overriding MINIWDL_CFG once here reaches every directory the recursion
+# touches.  Verified, because relying on unverified make semantics is how the
+# prerequisite ordering above went wrong.
+#
+# The path is absolute.  Each test directory sets MINIWDL_CFG relative to its own
+# depth, so a relative override would resolve differently in testing/sep_contigs
+# than in testing/single_cells/sc_full_pipe.  It is derived from this file's own
+# location rather than assumed, so it survives the directory being moved.
+LRAA_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
+MINIWDL_APPTAINER_CFG ?= $(LRAA_REPO_ROOT)/miniwdl.apptainer.cfg
+
+.PHONY: test_wdls_apptainer
+test_wdls_apptainer:
+	@test -f "$(MINIWDL_APPTAINER_CFG)" \
+	  || { echo "no apptainer config at $(MINIWDL_APPTAINER_CFG)" >&2; exit 1; }
+	$(MAKE) test_wdls MINIWDL_CFG=$(MINIWDL_APPTAINER_CFG)
