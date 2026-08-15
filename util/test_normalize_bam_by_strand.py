@@ -601,3 +601,130 @@ def test_repeating_a_single_strand_run_reuses_its_checkpoints(single_strand):
     }
 
     assert after == before
+
+
+# ---------------------------------------------------------------------------
+# alignments the header does not fit
+
+# far enough past CONTIG_LEN that the windows these reads occupy fall outside
+# the array sized from the header (3000 // 100 + 2 = 32 entries)
+PAST_THE_END = 6500
+
+
+def _write_bam_unindexed(path, reads, header, sort=True):
+    """Write records pysam can hold but samtools would refuse to index.
+
+    An alignment reaching past the reference length, or an input out of
+    coordinate order, is exactly what these tests are about, so the index step
+    `_write_bam` performs is not available to them.
+    """
+    ordered = sorted(reads, key=lambda r: r.reference_start) if sort else reads
+    with pysam.AlignmentFile(str(path), "wb", header=header) as writer:
+        for read in ordered:
+            writer.write(read)
+
+
+def test_an_alignment_past_the_contig_end_is_measured_rather_than_dropped(tmp_path):
+    """The depth an overhanging pile carries has to reach its own acceptance test.
+
+    Coordinate-remapped bams routinely carry alignments running off the contig
+    they were rebased onto -- 18% of the records in testing/sep_contigs do. Pass
+    1 sized its depth array from the header and wrote to it unchecked, so such a
+    record raised IndexError and took the whole run with it.
+
+    Not crashing is the smaller half. Bounding the write by skipping the window
+    instead would leave this pile unmeasured, pass 2 would find no depth for it
+    and return probability 1, and forty reads over a target of five would be
+    retained whole -- a silent normalization failure in place of a loud crash.
+    So the assertion is that the pile is *thinned*, and the anchor read, whose
+    depth is genuinely below target, is not.
+    """
+    header = _bam_header()
+    anchor_read = _aligned_read(header, "anchor", 350, 200)
+    past = [
+        _aligned_read(header, "P%04d" % i, PAST_THE_END, 100)
+        for i in range(40)
+    ]
+
+    source = tmp_path / "overhang.bam"
+    _write_bam_unindexed(source, [anchor_read] + past, header)
+
+    completed = _run_normalizer(
+        source, tmp_path / "overhang.norm.bam", tmp_path, single_strand=True
+    )
+
+    retained = _retained(tmp_path / "overhang.norm.bam")
+    survivors = [name for name in retained if name.startswith("P")]
+
+    assert 0 < len(survivors) < len(past)
+    assert all(retained[name] > 1.0 for name in survivors)
+    assert retained["anchor"] == 1.0
+
+    assert "extend past the reference length" in completed.stderr
+    assert str(len(past)) in completed.stderr
+
+
+def test_a_read_before_the_anchor_is_refused_while_the_anchor_depends_on_order(tmp_path):
+    """Refuse where the default anchor is load-bearing, and only there.
+
+    With no origin the grid is anchored on the first aligned base seen, so a
+    read starting before it yields a negative window -- which Python resolves
+    against the array tail, corrupting an unrelated locus rather than failing.
+    Given an absolute origin the anchor sits at or below zero, no aligned
+    position can precede it, and the same input bins perfectly well; refusing it
+    there would reject every legitimate chunk. Both halves are asserted so that
+    removing the gate fails a test.
+
+    The header claims `SO:unsorted` here, but the check reads the records: a bam
+    that merely says it is sorted must not get past it.
+    """
+    header = pysam.AlignmentHeader.from_dict(
+        {
+            "HD": {"VN": "1.6", "SO": "unsorted"},
+            "SQ": [{"SN": CONTIG, "LN": CONTIG_LEN}],
+        }
+    )
+    reads = [
+        _aligned_read(header, "late", 2000, 100),
+        _aligned_read(header, "early", 100, 100),
+    ]
+
+    source = tmp_path / "unsorted.bam"
+    _write_bam_unindexed(source, reads, header, sort=False)
+
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(NORMALIZER),
+            "--input_bam",
+            str(source),
+            "--output_bam",
+            str(tmp_path / "unsorted.norm.bam"),
+            "--normalize_max_cov_level",
+            str(TARGET_DEPTH),
+            "--depth_window",
+            str(DEPTH_WINDOW),
+            "--input_is_single_strand",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+    assert refused.returncode != 0
+    assert "coordinate-sorted" in refused.stderr
+    assert not (tmp_path / "unsorted.norm.bam").exists()
+
+    # the cli indexes what it writes, which unsorted output cannot support, so
+    # the inert half is asserted against the function that owns the invariant
+    accepted = tmp_path / "with_origin.norm.bam"
+    nbs.sift_bam(
+        str(source),
+        str(accepted),
+        TARGET_DEPTH,
+        DEPTH_WINDOW,
+        BASE_ARGS["random_seed"],
+        window_origin=0,
+    )
+
+    assert set(_retained(accepted)) == {"late", "early"}

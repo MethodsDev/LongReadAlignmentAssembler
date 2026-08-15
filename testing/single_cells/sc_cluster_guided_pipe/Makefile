@@ -7,7 +7,7 @@ include ../../lraa_test_docker.mk
 MINIWDL_CFG = ../../../miniwdl.test.cfg
 MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
 
-test_wdls: denovo_wdl ref_guided_wdl quant_only_wdl
+test_wdls: check_test_image_revision denovo_wdl ref_guided_wdl quant_only_wdl
 
 quant_only_wdl:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-cell_cluster_guided.wdl -i sc_pipe_inputs-quant_only.json -d sc_pipe_quant_only_outdir $(LRAA_WDL_DOCKER_CORE_SC)

@@ -340,6 +340,56 @@ def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0):
     )
 
 
+def _reject_read_before_anchor(read, contig, anchor, bam_file):
+    """Refuse a record the default anchor cannot bin.
+
+    With no `window_origin` the grid is anchored on the first aligned base seen
+    on a contig, which is that contig's minimum only if the input is
+    coordinate-sorted. Out of order, a read starting before the anchor yields a
+    negative window -- which Python resolves against the array tail, corrupting
+    an unrelated locus rather than failing. Skipping the read instead would
+    undercount depth just as silently, so the precondition is enforced.
+
+    Checked against the records rather than the header's `SO`, which costs one
+    comparison per read and is not something a mislabelled bam can talk its way
+    past. Given an explicit origin the anchor is at or below zero and no aligned
+    position can precede it, so this never fires and the ordering of the input
+    stops mattering.
+    """
+    if read.reference_start >= anchor:
+        return
+    raise ValueError(
+        "{}: depth windows on {} are anchored at {}, the first aligned base seen "
+        "there, but read {} starts at {}. This requires coordinate-sorted input. "
+        "Sort the bam, or pass --window_origin to anchor on an absolute grid "
+        "whose boundaries do not depend on visit order.".format(
+            bam_file, contig, anchor, read.query_name, read.reference_start
+        )
+    )
+
+
+def _grow_windows(bases, window):
+    """Extend a per-contig depth array until `window` is addressable.
+
+    The initial size comes from the header's reference length, but an alignment
+    may run past it -- coordinate-remapped bams routinely carry introns longer
+    than the contig they were rebased onto. Growing keeps every window a read
+    occupies measurable, so pass 1 and pass 2 partition the same reads over the
+    same grid. Doubling keeps a monotonically advancing scan amortized O(1).
+
+    SPLICE_GRAPH_NORMALIZATION_METHOD is deliberately NOT bumped for this. The
+    token names what decides an artifact's contents, and growing the array
+    decides nothing for any input the previous code could complete: a corpus
+    without overhanging alignments never reaches the growth branch, verified as
+    byte-identical record streams including XW weights across the two revisions,
+    and a corpus with them produced no artifact at all because pass 1 raised.
+    Bumping would invalidate every cached normalized bam to record a change none
+    of them can express, which is the over-keying that makes a token
+    unauditable.
+    """
+    target = max(window + 1, 2 * len(bases))
+    bases.extend(array("q", bytes(8 * (target - len(bases)))))
+
 def sift_bam(
     SS_bam_file,
     norm_bam_filename,
@@ -409,6 +459,9 @@ def sift_bam(
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
         contig_length = dict(zip(reader.references, reader.lengths))
 
+        overhanging = 0
+        max_overhang = 0
+
         for read in reader.fetch(until_eof=True):
             if not _record_is_evidence(read, min_per_id, min_mapping_quality):
                 continue
@@ -417,17 +470,25 @@ def sift_bam(
             bases = window_bases.get(contig)
             if bases is None:
                 if grid_anchor is None:
-                    # coordinate-sorted input, so the first read seen on a contig
-                    # starts at its minimum aligned position
+                    # the contig's minimum aligned position, given sorted input;
+                    # _reject_read_before_anchor holds every later read to it
                     contig_anchor[contig] = read.reference_start
                 else:
                     contig_anchor[contig] = grid_anchor
                 bases = array("q", bytes(8 * (contig_length[contig] // depth_window + 2)))
                 window_bases[contig] = bases
             anchor = contig_anchor[contig]
+            _reject_read_before_anchor(read, contig, anchor, SS_bam_file)
+
+            overhang = (read.reference_end or 0) - contig_length[contig]
+            if overhang > 0:
+                overhanging += 1
+                max_overhang = max(max_overhang, overhang)
 
             for block_lend, block_rend in read.get_blocks():
                 for window in _window_span(block_lend, block_rend, depth_window, anchor):
+                    if window >= len(bases):
+                        _grow_windows(bases, window)
                     window_lend = anchor + window * depth_window
                     covered_lend = max(block_lend, window_lend)
                     covered_rend = min(block_rend, window_lend + depth_window)
@@ -435,6 +496,13 @@ def sift_bam(
 
             for junction in _read_junctions(read):
                 junction_support[(contig, junction)] += 1
+
+    if overhanging:
+        logger.warning(
+            "{} alignment(s) extend past the reference length declared in the bam header, "
+            "by up to {} bp. Their depth is measured over the windows they actually occupy; "
+            "the records themselves are left untouched.".format(overhanging, max_overhang)
+        )
 
     logger.info(
         "measured depth over {} contig(s), {} distinct junction(s), "
@@ -514,8 +582,19 @@ def _acceptance_probability(
     depths = []
     for block_lend, block_rend in read.get_blocks():
         for window in _window_span(block_lend, block_rend, depth_window, anchor):
-            if 0 <= window < len(window_bases):
-                depths.append(window_bases[window] / depth_window)
+            if not 0 <= window < len(window_bases):
+                # pass 1 walked these same reads with this same anchor and grew
+                # the array to cover every window they touch, so an unaddressable
+                # window here means the two passes disagree. Skipping would drop
+                # this read's depth from its own acceptance decision silently.
+                raise AssertionError(
+                    "{}: window {} outside the {} measured for it in pass 1 "
+                    "(read {} block [{}, {}), anchor {})".format(
+                        contig, window, len(window_bases), read.query_name,
+                        block_lend, block_rend, anchor,
+                    )
+                )
+            depths.append(window_bases[window] / depth_window)
     if not depths:
         return 1.0
 

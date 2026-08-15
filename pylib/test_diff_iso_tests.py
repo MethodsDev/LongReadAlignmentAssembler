@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import pytest
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import logging
@@ -532,6 +533,49 @@ class TestDifferentialIsoformTests:
         delta_pis = annotated.sort_values("transcript_id")["delta_pi"].values
         assert abs(delta_pis[0] - 0.21) < 0.01, "First isoform delta_pi should be ~0.21"
         assert abs(delta_pis[1] - (-0.21)) < 0.01, "Second isoform delta_pi should be ~-0.21"
+
+
+class TestDTUFixtureIntegrity:
+    """The checked-in testing/DTU_eval inputs, held to what they claim.
+
+    `num_exons` was backfilled into the splice-hash mapping long after the run
+    that produced it, from the identity `Quantify.py` writes the hash code by:
+    a transcript is monoexonic iff its splice hash code is just its own id. If
+    the two ever disagree the column has been edited by hand, and
+    `--ignore_unspliced` would then silently filter the wrong rows -- it reads
+    `num_exons` alone and cannot notice. See testdata/README.md.
+    """
+
+    MAPPING = (
+        Path(__file__).resolve().parent.parent
+        / "testing"
+        / "DTU_eval"
+        / "testdata"
+        / "gene_transcript_splicehashcode.tsv.wAnnotIDs"
+    )
+
+    @pytest.fixture
+    def mapping(self):
+        return pd.read_csv(self.MAPPING, sep="\t", dtype=str)
+
+    def test_num_exons_agrees_with_the_splice_hash_code(self, mapping):
+        monoexonic = mapping["transcript_splice_hash_code"] == mapping["transcript_id"]
+        assert (mapping["num_exons"] == "1").equals(monoexonic)
+        assert (mapping.loc[~monoexonic, "num_exons"] != "1").all()
+
+    def test_the_annotated_ids_encode_the_same_split(self, mapping):
+        """Both id columns are filled from one exon count, so both must agree."""
+        assert (
+            mapping["transcript_splice_hash_code"] == mapping["transcript_id"]
+        ).equals(
+            mapping["new_transcript_splice_hash_code"] == mapping["new_transcript_id"]
+        )
+
+    def test_the_filter_has_something_to_remove_and_something_to_keep(self, mapping):
+        """A fixture that is all one kind would pass --ignore_unspliced vacuously."""
+        counts = (mapping["num_exons"] == "1").value_counts()
+        assert counts[True] == 689
+        assert counts[False] == 310
 
 
 if __name__ == "__main__":
