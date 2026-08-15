@@ -284,6 +284,16 @@ def _grow_windows(bases, window):
     than the contig they were rebased onto. Growing keeps every window a read
     occupies measurable, so pass 1 and pass 2 partition the same reads over the
     same grid. Doubling keeps a monotonically advancing scan amortized O(1).
+
+    SPLICE_GRAPH_NORMALIZATION_METHOD is deliberately NOT bumped for this. The
+    token names what decides an artifact's contents, and growing the array
+    decides nothing for any input the previous code could complete: a corpus
+    without overhanging alignments never reaches the growth branch, verified as
+    byte-identical record streams including XW weights across the two revisions,
+    and a corpus with them produced no artifact at all because pass 1 raised.
+    Bumping would invalidate every cached normalized bam to record a change none
+    of them can express, which is the over-keying that makes a token
+    unauditable.
     """
     target = max(window + 1, 2 * len(bases))
     bases.extend(array("q", bytes(8 * (target - len(bases)))))
