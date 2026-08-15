@@ -29,7 +29,7 @@ bench: bench_clean
 	@echo "Wrote bench.summary.tsv" && cat bench.summary.tsv
 
 
-test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
+test_wdls: check_test_image_revision test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
 
 ##########

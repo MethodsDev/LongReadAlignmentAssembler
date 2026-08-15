@@ -41,3 +41,69 @@ LRAA_WDL_DOCKER = docker=$(LRAA_TEST_DOCKER)
 LRAA_WDL_DOCKER_SC = docker_sc=$(LRAA_TEST_DOCKER_SC)
 LRAA_WDL_DOCKER_CORE_SC = $(LRAA_WDL_DOCKER) $(LRAA_WDL_DOCKER_SC)
 LRAA_WDL_DOCKER_ORF = docker=$(LRAA_TEST_DOCKER_ORF)
+
+
+# The tag above is a pointer, and a miniwdl run never says which commit it
+# resolved to.  A worktree that has moved since :testing was built therefore
+# drives the current WDL against older code, and the resulting failure names
+# whatever the drift happens to touch -- a script deleted two releases ago
+# reads as `command not found`, which looks like a packaging bug rather than a
+# stale checkout.  That cost a diagnosis once; the guard makes the skew itself
+# the error message.
+#
+# Only lraa-core is inspected.  The build scripts build all four images from
+# one checkout and verify each one's revision label before pushing any of them,
+# so core's revision is the tag's revision.
+#
+# Escape hatch, for driving a hand-built or deliberately older image:
+#
+#     make test_wdls LRAA_TEST_SKIP_IMAGE_CHECK=1
+#
+.PHONY: check_test_image_revision
+check_test_image_revision:
+	@if [ -n "$(LRAA_TEST_SKIP_IMAGE_CHECK)" ]; then \
+	  echo "image revision check skipped"; exit 0; \
+	fi; \
+	docker image inspect $(LRAA_TEST_DOCKER) >/dev/null 2>&1 \
+	  || docker pull $(LRAA_TEST_DOCKER) >/dev/null \
+	  || { echo "cannot inspect or pull $(LRAA_TEST_DOCKER)" >&2; exit 1; }; \
+	built=`docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' $(LRAA_TEST_DOCKER)`; \
+	head=`git rev-parse HEAD`; \
+	if [ -z "$$built" ]; then \
+	  echo "" >&2; \
+	  echo "$(LRAA_TEST_DOCKER) carries no org.opencontainers.image.revision label," >&2; \
+	  echo "so the commit it was built from cannot be established.  Images published" >&2; \
+	  echo "before v0.19.1 predate the label -- :latest is one of them.  Rebuild the" >&2; \
+	  echo "tag, or set LRAA_TEST_SKIP_IMAGE_CHECK=1 to run against it unverified." >&2; \
+	  echo "" >&2; \
+	  exit 1; \
+	fi; \
+	if [ "$$built" != "$$head" ]; then \
+	  echo "" >&2; \
+	  echo "$(LRAA_TEST_DOCKER) was built from $$built" >&2; \
+	  echo "this worktree is at                    $$head" >&2; \
+	  echo "" >&2; \
+	  echo "The wdls come from the worktree and the code from the image, so a run" >&2; \
+	  echo "now tests neither.  Rebuild the tag (bash Docker/build_docker.testing.sh)," >&2; \
+	  echo "check out $$built, or set LRAA_TEST_SKIP_IMAGE_CHECK=1 to proceed anyway." >&2; \
+	  echo "" >&2; \
+	  exit 1; \
+	fi; \
+	dirty=`git status --porcelain --untracked-files=no | wc -l`; \
+	if [ "$$dirty" -gt 0 ]; then \
+	  echo "" >&2; \
+	  echo "warning: $$dirty tracked file(s) modified since $$head." >&2; \
+	  echo "The image was built from the commit, not the worktree, so none of those" >&2; \
+	  echo "changes are under test -- including any fix you are trying to confirm." >&2; \
+	  echo "" >&2; \
+	fi; \
+	echo "image and worktree agree at $$head"
+
+# Each includer lists check_test_image_revision as the FIRST prerequisite of its
+# own test_wdls.  Appending it from here instead would put it last -- make runs
+# prerequisites in declaration order, so the check would report the skew after
+# the runs it was meant to stop.  Declared here it would also look sufficient,
+# which is worse than absent.
+#
+# .NOTPARALLEL because that ordering is only guaranteed for a serial make.
+.NOTPARALLEL:
