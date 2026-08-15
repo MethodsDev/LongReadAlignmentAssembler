@@ -28,6 +28,9 @@ testing/multigene_secondary_quant/data/**
 !testing/txalign_path_rescue/repetitive/*/Makefile
 !testing/txalign_path_rescue/repetitive/*/data/
 !testing/txalign_path_rescue/repetitive/*/data/**
+!testing/DTU_eval/
+!testing/DTU_eval/testdata/
+!testing/DTU_eval/testdata/**
 !testing/determinism/
 !testing/determinism/Makefile
 !testing/determinism/check_determinism.py
