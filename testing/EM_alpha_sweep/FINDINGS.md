@@ -33,15 +33,31 @@ Result tables in `results/`. No LRAA default is changed by this work.
 
 ## Recommendation
 
-| stratum | recommended alpha | evidence |
-| --- | --- | --- |
-| ONT | **0.3** | morf2_ont, interior optimum, -7.615e-3 MARD vs default, FN 2 -> 0. n=1 sample. |
-| HiFi | **no change from 0.01 on present evidence** | The 8 HiFi SIRV samples are confounded (below) and disagree by mixture; morf2_pacbio is incomplete. |
-| pooled | **do not set one value yet** | The two SIRV strata recommend opposite extremes and cancel to nothing when pooled. |
+| stratum | recommended alpha | status | evidence |
+| --- | --- | --- | --- |
+| ONT | **~0.3** | **CONDITIONAL — do not ship yet** | morf2_ont: interior MARD minimum, -7.615e-3 paired vs default, false negatives 2 -> 0. Every metric agrees 0.01 is far too low; they split only on how far. Blocked on the false-positive measurement below. |
+| HiFi | no change from 0.01 | not a positive result | The 8 HiFi SIRV samples are confounded (below); morf2_pacbio is incomplete, so HiFi rests on no realistic-abundance sample at all. |
+| pooled | do not set one value | — | The two SIRV strata recommend opposite extremes and cancel to nothing when pooled. |
 
-The honest pooled statement is that a single default cannot be justified from
-this corpus, because the corpus that dominates it by sample count cannot answer
-the question. See "Could not determine".
+### Why ONT is conditional and not ready to ship
+
+**The blocking gap is false positives, not the sample count.** alpha adds mass
+in proportion to ambiguous support, so raising it 30x is precisely the regime
+where it should start putting mass on transcripts that are not expressed. That
+is its known failure mode in the direction being recommended. Neither SIRVs nor
+MORFs contain a single truth-unexpressed transcript, so this corpus **cannot
+measure it at all**. The half of the objective that is measurable here (false
+negatives) favours 0.3; the half that is not points the other way. Arabidopsis
+and mouse — the only corpora with truth-unexpressed transcripts (5,286 and
+30,994) — are being run now, and the recommendation is conditional on FP as a
+function of alpha at 0.1 / 0.3 / 1.0.
+
+**n=1 for ONT is a corpus limit, not a sampling shortfall.** morf2_ont is the
+only realistic-abundance ONT library in the entire quant-only corpus; the only
+other ONT source is SG-NEx, which is poor quality. No additional work on this
+corpus can strengthen the ONT recommendation, and the arabidopsis and mouse runs
+are HiFi so they will not fix it either — they test whether the direction
+generalises across organism and error rate, not whether ONT replicates.
 
 ## The SIRV corpus cannot answer this question
 
@@ -148,14 +164,21 @@ and 92-95% on E2. The curve has converged; there was never anything above it.
 A genuine interior minimum: 1.0 is worse than 0.3 on MARD. The 3p-off column
 gives the same argmin, 0.3, with delta -8.12e-3.
 
-**Metrics disagree here, and this is the one place they do.** MARD picks 0.3;
-spearman and nrmse_mean_truth both keep improving through 1.0 and pick the top of
-the grid. On all 8 SIRV samples every metric agreed about alpha's direction
-(spearman being the only wobbler, moving in the 4th decimal at 60 scored
-transcripts). So the ONT recommendation of 0.3 is MARD-specific, and a reader who
-weights nrmse would go higher. Stated rather than resolved: MARD is the
-pre-agreed primary objective, so 0.3 is the recommendation, but it is not
-metric-independent.
+**The metrics disagree about HOW FAR, not about DIRECTION, and that strengthens
+the case rather than weakening it.** All of MARD, spearman and nrmse_mean_truth
+say the shipped 0.01 is far too low on morf2_ont, and not one of them favours
+staying there. They split only on the magnitude: MARD has an interior minimum at
+0.3 and turns up by 1.0, while spearman (0.98722 -> 0.98809) and nrmse (0.35663
+-> 0.31825) keep improving through the top of the grid and would go further. So
+a reader who distrusts MARD as the objective still has to accept that 0.01 is
+wrong; they would only argue for a larger move than 0.3, never a smaller one.
+MARD is the pre-agreed primary objective and puts the optimum at 0.3.
+
+This is the only sample where the metrics split at all. On all 8 SIRV samples
+every metric agreed about alpha's direction, spearman being the sole wobbler and
+moving only in the 4th decimal at 60 scored transcripts. Quant3Prime hit a
+separate metric split on the 3'-weighting contrast (nrmse dissenting on E2), so a
+metric split is a recurring feature of this corpus rather than a one-off.
 
 ## False negatives: the one place the count-based objective works
 
@@ -299,12 +322,24 @@ strata because their optima sit at opposite ends of the grid.
   750 s. Consequence: **the HiFi recommendation rests on no realistic-abundance
   sample at all**, only on the confounded SIRVs, and the HiFi row above is
   therefore "no change on present evidence" rather than a positive result.
-* **ONT rests on n=1.** morf2_ont is the only ONT sample in the corpus. One
-  library, one truth set. The alpha=0.3 recommendation has no replication and no
-  paired sign-consistency behind it — the "4/4" style evidence that backs every
-  SIRV statement does not exist for the recommendation that matters.
-* **Metrics disagree on morf2_ont** (MARD picks 0.3; spearman and nrmse pick
-  >= 1.0) and I did not resolve which is right. On SIRVs they agree.
+* **The false-positive cost of the recommended move is UNMEASURED, and this is
+  the blocking gap.** Raising alpha 30x is the exact regime where its known
+  failure mode — mass on transcripts that are not expressed — should appear, and
+  neither SIRVs nor MORFs contain a single truth-unexpressed transcript. So the
+  measurable half of the objective favours 0.3 while the unmeasurable half points
+  the other way. Arabidopsis (5,286 truth-unexpressed) and mouse (30,994) are
+  running now; the ONT recommendation is conditional on FP as a function of alpha
+  at 0.1 / 0.3 / 1.0.
+* **ONT n=1 is a CORPUS LIMIT, not a sampling shortfall.** morf2_ont is the only
+  realistic-abundance ONT library in the whole quant-only corpus; the only other
+  ONT source is SG-NEx, which is poor quality. No further work on this corpus can
+  strengthen the ONT recommendation, and the arabidopsis and mouse runs are HiFi
+  so they cannot either. The "4/4" paired sign-consistency that backs every SIRV
+  statement is unavailable for the recommendation that actually matters, and will
+  stay unavailable until an ONT library worth benchmarking exists.
+* **The metric split on morf2_ont is unresolved** (MARD 0.3; spearman and nrmse
+  >= 1.0). It is a disagreement about magnitude, not direction — see above — so
+  it does not threaten the "0.01 is too low" conclusion, only the value 0.3.
 * **The MORF partition analysis and MORF profile/residual tests are not run.**
   Both need a tracking file, and the grid deletes tracking to keep ~250 arms on
   disk. Two extra arms (~50 min) would supply it. The MORF dilution prediction
