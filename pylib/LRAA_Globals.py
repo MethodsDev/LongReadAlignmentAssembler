@@ -304,18 +304,23 @@ config = {
     # alignments; multi-record groups raise rather than produce a weighted number
     # from a configuration that was never checked.
     "use_XW_read_weights_for_quant": False,
-    # Diagnostic dumps for evaluating a streaming assignment pass, both off unless set
-    # to an output prefix via --config_update. They must exist here with defaults or
+    # Diagnostic dumps for evaluating a streaming assignment pass, all off unless set to
+    # an output prefix via --config_update. They must exist here with defaults or
     # --config_update rejects them as unknown keys.
     #
     # dump_read_path_map      read name -> the canonical path chosen to represent it
     # dump_mp_fraction_table  canonical path -> the fractional split over transcripts
+    # dump_rescue_candidates  read name -> why it is a rescue candidate, written by the
+    #                         batch path and by the streaming path under distinct names so
+    #                         the two populations can be diffed read for read. Counts alone
+    #                         would let two different sets of the same size look equal.
     #
-    # Both are keyed on canonical paths (feature type plus genomic coordinates) rather
-    # than node or multipath ids, since those are process-global counters and drift
+    # The first two are keyed on canonical paths (feature type plus genomic coordinates)
+    # rather than node or multipath ids, since those are process-global counters and drift
     # between runs.
     "dump_read_path_map": None,
     "dump_mp_fraction_table": None,
+    "dump_rescue_candidates": None,
     # Two-pass alternative to the default final quantification, off by default. The
     # first pass quantifies normally against the coverage-normalized bam; the second
     # streams the full bam, looks each read's path up in the table the first pass
@@ -339,6 +344,32 @@ config = {
     # resolve and roughly 21% extra cascade work rather than 7.5%. The earlier 2% default
     # was calibrated against a different quantity and fired on healthy data.
     "stream_reads_max_unseen_path_read_frac": 0.25,
+    # Rescue candidates against the local transcriptome from inside the streaming pass,
+    # using a resident mappy index instead of the batch path's minimap2 subprocess. Off
+    # by default, and refused unless --stream_reads_rescue_unassigned is given: without
+    # it --stream_reads still requires --quant_read_assignment_mode genome, because a
+    # streaming pass that silently skipped rescue would report the first pass's rescue
+    # summary as if it covered the whole bam.
+    #
+    # The candidate population is exactly the one the batch path collects at its three
+    # gated sites -- reads the extractor discarded for low_perID, reads whose graph path
+    # contains a spacer, and reads with no graph path -- so the two paths target the same
+    # reads. Measured identical on ONT chr20, read for read: 14,455 of 120,370 records.
+    # The batch path's fourth category is deliberately NOT included here; see the key
+    # below. Outcomes may still differ: mappy exposes no equivalent of minimap2's -f, and
+    # no alignment score, so best-hit ranking falls back to matched-minus-NM. See
+    # pylib/StreamingRescue.py.
+    "stream_reads_rescue_unassigned": False,
+    # Extend streaming rescue to the fourth candidate category: reads that DID map to a
+    # graph path, but whose path matched no target. Off by default, and behind its own
+    # flag rather than the one above, because this category is the one place the two
+    # paths cannot target the same reads. The batch path derives it from its own first
+    # pass; under --stream_reads that first pass reads the coverage-normalized bam while
+    # the stream reads the full one, so the streaming population is a strict superset.
+    # Measured on ONT chr20: batch 3,442, streaming 11,196, batch-only 0. Enabling it
+    # therefore rescues against a larger candidate set than the batch path would, which
+    # is a deliberate extension rather than a reproduction of it.
+    "stream_reads_rescue_unassigned_to_targets": False,
     "EM_alpha": 0.01,  # regularization
     "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
     # assignment fraction at or above which a read counts as uniquely assigned.

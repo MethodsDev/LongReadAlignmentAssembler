@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
+from contextlib import contextmanager
 import hashlib
 
 import pysam
@@ -19,6 +20,24 @@ from Pretty_alignment import Pretty_alignment
 
 
 logger = logging.getLogger(__name__)
+
+# Why a read is offered to transcriptome rescue. Shared vocabulary rather than four
+# string literals per call site, because the batch path and the streaming path must
+# report the same populations under the same names for their candidate sets to be
+# comparable at all -- a typo in one of them reads as a category the other never
+# produced. low_perID deliberately reuses Util_funcs.quant_discard_reason's key, since
+# that predicate is what puts a read in this category.
+RESCUE_CANDIDATE_LOW_PER_ID = "low_perID"
+RESCUE_CANDIDATE_SPACER_PATH = "spacer_path"
+RESCUE_CANDIDATE_NO_GRAPH_PATH = "no_graph_path"
+RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS = "unassigned_to_targets"
+
+RESCUE_CANDIDATE_CATEGORIES = (
+    RESCUE_CANDIDATE_LOW_PER_ID,
+    RESCUE_CANDIDATE_SPACER_PATH,
+    RESCUE_CANDIDATE_NO_GRAPH_PATH,
+    RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS,
+)
 
 
 def rescue_unassigned_reads_to_transcriptome(
@@ -582,8 +601,24 @@ def _write_candidate_tsv(candidate_tsv, candidate_rows, retained_read_names=None
             )
 
 
+@contextmanager
+def _rescue_alignment_records(source):
+    """Alignment records from a SAM path, or an already-open iterable of them.
+
+    Streaming rescue builds pysam records from mappy hits instead of reading a SAM
+    file, and has to run the very same acceptance loop over them: a second
+    implementation of those rules is exactly how the two rescue paths would drift
+    apart without anything reporting it.
+    """
+    if isinstance(source, (str, bytes, os.PathLike)):
+        with pysam.AlignmentFile(source, "r") as sam_reader:
+            yield sam_reader.fetch(until_eof=True)
+    else:
+        yield source
+
+
 def _parse_rescue_alignments(
-    rescue_sam,
+    rescue_alignments,
     splice_graph,
     transcript_models,
     read_path_mapper=None,
@@ -601,8 +636,8 @@ def _parse_rescue_alignments(
     max_indel_length = int(
         LRAA_Globals.config.get("rescue_unassigned_max_indel_length", 0) or 0
     )
-    with pysam.AlignmentFile(rescue_sam, "r") as sam_reader:
-        for read in sam_reader.fetch(until_eof=True):
+    with _rescue_alignment_records(rescue_alignments) as alignment_records:
+        for read in alignment_records:
             if read.is_unmapped or read.is_supplementary:
                 continue
             if read.reference_name not in transcript_models:

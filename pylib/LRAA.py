@@ -32,6 +32,7 @@ import Util_funcs
 import Simple_path_utils as SPU
 import math
 from Quantify import Quantify
+import IsoformReadRescue
 from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
 
 
@@ -134,12 +135,28 @@ class LRAA:
         # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
         # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
         self._read_name_to_span = dict()
-        self._failed_read_names_for_rescue = set()
+        # Rescue candidates, kept split by WHY each read is a candidate rather than as
+        # one flat set. The three reasons are gated at different places and answer
+        # different questions -- low_perID reads never reached graph mapping at all,
+        # while spacer and no-graph-path reads did and failed there -- and streaming
+        # rescue has to reproduce this population category by category to be comparable
+        # with this path. Storing the split costs nothing: the union is derived, so no
+        # read name is held twice.
+        self._failed_read_names_for_rescue_by_reason = defaultdict(set)
 
         return
 
     def get_failed_read_names_for_rescue(self):
-        return set(self._failed_read_names_for_rescue)
+        failed_read_names = set()
+        for read_names in self._failed_read_names_for_rescue_by_reason.values():
+            failed_read_names.update(read_names)
+        return failed_read_names
+
+    def get_failed_read_names_for_rescue_by_reason(self):
+        return {
+            reason: set(read_names)
+            for reason, read_names in self._failed_read_names_for_rescue_by_reason.items()
+        }
 
     def build_multipath_graph(
         self,
@@ -1175,7 +1192,7 @@ class LRAA:
 
         # distill read alignments into unique multipaths (so if 10k alignments yield the same structure, there's one multipath with 10k count associated)
         mp_counter = MultiPathCounter()
-        self._failed_read_names_for_rescue = set()
+        self._failed_read_names_for_rescue_by_reason = defaultdict(set)
 
         if bam_file is None:
             return mp_counter  # nothing to do here.
@@ -1218,9 +1235,9 @@ class LRAA:
             discarded_read_names_by_reason = (
                 pretty_alignment_manager.get_last_discarded_read_names_by_reason()
             )
-            self._failed_read_names_for_rescue.update(
-                discarded_read_names_by_reason.get("low_perID", set())
-            )
+            self._failed_read_names_for_rescue_by_reason[
+                IsoformReadRescue.RESCUE_CANDIDATE_LOW_PER_ID
+            ].update(discarded_read_names_by_reason.get("low_perID", set()))
 
         # actually not using the updated base coverage, so can skip for now.
         #  - disabling # must redo base coverage and exon coverage assignments
@@ -1398,7 +1415,9 @@ class LRAA:
                     if LRAA_Globals.config.get(
                         "rescue_unassigned_reads_via_transcriptome_alignment", False
                     ):
-                        self._failed_read_names_for_rescue.add(read_name)
+                        self._failed_read_names_for_rescue_by_reason[
+                            IsoformReadRescue.RESCUE_CANDIDATE_SPACER_PATH
+                        ].add(read_name)
                     if LRAA_Globals.DEBUG:
                         read_graph_mappings_ofh.write(
                             "\t".join(
@@ -1450,7 +1469,9 @@ class LRAA:
                 if LRAA_Globals.config.get(
                     "rescue_unassigned_reads_via_transcriptome_alignment", False
                 ):
-                    self._failed_read_names_for_rescue.add(read_name)
+                    self._failed_read_names_for_rescue_by_reason[
+                        IsoformReadRescue.RESCUE_CANDIDATE_NO_GRAPH_PATH
+                    ].add(read_name)
                 continue
 
             # Construct MultiPath storing the single read name so ID-based uniqueness

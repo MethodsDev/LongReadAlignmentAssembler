@@ -34,6 +34,7 @@ from MultiPath import MultiPath
 from MultiPathCounter import MultiPathCounter
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
+import IsoformReadRescue
 from IsoformReadRescue import (
     _normalize_read_identifier,
     build_transcriptome_alignment_multipaths,
@@ -560,8 +561,46 @@ def main():
             "of 2,522 reads differed by 394 reads, while the other 1,478 genes agreed to "
             "0.2. Raise the target if a locus like that matters. Requires --quant_only, a "
             "first-pass bam thinner than the streamed one, and "
-            "--quant_read_assignment_mode genome "
+            "--quant_read_assignment_mode genome, or rescue_unassigned together with "
+            "--stream_reads_rescue_unassigned "
             f"(default: {LRAA_Globals.config['stream_reads']})"
+        ),
+    )
+    primary.add_argument(
+        "--stream_reads_rescue_unassigned",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads_rescue_unassigned"],
+        help=(
+            "let --stream_reads run under --quant_read_assignment_mode rescue_unassigned "
+            "by rescuing candidates against the local transcriptome from inside the "
+            "streaming pass, using a resident mappy index instead of the batch path's "
+            "minimap2 subprocess. Without this the combination is refused, because a "
+            "streaming pass that skipped rescue would report the first pass's rescue "
+            "summary as though it covered the whole bam. Targets exactly the reads the "
+            "batch path collects at its three gated sites: measured identical read for "
+            "read on ONT chr20, 14,455 of 120,370 records. Outcomes are not identical -- "
+            "mappy exposes no equivalent of minimap2's -f and no alignment score, so "
+            "best-hit ranking falls back to matched-minus-NM -- though on that corpus "
+            "both paths rescued the same 6 reads to the same transcripts. Unvalidated "
+            "beyond chr20 ONT; requires mappy "
+            f"(default: {LRAA_Globals.config['stream_reads_rescue_unassigned']})"
+        ),
+    )
+    primary.add_argument(
+        "--stream_reads_rescue_unassigned_to_targets",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"],
+        help=(
+            "additionally offer streaming rescue the reads that mapped to a graph path "
+            "which matched no target -- the batch path's fourth candidate category. Off "
+            "by default and separate from --stream_reads_rescue_unassigned because it is "
+            "the one category where the two paths cannot target the same reads: the batch "
+            "path derives it from its own first pass, which under --stream_reads reads the "
+            "coverage-normalized bam while the stream reads the full one. Measured on ONT "
+            "chr20, batch 3,442 against streaming 11,196 with nothing batch-only, so this "
+            "rescues against 43% more reads than the batch path targets. An extension, not "
+            "a reproduction "
+            f"(default: {LRAA_Globals.config['stream_reads_rescue_unassigned_to_targets']})"
         ),
     )
     primary.add_argument(
@@ -1381,20 +1420,50 @@ def main():
                 "already-normalized bam as --bam_for_sg. Given neither, both passes read "
                 "the same bam and the mode only adds work."
             )
-    if args.stream_reads and args.quant_read_assignment_mode != "genome":
-        # The streaming pass maps every record genomically through _map_read_to_graph and
-        # runs no transcriptome alignment. Under the default rescue_unassigned mode the
-        # first pass rescues the reads that failed genomic assignment *in the normalized
-        # bam*, so reads present only in the full bam would reach the second pass and be
-        # assigned genomically or resolved -- never rescued -- while the rescue summary
-        # described the first pass alone. transcriptome_only and genome_tx_arb additionally
-        # build their first pass from the full bam, so the flag would cost a second traversal
-        # and save nothing.
+    if args.stream_reads and args.quant_read_assignment_mode in (
+        "transcriptome_only",
+        "genome_tx_arb",
+    ):
+        # Named individually rather than as "not genome": rescue_unassigned is reachable
+        # under --stream_reads_rescue_unassigned, and a message refusing every non-genome
+        # mode would send a reader looking for a flag that exists.
+        #
+        # These two build their first pass from the FULL bam and replace or arbitrate
+        # every read's path against a transcriptome alignment, so streaming would cost a
+        # second traversal of the same bam and save nothing. That is a different problem
+        # from rescue, which touches only the reads genome assignment failed on.
+        sys.exit(
+            "Error, --stream_reads requires --quant_read_assignment_mode genome or "
+            f"rescue_unassigned, not {args.quant_read_assignment_mode}. That mode "
+            "assigns every read by transcriptome alignment from the full bam, so the "
+            "first pass would read what the second pass streams and the mode would only "
+            "add work."
+        )
+    if (
+        args.stream_reads
+        and args.quant_read_assignment_mode == "rescue_unassigned"
+        and not (args.stream_reads_rescue_unassigned and rescue_enabled)
+    ):
+        # The streaming pass maps every record genomically through _map_read_to_graph. Left
+        # to itself it runs no transcriptome alignment, and the first pass rescues only the
+        # reads that failed genomic assignment *in the normalized bam* -- so reads present
+        # only in the full bam would be assigned genomically or resolved, never rescued,
+        # while the rescue summary described the first pass alone.
+        #
+        # --stream_reads_rescue_unassigned lifts that by rescuing candidates inside the
+        # stream against a resident mappy index. It is opt-in because its outcomes are not
+        # identical to the batch path's and it has been measured on one corpus.
         sys.exit(
             "Error, --stream_reads requires --quant_read_assignment_mode genome. The "
             "streaming pass assigns reads by genomic graph mapping only, so it cannot "
             "reproduce transcriptome rescue or arbitration for reads the first pass never "
-            "saw."
+            "saw. Add --stream_reads_rescue_unassigned to rescue those reads inside the "
+            "streaming pass instead"
+            + (
+                "."
+                if rescue_enabled
+                else ", which additionally needs transcriptome rescue left enabled."
+            )
         )
     if args.stream_reads and args.tag_bam:
         # Tagging annotates each bam record with the gene/transcript it was assigned to,
@@ -1409,6 +1478,38 @@ def main():
             "alone would tag only the reads that survived coverage normalization."
         )
     LRAA_Globals.config["stream_reads"] = args.stream_reads
+    LRAA_Globals.config["stream_reads_rescue_unassigned"] = bool(
+        args.stream_reads and args.stream_reads_rescue_unassigned
+    )
+    LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"] = bool(
+        LRAA_Globals.config["stream_reads_rescue_unassigned"]
+        and args.stream_reads_rescue_unassigned_to_targets
+    )
+    if (
+        args.stream_reads_rescue_unassigned_to_targets
+        and not LRAA_Globals.config["stream_reads_rescue_unassigned"]
+    ):
+        # Silently ignoring it would leave a run that asked for the extension and got the
+        # base behaviour, with the same output filenames and nothing to say so.
+        sys.exit(
+            "Error, --stream_reads_rescue_unassigned_to_targets extends streaming "
+            "transcriptome rescue and does nothing without it. Add "
+            "--stream_reads_rescue_unassigned, or drop this flag."
+        )
+    if LRAA_Globals.config["stream_reads_rescue_unassigned"]:
+        # Checked here, before any contig is scheduled. Discovering the missing binding
+        # inside a worker means the run has already built splice graphs and quantified a
+        # first pass, and every contig-strand fails the same way at once.
+        import StreamingRescue
+
+        if not StreamingRescue.mappy_available():
+            sys.exit(
+                "Error, --stream_reads_rescue_unassigned needs the mappy module, which "
+                "is minimap2's own Python binding and is what holds the resident "
+                "transcript index. Install it pinned to your minimap2 release "
+                "(pip install 'mappy==2.28'), or drop the flag and run "
+                "--quant_read_assignment_mode genome."
+            )
     if args.use_XW_read_weights_for_quant:
         # Discovery is out of scope on purpose. Its absolute support gates --
         # min_reads_novel_isoform, min_unique_reads_novel_isoform, and the FSM gates --
@@ -4972,6 +5073,31 @@ def run_quant_only(
             quant_unassigned_read_names = set(q_probe.get_unassigned_read_names())
             rescue_read_names.update(quant_unassigned_read_names)
 
+            # Diagnostic, off unless config['dump_rescue_candidates'] names a prefix. This
+            # is the reproduction control for streaming rescue: the same population written
+            # by the batch path, per read and per reason, so the streaming pass's dump can
+            # be diffed against it read for read. Counts alone would let two different
+            # sets of the same size look equal.
+            _rescue_dump_prefix = (
+                LRAA_Globals.config.get("dump_rescue_candidates") or None
+            )
+            if _rescue_dump_prefix:
+                import StreamingRescue
+
+                _by_reason = lraa_obj.get_failed_read_names_for_rescue_by_reason()
+                # The probe category is not one of the graph-mapping reasons and is not
+                # held on the LRAA object, so it is added here rather than there: these
+                # reads DID map to a path, it just matched no target.
+                _by_reason[
+                    IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS
+                ] = set(quant_unassigned_read_names)
+                StreamingRescue.write_candidate_dump(
+                    "{}.{}.{}.batch_candidates.tsv".format(
+                        _rescue_dump_prefix, contig_acc, contig_strand
+                    ),
+                    _by_reason,
+                )
+
             if rescue_read_names:
                 logger.info(
                     "[%s%s] transcriptome rescue: retrying %d unassigned reads",
@@ -5074,6 +5200,7 @@ def run_quant_only(
         # retaining any read, so the tracking file covers every read while peak memory stays
         # bounded by the annotation rather than the library.
         import StreamingQuant
+        import StreamingRescue
 
         theta = q.get_transcript_id_to_theta()
         em_was_run = q.em_was_run()
@@ -5094,21 +5221,74 @@ def run_quant_only(
         resolver = StreamingQuant.make_path_resolver(
             sg, q, theta, em_was_run, transcript_id_to_component_id
         )
-        totals = StreamingQuant.stream_assign(
-            bam_file_for_quant,
-            contig_acc,
-            contig_strand,
-            contig_seq_str,
-            lraa_obj,
-            table,
-            ofh_quant_read_tracker,
-            resolver=resolver,
-            region_lend=restrict_region_lend,
-            region_rend=restrict_region_rend,
-            max_fallback_path_frac=LRAA_Globals.config[
-                "stream_reads_max_unseen_path_read_frac"
-            ],
-        )
+
+        # Rescue candidates against a resident index over THIS contig-strand's transcript
+        # models -- input_transcripts, the same target set the batch rescue above hands
+        # rescue_unassigned_reads_to_transcriptome. A global transcriptome index would let
+        # a read rescue to targets the batch path never offered it, which would make the
+        # two paths incomparable and quietly change what rescue means.
+        #
+        # Per contig-strand and in-process: each worker is already its own process, so a
+        # small index per worker keeps mm_map() uncontended without a shared aligner.
+        rescuer = None
+        _rescue_dump_prefix = LRAA_Globals.config.get("dump_rescue_candidates") or None
+        if LRAA_Globals.config.get("stream_reads_rescue_unassigned", False) and (
+            quant_read_assignment_mode == "rescue_unassigned"
+        ):
+            rescuer = StreamingRescue.StreamingRescuer(
+                sg,
+                input_transcripts,
+                contig_seq_str,
+                lraa_obj._map_read_to_graph,
+                record_candidate_names=bool(_rescue_dump_prefix),
+            )
+        try:
+            totals = StreamingQuant.stream_assign(
+                bam_file_for_quant,
+                contig_acc,
+                contig_strand,
+                contig_seq_str,
+                lraa_obj,
+                table,
+                ofh_quant_read_tracker,
+                resolver=resolver,
+                region_lend=restrict_region_lend,
+                region_rend=restrict_region_rend,
+                max_fallback_path_frac=LRAA_Globals.config[
+                    "stream_reads_max_unseen_path_read_frac"
+                ],
+                rescuer=rescuer,
+            )
+        finally:
+            if rescuer is not None:
+                if _rescue_dump_prefix:
+                    StreamingRescue.write_candidate_dump(
+                        "{}.{}.{}.stream_candidates.tsv".format(
+                            _rescue_dump_prefix, contig_acc, contig_strand
+                        ),
+                        rescuer.candidate_read_names,
+                    )
+                # Alignment cost is logged per contig-strand and separately from
+                # acceptance, because it is the number that decides whether the mode
+                # scales: acceptance is Python over a handful of hits, alignment is
+                # mm_map() over the read.
+                _offered = sum(rescuer.reads_offered.values())
+                if _offered:
+                    logger.info(
+                        "[%s%s] streaming rescue cost: %d candidates, %.3f s aligning "
+                        "(%.3f ms/read), %.3f s in acceptance (%.3f ms/read), "
+                        "%d hits examined (%.2f per candidate)",
+                        contig_acc,
+                        contig_strand,
+                        _offered,
+                        rescuer.align_seconds,
+                        1000.0 * rescuer.align_seconds / _offered,
+                        rescuer.accept_seconds,
+                        1000.0 * rescuer.accept_seconds / _offered,
+                        rescuer.hits_examined,
+                        rescuer.hits_examined / _offered,
+                    )
+                rescuer.close()
         StreamingQuant.write_expr(
             input_transcripts, totals, ofh_quant_output, quant_only=True
         )

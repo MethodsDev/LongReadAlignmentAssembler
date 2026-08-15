@@ -95,6 +95,14 @@ COPY --from=builder /usr/local/lib/ /usr/local/lib/
 # numpy (pylib/EM.py), and igraph/leidenalg -- the Leiden partition in
 # Transcript.recluster_transcripts_to_genes is on the default discovery path and
 # raises ImportError without them, despite the guarded import.
+#
+# mappy is minimap2's own Python binding, used by streaming transcriptome rescue
+# (pylib/StreamingRescue.py) to keep a resident index instead of shelling out per
+# batch.  Pinned to the same release as the minimap2 binary above: mappy is built
+# from the minimap2 sources of its own version and the mapping heuristics change
+# between releases, so an unpinned mappy would silently disagree with the batch
+# rescue path it is compared against.  Installing compiles from source, which the
+# build stage's compiler and zlib headers already cover.
 RUN pip install --no-cache-dir --break-system-packages \
     pysam \
     networkx \
@@ -104,7 +112,8 @@ RUN pip install --no-cache-dir --break-system-packages \
     psutil \
     numpy \
     igraph==0.11.4 \
-    leidenalg==0.10.2
+    leidenalg==0.10.2 \
+    mappy==2.28
 
 # Set here rather than beside the checkout so that a version bump does not
 # invalidate a layer.

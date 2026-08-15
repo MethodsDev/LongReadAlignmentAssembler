@@ -35,6 +35,7 @@ from collections import defaultdict
 
 import pysam
 
+import IsoformReadRescue
 import LRAA_Globals
 import MultiPath
 import Util_funcs
@@ -453,6 +454,18 @@ class StreamingTotals:
         # normalization thins a rare isoform's evidence to nothing while the full bam still
         # carries reads that only it explains -- which is the regime this mode is for.
         self.reads_zero_fraction = 0
+        # Streaming transcriptome rescue, all keyed by candidate category. Held apart
+        # from the counters above rather than folded into them: a rescued read is not a
+        # streamed read -- a low_perID candidate never passes the retention filter, so
+        # counting it as assigned would make reads_assigned exceed reads_streamed -- and
+        # rescue-driven path resolution must stay out of the fallback guard, whose
+        # denominator is assigned plus unassignable reads and would otherwise be smaller
+        # than its own numerator.
+        self.rescue_offered = defaultdict(int)
+        self.rescue_assigned = defaultdict(int)
+        self.rescue_unassignable = defaultdict(int)
+        self.rescue_rows_written = 0
+        self.rescue_paths_resolved_in_stream = 0
 
     def record(self, rows):
         report_min = LRAA_Globals.config["unique_read_report_min_frac"]
@@ -572,6 +585,7 @@ def stream_assign(
     region_lend=None,
     region_rend=None,
     max_fallback_path_frac=None,
+    rescuer=None,
 ):
     """Stream the bam, emit one tracking row per (read, compatible isoform).
 
@@ -587,15 +601,115 @@ def stream_assign(
     One record per read is a structural guarantee rather than a check:
     Util_funcs.quant_discard_reason rejects secondary and supplementary alignments,
     so there is no grouping for a one-record-at-a-time pass to reconstruct.
+
+    `rescuer`, when given, is offered every read this pass cannot assign at the three
+    sites the batch path collects from.  Its verdict is a splice-graph path, which then
+    goes through the very same table lookup, in-stream resolution and tracking write as a
+    genomically derived path -- a rescued read is not accounted for specially, it just
+    arrives at its path by a different route.
+
+    The batch path has a FOURTH candidate category, reads that mapped to a path which
+    matched no target, and it is offered only under
+    config['stream_reads_rescue_unassigned_to_targets'].  It is off by default because it
+    is the one category where the two paths cannot target the same reads: the batch path
+    derives it from its own first pass, and under --stream_reads that pass reads the
+    coverage-normalized bam while this loop reads the full one.  Measured on ONT chr20,
+    batch 3,442 against streaming 11,196 with nothing batch-only -- so offering it by
+    default would rescue against 43% more reads than the batch path targets, which is a
+    different feature rather than a reproduction of this one.
+
+    The discard test below BRANCHES rather than dropping outright, and what it branches
+    on is deliberately narrow.  A read rejected only for low percent identity is offered
+    to rescue; every other discard reason still discards, and the read is counted
+    filtered either way.  Util_funcs.quant_discard_reason is the single retention policy
+    shared by quantification, coverage normalization and the chunked pipeline, so
+    changing what it effectively retains here would move depth measurement and XW
+    sampling weights with it.  Nothing in this branch touches retention: reads_filtered
+    still counts the read, reads_streamed still does not, and the read still never
+    reaches path mapping by this route.
     """
     totals = StreamingTotals()
     splice_graph = lraa_obj._splice_graph
+    # Read once rather than per read: this is the innermost loop of the whole mode.
+    rescue_unassigned_to_targets = bool(
+        LRAA_Globals.config.get("stream_reads_rescue_unassigned_to_targets", False)
+    )
 
     # Paths resolved during this stream. Bounded by the number of distinct novel paths,
     # not by reads, and needed so a path's later reads are attributed to the fallback
     # rather than counted as table hits -- the guard divides by reads, so it has to see
     # every read that depended on in-stream resolution, not just the first.
     stream_resolved = set()
+
+    def assign_path(read, path, count_fallback=True):
+        """Table lookup, in-stream resolution and tracking write for one path.
+
+        Shared by the genomic route and the rescue route, so a rescued read reaches its
+        isoforms through exactly the machinery a genomically mapped read does. Returns
+        the number of tracking rows written; 0 means the path matched no isoform.
+
+        `count_fallback` False keeps rescue out of the fallback-fraction guard. That
+        guard's denominator is assigned plus unassignable reads, which by construction
+        excludes rescued reads, so charging rescue resolutions to its numerator could
+        push the ratio past 1 and fail a healthy run for a reason the message does not
+        describe. The path still joins stream_resolved either way: a later genomic read
+        landing on it did land on a path the first pass never saw, whoever resolved it.
+        """
+        canon = splice_graph.canonical_simple_path(path)
+        rows = table.lookup(canon)
+        if count_fallback and canon in stream_resolved:
+            totals.reads_on_stream_resolved_paths += 1
+        if rows is None:
+            # Never seen. Resolve once with the ordinary compatibility cascade and
+            # cache the verdict, positive or negative, so this read and every later
+            # one on this path is assigned rather than silently omitted.
+            if count_fallback:
+                totals.paths_resolved_in_stream += 1
+                totals.reads_on_stream_resolved_paths += 1
+            else:
+                totals.rescue_paths_resolved_in_stream += 1
+            stream_resolved.add(canon)
+            rows = resolver(path) if resolver is not None else None
+            if rows is None:
+                raise RuntimeError(
+                    "no resolver supplied for a path absent from the assignment "
+                    "table; streaming can neither assign nor drop it: " + str(canon)
+                )
+            table.add(canon, rows)
+        if not rows:
+            return 0
+
+        read_name = Util_funcs.get_read_name_include_sc_encoding(read)
+        for gene_id, transcript_id, splice_hash, num_exons, mp_id, frac, weight in rows:
+            tracking_fh.write(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:.6f}\t{:.6f}\n".format(
+                    gene_id, transcript_id, splice_hash, num_exons, mp_id,
+                    read_name, frac, weight,
+                )
+            )
+        totals.record(rows)
+        return len(rows)
+
+    def offer_to_rescue(read, category):
+        """Offer one unassignable read to rescue and account for what came back.
+
+        Three outcomes, and they are worth keeping apart: rescue accepted no alignment
+        at all, rescue accepted one but the path it projects to matches no isoform, or
+        the read is assigned. Collapsing the first two would report an acceptance
+        problem and a compatibility problem as one number.
+        """
+        totals.rescue_offered[category] += 1
+        rescued_paths = rescuer.offer(read, category)
+        if not rescued_paths:
+            return
+        rows_written = 0
+        for rescued_path in rescued_paths:
+            rows_written += assign_path(read, rescued_path, count_fallback=False)
+        if rows_written:
+            totals.rescue_assigned[category] += 1
+            totals.rescue_rows_written += rows_written
+        else:
+            totals.rescue_unassignable[category] += 1
 
     with pysam.AlignmentFile(bam_file, "rb") as reader:
         if region_lend is not None and region_rend is not None:
@@ -610,8 +724,24 @@ def stream_assign(
             # min_mapping_quality_for_final_quant. Pinning explicit thresholds here
             # would reintroduce the discovery value and drop or admit reads the pass
             # this stream extends did not.
-            if Util_funcs.quant_discard_reason(read, contig_strand) is not None:
+            discard_reason = Util_funcs.quant_discard_reason(read, contig_strand)
+            if discard_reason is not None:
                 totals.reads_filtered += 1
+                # The ONE place retention branches, and only for reads whose sole
+                # objection is percent identity -- the population batch rescue recovers
+                # by name from the extractor's discard log, and 70% of its candidates on
+                # ONT chr20. Every other reason still discards. Retention itself is
+                # untouched: the read is counted filtered, is not counted streamed, and
+                # never reaches path mapping, so depth measurement and XW sampling
+                # weights see exactly what they saw before.
+                if (
+                    rescuer is not None
+                    and discard_reason
+                    == IsoformReadRescue.RESCUE_CANDIDATE_LOW_PER_ID
+                ):
+                    offer_to_rescue(
+                        read, IsoformReadRescue.RESCUE_CANDIDATE_LOW_PER_ID
+                    )
                 continue
 
             totals.reads_streamed += 1
@@ -621,42 +751,26 @@ def stream_assign(
             )
             if not path or path == SPACER:
                 totals.reads_no_path += 1
+                if rescuer is not None:
+                    offer_to_rescue(
+                        read, IsoformReadRescue.RESCUE_CANDIDATE_NO_GRAPH_PATH
+                    )
                 continue
             if SPACER in path:
                 totals.reads_spacer_path += 1
+                if rescuer is not None:
+                    offer_to_rescue(
+                        read, IsoformReadRescue.RESCUE_CANDIDATE_SPACER_PATH
+                    )
                 continue
 
-            canon = splice_graph.canonical_simple_path(path)
-            rows = table.lookup(canon)
-            if canon in stream_resolved:
-                totals.reads_on_stream_resolved_paths += 1
-            if rows is None:
-                # Never seen. Resolve once with the ordinary compatibility cascade and
-                # cache the verdict, positive or negative, so this read and every later
-                # one on this path is assigned rather than silently omitted.
-                totals.paths_resolved_in_stream += 1
-                totals.reads_on_stream_resolved_paths += 1
-                stream_resolved.add(canon)
-                rows = resolver(path) if resolver is not None else None
-                if rows is None:
-                    raise RuntimeError(
-                        "no resolver supplied for a path absent from the assignment "
-                        "table; streaming can neither assign nor drop it: " + str(canon)
-                    )
-                table.add(canon, rows)
-            if not rows:
+            if not assign_path(read, path):
                 totals.reads_unassignable += 1
-                continue
-
-            read_name = Util_funcs.get_read_name_include_sc_encoding(read)
-            for gene_id, transcript_id, splice_hash, num_exons, mp_id, frac, weight in rows:
-                tracking_fh.write(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{:.6f}\t{:.6f}\n".format(
-                        gene_id, transcript_id, splice_hash, num_exons, mp_id,
-                        read_name, frac, weight,
+                if rescuer is not None and rescue_unassigned_to_targets:
+                    offer_to_rescue(
+                        read, IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS
                     )
-                )
-            totals.record(rows)
+                continue
             totals.reads_assigned += 1
 
     _report(contig_acc, contig_strand, totals, max_fallback_path_frac)
@@ -730,6 +844,30 @@ def _report(contig_acc, contig_strand, totals, max_fallback_path_frac):
         totals.reads_no_path, totals.reads_spacer_path, totals.paths_resolved_in_stream,
         totals.reads_on_stream_resolved_paths,
     )
+    if totals.rescue_offered:
+        # Reported per category, and with both the offered and the assigned count, because
+        # the four populations behave differently: a low_perID candidate never had a usable
+        # genome alignment to compare against, while an unassigned_to_targets candidate had
+        # a perfectly good one that simply matched no isoform. A single rescue rate over the
+        # union would average those together and describe neither.
+        for category in IsoformReadRescue.RESCUE_CANDIDATE_CATEGORIES:
+            offered = totals.rescue_offered.get(category, 0)
+            if not offered:
+                continue
+            assigned = totals.rescue_assigned.get(category, 0)
+            logger.info(
+                "%s streaming rescue [%s]: %d/%d reads rescued (%.2f%%), "
+                "%d accepted an alignment whose path matched no isoform",
+                tag, category, assigned, offered, 100.0 * assigned / offered,
+                totals.rescue_unassignable.get(category, 0),
+            )
+        logger.info(
+            "%s streaming rescue: %d reads offered, %d rescued, %d tracking rows written, "
+            "%d rescued paths resolved here rather than by the first pass",
+            tag, sum(totals.rescue_offered.values()),
+            sum(totals.rescue_assigned.values()), totals.rescue_rows_written,
+            totals.rescue_paths_resolved_in_stream,
+        )
     if totals.reads_zero_fraction:
         # Logged at WARNING because nothing in the output shows it: these reads have
         # tracking rows reading 0.000000 and contribute no mass to any count, so a reader
