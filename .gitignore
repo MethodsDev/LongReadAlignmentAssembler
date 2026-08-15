@@ -51,6 +51,18 @@ testing/multigene_secondary_quant/data/**
 !testing/strandless_parity/Makefile
 !testing/strandless_parity/run_strandless_gate.py
 
+# EM_alpha sweep: measurement harness plus the small result tables and figure
+# it produces. The run outputs themselves (one quant.expr per arm, ~250 arms)
+# stay outside the repo; only the scored summaries are tracked, because those
+# are what a reviewer needs to re-derive the recommendation without re-running
+# 40 core-hours of LRAA.
+!testing/EM_alpha_sweep/
+!testing/EM_alpha_sweep/*.py
+!testing/EM_alpha_sweep/*.md
+!testing/EM_alpha_sweep/results/
+!testing/EM_alpha_sweep/results/*.tsv
+!testing/EM_alpha_sweep/results/*.png
+
 # personal audit working notes; not for distribution
 doc_audit/
 
