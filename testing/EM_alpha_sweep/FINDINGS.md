@@ -25,7 +25,7 @@ Result tables in `results/`. No LRAA default is changed by this work.
    output (MARD 0.0847 ont / 0.0528 pacbio, against 0.0096 / 0.0027 for
    unambiguous transcripts; Quant3Prime). alpha is the only knob LRAA has on it.
 3. **The recommendation depends on the corpus, not on the 3' weighting.** Argmin
-   alpha is identical with 3' weighting on and off on all 9 samples measured;
+   alpha is identical with 3' weighting on and off on all 10 samples;
    the interaction contrast is 0.2-1.5% of the main effect.
 4. **Both realistic-abundance samples put the optimum at alpha = 0.3, thirty
    times the shipped default** — morf2_ont (ONT) and morf2_pacbio (HiFi), both
@@ -260,7 +260,7 @@ corpus, same conclusion.
 
 ## Alpha x 3' weighting: measurably additive
 
-Argmin alpha is identical at 3p on and off on all 9 samples measured (8 SIRV,
+Argmin alpha is identical at 3p on and off on all 10 samples (8 SIRV,
 morf2_ont). The interaction contrast — the gain from moving alpha to its optimum
 with 3p off, minus the same with 3p on — is between -2.7e-05 and +1.0e-04 on the
 SIRV samples, against alpha gains of 1.2e-3 to 1.4e-2. The interaction is
