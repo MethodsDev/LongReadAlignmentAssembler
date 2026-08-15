@@ -70,6 +70,54 @@ and mouse — the only corpora with truth-unexpressed transcripts (5,286 and
 30,994) — are being run now, and the recommendation is conditional on FP as a
 function of alpha at 0.1 / 0.3 / 1.0.
 
+### False positives: the pending measurement, and how to read it
+
+This section is written to receive the arabidopsis and mouse results, which are
+the only corpora carrying truth-unexpressed transcripts (5,286 and 30,994). Both
+are HiFi with realistic abundance distributions and are being run at alpha 0.1 /
+0.3 / 1.0 to resolve the recommended region.
+
+| corpus | alpha | false positives | FP rate (of truth-unexpressed) | MARD | FN |
+| --- | --- | --- | --- | --- | --- |
+| arabidopsis | 0.01 | _pending_ | _pending_ / 5286 | _pending_ | _pending_ |
+| arabidopsis | 0.1 | _pending_ | _pending_ / 5286 | _pending_ | _pending_ |
+| arabidopsis | 0.3 | _pending_ | _pending_ / 5286 | _pending_ | _pending_ |
+| arabidopsis | 1.0 | _pending_ | _pending_ / 5286 | _pending_ | _pending_ |
+| mouse | 0.01 | _pending_ | _pending_ / 30994 | _pending_ | _pending_ |
+| mouse | 0.1 | _pending_ | _pending_ / 30994 | _pending_ | _pending_ |
+| mouse | 0.3 | _pending_ | _pending_ / 30994 | _pending_ | _pending_ |
+| mouse | 1.0 | _pending_ | _pending_ / 30994 | _pending_ | _pending_ |
+
+**Two outcomes, and the recommendation takes a different shape under each.**
+
+*If FP is flat between 0.01 and 0.3*, then 0.3 is an argmin and the
+recommendation above stands as written: MARD, false negatives and false
+positives all agree, and the shipped default is simply thirty times too low.
+
+*If FP rises steeply between 0.01 and 0.3*, then 0.3 is NOT an argmin, it is an
+**operating point on a tradeoff curve**, and the report must be read that way.
+What is already established constrains that curve and does not change with the
+new data:
+
+* FN is monotone in alpha and reaches zero by 0.3 on ont and 0.003 on pacbio,
+  and stays at zero out to alpha=1e6. So the FN axis buys nothing above 0.3 and
+  cannot justify going further.
+* MARD has an interior minimum at 0.3 on both samples, with alpha=1.0 and
+  alpha=1e6 both worse. So the MARD axis also stops at 0.3.
+* Therefore FP is the only axis that can argue for a value BELOW 0.3, and every
+  axis that can argue for a value above it has already been exhausted. Whatever
+  the FP curve looks like, the answer lies in [0.01, 0.3] and not outside it.
+* alpha is inert on transcripts with no ambiguous read support (0.2-0.5% of the
+  effect), so any FP increase must come from the ambiguous strata rather than
+  from mass appearing on unrelated transcripts. That is a testable prediction
+  for whoever reads the FP tables: the new false positives should be
+  concentrated in LEVER and TIED_ONLY.
+
+Whatever lands, **do not average FP across corpora with different
+truth-unexpressed counts** — 5,286 against 30,994 — without stating both
+denominators. Every rate in this report carries its denominator and this one
+must too.
+
 **n=1 for ONT is a corpus limit, not a sampling shortfall.** morf2_ont is the
 only realistic-abundance ONT library in the entire quant-only corpus; the only
 other ONT source is SG-NEx, which is poor quality. No additional work on this
