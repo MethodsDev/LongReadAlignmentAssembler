@@ -64,6 +64,17 @@ check_test_image_revision:
 	@if [ -n "$(LRAA_TEST_SKIP_IMAGE_CHECK)" ]; then \
 	  echo "image revision check skipped"; exit 0; \
 	fi; \
+	if ! command -v docker >/dev/null 2>&1; then \
+	  echo "" >&2; \
+	  echo "docker is not on PATH, so the image revision cannot be read and the" >&2; \
+	  echo "worktree-vs-image check is being skipped.  This is expected under" >&2; \
+	  echo "Apptainer, which can inspect labels only after converting an image to a" >&2; \
+	  echo "SIF -- too expensive to do for a check.  The run continues, but nothing" >&2; \
+	  echo "is verifying that $(LRAA_TEST_DOCKER) was built from this commit:" >&2; \
+	  echo "  worktree at `git rev-parse HEAD`" >&2; \
+	  echo "" >&2; \
+	  exit 0; \
+	fi; \
 	docker image inspect $(LRAA_TEST_DOCKER) >/dev/null 2>&1 \
 	  || docker pull $(LRAA_TEST_DOCKER) >/dev/null \
 	  || { echo "cannot inspect or pull $(LRAA_TEST_DOCKER)" >&2; exit 1; }; \
