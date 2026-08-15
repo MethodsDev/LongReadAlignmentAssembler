@@ -33,12 +33,24 @@ BASE_IMAGE=lraa-base:${LRAA_VERSION}
 # and the error names a tarball rather than the mistake.  Worse, a SHA that
 # happens to exist upstream but is not what you have locally builds something
 # that is not your working tree.  Fail here instead.
-if ! curl -sSf -o /dev/null -L https://github.com/${GITHUB_REPO}/archive/${LRAA_CO}.tar.gz; then
+# Retried, because the archive endpoint lags a push: a commit confirmed present
+# by `git ls-remote` still 404s here for twenty to thirty seconds.  Failing on
+# the first attempt turns "you pushed a moment ago" into "you did not push",
+# which is the opposite of what this check is for.
+reachable=no
+for attempt in 1 2 3 4 5 6; do
+    if curl -sSf -o /dev/null -L https://github.com/${GITHUB_REPO}/archive/${LRAA_CO}.tar.gz; then
+        reachable=yes
+        break
+    fi
+    [ $attempt -lt 6 ] && sleep 10
+done
+if [ "${reachable}" != "yes" ]; then
     set +x
     echo "" >&2
-    echo "commit ${LRAA_CO} is not fetchable from ${GITHUB_REPO}." >&2
-    echo "The Dockerfiles fetch the LRAA checkout by SHA from GitHub, so this" >&2
-    echo "commit must be pushed before it can be built.  Push it and re-run:" >&2
+    echo "commit ${LRAA_CO} is not fetchable from ${GITHUB_REPO} after 6 attempts" >&2
+    echo "over ~50s.  The Dockerfiles fetch the LRAA checkout by SHA from GitHub, so" >&2
+    echo "this commit must be pushed before it can be built.  Push it and re-run:" >&2
     echo "" >&2
     echo "    git push origin HEAD" >&2
     echo "" >&2
