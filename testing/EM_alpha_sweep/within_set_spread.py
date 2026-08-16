@@ -46,9 +46,22 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sweep_config as C  # noqa: E402
-from ambiguity_profile import PROBE, load_truth, profile_from_tracking  # noqa: E402
+# PROVENANCE: this file is QuantAlpha's testing/EM_alpha_sweep/within_set_spread.py
+# at commit b8b8bdf on branch quant-alpha, VERBATIM except for the argument
+# plumbing that lets it read an explicit --tracking/--truth_quant pair instead of
+# resolving paths through their sweep_config.  The statistic -- candidate_sets(),
+# wpct(), and every line that computes a ratio, a CV or a percentile -- is
+# untouched, because the arabidopsis and morf2 numbers are only comparable if one
+# implementation produced both.  load_truth is imported from their tree rather
+# than copied, for the same reason.  Diff sent to QuantAlpha for adoption.
+QA = "/home/unix/bhaas/projects/SingleCellOverhaul/LRAA-quant-alpha/testing/EM_alpha_sweep"
+sys.path.insert(0, QA)
+from ambiguity_profile import load_truth  # noqa: E402
+try:                                       # only needed for --samples mode
+    import sweep_config as C               # noqa: E402
+    from ambiguity_profile import PROBE    # noqa: E402
+except Exception:                          # pragma: no cover - path-explicit mode
+    C = PROBE = None
 
 
 def candidate_sets(path):
@@ -85,24 +98,45 @@ def wpct(values, weights, qs=(25, 50, 75)):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", default="morf2_ont,morf2_pacbio")
-    ap.add_argument("--out", default=os.path.join(C.BASE, "results", "within_set_spread.tsv"))
+    ap.add_argument("--tracking", default=None,
+                    help="explicit ON-arm quant.tracking.gz; bypasses sweep_config")
+    ap.add_argument("--truth_quant", default=None, help="explicit truth quant tsv")
+    ap.add_argument("--label", default=None, help="sample label for the output row")
+    ap.add_argument("--corpus", default="", help="corpus label for the output row")
+    ap.add_argument("--platform", default="", help="platform label for the output row")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    if args.tracking and not args.truth_quant:
+        ap.error("--tracking requires --truth_quant")
+    if args.out is None:
+        if C is None:
+            ap.error("--out is required in path-explicit mode")
+        args.out = os.path.join(C.BASE, "results", "within_set_spread.tsv")
 
     rows = []
-    for name in args.samples.split(","):
-        smp = C.SAMPLES_BY_NAME[name]
-        trk = os.path.join(PROBE, smp["sample"], "prof.LRAA.quant-only.quant.tracking.gz")
+    if args.tracking:
+        targets = [(args.label or "explicit", args.corpus, args.platform,
+                    args.tracking, args.truth_quant)]
+    else:
+        targets = []
+        for name in args.samples.split(","):
+            smp = C.SAMPLES_BY_NAME[name]
+            targets.append((
+                name, smp["corpus"], smp["platform"],
+                os.path.join(PROBE, smp["sample"], "prof.LRAA.quant-only.quant.tracking.gz"),
+                smp["truth_quant"]))
+    for name, _corpus, _platform, trk, _truth_path in targets:
         if not os.path.exists(trk):
             print(f"  {name}: no tracking, skipped")
             continue
         sets, n_reads_assigned = candidate_sets(trk)
-        truth = load_truth(smp["truth_quant"])
+        truth = load_truth(_truth_path)
         tot = sum(truth.values())
         tpm = {k: v / tot * 1e6 for k, v in truth.items()}
 
         n_amb_reads = sum(sets.values())
         rec = dict(
-            sample=name, corpus=smp["corpus"], platform=smp["platform"],
+            sample=name, corpus=_corpus, platform=_platform,
             n_reads_assigned=n_reads_assigned, n_ambiguous_reads=n_amb_reads,
             frac_reads_ambiguous=n_amb_reads / n_reads_assigned,
             n_distinct_sets=len(sets),

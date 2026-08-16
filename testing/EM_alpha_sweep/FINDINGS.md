@@ -36,9 +36,9 @@ Result tables in `results/`. No LRAA default is changed by this work.
 
 | stratum | recommended alpha | status | evidence |
 | --- | --- | --- | --- |
-| ONT | **~0.3** | **CONDITIONAL — do not ship yet** | morf2_ont: interior MARD minimum, -7.615e-3 paired vs default, false negatives 2 -> 0. Blocked on the false-positive measurement below. |
-| HiFi | **~0.3** | **CONDITIONAL — same block** | morf2_pacbio: interior MARD minimum at the SAME alpha, -3.644e-3 paired, false negatives 32 -> 0. |
-| pooled | **~0.3 across both realistic-abundance samples** | **CONDITIONAL — same block** | 2 of 2 realistic samples, both platforms, both 3p settings, all four argmins = 0.3. |
+| ONT | ~0.3 **on MORF only** | **DO NOT SHIP AS A DEFAULT** | morf2_ont: interior MARD minimum, -7.615e-3 paired vs default, false negatives 2 -> 0. Blocked on the false-positive measurement below. |
+| HiFi | ~0.3 **on MORF only** | **DO NOT SHIP AS A DEFAULT** | morf2_pacbio: interior MARD minimum at the SAME alpha, -3.644e-3 paired, false negatives 32 -> 0. |
+| pooled | **no single value; use the within-set rule** | **superseded — see the dose-response below** | 2 of 2 realistic samples, both platforms, both 3p settings, all four argmins = 0.3. |
 | SIRV-only | do not use | — | The two SIRV strata recommend opposite extremes and cancel to nothing when pooled. Seven strikes below. |
 
 **The two realistic-abundance samples agree exactly.** morf2_ont (ONT) and
@@ -448,13 +448,51 @@ hand-selected loci, which concentrates related isoforms and manufactures
 ambiguity. Median set size is 2 on every corpus measured, so the excess is in how
 many reads are ambiguous, not in how hard each choice is.
 
-**Consequence for the recommendation, stated plainly.** If arabidopsis's
-within-set spread is wider than MORF's, then alpha=0.3 is calibrated to a
-minigenome's unusually even ambiguous sets and is a CORPUS ARTIFACT rather than a
-platform-independent optimum, and the recommendation should not ship as a global
-default. That comparison is pending from the arabidopsis measurement, whose
-early-scored 3p-ON arms already show MARD rising monotonically with alpha — the
-opposite sign to MORF. Read this table together with that result when it lands.
+### RESOLVED: arabidopsis extends the ordering, and alpha=0.3 is a corpus artifact
+
+ArabidopsisSweep ran **this script, unmodified**, on arabidopsis e016 under the
+spec agreed before either of us saw the other's numbers. I predicted on the
+record that arabidopsis would return a within-set median max/min "at or above ~8
+and in any case clearly above 5". It returned **26.67** (p25 5.90, p75 124.87;
+geomean 29.36; median CV 0.925; only 33.6% of ambiguous reads in sets with ratio
+< 10; 3,464 distinct sets; 247,119 of 16,460,802 assigned reads ambiguous).
+
+That is past SIRV E2's 8-16, so arabidopsis does not merely land on the skewed
+end of the ordering — it **extends it beyond the most skewed calibration point
+that existed**. The completed dose-response, monotone with no inversion across
+seven samples and three corpora:
+
+| corpus | median max/min | median CV | % amb. reads, ratio < 10 | measured alpha optimum |
+| --- | --- | --- | --- | --- |
+| SIRV E1 (BT474) | 2.00 | 0.333 | 100.0 | 10 / limit |
+| SIRV E1 (HG002) | 2.00 | 0.333 | 100.0 | 10 / limit |
+| morf2_pacbio | 2.47 | 0.378 | 84.8 | 0.3 |
+| morf2_ont | 2.84 | 0.429 | 79.2 | 0.3 |
+| SIRV E2 (HG002) | 8.00 | 0.778 | 52.2 | 0.0 |
+| SIRV E2 (BT474) | 16.00 | 0.926 | 42.8 | 0.0 |
+| arabidopsis e016 | 26.67 | 0.925 | 33.6 | <= 0.0003, monotone |
+
+**So the recommendation changes.** MORF's ambiguous sets are the second most even
+in the corpus, behind only the SIRV E1 mixture, and the one realistic annotation
+measured sits at the opposite extreme. alpha = 0.3 is calibrated to a
+minigenome's unusually even candidate sets and **must not ship as a global
+default**. What generalises is not the value but the rule: the optimum is
+predictable from within-set truth spread, computable without a sweep.
+
+Decoy exposure, reconciled so the two reports print the same statistic:
+arabidopsis 16.30% of ambiguous reads see a set containing a member absent from
+`truth_quant`, against morf2_ont 0.81% (925 / 114,663) and morf2_pacbio 0.21%
+(714 / 335,069) — 20-78x. ArabidopsisSweep's earlier 12.60% is a different
+universe (intron chains with `ref_tpm == 0` within the benchmark's 37,757 scored
+chains, rather than transcripts absent from the 52,060-entry annotation); 16.30%
+is the cross-corpus comparable because it comes from this same code.
+
+Agreed structural sentence, phrased identically in both reports: *morf2 carries
+5-8x the ambiguous read mass of a real transcriptome (11.35% of assigned reads on
+morf2_ont and 7.98% on morf2_pacbio, against 1.50% on arabidopsis), but the
+median ambiguous candidate set has exactly two members on every corpus — so a
+1,566-locus minigenome manufactures more ambiguous reads without making any
+individual choice harder.*
 
 ## Could not determine
 
