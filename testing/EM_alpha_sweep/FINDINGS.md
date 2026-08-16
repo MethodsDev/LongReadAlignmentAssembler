@@ -494,6 +494,37 @@ median ambiguous candidate set has exactly two members on every corpus — so a
 1,566-locus minigenome manufactures more ambiguous reads without making any
 individual choice harder.*
 
+### What a user should actually do
+
+* **Leave `EM_alpha` at 0.01 absent a corpus-specific measurement.** My four
+  independent argmins at 0.3 were real and reproducible, and they were measuring
+  a property of a 1,566-locus minigenome, not of ONT versus HiFi.
+* **Do not read "do not raise it" as "lower it".** Arabidopsis is monotone down to
+  0.0003, the lowest point tested, so 0.01 may itself be slightly high for a
+  realistic annotation — but the gain from 0.01 to 0.0003 interpolates to roughly
+  5e-4, and one realistic annotation is not a basis for moving a default either.
+* **If you care about the value on your own data, measure within-set truth spread
+  rather than sweeping.** It needs read compatibility and a truth set, no sweep,
+  and it made a correct out-of-sample prediction before the data existed:
+  `within_set_spread.py`, then read the optimum off the dose-response above.
+
+### Why the limit prior is wrong, and why that makes within-set spread decisive
+
+As alpha grows, theta converges to the normalized AMBIGUOUS-SUPPORT profile —
+**not** to a uniform split, and the distinction is the whole mechanism.
+`ambiguous_read_counts` is computed once before the iteration loop (EM.py:283-290)
+and never updates with theta, so at high alpha a constant vector dominates a term
+that iterates, and EM stops doing work. The limit prior therefore asserts
+"transcripts appearing in more ambiguous groups are more abundant", which has no
+biological justification.
+
+That is *why* within-set spread governs the sign. Where the competing candidates
+in a set genuinely have comparable abundance, a structurally-driven prior is
+nearly right and flattening toward it helps. Where one isoform dominates its
+locus by 26x, the same prior is badly wrong and flattening destroys the answer.
+Same prior, opposite outcomes, and the dose-response above is the size of the
+error as a function of how wrong it is.
+
 ## Could not determine
 
 * **The residual test is an ENDPOINT predictor and is 9 of 10 across the corpus,
@@ -540,6 +571,14 @@ individual choice harder.*
   so they cannot either. The "4/4" paired sign-consistency that backs every SIRV
   statement is unavailable for the recommendation that actually matters, and will
   stay unavailable until an ONT library worth benchmarking exists.
+* **EM iterations-to-convergence against alpha was not measured.** The algebra
+  says the fixed `ambiguous_read_counts` term should pin theta almost
+  immediately at high alpha, which would be a direct observation of EM ceasing
+  to function rather than an inference. LRAA logs "Converged after N iterations"
+  from the per-contig worker processes, and those logs are not captured in the
+  parent run.log this harness keeps, so it needs a re-run with worker logging
+  retained rather than a grep over existing arms. Cheap, but not free, and not
+  done.
 * **The metric split on morf2_ont is unresolved** (MARD 0.3; spearman and nrmse
   >= 1.0). It is a disagreement about magnitude, not direction — see above — so
   it does not threaten the "0.01 is too low" conclusion, only the value 0.3.
