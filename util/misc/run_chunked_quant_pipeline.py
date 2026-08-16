@@ -1193,12 +1193,38 @@ def main(argv=None):
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
-    parser.add_argument("--approx_MB_per_cut", type=float, default=10)
-    parser.add_argument("--approx_MB_per_cut_wiggle_window", type=float, default=1)
+    # Defaults come from the canonical definition rather than a second copy. These
+    # were hardcoded here and happened to agree with LRAA_Globals; a change to
+    # either would have diverged silently, and worse than silently, because the
+    # values are baked into the stage-2 cache token above -- a run would have kept
+    # the old cut geometry while the token asserted the new one.
+    parser.add_argument(
+        "--approx_MB_per_cut",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut"],
+    )
+    parser.add_argument(
+        "--approx_MB_per_cut_wiggle_window",
+        type=float,
+        default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
+    )
+    # depth_window and margin have no LRAA_Globals key; their canonical values are
+    # select_contig_cut_points.DEFAULT_DEPTH_WINDOW and
+    # extract_contig_region_inputs.DEFAULT_MARGIN. Both scripts are invoked as
+    # subprocesses, not imported, so these mirror them by hand -- change all three
+    # together, or promote them into LRAA_Globals.
     parser.add_argument("--depth_window", type=int, default=100)
     parser.add_argument("--margin", type=int, default=200)
-    parser.add_argument("--max_intron_length", type=int, default=200000)
-    parser.add_argument("--normalize_max_cov_level", type=int, default=1000)
+    parser.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+    )
+    parser.add_argument(
+        "--normalize_max_cov_level",
+        type=int,
+        default=LRAA_Globals.config["normalize_max_cov_level"],
+    )
     parser.add_argument("--random_seed", type=int, default=42)
     parser.add_argument(
         "--rss_sample_interval",
