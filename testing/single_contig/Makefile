@@ -3,7 +3,7 @@ test_quick:
 	../../LRAA --bam pacbio.PBLR.small.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA.small  --no_norm --tag_bam --HiFi --verbose --no_cleanup
 
 
-test: test_quick test_reads_only test_include_ref_annot_guide test_quant test_oversimplify
+test: test_quick test_reads_only test_include_ref_annot_guide test_quant test_observability test_oversimplify
 
 
 test_reads_only:
@@ -16,6 +16,34 @@ test_include_ref_annot_guide:
 
 test_quant:
 	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only --tag_bam --HiFi --verbose --no_cleanup
+
+
+# Observability of a run that succeeds.
+#
+# Everything a worker logs goes to <tmp_prefix>.err.log inside the contigtmp
+# tree, which is deleted on success -- so a successful run used to leave no
+# per-contig record of anything, and streaming rescue's counters reached only
+# `stats()`, which nothing outside the tests has ever called. A rescue rate of
+# 6 reads in 17,897 was therefore indistinguishable from a rescue path that was
+# silently disabled.
+#
+# Asserts the two summaries survive cleanup and carry real values: one rescue
+# row per contig-strand, and a per-worker duration that is not zero. The
+# duration is the specific regression -- the summary differenced a single
+# timestamp against itself and reported every work unit shorter than the
+# monitor's write interval as lasting 0.0 seconds.
+test_observability:
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
+	    --quant_only --stream_reads --quant_read_assignment_mode rescue_unassigned \
+	    --stream_reads_rescue_unassigned --cpu_budget 4 --HiFi \
+	    --output_prefix LRAA.observability
+	test -s LRAA.observability.LRAA.quant-only.rescue.summary.tsv
+	test $$(grep -vc '^contig' LRAA.observability.LRAA.quant-only.rescue.summary.tsv) -ge 2
+	awk -F'\t' 'NR>1 && $$3+0 > 0 {n++} END{exit !(n>=2)}' \
+	    LRAA.observability.LRAA.quant-only.rescue.summary.tsv
+	test -s LRAA.observability.LRAA.quant-only.resources.summary.tsv
+	awk -F'\t' 'NR>1 && $$4+0 > 0 {n++} END{exit !(n>=1)}' \
+	    LRAA.observability.LRAA.quant-only.resources.summary.tsv
 
 
 

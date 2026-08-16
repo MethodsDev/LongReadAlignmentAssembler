@@ -40,7 +40,7 @@ from IsoformReadRescue import (
     build_transcriptome_alignment_multipaths,
     rescue_unassigned_reads_to_transcriptome,
 )
-from ResourceMonitor import ResourceMonitor
+from ResourceMonitor import ResourceMonitor, summarize_resource_log
 import TranscriptFiltering
 import Util_funcs
 import CpuBudget
@@ -3289,6 +3289,7 @@ def _run_jobs_schedule_and_merge(
 
     quant_expr_tmp_paths = list()
     genome_tx_arb_summary_paths = list()
+    rescue_summary_paths = list()
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
         tmp_root_old = f"{j['output_prefix']}.contigtmp"
@@ -3302,12 +3303,16 @@ def _run_jobs_schedule_and_merge(
             expected_num_fields=len(tracking_header_final),
         )
         genome_tx_arb_summary_paths.append(f"{tmp_prefix}.genome_tx_arb.summary.tsv")
+        rescue_summary_paths.append(f"{tmp_prefix}.rescue.tsv")
 
     _merge_quant_expr_files(quant_expr_tmp_paths, quant_out_fn, quant_header_final)
     merged_track_fh.close()
 
     _merge_genome_tx_arb_summary_files(
         genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
+    )
+    _merge_streaming_rescue_summary_files(
+        rescue_summary_paths, f"{output_prefix}.rescue.summary.tsv"
     )
     _ensure_lraa_version_comment(quant_out_fn)
     _ensure_lraa_version_comment(track_out_fn)
@@ -3361,12 +3366,15 @@ def _run_jobs_schedule_and_merge(
                     f"Skipping prelim BED generation; missing or empty GTF: {prelim_gtf}"
                 )
 
-    # Resource summary
+    # Consolidate per-worker resource logs before the temp tree that holds them
+    # is removed below. A bare `except: pass` here would put us back where we
+    # started, so a failure says so. The rescue summary is merged earlier, with
+    # the other per-unit artifacts.
     try:
         if LRAA_Globals.config.get("resource_monitor_enabled", False):
             _summarize_contig_resource_logs(output_prefix, jobs)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("could not summarize per-worker resource logs: %s", exc)
 
     # Cleanup per-task outputs
     if CLEAN_PARALLEL_TMP:
@@ -3382,6 +3390,7 @@ def _run_jobs_schedule_and_merge(
                 f"{tmp_prefix}.gtf",
                 f"{tmp_prefix}.ok",
                 f"{tmp_prefix}.resources.tsv",
+                f"{tmp_prefix}.rescue.tsv",
             ):
                 if os.path.exists(pth):
                     try:
@@ -3626,6 +3635,7 @@ def _contig_job_runner(job):
         # the deletion exists to prevent.
         pass
     genome_tx_arb_summary_tmp = f"{tmp_prefix}.genome_tx_arb.summary.tsv"
+    rescue_summary_tmp = f"{tmp_prefix}.rescue.tsv"
     try:
         if os.path.exists(genome_tx_arb_summary_tmp):
             os.unlink(genome_tx_arb_summary_tmp)
@@ -3775,6 +3785,7 @@ def _contig_job_runner(job):
                     report_quants=True,
                     splice_graph_cache_dir=splice_graph_cache_dir,
                     arb_summary_path=genome_tx_arb_summary_tmp,
+                    rescue_summary_path=rescue_summary_tmp,
                     # QUANT_ONLY is only reachable with --gtf, so here
                     # input_transcripts really is the user's annotation.
                     reference_transcripts=input_transcripts,
@@ -3803,6 +3814,7 @@ def _contig_job_runner(job):
                     job["SE_only"],
                     splice_graph_cache_dir=splice_graph_cache_dir,
                     arb_summary_path=genome_tx_arb_summary_tmp,
+                    rescue_summary_path=rescue_summary_tmp,
                 )
 
         ofh_quant.close()
@@ -4216,6 +4228,76 @@ def _run_oversimplify_aggregate(
     return
 
 
+RESCUE_STATS_COLUMNS = (
+    "contig",
+    "strand",
+    "candidates_offered",
+    "reads_rescued",
+    "reads_without_sequence",
+    "hits_examined",
+    "n_targets",
+    "align_seconds",
+    "accept_seconds",
+)
+
+
+def _write_streaming_rescue_stats(path, contig_acc, contig_strand, rescuer):
+    """One row of streaming rescue counters, for the parent to merge."""
+
+    stats = rescuer.stats()
+    with open(path, "wt") as out:
+        out.write("\t".join(RESCUE_STATS_COLUMNS) + "\n")
+        out.write(
+            "\t".join(
+                [
+                    contig_acc,
+                    contig_strand,
+                    str(sum(stats["reads_offered"].values())),
+                    str(sum(stats["reads_rescued"].values())),
+                    str(stats["reads_without_sequence"]),
+                    str(stats["hits_examined"]),
+                    str(stats["n_targets"]),
+                    f"{rescuer.align_seconds:.3f}",
+                    f"{rescuer.accept_seconds:.3f}",
+                ]
+            )
+            + "\n"
+        )
+
+
+def _merge_streaming_rescue_summary_files(paths, output_path):
+    """Merge per-work-unit rescue rows into <output_prefix>.rescue.summary.tsv.
+
+    Written only when some unit recorded rescue, so an absent file means the
+    mode never ran rather than that it ran and found nothing. Those two were
+    indistinguishable before, which is what made a rate of 6 reads in 17,897
+    impossible to tell apart from a rescue path that was silently disabled.
+    """
+
+    rows = []
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "rt") as fh:
+                next(fh)
+                rows.extend(line for line in fh if line.strip())
+        except Exception:
+            continue
+
+    if not rows:
+        return
+
+    try:
+        with open(output_path, "wt") as out:
+            out.write("\t".join(RESCUE_STATS_COLUMNS) + "\n")
+            for row in rows:
+                out.write(row if row.endswith("\n") else row + "\n")
+        logger.info("wrote streaming rescue summary %s", output_path)
+    except Exception as exc:
+        logger.warning("could not write %s: %s", output_path, exc)
+
+
 def _summarize_contig_resource_logs(output_prefix, jobs):
     """Write a consolidated summary TSV across per-work-unit resource logs if monitoring enabled.
     Writes: <output_prefix>.resources.summary.tsv
@@ -4249,65 +4331,24 @@ def _summarize_contig_resource_logs(output_prefix, jobs):
                 log_path = f"{tmp_prefix}.resources.tsv"
                 if not os.path.exists(log_path):
                     continue
-                # local summarization (avoid importing the util script here)
-                try:
-                    with open(log_path, "rt") as fh:
-                        header = next(fh).rstrip("\n").split("\t")
-                        idx = {k: i for i, k in enumerate(header)}
-                        peak_rss = 0.0
-                        peak_cpu = 0.0
-                        sum_rss = 0.0
-                        sum_cpu = 0.0
-                        n = 0
-                        first_ts = None
-                        last_ts = None
-                        for line in fh:
-                            parts = line.rstrip("\n").split("\t")
-                            try:
-                                ts = float(parts[idx.get("epoch_ts", 0)])
-                                rss = float(parts[idx.get("rss_mb", 2)])
-                                cpu = float(parts[idx.get("cpu_percent", 3)])
-                                rss_ch = float(parts[idx.get("rss_mb_children", 4)])
-                                cpu_ch = float(
-                                    parts[idx.get("cpu_percent_children", 5)]
-                                )
-                            except Exception:
-                                continue
-                            total_rss = rss + rss_ch
-                            total_cpu = cpu + cpu_ch
-                            peak_rss = max(peak_rss, total_rss)
-                            peak_cpu = max(peak_cpu, total_cpu)
-                            sum_rss += total_rss
-                            sum_cpu += total_cpu
-                            n += 1
-                            if first_ts is None:
-                                first_ts = ts
-                            last_ts = ts
-                        if n:
-                            avg_rss = sum_rss / n
-                            avg_cpu = sum_cpu / n
-                            duration = (
-                                (last_ts - first_ts)
-                                if (first_ts is not None and last_ts is not None)
-                                else 0.0
-                            )
-                            out.write(
-                                "\t".join(
-                                    [
-                                        contig_acc,
-                                        contig_strand,
-                                        str(n),
-                                        f"{duration:.1f}",
-                                        f"{peak_rss:.1f}",
-                                        f"{avg_rss:.1f}",
-                                        f"{peak_cpu:.1f}",
-                                        f"{avg_cpu:.1f}",
-                                    ]
-                                )
-                                + "\n"
-                            )
-                except Exception:
+                summary = summarize_resource_log(log_path)
+                if not summary or not summary["samples"]:
                     continue
+                out.write(
+                    "\t".join(
+                        [
+                            contig_acc,
+                            contig_strand,
+                            str(summary["samples"]),
+                            f"{summary['duration_sec']:.1f}",
+                            f"{summary['peak_rss_mb_total']:.1f}",
+                            f"{summary['avg_rss_mb_total']:.1f}",
+                            f"{summary['peak_cpu_percent_total']:.1f}",
+                            f"{summary['avg_cpu_percent_total']:.1f}",
+                        ]
+                    )
+                    + "\n"
+                )
     except Exception:
         # summarization failures should not break the pipeline
         pass
@@ -4830,6 +4871,7 @@ def run_quant_only(
     prebuilt_splice_graph=None,
     splice_graph_cache_dir=None,
     arb_summary_path=None,
+    rescue_summary_path=None,
     reference_transcripts=None,
 ):
 
@@ -5288,6 +5330,25 @@ def run_quant_only(
                         rescuer.hits_examined,
                         rescuer.hits_examined / _offered,
                     )
+                # A log line is not an artifact. In parallel mode this runs in a
+                # worker whose stderr is interleaved with every other worker's
+                # and retained nowhere, so the only durable record of whether
+                # rescue did anything was `stats()`, which nothing outside the
+                # tests has ever called. One row per contig-strand, merged into
+                # <output_prefix>.rescue.summary.tsv by the parent.
+                try:
+                    _write_streaming_rescue_stats(
+                        rescue_summary_path,
+                        contig_acc,
+                        contig_strand,
+                        rescuer,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[%s%s] could not record streaming rescue stats",
+                        contig_acc,
+                        contig_strand,
+                    )
                 rescuer.close()
         StreamingQuant.write_expr(
             input_transcripts, totals, ofh_quant_output, quant_only=True
@@ -5345,6 +5406,7 @@ def run_transcript_assembly(
     SE_only,
     splice_graph_cache_dir=None,
     arb_summary_path=None,
+    rescue_summary_path=None,
 ):
 
     ##---------------------
@@ -5903,6 +5965,7 @@ def run_transcript_assembly(
         report_quants=False,
         splice_graph_cache_dir=splice_graph_cache_dir,
         arb_summary_path=arb_summary_path,
+        rescue_summary_path=rescue_summary_path,
         # `transcripts` above are the models LRAA just assembled; the genuine annotation
         # is the reference subset, and only it may waive the internal-priming veto.
         reference_transcripts=reference_transcripts_incl_in_graph,
