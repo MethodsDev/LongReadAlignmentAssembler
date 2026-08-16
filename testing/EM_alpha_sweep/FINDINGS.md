@@ -319,8 +319,22 @@ it agrees with Quant3Prime's independent result that their on/off delta is
 invariant across a 10x alpha change (HiFi +1.288e-3 at alpha 0.01 vs +1.208e-3 at
 0.001; ONT +4.426e-3 vs +4.489e-3; per-sample agreement ~1e-5).
 
-**The alpha recommendation therefore does not need conditioning on the 3p
-setting.** Caveat that must travel with it: the 3' weighting can only reach
+**QUALIFIED: additivity holds for the ACCURACY component only, and my corpus
+could not test the other one.** Every sample behind the paragraph above — mine
+and Quant3Prime's — has ZERO truth-unexpressed transcripts, so none of these
+MARD figures contains a false-positive term at all. On arabidopsis, which has
+5,286, the contrast splits: the expressed-only MARD delta drifts just 12% over a
+333x alpha range (8.286e-4 at alpha 0.0003 to 9.256e-4 at 0.1), reproducing the
+additivity, while the FULL MARD delta moves 1.004e-3 to 1.378e-3 — and the
+difference is entirely false positives. Alpha manufactures them (169 -> 575 as
+alpha goes 0.0003 -> 0.1) and the 3' weighting prevents a GROWING share (11
+fewer at 0.0003, 17 at 0.01, 24 at 0.03).
+
+So **the interaction is largest exactly at the high-alpha end**, and any
+high-alpha operating point must be stated as CONDITIONAL ON 3' WEIGHTING BEING ON
+— at that end the weighting is worth more, not less. The independence claim above
+is safe for choosing alpha on accuracy grounds and is NOT safe for choosing it on
+a corpus that can penalise false positives. Caveat that must travel with it: the 3' weighting can only reach
 4.1% (HiFi) / 2.5% (ONT) of library mass, and moves 1.3e-3..5.3e-3 of mass in
 total variation between on and off (Quant3Prime). A null here means 3p had no
 lever to pull over this corpus, not that the two parameters are independent in
