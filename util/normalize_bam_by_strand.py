@@ -34,8 +34,8 @@ def main():
     parser.add_argument("--input_bam", type=str, required=True, help="input bam filename")
     parser.add_argument("--output_bam", type=str, required=True, help="output for normalied bam file")
     parser.add_argument("--normalize_max_cov_level", type=int, default=1000, help="target read depth; coverage above this is thinned, coverage below it is left alone (default: 1000)")
-    parser.add_argument("--depth_window", type=int, default=100, help="resolution in bases at which read depth is measured")
-    parser.add_argument("--random_seed", type=int, default=42, help="random seed for reproducible sampling (default: 42)")
+    parser.add_argument("--depth_window", type=int, default=LRAA_Globals.config["chunk_depth_window"], help="resolution in bases at which read depth is measured")
+    parser.add_argument("--random_seed", type=int, default=LRAA_Globals.config["chunk_random_seed"], help="random seed for reproducible sampling")
     parser.add_argument(
         "--min_per_id",
         type=float,

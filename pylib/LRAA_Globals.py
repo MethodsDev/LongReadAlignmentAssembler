@@ -258,6 +258,30 @@ config = {
     # alignments; the window is never widened to find a zero-crossing position.
     "approx_MB_per_cut_wiggle_window": 1,
     #
+    # The remaining chunking constants. Each of these previously existed as two
+    # to four independent copies across LRAA, ChunkedRun, select_contig_cut_points
+    # and normalize_bam_by_strand, all of which happened to agree. A divergence
+    # would not have surfaced as a mismatch: the values are baked into the
+    # stage-2 cache token, so one copy moving turns a stale cache entry into a
+    # HIT that reuses the old geometry while asserting the new parameters.
+    #
+    # Resolution in bases at which read depth is measured when scoring candidate
+    # cut positions, and the grid the normalizer's depth windows sit on. The two
+    # must be the same number or normalization thins differently on either side
+    # of a boundary.
+    "chunk_depth_window": 100,
+    # Bases of clearance a cut must leave on both sides of every annotated locus.
+    # 4x the largest boundary-snapping distance in this file (50 bp:
+    # max_dist_between_alt_TSS_sites, max_dist_between_alt_polyA_sites,
+    # TSS_window_read_enrich_len), so no snapping can reach across a cut.
+    "chunk_margin": 200,
+    # Absolute reference coordinate the depth-window grid is anchored to, so the
+    # same locus lands in the same window whether it is normalized whole or as
+    # part of a chunk.
+    "chunk_grid_origin": 0,
+    # Seed for the normalizer's reproducible down-sampling.
+    "chunk_random_seed": 42,
+    #
     #######
     # quant
     "num_total_reads": None,  # for TPM and filtering - set by CLI or within LRAA by counting bam records

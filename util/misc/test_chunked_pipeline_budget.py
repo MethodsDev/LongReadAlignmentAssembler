@@ -26,12 +26,10 @@ import CpuBudget  # noqa: E402
 
 
 def _load_driver():
-    """Load the driver by path: its filename is not an importable module name."""
-    path = os.path.join(_HERE, "run_chunked_quant_pipeline.py")
-    spec = importlib.util.spec_from_file_location("run_chunked_quant_pipeline", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The pipeline now lives in pylib/ChunkedRun.py; the script here is a front end."""
+    import ChunkedRun
+
+    return ChunkedRun
 
 
 DRIVER = _load_driver()

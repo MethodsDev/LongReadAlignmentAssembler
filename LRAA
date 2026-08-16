@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.20.1"
+VERSION = "v0.21.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -66,13 +66,13 @@ UTILDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "util")
 # to the utility, and included in the cache stem, so that changing one cannot silently
 # reuse a normalized bam built under the old value. These must match the utility's own
 # defaults in util/normalize_bam_by_strand.py.
-NORM_DEPTH_WINDOW = 100
-NORM_RANDOM_SEED = 42
+NORM_DEPTH_WINDOW = LRAA_Globals.config["chunk_depth_window"]
+NORM_RANDOM_SEED = LRAA_Globals.config["chunk_random_seed"]
 # Absolute depth-window grid: the driver normalizes whole contigs, so position 0 of the
 # input is reference coordinate 0. Passed explicitly rather than left unset, because an
 # unset origin anchors the grid on the first aligned base seen and so makes window
 # boundaries a function of which records happen to be present.
-NORM_WINDOW_ORIGIN = 0
+NORM_WINDOW_ORIGIN = LRAA_Globals.config["chunk_grid_origin"]
 
 # One authoritative budget, set after CLI parsing, divided by CpuBudget.allocate().
 CPU_BUDGET = None
@@ -342,6 +342,12 @@ def main():
             default=False,
             help="disable contig/strand-level parallelization",
         )
+        lite_parallel.add_argument(
+            "--chunk",
+            action="store_true",
+            default=False,
+            help="chunked mode: split each contig-strand between annotated loci and quantify the chunks independently, bounding peak memory (requires --quant_only and --gtf)",
+        )
 
         lite_quant = lite_parser.add_argument_group("common quant/discovery settings")
         lite_quant.add_argument(
@@ -598,7 +604,7 @@ def main():
             "path derives it from its own first pass, which under --stream_reads reads the "
             "coverage-normalized bam while the stream reads the full one. Measured on ONT "
             "chr20, batch 3,442 against streaming 11,196 with nothing batch-only, so this "
-            "rescues against 43% more reads than the batch path targets. An extension, not "
+            "rescues against 43%% more reads than the batch path targets. An extension, not "
             "a reproduction "
             f"(default: {LRAA_Globals.config['stream_reads_rescue_unassigned_to_targets']})"
         ),
@@ -1154,10 +1160,21 @@ def main():
         help="space or comma-separated list of chromosome names to process; chromosomes not in this list will be skipped (ex: 'chr1 chr2 chr3' or 'chr1,chr2,chr3')",
     )
     contig_group_setting.add_argument(
+        "--chunk",
+        action="store_true",
+        help="chunked mode: split each contig-strand at low-coverage positions "
+        "between annotated loci, quantify the chunks independently and merge. "
+        "Bounds peak memory, because a chunk is extracted as a self-contained "
+        "mini contig and a worker then holds only that chunk's sequence rather "
+        "than the whole chromosome's. Requires --quant_only and --gtf. Without "
+        "this flag LRAA runs exactly as it always has, and --contig/--region "
+        "are unaffected either way",
+    )
+    contig_group_setting.add_argument(
         "--approx_MB_per_cut",
         type=float,
         default=LRAA_Globals.config["approx_MB_per_cut"],
-        help="chunked parallelism: approximate MEGABASES between cut points when splitting a contig-strand into independently processed chunks (default: {})".format(
+        help="--chunk: approximate MEGABASES between cut points when splitting a contig-strand into independently processed chunks (default: {})".format(
             LRAA_Globals.config["approx_MB_per_cut"]
         ),
     )
@@ -1165,9 +1182,33 @@ def main():
         "--approx_MB_per_cut_wiggle_window",
         type=float,
         default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
-        help="chunked parallelism: TOTAL width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched over [T - w/2, T + w/2] (default: {})".format(
+        help="--chunk: TOTAL width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched over [T - w/2, T + w/2] (default: {})".format(
             LRAA_Globals.config["approx_MB_per_cut_wiggle_window"]
         ),
+    )
+    contig_group_setting.add_argument(
+        "--chunk_depth_window",
+        type=int,
+        default=LRAA_Globals.config["chunk_depth_window"],
+        help="--chunk: resolution in bases at which read depth is measured when "
+        "scoring candidate cut positions (default: {})".format(
+            LRAA_Globals.config["chunk_depth_window"]
+        ),
+    )
+    contig_group_setting.add_argument(
+        "--chunk_margin",
+        type=int,
+        default=LRAA_Globals.config["chunk_margin"],
+        help="--chunk: bases of clearance a cut must leave on both sides of every "
+        "annotated locus (default: {})".format(LRAA_Globals.config["chunk_margin"]),
+    )
+    contig_group_setting.add_argument(
+        "--chunk_work_dir",
+        type=str,
+        default=None,
+        help="--chunk: directory for per-chunk inputs, logs and checkpoints. "
+        "Default: <output_prefix>.chunked_work. Reusing one resumes an "
+        "interrupted run instead of repeating the completed stages",
     )
 
     ## generic config update via json
@@ -1231,6 +1272,12 @@ def main():
 
     if args.ME_only and args.SE_only:
         sys.exit("Error: Cannot specify both --ME_only and --SE_only")
+
+    # Chunked mode delegates the whole run and never reaches the setup below.
+    # Dispatched here so that --chunk is validated against the same parsed args
+    # everything else sees, and before any state is built that it would discard.
+    if args.chunk:
+        sys.exit(_run_chunked_mode(args))
 
     genome_fasta_filename = args.genome
     bam_filename = args.bam
@@ -2777,6 +2824,81 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
             out_row["TPM"] = f"{tpm:.3f}"
             out_row["RPM_total_reads"] = old_total_read_scaled_val
             writer.writerow(out_row)
+
+
+def _run_chunked_mode(args):
+    """Run the chunked pipeline, then leave its results where LRAA's would be.
+
+    Chunked mode is quant-only by construction. A chunk sees only the isoforms
+    inside it, so discovery across a boundary would produce two partial models
+    of one locus with nothing able to reconcile them; quantification against a
+    supplied annotation has no such dependence, which is why the cut rule only
+    has to keep whole loci on one side.
+    """
+
+    import ChunkedRun
+
+    if os.environ.get(ChunkedRun.WORKER_ENV):
+        sys.exit(
+            "Error: --chunk was passed to a chunk worker. The pipeline runs "
+            "plain LRAA on each chunk; re-entering it here would fork without "
+            "bound."
+        )
+    if not args.quant_only:
+        sys.exit(
+            "Error: --chunk requires --quant_only. Isoform discovery cannot be "
+            "split across chunk boundaries."
+        )
+    if not args.gtf:
+        sys.exit("Error: --chunk requires --gtf (the transcripts to quantify).")
+
+    work_dir = args.chunk_work_dir or "{}.chunked_work".format(args.output_prefix)
+    logger.info("chunked mode: staging under %s", work_dir)
+
+    chunk_args = ChunkedRun.default_args(
+        bam=args.bam,
+        genome_fa=args.genome,
+        gtf=args.gtf,
+        output_dir=work_dir,
+        cpu_budget=args.cpu_budget,
+        contig=args.contig,
+        HiFi=args.HiFi,
+        arm="chunked",
+        num_total_reads=args.num_total_reads,
+        approx_MB_per_cut=args.approx_MB_per_cut,
+        approx_MB_per_cut_wiggle_window=args.approx_MB_per_cut_wiggle_window,
+        depth_window=args.chunk_depth_window,
+        margin=args.chunk_margin,
+        max_intron_length=args.max_intron_length,
+        normalize_max_cov_level=args.normalize_max_cov_level,
+    )
+
+    outputs = ChunkedRun.run(chunk_args)
+
+    output_prefix = _append_lraa_output_mode_suffix(
+        args.output_prefix, True, args.gtf
+    )
+    merged = outputs.get("chunked") or {}
+    for key, dest in (
+        ("quant_expr", "{}.quant.expr".format(output_prefix)),
+        ("quant_tracking", None),
+    ):
+        src = merged.get(key)
+        if not src or not os.path.exists(src):
+            sys.exit(
+                "Error: the chunked pipeline reported no {}; its work directory "
+                "is {}".format(key, work_dir)
+            )
+        if dest is None:
+            # tracking keeps whichever compression the merge produced, so that
+            # the file name still describes the file
+            dest = "{}.quant.tracking{}".format(
+                output_prefix, ".gz" if src.endswith(".gz") else ""
+            )
+        shutil.copyfile(src, dest)
+        logger.info("wrote %s", dest)
+
+    return 0
 
 
 def _get_lraa_output_mode_suffix(quant_only, input_gtf):

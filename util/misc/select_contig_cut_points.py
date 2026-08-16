@@ -181,11 +181,9 @@ MB = 1000000
 # rebased, and normalize_bam_by_strand.py is told the rebase offset via
 # --window_origin, so chunk-local windows ARE the absolute windows. Anything else
 # would make the grid depend on which read happened to come first.
-DEFAULT_GRID_ORIGIN = 0
+DEFAULT_GRID_ORIGIN = LRAA_Globals.config["chunk_grid_origin"]
 
-# Resolution at which read depth is measured, from normalize_bam_by_strand.py's
-# --depth_window default. Cuts land on this grid so no window spans one.
-DEFAULT_DEPTH_WINDOW = 100
+DEFAULT_DEPTH_WINDOW = LRAA_Globals.config["chunk_depth_window"]
 
 
 class SelectionError(RuntimeError):

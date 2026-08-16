@@ -159,10 +159,10 @@ NONPRIMARY_FLAGS = 0x100 | 0x800
 _CIGAR_REF_CONSUMING = frozenset((0, 2, 7, 8))  # M D = X
 _CIGAR_INTRON = 3  # N
 
-# 4x the largest boundary-snapping distance in LRAA_Globals (50 bp:
-# max_dist_between_alt_TSS_sites, max_dist_between_alt_polyA_sites,
-# TSS_window_read_enrich_len), so that no snapping can reach across a cut.
-DEFAULT_MARGIN = 200
+# Bases of clearance a cut must leave on both sides of an annotated locus. The
+# rationale for the value lives with it in LRAA_Globals: 4x the largest
+# boundary-snapping distance there, so no snapping can reach across a cut.
+DEFAULT_MARGIN = LRAA_Globals.config["chunk_margin"]
 
 
 class ExtractionError(RuntimeError):
