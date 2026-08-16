@@ -394,12 +394,7 @@ def load_gtf(gtf_filename, chrom, strand=""):
 GTF_INDEX_SUFFIX = ".lraa_tabix.gtf.gz"
 GTF_INDEX_STAMP_SUFFIX = ".lraa_tabix.json"
 
-IndexedGtf = collections.namedtuple("IndexedGtf", "path max_gene_span")
-IndexedGtf.__doc__ = """A tabix-indexed GTF, plus the number that makes a region fetch exact.
-
-``max_gene_span`` is the longest gene locus in the whole file, in bp. See
-``load_gtf_region`` for what it buys.
-"""
+# A tabix-indexed GTF is just its path; `ensure_gtf_index` returns one or None.
 
 
 def _gtf_index_key(gtf_filename):
@@ -448,11 +443,10 @@ def _read_gtf_stamp(stamp_path):
 
 
 def _build_gtf_index(gtf_filename, gz_path):
-    """Sort, compress and index a copy of ``gtf_filename``; return the largest gene span.
+    """Sort, compress and index a copy of ``gtf_filename``.
 
     Sorting is delegated to ``sort``, which spills to disk: a whole-genome GTF
-    does not fit in the memory chunking exists to bound. The gene spans are
-    accumulated on the way past, so the file is read once rather than twice.
+    does not fit in the memory chunking exists to bound.
 
     Written to temporaries and moved into place, because chunk workers race to
     build the same index and a half-written one must never be visible.
@@ -460,7 +454,7 @@ def _build_gtf_index(gtf_filename, gz_path):
 
     tmp_sorted = "{}.{}.sorting".format(gz_path, os.getpid())
     tmp_gz = "{}.{}.tmp".format(gz_path, os.getpid())
-    spans = {}  # (chrom, gene_id) -> [lend, rend]; gene count, not line count
+
     try:
         env = dict(os.environ, LC_ALL="C")
         with open(tmp_sorted, "wt") as ofh:
@@ -478,26 +472,6 @@ def _build_gtf_index(gtf_filename, gz_path):
                     # tabix can index.
                     if line.startswith("#") or not line.strip():
                         continue
-                    vals = line.split("\t")
-                    if len(vals) < 9:
-                        continue  # left for the readers to reject, with a line number
-                    gene_id = _attribute(vals[8], "gene_id") or _attribute(
-                        vals[8], "transcript_id"
-                    )
-                    if gene_id is not None:
-                        try:
-                            lend, rend = int(vals[3]), int(vals[4])
-                        except ValueError:
-                            continue
-                        key = (vals[0], gene_id)
-                        span = spans.get(key)
-                        if span is None:
-                            spans[key] = [lend, rend]
-                        else:
-                            if lend < span[0]:
-                                span[0] = lend
-                            if rend > span[1]:
-                                span[1] = rend
                     sorter.stdin.write(line)
             sorter.stdin.close()
             if sorter.wait() != 0:
@@ -507,7 +481,7 @@ def _build_gtf_index(gtf_filename, gz_path):
                     )
                 )
 
-        max_gene_span = max((r - l + 1 for l, r in spans.values()), default=0)
+
 
         pysam.tabix_compress(tmp_sorted, tmp_gz, force=True)
         pysam.tabix_index(tmp_gz, preset="gff", force=True)
@@ -520,11 +494,11 @@ def _build_gtf_index(gtf_filename, gz_path):
             except OSError:
                 pass
 
-    return max_gene_span
+    return None
 
 
 def ensure_gtf_index(gtf_filename, cache_dir=None):
-    """Return an ``IndexedGtf`` for ``gtf_filename``, building one if needed.
+    """Path to a tabix-indexed copy of ``gtf_filename``, building one if needed.
 
     Returns None when none could be built or reused, which tells the caller to
     fall back to ``load_gtf``. A missing index is a performance problem, not a
@@ -541,21 +515,20 @@ def ensure_gtf_index(gtf_filename, cache_dir=None):
         if (
             cached is not None
             and cached.get("key") == key
-            and cached.get("max_gene_span") is not None
             and os.path.exists(gz)
             and os.path.exists(gz + ".tbi")
         ):
-            return IndexedGtf(gz, cached["max_gene_span"])
+            return gz
 
     for home in homes:
         gz = os.path.join(home, base + GTF_INDEX_SUFFIX)
         stamp = os.path.join(home, base + GTF_INDEX_STAMP_SUFFIX)
         try:
             os.makedirs(home, exist_ok=True)
-            max_gene_span = _build_gtf_index(gtf_filename, gz)
+            _build_gtf_index(gtf_filename, gz)
             tmp_stamp = "{}.{}.tmp".format(stamp, os.getpid())
             with open(tmp_stamp, "wt") as ofh:
-                json.dump({"key": key, "max_gene_span": max_gene_span}, ofh)
+                json.dump({"key": key}, ofh)
             os.replace(tmp_stamp, stamp)
         except (OSError, ValueError, ExtractionError) as err:
             logger.warning(
@@ -565,13 +538,8 @@ def ensure_gtf_index(gtf_filename, cache_dir=None):
                 err,
             )
             continue
-        logger.info(
-            "indexed %s at %s (longest gene locus %d bp)",
-            gtf_filename,
-            gz,
-            max_gene_span,
-        )
-        return IndexedGtf(gz, max_gene_span)
+        logger.info("indexed %s at %s", gtf_filename, gz)
+        return gz
 
     logger.warning(
         "no writable location for a tabix index of %s; falling back to a full "
@@ -581,28 +549,31 @@ def ensure_gtf_index(gtf_filename, cache_dir=None):
     return None
 
 
-def load_gtf_region(indexed, gtf_filename, chrom, strand, lend, rend):
+def load_gtf_region(index_path, gtf_filename, chrom, strand, lend, rend, margin):
     """``load_gtf`` restricted to a region, served from a tabix index.
 
-    Widening the fetch by ``max_gene_span`` is what makes this exact rather than
-    a heuristic. A gene overlapping ``[lend, rend]`` cannot be longer than the
-    longest gene in the file, so it lies wholly inside the widened window and
-    every one of its lines comes back -- including the ones outside the region,
-    which is the point. A gene's SPAN decides whether it straddles a boundary,
-    and a span computed from a truncated line set would under-report a straddle
-    and admit a cut through a locus ``admissibility_offenders`` exists to refuse.
+    The fetch is widened by ``margin`` because that is the window the consumer
+    asks about, not because a gene might be long. ``admissibility_offenders``
+    tests each boundary against ``cut +/- margin``, so a gene lying wholly
+    OUTSIDE the chunk but within the margin of its edge still blocks the cut. A
+    fetch of ``[lend, rend]`` alone never returns that gene, and the check then
+    reports zero offenders where the full scan reports one -- it does not fail,
+    it stops being able to fire.
 
-    Widening cannot be dropped in favour of fetching the region alone even when
-    the GTF carries transcript rows: a gene whose transcripts do not overlap each
-    other can have its nearer transcripts returned and its farther ones missed,
-    which shortens the span in exactly the direction that hides a straddle.
+    Nothing wider is needed. Cut selection places boundaries only in the gaps
+    between annotated islands, so a gene overlapping the chunk lies wholly
+    inside it and all of its lines are inside the fetch; the derived span then
+    equals the full scan's. The one case this cannot see -- a gene whose
+    transcripts do not overlap each other, straddling a boundary with its far
+    transcripts beyond the margin -- is a case cut selection cannot produce,
+    because it blocks on the gene span it computed from the whole contig.
     """
 
     ingest = _GtfIngest(chrom, strand)
-    fetch_lend = max(1, lend - indexed.max_gene_span)
-    fetch_rend = rend + indexed.max_gene_span
+    fetch_lend = max(1, lend - margin)
+    fetch_rend = rend + margin
     where = "{}@{}:{}-{}".format(gtf_filename, chrom, fetch_lend, fetch_rend)
-    with pysam.TabixFile(indexed.path) as tabix:
+    with pysam.TabixFile(index_path) as tabix:
         if chrom not in tabix.contigs:
             return ingest.finish()
         for line in tabix.fetch(chrom, fetch_lend - 1, fetch_rend):
@@ -610,13 +581,17 @@ def load_gtf_region(indexed, gtf_filename, chrom, strand, lend, rend):
     return ingest.finish()
 
 
-def load_gtf_for_region(gtf_filename, chrom, strand, lend, rend, cache_dir=None):
+def load_gtf_for_region(
+    gtf_filename, chrom, strand, lend, rend, margin=DEFAULT_MARGIN, cache_dir=None
+):
     """Annotation of one region, indexed where possible and scanned where not."""
 
-    indexed = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
-    if indexed is None:
+    index_path = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
+    if index_path is None:
         return load_gtf(gtf_filename, chrom, strand)
-    return load_gtf_region(indexed, gtf_filename, chrom, strand, lend, rend)
+    return load_gtf_region(
+        index_path, gtf_filename, chrom, strand, lend, rend, margin
+    )
 
 
 def load_gtf_for_contig(gtf_filename, chrom, strand="", cache_dir=None):
@@ -626,13 +601,13 @@ def load_gtf_for_contig(gtf_filename, chrom, strand="", cache_dir=None):
     reach lies outside it.
     """
 
-    indexed = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
-    if indexed is None:
+    index_path = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
+    if index_path is None:
         return load_gtf(gtf_filename, chrom, strand)
 
     ingest = _GtfIngest(chrom, strand)
     where = "{}@{}".format(gtf_filename, chrom)
-    with pysam.TabixFile(indexed.path) as tabix:
+    with pysam.TabixFile(index_path) as tabix:
         if chrom not in tabix.contigs:
             return ingest.finish()
         for line in tabix.fetch(chrom):
@@ -1018,6 +993,9 @@ def extract_partition(
                 region.strand,
                 region.lend,
                 region.rend,
+                # the same margin admissibility_offenders applies below, so the
+                # fetch covers exactly the coordinates the check will consult
+                margin=margin,
                 cache_dir=gtf_index_cache_dir,
             )
             if gtf

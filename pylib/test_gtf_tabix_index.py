@@ -4,14 +4,17 @@
 
 Extraction used to read the whole GTF once per chunk, so its cost scaled with
 (chunk count x GTF size) rather than with genome size. The indexed path replaces
-that scan with a region fetch, and these tests hold it to the only contract that
-makes the substitution legitimate: for every gene the region needs, the indexed
-answer is IDENTICAL to the answer the full scan gives, span and lines alike.
+that scan with a region fetch, and these tests hold it to the contract that makes
+the substitution legitimate: the annotation a chunk sees is the same one the full
+scan would have given it, over every coordinate the chunk's consumers consult.
 
-A truncated gene span is the failure that matters. Cut admissibility is decided
-by comparing a gene's span against the boundary, so a span short by one exon does
-not raise -- it silently declares an inadmissible cut admissible, and the locus
-then falls in the gap between two chunks and vanishes from the run.
+"Every coordinate the consumers consult" is wider than the chunk. Cut selection
+guarantees that a gene overlapping a chunk lies wholly inside it, so emission
+needs nothing beyond the interval -- but ``admissibility_offenders`` tests each
+boundary against ``cut +/- margin``, and a gene lying entirely outside the chunk,
+within that margin, still blocks the cut. A fetch of the interval alone does not
+fail on such a gene; it stops being able to see it, and reports zero offenders
+where the scan reports one.
 """
 
 import importlib.util
@@ -39,6 +42,7 @@ def _load_extractor():
 extractor = _load_extractor()
 
 CONTIG = "chrT"
+CONTIG_LENGTH = 100000
 
 
 def _row(feature, lend, rend, strand, attrs, contig=CONTIG):
@@ -47,19 +51,15 @@ def _row(feature, lend, rend, strand, attrs, contig=CONTIG):
     )
 
 
-def _transcript_rows(gene_id, transcript_id, strand, exons, with_gene_row=True):
-    """Rows for one transcript. ``with_gene_row`` controls whether a locus-spanning
-    ``gene`` feature is present, which is what decides whether a naive region fetch
-    could recover the gene's full span on its own."""
-
+def _transcript_rows(gene_id, transcript_id, strand, exons):
     lend = min(e[0] for e in exons)
     rend = max(e[1] for e in exons)
     attrs = 'gene_id "{}";'.format(gene_id)
     tx_attrs = 'gene_id "{}"; transcript_id "{}";'.format(gene_id, transcript_id)
-    rows = []
-    if with_gene_row:
-        rows.append(_row("gene", lend, rend, strand, attrs))
-    rows.append(_row("transcript", lend, rend, strand, tx_attrs))
+    rows = [
+        _row("gene", lend, rend, strand, attrs),
+        _row("transcript", lend, rend, strand, tx_attrs),
+    ]
     for exon_lend, exon_rend in exons:
         rows.append(_row("exon", exon_lend, exon_rend, strand, tx_attrs))
     return rows
@@ -105,6 +105,45 @@ def plain_gtf(tmp_path):
     return _write_gtf(tmp_path / "annot.gtf", rows)
 
 
+def test_a_gene_outside_the_chunk_but_within_the_margin_still_blocks_the_cut(tmp_path):
+    """The reason the fetch is widened at all, and the whole of that reason.
+
+    ``near`` sits 50 bp past the chunk's right edge, so it overlaps nothing the
+    chunk contains -- and it blocks the boundary anyway, because a cut must clear
+    every locus by ``margin``. Fetch only the interval and the annotation has no
+    record of it, so the check returns clean on a region the scan refuses.
+
+    Set the widening to 0 and this goes red; it is what pins the margin.
+    """
+
+    rows = _transcript_rows("inside", "inside.1", "+", [(10000, 12000)])
+    rows += _transcript_rows("near", "near.1", "+", [(20050, 20400)])
+    gtf = _write_gtf(tmp_path / "near.gtf", rows)
+
+    region = extractor.Region(CONTIG, "+", 5000, 20000)
+    margin = extractor.DEFAULT_MARGIN
+    index_path = extractor.ensure_gtf_index(gtf)
+
+    scanned = extractor.load_gtf(gtf, CONTIG, "+")
+    widened = extractor.load_gtf_region(
+        index_path, gtf, CONTIG, "+", region.lend, region.rend, margin
+    )
+    unwidened = extractor.load_gtf_region(
+        index_path, gtf, CONTIG, "+", region.lend, region.rend, 0
+    )
+
+    def offenders(annotation):
+        return extractor.admissibility_offenders(
+            annotation, region, CONTIG_LENGTH, margin
+        )
+
+    assert len(offenders(scanned)) == 1
+    assert len(offenders(widened)) == len(offenders(scanned))
+    assert offenders(widened) == offenders(scanned)
+    # and the unwidened fetch is the failure this guards against
+    assert offenders(unwidened) == []
+
+
 def test_indexed_region_matches_full_scan_for_every_gene_it_returns(plain_gtf):
     """The substitution is only legitimate if the answers coincide exactly."""
 
@@ -118,8 +157,8 @@ def test_indexed_region_matches_full_scan_for_every_gene_it_returns(plain_gtf):
         for gene_id, observed in region_snapshot.items():
             assert observed == full_snapshot[gene_id]
 
-        # every gene the region actually overlaps must be present, or a locus
-        # straddling a boundary could go unnoticed
+        # every gene the region overlaps must be present and complete, since a
+        # gene overlapping a chunk lies wholly inside it
         for gene_id, (_, g_lend, g_rend, _, _) in full_snapshot.items():
             if g_lend <= rend and g_rend >= lend:
                 assert gene_id in region_snapshot
@@ -138,69 +177,32 @@ def test_transcript_models_match_full_scan(plain_gtf):
     assert _transcript_snapshot(indexed) == _transcript_snapshot(full)
 
 
-def test_gene_span_is_complete_when_transcripts_do_not_overlap(tmp_path):
-    """The case widening exists for, and the one a region fetch alone gets wrong.
-
-    One gene, two transcripts, a 39 kb gap between them and NO locus-spanning
-    ``gene`` row. A fetch of the region around the far transcript returns only
-    that transcript, making the gene look like it starts at 40000 when it starts
-    at 1000 -- so a cut at 30000 would read as clear of the locus when it splits
-    it. Widening by the longest gene span is what prevents that, and removing the
-    widening turns this assertion red.
-    """
-
-    rows = _transcript_rows(
-        "wide", "wide.1", "+", [(1000, 1200)], with_gene_row=False
-    ) + _transcript_rows("wide", "wide.2", "+", [(40000, 40200)], with_gene_row=False)
-    gtf = _write_gtf(tmp_path / "disjoint.gtf", rows)
-
-    full = extractor.load_gtf(gtf, CONTIG, "+")
-    assert full.genes["wide"].lend == 1000
-    assert full.genes["wide"].rend == 40200
-
-    indexed = extractor.load_gtf_for_region(gtf, CONTIG, "+", 39000, 41000)
-    assert indexed.genes["wide"].lend == 1000
-    assert indexed.genes["wide"].rend == 40200
-    assert _snapshot(indexed)["wide"] == _snapshot(full)["wide"]
-
-
-def test_max_gene_span_is_the_longest_locus(tmp_path):
-    rows = _transcript_rows("short", "short.1", "+", [(100, 200)]) + _transcript_rows(
-        "long", "long.1", "+", [(1000, 5000)]
-    )
-    gtf = _write_gtf(tmp_path / "spans.gtf", rows)
-    indexed = extractor.ensure_gtf_index(gtf)
-    assert indexed is not None
-    assert indexed.max_gene_span == 5000 - 1000 + 1
-
-
 def test_index_is_reused_rather_than_rebuilt(plain_gtf):
     first = extractor.ensure_gtf_index(plain_gtf)
     assert first is not None
-    stat_before = os.stat(first.path)
+    stat_before = os.stat(first)
 
     second = extractor.ensure_gtf_index(plain_gtf)
     assert second == first
-    stat_after = os.stat(second.path)
+    stat_after = os.stat(second)
     assert stat_after.st_mtime_ns == stat_before.st_mtime_ns
     assert stat_after.st_ino == stat_before.st_ino
 
 
 def test_index_is_rebuilt_when_the_gtf_changes(tmp_path):
+    """Staleness is size and mtime; a content hash would cost more than the scan."""
+
     gtf = _write_gtf(
         tmp_path / "mutating.gtf", _transcript_rows("g1", "g1.1", "+", [(100, 200)])
     )
-    first = extractor.ensure_gtf_index(gtf)
-    assert first.max_gene_span == 101
+    extractor.ensure_gtf_index(gtf)
+    assert set(extractor.load_gtf_for_region(gtf, CONTIG, "+", 1, 10000).genes) == {"g1"}
 
     _write_gtf(
         tmp_path / "mutating.gtf",
         _transcript_rows("g1", "g1.1", "+", [(100, 200)])
         + _transcript_rows("g2", "g2.1", "+", [(1000, 9000)]),
     )
-    second = extractor.ensure_gtf_index(gtf)
-    assert second.max_gene_span == 8001
-
     reloaded = extractor.load_gtf_for_region(gtf, CONTIG, "+", 1, 10000)
     assert set(reloaded.genes) == {"g1", "g2"}
 
@@ -231,9 +233,9 @@ def test_index_lands_in_the_cache_dir_when_the_gtf_dir_is_unwritable(
 
     monkeypatch.setattr(extractor, "_build_gtf_index", refuse_beside_the_gtf)
 
-    indexed = extractor.ensure_gtf_index(gtf, cache_dir=str(cache))
-    assert indexed is not None
-    assert indexed.path.startswith(str(cache))
+    index_path = extractor.ensure_gtf_index(gtf, cache_dir=str(cache))
+    assert index_path is not None
+    assert index_path.startswith(str(cache))
 
 
 def test_falls_back_to_a_full_scan_when_no_index_can_be_built(plain_gtf, monkeypatch):
@@ -266,9 +268,7 @@ def test_malformed_line_is_rejected_by_both_loaders(tmp_path):
     """The indexed path must not become the lenient one."""
 
     rows = _transcript_rows("g1", "g1.1", "+", [(100, 200)])
-    rows.append(
-        _row("exon", 300, 400, "+", 'note "no ids here";')
-    )
+    rows.append(_row("exon", 300, 400, "+", 'note "no ids here";'))
     gtf = _write_gtf(tmp_path / "bad.gtf", rows)
 
     with pytest.raises(extractor.ExtractionError) as scan_err:
