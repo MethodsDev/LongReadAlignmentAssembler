@@ -54,9 +54,11 @@ Sampling can miss a spike shorter than the interval.
 import argparse
 import collections
 import glob
+import gzip
 import json
 import os
 import re
+import resource
 import shutil
 import subprocess
 import sys
@@ -89,6 +91,27 @@ PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
 # LRAA rewrites --output_prefix to "<prefix>.LRAA.quant-only" in quant-only mode
 # (LRAA:_append_lraa_output_mode_suffix), so the files land under that name.
 LRAA_QUANT_ONLY_SUFFIX = "LRAA.quant-only"
+
+# LRAA gzips quant.tracking since v0.20.0; v0.19.x and earlier wrote it plain.
+# Both are accepted on read so a run at either version resolves its own artifact,
+# and the .gz form is preferred when a directory somehow carries both.
+QUANT_TRACKING_SUFFIXES = (".quant.tracking.gz", ".quant.tracking")
+
+
+def resolve_tracking(quant_prefix):
+    """Path to <quant_prefix>'s quant.tracking, gzipped or not. None if absent."""
+
+    for suffix in QUANT_TRACKING_SUFFIXES:
+        path = quant_prefix + suffix
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def open_text(path):
+    """Open a text file that may be gzipped, decided by extension."""
+
+    return gzip.open(path, "rt") if path.endswith(".gz") else open(path, "rt")
 
 
 class PipelineError(RuntimeError):
@@ -204,14 +227,32 @@ def run_step(name, cmd, log_path, cwd, rss_interval, append=True):
         sampler = RssSampler(proc.pid, rss_interval)
         sampler.start()
         try:
-            returncode = proc.wait()
+            # os.wait4 rather than proc.wait(): rusage is exact and cumulative, and
+            # it includes descendants the child reaped. LRAA joins its per-unit
+            # workers, so the whole tree rolls up here. The RssSampler below cannot
+            # substitute -- at a 0.5 s interval it misses exactly the short-lived
+            # per-unit workers this instrumentation exists to account for.
+            #
+            # wait4 reaps the pid itself, so assign proc.returncode directly and do
+            # NOT call proc.wait() afterwards, or Popen.__del__ warns about an
+            # unreaped child.
+            _, status, ru = os.wait4(proc.pid, 0)
+            proc.returncode = returncode = os.waitstatus_to_exitcode(status)
+            cpu_s = ru.ru_utime + ru.ru_stime
+            max_rss_kb = ru.ru_maxrss
         finally:
             sampler.stop()
         elapsed = time.time() - started
         print(
-            "\n===== step {} exit {} wall {:.1f}s peak_tree_rss {} KB "
-            "({} samples) =====".format(
-                name, returncode, elapsed, sampler.peak_kb, sampler.samples
+            "\n===== step {} exit {} wall {:.1f}s cpu {:.1f}s "
+            "peak_tree_rss {} KB ({} samples) max_rss {} KB =====".format(
+                name,
+                returncode,
+                elapsed,
+                cpu_s,
+                sampler.peak_kb,
+                sampler.samples,
+                max_rss_kb,
             ),
             file=log,
             flush=True,
@@ -222,7 +263,13 @@ def run_step(name, cmd, log_path, cwd, rss_interval, append=True):
         "cmd": cmd,
         "log": log_path,
         "wall_s": round(elapsed, 3),
+        "cpu_s": round(cpu_s, 3),
+        # Two different quantities, deliberately both kept: peak_tree_rss_kb is a
+        # SAMPLED sum over the process tree, max_rss_kb is an EXACT peak for the
+        # largest single process in it. Neither replaces the other, and the exact
+        # one is what distinguishes a completed run from an OOM-killed one.
         "peak_tree_rss_kb": sampler.peak_kb,
+        "max_rss_kb": max_rss_kb,
         "rss_samples": sampler.samples,
         "exit": returncode,
     }
@@ -683,12 +730,17 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
         )
         ckpt.mark(quant_token)
 
-    for suffix in (".quant.expr", ".quant.tracking"):
-        path = quant_prefix + suffix
-        if not os.path.exists(path):
-            raise PipelineError(
-                "chunk {} produced no {}; log: {}".format(cid, path, log)
+    expr_path = quant_prefix + ".quant.expr"
+    if not os.path.exists(expr_path):
+        raise PipelineError(
+            "chunk {} produced no {}; log: {}".format(cid, expr_path, log)
+        )
+    if resolve_tracking(quant_prefix) is None:
+        raise PipelineError(
+            "chunk {} produced no {}{{{}}}; log: {}".format(
+                cid, quant_prefix, ",".join(QUANT_TRACKING_SUFFIXES), log
             )
+        )
 
     chunk["quant_prefix"] = quant_prefix
     chunk["norm_bam"] = norm_bam
@@ -800,7 +852,7 @@ def read_tsv(path):
     """Returns (comments, header_fields, rows). Comment lines start with '#'."""
 
     comments, header, rows = [], None, []
-    with open(path, "rt") as fh:
+    with open_text(path) as fh:
         for line in fh:
             line = line.rstrip("\n")
             if line.startswith("#"):
@@ -846,7 +898,9 @@ def merge_and_translate(outdir, chunks):
     merged_dir = os.path.join(outdir, "merged")
     os.makedirs(merged_dir, exist_ok=True)
     expr_out = os.path.join(merged_dir, "chunked.quant.expr")
-    track_out = os.path.join(merged_dir, "chunked.quant.tracking")
+    # Gzipped to match what LRAA itself emits per chunk, so a consumer opens the
+    # merged table and a per-arm table the same way.
+    track_out = os.path.join(merged_dir, "chunked.quant.tracking.gz")
 
     expr_header = None
     expr_rows = []
@@ -934,7 +988,7 @@ def merge_and_translate(outdir, chunks):
     track_header = None
     track_rows = []
     for chunk in chunks:
-        _, header, rows = read_tsv(chunk["quant_prefix"] + ".quant.tracking")
+        _, header, rows = read_tsv(resolve_tracking(chunk["quant_prefix"]))
         if track_header is None:
             track_header = header
         elif header != track_header:
@@ -959,7 +1013,7 @@ def merge_and_translate(outdir, chunks):
             r[tcol["gene_id"]],
         )
     )
-    with open(track_out, "wt") as ofh:
+    with gzip.open(track_out, "wt") as ofh:
         print("\t".join(track_header), file=ofh)
         for row in track_rows:
             print("\t".join(row), file=ofh)
@@ -1054,9 +1108,24 @@ def run_baseline(
         if ckpt.done(input_token):
             prune_step["reused"] = True
         else:
+            # This step runs IN-PROCESS -- write_bam_excluding is a call, not a
+            # subprocess -- so os.wait4 has no child to report and it is the one
+            # step run_step cannot instrument. Measure the driver's own CPU across
+            # the span instead, and label the source, because a self-rusage delta
+            # and a child rusage total are not interchangeable: this one includes
+            # any other work this process does concurrently, which here is none.
+            _ru0 = resource.getrusage(resource.RUSAGE_SELF)
+            _t0 = time.time()
             prune_step["kept_records"] = write_bam_excluding(
                 whole_bam, severed_names, quant_bam
             )
+            _ru1 = resource.getrusage(resource.RUSAGE_SELF)
+            prune_step["wall_s"] = round(time.time() - _t0, 3)
+            prune_step["cpu_s"] = round(
+                (_ru1.ru_utime - _ru0.ru_utime) + (_ru1.ru_stime - _ru0.ru_stime), 3
+            )
+            prune_step["cpu_source"] = "rusage_self_delta"
+            prune_step["max_rss_kb"] = _ru1.ru_maxrss
             ckpt.mark(input_token)
         steps.append(prune_step)
 
@@ -1125,11 +1194,18 @@ def run_baseline(
         steps.append(run_step("baseline_quant", quant_cmd, log, bdir, rss_interval))
         ckpt.mark(quant_token)
 
-    for suffix in (".quant.expr", ".quant.tracking"):
-        if not os.path.exists(quant_prefix + suffix):
-            raise PipelineError(
-                "baseline produced no {}; log: {}".format(quant_prefix + suffix, log)
+    expr_path = quant_prefix + ".quant.expr"
+    if not os.path.exists(expr_path):
+        raise PipelineError(
+            "baseline produced no {}; log: {}".format(expr_path, log)
+        )
+    baseline_tracking = resolve_tracking(quant_prefix)
+    if baseline_tracking is None:
+        raise PipelineError(
+            "baseline produced no {}{{{}}}; log: {}".format(
+                quant_prefix, ",".join(QUANT_TRACKING_SUFFIXES), log
             )
+        )
 
     timing.setdefault("arms", {})["baseline"] = {
         "wall_s": round(time.time() - started, 3),
@@ -1139,7 +1215,7 @@ def run_baseline(
     }
     return {
         "quant_expr": quant_prefix + ".quant.expr",
-        "quant_tracking": quant_prefix + ".quant.tracking",
+        "quant_tracking": baseline_tracking,
     }
 
 
