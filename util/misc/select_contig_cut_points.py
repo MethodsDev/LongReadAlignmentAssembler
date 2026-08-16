@@ -605,6 +605,7 @@ def select_cut_points(
     minimum_span=None,
     max_intron_length=None,
     annotation=None,
+    gtf_index_cache_dir=None,
     count_denominator=True,
     severed_sink=None,
     # The thresholds the quant step will apply, for the emitted set only.  Not
@@ -631,7 +632,11 @@ def select_cut_points(
 
     if annotation is None:
         annotation = (
-            extractor.load_gtf(gtf, chrom, strand) if gtf else extractor.Annotation()
+            extractor.load_gtf_for_contig(
+                gtf, chrom, strand, cache_dir=gtf_index_cache_dir
+            )
+            if gtf
+            else extractor.Annotation()
         )
     islands = extractor.find_islands(annotation, chrom, strand, margin)
     zones = extractor.cut_zones(islands, 1, contig_length)
@@ -1060,6 +1065,13 @@ def main(argv=None):
     )
     parser.add_argument("--gtf", type=str, required=False, help="gtf annotation")
     parser.add_argument(
+        "--gtf_index_cache_dir",
+        type=str,
+        default=None,
+        help="where to put the tabix index of --gtf when the GTF's own "
+        "directory is not writable. The GTF itself is never modified.",
+    )
+    parser.add_argument(
         "--contig",
         type=str,
         default=None,
@@ -1191,7 +1203,9 @@ def main(argv=None):
     severed_sink = [] if args.severed_reads_bam else None
     for chrom in contigs:
         annotation = (
-            extractor.load_gtf(args.gtf, chrom, strand)
+            extractor.load_gtf_for_contig(
+                args.gtf, chrom, strand, cache_dir=args.gtf_index_cache_dir
+            )
             if args.gtf
             else extractor.Annotation()
         )

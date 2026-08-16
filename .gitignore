@@ -50,3 +50,8 @@ testing/multigene_secondary_quant/data/**
 
 # personal audit working notes; not for distribution
 doc_audit/
+
+# tabix indexes LRAA builds beside a reference GTF
+*.lraa_tabix.gtf.gz
+*.lraa_tabix.gtf.gz.tbi
+*.lraa_tabix.json

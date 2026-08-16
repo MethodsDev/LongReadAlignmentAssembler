@@ -133,8 +133,10 @@ import argparse
 import bisect
 import collections
 import json
+import logging
 import os
 import re
+import subprocess
 import sys
 
 import pysam
@@ -145,6 +147,8 @@ sys.path.insert(
 
 import LRAA_Globals
 import Util_funcs
+
+logger = logging.getLogger(__name__)
 
 # Retention filter shared by cut selection and emission: a spanning count is only
 # worth anything if it is computed over exactly the alignments that will be
@@ -288,81 +292,352 @@ def _attribute(attributes, key):
     return m.group(1).strip() if m else None
 
 
+class _GtfIngest:
+    """Accumulate GTF lines into gene and transcript models for one contig-strand.
+
+    One parser serves both the full scan and the indexed region fetch. Two copies
+    would be free to disagree about which lines belong to which gene, and the
+    symptom of a disagreement is a silently dropped locus -- the exact failure
+    ``admissibility_offenders`` exists to refuse -- rather than an error.
+    """
+
+    __slots__ = ("transcripts", "genes", "chrom", "strand")
+
+    def __init__(self, chrom, strand=""):
+        self.transcripts = {}
+        self.genes = {}
+        self.chrom = chrom
+        self.strand = strand
+
+    def ingest(self, line, where):
+        if line.startswith("#") or not line.strip():
+            return
+        vals = line.rstrip("\n").split("\t")
+        if len(vals) < 9:
+            raise ExtractionError(
+                "{}: GTF line has {} fields, need 9".format(where, len(vals))
+            )
+        if vals[0] != self.chrom:
+            return
+        feature_strand = vals[6]
+        if self.strand and feature_strand != self.strand:
+            return
+        lend, rend = int(vals[3]), int(vals[4])
+        if rend < lend:
+            raise ExtractionError(
+                "{}: GTF feature end {} precedes start {}".format(where, rend, lend)
+            )
+        attributes = vals[8]
+        transcript_id = _attribute(attributes, "transcript_id")
+        gene_id = _attribute(attributes, "gene_id")
+        if transcript_id is None and gene_id is None:
+            raise ExtractionError(
+                "{}: GTF line carries neither gene_id nor transcript_id; "
+                "it cannot be assigned to a partition".format(where)
+            )
+        if gene_id is None:
+            gene_id = transcript_id
+
+        gene = self.genes.get(gene_id)
+        if gene is None:
+            gene = self.genes[gene_id] = GeneModel(gene_id, feature_strand)
+        elif gene.strand != feature_strand:
+            raise ExtractionError(
+                "{}: gene {} appears on both strands ({} and {})".format(
+                    where, gene_id, gene.strand, feature_strand
+                )
+            )
+        gene.note_span(lend, rend)
+
+        if transcript_id is None:
+            gene.lines.append(line)
+            return
+
+        transcript = self.transcripts.get(transcript_id)
+        if transcript is None:
+            transcript = self.transcripts[transcript_id] = TranscriptModel(
+                transcript_id, gene_id, feature_strand
+            )
+            gene.transcript_ids.append(transcript_id)
+        elif transcript.gene_id != gene_id:
+            raise ExtractionError(
+                "{}: transcript {} claims gene {} and gene {}".format(
+                    where, transcript_id, transcript.gene_id, gene_id
+                )
+            )
+        transcript.add_line(line, vals[2], lend, rend)
+
+    def finish(self):
+        for transcript in self.transcripts.values():
+            transcript.finalize()
+        return Annotation(self.transcripts, self.genes)
+
+
 def load_gtf(gtf_filename, chrom, strand=""):
-    """Index a GTF for one contig-strand, grouping every line under its gene."""
+    """Index a GTF for one contig-strand, grouping every line under its gene.
 
-    transcripts = {}
-    genes = {}
+    Reads the file end to end. ``load_gtf_for_region`` is the indexed equivalent
+    and is what the per-chunk path uses; this stays as the fallback for a GTF
+    that cannot be indexed, and as the reference the indexed path is tested
+    against.
+    """
 
+    ingest = _GtfIngest(chrom, strand)
     with open(gtf_filename, "rt") as fh:
         for lineno, line in enumerate(fh, start=1):
-            if line.startswith("#") or not line.strip():
-                continue
-            vals = line.rstrip("\n").split("\t")
-            if len(vals) < 9:
+            ingest.ingest(line, "{}:{}".format(gtf_filename, lineno))
+    return ingest.finish()
+
+
+# A sorted, bgzipped, tabix-indexed copy of a GTF, beside the original. The
+# original is never modified: reference GTFs are shared, and often read-only.
+GTF_INDEX_SUFFIX = ".lraa_tabix.gtf.gz"
+GTF_INDEX_STAMP_SUFFIX = ".lraa_tabix.json"
+
+IndexedGtf = collections.namedtuple("IndexedGtf", "path max_gene_span")
+IndexedGtf.__doc__ = """A tabix-indexed GTF, plus the number that makes a region fetch exact.
+
+``max_gene_span`` is the longest gene locus in the whole file, in bp. See
+``load_gtf_region`` for what it buys.
+"""
+
+
+def _gtf_index_key(gtf_filename):
+    """What makes a cached index stale.
+
+    Size and mtime rather than a content hash: digesting a 1.5 GB GTF on every
+    chunk would cost more than the scan the index exists to replace.
+    """
+
+    st = os.stat(gtf_filename)
+    return {
+        "path": os.path.realpath(gtf_filename),
+        "size": st.st_size,
+        "mtime_ns": st.st_mtime_ns,
+    }
+
+
+def _gtf_index_basename(gtf_filename):
+    base = os.path.basename(gtf_filename)
+    for suffix in (".gtf.gz", ".gff3.gz", ".gff.gz", ".gtf", ".gff3", ".gff"):
+        if base.endswith(suffix):
+            return base[: -len(suffix)]
+    return base
+
+
+def _gtf_index_homes(gtf_filename, cache_dir):
+    """Where an index may live, best first.
+
+    Beside the GTF is preferred, so that repeat runs against the same reference
+    reuse one index instead of rebuilding per run. Reference directories are
+    often read-only, hence the fallback.
+    """
+
+    homes = [os.path.dirname(os.path.realpath(gtf_filename)) or "."]
+    if cache_dir:
+        homes.append(cache_dir)
+    return homes
+
+
+def _read_gtf_stamp(stamp_path):
+    try:
+        with open(stamp_path, "rt") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _build_gtf_index(gtf_filename, gz_path):
+    """Sort, compress and index a copy of ``gtf_filename``; return the largest gene span.
+
+    Sorting is delegated to ``sort``, which spills to disk: a whole-genome GTF
+    does not fit in the memory chunking exists to bound. The gene spans are
+    accumulated on the way past, so the file is read once rather than twice.
+
+    Written to temporaries and moved into place, because chunk workers race to
+    build the same index and a half-written one must never be visible.
+    """
+
+    tmp_sorted = "{}.{}.sorting".format(gz_path, os.getpid())
+    tmp_gz = "{}.{}.tmp".format(gz_path, os.getpid())
+    spans = {}  # (chrom, gene_id) -> [lend, rend]; gene count, not line count
+    try:
+        env = dict(os.environ, LC_ALL="C")
+        with open(tmp_sorted, "wt") as ofh:
+            sorter = subprocess.Popen(
+                ["sort", "-k1,1", "-k4,4n"],
+                stdin=subprocess.PIPE,
+                stdout=ofh,
+                env=env,
+                text=True,
+            )
+            with open(gtf_filename, "rt") as fh:
+                for line in fh:
+                    # Comments and blanks are dropped rather than sorted: the
+                    # readers ignore them, and a blank line is not a record
+                    # tabix can index.
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    vals = line.split("\t")
+                    if len(vals) < 9:
+                        continue  # left for the readers to reject, with a line number
+                    gene_id = _attribute(vals[8], "gene_id") or _attribute(
+                        vals[8], "transcript_id"
+                    )
+                    if gene_id is not None:
+                        try:
+                            lend, rend = int(vals[3]), int(vals[4])
+                        except ValueError:
+                            continue
+                        key = (vals[0], gene_id)
+                        span = spans.get(key)
+                        if span is None:
+                            spans[key] = [lend, rend]
+                        else:
+                            if lend < span[0]:
+                                span[0] = lend
+                            if rend > span[1]:
+                                span[1] = rend
+                    sorter.stdin.write(line)
+            sorter.stdin.close()
+            if sorter.wait() != 0:
                 raise ExtractionError(
-                    "{}:{}: GTF line has {} fields, need 9".format(
-                        gtf_filename, lineno, len(vals)
+                    "sort failed with exit {} while indexing {}".format(
+                        sorter.returncode, gtf_filename
                     )
                 )
-            if vals[0] != chrom:
-                continue
-            feature_strand = vals[6]
-            if strand and feature_strand != strand:
-                continue
-            lend, rend = int(vals[3]), int(vals[4])
-            if rend < lend:
-                raise ExtractionError(
-                    "{}:{}: GTF feature end {} precedes start {}".format(
-                        gtf_filename, lineno, rend, lend
-                    )
-                )
-            attributes = vals[8]
-            transcript_id = _attribute(attributes, "transcript_id")
-            gene_id = _attribute(attributes, "gene_id")
-            if transcript_id is None and gene_id is None:
-                raise ExtractionError(
-                    "{}:{}: GTF line carries neither gene_id nor transcript_id; "
-                    "it cannot be assigned to a partition".format(
-                        gtf_filename, lineno
-                    )
-                )
-            if gene_id is None:
-                gene_id = transcript_id
 
-            gene = genes.get(gene_id)
-            if gene is None:
-                gene = genes[gene_id] = GeneModel(gene_id, feature_strand)
-            elif gene.strand != feature_strand:
-                raise ExtractionError(
-                    "{}:{}: gene {} appears on both strands ({} and {})".format(
-                        gtf_filename, lineno, gene_id, gene.strand, feature_strand
-                    )
-                )
-            gene.note_span(lend, rend)
+        max_gene_span = max((r - l + 1 for l, r in spans.values()), default=0)
 
-            if transcript_id is None:
-                gene.lines.append(line)
-                continue
+        pysam.tabix_compress(tmp_sorted, tmp_gz, force=True)
+        pysam.tabix_index(tmp_gz, preset="gff", force=True)
+        os.replace(tmp_gz + ".tbi", gz_path + ".tbi")
+        os.replace(tmp_gz, gz_path)
+    finally:
+        for path in (tmp_sorted, tmp_gz, tmp_gz + ".tbi"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
-            transcript = transcripts.get(transcript_id)
-            if transcript is None:
-                transcript = transcripts[transcript_id] = TranscriptModel(
-                    transcript_id, gene_id, feature_strand
-                )
-                gene.transcript_ids.append(transcript_id)
-            elif transcript.gene_id != gene_id:
-                raise ExtractionError(
-                    "{}:{}: transcript {} claims gene {} and gene {}".format(
-                        gtf_filename, lineno, transcript_id, transcript.gene_id, gene_id
-                    )
-                )
-            transcript.add_line(line, vals[2], lend, rend)
+    return max_gene_span
 
-    for transcript in transcripts.values():
-        transcript.finalize()
 
-    return Annotation(transcripts, genes)
+def ensure_gtf_index(gtf_filename, cache_dir=None):
+    """Return an ``IndexedGtf`` for ``gtf_filename``, building one if needed.
+
+    Returns None when none could be built or reused, which tells the caller to
+    fall back to ``load_gtf``. A missing index is a performance problem, not a
+    correctness one, so refusing the run over it would be the worse failure.
+    """
+
+    key = _gtf_index_key(gtf_filename)
+    base = _gtf_index_basename(gtf_filename)
+    homes = _gtf_index_homes(gtf_filename, cache_dir)
+
+    for home in homes:
+        gz = os.path.join(home, base + GTF_INDEX_SUFFIX)
+        cached = _read_gtf_stamp(os.path.join(home, base + GTF_INDEX_STAMP_SUFFIX))
+        if (
+            cached is not None
+            and cached.get("key") == key
+            and cached.get("max_gene_span") is not None
+            and os.path.exists(gz)
+            and os.path.exists(gz + ".tbi")
+        ):
+            return IndexedGtf(gz, cached["max_gene_span"])
+
+    for home in homes:
+        gz = os.path.join(home, base + GTF_INDEX_SUFFIX)
+        stamp = os.path.join(home, base + GTF_INDEX_STAMP_SUFFIX)
+        try:
+            os.makedirs(home, exist_ok=True)
+            max_gene_span = _build_gtf_index(gtf_filename, gz)
+            tmp_stamp = "{}.{}.tmp".format(stamp, os.getpid())
+            with open(tmp_stamp, "wt") as ofh:
+                json.dump({"key": key, "max_gene_span": max_gene_span}, ofh)
+            os.replace(tmp_stamp, stamp)
+        except (OSError, ValueError, ExtractionError) as err:
+            logger.warning(
+                "could not build a tabix index for %s under %s: %s",
+                gtf_filename,
+                home,
+                err,
+            )
+            continue
+        logger.info(
+            "indexed %s at %s (longest gene locus %d bp)",
+            gtf_filename,
+            gz,
+            max_gene_span,
+        )
+        return IndexedGtf(gz, max_gene_span)
+
+    logger.warning(
+        "no writable location for a tabix index of %s; falling back to a full "
+        "scan per region, which is what makes extraction cost scale with chunk count",
+        gtf_filename,
+    )
+    return None
+
+
+def load_gtf_region(indexed, gtf_filename, chrom, strand, lend, rend):
+    """``load_gtf`` restricted to a region, served from a tabix index.
+
+    Widening the fetch by ``max_gene_span`` is what makes this exact rather than
+    a heuristic. A gene overlapping ``[lend, rend]`` cannot be longer than the
+    longest gene in the file, so it lies wholly inside the widened window and
+    every one of its lines comes back -- including the ones outside the region,
+    which is the point. A gene's SPAN decides whether it straddles a boundary,
+    and a span computed from a truncated line set would under-report a straddle
+    and admit a cut through a locus ``admissibility_offenders`` exists to refuse.
+
+    Widening cannot be dropped in favour of fetching the region alone even when
+    the GTF carries transcript rows: a gene whose transcripts do not overlap each
+    other can have its nearer transcripts returned and its farther ones missed,
+    which shortens the span in exactly the direction that hides a straddle.
+    """
+
+    ingest = _GtfIngest(chrom, strand)
+    fetch_lend = max(1, lend - indexed.max_gene_span)
+    fetch_rend = rend + indexed.max_gene_span
+    where = "{}@{}:{}-{}".format(gtf_filename, chrom, fetch_lend, fetch_rend)
+    with pysam.TabixFile(indexed.path) as tabix:
+        if chrom not in tabix.contigs:
+            return ingest.finish()
+        for line in tabix.fetch(chrom, fetch_lend - 1, fetch_rend):
+            ingest.ingest(line, where)
+    return ingest.finish()
+
+
+def load_gtf_for_region(gtf_filename, chrom, strand, lend, rend, cache_dir=None):
+    """Annotation of one region, indexed where possible and scanned where not."""
+
+    indexed = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
+    if indexed is None:
+        return load_gtf(gtf_filename, chrom, strand)
+    return load_gtf_region(indexed, gtf_filename, chrom, strand, lend, rend)
+
+
+def load_gtf_for_contig(gtf_filename, chrom, strand="", cache_dir=None):
+    """Annotation of one whole contig-strand, indexed where possible.
+
+    No widening: the fetch already covers the contig, so nothing a gene could
+    reach lies outside it.
+    """
+
+    indexed = ensure_gtf_index(gtf_filename, cache_dir=cache_dir)
+    if indexed is None:
+        return load_gtf(gtf_filename, chrom, strand)
+
+    ingest = _GtfIngest(chrom, strand)
+    where = "{}@{}".format(gtf_filename, chrom)
+    with pysam.TabixFile(indexed.path) as tabix:
+        if chrom not in tabix.contigs:
+            return ingest.finish()
+        for line in tabix.fetch(chrom):
+            ingest.ingest(line, where)
+    return ingest.finish()
 
 
 def alignment_blocks(aln):
@@ -701,6 +976,7 @@ def extract_partition(
     margin=DEFAULT_MARGIN,
     secondary_alignments="exclude",
     mini_contig_name=None,
+    gtf_index_cache_dir=None,
 ):
     """Extract one chunk. Returns the manifest, also written as JSON.
 
@@ -735,7 +1011,18 @@ def extract_partition(
                 )
             )
 
-        annotation = load_gtf(gtf, region.chrom, region.strand) if gtf else Annotation()
+        annotation = (
+            load_gtf_for_region(
+                gtf,
+                region.chrom,
+                region.strand,
+                region.lend,
+                region.rend,
+                cache_dir=gtf_index_cache_dir,
+            )
+            if gtf
+            else Annotation()
+        )
 
         offenders = admissibility_offenders(annotation, region, contig_length, margin)
         if offenders:
@@ -1019,6 +1306,14 @@ def main(argv=None):
         help="name of the extracted contig. Default: the source contig name.",
     )
 
+    parser.add_argument(
+        "--gtf_index_cache_dir",
+        type=str,
+        default=None,
+        help="where to put the tabix index of --gtf when the GTF's own "
+        "directory is not writable. The GTF itself is never modified.",
+    )
+
     args = parser.parse_args(argv)
     region = parse_region(args.region)
     output_prefix = args.output_prefix
@@ -1034,6 +1329,7 @@ def main(argv=None):
         margin=args.margin,
         secondary_alignments=args.secondary_alignments,
         mini_contig_name=args.mini_contig_name,
+        gtf_index_cache_dir=args.gtf_index_cache_dir,
     )
 
     print(
