@@ -2,22 +2,36 @@
 
 ## Overview
 
-`util/misc/run_chunked_quant_pipeline.py` quantifies a contig by cutting it into segments,
-quantifying each independently, and merging. The question that decides whether that is sound
-is whether it produces the same numbers as quantifying the whole contig at once. The pipeline
-answers it directly: `--arm both` runs the chunked arm and a whole-contig control over the
-same substrate, and the two outputs can be compared transcript by transcript.
+Chunked quantification cuts a contig into segments, quantifies each independently, and
+merges. The question that decides whether that is sound is whether it produces the same
+numbers as quantifying the whole contig at once. The pipeline answers it directly:
+`--arm both` runs the chunked arm and a whole-contig control over the same substrate, and
+the two outputs can be compared transcript by transcript.
 
-This evaluation is **not part of routine testing** and is not expected to become part of it.
-It needs a real chromosome with real annotation to be worth running, and `testing/` has no
-room for one. What follows is enough to reconstruct it when it is needed: which corpora make
-it meaningful, the exact invocations, the comparison, and the numbers a healthy run produced
-on 2026-08-15 so a future run has something to differ from.
+The orchestration lives in `pylib/ChunkedRun.py` as of v0.21.0. Two things reach it:
+`LRAA --chunk`, which is how users run it, and `util/misc/run_chunked_quant_pipeline.py`,
+which is the front end for this evaluation and the only route offering `--arm baseline`.
+A whole-contig control is a measurement device, not a mode LRAA has reason to offer, which
+is why the split falls there. Both routes produce byte-identical merged output, and
+`testing/single_contig` asserts that on every run.
+
+**The full evaluation is not part of routine testing** and is not expected to become part
+of it: it needs a real chromosome with real annotation to be worth running, and `testing/`
+has no room for one. What follows is enough to reconstruct it when it is needed: which
+corpora make it meaningful, the exact invocations, the comparison, and the numbers a
+healthy run produced on 2026-08-15 so a future run has something to differ from.
+
+What *is* routine, since v0.21.0, is `make test` in `testing/single_contig`, which runs
+both routes over the bundled minigenome with the cut size forced down to produce 14 chunks
+and diffs their merged output. It executes every stage as a subprocess, so unlike the unit
+tests it can catch a defect in the wiring between stages. That is the class this evaluation
+found twice, and the class that let the v0.20.0 tracking-name break survive two releases
+with nothing running chunking at all.
 
 Unit coverage of the pieces lives in `util/misc/test_chunked_pipeline_{budget,checkpoints,parity}.py`,
-`pylib/test_select_contig_cut_points.py` and `pylib/test_extract_contig_region_inputs.py`. None
-of those executes a stage subprocess, so none of them can catch a defect in the wiring between
-stages. Both defects this evaluation found were exactly that.
+`pylib/test_select_contig_cut_points.py`, `pylib/test_extract_contig_region_inputs.py`,
+`pylib/test_gtf_tabix_index.py` and `pylib/test_chunked_entry_point.py`. None of those
+executes a stage subprocess.
 
 ## What has to be true for the comparison to mean anything
 
