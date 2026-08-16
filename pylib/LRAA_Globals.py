@@ -414,7 +414,12 @@ config = {
     ######
     # resource monitoring
     "resource_monitor_enabled": True,
-    "resource_monitor_interval": 60.0,  # seconds
+    # How often a row is WRITTEN. RSS is sampled far more often than this and
+    # each row carries the high-water mark over its interval, so the peak does
+    # not depend on this value; it only decides how much shape the time series
+    # has. 60 s used to be the sampling rate too, against a median work unit of
+    # ~53 s, which left most units with a single spot reading.
+    "resource_monitor_interval": 15.0,  # seconds
     "resource_monitor_include_children": True,
     ######
     # progress monitoring
