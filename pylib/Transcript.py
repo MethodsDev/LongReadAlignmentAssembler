@@ -695,8 +695,19 @@ class Transcript(GenomeFeature):
                 else:
                     seen[nid] = i
 
+        # sorted(), not the raw set networkx hands back.  comp is a set of INDICES into
+        # the contig-wide structural sort above, and CPython iterates a set of ints in
+        # ascending "value mod table_size" order -- so restricting a run to a subrange
+        # shifts every index by a constant and ROTATES each cluster's member order.  That
+        # order becomes igraph vertex ids in partition_with_leiden, and Leiden is
+        # order-sensitive (the seed fixes the RNG, not the labelling), so the same
+        # transcripts were being called as different genes depending on how much of the
+        # contig was processed -- and every isoform filter is gene-scoped.  Sorting by
+        # index restores the cluster's own structural_sort_key order, which is intrinsic
+        # to its members and therefore extent-invariant.
         initial_clusters = [
-            [transcripts[i] for i in comp] for comp in nx.connected_components(G)
+            [transcripts[i] for i in sorted(comp)]
+            for comp in nx.connected_components(G)
         ]
 
         # Optional debug export of initial cluster memberships
