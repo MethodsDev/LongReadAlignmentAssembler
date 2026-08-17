@@ -1434,6 +1434,31 @@ def extract_partition(
             ),
             file=sys.stderr,
         )
+        # WHAT THE RECURSION COSTS, so the next reader inherits a choice rather
+        # than an accident. Re-entering the whole function re-does the cheap
+        # artifacts as well as the bam: this chunk's mini fasta, its faidx and its
+        # mini GTF are written twice, and the region is scanned twice. On
+        # testing/sep_contigs that is 1,006,292 bytes across the 10 chunks that
+        # withdraw -- noise. On a whole-contig chunk of a large contig it is not
+        # noise: chr1 would rewrite roughly 249 MB of mini fasta [INFERRED from
+        # this control flow, never measured, because no remapped whole-genome
+        # corpus was to hand].
+        #
+        # Kept anyway, and the reasoning is conditional rather than absolute. The
+        # cost is paid only by a chunk that withdraws, withdrawal needs an
+        # alignment past a contig end, and a well-formed aligner output has none:
+        # measured 0 such records in testing/single_contig, testing/sirvs and
+        # testing/ont_sep_contigs, against 453 of 2,507 in the remapped minigenome.
+        # So on every clean corpus this branch executes never and the duplicate
+        # write is zero.
+        #
+        # The narrower alternative is to factor the bam pass out and re-run only
+        # that, paying one extra index-backed fetch instead of a second full
+        # extraction. It was declined because this function has already produced
+        # one subtle defect -- the very premise this block repairs -- and six
+        # obviously-correct lines are worth more here than a saved fasta write on
+        # an input nobody has yet benchmarked. If a remapped whole-genome corpus
+        # does turn up, measure it and then make the change.
         return extract_partition(
             genome_fa,
             bam,
