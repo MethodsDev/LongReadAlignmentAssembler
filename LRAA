@@ -2941,6 +2941,14 @@ def _run_chunked_mode(args):
     output_prefix = _append_lraa_output_mode_suffix(
         args.output_prefix, bool(args.quant_only), args.gtf
     )
+    # An --output_prefix with a directory component that does not exist fails
+    # HERE, at the copy, after the whole partitioned run has been computed --
+    # chunked runs are the long ones, so that is the expensive place to find out.
+    # Creating the parent costs nothing, and is what LRAA's own scratch roots
+    # already do for themselves.
+    dest_dir = os.path.dirname(output_prefix)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
     merged = outputs.get("chunked") or {}
     wanted = [
         ("quant_expr", "{}.quant.expr".format(output_prefix)),
