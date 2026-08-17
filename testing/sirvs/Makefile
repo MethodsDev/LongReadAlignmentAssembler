@@ -107,11 +107,9 @@ test_unsupported_ref_model:
 
 include ../lraa_test_docker.mk
 
-MINIWDL_CFG = ../../miniwdl.test.cfg
-MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
-# The gating test below asserts on task behavior, so it must never be served from the
-# call cache: a cache hit skips the task and the assertion checks nothing.
-MINIWDL_RUN_UNCACHED = miniwdl run
+# MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
+# MINIWDL_RUN_UNCACHED is what the gating test below must use: it asserts on task
+# behavior, and a cache hit skips the task, so the assertion would check nothing.
 
 test_docker: test_docker_normalized_sg_bam
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i data/input_refFree_asm.json $(LRAA_WDL_DOCKER)
@@ -135,6 +133,6 @@ test_docker_normalized_sg_bam:
 	python3 -c 'import json; o=json.load(open("_LAST/outputs.json")); b=o["LRAA_wf.normalizedSpliceGraphBams"]; assert b==[], "opt-out: expected no normalized BAM, got {}".format(b); print("  retain_normalized_splice_graph_bam=false ok")'
 
 
-clean:
+clean: reclaim_root_owned
 	rm -rf ./gffcompare* ./LRAA.* ./__* ./*_lraa_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache \
 		./tx_rescue.* ./*.bam.count

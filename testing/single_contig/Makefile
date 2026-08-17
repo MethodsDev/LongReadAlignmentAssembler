@@ -141,8 +141,7 @@ test_oversimplify_refguided:
 
 include ../lraa_test_docker.mk
 
-MINIWDL_CFG = ../../miniwdl.test.cfg
-MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+# MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
 test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_ORF_prediction
 
@@ -182,7 +181,7 @@ test_wdl_Quant_only:
 # assertion while proving nothing about this build.
 test_wdl_chunked:
 	rm -rf __wdl_chunked
-	MINIWDL__CALL_CACHE__GET=false MINIWDL__CALL_CACHE__PUT=false miniwdl run --cfg $(MINIWDL_CFG) ../../WDL/LRAA.wdl -i wdl.Quant_only_chunked_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunked/. --verbose
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.Quant_only_chunked_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunked/. --verbose
 	python3 -c 'import json,collections; r=json.load(open("__wdl_chunked/outputs.json"))["LRAA_wf.chunkReports"]; assert len(r)==1, "expected one shard chunk report, got %r" % (r,); m=json.load(open(r[0]))["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("chunks per contig-strand: %r" % (dict(per),)); assert max(per.values()) > 1, "no contig-strand was cut, so chunking never happened: %r" % ([c["region"] for c in m],)'
 
 test_wdl_ORF_prediction:
@@ -192,7 +191,7 @@ test_wdl_ORF_prediction:
 
 ## Cleaning
 
-clean_miniwdl: 
+clean_miniwdl: reclaim_root_owned
 	rm -rf ./_LAST ./*_LRAA_wf ./__miniwdl_call_cache ./__miniwdl_download_cache
 
 

@@ -37,8 +37,7 @@ test_wdls: check_test_image_revision test_wdl_quant_only test_wdl_ref_guided tes
 
 include ../lraa_test_docker.mk
 
-MINIWDL_CFG = ../../miniwdl.test.cfg
-MINIWDL_RUN = miniwdl run --cfg $(MINIWDL_CFG)
+# MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
 test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
@@ -57,7 +56,7 @@ test_wdl_ref_free:
 ######
 # cleaning
 
-wdl_clean:
+wdl_clean: reclaim_root_owned
 	rm -rf  ./*_LRAA_wf ./_LAST ./__miniwdl_call_cache ./__miniwdl_download_cache
 
 clean: wdl_clean
