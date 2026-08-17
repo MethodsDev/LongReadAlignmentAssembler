@@ -262,6 +262,32 @@ BASES. Measured at chromosome scale, max nearest-zero distance 431.4 kb on chr1 
 and why the shipped 1 Mb default already covers it. Spacing decides how many windows
 there are, not how likely each one is to succeed.
 
+Two points about the FORM of that evidence, because they decide what may be built on
+it.
+
+First, the inversions are what settle it, not the flat rows. Decline fraction being
+flat under a 4x change in ratio is consistent with absolute; ratio 0.200 declining MORE
+than the larger ratio 0.250, and ratio 0.125 more than the smaller 0.100, is
+INCONSISTENT WITH RATIO. A monotone relationship cannot survive an inversion. Reporting
+it as "inconsistent with ratio" rather than "consistent with absolute" is the stronger
+and the honest form.
+
+Second, and this is the part a tidy story gets wrong: ratio is not operative on this
+corpus EITHER. The tempting reconciliation — that `minigenome`'s gaps scale with its
+own length so ratio governs synthetic corpora while absolute distance governs real
+chromosomes — reaches the right conclusion by a false mechanism, and a false mechanism
+that agrees with the answer is the most durable kind. It is false here: absolute wiggle
+predicts the decline fraction ON MINIGENOME, across a 4x range of ratios, in both
+blocks of the table above. Ratio was never operative anywhere; it was a confound in a
+sweep that held spacing fixed. Anyone who writes down "ratio governs small or synthetic
+contigs" has licensed the proportional-wiggle rule the next section exists to prevent.
+
+The mechanism is unremarkable once stated: a window of width W offers W/depth_window
+candidate positions, and whether any of them is read-free depends on the local
+distribution of read-free gaps — a property of the sequence and the library, measured
+in bases. Spacing changes how many windows a contig has. It does not change what is
+inside any one of them.
+
 ### The misreading to prevent
 
 **Do not make the default wiggle proportional to spacing.** A "keep the ratio at 0.1"
@@ -283,9 +309,13 @@ arithmetic, not the mechanism, and it should not be quoted as one.)
 ### What NOT to conclude from this corpus
 
 That one decline persists on `minigenome` even at 0.2 Mb wiggle is not evidence
-against the chromosome-scale result. `minigenome` is a synthetic 3.4 Mb contig carrying
-2,507 alignments packed far more densely per Mb than a real chromosome, and 16 targets
-at 0.2 Mb spacing is 50x finer than the shipped 10 Mb default. At the smoke section's
+against the chromosome-scale result. This is a claim about the decline RATE, not about
+which variable governs it — absolute wiggle governs it here as it does on a
+chromosome, per the section above. `minigenome` is a synthetic 3.4 Mb contig carrying
+2,507 alignments packed far more densely per Mb than a real chromosome, so its
+read-free gaps are scarcer in ABSOLUTE terms and a window of any given width in bases
+is likelier to be crowded; and 16 targets at 0.2 Mb spacing is 50x finer than the
+shipped 10 Mb default. At the smoke section's
 own sane geometry — 0.5 Mb spacing, 0.2 Mb wiggle — it placed 12 of 12 with nothing
 declined. `[INFERENCE]` At the shipped 10 Mb / 1 Mb defaults on a real chromosome the
 refusal should be rare to absent, consistent with chr21 (0 severed at 4 cuts) and chr1
