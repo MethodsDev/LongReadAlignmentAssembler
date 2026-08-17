@@ -242,6 +242,22 @@ config = {
     ###############################################
     # chunked parallelism: cutting a contig-strand
     #
+    # ON by default: the orientation split runs inside each chunk, concurrently with
+    # every other chunk, rather than as a serial pass over the whole bam first.
+    # MEASURED 151.2 s against strand-first's 255.2 s on the same input, because the
+    # whole-genome split is the single largest serial phase a chunked run has and
+    # strandless does not have it at all. The two orientations of an interval then
+    # share one extraction -- one mini FASTA, one mini GTF, one pass over the region.
+    #
+    # Stages 4 and 5 are identical either way: each still receives one
+    # orientation-pure bam for one chunk. Strandless changes WHERE the split happens,
+    # not whether reads are processed per strand.
+    #
+    # Opt out with --no_strandless_chunks, which restores the strand-first ordering.
+    # There is no correctness reason to: chunked-vs-unchunked parity is measured in
+    # both modes. It exists so a regression can be bisected against the older path.
+    "strandless_chunks": True,
+    #
     # A contig-strand is split into chunks that are normalized and processed
     # independently, then merged. Both values below are in MEGABASES.
     #

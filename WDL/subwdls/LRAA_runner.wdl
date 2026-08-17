@@ -46,10 +46,22 @@ task LRAA_runner_task {
         # bounds peak memory by the chunk size instead of the contig size -- measured
         # on chr1 at budget 8, 3.58 GB peak against 10.03 GB unchunked, 2.8x wall.
         #
-        # LRAA requires --quant_only and --gtf for this: a chunk sees only the isoforms
-        # inside it, so discovery across a cut would produce two partial models of one
-        # locus. Setting chunk without both of those is refused by LRAA, not silently
-        # ignored. Chunked mode also has no single-cell plumbing -- cell_list,
+        # AS OF v0.22.0 THIS WORKS IN ALL THREE MODES, and the comment that used to sit
+        # here said the opposite. It said LRAA requires --quant_only and --gtf for
+        # chunking, because a chunk sees only the isoforms inside it and discovery across
+        # a cut would produce two partial models of one locus. That was true until
+        # v0.22.0, which chunks discovery too: stage 6 merges the per-chunk GTFs, shifts
+        # coordinates back into the whole-contig frame and namespaces model ids per unit,
+        # and chunked agrees with unchunked EXACTLY on chr21 -- 1460 = 1460 models, 0 of
+        # 11,811 GTF rows differing, in both rescue configurations.
+        #
+        # So all three combinations are supported and this task already assembles them:
+        # quant_only with annot_gtf is quant-only, annot_gtf without quant_only is
+        # ref-guided discovery, and neither is de novo. See output_suffix below, which
+        # has always distinguished the three. The one refusal left in LRAA is
+        # --chunk --quant_only WITHOUT --gtf, which has nothing to quantify.
+        #
+        # Chunked mode still has no single-cell plumbing -- cell_list,
         # cell_barcode_tag and read_umi_tag do not reach the chunk workers -- so do not
         # combine it with the single-cell callers of this task.
         #
@@ -66,10 +78,14 @@ task LRAA_runner_task {
         # the half-width. LRAA's default is 1, so it must come down alongside a small
         # approx_MB_per_cut or neighbouring windows overlap.
         Float? approx_MB_per_cut_wiggle_window
-        # Move the orientation split out of the serial whole-BAM phase and into the
-        # per-chunk parallel phase. Requires num_total_reads: the whole-BAM pass that
-        # would otherwise count the TPM denominator no longer runs.
-        Boolean strandless_chunks = false
+        # DEFAULT ON, matching LRAA's own default. The orientation split runs inside
+        # each chunk rather than as a serial pass over the whole BAM -- the largest
+        # serial phase a chunked run otherwise has, 151.2 s against 255.2 s on the same
+        # input. Set false for the strand-first ordering.
+        #
+        # No longer requires num_total_reads: LRAA counts the library itself, before any
+        # chunking, with the -F 0x904 policy that matches the unchunked path.
+        Boolean strandless_chunks = true
 
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -385,13 +401,14 @@ workflow LRAA_runner {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
-        # Chunked quantification; see the task's inputs for what each of these does and
-        # what chunking requires. Off by default, so a caller that ignores them gets the
-        # command this task built before they existed.
+        # Chunked quantification and discovery; see the task's inputs for what each of
+        # these does. chunk itself is off by default, so a caller that ignores these
+        # gets the command this task built before they existed -- but when chunking IS
+        # on, strandless is the default ordering, as it is in LRAA.
         Boolean chunk = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
-        Boolean strandless_chunks = false
+        Boolean strandless_chunks = true
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"

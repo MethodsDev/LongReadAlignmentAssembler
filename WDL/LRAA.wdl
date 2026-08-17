@@ -49,15 +49,28 @@ workflow LRAA_wf {
         # 3.58 GB against 10.03 GB, which is the part that decides whether a
         # whole-genome run fits on a machine at all.
         #
-        # Requires quant_only plus annot_gtf -- a chunk sees only the isoforms inside it,
-        # so discovery cannot span a cut. LRAA refuses the combination rather than
-        # quietly producing partial models. See subwdls/LRAA_runner.wdl for the rest.
+        # Works in all three modes. This comment used to say chunking requires
+        # quant_only plus annot_gtf because discovery cannot span a cut; that stopped
+        # being true when stage 6 learned to merge per-chunk GTFs, shift coordinates
+        # back into the whole-contig frame and namespace model ids per unit. Chunked
+        # discovery now agrees with unchunked EXACTLY on chr21 -- 1460 = 1460 models,
+        # 0 of 11,811 GTF rows differing, in both rescue configurations. quant_only
+        # with annot_gtf is quant-only, annot_gtf alone is ref-guided discovery,
+        # neither is de novo. The one refusal left is --quant_only without a gtf,
+        # which has nothing to quantify. See subwdls/LRAA_runner.wdl for the rest.
         Boolean chunk = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
-        # Needs num_total_reads, which the scattered path always computes but the direct
-        # path only has if the caller supplies it.
-        Boolean strandless_chunks = false
+        # DEFAULT ON, matching LRAA's own default. The orientation split runs inside
+        # each chunk instead of as a serial pass over the whole bam, which is the
+        # largest serial phase a chunked run otherwise has: 151.2 s against 255.2 s on
+        # the same input. Set false to restore the strand-first ordering.
+        #
+        # This no longer needs num_total_reads from the caller. LRAA counts the library
+        # itself before any chunking, with the same -F 0x904 policy as the count_bam
+        # task below, so the scattered and direct paths agree and neither depends on
+        # the caller getting `samtools view -c` right.
+        Boolean strandless_chunks = true
 
         #  non-scattered runs
         # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across

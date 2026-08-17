@@ -452,7 +452,7 @@ def test_strandless_cut_selection_reads_the_raw_bam(tmp_path):
 
 
 def test_strand_first_cut_selection_reads_the_split_bams():
-    args = ChunkedRun.default_args(bam="raw.bam")
+    args = ChunkedRun.default_args(bam="raw.bam", strandless_chunks=False)
     strand_bams = {"+": "p.bam", "-": "m.bam"}
     sources = ChunkedRun.cut_sources(args, strand_bams, "inputs.up_1", "split.up_1")
 
@@ -557,7 +557,7 @@ def test_the_plan_reports_intervals_and_the_split_inside_each():
 
 
 def test_the_strand_first_plan_does_not_claim_an_in_chunk_split():
-    args = ChunkedRun.default_args()
+    args = ChunkedRun.default_args(strandless_chunks=False)
     sources = [("+", "plus", "p.bam", "tok"), ("-", "minus", "m.bam", "tok")]
     selections = {"+": [selection("chr1", (1, 10))], "-": [selection("chr1", (1, 10))]}
 

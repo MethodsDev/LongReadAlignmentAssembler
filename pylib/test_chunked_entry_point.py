@@ -60,9 +60,13 @@ def test_chunked_discovery_is_reachable(tmp_path):
     priced -- so the configuration is servable and is offered. See
     ``docs/denovo_chunking.md`` for the measurement the change rests on.
 
-    Asserted by the run reaching stage 1 and dying on the bam that does not
-    exist. A failure only the pipeline can produce cannot be confused with the
-    guard still firing under a different message.
+    Asserted by the run reaching the pipeline's FIRST act and dying on the bam
+    that does not exist. That act used to be stage 1's strand split; strandless
+    chunking is now the default and skips stage 1 entirely, so the marker is the
+    library count the chunked path takes before any partitioning. The principle is
+    unchanged and is the reason a marker is used at all: a failure only the
+    pipeline can produce cannot be confused with the guard still firing under a
+    different message.
     """
 
     result = _lraa(
@@ -76,7 +80,7 @@ def test_chunked_discovery_is_reachable(tmp_path):
     assert result.returncode != 0
     assert "--chunk requires --quant_only" not in combined
     assert "--chunk requires --gtf" not in combined
-    assert "stage1_strand_split" in combined
+    assert "counting genome-mapped reads" in combined
 
 
 def test_chunked_ref_guided_discovery_is_reachable(tmp_path):
@@ -99,14 +103,17 @@ def test_chunked_ref_guided_discovery_is_reachable(tmp_path):
     combined = result.stdout + result.stderr
     assert result.returncode != 0
     assert "--chunk requires --quant_only" not in combined
-    assert "stage1_strand_split" in combined
+    assert "counting genome-mapped reads" in combined
 
 
 def test_chunked_quant_only_still_requires_a_gtf(tmp_path):
     """Quant-only has nothing to quantify without one, and is refused up front.
 
-    The refusal has to happen BEFORE any stage runs: reaching stage 1 here would
-    mean the relaxation removed a check instead of narrowing it.
+    The refusal has to happen BEFORE any work runs, because reaching the pipeline
+    here would mean the relaxation removed a check instead of narrowing it. The
+    negative marker is the library count the chunked path takes first, not stage 1:
+    strandless is the default and skips stage 1, so asserting stage 1's absence
+    would pass no matter what this code did.
     """
 
     result = _lraa(
@@ -119,6 +126,7 @@ def test_chunked_quant_only_still_requires_a_gtf(tmp_path):
     combined = result.stdout + result.stderr
     assert result.returncode != 0
     assert "--chunk --quant_only requires --gtf" in combined
+    assert "counting genome-mapped reads" not in combined
     assert "stage1_strand_split" not in combined
 
 
@@ -651,3 +659,50 @@ def test_the_merged_gtf_is_rebased_and_its_model_ids_cannot_collide(tmp_path):
         ("5100", "5400"),
         ("5100", "5200"),
     ]
+
+
+def test_strandless_is_the_default_chunking_mode(tmp_path):
+    """Chunking is strandless unless asked otherwise, on BOTH routes into the pipeline.
+
+    The two routes have separate argparse instances -- LRAA's own and ChunkedRun's --
+    and ``default_args`` is documented as the single place both take defaults from. A
+    disagreement would make `LRAA --chunk` and the parity driver run different
+    pipelines from identical arguments, which is the drift that docstring exists to
+    prevent, so both are asserted here rather than one.
+    """
+
+    assert ChunkedRun.default_args().strandless_chunks is True
+    assert ChunkedRun.default_args(strandless_chunks=False).strandless_chunks is False
+    assert LRAA_Globals.config["strandless_chunks"] is True
+
+
+def test_the_library_count_is_taken_once_before_any_partitioning(tmp_path):
+    """The TPM denominator is resolved before chunking, not required from the caller.
+
+    Strandless has no whole-bam serial phase, so nothing downstream can count the
+    library. An earlier revision refused the combination and told the caller to pass
+    --num_total_reads, which put an extra required argument on the fast path and
+    invited callers to compute it with `samtools view -c` -- which counts unmapped and
+    supplementary records and inflates the denominator 3.89x on an SG-NEx ONT bam.
+
+    Asserted on ORDER as well as occurrence: the count must precede cut selection, so
+    a bam problem surfaces before the partition is computed rather than after.
+    """
+
+    result = _lraa(
+        "--chunk",
+        "--bam", "reads.bam",
+        "--genome", "genome.fa",
+        "--output_prefix", str(tmp_path / "sample"),
+        "--chunk_work_dir", str(tmp_path / "work"),
+    )
+    combined = result.stdout + result.stderr
+
+    assert "requires --num_total_reads" not in combined, "must not refuse; must count"
+    assert "counting genome-mapped reads" in combined
+    # the policy, not just that something was counted: -F 0x904 is what makes this
+    # agree with the unchunked path's count_reads_from_bam
+    assert "0x904" in combined
+    # and it happened before any cut selection: the run dies at the count, so no cut
+    # stage token appears at all. ("cut" as a bare substring would match "execute".)
+    assert "stage2_cuts" not in combined

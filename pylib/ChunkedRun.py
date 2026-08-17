@@ -3149,16 +3149,33 @@ def build_parser():
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
+    # DEFAULT ON, and it must agree with LRAA's own default -- default_args() is
+    # documented as the single place both routes get their defaults from, so a
+    # disagreement here would make `LRAA --chunk` and this driver run different
+    # pipelines from the same arguments. LRAA_Globals.config["strandless_chunks"]
+    # is the value; it is not read directly here because this parser is usable
+    # without that module loaded.
     parser.add_argument(
         "--strandless_chunks",
+        dest="strandless_chunks",
         action="store_true",
+        default=True,
         help="cut and extract STRANDLESS chunks and run the orientation split "
         "inside each chunk, concurrently with every other chunk, instead of "
-        "splitting the whole bam up front. The chunked arm then skips stage 1 "
+        "splitting the whole bam up front. THE DEFAULT; the flag is accepted so "
+        "a command can say so explicitly. The chunked arm then skips stage 1 "
         "entirely and extracts once per interval rather than once per "
         "contig-strand. The control still needs the split -- it IS the "
         "strand-split whole bam -- so --arm baseline/both still runs stage 1. "
         "An output directory serves one mode or the other, never both",
+    )
+    parser.add_argument(
+        "--no_strandless_chunks",
+        dest="strandless_chunks",
+        action="store_false",
+        help="split the whole bam by orientation first, then cut and process "
+        "each contig-STRAND. The older ordering, kept so a regression can be "
+        "bisected against it",
     )
     parser.add_argument(
         "--dry_run",
@@ -3599,9 +3616,31 @@ def run(args):
     LRAA refuses ``--chunk``: the chunk commands this module builds never pass
     it, but a recursive pipeline would fork until the box died, so the guard is
     a marker in the environment rather than a promise about a command line.
+
+    The marker is RESTORED on the way out. In a real run this makes no difference
+    -- the process spawns its children and exits -- but this function is also
+    called in-process, and leaving the variable set marked the whole caller as a
+    chunk worker for everything that followed. That turned test ORDER into a
+    correctness input: a later in-process run, or any subprocess inheriting the
+    caller's environment, would be refused by the recursion guard with nothing to
+    say why. Set-and-restore keeps the guard's meaning ("my parent is a chunked
+    pipeline") true for the children that need it and false for everyone else.
     """
 
+    had_worker_env = WORKER_ENV in os.environ
+    previous_worker_env = os.environ.get(WORKER_ENV)
     os.environ[WORKER_ENV] = "1"
+    try:
+        return _run_inner(args)
+    finally:
+        if had_worker_env:
+            os.environ[WORKER_ENV] = previous_worker_env
+        else:
+            os.environ.pop(WORKER_ENV, None)
+
+
+def _run_inner(args):
+    """The body of :func:`run`, with the worker marker already in place."""
 
     if args.cpu_budget is None:
         args.cpu_budget = CpuBudget.default_budget()

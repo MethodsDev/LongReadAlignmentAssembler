@@ -1145,12 +1145,24 @@ def main():
     )
     contig_group_setting.add_argument(
         "--strandless_chunks",
+        dest="strandless_chunks",
         action="store_true",
+        default=LRAA_Globals.config["strandless_chunks"],
         help="--chunk: cut and extract STRANDLESS chunks and run the "
         "orientation split inside each chunk, concurrently with every other "
         "chunk, instead of splitting the whole bam up front as a serial phase. "
-        "Requires --num_total_reads, because the whole-bam pass that would "
-        "otherwise supply the TPM denominator does not run",
+        "This is the DEFAULT; the flag is accepted so a command can say so "
+        "explicitly. 151.2 s against strand-first's 255.2 s on the same input",
+    )
+    contig_group_setting.add_argument(
+        "--no_strandless_chunks",
+        dest="strandless_chunks",
+        action="store_false",
+        help="--chunk: split the whole bam by orientation first, as a serial "
+        "phase, then cut and process each contig-STRAND. The older ordering, "
+        "slower because the whole-genome split is the largest serial phase a "
+        "chunked run has. Kept so a regression can be bisected against it, not "
+        "for correctness: chunked-vs-unchunked parity is measured in both modes",
     )
     contig_group_setting.add_argument(
         "--approx_MB_per_cut",
@@ -2874,16 +2886,32 @@ def _run_chunked_mode(args):
             "de novo chunked discovery, present runs ref-guided chunked "
             "discovery."
         )
-    if args.strandless_chunks and not args.num_total_reads:
-        # The strandless arm skips the whole-bam strand split, and that pass is
-        # what would otherwise count the retained records the TPM denominator
-        # defaults to. Refused here rather than deep in the pipeline, where the
-        # same refusal arrives after cut selection has already run.
-        sys.exit(
-            "Error: --strandless_chunks requires --num_total_reads. The "
-            "orientation split runs per chunk, so the whole-bam pass that "
-            "supplies the TPM denominator never runs and there is nothing to "
-            "default it to."
+    # THE TPM DENOMINATOR IS RESOLVED HERE, before any chunking work happens.
+    #
+    # Strandless chunking has no whole-bam serial phase -- that is the point of it --
+    # so nothing downstream is in a position to count the library for us. An earlier
+    # revision refused the combination and told the caller to pass --num_total_reads,
+    # which made the fast path the one with an extra required argument and invited
+    # every caller to compute it themselves. Several would have got it wrong in the
+    # same direction: `samtools view -c` counts unmapped and supplementary records
+    # too, and on an SG-NEx ONT cDNA bam that is ~74 % unmapped it returns 9,480,826
+    # against the correct 2,436,734 -- a 3.89x inflated denominator that deflates
+    # every TPM and drops the min_monoexonic_TPM floor from ~9.5 reads to ~2.4.
+    #
+    # So LRAA counts it itself, with the same helper and therefore the same -F 0x904
+    # policy the unchunked path uses, and the result is cached beside the bam as
+    # <basename>.mapped_primary.count with the policy in the filename. Doing it here
+    # rather than inside a chunk means one count for the run instead of one per chunk,
+    # and it happens before cut selection so a bam problem surfaces immediately
+    # instead of after the partition has been computed.
+    if not args.num_total_reads:
+        logger.info(
+            "chunked mode: counting genome-mapped reads for the TPM denominator "
+            "(no --num_total_reads given)"
+        )
+        args.num_total_reads = count_reads_from_bam(args.bam)
+        logger.info(
+            "chunked mode: using num_total_reads = %d", args.num_total_reads
         )
 
     work_dir = args.chunk_work_dir or "{}.chunked_work".format(args.output_prefix)
