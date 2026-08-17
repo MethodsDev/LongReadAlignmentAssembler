@@ -481,6 +481,101 @@ def test_candidate_names_are_not_recorded_unless_asked(tmp_path):
 
 
 # --------------------------------------------------------------------------------------
+# Locality
+# --------------------------------------------------------------------------------------
+
+
+def _distinct_contig_seq(length=1200, seed=20260817):
+    """Non-repetitive sequence, so two transcripts drawn from it are distinguishable.
+
+    CONTIG_SEQ above is deliberately simple and is in fact periodic, which is fine where
+    only "does anything align" matters. It is useless here: under a short repeat every
+    target matches every read and locality cannot be told from chance.
+    """
+    out = []
+    state = seed
+    for _ in range(length):
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        out.append("ACGT"[(state >> 16) & 3])
+    return "".join(out)
+
+
+LOCAL_SEQ = _distinct_contig_seq()
+
+# Two transcripts at disjoint loci. A read placed on NEAR must not be credited to FAR.
+NEAR_EXONS = [(1, 200), (251, 400)]
+FAR_EXONS = [(701, 900), (951, 1100)]
+
+
+def _locality_rescuer(tmp_path):
+    transcripts = [
+        _Transcript("near", "gNear", NEAR_EXONS),
+        _Transcript("far", "gFar", FAR_EXONS),
+    ]
+    return StreamingRescue.StreamingRescuer(
+        _ModelSpliceGraph(), transcripts, LOCAL_SEQ, None, tmp_dir=str(tmp_path)
+    )
+
+
+def _genome_read_over_near(sequence):
+    """A primary genome record whose aligned blocks sit inside NEAR's first exon."""
+    header = pysam.AlignmentHeader.from_references([CONTIG], [len(LOCAL_SEQ)])
+    read = pysam.AlignedSegment(header)
+    read.query_name = "displaced"
+    read.reference_id = 0
+    read.reference_start = 0
+    read.mapping_quality = 60
+    read.cigarstring = f"{len(sequence)}M"
+    read.query_sequence = sequence
+    read.set_tag("NM", 0, value_type="i")
+    return read
+
+
+def test_the_index_sees_only_the_targets_a_read_overlaps(tmp_path):
+    """The input streaming supplies to the shared locality rule, checked on its own.
+
+    Everything downstream is the batch path's; what streaming adds is this per-read set,
+    computed from the read's own genome blocks against the same exon overlap index.
+    """
+    rescuer = _locality_rescuer(tmp_path)
+    try:
+        read = _genome_read_over_near(LOCAL_SEQ[:150])
+        overlapping = set(
+            IsoformReadRescue._get_alignment_overlapping_targets(
+                read, rescuer._exon_overlap_index
+            )
+        )
+        assert overlapping == {"gNear^near"}, overlapping
+    finally:
+        rescuer.close()
+
+
+def test_a_hit_to_a_target_the_read_does_not_overlap_is_declined(tmp_path):
+    """The rejection itself, end to end through the shared acceptance function.
+
+    The read's genome alignment sits on NEAR while its sequence is FAR's, so its only
+    good transcriptome hit is at a locus the read is not at -- the case locality exists
+    to refuse. Worth a test of its own because on ONT chr20 the gate fires zero times:
+    the aligned-fraction threshold leaves six reads whose hits are all local, so an
+    end-to-end run there cannot tell this gate working from it being absent.
+    """
+    rescuer = _locality_rescuer(tmp_path)
+    try:
+        far_sequence = "".join(LOCAL_SEQ[lend - 1 : rend] for lend, rend in FAR_EXONS)
+        read = _genome_read_over_near(far_sequence)
+        rescued = rescuer.offer(read, LOW_PER_ID)
+
+        assert rescued == (), "a non-local target must not be credited"
+        assert rescuer.alignment_rejections["locality"] >= 1
+        assert rescuer.reads_locality_declined == 1
+        # Nothing local survived either, so this read's placement really was displaced.
+        assert rescuer.reads_locality_displaced == 1
+        assert rescuer.stats()["alignment_rejections"]["locality"] >= 1
+    finally:
+        rescuer.close()
+
+
+# --------------------------------------------------------------------------------------
 # The refusals
 # --------------------------------------------------------------------------------------
 

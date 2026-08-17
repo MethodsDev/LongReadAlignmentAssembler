@@ -182,12 +182,25 @@ class StreamingRescuer:
         self._buf = None
         self._header = None
         self._target_id_to_tid = {}
+        # Same exon overlap index the batch path builds, over the same transcript models,
+        # built once per contig-strand rather than per read: locality is one IntervalTree
+        # query against it per candidate, which is why the batch path's read-local
+        # criterion transfers to a streaming pass unchanged.
+        self._exon_overlap_index = IsoformReadRescue._build_exon_overlap_index(
+            self._transcript_models
+        )
         self.reads_offered = defaultdict(int)
         self.reads_rescued = defaultdict(int)
         self.reads_without_sequence = 0
         self.hits_examined = 0
         self.align_seconds = 0.0
         self.accept_seconds = 0.0
+        # Rejection tallies in rescue's own vocabulary, accumulated across candidates so a
+        # worker can report the same breakdown the batch path logs. Bounded by the number
+        # of distinct reasons, not by reads.
+        self.alignment_rejections = defaultdict(int)
+        self.reads_locality_declined = 0
+        self.reads_locality_displaced = 0
         # Off by default: at a billion reads a candidate name set is exactly the
         # unbounded per-read state this whole pass exists not to hold. Turned on only by
         # the candidate-parity measurement, where the population is 14k names.
@@ -337,13 +350,30 @@ class StreamingRescuer:
         genome_explained = IsoformReadRescue._explained_read_bases(read)
         genome_gap_id = IsoformReadRescue._gap_aware_identity(read)
 
-        rescued_mps, _details = IsoformReadRescue._parse_rescue_alignments(
+        # Locality, from this read's own genome alignment blocks. The batch path computes
+        # exactly this in _collect_read_sequences and applies it as the last content rule
+        # inside _parse_rescue_alignments, so the rule, its position and its counters are
+        # all inherited here rather than restated -- streaming supplies only the per-read
+        # input, which is the one thing a streaming pass has that a batch pass had to
+        # collect up front.
+        #
+        # An empty set is recorded rather than omitted, matching the batch path: the read
+        # stays offered and is still realigned, it simply has no target it may be credited
+        # to. Omitting the key would read as "no locality information" to the same check.
+        allowed_target_ids = set(
+            IsoformReadRescue._get_alignment_overlapping_targets(
+                read, self._exon_overlap_index
+            )
+        )
+
+        rescued_mps, details = IsoformReadRescue._parse_rescue_alignments(
             alignments,
             self._splice_graph,
             self._transcript_models,
             read_path_mapper=self._read_path_mapper,
             require_unique_path_across_best_hits=True,
             split_multipaths_by_gene=False,
+            read_name_to_allowed_target_ids={read_name: allowed_target_ids},
             read_name_to_genome_explained=(
                 {} if genome_explained is None else {read_name: genome_explained}
             ),
@@ -352,6 +382,10 @@ class StreamingRescuer:
             ),
         )
         self.accept_seconds += time.perf_counter() - accept_started
+        for reason, count in details.get("alignment_rejections", {}).items():
+            self.alignment_rejections[reason] += count
+        self.reads_locality_declined += details.get("reads_locality_declined", 0)
+        self.reads_locality_displaced += details.get("reads_locality_displaced", 0)
         if not rescued_mps:
             return ()
         self.reads_rescued[category] += 1
@@ -425,4 +459,7 @@ class StreamingRescuer:
             "reads_without_sequence": self.reads_without_sequence,
             "hits_examined": self.hits_examined,
             "n_targets": 0 if self._aligner is None else self._aligner.n_seq,
+            "alignment_rejections": dict(self.alignment_rejections),
+            "reads_locality_declined": self.reads_locality_declined,
+            "reads_locality_displaced": self.reads_locality_displaced,
         }

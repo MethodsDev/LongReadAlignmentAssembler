@@ -4381,6 +4381,14 @@ RESCUE_STATS_COLUMNS = (
     "n_targets",
     "align_seconds",
     "accept_seconds",
+    # Named to match the batch summary's reads_rescue_declined_locality /
+    # reads_rescue_displaced_locality / alignments_rescue_rejected_locality, so the two
+    # paths' locality numbers can be compared directly rather than transcribed between
+    # two vocabularies. Displaced is the one to watch: a read whose best transcriptome
+    # hit sat somewhere the read is not.
+    "reads_rescue_declined_locality",
+    "reads_rescue_displaced_locality",
+    "alignments_rescue_rejected_locality",
 )
 
 
@@ -4402,6 +4410,9 @@ def _write_streaming_rescue_stats(path, contig_acc, contig_strand, rescuer):
                     str(stats["n_targets"]),
                     f"{rescuer.align_seconds:.3f}",
                     f"{rescuer.accept_seconds:.3f}",
+                    str(stats["reads_locality_declined"]),
+                    str(stats["reads_locality_displaced"]),
+                    str(stats["alignment_rejections"].get("locality", 0)),
                 ]
             )
             + "\n"
