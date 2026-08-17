@@ -171,10 +171,13 @@ branch and from its branch point (`f6019a1`, a detached worktree), at two geomet
 
 The second row is the one that matters: it exercises the cost-minimising selection
 and the drop-count-and-name path, and both produce exactly what they produced before.
-The only differences anywhere in quant-only output are two ADDED keys —
-`params.require_zero_severed: false` in the cut manifest and
-`severed_read_accounting.zero_severed_required: false` in `timing.json` — both of
-which state the contract rather than change it.
+A key-by-key comparison of the cut manifests, flattened, reports zero changed
+values and zero removed keys in both orientations. Five keys are ADDED, and all
+five state the contract rather than change it: `params.require_zero_severed` and
+`counts.targets_declined_zero_severed` in the manifest, `declined_zero_severed`
+and `best_spanning_in_window` on each unplaced target, and
+`severed_read_accounting.zero_severed_required` in `timing.json`. All are false or
+null on a quant-only run.
 
 ## Smoke evidence for the new mode
 
