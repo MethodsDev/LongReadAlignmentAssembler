@@ -612,7 +612,13 @@ def load_arm(arm_dir):
         "expr_rows": outputs["chunked"]["expr_rows"],
         "tracking_rows": outputs["chunked"]["tracking_rows"],
         "num_total_reads": outputs.get("num_total_reads"),
-        "strandless": bool(timing.get("strandless_chunks")),
+        # ``chunk_order``, which is what ChunkedRun.run actually writes. It wrote
+        # no ``strandless_chunks`` key, so reading that name reported False for
+        # EVERY arm, strandless ones included -- and the fixture in
+        # test_strandless_parity.py invented the key, so the tests agreed with the
+        # bug rather than with the pipeline. Caught by the first chr1-scale run,
+        # which read a real strandless timing.json.
+        "strandless": timing.get("chunk_order") == ChunkedRun.STRANDLESS_MODE,
         "baseline_excluded_severed_reads": timing.get(
             "baseline_excluded_severed_reads"
         ),

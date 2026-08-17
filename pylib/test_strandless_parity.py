@@ -531,7 +531,21 @@ def make_arm(
             fh,
         )
     with open(os.path.join(root, "timing.json"), "wt") as fh:
-        json.dump({"strandless_chunks": strandless, "num_total_reads": num_total_reads}, fh)
+        # The key ChunkedRun.run writes, not a name invented here: this fixture
+        # claims above to be "exactly what compare-arms reads", and a fixture that
+        # publishes a key the pipeline never emits certifies a contract nobody
+        # implements.
+        json.dump(
+            {
+                "chunk_order": (
+                    gate.ChunkedRun.STRANDLESS_MODE
+                    if strandless
+                    else gate.ChunkedRun.STRAND_FIRST_MODE
+                ),
+                "num_total_reads": num_total_reads,
+            },
+            fh,
+        )
     return root
 
 
@@ -553,6 +567,34 @@ def test_identical_arms_are_equivalent(tmp_path):
     assert report["tracking"]["byte_identical"] is True
     assert report["verdict"].startswith("EQUIVALENT:")
     assert report["passed"] is True
+
+
+def test_load_arm_reads_the_mode_the_pipeline_actually_records(tmp_path):
+    """``load_arm`` must read the key ChunkedRun WRITES, not one a fixture invents.
+
+    This is a contract between two files, so it is asserted against the real
+    writer rather than against ``make_arm``: the previous name
+    (``strandless_chunks``) is one ``ChunkedRun.run`` never emits, so the field
+    read False for every arm including strandless ones, and no fixture-only test
+    could see it because the fixture published the invented key too.
+
+    The regression this pins is silent and in the reassuring direction, which is
+    why it needs its own test rather than an assertion inside a bigger one.
+    """
+
+    strand_first = make_arm(tmp_path / "sf", BASE_EXPR, BASE_TRACKING)
+    strandless = make_arm(
+        tmp_path / "sl", BASE_EXPR, BASE_TRACKING, strandless=True
+    )
+
+    assert gate.load_arm(strand_first)["strandless"] is False
+    assert gate.load_arm(strandless)["strandless"] is True
+
+    # The fixture writes the writer's own vocabulary, so a rename in ChunkedRun
+    # breaks this test instead of silently reverting the field to False.
+    recorded = json.loads((tmp_path / "sl" / "timing.json").read_text())
+    assert recorded["chunk_order"] == gate.ChunkedRun.STRANDLESS_MODE
+    assert "strandless_chunks" not in recorded
 
 
 def test_a_tracking_order_difference_is_reported_as_ordering_and_proven(tmp_path):
