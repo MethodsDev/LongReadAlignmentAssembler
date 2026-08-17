@@ -2588,8 +2588,18 @@ def format_plan(args, mode, sources, selections):
                 " = {} x 2 orientations".format(len(planned)) if strandless else "",
             ),
         ),
-        row("stage 5", "quant", str(quant_units)),
-        row("stage 6", "merge", "{} quant unit(s)".format(quant_units)),
+        row(
+            "stage 5",
+            "discovery" if args.discovery else "quant",
+            str(quant_units),
+        ),
+        row(
+            "stage 6",
+            "merge",
+            "{} unit(s){}".format(
+                quant_units, ", incl. model gtfs" if args.discovery else ""
+            ),
+        ),
         "",
         "  {:<20} {:<28} {:>9}  {}".format(
             "chunk", "region", "span Mb", "quant units"
