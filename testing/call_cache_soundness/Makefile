@@ -9,7 +9,12 @@ include ../lraa_test_docker.mk
 
 # No check_test_image_revision prerequisite: this directory never runs an LRAA
 # image, it builds its own throwaway one.
-test_wdls: test_cache_soundness
+#
+# test_reclaim_root_owned comes from the include; it lives beside the target it
+# tests and runs here because this is where harness self-checks run.  Both are
+# seconds, and testing/Makefile runs this directory first so that a broken
+# harness is reported before forty minutes of runs that depend on it.
+test_wdls: test_reclaim_root_owned test_cache_soundness
 
 test_cache_soundness:
 	bash ./test_cache_soundness.sh '$(MINIWDL_CFG)' '$(LRAA_TEST_DOCKER)'

@@ -131,6 +131,50 @@ reclaim_root_owned:
 	  chown -R "$$(id -u)" /reclaim \
 	  || { echo "could not reclaim root-owned files under $$PWD; rm -rf will fail" >&2; exit 1; }
 
+# Self-test for the target above, run by testing/call_cache_soundness, which is
+# where the harness checks its own invariants.  It costs about a second.
+#
+# It exists because the passive evidence is worthless: a `make clean` that
+# succeeds while nothing is root-owned and a `make clean` that succeeds because
+# the reclaim fixed it are THE SAME OBSERVATION, and the reclaim reports nothing
+# when it finds nothing to do.  Every clean run since this landed has been the
+# first case -- a completed LRAA run deletes the contigtmp tree the root-owned
+# files live in, so only an aborted or killed run leaves them, which is exactly
+# when someone reaches for make clean.  So the check creates the condition,
+# CONFIRMS rm -rf fails on it, applies the reclaim, and confirms rm -rf then
+# succeeds.  A check that never observes the failure state cannot tell a working
+# fix from an absent problem.
+.PHONY: test_reclaim_root_owned
+test_reclaim_root_owned:
+	@probe=__reclaim_probe; \
+	if [ "`id -u`" = 0 ]; then \
+	  echo "SKIP: running as root, rm -rf cannot fail on ownership"; exit 0; fi; \
+	if ! command -v docker >/dev/null 2>&1; then \
+	  echo "SKIP: needs docker to create root-owned files"; exit 0; fi; \
+	rm -rf $$probe; \
+	docker run --rm -v "$$PWD":/probe alpine sh -c \
+	  "mkdir -p /probe/$$probe/sub && echo x > /probe/$$probe/sub/f && chmod 700 /probe/$$probe" \
+	  || { echo "could not plant a root-owned probe directory" >&2; exit 1; }; \
+	if rm -rf $$probe 2>/dev/null; then \
+	  echo "" >&2; \
+	  echo "FAIL: rm -rf removed a root-owned 0700 directory, so this check cannot" >&2; \
+	  echo "observe the failure it defends against.  Either the probe was not created" >&2; \
+	  echo "root-owned, or this process has privileges a developer running make does" >&2; \
+	  echo "not.  Passing under those conditions would mean nothing." >&2; \
+	  echo "" >&2; \
+	  exit 1; \
+	fi; \
+	$(MAKE) --no-print-directory reclaim_root_owned >/dev/null; \
+	rm -rf $$probe || { \
+	  echo "" >&2; \
+	  echo "FAIL: reclaim_root_owned ran and rm -rf still cannot remove $$probe." >&2; \
+	  echo "make clean aborts here, and the next suite run is blocked by the debris" >&2; \
+	  echo "of the last one -- the failure this target exists to prevent." >&2; \
+	  echo "" >&2; \
+	  exit 1; \
+	}; \
+	echo "ok: root-owned container debris is reclaimed and then removable"
+
 # The tag above is a pointer, and a miniwdl run never says which commit it
 # resolved to.  A worktree that has moved since :testing was built therefore
 # drives the current WDL against older code, and the resulting failure names
