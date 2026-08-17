@@ -519,7 +519,18 @@ def ensure_bam_index(bam):
         )
 
 
-def severed_read_names(cut_dir):
+# Extraction refuses some alignments for reasons no cut selection can predict: a
+# record whose aligned end lies past the END OF ITS CONTIG overhangs the last chunk
+# without any cut being responsible for it. Those reads are genuinely absent from
+# the chunk inputs, so the baseline has to subtract them too or the two arms stop
+# consuming the same records. ``verify_severed_accounting`` writes them here, and
+# the glob below absorbs them for the baseline while the accounting check excludes
+# them from the SELECTION side -- otherwise a file this pipeline wrote would be read
+# back as a prediction cut selection never made.
+EXTRACTION_ONLY_DROPS = "__extraction_only.dropped_reads.txt"
+
+
+def severed_read_names(cut_dir, exclude=()):
     """Every read the extractor drops at a cut, across both orientations.
 
     Cut selection writes one of these per strand.  Their union is exactly the
@@ -531,9 +542,15 @@ def severed_read_names(cut_dir):
     deliberately narrower -- it holds only the severed alignments quantification
     would have used, which is the right set for asking what a cut cost and the
     wrong one for making the two arms consume the same records.
+
+    ``exclude`` drops basenames from the union. Callers asking "what did SELECTION
+    predict" pass ``EXTRACTION_ONLY_DROPS``; callers asking "what must the baseline
+    subtract" pass nothing, because for that question the two sources are equal.
     """
     names = set()
     for path in sorted(glob.glob(os.path.join(cut_dir, "*.dropped_reads.txt"))):
+        if os.path.basename(path) in exclude:
+            continue
         with open(path, "rt") as fh:
             names.update(line.strip() for line in fh if line.strip())
     return names
@@ -1900,6 +1917,9 @@ def verify_severed_accounting(cut_dir, chunks):
                           EITHER orientation, because a strandless cut is one
                           position serving both.
       dropped             names extraction actually refused, unioned over chunks.
+                          A SUPERSET of ``selected``, not an equal: extraction also
+                          refuses alignments reaching past the end of their contig,
+                          which no cut is responsible for.
       mentions            the same drops counted per chunk rather than per read.
                           A read spanning a cut overlaps BOTH neighbouring
                           chunks and is listed by both, so this is about twice
@@ -1907,6 +1927,13 @@ def verify_severed_accounting(cut_dir, chunks):
                           that nobody reaches for the per-chunk sum -- which is
                           what ``alignments_dropped_overhang`` totals to -- as if
                           it were the severed set.
+
+    The opening statement is still the contract, but it is enforced by making the
+    control subtract more rather than by refusing the run: reads dropped without
+    being named are written to ``EXTRACTION_ONLY_DROPS`` in the same directory, which
+    the baseline's own glob then picks up. Only the opposite direction -- named and
+    NOT dropped -- remains fatal, because that one needs the two tools to disagree
+    about identical geometry and no bookkeeping can decide which is right.
 
     Strand-first never had to check this: one selection and one chunk series per
     orientation meant the same coordinates decided both sets twice over.
@@ -1916,7 +1943,7 @@ def verify_severed_accounting(cut_dir, chunks):
     in the new mode proves nothing about the old one.
     """
 
-    selected = severed_read_names(cut_dir)
+    selected = severed_read_names(cut_dir, exclude=(EXTRACTION_ONLY_DROPS,))
     dropped = set()
     mentions = 0
     for chunk in chunks:
@@ -1928,34 +1955,63 @@ def verify_severed_accounting(cut_dir, chunks):
     # An earlier revision raised here whenever discovery dropped anything, because
     # selection had promised zero by refusing every severing position. That promise
     # is gone: severing is priced, not forbidden, so a nonzero drop is the expected
-    # outcome on any dense input. What still has to hold is the IDENTITY below --
-    # the reads selection named are the reads extraction dropped -- which is a
-    # statement about the two tools agreeing, not about the geometry being clean.
-    if selected != dropped:
-        missed = sorted(dropped - selected)
-        unrealized = sorted(selected - dropped)
+    # outcome on any dense input.
+    #
+    # The two directions of a mismatch are NOT the same defect, and only one of them
+    # is about the tools disagreeing.
+    #
+    # NAMED BUT NOT DROPPED is fatal. Selection promised a cut would sever a read and
+    # extraction placed it whole, so the two disagree about the same geometry. The
+    # baseline would then lose records the chunks did see, and no bookkeeping here can
+    # reconstruct which side is right.
+    unrealized = sorted(selected - dropped)
+    if unrealized:
         raise PipelineError(
-            "severed-read accounting is inexact: cut selection named {} read(s) "
-            "and extraction dropped {}. {} dropped but not named (the control "
-            "would keep records the chunks never saw, e.g. {}); {} named but not "
-            "dropped (the control would lose records the chunks did see, e.g. "
-            "{}). The parity comparison subtracts the NAMED set from the "
-            "control, so it must be the dropped set exactly.".format(
-                len(selected),
-                len(dropped),
-                len(missed),
-                ", ".join(missed[:5]) or "-",
-                len(unrealized),
-                ", ".join(unrealized[:5]) or "-",
+            "severed-read accounting is inexact: cut selection named {} read(s) as "
+            "severed and extraction placed {} of them whole (e.g. {}). The two tools "
+            "disagree about the same cut geometry, so the parity comparison would "
+            "lose records the chunks did see.".format(
+                len(selected), len(unrealized), ", ".join(unrealized[:5])
             )
         )
 
+    # DROPPED BUT NOT NAMED is tolerated, because it does not require the tools to
+    # disagree about anything. An alignment whose end lies past the end of its contig
+    # overhangs the final chunk with no cut responsible for it, and coordinate-remapped
+    # bams carry these routinely -- 453 of 2,507 records in testing/sep_contigs do,
+    # one ending at 199,427 on a 77,313 bp contig. Refusing the run over a defect in
+    # the INPUT would make such a bam unchunkable for a reason that has nothing to do
+    # with chunking.
+    #
+    # Tolerated is not ignored. These reads are absent from the chunk inputs, so the
+    # baseline must subtract them or the arms stop consuming the same records and the
+    # parity comparison silently compares different sets. Persisting them where
+    # ``severed_read_names`` looks is what keeps that true across separate
+    # invocations of the two arms, which is the whole reason the baseline reads this
+    # directory from disk rather than being handed a set in memory.
+    extraction_only = sorted(dropped - selected)
+    if extraction_only:
+        path = os.path.join(cut_dir, EXTRACTION_ONLY_DROPS)
+        with open(path, "wt") as fh:
+            for name in extraction_only:
+                fh.write(name + "\n")
+        print(
+            "NOTE: extraction dropped {} read(s) no cut selection named, which is "
+            "what an alignment reaching past the end of its contig looks like. They "
+            "are named in {} so the baseline subtracts them too; the run continues. "
+            "e.g. {}".format(
+                len(extraction_only), path, ", ".join(extraction_only[:3])
+            ),
+            flush=True,
+        )
+
     return {
-        "severed_reads": len(dropped),
+        "severed_reads": len(selected),
         "named_by_cut_selection": len(selected),
         "dropped_by_extraction": len(dropped),
         "per_chunk_drop_mentions": mentions,
-        "sets_identical": True,
+        "dropped_not_named": len(extraction_only),
+        "sets_identical": not extraction_only,
     }
 
 

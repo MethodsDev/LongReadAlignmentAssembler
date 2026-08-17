@@ -308,9 +308,12 @@ def test_severed_accounting_counts_reads_not_mentions(tmp_path):
     assert counts["sets_identical"] is True
 
 
-def test_a_read_dropped_but_not_named_fails_the_run(tmp_path):
-    """The control would keep a record the chunks never saw, and every
-    difference downstream would be confounded by exactly that read."""
+def test_a_read_dropped_but_not_named_is_tolerated_and_still_subtracted(tmp_path):
+    """An alignment reaching past the end of its contig is dropped by extraction
+    with no cut responsible for it, and coordinate-remapped bams carry these
+    routinely. Refusing the run would make such a bam unchunkable over a defect in
+    the input. Tolerating it is only sound if the control still subtracts the read,
+    so that is asserted here rather than left to the comment."""
 
     cut_dir = tmp_path / "cuts"
     cut_dir.mkdir()
@@ -321,9 +324,43 @@ def test_a_read_dropped_but_not_named_fails_the_run(tmp_path):
         chunk["manifest"], dropped_read_names=["readA", "readB"]
     )
 
-    with pytest.raises(ChunkedRun.PipelineError) as err:
-        ChunkedRun.verify_severed_accounting(str(cut_dir), [chunk])
-    assert "readB" in str(err.value)
+    record = ChunkedRun.verify_severed_accounting(str(cut_dir), [chunk])
+
+    assert record["dropped_not_named"] == 1
+    assert record["sets_identical"] is False
+    assert record["named_by_cut_selection"] == 1
+    assert record["dropped_by_extraction"] == 2
+
+    # The load-bearing half: run_baseline prunes by this glob, so readB has to be in
+    # it or the two arms consume different records while the run reports success.
+    assert ChunkedRun.severed_read_names(str(cut_dir)) == {"readA", "readB"}
+    # ...and the check itself must NOT read its own output back as a prediction that
+    # cut selection made, or a rerun would silently reclassify readB as severed.
+    assert ChunkedRun.severed_read_names(
+        str(cut_dir), exclude=(ChunkedRun.EXTRACTION_ONLY_DROPS,)
+    ) == {"readA"}
+
+
+def test_tolerating_an_unnamed_drop_is_idempotent_across_reruns(tmp_path):
+    """The extraction-only file lands in the directory the check reads, so a second
+    run must not mistake the first run's output for cut selection's prediction and
+    must not accumulate. Verified because the persist-and-reread shape is what makes
+    the tolerance safe, and it is the part that would rot silently."""
+
+    cut_dir = tmp_path / "cuts"
+    cut_dir.mkdir()
+    (cut_dir / "strandless.dropped_reads.txt").write_text("readA\n")
+
+    chunk = make_chunk(tmp_path, emitted=(1, 1))
+    chunk["manifest"] = dict(
+        chunk["manifest"], dropped_read_names=["readA", "readB"]
+    )
+
+    first = ChunkedRun.verify_severed_accounting(str(cut_dir), [chunk])
+    second = ChunkedRun.verify_severed_accounting(str(cut_dir), [chunk])
+
+    assert second == first
+    assert ChunkedRun.severed_read_names(str(cut_dir)) == {"readA", "readB"}
 
 
 def test_a_read_named_but_not_dropped_fails_the_run(tmp_path):
