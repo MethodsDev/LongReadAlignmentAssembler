@@ -1047,6 +1047,73 @@ def test_reuse_is_withdrawn_when_an_alignment_reaches_past_the_contig_end(tmp_pa
     assert "overhangs_contig_end" not in {a.query_name for a in written}
 
 
+def test_a_reused_manifest_reporting_an_overhang_drop_is_refused(tmp_path):
+    """The reuse-and-drop contradiction, refused at the CONSUMER.
+
+    The extractor withdraws reuse rather than producing this state, so nothing in
+    the tree reaches it -- which is exactly why it is worth asserting. "Unreachable"
+    is a property of today's extractor, not of the contract every later stage
+    relies on, and this is the state that fails SILENTLY: the dropped names reach
+    EXTRACTION_ONLY_DROPS so the parity baseline subtracts them while the reused
+    source still feeds them to the chunked arm.
+
+    Built from a synthetic manifest rather than by breaking the extractor, because
+    the question is what the consumer does when handed one -- and the sentinel is
+    pre-marked so no extraction is launched.
+    """
+
+    outdir = tmp_path / "out"
+    (outdir / "logs").mkdir(parents=True)
+    ckpt = ChunkedRun.Checkpoints(str(outdir / "__ckpt"))
+    cdir = tmp_path / "chunk_dir"
+    cdir.mkdir()
+    prefix = cdir / "chunk"
+    ckpt.mark("sentinel_cA_00")
+
+    plan = {
+        "planned": {"key": ""},
+        "chunk_id": "cA_00",
+        "unit_id": "extract_cA_00",
+        "dir": str(cdir),
+        "prefix": str(prefix),
+        "log": str(outdir / "logs" / "chunk_cA_00.log"),
+        "cmd": ["true"],
+        "token": "sentinel_cA_00",
+        "reuse_source_bam": True,
+    }
+
+    def write_manifest(overhang):
+        Path(str(prefix) + ".partition.json").write_text(
+            json.dumps(
+                {
+                    "strand": None,
+                    "offset": 0,
+                    "window_origin": 0,
+                    "bam_reused_from_source": True,
+                    "counts": {
+                        "alignments_emitted": 10,
+                        "alignments_dropped_overhang": overhang,
+                        "opposite_orientation_excluded": 0,
+                    },
+                    "files": {"bam": "/dev/null"},
+                }
+            )
+        )
+
+    write_manifest(overhang=2)
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.run_extraction(plan, ckpt, str(outdir), 0.5)
+    assert "bam_reused_from_source=True" in str(err.value)
+    assert "2 alignment(s)" in str(err.value)
+
+    # CONTROL: the same manifest reusing and dropping NOTHING is the common case
+    # and must pass, so the check above is about the contradiction rather than
+    # about reuse.
+    write_manifest(overhang=0)
+    _record, manifest = ChunkedRun.run_extraction(plan, ckpt, str(outdir), 0.5)
+    assert manifest["bam_reused_from_source"] is True
+
+
 def test_splitting_the_reused_source_by_contig_equals_splitting_the_copy(tmp_path):
     """The downstream stage really does accept the source in place of the copy.
 
