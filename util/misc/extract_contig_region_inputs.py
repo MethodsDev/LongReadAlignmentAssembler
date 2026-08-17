@@ -296,10 +296,29 @@ class Annotation:
 
 
 def parse_region(region_str):
-    """``chr20-:100-200`` -> Region(chrom='chr20', strand='-', lend=100, rend=200)."""
+    """``chr20-:100-200`` -> Region(chrom='chr20', strand='-', lend=100, rend=200).
+
+    The chrom group is non-greedy rather than a negated class. It used to be
+    ``[^:+-]+``, which excluded the hyphen and so refused every contig with one in
+    its name: ``LRAA --chunk`` died at stage 3 with "Cannot parse region string" on
+    GRCh38 analysis-set HLA contigs (``HLA-A*``), on 1 of the 50 contigs in
+    ``testing/sep_contigs`` (``TRIM39-RPP21^ENSG...``), and on all 6 of
+    ``testing/ont_sep_contigs`` (``minig-ENSG...``), which could therefore not be
+    chunked at all.
+
+    Non-greedy plus the anchored digits tail resolves the shapes by backtracking:
+    ``HLA-A:1-100`` gives chrom ``HLA-A``; ``chr20-:100-200`` still gives chrom
+    ``chr20`` strand ``-``; and a name containing colons, ``HLA-A:01:01:1-100``,
+    gives chrom ``HLA-A:01:01``, because only the final digits-dash-digits can
+    satisfy the tail.
+
+    One ambiguity is irreducible in this encoding and is unchanged: a contig whose
+    name genuinely ends in ``+`` or ``-``, addressed without a strand suffix, cannot
+    be told from the same name carrying one. The suffix wins.
+    """
 
     region_str = region_str.replace(",", "")
-    m = re.match(r"^([^:+-]+)([+-]?):(\d+)-(\d+)$", region_str)
+    m = re.match(r"^(.+?)([+-]?):(\d+)-(\d+)$", region_str)
     if m is None:
         raise ExtractionError(
             "Cannot parse region string: {} (expected chrom[+-]:lend-rend)".format(

@@ -1408,3 +1408,55 @@ def test_cli_can_be_told_to_filter_a_mixed_bam_deliberately(tmp_path, capsys):
     manifest = json.loads(Path(prefix + ".partition.json").read_text())
     assert manifest["counts"]["opposite_orientation_excluded"] == 2
     assert manifest["counts"]["alignments_emitted"] == 3
+
+# --------------------------------------------------------------------------- #
+# Region parsing.  The chrom group was a negated class, [^:+-]+, which excluded
+# the hyphen and so refused every contig with one in its name.  That is not an
+# exotic shape: GRCh38's analysis set names its HLA contigs HLA-A* and friends,
+# 1 of the 50 contigs in testing/sep_contigs is TRIM39-RPP21^ENSG..., and all 6
+# of testing/ont_sep_contigs are minig-ENSG..., so `LRAA --chunk` could not run
+# on that corpus at all -- it died at stage 3 on "Cannot parse region string".
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "region_str,chrom,strand",
+    [
+        # the shapes that already worked, which the fix must not disturb
+        ("chr20:100-200", "chr20", ""),
+        ("chr20-:100-200", "chr20", "-"),
+        ("chr20+:100-200", "chr20", "+"),
+        ("chr1:1,000-2,000", "chr1", ""),
+        # hyphens in the contig name: the defect
+        ("HLA-A:1-100", "HLA-A", ""),
+        ("HLA-A-:1-100", "HLA-A", "-"),
+        ("chr1-2:30-40", "chr1-2", ""),
+        ("chr1-2-:30-40", "chr1-2", "-"),
+        ("TRIM39-RPP21^ENSG00000248167.7:1-1000", "TRIM39-RPP21^ENSG00000248167.7", ""),
+        ("minig-ENSG00000112293:1-46709983", "minig-ENSG00000112293", ""),
+        # colons in the contig name resolve too, because only the final
+        # digits-dash-digits can satisfy the anchored tail
+        ("HLA-DRB1*01:01:1-500", "HLA-DRB1*01:01", ""),
+    ],
+)
+def test_parse_region_accepts_punctuated_contig_names(region_str, chrom, strand):
+    extractor = _load_extractor()
+    region = extractor.parse_region(region_str)
+    assert (region.chrom, region.strand) == (chrom, strand)
+
+
+@pytest.mark.parametrize(
+    "region_str",
+    ["chr1:200-100", "chr1:0-100", "chr1:abc-def", "nonsense", "chr1-100-200"],
+)
+def test_parse_region_still_refuses_what_it_should(region_str):
+    """Relaxing the chrom class must not make the parser permissive.
+
+    Reversed and sub-1 bounds, non-numeric bounds, and a string with no colon at
+    all are still errors.  The last case matters most: chr1-100-200 looks like a
+    region to a human and is not one, and a greedy chrom group would have matched
+    it as chrom "chr1-100" over an empty tail.
+    """
+    extractor = _load_extractor()
+    with pytest.raises(extractor.ExtractionError):
+        extractor.parse_region(region_str)
