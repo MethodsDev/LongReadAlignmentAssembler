@@ -47,6 +47,9 @@ testing/multigene_secondary_quant/data/**
 !testing/determinism/check_determinism.py
 !testing/internal_priming/
 !testing/internal_priming/check_monoexonic_internal_priming.py
+!testing/strandless_parity/
+!testing/strandless_parity/Makefile
+!testing/strandless_parity/run_strandless_gate.py
 
 # personal audit working notes; not for distribution
 doc_audit/
