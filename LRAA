@@ -1155,14 +1155,16 @@ def main():
         "explicitly. 151.2 s against strand-first's 255.2 s on the same input",
     )
     contig_group_setting.add_argument(
-        "--no_strandless_chunks",
+        "--chunk_by_strand",
         dest="strandless_chunks",
         action="store_false",
-        help="--chunk: split the whole bam by orientation first, as a serial "
-        "phase, then cut and process each contig-STRAND. The older ordering, "
-        "slower because the whole-genome split is the largest serial phase a "
-        "chunked run has. Kept so a regression can be bisected against it, not "
-        "for correctness: chunked-vs-unchunked parity is measured in both modes",
+        help="--chunk: split the whole bam by orientation FIRST, as a serial "
+        "phase, then cut and process each contig-STRAND independently. The "
+        "pre-default ordering. Slower, because that whole-genome split is the "
+        "largest serial phase a chunked run has -- 255.2 s against 151.2 s for "
+        "the strandless default on the same input. Kept so a regression can be "
+        "bisected against it, not for correctness: chunked-vs-unchunked parity is "
+        "measured in both modes",
     )
     contig_group_setting.add_argument(
         "--approx_MB_per_cut",

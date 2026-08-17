@@ -78,14 +78,21 @@ task LRAA_runner_task {
         # the half-width. LRAA's default is 1, so it must come down alongside a small
         # approx_MB_per_cut or neighbouring windows overlap.
         Float? approx_MB_per_cut_wiggle_window
-        # DEFAULT ON, matching LRAA's own default. The orientation split runs inside
-        # each chunk rather than as a serial pass over the whole BAM -- the largest
-        # serial phase a chunked run otherwise has, 151.2 s against 255.2 s on the same
-        # input. Set false for the strand-first ordering.
+        # Chunk each contig-STRAND separately, splitting the whole BAM by orientation
+        # first as a serial phase. OFF by default, because the strandless ordering --
+        # split inside each chunk, concurrently with every other chunk -- removes the
+        # largest serial phase a chunked run has: 151.2 s against 255.2 s on the same
+        # input.
         #
-        # No longer requires num_total_reads: LRAA counts the library itself, before any
-        # chunking, with the -F 0x904 policy that matches the unchunked path.
-        Boolean strandless_chunks = true
+        # Named for what setting it DOES, not for what it turns off. The input this
+        # replaces was `strandless_chunks`, which had to be read as a double negative
+        # once strandless became the default, and whose false case emitted no flag at
+        # all -- so asking for strand-first silently got you strandless.
+        #
+        # Neither ordering needs num_total_reads from the caller: LRAA counts the
+        # library itself, before any chunking, with the -F 0x904 policy that matches
+        # the unchunked path.
+        Boolean chunk_by_strand = false
 
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -269,7 +276,7 @@ task LRAA_runner_task {
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
                                  ~{true="--chunk" false='' chunk} \
-                                 ~{if (chunk && strandless_chunks) then "--strandless_chunks" else ""} \
+                                 ~{if (chunk && chunk_by_strand) then "--chunk_by_strand" else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut)) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut_wiggle_window)) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
@@ -408,7 +415,7 @@ workflow LRAA_runner {
         Boolean chunk = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
-        Boolean strandless_chunks = true
+        Boolean chunk_by_strand = false
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -453,7 +460,7 @@ workflow LRAA_runner {
             chunk = chunk,
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
-            strandless_chunks = strandless_chunks,
+            chunk_by_strand = chunk_by_strand,
             shardno=shardno,
             docker=docker,
             cpu=cpu,

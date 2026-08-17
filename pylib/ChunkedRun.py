@@ -3170,12 +3170,13 @@ def build_parser():
         "An output directory serves one mode or the other, never both",
     )
     parser.add_argument(
-        "--no_strandless_chunks",
+        "--chunk_by_strand",
         dest="strandless_chunks",
         action="store_false",
-        help="split the whole bam by orientation first, then cut and process "
-        "each contig-STRAND. The older ordering, kept so a regression can be "
-        "bisected against it",
+        help="split the whole bam by orientation FIRST, then cut and process each "
+        "contig-STRAND. The pre-default ordering, kept so a regression can be "
+        "bisected against it. Must stay spelled the same as LRAA's flag: the two "
+        "parsers are one interface as far as anyone reading a command is concerned",
     )
     parser.add_argument(
         "--dry_run",

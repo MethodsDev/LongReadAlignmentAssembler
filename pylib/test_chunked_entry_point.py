@@ -706,3 +706,26 @@ def test_the_library_count_is_taken_once_before_any_partitioning(tmp_path):
     # and it happened before any cut selection: the run dies at the count, so no cut
     # stage token appears at all. ("cut" as a bare substring would match "execute".)
     assert "stage2_cuts" not in combined
+
+
+def test_chunk_by_strand_selects_the_strand_first_ordering():
+    """The opt-out is named for what it does, and it has to actually do it.
+
+    Worth its own test because the flag's whole job is to set a boolean FALSE, which
+    is the shape that fails silently: an emitted-but-ignored flag, a dest typo, or a
+    WDL that omits the flag in its false case all leave the default in place and the
+    run looks entirely normal. The WDL did exactly that before this rename -- its
+    false case emitted nothing, and nothing means strandless now.
+    """
+
+    parser_default = ChunkedRun.build_parser().parse_args([])
+    assert parser_default.strandless_chunks is True
+
+    opted_out = ChunkedRun.build_parser().parse_args(["--chunk_by_strand"])
+    assert opted_out.strandless_chunks is False
+
+    # and the retired spelling must be REJECTED, not ignored: a script still passing
+    # it was asking for strand-first, and silently accepting it would hand back
+    # strandless -- the failure this rename exists to remove
+    with pytest.raises(SystemExit):
+        ChunkedRun.build_parser().parse_args(["--no_strandless_chunks"])

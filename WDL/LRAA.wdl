@@ -61,16 +61,22 @@ workflow LRAA_wf {
         Boolean chunk = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
-        # DEFAULT ON, matching LRAA's own default. The orientation split runs inside
-        # each chunk instead of as a serial pass over the whole bam, which is the
-        # largest serial phase a chunked run otherwise has: 151.2 s against 255.2 s on
-        # the same input. Set false to restore the strand-first ordering.
+        # Chunk each contig-STRAND separately, splitting the whole bam by orientation
+        # first as a serial phase. OFF by default: the strandless ordering splits inside
+        # each chunk, concurrently with every other chunk, and removes the largest
+        # serial phase a chunked run has -- 151.2 s against 255.2 s on the same input.
         #
-        # This no longer needs num_total_reads from the caller. LRAA counts the library
+        # Named for what setting it DOES. It replaces a `strandless_chunks` input that
+        # read as a double negative once strandless became the default, and whose false
+        # case emitted no flag at all, so asking for strand-first silently got you
+        # strandless. A workspace still binding the old name will fail on an unknown
+        # input rather than quietly run the other mode.
+        #
+        # Neither ordering needs num_total_reads from the caller. LRAA counts the library
         # itself before any chunking, with the same -F 0x904 policy as the count_bam
         # task below, so the scattered and direct paths agree and neither depends on
         # the caller getting `samtools view -c` right.
-        Boolean strandless_chunks = true
+        Boolean chunk_by_strand = false
 
         #  non-scattered runs
         # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across
@@ -165,7 +171,7 @@ workflow LRAA_wf {
                     chunk = chunk,
                     approx_MB_per_cut = approx_MB_per_cut,
                     approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
-                    strandless_chunks = strandless_chunks,
+                    chunk_by_strand = chunk_by_strand,
                     cpu = cpuScattered,
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
@@ -225,7 +231,7 @@ workflow LRAA_wf {
                 chunk = chunk,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
-                strandless_chunks = strandless_chunks,
+                chunk_by_strand = chunk_by_strand,
                 cpu = cpu,
                 num_total_reads = num_total_reads,
                 cell_list = cell_list,

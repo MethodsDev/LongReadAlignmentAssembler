@@ -253,7 +253,7 @@ config = {
     # orientation-pure bam for one chunk. Strandless changes WHERE the split happens,
     # not whether reads are processed per strand.
     #
-    # Opt out with --no_strandless_chunks, which restores the strand-first ordering.
+    # Opt out with --chunk_by_strand, which restores the strand-first ordering.
     # There is no correctness reason to: chunked-vs-unchunked parity is measured in
     # both modes. It exists so a regression can be bisected against the older path.
     "strandless_chunks": True,
