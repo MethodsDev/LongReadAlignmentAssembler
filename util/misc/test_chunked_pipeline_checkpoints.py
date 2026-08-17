@@ -118,11 +118,16 @@ def _chunk_tokens(tmp_path, monkeypatch, upstream="stage3.up_aaaaaaaaaaaa", **kw
     cdir.mkdir(exist_ok=True)
     chunk = {
         "chunk_id": "chr20_plus_00",
+        # strand-first: one quant unit, no in-chunk split
+        "strandless": False,
         "dir": str(cdir),
         "prefix": str(cdir / "chunk"),
         "log": str(cdir / "chunk.log"),
         "window_origin": 0,
         "upstream_token": upstream,
+        "units": DRIVER.chunk_quant_units(
+            "chr20_plus_00", str(cdir), str(cdir / "chunk"), "+", 0, 0
+        ),
     }
 
     with pytest.raises(DRIVER.PipelineError):

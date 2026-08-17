@@ -43,6 +43,31 @@ LRAA's own contig pool times its thread count fit the host. A chunk is single-co
 strand-pure, so LRAA's internal queue inside it is one unit and its own pool clamps to 1
 regardless -- the share is not double-counted against that.
 
+STRANDLESS CHUNKING, ``--strandless_chunks``. An added mode, off by default,
+that moves the orientation split out of the whole-bam serial phase and into the
+per-chunk parallel phase:
+
+  strand-first  split(whole bam) -> cuts per contig-STRAND -> per chunk: normalize | quant
+  strandless    cuts per contig  -> per chunk: extract | SPLIT | (normalize | quant) x2
+
+Stage 1 is then not run at all for the chunked arm, which is the point: a
+single-contig run no longer splits every record in the bam to use one contig's
+worth. The two orientations of an interval share ONE extraction -- one mini
+FASTA, one mini GTF, one pass over the region -- and the split runs on that
+mini bam as the chunk's own first step. Stages 4 and 5 are untouched: they
+still each receive one orientation-pure bam of one chunk.
+
+ORDER IS LOAD-BEARING HERE. ``separate_bam_by_strand`` REWRITES
+``read.is_reverse`` when the orientation it infers disagrees with the aligner,
+and the extractor's strand filter reads the RAW flag. So a chunk is extracted
+STRANDLESSLY and split AFTERWARDS; extracting ``chr1+:...`` from a bam that has
+not been split would assign every flipped read to the wrong chunk and still
+produce output that looks entirely normal. Three things stop that reordering:
+the extractor refuses a strand-suffixed region over a mixed-orientation bam,
+``assert_extracted_strandlessly`` refuses to split a chunk that was extracted
+for one orientation, and the post-split record counts are checked against the
+extractor's own per-orientation tallies.
+
 MEASUREMENT NOTES. Wall time is measured around each subprocess. Peak RSS is
 sampled from ``/proc`` at ``--rss_sample_interval`` over the step's whole
 process tree and summed across that tree, so a chunk's figure already includes
@@ -89,6 +114,13 @@ LRAA = os.path.join(REPO_ROOT, "LRAA")
 # pipeline and fork without bound.
 WORKER_ENV = "LRAA_CHUNKED_PIPELINE_WORKER"
 STRAND_TAG = {"+": "plus", "-": "minus"}
+# The orientation a strandless cut selection or chunk is for is the empty string,
+# the same "both" convention parse_region, _strand_matches and find_islands
+# already use. STRANDLESS_TAG is what that key is called in a filename.
+STRANDLESS_TAG = "strandless"
+STRAND_FIRST_MODE = "strand_first"
+STRANDLESS_MODE = "strandless"
+PIPELINE_MODES = (STRAND_FIRST_MODE, STRANDLESS_MODE)
 PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
 # LRAA rewrites --output_prefix to "<prefix>.LRAA.quant-only" in quant-only mode
 # (LRAA:_append_lraa_output_mode_suffix), so the files land under that name.
@@ -446,15 +478,36 @@ def write_bam_excluding(source_bam, names, dest_bam):
 # --------------------------------------------------------------------- stage 2
 
 
-def stage_select_cuts(
-    args, ckpt, outdir, timing, strand_bams, rss_interval, split_token
-):
+def cut_sources(args, strand_bams, inputs_token, split_token):
+    """The bams cut selection runs over, and what each run's sentinel chains onto.
+
+    Strand-first: one selection per orientation, over that orientation's bam,
+    chained onto the split that produced it.
+
+    Strandless: ONE selection over the RAW bam, chained onto the inputs
+    directly, because no split has happened yet. A strandless selection blocks
+    on the UNION of both orientations' annotated loci and counts every record,
+    so each cut it places serves both orientations -- which is what makes one
+    extraction and two quant units possible.
+
+    The key is the orientation the selection is FOR: ``"+"``/``"-"``
+    strand-first, ``""`` strandless.
+    """
+
+    if args.strandless_chunks:
+        return [("", STRANDLESS_TAG, os.path.abspath(args.bam), inputs_token)]
+    return [
+        (strand, STRAND_TAG[strand], strand_bams[strand], split_token)
+        for strand in ("+", "-")
+    ]
+
+
+def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
     cut_dir = os.path.join(outdir, "cuts")
     os.makedirs(cut_dir, exist_ok=True)
     selections = {}
     cuts_tokens = {}
-    for strand, bam in strand_bams.items():
-        tag = STRAND_TAG[strand]
+    for key, tag, bam, parent_token in sources:
         prefix = os.path.join(cut_dir, tag)
         log = os.path.join(outdir, "logs", "stage2_cuts_{}.log".format(tag))
         # ".sev" is a version marker, not an input: this stage now also emits
@@ -472,6 +525,9 @@ def stage_select_cuts(
         effective_min_mapq = int(
             LRAA_Globals.config["min_mapping_quality_for_final_quant"]
         )
+        # ``tag`` carries the mode into the sentinel filename -- "strandless"
+        # rather than "plus"/"minus" -- and the parent token differs as well
+        # (the inputs, not a split), so neither mode can read the other's cuts.
         token = chain_token(
             "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
                 tag,
@@ -482,9 +538,9 @@ def stage_select_cuts(
                 effective_min_per_id,
                 effective_min_mapq,
             ),
-            split_token,
+            parent_token,
         )
-        cuts_tokens[strand] = token
+        cuts_tokens[key] = token
         cmd = [
             sys.executable,
             SELECT_CUTS,
@@ -530,105 +586,293 @@ def stage_select_cuts(
             "--output_prefix",
             prefix,
         ]
-        # the bam is orientation-pure already, so --strand is omitted (every
-        # record counts); the orientation for the region strings comes from which
-        # bam this is, recorded below.
+        if key:
+            # the bam is orientation-pure already, so --strand is omitted (every
+            # record counts); the orientation for the region strings comes from
+            # which bam this is, recorded below.
+            pass
+        else:
+            # Declared, not inferred. Omitting --strand ALSO means "this bam is
+            # already orientation-pure, count every record", which is the
+            # strand-first case; --strandless says the bam holds both, so the
+            # selector emits strandless region strings and reports each
+            # orientation's retained count separately.
+            cmd.append("--strandless")
         if args.contig:
             cmd += ["--contig", args.contig]
-        key = "cuts_{}".format(tag)
+        key_name = "cuts_{}".format(tag)
         if ckpt.done(token):
-            timing.setdefault("stages", {})[key] = {
+            timing.setdefault("stages", {})[key_name] = {
                 "reused": True,
                 "cmd": cmd,
                 "log": log,
             }
         else:
-            timing.setdefault("stages", {})[key] = run_step(
+            timing.setdefault("stages", {})[key_name] = run_step(
                 "stage2_cuts_{}".format(tag), cmd, log, outdir, rss_interval
             )
             ckpt.mark(token)
         with open("{}.cuts.json".format(prefix), "rt") as fh:
-            selections[strand] = json.load(fh)
+            selections[key] = json.load(fh)
     return selections, cut_dir, cuts_tokens
 
 
 # --------------------------------------------------------------------- stage 3
 
 
+def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
+    """The quant units one extracted chunk feeds, and where each one's files go.
+
+    Strand-first: one unit, at exactly the paths and sentinel names this stage
+    has always used, so an existing output directory still resumes.
+
+    Strandless: two, one per orientation, reading the bam AND the annotation
+    that the chunk's own stage 3b writes. They share the mini FASTA, which has
+    no orientation and was extracted once, and that is the saving. They cannot
+    share the GTF: stage 5 quantifies every transcript the GTF names, so a unit
+    handed both orientations' models emits a zero row for each of the other
+    orientation's -- 1,110 rows where the strand-first arm emits 555, on the
+    same 36 rows carrying reads. Stage 5 consumes exactly what it consumes
+    today: one orientation's bam against one orientation's models.
+    """
+
+    if strand:
+        units = [
+            (
+                strand,
+                chunk_id,
+                "chunk.norm.bam",
+                "chunk_quant",
+                "{}.bam".format(prefix),
+                "{}.gtf".format(prefix),
+            )
+        ]
+    else:
+        units = [
+            (
+                s,
+                "{}_{}".format(chunk_id, STRAND_TAG[s]),
+                "chunk.{}.norm.bam".format(STRAND_TAG[s]),
+                "chunk_quant_{}".format(STRAND_TAG[s]),
+                # both written by stage 3b, inside this chunk's own work
+                "{}.strand.{}.bam".format(prefix, s),
+                "{}.strand.{}.gtf".format(prefix, s),
+            )
+            for s in ("+", "-")
+        ]
+    return [
+        {
+            "unit_id": unit_id,
+            # what the sentinel is named for. The mode is spelled out rather
+            # than left implicit in the id shape ("chr1_00_plus" against
+            # "chr1_plus_00"), because a checkpoint directory that cannot be
+            # read at a glance is its own hazard.
+            "sentinel_id": unit_id if strand else "strandless_" + unit_id,
+            "chunk_id": chunk_id,
+            "strand": s,
+            "offset": offset,
+            "order": order,
+            "bam": bam,
+            "gtf": gtf,
+            "norm_bam": os.path.join(cdir, norm_name),
+            "quant_name": quant_name,
+            "quant_prefix": os.path.join(
+                cdir, quant_name + "." + LRAA_QUANT_ONLY_SUFFIX
+            ),
+        }
+        for s, unit_id, norm_name, quant_name, bam, gtf in units
+    ]
+
+
+def planned_chunks(sources, selections):
+    """Every chunk the run will extract, in extraction order.
+
+    One definition of what a chunk is called and which region it covers, shared
+    by stage 3 and by ``--dry_run``, so a printed plan cannot describe a
+    partition the real run would not build. Strandless ids and regions carry no
+    orientation -- ``chr1_00`` over ``chr1:1-9700000`` -- which is also what the
+    extractor needs in order to keep both orientations.
+    """
+
+    order = 0
+    for key, tag, bam, _parent_token in sources:
+        for selection in selections[key]:
+            chrom = selection["chrom"]
+            for idx, segment in enumerate(selection["segments"]):
+                if key:
+                    chunk_id = "{}_{}_{:02d}".format(chrom, tag, idx)
+                    region = "{}{}:{}-{}".format(
+                        chrom, key, segment["lend"], segment["rend"]
+                    )
+                else:
+                    chunk_id = "{}_{:02d}".format(chrom, idx)
+                    region = "{}:{}-{}".format(
+                        chrom, segment["lend"], segment["rend"]
+                    )
+                yield {
+                    "key": key,
+                    "tag": tag,
+                    "bam": bam,
+                    "chrom": chrom,
+                    "index": idx,
+                    "order": order,
+                    "chunk_id": chunk_id,
+                    "region": region,
+                    "lend": segment["lend"],
+                    "rend": segment["rend"],
+                }
+                order += 1
+
+
 def stage_extract_chunks(
-    args, ckpt, outdir, timing, strand_bams, selections, rss, cuts_tokens
+    args, ckpt, outdir, timing, sources, selections, rss, cuts_tokens
 ):
+    """Extract one mini contig, bam and gtf per chunk, and name the units it feeds.
+
+    Strand-first: one chunk per contig-STRAND segment, feeding one quant unit.
+
+    Strandless: one chunk per CONTIG segment, holding both orientations, feeding
+    two quant units that this chunk's own strand split produces later. Halving
+    the number of extractions is the second saving of the mode, after skipping
+    stage 1: the mini FASTA and the mini GTF are written once for the pair
+    instead of twice, and the region is read once instead of twice.
+    """
+
     chunk_root = os.path.join(outdir, "chunks")
     os.makedirs(chunk_root, exist_ok=True)
     chunks = []
-    for strand in ("+", "-"):
-        tag = STRAND_TAG[strand]
-        for selection in selections[strand]:
-            chrom = selection["chrom"]
-            for idx, segment in enumerate(selection["segments"]):
-                region = "{}{}:{}-{}".format(
-                    chrom, strand, segment["lend"], segment["rend"]
+    for planned in planned_chunks(sources, selections):
+        key = planned["key"]
+        strandless = not key
+        chunk_id = planned["chunk_id"]
+        region = planned["region"]
+        local = "stage3_extract_{}{}.margin_{}_maxintron_{}".format(
+            "strandless_" if strandless else "",
+            chunk_id,
+            args.margin,
+            args.max_intron_length,
+        )
+        cdir = os.path.join(chunk_root, chunk_id)
+        os.makedirs(cdir, exist_ok=True)
+        prefix = os.path.join(cdir, "chunk")
+        log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
+        token = chain_token(local, cuts_tokens[key])
+        cmd = [
+            sys.executable,
+            EXTRACT_CHUNK,
+            "--genome_fa",
+            os.path.abspath(args.genome_fa),
+            "--bam",
+            planned["bam"],
+            "--gtf",
+            os.path.abspath(args.gtf),
+            "--gtf_index_cache_dir",
+            gtf_index_cache_dir(outdir),
+            "--region",
+            region,
+            "--output_prefix",
+            prefix,
+            "--margin",
+            str(args.margin),
+            # The run's value, at all three of selection, extraction and split,
+            # so the three see ONE record set. The extractor defaults to the
+            # configured cap instead, which is invisible strand-first -- the bam
+            # reaching it was already filtered at the run's value -- and a
+            # divergence strandless, where the raw bam still holds the records
+            # the split would have discarded and extraction is the first place
+            # they are seen.
+            "--max_intron_length",
+            str(args.max_intron_length),
+            "--secondary_alignments",
+            "exclude",
+        ]
+        if ckpt.done(token):
+            record = {"reused": True, "cmd": cmd, "log": log}
+        else:
+            record = run_step(
+                "stage3_extract_{}".format(chunk_id), cmd, log, outdir, rss
+            )
+            ckpt.mark(token)
+        with open("{}.partition.json".format(prefix), "rt") as fh:
+            manifest = json.load(fh)
+        # A manifest extracted for the other mode would be silently wrong rather
+        # than absent: a strand-pure chunk bam split again is a no-op on one
+        # orientation and an empty bam on the other.
+        manifest_strand = manifest.get("strand") or ""
+        if manifest_strand != key:
+            raise PipelineError(
+                "chunk {} carries a manifest for strand {!r}, but this run "
+                "extracted it for {!r}. The chunk directory is from another "
+                "run; use a fresh --output_dir.".format(
+                    chunk_id, manifest_strand, key
                 )
-                chunk_id = "{}_{}_{:02d}".format(chrom, tag, idx)
-                cdir = os.path.join(chunk_root, chunk_id)
-                os.makedirs(cdir, exist_ok=True)
-                prefix = os.path.join(cdir, "chunk")
-                log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
-                token = chain_token(
-                    "stage3_extract_{}.margin_{}".format(chunk_id, args.margin),
-                    cuts_tokens[strand],
-                )
-                cmd = [
-                    sys.executable,
-                    EXTRACT_CHUNK,
-                    "--genome_fa",
-                    os.path.abspath(args.genome_fa),
-                    "--bam",
-                    strand_bams[strand],
-                    "--gtf",
-                    os.path.abspath(args.gtf),
-                    "--gtf_index_cache_dir",
-                    gtf_index_cache_dir(outdir),
-                    "--region",
-                    region,
-                    "--output_prefix",
+            )
+        # The other half of the extractor's refusal, and it applies to BOTH
+        # modes: a nonzero count means a strand filter discarded records the
+        # source bam still held, which is the raw-flag mistake the ordering
+        # exists to prevent -- strand-first because the source should have been
+        # orientation-pure already, strandless because no strand filter should
+        # have run at all.
+        excluded = manifest["counts"].get("opposite_orientation_excluded", 0)
+        if excluded:
+            raise PipelineError(
+                "chunk {} excluded {} record(s) of the opposite orientation at "
+                "extraction. Its source bam holds both orientations, so the "
+                "records that reached the strand filter carried RAW aligner "
+                "flags -- any read the split would have flipped is now in the "
+                "wrong chunk. Extract strandlessly and split "
+                "afterwards.".format(chunk_id, excluded)
+            )
+        chunks.append(
+            {
+                "chunk_id": chunk_id,
+                "chrom": planned["chrom"],
+                "strand": key,
+                "strandless": strandless,
+                "region": region,
+                "index": planned["index"],
+                "order": planned["order"],
+                "dir": cdir,
+                "prefix": prefix,
+                "log": log,
+                "manifest": manifest,
+                "offset": manifest["offset"],
+                "window_origin": manifest["window_origin"],
+                "extract": record,
+                # what stages 3b-5 chain their own sentinels onto
+                "upstream_token": token,
+                "units": chunk_quant_units(
+                    chunk_id,
+                    cdir,
                     prefix,
-                    "--margin",
-                    str(args.margin),
-                    "--secondary_alignments",
-                    "exclude",
-                ]
-                if ckpt.done(token):
-                    record = {"reused": True, "cmd": cmd, "log": log}
-                else:
-                    record = run_step(
-                        "stage3_extract_{}".format(chunk_id), cmd, log, outdir, rss
-                    )
-                    ckpt.mark(token)
-                with open("{}.partition.json".format(prefix), "rt") as fh:
-                    manifest = json.load(fh)
-                chunks.append(
-                    {
-                        "chunk_id": chunk_id,
-                        "chrom": chrom,
-                        "strand": strand,
-                        "region": region,
-                        "index": idx,
-                        "dir": cdir,
-                        "prefix": prefix,
-                        "log": log,
-                        "manifest": manifest,
-                        "offset": manifest["offset"],
-                        "window_origin": manifest["window_origin"],
-                        "extract": record,
-                        # what stages 4 and 5 chain their own sentinels onto
-                        "upstream_token": token,
-                    }
-                )
+                    key,
+                    manifest["offset"],
+                    planned["order"],
+                ),
+            }
+        )
     timing.setdefault("stages", {})["extract_chunks"] = [
         c["extract"] for c in chunks
     ]
     return chunks
+
+
+def ordered_units(chunks):
+    """Every quant unit of the run, in the order stage 6 concatenates them.
+
+    Grouped by orientation and then by extraction order, which for the
+    strand-first path is the order the chunks were built in and so leaves that
+    path's merged output byte-identical. A strandless run interleaves the two
+    orientations chunk by chunk, and this puts them back into the same shape, so
+    the two modes' merged tables are comparable row for row rather than only as
+    sets.
+    """
+
+    rank = {"+": 0, "-": 1}
+    return sorted(
+        (unit for chunk in chunks for unit in chunk["units"]),
+        key=lambda u: (rank[u["strand"]], u["order"]),
+    )
 
 
 # ---------------------------------------------------------------- stages 4 + 5
@@ -669,10 +913,250 @@ def lraa_cmd(
     return cmd
 
 
+def assert_extracted_strandlessly(chunk):
+    """Refuse to split a chunk that was not extracted with both orientations.
+
+    ``separate_bam_by_strand`` REWRITES ``read.is_reverse`` when the orientation
+    it infers disagrees with the aligner, and the extractor's strand filter
+    reads the RAW flag. Extract-then-split is therefore the only correct order:
+    extracting ``chr1+:...`` from a bam that has not been split puts every
+    flipped read in the wrong chunk and produces output that looks entirely
+    normal.
+
+    Checked here rather than at the call site because this is the one place the
+    order cannot be got wrong by accident -- the chunk in hand either was
+    extracted strandlessly or it was not, and no rearrangement of the stages
+    changes which. The extractor refuses the same mistake from the other side.
+    """
+
+    manifest = chunk["manifest"]
+    if manifest.get("strand"):
+        raise PipelineError(
+            "REFUSING to strand-split chunk {}: it was extracted for strand {!r}, "
+            "so its bam was already filtered on the RAW aligner flag. Any read "
+            "whose inferred orientation disagrees with its flag is in the wrong "
+            "chunk, and splitting now would not move it back. Extract the chunk "
+            "strandlessly and split afterwards.".format(
+                chunk["chunk_id"], manifest["strand"]
+            )
+        )
+    # The extractor states this outright for a strandless chunk. A manifest
+    # written before the key existed does not carry it, and the strand check
+    # above is the same statement, so absence is not itself a failure.
+    if manifest.get("strand_split_required", True) is not True:
+        raise PipelineError(
+            "REFUSING to strand-split chunk {}: its manifest reports the bam has "
+            "already been strand-separated. Splitting it again would empty one "
+            "orientation.".format(chunk["chunk_id"])
+        )
+
+
+def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
+    """Stage 3b. Separate ONE chunk's mini bam and mini GTF into two orientations.
+
+    The step the strandless mode exists for: the tool stage 1 runs once over the
+    whole bam, run instead over a chunk's own reads, concurrently with every
+    other chunk. Same command and therefore the same filters -- a per-chunk
+    difference in filtering would be a difference in the record set rather than
+    a difference in scheduling, and the arms would no longer be comparable.
+
+    The annotation is partitioned here too, in process, because it is a column-7
+    filter on a file the extractor has already rebased -- no coordinates move
+    and nothing is re-derived. It has to happen: stage 5 quantifies every model
+    the GTF names, so a unit given both orientations reports the other
+    orientation's transcripts as zero rows.
+
+    Returns ``(step record, token stages 4-5 chain onto, counts)``.
+    """
+
+    assert_extracted_strandlessly(chunk)
+
+    cid = chunk["chunk_id"]
+    prefix = chunk["prefix"]
+    split_prefix = "{}.strand".format(prefix)
+    token = chain_token(
+        "stage3b_split_{}.maxintron_{}".format(cid, args.max_intron_length),
+        chunk["upstream_token"],
+    )
+    cmd = [
+        sys.executable,
+        SEPARATE_BAM,
+        "--bam",
+        "{}.bam".format(prefix),
+        "--output_prefix",
+        split_prefix,
+        "--max_intron_length",
+        str(args.max_intron_length),
+    ]
+    if ckpt.done(token):
+        step = {"step": "stage3b_strand_split", "reused": True, "cmd": cmd}
+    else:
+        step = run_step(
+            "stage3b_strand_split_{}".format(cid),
+            cmd,
+            chunk["log"],
+            chunk["dir"],
+            rss_interval,
+        )
+        ckpt.mark(token)
+
+    counts = verify_chunk_split(chunk, split_prefix)
+    # Rewritten on every pass, sentinel or not: it is a few hundred kB of text
+    # and a resumed run must find the files, not the sentinel that says they
+    # were once written.
+    counts.update(split_chunk_gtf_by_strand(chunk, split_prefix))
+    step["counts"] = counts
+    return step, token, counts
+
+
+def split_chunk_gtf_by_strand(chunk, split_prefix):
+    """Partition the chunk's mini GTF into one file per orientation.
+
+    Column 7 and nothing else: every line the extractor emitted for a gene
+    carries that gene's orientation, and the coordinates were rebased when it
+    was written, so this selects lines and moves nothing. The transcript counts
+    are checked against the extractor's own tally, which is the same discipline
+    the bam split gets -- a partition that does not add up is a partition that
+    lost a model, and a lost model is a row missing from the merged table rather
+    than an error anyone would see.
+    """
+
+    source = "{}.gtf".format(chunk["prefix"])
+    written = {"+": 0, "-": 0}
+    handles = {}
+    try:
+        for strand in ("+", "-"):
+            handles[strand] = open("{}.{}.gtf".format(split_prefix, strand), "wt")
+        with open(source, "rt") as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                fields = line.split("\t")
+                strand = fields[6] if len(fields) > 7 else None
+                if strand not in handles:
+                    raise PipelineError(
+                        "chunk {} annotation line has orientation {!r}, which is "
+                        "neither + nor -: {}".format(
+                            chunk["chunk_id"], strand, line.rstrip()
+                        )
+                    )
+                handles[strand].write(line)
+                if fields[2] == "transcript":
+                    written[strand] += 1
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    emitted = chunk["manifest"]["counts"]["gtf_transcripts_emitted"]
+    total = written["+"] + written["-"]
+    if total != emitted:
+        raise PipelineError(
+            "chunk {} annotation split accounting: {} + {} = {} transcript "
+            "line(s) across the two orientations, but extraction emitted {}. "
+            "Every model the chunk holds has to reach exactly one of the two "
+            "quant units.".format(
+                chunk["chunk_id"], written["+"], written["-"], total, emitted
+            )
+        )
+
+    return {
+        "gtf_transcripts_plus": written["+"],
+        "gtf_transcripts_minus": written["-"],
+        "gtf_transcripts_emitted": emitted,
+    }
+
+
+def verify_chunk_split(chunk, split_prefix):
+    """Prove the in-chunk split partitioned the chunk and discarded nothing.
+
+    Two identities, both exact, both cheap, and checked on every chunk of every
+    strandless run rather than sampled:
+
+    1. ``+`` records plus ``-`` records equals ``alignments_emitted``. The split
+       CANNOT discard here, because extraction already applied the same record
+       filter -- primary, non-duplicate, non-qcfail, intron within the cap, at
+       the same ``--max_intron_length`` -- so every record in the chunk bam is
+       one the split retains. A nonzero loss is a filter divergence between the
+       two tools, not an expected cost, and it would silently shrink the chunked
+       arm's input relative to the control.
+
+    2. Each orientation's record count equals the extractor's own tally for that
+       orientation. The extractor counts by raw flag at the moment it writes;
+       the split partitions by raw flag, because this pipeline never passes
+       ``--infer_read_orient``. Two tools, one number. If inference were ever
+       turned on the counts would differ by exactly
+       ``num_records_strand_flipped`` -- by design, not by fault -- and this
+       check would have to become the sum alone.
+    """
+
+    counts = chunk["manifest"]["counts"]
+    emitted = counts["alignments_emitted"]
+    observed = {}
+    for strand in ("+", "-"):
+        bam = "{}.{}.bam".format(split_prefix, strand)
+        if not os.path.exists(bam):
+            raise PipelineError(
+                "chunk {} strand split produced no {}".format(chunk["chunk_id"], bam)
+            )
+        observed[strand] = count_records(bam)
+
+    total = observed["+"] + observed["-"]
+    if total != emitted:
+        raise PipelineError(
+            "chunk {} strand split accounting: {} + {} = {} records across the "
+            "two orientations, but extraction emitted {}. The split lost {} "
+            "record(s) the chunk bam held. Extraction and the split must apply "
+            "the same record filter at the same --max_intron_length; they did "
+            "not.".format(
+                chunk["chunk_id"],
+                observed["+"],
+                observed["-"],
+                total,
+                emitted,
+                emitted - total,
+            )
+        )
+
+    expected = (
+        counts.get("alignments_emitted_forward"),
+        counts.get("alignments_emitted_reverse"),
+    )
+    if None not in expected and (observed["+"], observed["-"]) != expected:
+        raise PipelineError(
+            "chunk {} strand split disagrees with extraction on which records "
+            "are which: the split wrote {}/{} (+/-), extraction counted {}/{} by "
+            "raw flag. The totals match, so nothing was lost -- records moved "
+            "between orientations, which only happens under "
+            "--infer_read_orient, and this pipeline does not pass it.".format(
+                chunk["chunk_id"],
+                observed["+"],
+                observed["-"],
+                expected[0],
+                expected[1],
+            )
+        )
+
+    return {
+        "alignments_emitted": emitted,
+        "records_plus": observed["+"],
+        "records_minus": observed["-"],
+        "records_total": total,
+        "records_lost": emitted - total,
+    }
+
+
 def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_budget):
-    """Stages 4 and 5 for one chunk. Everything goes to the chunk's own log.
+    """Stages 3b, 4 and 5 for one chunk. Everything goes to the chunk's own log.
 
     ``cpu_budget`` is this chunk's share of the total, handed down by the scheduler.
+
+    A strand-first chunk is one quant unit. A strandless chunk is TWO, and the
+    orientation split that produces them runs HERE -- inside the chunk, against
+    the chunk's own reads, concurrently with every other chunk -- instead of
+    once over the whole bam before any of this starts. The two units then run one
+    after the other on this chunk's share of the budget rather than competing
+    for it, and they share the mini FASTA and mini GTF the single extraction
+    wrote.
     """
 
     cid = chunk["chunk_id"]
@@ -682,91 +1166,135 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
     started = time.time()
     steps = []
 
-    norm_bam = os.path.join(cdir, "chunk.norm.bam")
-    norm_token = chain_token(
-        # maxintron is passed to the normalizer below, so it decides these
-        # contents and has to name them
-        "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}".format(
-            cid,
-            args.normalize_max_cov_level,
-            args.depth_window,
-            args.random_seed,
-            chunk["window_origin"],
-            args.max_intron_length,
-        ),
-        chunk["upstream_token"],
-    )
-    norm_cmd = [
-        sys.executable,
-        NORMALIZE_BAM,
-        "--input_bam",
-        "{}.bam".format(prefix),
-        "--output_bam",
-        norm_bam,
-        "--normalize_max_cov_level",
-        str(args.normalize_max_cov_level),
-        "--depth_window",
-        str(args.depth_window),
-        "--random_seed",
-        str(args.random_seed),
-        "--max_intron_length",
-        str(args.max_intron_length),
-        "--input_is_single_strand",
-        "--window_origin",
-        str(chunk["window_origin"]),
-    ]
-    if ckpt.done(norm_token):
-        steps.append({"step": "stage4_normalize", "reused": True, "cmd": norm_cmd})
-    else:
-        steps.append(
-            run_step("stage4_normalize_{}".format(cid), norm_cmd, log, cdir, rss_interval)
+    upstream_token = chunk["upstream_token"]
+    if chunk["strandless"]:
+        split_step, upstream_token, split_counts = split_chunk_by_strand(
+            args, ckpt, chunk, rss_interval
         )
-        ckpt.mark(norm_token)
+        steps.append(split_step)
+        chunk["split_counts"] = split_counts
 
-    # LRAA derives its scratch roots by string concatenation on --output_prefix
-    # ("__{prefix}.contigtmp", "__{prefix}.sgcache"), so an ABSOLUTE prefix would
-    # produce nonsense paths like "__/abs/path.contigtmp" rooted at the cwd.
-    # Give it a bare name and let cwd place the outputs.
-    quant_prefix = os.path.join(cdir, "chunk_quant." + LRAA_QUANT_ONLY_SUFFIX)
-    quant_token = chain_token(
-        "stage5_quant_{}.N_{}_hifi_{}".format(cid, num_total_reads, args.HiFi),
-        norm_token,
-    )
-    quant_cmd = lraa_cmd(
-        args,
-        bam_for_quant="{}.bam".format(prefix),
-        bam_for_sg=norm_bam,
-        genome="{}.fa".format(prefix),
-        gtf="{}.gtf".format(prefix),
-        out_prefix="chunk_quant",
-        num_total_reads=num_total_reads,
-        cpu_budget=cpu_budget,
-    )
-    if ckpt.done(quant_token):
-        steps.append({"step": "stage5_quant", "reused": True, "cmd": quant_cmd})
-    else:
-        steps.append(
-            run_step("stage5_quant_{}".format(cid), quant_cmd, log, cdir, rss_interval)
+    for unit in chunk["units"]:
+        uid = unit["sentinel_id"]
+        norm_bam = unit["norm_bam"]
+        norm_token = chain_token(
+            # maxintron is passed to the normalizer below, so it decides these
+            # contents and has to name them
+            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}".format(
+                uid,
+                args.normalize_max_cov_level,
+                args.depth_window,
+                args.random_seed,
+                chunk["window_origin"],
+                args.max_intron_length,
+            ),
+            upstream_token,
         )
-        ckpt.mark(quant_token)
-
-    expr_path = quant_prefix + ".quant.expr"
-    if not os.path.exists(expr_path):
-        raise PipelineError(
-            "chunk {} produced no {}; log: {}".format(cid, expr_path, log)
-        )
-    if resolve_tracking(quant_prefix) is None:
-        raise PipelineError(
-            "chunk {} produced no {}{{{}}}; log: {}".format(
-                cid, quant_prefix, ",".join(QUANT_TRACKING_SUFFIXES), log
+        norm_cmd = [
+            sys.executable,
+            NORMALIZE_BAM,
+            "--input_bam",
+            unit["bam"],
+            "--output_bam",
+            norm_bam,
+            "--normalize_max_cov_level",
+            str(args.normalize_max_cov_level),
+            "--depth_window",
+            str(args.depth_window),
+            "--random_seed",
+            str(args.random_seed),
+            "--max_intron_length",
+            str(args.max_intron_length),
+            # true of both modes' units: strand-first because the whole bam was
+            # split before extraction, strandless because stage 3b split this
+            # chunk above.
+            "--input_is_single_strand",
+            "--window_origin",
+            str(chunk["window_origin"]),
+        ]
+        if ckpt.done(norm_token):
+            steps.append(
+                {
+                    "step": "stage4_normalize",
+                    "unit": unit["unit_id"],
+                    "reused": True,
+                    "cmd": norm_cmd,
+                }
             )
-        )
+        else:
+            steps.append(
+                run_step(
+                    "stage4_normalize_{}".format(uid),
+                    norm_cmd,
+                    log,
+                    cdir,
+                    rss_interval,
+                )
+            )
+            ckpt.mark(norm_token)
 
-    chunk["quant_prefix"] = quant_prefix
-    chunk["norm_bam"] = norm_bam
+        # LRAA derives its scratch roots by string concatenation on
+        # --output_prefix ("__{prefix}.contigtmp", "__{prefix}.sgcache"), so an
+        # ABSOLUTE prefix would produce nonsense paths like
+        # "__/abs/path.contigtmp" rooted at the cwd. Give it a bare name and let
+        # cwd place the outputs.
+        quant_prefix = unit["quant_prefix"]
+        quant_token = chain_token(
+            "stage5_quant_{}.N_{}_hifi_{}".format(uid, num_total_reads, args.HiFi),
+            norm_token,
+        )
+        quant_cmd = lraa_cmd(
+            args,
+            bam_for_quant=unit["bam"],
+            bam_for_sg=norm_bam,
+            # ONE mini contig for the pair -- sequence has no orientation and
+            # the extraction wrote it once -- but each unit's OWN annotation,
+            # because stage 5 quantifies every model its GTF names.
+            genome="{}.fa".format(prefix),
+            gtf=unit["gtf"],
+            out_prefix=unit["quant_name"],
+            num_total_reads=num_total_reads,
+            cpu_budget=cpu_budget,
+        )
+        if ckpt.done(quant_token):
+            steps.append(
+                {
+                    "step": "stage5_quant",
+                    "unit": unit["unit_id"],
+                    "reused": True,
+                    "cmd": quant_cmd,
+                }
+            )
+        else:
+            steps.append(
+                run_step(
+                    "stage5_quant_{}".format(uid), quant_cmd, log, cdir, rss_interval
+                )
+            )
+            ckpt.mark(quant_token)
+
+        expr_path = quant_prefix + ".quant.expr"
+        if not os.path.exists(expr_path):
+            raise PipelineError(
+                "chunk {} unit {} produced no {}; log: {}".format(
+                    cid, unit["unit_id"], expr_path, log
+                )
+            )
+        if resolve_tracking(quant_prefix) is None:
+            raise PipelineError(
+                "chunk {} unit {} produced no {}{{{}}}; log: {}".format(
+                    cid,
+                    unit["unit_id"],
+                    quant_prefix,
+                    ",".join(QUANT_TRACKING_SUFFIXES),
+                    log,
+                )
+            )
+
     return {
         "chunk_id": cid,
         "region": chunk["region"],
+        "units": [u["unit_id"] for u in chunk["units"]],
         "log": log,
         "wall_s": round(time.time() - started, 3),
         "peak_tree_rss_kb": max(
@@ -777,7 +1305,7 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
 
 
 def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_interval):
-    """Run every chunk's stages 4-5, scheduling the flat unit queue from ONE budget.
+    """Run every chunk's stages 3b-5, scheduling the flat unit queue from ONE budget.
 
     Concurrency is not a knob here any more. A chunk is one unit of the same flat queue
     LRAA schedules internally, so CpuBudget.allocate() derives both how many chunks run
@@ -785,10 +1313,22 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
     exceed the budget, which is what --concurrency and LRAA's own contig pool could
     previously do to each other.
 
+    The scheduled unit is the CHUNK, not the quant job. A strandless chunk holds
+    two quant jobs and runs them in series on its own share, so the queue is 25
+    intervals rather than 50 contig-strand chunks. That coarsens the granularity
+    the makespan heuristic has to work with, and it is the one place this mode
+    could lose what it gains: with a budget near the interval count, a long tail
+    interval now carries both orientations instead of one. It buys the shared
+    extraction and a split that is per-chunk rather than whole-bam. Splitting the
+    queue back into 50 quant units would need a barrier after every chunk's
+    split, or units that appear mid-run; both were rejected as more machinery
+    than the granularity is worth at 8-wide over 25 intervals.
+
     Launch order is longest-first on retained alignments per chunk, which the extractor
     already counted, so no extra pass is needed. Span would be the wrong proxy: it does
     not bound read count, and a short highly expressed chunk can outweigh a long quiet
-    one.
+    one. For a strandless chunk that cost is both orientations together, which is
+    what the chunk's worker will actually do.
 
     A chunk failure is fatal: the exception names the chunk and its log, and no
     merge is attempted. Chunks already running are allowed to finish so their
@@ -888,7 +1428,7 @@ def read_tsv(path):
     return comments, header, rows
 
 
-def merge_and_translate(outdir, chunks):
+def merge_and_translate(outdir, units):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
     Three fields carry chunk-local COORDINATES: ``exons`` and ``introns``, and the
@@ -913,6 +1453,10 @@ def merge_and_translate(outdir, chunks):
     coordinate; it is left as emitted and is not comparable across any two runs.
 
     Transcript ids come from the supplied GTF, so no id translation is needed.
+    A quant UNIT rather than a chunk is what is concatenated here: strand-first
+    they are the same thing, and strandless each chunk contributes two, one per
+    orientation, from the one extraction. ``ordered_units`` puts them back into
+    the strand-first order so the two modes' merged tables line up row for row.
     """
 
     merged_dir = os.path.join(outdir, "merged")
@@ -924,24 +1468,24 @@ def merge_and_translate(outdir, chunks):
 
     expr_header = None
     expr_rows = []
-    hash_remap = {}  # (chunk_id, old_hash) -> new_hash
-    for chunk in chunks:
-        offset = chunk["offset"]
-        _, header, rows = read_tsv(chunk["quant_prefix"] + ".quant.expr")
+    hash_remap = {}  # (unit_id, old_hash) -> new_hash
+    for unit in units:
+        offset = unit["offset"]
+        _, header, rows = read_tsv(unit["quant_prefix"] + ".quant.expr")
         if expr_header is None:
             expr_header = header
         elif header != expr_header:
             raise PipelineError(
-                "chunk {} quant.expr header differs from the first chunk's".format(
-                    chunk["chunk_id"]
+                "unit {} quant.expr header differs from the first unit's".format(
+                    unit["unit_id"]
                 )
             )
         col = {name: i for i, name in enumerate(header)}
         for row in rows:
             if len(row) != len(header):
                 raise PipelineError(
-                    "chunk {} quant.expr row has {} fields, header has {}".format(
-                        chunk["chunk_id"], len(row), len(header)
+                    "unit {} quant.expr row has {} fields, header has {}".format(
+                        unit["unit_id"], len(row), len(header)
                     )
                 )
             row = list(row)
@@ -951,9 +1495,9 @@ def merge_and_translate(outdir, chunks):
                 introns = _shift_coord_string(introns, offset)
                 row[col["introns"]] = introns
                 new_hash = Util_funcs.get_hash_code(introns)
-                hash_remap[(chunk["chunk_id"], row[col["splice_hash_code"]])] = new_hash
+                hash_remap[(unit["unit_id"], row[col["splice_hash_code"]])] = new_hash
                 row[col["splice_hash_code"]] = new_hash
-            expr_rows.append((chunk["chunk_id"], row))
+            expr_rows.append((unit["unit_id"], row))
 
     ecol = {name: i for i, name in enumerate(expr_header)}
     expr_rows.sort(
@@ -985,16 +1529,16 @@ def merge_and_translate(outdir, chunks):
     with open(tpm_audit, "wt") as ofh:
         print(
             "\t".join(
-                ["chunk_id", "gene_id", "transcript_id", "all_reads",
+                ["quant_unit", "gene_id", "transcript_id", "all_reads",
                  "TPM_chunk_local", "TPM_merged_scope"]
             ),
             file=ofh,
         )
-        for (chunk_id, row), local in zip(expr_rows, chunk_local_tpm):
+        for (unit_id, row), local in zip(expr_rows, chunk_local_tpm):
             print(
                 "\t".join(
                     [
-                        chunk_id,
+                        unit_id,
                         row[ecol["gene_id"]],
                         row[ecol["transcript_id"]],
                         row[ecol["all_reads"]],
@@ -1007,21 +1551,21 @@ def merge_and_translate(outdir, chunks):
 
     track_header = None
     track_rows = []
-    for chunk in chunks:
-        _, header, rows = read_tsv(resolve_tracking(chunk["quant_prefix"]))
+    for unit in units:
+        _, header, rows = read_tsv(resolve_tracking(unit["quant_prefix"]))
         if track_header is None:
             track_header = header
         elif header != track_header:
             raise PipelineError(
-                "chunk {} quant.tracking header differs from the first "
-                "chunk's".format(chunk["chunk_id"])
+                "unit {} quant.tracking header differs from the first "
+                "unit's".format(unit["unit_id"])
             )
         col = {name: i for i, name in enumerate(header)}
         for row in rows:
             row = list(row)
             old = row[col["transcript_splice_hash_code"]]
             row[col["transcript_splice_hash_code"]] = hash_remap.get(
-                (chunk["chunk_id"], old), old
+                (unit["unit_id"], old), old
             )
             track_rows.append(row)
 
@@ -1046,6 +1590,95 @@ def merge_and_translate(outdir, chunks):
         "tracking_rows": len(track_rows),
         "splice_hash_codes_recomputed": len(hash_remap),
         "merged_scope_total_all_reads": total_reported_read_count,
+    }
+
+
+def verify_severed_accounting(cut_dir, chunks):
+    """The set the control subtracts must BE the set the chunks dropped.
+
+    WHAT IS COUNTED, exactly. ``run_baseline`` prunes the whole-contig bam by the
+    read NAMES cut selection wrote to ``<cut_dir>/*.dropped_reads.txt``, so the
+    two arms consume the same records only if those names are precisely the reads
+    extraction then refused to place. Three quantities, deliberately kept apart:
+
+      selected            names cut selection predicted it would sever. One file
+                          per contig-STRAND strand-first; ONE FILE PER CONTIG
+                          strandless, holding the reads a shared cut severs on
+                          EITHER orientation, because a strandless cut is one
+                          position serving both.
+      dropped             names extraction actually refused, unioned over chunks.
+      mentions            the same drops counted per chunk rather than per read.
+                          A read spanning a cut overlaps BOTH neighbouring
+                          chunks and is listed by both, so this is about twice
+                          ``dropped`` and is not a read count. It is reported so
+                          that nobody reaches for the per-chunk sum -- which is
+                          what ``alignments_dropped_overhang`` totals to -- as if
+                          it were the severed set.
+
+    Strand-first never had to check this: one selection and one chunk series per
+    orientation meant the same coordinates decided both sets twice over.
+    Strandless breaks that symmetry -- the selection is per contig and the drops
+    are per orientation within a shared chunk -- so the identity is verified on
+    every run instead of assumed, in both modes, because a check that only runs
+    in the new mode proves nothing about the old one.
+    """
+
+    selected = severed_read_names(cut_dir)
+    dropped = set()
+    mentions = 0
+    for chunk in chunks:
+        names = chunk["manifest"]["dropped_read_names"]
+        mentions += len(names)
+        dropped.update(names)
+
+    if selected != dropped:
+        missed = sorted(dropped - selected)
+        unrealized = sorted(selected - dropped)
+        raise PipelineError(
+            "severed-read accounting is inexact: cut selection named {} read(s) "
+            "and extraction dropped {}. {} dropped but not named (the control "
+            "would keep records the chunks never saw, e.g. {}); {} named but not "
+            "dropped (the control would lose records the chunks did see, e.g. "
+            "{}). The parity comparison subtracts the NAMED set from the "
+            "control, so it must be the dropped set exactly.".format(
+                len(selected),
+                len(dropped),
+                len(missed),
+                ", ".join(missed[:5]) or "-",
+                len(unrealized),
+                ", ".join(unrealized[:5]) or "-",
+            )
+        )
+
+    return {
+        "severed_reads": len(dropped),
+        "named_by_cut_selection": len(selected),
+        "dropped_by_extraction": len(dropped),
+        "per_chunk_drop_mentions": mentions,
+        "sets_identical": True,
+    }
+
+
+def roll_up_split_accounting(chunks):
+    """Per-chunk split counts, summed, for a strandless run's timing record.
+
+    ``verify_chunk_split`` already refused anything inconsistent, chunk by chunk,
+    inside the parallel phase. This is the run-level statement of what survived:
+    the number of alignment records the chunked arm quantifies, and the number
+    the in-chunk splits lost on the way, which is zero or the run failed.
+    """
+
+    total = collections.Counter()
+    for chunk in chunks:
+        for key, value in chunk.get("split_counts", {}).items():
+            total[key] += value
+    return {
+        "intervals_split": sum(1 for c in chunks if "split_counts" in c),
+        "alignments_emitted": total["alignments_emitted"],
+        "records_plus": total["records_plus"],
+        "records_minus": total["records_minus"],
+        "records_quantified": total["records_total"],
+        "records_lost_in_split": total["records_lost"],
     }
 
 
@@ -1294,10 +1927,32 @@ def build_parser():
         help="TPM denominator, passed identically to every chunk and to the "
         "control. Default: the stage-1 retained record count, which is what "
         "every arm actually sees. A supplied value that disagrees with that "
-        "count is an error, not a preference",
+        "count is an error, not a preference. REQUIRED with "
+        "--strandless_chunks --arm chunked, which does not run stage 1 and so "
+        "has no count to default to",
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
+    parser.add_argument(
+        "--strandless_chunks",
+        action="store_true",
+        help="cut and extract STRANDLESS chunks and run the orientation split "
+        "inside each chunk, concurrently with every other chunk, instead of "
+        "splitting the whole bam up front. The chunked arm then skips stage 1 "
+        "entirely and extracts once per interval rather than once per "
+        "contig-strand. The control still needs the split -- it IS the "
+        "strand-split whole bam -- so --arm baseline/both still runs stage 1. "
+        "An output directory serves one mode or the other, never both",
+    )
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="print the plan and stop. Cut selection IS the plan, so it runs "
+        "(and is checkpointed for the real run); nothing is extracted, "
+        "normalized or quantified. Strand-first also needs stage 1 first, "
+        "because its cut selection reads the split bams -- which is itself the "
+        "difference the strandless mode exists to remove",
+    )
     # Defaults come from the canonical definition rather than a second copy. These
     # were hardcoded here and happened to agree with LRAA_Globals; a change to
     # either would have diverged silently, and worse than silently, because the
@@ -1383,6 +2038,135 @@ def main(argv=None):
     return run(parse_args(argv))
 
 
+def claim_pipeline_mode(ckpt, mode):
+    """One output directory serves one chunking mode, and records which one.
+
+    ``merged/``, ``timing.json`` and ``outputs.json`` sit at fixed paths and
+    stage 6 is not checkpointed, so a second run in the other mode would
+    overwrite the first's results rather than add to them. Every per-stage
+    sentinel already differs between the modes -- the two chains have different
+    roots -- and that is exactly what would make the collision quiet: each stage
+    would find itself not done, rerun, and replace a merged table that looked
+    finished. So the directory carries an explicit claim, and the second mode is
+    refused instead of served.
+    """
+
+    for other in PIPELINE_MODES:
+        if other != mode and ckpt.done("mode_" + other):
+            raise PipelineError(
+                "this output directory has already served the {} pipeline "
+                "(sentinel {}). The two modes share merged/, timing.json and "
+                "outputs.json, so running {} here would overwrite those results "
+                "rather than add to them, while every per-stage sentinel "
+                "reported the work as new. Use a different "
+                "--output_dir.".format(other, ckpt.path("mode_" + other), mode)
+            )
+    ckpt.mark("mode_" + mode, mode)
+
+
+def format_plan(args, mode, sources, selections):
+    """The ``--dry_run`` report: what would run, how much of it, and over what.
+
+    Built from ``planned_chunks``, the same generator stage 3 iterates, so the
+    plan cannot describe a partition the real run would not build.
+    """
+
+    planned = list(planned_chunks(sources, selections))
+    strandless = args.strandless_chunks
+    per_chunk = 2 if strandless else 1
+    quant_units = len(planned) * per_chunk
+    noun = "interval" if strandless else "contig-strand chunk"
+
+    def row(stage, what, detail):
+        return "  {:<9} {:<24} {}".format(stage, what, detail)
+
+    lines = [
+        "",
+        "PLAN (--dry_run): {} chunking, arm={}".format(mode, args.arm),
+        "",
+    ]
+    if strandless:
+        lines.append(
+            row(
+                "stage 1",
+                "whole-bam strand split",
+                "SKIPPED for the chunked arm"
+                + (
+                    "; run for the control, which IS the strand-split bam"
+                    if args.arm in ("baseline", "both")
+                    else ""
+                ),
+            )
+        )
+    else:
+        lines.append(
+            row("stage 1", "whole-bam strand split", "1 run over the whole bam")
+        )
+    lines += [
+        row(
+            "stage 2",
+            "cut selection",
+            "{} run(s) over {}".format(
+                len(sources), "the RAW bam" if strandless else "each orientation bam"
+            ),
+        ),
+        row(
+            "stage 3",
+            "chunk extraction",
+            "{} extraction(s), one per {}".format(len(planned), noun),
+        ),
+        row(
+            "stage 3b",
+            "strand split IN CHUNK",
+            "{} run(s), after extraction, inside the parallel phase".format(
+                len(planned)
+            )
+            if strandless
+            else "not run -- the whole bam was split at stage 1",
+        ),
+        row(
+            "stage 4",
+            "normalize",
+            "{}{}".format(
+                quant_units,
+                " = {} x 2 orientations".format(len(planned)) if strandless else "",
+            ),
+        ),
+        row("stage 5", "quant", str(quant_units)),
+        row("stage 6", "merge", "{} quant unit(s)".format(quant_units)),
+        "",
+        "  {:<20} {:<28} {:>9}  {}".format(
+            "chunk", "region", "span Mb", "quant units"
+        ),
+    ]
+    for chunk in planned:
+        span = (chunk["rend"] - chunk["lend"] + 1) / 1e6
+        if strandless:
+            units = "{0}_plus, {0}_minus".format(chunk["chunk_id"])
+        else:
+            units = chunk["chunk_id"]
+        lines.append(
+            "  {:<20} {:<28} {:>9.2f}  {}".format(
+                chunk["chunk_id"], chunk["region"], span, units
+            )
+        )
+    lines += [
+        "",
+        "  {} {}s, {} extraction(s), {} quant unit(s)".format(
+            len(planned), noun, len(planned), quant_units
+        ),
+    ]
+    if strandless:
+        lines.append(
+            "  strand-first over the same substrate extracts once per quant "
+            "unit, so {} extractions rather than {}".format(
+                quant_units, len(planned)
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def run(args):
     """Execute the pipeline described by ``args``. Returns the outputs mapping.
 
@@ -1405,9 +2189,11 @@ def run(args):
                 "the chunked pipeline needs {}".format(required)
             )
 
+    mode = STRANDLESS_MODE if args.strandless_chunks else STRAND_FIRST_MODE
     outdir = os.path.abspath(args.output_dir)
     os.makedirs(os.path.join(outdir, "logs"), exist_ok=True)
     ckpt = Checkpoints(os.path.join(outdir, "__ckpt"))
+    claim_pipeline_mode(ckpt, mode)
 
     timing_path = os.path.join(outdir, "timing.json")
     timing = {}
@@ -1419,6 +2205,8 @@ def run(args):
     timing["checkpoint_dir"] = ckpt.root
     timing["cpu_budget"] = args.cpu_budget
     timing["arm"] = args.arm
+    timing["chunk_order"] = mode
+    timing["dry_run"] = bool(args.dry_run)
 
     for tool in (SEPARATE_BAM, SELECT_CUTS, EXTRACT_CHUNK, NORMALIZE_BAM, LRAA):
         if not os.path.exists(tool):
@@ -1442,32 +2230,69 @@ def run(args):
         args.contig or "",
     )
 
-    strand_bams, split_token = stage_strand_split(
-        args, ckpt, outdir, timing, rss, inputs_token
-    )
-    retained = {s: count_records(b) for s, b in strand_bams.items()}
-    retained_total = sum(retained.values())
-    timing["stage1_retained_records"] = {
-        "plus": retained["+"],
-        "minus": retained["-"],
-        "total": retained_total,
-    }
-    if args.num_total_reads is None:
-        num_total_reads = retained_total
-    else:
-        num_total_reads = args.num_total_reads
-        if num_total_reads != retained_total:
-            raise PipelineError(
-                "-N {} disagrees with the stage-1 retained record count {} "
-                "({} on + plus {} on -). The denominator has to be the record "
-                "set the arms actually see, or TPM is not comparable between "
-                "them.".format(
-                    num_total_reads, retained_total, retained["+"], retained["-"]
+    # Skipping stage 1 IS the strandless mode; it is not made cheaper, it is not
+    # run. The CONTROL still needs it, because the whole-contig baseline is
+    # precisely the strand-split bam glued back together, so a parity run pays
+    # for it once and a pure chunked run does not pay at all.
+    needs_split = (not args.strandless_chunks) or args.arm in ("baseline", "both")
+    strand_bams = split_token = None
+    if needs_split:
+        strand_bams, split_token = stage_strand_split(
+            args, ckpt, outdir, timing, rss, inputs_token
+        )
+        retained = {s: count_records(b) for s, b in strand_bams.items()}
+        retained_total = sum(retained.values())
+        timing["stage1_retained_records"] = {
+            "plus": retained["+"],
+            "minus": retained["-"],
+            "total": retained_total,
+        }
+        if args.num_total_reads is None:
+            num_total_reads = retained_total
+            timing["num_total_reads_source"] = "stage 1 retained record count"
+        else:
+            num_total_reads = args.num_total_reads
+            timing["num_total_reads_source"] = "supplied via -N"
+            if num_total_reads != retained_total:
+                raise PipelineError(
+                    "-N {} disagrees with the stage-1 retained record count {} "
+                    "({} on + plus {} on -). The denominator has to be the record "
+                    "set the arms actually see, or TPM is not comparable between "
+                    "them.".format(
+                        num_total_reads, retained_total, retained["+"], retained["-"]
+                    )
                 )
-            )
+    else:
+        timing.setdefault("stages", {})["strand_split"] = {
+            "skipped": "--strandless_chunks with --arm chunked: the orientation "
+            "split runs per chunk, at stage 3b"
+        }
+        timing["stage1_retained_records"] = None
+        # There is no stage-1 count to default to, and inventing one would
+        # silently move the RPM_total_reads column relative to a strand-first
+        # run of the same substrate -- the one column stage 6 does not rebase.
+        # A dry run never reaches quantification, so it does not need the number.
+        if args.num_total_reads is None:
+            if not args.dry_run:
+                raise PipelineError(
+                    "-N is required with --strandless_chunks --arm chunked. That "
+                    "arm does not run stage 1, so there is no retained record "
+                    "count to default to, and RPM_total_reads is computed "
+                    "against whatever is passed -- a guess here would look like "
+                    "a quantification difference. Use "
+                    "stage1_retained_records.total from a strand-first run over "
+                    "the same bam, or run --arm both once, which does run "
+                    "stage 1."
+                )
+            num_total_reads = None
+        else:
+            num_total_reads = args.num_total_reads
+        timing["num_total_reads_source"] = (
+            "supplied via -N (stage 1 skipped, nothing to cross-check against)"
+        )
     timing["num_total_reads"] = num_total_reads
 
-    outputs = {"num_total_reads": num_total_reads}
+    outputs = {"num_total_reads": num_total_reads, "chunk_order": mode}
 
     def flush():
         with open(timing_path, "wt") as fh:
@@ -1477,16 +2302,33 @@ def run(args):
     flush()
 
     if args.arm in ("chunked", "both"):
+        sources = cut_sources(args, strand_bams, inputs_token, split_token)
         selections, cut_dir, cuts_tokens = stage_select_cuts(
-            args, ckpt, outdir, timing, strand_bams, rss, split_token
+            args, ckpt, outdir, timing, sources, rss
         )
         flush()
+
+        if args.dry_run:
+            plan = format_plan(args, mode, sources, selections)
+            print(plan, flush=True)
+            timing["plan"] = plan.splitlines()
+            flush()
+            # outputs.json is NOT written: a dry run must not overwrite the
+            # record of a real run that already finished in this directory.
+            outputs["dry_run"] = True
+            outputs["cut_dir"] = cut_dir
+            return outputs
+
         chunks = stage_extract_chunks(
-            args, ckpt, outdir, timing, strand_bams, selections, rss, cuts_tokens
+            args, ckpt, outdir, timing, sources, selections, rss, cuts_tokens
         )
+        # Before the expensive phase, not after it: this is the check that keeps
+        # the control's pruned bam and the chunked arm's inputs the same record
+        # set, and it needs nothing but the manifests and the cut selection.
+        timing["severed_read_accounting"] = verify_severed_accounting(cut_dir, chunks)
         flush()
         print(
-            "extracted {} chunks: {}".format(
+            "extracted {} chunk(s): {}".format(
                 len(chunks), ", ".join(c["region"] for c in chunks)
             ),
             flush=True,
@@ -1503,7 +2345,8 @@ def run(args):
             arm_sampler.stop()
         load_after = loadavg()
 
-        merged = merge_and_translate(outdir, chunks)
+        units = ordered_units(chunks)
+        merged = merge_and_translate(outdir, units)
         timing.setdefault("arms", {})["chunked"] = {
             "cpu_budget": chunk_allocation.budget,
             "concurrent_chunk_workers": chunk_allocation.unit_workers,
@@ -1511,6 +2354,8 @@ def run(args):
             "unallocated_cores": chunk_allocation.unallocated_cores,
             "makespan_s": round(makespan, 3),
             "summed_wall_s": round(sum(c["wall_s"] for c in chunk_records), 3),
+            "chunks_extracted": len(chunks),
+            "quant_units": len(units),
             "chunks": chunk_records,
             "peak_rss_kb_summed_over_chunk_peaks": sum(
                 c["peak_tree_rss_kb"] for c in chunk_records
@@ -1519,12 +2364,15 @@ def run(args):
             "loadavg_before": load_before,
             "loadavg_after": load_after,
         }
+        if args.strandless_chunks:
+            timing["strandless_split_accounting"] = roll_up_split_accounting(chunks)
         timing["chunk_manifests"] = [
             {
                 "chunk_id": c["chunk_id"],
                 "region": c["region"],
                 "offset": c["offset"],
                 "window_origin": c["window_origin"],
+                "quant_units": [u["unit_id"] for u in c["units"]],
                 "alignments_emitted": c["manifest"]["counts"]["alignments_emitted"],
                 "alignments_dropped_overhang": c["manifest"]["counts"][
                     "alignments_dropped_overhang"
@@ -1532,6 +2380,7 @@ def run(args):
                 "gtf_transcripts_emitted": c["manifest"]["counts"][
                     "gtf_transcripts_emitted"
                 ],
+                "split_counts": c.get("split_counts"),
                 "log": c["log"],
             }
             for c in chunks
@@ -1539,6 +2388,18 @@ def run(args):
         outputs["chunked"] = merged
         outputs["cut_dir"] = cut_dir
         flush()
+    elif args.dry_run:
+        # --arm baseline has no partition to plan: the control is one merge, one
+        # normalize and one quant over the whole contig. Said, not run, because
+        # a dry run that quantified would be a run.
+        print(
+            "\nPLAN (--dry_run): {} chunking, arm=baseline\n\n"
+            "  baseline   merge + normalize + quant   1 whole-contig run, minus "
+            "the reads any cut selection in this directory named as "
+            "severed\n".format(mode),
+            flush=True,
+        )
+        return outputs
 
     if args.arm in ("baseline", "both"):
         # Read from disk rather than carried down from the chunked arm, so a

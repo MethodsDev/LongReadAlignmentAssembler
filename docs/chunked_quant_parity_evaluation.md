@@ -33,6 +33,75 @@ Unit coverage of the pieces lives in `util/misc/test_chunked_pipeline_{budget,ch
 `pylib/test_gtf_tabix_index.py` and `pylib/test_chunked_entry_point.py`. None of those
 executes a stage subprocess.
 
+## The sibling comparison: strand-first against strandless chunking
+
+Everything above compares chunked against whole-contig. `--strandless_chunks` asks a
+different question with the same shape — does moving the orientation split from a whole-BAM
+serial phase into the per-chunk parallel phase change the answer — and it is answered by
+`pylib/StrandlessParity.py`, driven from `testing/strandless_parity/`. It reuses this
+evaluation's machinery rather than restating it: `ChunkedRun.severed_read_names`,
+`ChunkedRun.read_tsv` and `ChunkedRun.resolve_tracking` are what it reads the arms with, so
+the two comparisons cannot drift into disagreeing about what an arm consumed.
+
+Two things differ from the chunked-vs-whole comparison and both change what the bar can be.
+
+**There is a cheaper and stronger check available first.** Strand assignment is per-read
+local — `split_bam_by_strand` decides from the read alone — so a read's strand must be
+identical computed over the whole contig or inside the chunk holding it. That is checkable
+without quantifying anything (`strand-invariant`), and if it fails no downstream number can
+be made to agree. Measured on chr1 (HG002 PacBio Kinnex, 1,909,780 records, 1,064,804
+retained, 24 union cuts at the 10 Mb default), in both modes:
+
+| mode | records compared | agree | flag rewritten by the split |
+|---|---|---|---|
+| aligner flag (what the pipeline runs today) | 1,064,804 | 1,064,804 | 0 |
+| `--infer_read_orient` | 1,064,804 | 1,064,804 | 12,471 whole-genome, the same 12,471 in-chunk |
+
+**Quote the second row, not the first.** Under plain aligner flags the split is a filter and a
+partition on `read.is_forward`, so a record's strand is a property of the record and cannot
+disagree with itself no matter where the split ran: that row is a wiring check, and 100%
+agreement in it is not evidence for the design. Inference is the only regime in which a read's
+strand can differ from its alignment flag at all, and therefore the only regime in which the
+invariant could have been false. There the split rewrote 12,471 flags genome-wide, rewrote the
+same 12,471 inside the chunks, and no read changed strand. Nothing was severed at that
+geometry, so the two arms' read sets are identical too, and every disagreement the check could
+have reported would have been a real one.
+
+**The arms may legitimately consume different reads.** Cuts are chosen from different
+evidence — one strand's coverage against both strands' union — so their POSITIONS can differ
+and different positions sever different reads. On the minigenome at 0.5 Mb the strandless arm
+severs 6 where strand-first severs 5, and the extra read is named rather than counted:
+`m160629_191727_..._s1_p0/69114/ccs`, reverse-oriented, spanning 928,251-1,020,755, severed
+by the shared cut at 1,014,000 that the minus strand's own cut at 1,046,300 misses. It reaches
+neither arm's `quant.tracking`, so the difference costs the comparison nothing and the merged
+tables come out identical anyway. The gate therefore does not demand byte identity
+unconditionally: it demands that every differing row be attributable to a read in the
+symmetric difference of the two severed sets, and names any row that is not.
+
+`quant.tracking` differs between the arms in `mp_id` alone, which is a per-process MultiPath
+counter rather than data (`ChunkedRun.merge_and_translate` says the same). The gate tests row
+ORDER separately from row CONTENT so that an ordering difference is proven — equal row
+multisets, which no content difference can satisfy — rather than asserted; on this corpus the
+rows are in the same order, so "ordering" would have been the wrong description and the gate
+says `mp_id` instead.
+
+**The ordering mistake, measured rather than warned about.** `retained_for_extraction`
+filters on the RAW alignment flag and `split_bam_by_strand` rewrites that flag, so extracting
+`chr1+:...` from a raw BAM keeps every read the aligner called forward and then treats all of
+them as forward — including those whose splice dinucleotides say otherwise, which no later
+stage revisits. `ordering-cost` commits the mistake on purpose and names what it costs:
+56 of 245 emitted records on `minigenome+:1014001-1502500`, and 21 of 25,757 on
+`chr1+:9919601-20000000`. The two rates differ by 300x and the reason is the substrate, not
+the geometry: the minigenome's PacBio BAM is not oriented with transcription (1,076 of 2,266
+records are flipped by the split, 47.5%) while HG002 Kinnex largely is (12,471 of 1,064,804,
+1.2%). Quoting either figure alone would misstate the risk — the minigenome overstates how
+visible the mistake is, chr1 understates it — so both are here, and neither is zero.
+
+Unit coverage is `pylib/test_strandless_parity.py`, whose fixture plants splice
+dinucleotides that CONTRADICT the aligner flag: without a read the split rewrites, the
+invariant would pass while testing nothing. It also runs each check against a deliberately
+broken arrangement, because an instrument that cannot register a fault is worthless.
+
 ## What has to be true for the comparison to mean anything
 
 A cut severs the reads that span it, and both neighbouring chunks drop them. That loss is
@@ -96,6 +165,30 @@ python3 ../../util/misc/run_chunked_quant_pipeline.py \
     --output_dir /tmp/parity --arm both --cpu_budget 6 --HiFi \
     --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1
 ```
+
+Strandless chunking, `--strandless_chunks`: cut the RAW bam, extract one chunk per
+interval holding both orientations, and run the orientation split inside each chunk.
+The chunked arm then does not run stage 1 at all, so it has no retained record count
+to default `-N` to and requires one -- use `stage1_retained_records.total` from a
+strand-first run over the same bam, which is what makes the two arms' RPM column
+comparable. `--arm both` still runs stage 1, because the control IS the strand-split
+whole bam.
+
+```bash
+cd <repo>/testing/single_contig
+python3 ../../util/misc/run_chunked_quant_pipeline.py \
+    --bam pacbio.PBLR.bam --genome_fa ref_genome.fa --gtf ref_annot.gtf \
+    --output_dir /tmp/parity_strandless --arm chunked --cpu_budget 6 --HiFi \
+    --strandless_chunks -N 2266 \
+    --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1
+```
+
+An output directory serves one mode or the other: `merged/`, `timing.json` and
+`outputs.json` are at fixed paths and stage 6 is not checkpointed, so the second mode
+would overwrite the first's results while every per-stage sentinel reported new work.
+The run refuses instead. `--dry_run` stops after cut selection -- which is the plan --
+and prints the units it would run: 25 intervals and 50 quant units on chr1 at 10 Mb,
+against 50 chunks and 50 quant units strand-first.
 
 Outputs to compare are named in `<outdir>/outputs.json`:
 
