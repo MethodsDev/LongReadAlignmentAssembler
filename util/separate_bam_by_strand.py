@@ -121,6 +121,20 @@ def main():
         help="alignments containing any intron (CIGAR 'N' operation) longer than this are discarded; set to 0 or a negative value to disable intron length filtering",
     )
 
+    parser.add_argument(
+        "--contig",
+        type=str,
+        default=None,
+        help="restrict the split to one contig, fetched by name from an indexed "
+        "bam. Written for the chunked pipeline's whole-contig chunks, whose bam "
+        "is the SOURCE rather than an extracted copy and therefore still holds "
+        "every other contig. A NAME rather than a region on purpose: the only "
+        "restriction anyone needs here is a whole contig, and a name has no "
+        "1-based/0-based boundary to get wrong. Omitted, every record in the "
+        "file is read, which is what stage 1 does and what this tool has always "
+        "done.",
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.bam
@@ -130,6 +144,7 @@ def main():
     genome_fasta = args.genome
     gtf_file = args.gtf
     max_intron_length = args.max_intron_length
+    contig = args.contig
 
     #########
     ### begin
@@ -157,6 +172,9 @@ def main():
     else:
         logger.info("-intron length filtering disabled")
 
+    if contig:
+        logger.info("-restricting the split to contig {}".format(contig))
+
     counters = split_bam_by_strand(
         input_bam_filename,
         top_strand_bam_filename,
@@ -165,10 +183,16 @@ def main():
         infer_read_orient_flag=infer_read_orient_flag,
         genome_fasta=genome_fasta,
         chrom_to_itree=chrom_to_itree,
+        contig=contig,
     )
 
     if counters["num_records"] == 0:
-        logger.warning("No records detected for {}".format(input_bam_filename))
+        logger.warning(
+            "No records detected for {}{}".format(
+                input_bam_filename,
+                " on contig {}".format(contig) if contig else "",
+            )
+        )
     else:
         logger.info(build_report(counters, infer_read_orient_flag))
 
@@ -187,6 +211,7 @@ def split_bam_by_strand(
     infer_read_orient_flag=False,
     genome_fasta=None,
     chrom_to_itree=None,
+    contig=None,
 ):
     """writes the retained records of the input bam to the strand-specific bam files
     and returns the record accounting as a dict of counters.
@@ -194,6 +219,14 @@ def split_bam_by_strand(
     Only primary, non-supplementary alignments passing the intron length
     criterion are retained; every other input record is discarded here and so
     excluded from all downstream processing.
+
+    ``contig`` restricts the pass to one reference, fetched from the index. The
+    counters then carry that contig's records as their denominator rather than
+    the file's -- which is the honest reading, since nothing else was looked at
+    -- and unmapped records fall out of the accounting entirely, because a
+    coordinate fetch cannot return one. They were discarded anyway, under
+    ``unmapped``. Whole-file iteration is unchanged and is still what stage 1
+    does.
     """
 
     bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
@@ -225,7 +258,8 @@ def split_bam_by_strand(
     for discard_reason in DISCARD_REASONS:
         counters[discard_counter_name(discard_reason)] = 0
 
-    for read in bamfile_reader:
+    reader = bamfile_reader.fetch(contig) if contig else bamfile_reader
+    for read in reader:
 
         counters["num_records"] += 1
 

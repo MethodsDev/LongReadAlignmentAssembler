@@ -95,6 +95,40 @@ stored in ``timing.json`` and ``outputs.json``. A partition that quietly shrank,
 or quietly severed thousands of junctions, is a regression nobody can explain
 afterwards.
 
+MAKE-CHUNKS IS A POOL, not two serial loops. Stages 2 and 3 used to be the
+serial half of a chunked run: one cut selection per orientation looping every
+contig inside one process, then one extraction per chunk in a ``for``. Both scale
+with READS rather than with genome length, which is why they dominate --
+whole-genome strandless prep models at 1,009 s, and strand-first at 2,010 s,
+against a processing phase that has been pooled since it was written.
+
+``run_prep_concurrently`` schedules both as ONE flat queue of (contig,
+orientation) selections and (contig, orientation, chunk) extractions, from the
+same ``CpuBudget`` and with the same abort-and-refuse mechanics
+``run_chunks_concurrently`` uses. Three things about it are not incidental:
+
+  * NO STAGE BARRIER. A contig's extractions are submitted by that contig's own
+    selection, so one contig's chunks start while another is still selecting.
+    With a barrier the floor is the largest chromosome's whole prep -- chr1 at
+    121.6 s, an 8.3x ceiling no number of cores improves. Without one the floor
+    is the longest single dependency chain, one selection plus its longest
+    extraction, which on an HG002 library is chrM at 73.6 s: 13.7x.
+  * WHICH CONTIGS IS NOT A CHOICE. The enumeration is the selector's own
+    ``sorted(lengths)`` off the genome fasta, so the cuts a pooled run places are
+    the cuts a serial run places. See ``enumerate_prep_contigs``.
+  * ORDER IS RESTORED SERIALLY. ``selections[key]`` is reassembled in contig
+    order and the ``order`` counter every quant unit carries is assigned in one
+    serial pass afterwards, so the merged table's row order cannot depend on
+    which selection finished first. See ``planned_chunks``.
+
+A chunk covering its WHOLE contig is not extracted. Offset 0, mini contig named
+and sized like the real one, nothing able to overhang: the mini bam would restate
+the source. Measured on chrM of a 6.9 GB HG002 bam, writing it costs 73.2 s
+against 6.6 s for the same fetch and the same predicates without the write, so
+the chunk's bam is the source and stage 3b reads it restricted to the contig.
+Strandless only -- a strand-first chunk bam is normalized and quantified
+directly, and neither of those can restrict a multi-contig source.
+
 MEASUREMENT NOTES. Wall time is measured around each subprocess. Peak RSS is
 sampled from ``/proc`` at ``--rss_sample_interval`` over the step's whole
 process tree and summed across that tree, so a chunk's figure already includes
@@ -519,6 +553,230 @@ def ensure_bam_index(bam):
         )
 
 
+# ----------------------------------------------------- make-chunks scheduling
+
+
+def contig_mapped_counts(bam):
+    """Mapped record count per reference, read out of the bam's own index.
+
+    ``samtools idxstats`` touches only the ``.bai``, so this is 0.19 s on a
+    6.9 GB bam rather than a pass over it. It is used ONLY as the launch-order
+    cost proxy -- ``enumerate_prep_contigs`` says why it must not choose the
+    contig set -- so a reference it cannot report just sorts last.
+    """
+
+    counts = {}
+    try:
+        report = pysam.idxstats(bam)
+    except Exception as err:  # noqa: BLE001 - a launch-order proxy, not a result
+        print(
+            "idxstats on {} failed ({}), so make-chunks will launch in "
+            "contig-length order rather than longest-first. Scheduling only; no "
+            "output depends on it.".format(bam, err),
+            flush=True,
+        )
+        return counts
+    for line in report.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 3 or fields[0] == "*":
+            continue
+        counts[fields[0]] = int(fields[2])
+    return counts
+
+
+def enumerate_prep_contigs(args):
+    """The contigs cut selection runs on, and their lengths. NOT a choice.
+
+    ``select_contig_cut_points.py`` enumerates ``sorted(lengths)`` off the genome
+    fasta when it is given one and off the bam header otherwise (``:1335-1351``),
+    and this pipeline always gives it the fasta. Splitting that loop across
+    processes must not also change which contigs are in it:
+
+      * a SMALLER set drops the reads AND the TPM denominator of everything it
+        omits, silently. "Main chromosomes" on a whole-genome HG002 library omits
+        85 references holding 504,971 mapped records, 2.78 % of the library.
+        "References with mapped reads" is subtler and still wrong: it changes the
+        cut manifest against a serial run, which is the artifact the parity gates
+        diff.
+      * a LARGER set invents chunks.
+
+    So the set is the selector's own, verbatim, and idxstats supplies the launch
+    cost only. A reference holding nothing still gets its selection and its one
+    empty chunk, exactly as the serial loop gave it one.
+
+    ``--contig`` reduces the enumeration to a single entry, which leaves today's
+    behaviour as a degenerate case of the same pool rather than a second path.
+    """
+
+    with pysam.FastaFile(os.path.abspath(args.genome_fa)) as fasta:
+        lengths = dict(zip(fasta.references, fasta.lengths))
+    if not lengths:
+        raise PipelineError(
+            "{} names no contigs, so there is nothing to select cuts on. The "
+            "make-chunks phase enumerates the genome fasta because that is what "
+            "cut selection enumerates.".format(args.genome_fa)
+        )
+    if args.contig:
+        if args.contig not in lengths:
+            raise PipelineError(
+                "--contig {} is absent from {}. Known contigs begin: {}".format(
+                    args.contig, args.genome_fa, ", ".join(sorted(lengths)[:10])
+                )
+            )
+        return [args.contig], lengths
+    return sorted(lengths), lengths
+
+
+def _extractor_module():
+    """``extract_contig_region_inputs``, imported into this process.
+
+    For ``ensure_gtf_index`` alone. Everything else this pipeline asks of the
+    extractor it asks through a subprocess, so that a per-chunk failure lands in
+    that chunk's own log rather than killing the driver.
+    """
+
+    path = os.path.join(REPO_ROOT, "util", "misc")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    import extract_contig_region_inputs
+
+    return extract_contig_region_inputs
+
+
+def warm_gtf_index(args, outdir, timing):
+    """Build the shared GTF tabix index ONCE, serially, before the pool opens.
+
+    ``ensure_gtf_index`` has no lock: it checks a stamp, misses, and builds.
+    MEASURED, with ``_build_gtf_index`` marked per pid -- six concurrent callers
+    against a COLD cache produced SIX independent builds; against a WARM cache,
+    zero. Nothing is corrupted, because each build writes pid-scoped temps and
+    ``os.replace``s them into place, but on a 1.49 GB GENCODE GTF one build is
+    36.2 s and spills ~1.5 GB of temp, so sixteen-wide cold is sixteen times
+    both. This is the single largest hazard the parallel phase introduces, and
+    one serial call removes it.
+
+    Reported rather than silent, so a cold run says what it paid.
+    """
+
+    extractor = _extractor_module()
+    started = time.time()
+    index_path = extractor.ensure_gtf_index(
+        os.path.abspath(args.gtf), cache_dir=gtf_index_cache_dir(outdir)
+    )
+    elapsed = round(time.time() - started, 3)
+    record = {"wall_s": elapsed, "index": index_path}
+    if index_path is None:
+        # Not fatal: the selector and the extractor both fall back to scanning
+        # the GTF per contig. Said out loud, because that fallback is the slow
+        # path and silence would read as a successful pre-warm.
+        record["note"] = (
+            "no tabix index could be built for {}; every unit will scan the "
+            "whole GTF instead of seeking into it".format(args.gtf)
+        )
+    print(
+        "gtf tabix index ready in {:.2f}s: {}".format(
+            elapsed, index_path or "NONE -- every unit will scan the gtf"
+        ),
+        flush=True,
+    )
+    timing.setdefault("stages", {})["gtf_index_warm"] = record
+    return index_path
+
+
+# Worst per-unit peak RSS across the make-chunks stages, with margin. MEASURED by
+# exact wait4 ru_maxrss, not by the sampler, over a WHOLE-GENOME run of this pool:
+# 195 contigs of GRCh38 against GENCODE v39, every unit's peak recorded by
+# ``run_step``.
+#
+#   cut selection      43.0 MiB (chrM) - 263.8 MiB (chr1), median 44.5.
+#                      chr1 264, chr2 220, chr3 191, chr11 179, chr12 166.
+#                      The dominant stage, and it scales with ANNOTATION size,
+#                      not read count: chrM carries 1.19 M reads, 6.6 % of the
+#                      library, and has the SMALLEST footprint of the 195.
+#   chunk extraction   41.5 - 80.5 MiB, and flat in concurrency
+#                      (80.5 / 80.6 / 80.3 MiB at 1 / 4 / 8 wide).
+#
+# So K workers cost about K times this. Measured concurrent tree RSS over the same
+# run: 0.30 GiB at 1 worker, 0.83 GiB at 4 -- 181 MiB marginal per worker, under
+# the worst case because the queue mixes cheap contigs with expensive ones.
+#
+# 300 MiB is the measured worst (263.8) plus 14 %. It is a GUARD, not an
+# estimator: the MiB-per-GTF-MB ratio varies by 2.0x across contigs (1.49 on
+# chr1, 0.74 on chr21), which is not enough to model from, so nothing here
+# pretends to model it.
+PREP_UNIT_PEAK_MIB = 300
+
+
+def available_memory_mib():
+    """``MemAvailable`` in MiB, or None where /proc/meminfo cannot be read."""
+
+    try:
+        with open("/proc/meminfo", "rt") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def prep_memory_cap(budget, available_mib=None):
+    """Concurrency this box can hold in the make-chunks phase. ``(cap, note)``.
+
+    Bounded by MEMORY as well as by cores, because the two bounds belong to
+    different parties: the core bound is the user's ``--cpu_budget``, the memory
+    bound is the box's. Both have to hold, and only one of them was being
+    checked.
+
+    What the numbers are, at ``PREP_UNIT_PEAK_MIB``:
+
+      | workers | worst-case prep RSS | 62 GB box | 16 GB box |
+      |       8 |            2.34 GiB |       26x |      6.8x |
+      |      16 |            4.69 GiB |       13x |      3.4x |
+      |      24 |            7.03 GiB |      8.8x |      2.3x |
+      |      32 |            9.38 GiB |      6.6x | 1.7x, capped |
+
+    So a 62 GB box runs any width the budget asks for and a 16 GB box runs to
+    24-wide; the cap starts doing work on a small box at high budget, and on a
+    container whose memory has been squeezed. The processing phase's own measured
+    peak is 3.575 GB on a whole chr1, and the two phases do not overlap -- prep
+    completes before processing starts -- so a wide make-chunks pool becomes the
+    run's high-water MAX rather than adding to it.
+
+    ``None`` cap means unbounded by memory. The cap never falls below 1: running
+    one unit at a time is what the serial loop being replaced did, and is
+    strictly better than refusing to run.
+    """
+
+    if available_mib is None:
+        available_mib = available_memory_mib()
+    if available_mib is None:
+        return None, (
+            "make-chunks concurrency is bounded by --cpu_budget alone: "
+            "/proc/meminfo could not be read, so the {} MiB-per-unit memory "
+            "bound could not be applied on this box.".format(PREP_UNIT_PEAK_MIB)
+        )
+    affordable = max(1, int(available_mib) // PREP_UNIT_PEAK_MIB)
+    if affordable >= budget:
+        return None, None
+    return affordable, (
+        "make-chunks concurrency capped at {} worker(s) by MEMORY rather than by "
+        "--cpu_budget {}: {} MiB available, and one make-chunks unit peaks at up "
+        "to {} MiB (measured worst case: cut selection against a whole-genome "
+        "GTF). {} core(s) of the budget sit idle in this phase deliberately, "
+        "because {} x {} MiB is {} MiB and the box does not have it.".format(
+            affordable,
+            budget,
+            available_mib,
+            PREP_UNIT_PEAK_MIB,
+            budget - affordable,
+            budget,
+            PREP_UNIT_PEAK_MIB,
+            budget * PREP_UNIT_PEAK_MIB,
+        )
+    )
+
+
 # Extraction refuses some alignments for reasons no cut selection can predict: a
 # record whose aligned end lies past the END OF ITS CONTIG overhangs the last chunk
 # without any cut being responsible for it. Those reads are genuinely absent from
@@ -612,150 +870,214 @@ def resolve_min_per_id(args):
     return 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
 
 
-def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
-    cut_dir = os.path.join(outdir, "cuts")
-    os.makedirs(cut_dir, exist_ok=True)
-    selections = {}
-    cuts_tokens = {}
-    for key, tag, bam, parent_token in sources:
-        prefix = os.path.join(cut_dir, tag)
-        log = os.path.join(outdir, "logs", "stage2_cuts_{}.log".format(tag))
-        # ".sev" is a version marker, not an input: this stage now also emits
-        # <prefix>.severed_reads.bam, so a checkpoint written before that would
-        # skip the step and leave the file absent while reporting the stage reused.
-        # --HiFi raises min_per_id to 97 inside LRAA, and the emitted severed set is
-        # filtered on the value the quant step will use, so the thresholds belong in
-        # the token: the same cuts with a different min_per_id emit a different bam.
-        effective_min_per_id = resolve_min_per_id(args)
-        # Stage 5 runs LRAA --quant_only, which swaps
-        # min_mapping_quality_for_final_quant into min_mapping_quality before it
-        # filters (LRAA:4201-4204).  Reading the discovery key here would be wrong
-        # for every run that raises the final-quant threshold; both default to 0,
-        # so nothing would have failed until someone set it.
-        effective_min_mapq = int(
-            LRAA_Globals.config["min_mapping_quality_for_final_quant"]
-        )
-        # ``tag`` carries the mode into the sentinel filename -- "strandless"
-        # rather than "plus"/"minus" -- and the parent token differs as well
-        # (the inputs, not a split), so neither mode can read the other's cuts.
-        token = chain_token(
-            "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}"
-            ".mxw_{}_annot_{}".format(
-                tag,
-                args.approx_MB_per_cut,
-                args.approx_MB_per_cut_wiggle_window,
-                args.depth_window,
-                args.margin,
-                effective_min_per_id,
-                effective_min_mapq,
-                # Two more things that decide the cut COORDINATES. The severed
-                # multi-exon weight is the objective itself, so changing it moves
-                # cuts; and whether an annotation constrains placement at all is
-                # now a property of the run rather than a given. Neither was in
-                # the token, and a stale hit here reuses one geometry's cuts under
-                # another's name. ``discovery`` is deliberately NOT here: stage 2
-                # is identical in the two modes, so including it would force a
-                # needless re-selection rather than prevent a wrong reuse.
-                args.severed_multiexon_weight,
-                bool(args.gtf),
-            ),
-            parent_token,
-        )
-        cuts_tokens[key] = token
-        gtf_args = (
-            [
-                "--gtf",
-                os.path.abspath(args.gtf),
-                # Both stages name the same fallback, so a read-only reference
-                # directory costs one index build for the run rather than one per
-                # invocation -- and cut selection, which runs first and once, is
-                # what pays for it.
-                "--gtf_index_cache_dir",
-                gtf_index_cache_dir(outdir),
-            ]
-            if args.gtf
-            # De novo discovery has no annotation, and the selector treats the
-            # annotation constraint as optional: with none supplied every
-            # grid-aligned position in the window is admissible on that axis.
-            else []
-        )
-        cmd = [
-            sys.executable,
-            SELECT_CUTS,
-            "--bam",
-            bam,
-            "--genome_fa",
-            os.path.abspath(args.genome_fa),
-            *gtf_args,
-            "--approx_MB_per_cut",
-            str(args.approx_MB_per_cut),
-            "--approx_MB_per_cut_wiggle_window",
-            str(args.approx_MB_per_cut_wiggle_window),
-            "--depth_window",
-            str(args.depth_window),
-            "--grid_origin",
-            "0",
-            "--margin",
-            str(args.margin),
-            "--max_intron_length",
-            str(args.max_intron_length),
-            # The severing cost's shape, and therefore the cut coordinates. Passed
-            # explicitly rather than left to the selector's config read so the
-            # value that chose the cuts is the value this run recorded.
-            "--severed_multiexon_weight",
-            str(args.severed_multiexon_weight),
-            # Always, not on request.  A consumer deciding whether a chunk boundary
-            # dissolved a read-sharing component needs the severed alignments
-            # themselves: names cannot be fetched from a coordinate-indexed bam,
-            # and a span cannot answer compatibility, which follows exon blocks.
-            # Without it the only alternative is trusting per-chunk components
-            # silently.  The set is bounded by the placement report rather than by
-            # a refusal: the selector minimises severing but will take a dirty
-            # position when the window holds nothing better, so on deep inputs this
-            # bam is how anyone sees which reads it cost.
-            "--severed_reads_bam",
-            "{}.severed_reads.bam".format(prefix),
-            # The values LRAA will apply, not the selector's own defaults: --HiFi
-            # changes min_per_id downstream and the selector cannot see that flag.
-            "--min_per_id",
-            str(effective_min_per_id),
-            "--min_mapping_quality",
-            str(effective_min_mapq),
-            "--output_prefix",
-            prefix,
+def cut_selection_plan(args, outdir, cut_dir, source, contig):
+    """One per-contig cut selection: where it writes, what it runs, its sentinel.
+
+    Lifted out of the serial loop with the COMMAND unchanged. Three things move,
+    and all three name the contig: the output prefix, the log and the sentinel.
+    Nothing about how a cut is chosen changes, because the selector already loops
+    contigs internally (``select_contig_cut_points.py:1342-1351``) and
+    ``--contig`` already restricts it -- per-contig invocation is a refactor of
+    the caller and zero lines of the selector.
+
+    What per-contig invocation DOES change is aggregation, and the prefix is
+    where it bites. ``.cuts.json``, ``.cuts.txt``, ``.dropped_reads.txt``,
+    ``.dropped_reads.tsv`` and ``--severed_reads_bam`` are per-INVOCATION
+    artifacts, not per-contig ones -- ``write_severed_alignments_bam``'s own
+    docstring says so -- so N invocations sharing one prefix would leave only the
+    last contig's on disk. One prefix per contig, and the three that are consumed
+    downstream are consumed by a glob-and-union (``severed_read_names``) that N
+    files already satisfy.
+    """
+
+    key, tag, bam, parent_token = source
+    prefix = os.path.join(cut_dir, "{}.{}".format(contig, tag))
+    log = os.path.join(
+        outdir, "logs", "stage2_cuts_{}_{}.log".format(contig, tag)
+    )
+    # ".sev" is a version marker, not an input: this stage now also emits
+    # <prefix>.severed_reads.bam, so a checkpoint written before that would
+    # skip the step and leave the file absent while reporting the stage reused.
+    # --HiFi raises min_per_id to 97 inside LRAA, and the emitted severed set is
+    # filtered on the value the quant step will use, so the thresholds belong in
+    # the token: the same cuts with a different min_per_id emit a different bam.
+    effective_min_per_id = resolve_min_per_id(args)
+    # Stage 5 runs LRAA --quant_only, which swaps
+    # min_mapping_quality_for_final_quant into min_mapping_quality before it
+    # filters (LRAA:4201-4204).  Reading the discovery key here would be wrong
+    # for every run that raises the final-quant threshold; both default to 0,
+    # so nothing would have failed until someone set it.
+    effective_min_mapq = int(
+        LRAA_Globals.config["min_mapping_quality_for_final_quant"]
+    )
+    # ``tag`` carries the mode into the sentinel filename -- "strandless"
+    # rather than "plus"/"minus" -- and the parent token differs as well
+    # (the inputs, not a split), so neither mode can read the other's cuts.
+    # ``contig`` is in ``local`` and not merely in the prefix, because two
+    # contigs sharing a sentinel would let one contig's completion mark the
+    # other's work done.
+    token = chain_token(
+        "stage2_cuts_{}_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}"
+        ".mxw_{}_annot_{}".format(
+            contig,
+            tag,
+            args.approx_MB_per_cut,
+            args.approx_MB_per_cut_wiggle_window,
+            args.depth_window,
+            args.margin,
+            effective_min_per_id,
+            effective_min_mapq,
+            # Two more things that decide the cut COORDINATES. The severed
+            # multi-exon weight is the objective itself, so changing it moves
+            # cuts; and whether an annotation constrains placement at all is
+            # now a property of the run rather than a given. Neither was in
+            # the token, and a stale hit here reuses one geometry's cuts under
+            # another's name. ``discovery`` is deliberately NOT here: stage 2
+            # is identical in the two modes, so including it would force a
+            # needless re-selection rather than prevent a wrong reuse.
+            args.severed_multiexon_weight,
+            bool(args.gtf),
+        ),
+        parent_token,
+    )
+    gtf_args = (
+        [
+            "--gtf",
+            os.path.abspath(args.gtf),
+            # Both stages name the same fallback, so a read-only reference
+            # directory costs one index build for the run rather than one per
+            # invocation. It is built once and SERIALLY by warm_gtf_index before
+            # this pool opens: concurrent callers all miss the same cold stamp and
+            # each build their own copy, measured six for six.
+            "--gtf_index_cache_dir",
+            gtf_index_cache_dir(outdir),
         ]
-        # Nothing mode-specific here: severing is priced the same way for
-        # quantification and for discovery, because a rule refusing to sever
-        # anything declines every cut once every base is covered.
-        if key:
-            # the bam is orientation-pure already, so --strand is omitted (every
-            # record counts); the orientation for the region strings comes from
-            # which bam this is, recorded below.
-            pass
-        else:
-            # Declared, not inferred. Omitting --strand ALSO means "this bam is
-            # already orientation-pure, count every record", which is the
-            # strand-first case; --strandless says the bam holds both, so the
-            # selector emits strandless region strings and reports each
-            # orientation's retained count separately.
-            cmd.append("--strandless")
-        if args.contig:
-            cmd += ["--contig", args.contig]
-        key_name = "cuts_{}".format(tag)
-        if ckpt.done(token):
-            timing.setdefault("stages", {})[key_name] = {
-                "reused": True,
-                "cmd": cmd,
-                "log": log,
-            }
-        else:
-            timing.setdefault("stages", {})[key_name] = run_step(
-                "stage2_cuts_{}".format(tag), cmd, log, outdir, rss_interval
+        if args.gtf
+        # De novo discovery has no annotation, and the selector treats the
+        # annotation constraint as optional: with none supplied every
+        # grid-aligned position in the window is admissible on that axis.
+        else []
+    )
+    cmd = [
+        sys.executable,
+        SELECT_CUTS,
+        "--bam",
+        bam,
+        "--genome_fa",
+        os.path.abspath(args.genome_fa),
+        *gtf_args,
+        "--approx_MB_per_cut",
+        str(args.approx_MB_per_cut),
+        "--approx_MB_per_cut_wiggle_window",
+        str(args.approx_MB_per_cut_wiggle_window),
+        "--depth_window",
+        str(args.depth_window),
+        "--grid_origin",
+        "0",
+        "--margin",
+        str(args.margin),
+        "--max_intron_length",
+        str(args.max_intron_length),
+        # The severing cost's shape, and therefore the cut coordinates. Passed
+        # explicitly rather than left to the selector's config read so the
+        # value that chose the cuts is the value this run recorded.
+        "--severed_multiexon_weight",
+        str(args.severed_multiexon_weight),
+        # Always, not on request.  A consumer deciding whether a chunk boundary
+        # dissolved a read-sharing component needs the severed alignments
+        # themselves: names cannot be fetched from a coordinate-indexed bam,
+        # and a span cannot answer compatibility, which follows exon blocks.
+        # Without it the only alternative is trusting per-chunk components
+        # silently, and the set is small by construction -- a cut severing many
+        # reads is one the selector rejects.
+        #
+        # One per contig, deliberately NOT merged: nothing in the pipeline reads
+        # these bams (verify_severed_accounting and run_baseline's pruning both
+        # consume the .txt names), and concatenating record streams from
+        # concurrent writers is the one aggregation with nothing to gain.
+        "--severed_reads_bam",
+        "{}.severed_reads.bam".format(prefix),
+        # The values LRAA will apply, not the selector's own defaults: --HiFi
+        # changes min_per_id downstream and the selector cannot see that flag.
+        "--min_per_id",
+        str(effective_min_per_id),
+        "--min_mapping_quality",
+        str(effective_min_mapq),
+        "--output_prefix",
+        prefix,
+        # The whole point. The flag was already wired for --contig runs; now
+        # every run passes it, and a --contig invocation is the one-entry case
+        # of the same enumeration rather than a separate branch.
+        "--contig",
+        contig,
+    ]
+    # Nothing mode-specific here: severing is priced the same way for
+    # quantification and for discovery, because a rule refusing to sever
+    # anything declines every cut once every base is covered.
+    if not key:
+        # Declared, not inferred. Omitting --strand ALSO means "this bam is
+        # already orientation-pure, count every record", which is the
+        # strand-first case; --strandless says the bam holds both, so the
+        # selector emits strandless region strings and reports each
+        # orientation's retained count separately.
+        cmd.append("--strandless")
+    return {
+        "kind": "cuts",
+        "key": key,
+        "tag": tag,
+        "bam": bam,
+        "contig": contig,
+        "unit_id": "cuts_{}_{}".format(contig, tag),
+        "prefix": prefix,
+        "log": log,
+        "cmd": cmd,
+        "token": token,
+    }
+
+
+def run_cut_selection(plan, ckpt, outdir, rss_interval):
+    """Run (or reuse) one contig's cut selection. ``(timing record, selection)``.
+
+    The selection is read back out of the contig's own ``.cuts.json``, which the
+    selector writes as a one-element list because it selected on one contig.
+    Unwrapped here so the caller reassembles a list over contigs in a FIXED
+    order rather than in completion order.
+    """
+
+    if ckpt.done(plan["token"]):
+        record = {"reused": True, "cmd": plan["cmd"], "log": plan["log"]}
+    else:
+        record = run_step(
+            "stage2_cuts_{}_{}".format(plan["contig"], plan["tag"]),
+            plan["cmd"],
+            plan["log"],
+            outdir,
+            rss_interval,
+        )
+        ckpt.mark(plan["token"])
+    record["contig"] = plan["contig"]
+    record["tag"] = plan["tag"]
+    path = "{}.cuts.json".format(plan["prefix"])
+    with open(path, "rt") as fh:
+        payload = json.load(fh)
+    if len(payload) != 1:
+        raise PipelineError(
+            "cut selection for {} wrote {} selection(s) to {}, expected exactly "
+            "one: the invocation passed --contig {}, so anything else means the "
+            "file is from another run. Use a fresh --output_dir.".format(
+                plan["contig"], len(payload), path, plan["contig"]
             )
-            ckpt.mark(token)
-        with open("{}.cuts.json".format(prefix), "rt") as fh:
-            selections[key] = json.load(fh)
-    return selections, cut_dir, cuts_tokens
+        )
+    selection = payload[0]
+    if selection["chrom"] != plan["contig"]:
+        raise PipelineError(
+            "cut selection for {} wrote a selection for {} to {}. The per-contig "
+            "prefixes would then be crossed and the reassembled selection list "
+            "would be in the wrong order.".format(
+                plan["contig"], selection["chrom"], path
+            )
+        )
+    return record, selection
 
 
 # --------------------------------------------------------------------- stage 3
@@ -843,6 +1165,51 @@ def chunk_quant_units(
     ]
 
 
+def planned_chunks_for_selection(source, selection):
+    """The chunks ONE contig's selection defines, in segment order, WITHOUT order.
+
+    Split out of ``planned_chunks`` because the global ``order`` counter is the
+    one thing a per-contig unit cannot know: it runs over every contig's segments
+    in sequence, so it is only defined once every selection is in hand. The pool
+    submits extractions from here as each contig finishes and the ``order`` is
+    assigned afterwards, serially, by ``planned_chunks``. That is the order
+    normalisation -- structural rather than a sort bolted on the end.
+    """
+
+    key, tag, bam, _parent_token = source
+    chrom = selection["chrom"]
+    contig_length = selection.get("contig_length")
+    for idx, segment in enumerate(selection["segments"]):
+        if key:
+            chunk_id = "{}_{}_{:02d}".format(chrom, tag, idx)
+            region = "{}{}:{}-{}".format(
+                chrom, key, segment["lend"], segment["rend"]
+            )
+        else:
+            chunk_id = "{}_{:02d}".format(chrom, idx)
+            region = "{}:{}-{}".format(chrom, segment["lend"], segment["rend"])
+        yield {
+            "key": key,
+            "tag": tag,
+            "bam": bam,
+            "chrom": chrom,
+            "index": idx,
+            "chunk_id": chunk_id,
+            "region": region,
+            "lend": segment["lend"],
+            "rend": segment["rend"],
+            "contig_length": contig_length,
+            # One segment covering [1, contig_length] is a chunk that is not a
+            # chunk: the contig was never divided. Recorded here so the extractor
+            # call and the plan agree about which chunks those are.
+            "spans_whole_contig": (
+                contig_length is not None
+                and segment["lend"] == 1
+                and segment["rend"] == contig_length
+            ),
+        }
+
+
 def planned_chunks(sources, selections):
     """Every chunk the run will extract, in extraction order.
 
@@ -851,42 +1218,24 @@ def planned_chunks(sources, selections):
     partition the real run would not build. Strandless ids and regions carry no
     orientation -- ``chr1_00`` over ``chr1:1-9700000`` -- which is also what the
     extractor needs in order to keep both orientations.
+
+    ``order`` is assigned HERE and only here, over ``sources`` x
+    ``selections[key]`` in list order, which is what stage 6 concatenates in. So
+    the merged table's row order is set by the order ``selections[key]`` was
+    reassembled in, never by the order the parallel selections completed.
     """
 
     order = 0
-    for key, tag, bam, _parent_token in sources:
-        for selection in selections[key]:
-            chrom = selection["chrom"]
-            for idx, segment in enumerate(selection["segments"]):
-                if key:
-                    chunk_id = "{}_{}_{:02d}".format(chrom, tag, idx)
-                    region = "{}{}:{}-{}".format(
-                        chrom, key, segment["lend"], segment["rend"]
-                    )
-                else:
-                    chunk_id = "{}_{:02d}".format(chrom, idx)
-                    region = "{}:{}-{}".format(
-                        chrom, segment["lend"], segment["rend"]
-                    )
-                yield {
-                    "key": key,
-                    "tag": tag,
-                    "bam": bam,
-                    "chrom": chrom,
-                    "index": idx,
-                    "order": order,
-                    "chunk_id": chunk_id,
-                    "region": region,
-                    "lend": segment["lend"],
-                    "rend": segment["rend"],
-                }
+    for source in sources:
+        for selection in selections[source[0]]:
+            for planned in planned_chunks_for_selection(source, selection):
+                planned["order"] = order
+                yield planned
                 order += 1
 
 
-def stage_extract_chunks(
-    args, ckpt, outdir, timing, sources, selections, rss, cuts_tokens
-):
-    """Extract one mini contig, bam and gtf per chunk, and name the units it feeds.
+def extraction_plan(args, outdir, chunk_root, planned, parent_token):
+    """One chunk extraction: its directory, its command, its sentinel.
 
     Strand-first: one chunk per contig-STRAND segment, feeding one quant unit.
 
@@ -895,128 +1244,214 @@ def stage_extract_chunks(
     the number of extractions is the second saving of the mode, after skipping
     stage 1: the mini FASTA and the mini GTF are written once for the pair
     instead of twice, and the region is read once instead of twice.
+
+    THE WHOLE-CONTIG CASE IS NOT EXTRACTED. A strandless chunk covering
+    ``[1, contig_length]`` is a chunk of a contig that was never divided: offset
+    0, mini contig named and sized like the real one, nothing able to overhang
+    either boundary, so the mini bam it would write is the source's own records
+    on that contig, unmoved, minus what ``retained_for_extraction`` rejects --
+    and the tool that reads it next applies exactly that filter itself.
+
+    That is not a rare shape. ``cut_targets`` keys on LENGTH, so a contig shorter
+    than the segment span gets zero cut targets however deep it is: chrM is
+    16,569 bp carrying 1,199,182 mapped reads, 6.6 % of an HG002 library, and it
+    is one chunk. MEASURED, that one extraction is 67.5 s of chrM's 73.6 s of
+    prep, and the same fetch with the same predicates and no write is 5.45 s --
+    92 % of the cost is a copy of something that already exists. Every reference
+    holding nothing is the same shape, and a whole-genome fasta has 92 of them.
+
+    So ``--reuse_source_bam``: the region is still read and still counted, so the
+    manifest states what a full extraction would have stated and states it from
+    its own measurement, but no bam is written and ``files.bam`` names the
+    source. Stage 3b then reads the source restricted to this contig. Strandless
+    only, because there the chunk bam has exactly ONE consumer -- the split --
+    whereas a strand-first chunk bam is normalized and quantified directly, and
+    the source is not restricted to one contig for either of those.
     """
 
-    chunk_root = os.path.join(outdir, "chunks")
-    os.makedirs(chunk_root, exist_ok=True)
+    key = planned["key"]
+    strandless = not key
+    chunk_id = planned["chunk_id"]
+    region = planned["region"]
+    reuse_source = strandless and planned["spans_whole_contig"]
+    local = "stage3_extract_{}{}.margin_{}_maxintron_{}{}".format(
+        "strandless_" if strandless else "",
+        chunk_id,
+        args.margin,
+        args.max_intron_length,
+        # In the sentinel because it decides what is on disk: a directory whose
+        # chunk was extracted must not be reported as reusable by a run that
+        # would have reused the source, and the reverse.
+        ".srcbam" if reuse_source else "",
+    )
+    cdir = os.path.join(chunk_root, chunk_id)
+    os.makedirs(cdir, exist_ok=True)
+    prefix = os.path.join(cdir, "chunk")
+    log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
+    gtf_args = (
+        [
+            "--gtf",
+            os.path.abspath(args.gtf),
+            "--gtf_index_cache_dir",
+            gtf_index_cache_dir(outdir),
+        ]
+        if args.gtf
+        # No annotation to partition. The extractor then writes no mini GTF
+        # and reports zero transcripts emitted, which is what a de novo chunk
+        # is: a mini contig and its reads.
+        else []
+    )
+    cmd = [
+        sys.executable,
+        EXTRACT_CHUNK,
+        "--genome_fa",
+        os.path.abspath(args.genome_fa),
+        "--bam",
+        planned["bam"],
+        *gtf_args,
+        "--region",
+        region,
+        "--output_prefix",
+        prefix,
+        "--margin",
+        str(args.margin),
+        # The run's value, at all three of selection, extraction and split,
+        # so the three see ONE record set. The extractor defaults to the
+        # configured cap instead, which is invisible strand-first -- the bam
+        # reaching it was already filtered at the run's value -- and a
+        # divergence strandless, where the raw bam still holds the records
+        # the split would have discarded and extraction is the first place
+        # they are seen.
+        "--max_intron_length",
+        str(args.max_intron_length),
+        "--secondary_alignments",
+        "exclude",
+    ]
+    if reuse_source:
+        cmd.append("--reuse_source_bam")
+    return {
+        "kind": "extract",
+        "planned": planned,
+        "chunk_id": chunk_id,
+        "unit_id": "extract_{}".format(chunk_id),
+        "dir": cdir,
+        "prefix": prefix,
+        "log": log,
+        "cmd": cmd,
+        "token": chain_token(local, parent_token),
+        "reuse_source_bam": reuse_source,
+    }
+
+
+def run_extraction(plan, ckpt, outdir, rss_interval):
+    """Extract (or reuse) one chunk. ``(timing record, manifest)``.
+
+    The two manifest refusals live here rather than in the assembly pass so that
+    a chunk whose directory came from another run names ITSELF in the pool's
+    failure list, beside its own log.
+    """
+
+    chunk_id = plan["chunk_id"]
+    key = plan["planned"]["key"]
+    if ckpt.done(plan["token"]):
+        record = {"reused": True, "cmd": plan["cmd"], "log": plan["log"]}
+    else:
+        record = run_step(
+            "stage3_extract_{}".format(chunk_id),
+            plan["cmd"],
+            plan["log"],
+            outdir,
+            rss_interval,
+        )
+        ckpt.mark(plan["token"])
+    record["chunk_id"] = chunk_id
+    with open("{}.partition.json".format(plan["prefix"]), "rt") as fh:
+        manifest = json.load(fh)
+    # A manifest extracted for the other mode would be silently wrong rather
+    # than absent: a strand-pure chunk bam split again is a no-op on one
+    # orientation and an empty bam on the other.
+    manifest_strand = manifest.get("strand") or ""
+    if manifest_strand != key:
+        raise PipelineError(
+            "chunk {} carries a manifest for strand {!r}, but this run "
+            "extracted it for {!r}. The chunk directory is from another "
+            "run; use a fresh --output_dir.".format(chunk_id, manifest_strand, key)
+        )
+    # The other half of the extractor's refusal, and it applies to BOTH
+    # modes: a nonzero count means a strand filter discarded records the
+    # source bam still held, which is the raw-flag mistake the ordering
+    # exists to prevent -- strand-first because the source should have been
+    # orientation-pure already, strandless because no strand filter should
+    # have run at all.
+    excluded = manifest["counts"].get("opposite_orientation_excluded", 0)
+    if excluded:
+        raise PipelineError(
+            "chunk {} excluded {} record(s) of the opposite orientation at "
+            "extraction. Its source bam holds both orientations, so the "
+            "records that reached the strand filter carried RAW aligner "
+            "flags -- any read the split would have flipped is now in the "
+            "wrong chunk. Extract strandlessly and split "
+            "afterwards.".format(chunk_id, excluded)
+        )
+    # A manifest that says it reused the source while the plan asked for an
+    # extraction (or the reverse) means the chunk directory and this run
+    # disagree about where the chunk's reads live, and stage 3b would then read
+    # the wrong file with no error of its own.
+    reused = bool(manifest.get("bam_reused_from_source"))
+    if reused != plan["reuse_source_bam"]:
+        raise PipelineError(
+            "chunk {}'s manifest reports bam_reused_from_source={} but this run "
+            "planned {}. The chunk directory predates the plan; use a fresh "
+            "--output_dir.".format(chunk_id, reused, plan["reuse_source_bam"])
+        )
+    return record, manifest
+
+
+def assemble_chunks(args, timing, sources, selections, extractions):
+    """Chunk records in PLANNED order, from manifests the pool produced.
+
+    Every order-sensitive decision of the make-chunks phase is made here, in one
+    serial pass over ``planned_chunks``: the ``order`` counter each quant unit
+    embeds, the ``chunks`` list stage 6 concatenates through, and the
+    ``extract_chunks`` timing list. The pool contributes only a mapping from
+    chunk id to what that chunk's extraction did, which has no order in it.
+    """
+
     chunks = []
     for planned in planned_chunks(sources, selections):
-        key = planned["key"]
-        strandless = not key
         chunk_id = planned["chunk_id"]
-        region = planned["region"]
-        local = "stage3_extract_{}{}.margin_{}_maxintron_{}".format(
-            "strandless_" if strandless else "",
-            chunk_id,
-            args.margin,
-            args.max_intron_length,
-        )
-        cdir = os.path.join(chunk_root, chunk_id)
-        os.makedirs(cdir, exist_ok=True)
-        prefix = os.path.join(cdir, "chunk")
-        log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
-        token = chain_token(local, cuts_tokens[key])
-        gtf_args = (
-            [
-                "--gtf",
-                os.path.abspath(args.gtf),
-                "--gtf_index_cache_dir",
-                gtf_index_cache_dir(outdir),
-            ]
-            if args.gtf
-            # No annotation to partition. The extractor then writes no mini GTF
-            # and reports zero transcripts emitted, which is what a de novo chunk
-            # is: a mini contig and its reads.
-            else []
-        )
-        cmd = [
-            sys.executable,
-            EXTRACT_CHUNK,
-            "--genome_fa",
-            os.path.abspath(args.genome_fa),
-            "--bam",
-            planned["bam"],
-            *gtf_args,
-            "--region",
-            region,
-            "--output_prefix",
-            prefix,
-            "--margin",
-            str(args.margin),
-            # The run's value, at all three of selection, extraction and split,
-            # so the three see ONE record set. The extractor defaults to the
-            # configured cap instead, which is invisible strand-first -- the bam
-            # reaching it was already filtered at the run's value -- and a
-            # divergence strandless, where the raw bam still holds the records
-            # the split would have discarded and extraction is the first place
-            # they are seen.
-            "--max_intron_length",
-            str(args.max_intron_length),
-            "--secondary_alignments",
-            "exclude",
-        ]
-        if ckpt.done(token):
-            record = {"reused": True, "cmd": cmd, "log": log}
-        else:
-            record = run_step(
-                "stage3_extract_{}".format(chunk_id), cmd, log, outdir, rss
-            )
-            ckpt.mark(token)
-        with open("{}.partition.json".format(prefix), "rt") as fh:
-            manifest = json.load(fh)
-        # A manifest extracted for the other mode would be silently wrong rather
-        # than absent: a strand-pure chunk bam split again is a no-op on one
-        # orientation and an empty bam on the other.
-        manifest_strand = manifest.get("strand") or ""
-        if manifest_strand != key:
+        key = planned["key"]
+        if chunk_id not in extractions:
             raise PipelineError(
-                "chunk {} carries a manifest for strand {!r}, but this run "
-                "extracted it for {!r}. The chunk directory is from another "
-                "run; use a fresh --output_dir.".format(
-                    chunk_id, manifest_strand, key
-                )
+                "chunk {} was planned but never extracted; refusing to build a "
+                "partial chunk list".format(chunk_id)
             )
-        # The other half of the extractor's refusal, and it applies to BOTH
-        # modes: a nonzero count means a strand filter discarded records the
-        # source bam still held, which is the raw-flag mistake the ordering
-        # exists to prevent -- strand-first because the source should have been
-        # orientation-pure already, strandless because no strand filter should
-        # have run at all.
-        excluded = manifest["counts"].get("opposite_orientation_excluded", 0)
-        if excluded:
-            raise PipelineError(
-                "chunk {} excluded {} record(s) of the opposite orientation at "
-                "extraction. Its source bam holds both orientations, so the "
-                "records that reached the strand filter carried RAW aligner "
-                "flags -- any read the split would have flipped is now in the "
-                "wrong chunk. Extract strandlessly and split "
-                "afterwards.".format(chunk_id, excluded)
-            )
+        plan, record, manifest = extractions[chunk_id]
         chunks.append(
             {
                 "chunk_id": chunk_id,
                 "chrom": planned["chrom"],
                 "strand": key,
-                "strandless": strandless,
-                "region": region,
+                "strandless": not key,
+                "region": planned["region"],
                 "index": planned["index"],
                 "order": planned["order"],
-                "dir": cdir,
-                "prefix": prefix,
-                "log": log,
+                "dir": plan["dir"],
+                "prefix": plan["prefix"],
+                "log": plan["log"],
                 "manifest": manifest,
                 "offset": manifest["offset"],
                 "window_origin": manifest["window_origin"],
                 "extract": record,
                 # what stages 3b-5 chain their own sentinels onto
-                "upstream_token": token,
+                "upstream_token": plan["token"],
                 # Whether this chunk has an annotation at all: stage 3b splits a
                 # GTF that exists, and de novo discovery has none.
                 "has_gtf": bool(args.gtf),
                 "units": chunk_quant_units(
                     chunk_id,
-                    cdir,
-                    prefix,
+                    plan["dir"],
+                    plan["prefix"],
                     key,
                     manifest["offset"],
                     planned["order"],
@@ -1029,6 +1464,334 @@ def stage_extract_chunks(
         c["extract"] for c in chunks
     ]
     return chunks
+
+
+def run_prep_concurrently(
+    args, ckpt, outdir, timing, sources, rss_interval, select_only=False
+):
+    """Stages 2 and 3 as ONE flat queue over (contig, strand) and (contig, chunk).
+
+    The make-chunks phase used to be two serial loops: one cut selection per
+    orientation over every contig at once, then one extraction per chunk. Both
+    scale with READS rather than with genome length, and on a whole-genome
+    strandless run they model at 1,009 s together -- the Amdahl floor of a
+    chunked run, paid before the already-pooled processing phase starts.
+
+    ONE POOL, NOT TWO PHASES. When a contig's cut selection finishes, that
+    contig's extractions are submitted to the same executor, so contig A's chunks
+    start while contig B is still selecting. With a stage barrier the floor is the
+    largest chromosome's whole prep (chr1, 121.6 s measured, an 8.3x ceiling no
+    number of cores improves); without one the floor is the longest single
+    dependency chain, which is one selection plus its longest extraction. On an
+    HG002 library that chain belongs to chrM -- 16,569 bp holding 6.6 % of the
+    library, zero cut targets because targeting keys on length -- at 73.6 s, i.e.
+    13.7x. A 5-contig 33-unit prototype of exactly this shape measured 150.6 s of
+    summed wall against a 41.5 s makespan at ``--cpu_budget 4``: 91 % of ideal.
+
+    Mechanics are ``run_chunks_concurrently``'s, deliberately: one
+    ``ThreadPoolExecutor``, ``order_longest_first`` for the launch order, a
+    ``failures`` list under a lock with a ``threading.Event`` abort, and a refusal
+    to go on with a partial result. Two things are this phase's own -- the pool is
+    bounded by MEMORY as well as by the budget (``prep_memory_cap``), and the
+    queue GROWS while it drains, which the wait loop below has to account for.
+
+    ``select_only`` runs the cut selections and stops, for ``--dry_run``: the
+    selection is real work whose result the plan describes, and extraction is
+    exactly the part a dry run must not perform. ``chunks`` comes back empty.
+
+    Returns ``(selections, cut_dir, chunks, makespan, allocation)``.
+    """
+
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    cut_dir = os.path.join(outdir, "cuts")
+    os.makedirs(cut_dir, exist_ok=True)
+    chunk_root = os.path.join(outdir, "chunks")
+    os.makedirs(chunk_root, exist_ok=True)
+
+    contigs, lengths = enumerate_prep_contigs(args)
+    if args.gtf:
+        # De novo discovery has no annotation, so there is no index to warm and
+        # nothing in the pool will seek into one. The pre-warm exists only to
+        # keep concurrent callers from each building the same index.
+        warm_gtf_index(args, outdir, timing)
+
+    source_by_key = {source[0]: source for source in sources}
+    # One idxstats per distinct source bam, not per unit: strand-first selects
+    # over two bams whose per-contig counts differ, and a cost proxy taken from
+    # the wrong one would order the queue by the wrong orientation's depth.
+    costs = {}
+    for source in sources:
+        costs[source[0]] = contig_mapped_counts(source[2])
+
+    selection_plans = []
+    selection_units = []
+    for source in sources:
+        for contig in contigs:
+            plan = cut_selection_plan(args, outdir, cut_dir, source, contig)
+            selection_plans.append(plan)
+            selection_units.append(
+                CpuBudget.WorkUnit(
+                    contig_acc=contig,
+                    contig_strand=source[0] or STRANDLESS_TAG,
+                    # Reads, not bases. Prep scales with the record count: chrM is
+                    # 604x shorter than a 10 Mb segment span and still the most
+                    # expensive unit on the queue. A reference idxstats could not
+                    # report falls back to length, which at least separates a
+                    # 250 Mb contig from a 5 kb scaffold.
+                    cost=costs[source[0]].get(contig, lengths.get(contig, 0)),
+                )
+            )
+    if not selection_units:
+        raise PipelineError(
+            "no cut selection units to run: {} contig(s) x {} source(s)".format(
+                len(contigs), len(sources)
+            )
+        )
+    # Keyed on the pair that identifies the unit rather than on the WorkUnit
+    # itself: WorkUnit is a namedtuple, so two units agreeing on every field --
+    # including a cost of 0, which every reference holding no reads has -- would
+    # be the same dict key and one plan would be lost.
+    plan_by_unit = {
+        (u.contig_acc, u.contig_strand): p
+        for u, p in zip(selection_units, selection_plans)
+    }
+    if len(plan_by_unit) != len(selection_plans):
+        raise PipelineError(
+            "{} cut selection unit(s) collapsed to {} distinct (contig, "
+            "orientation) key(s). Two units sharing a key would share an output "
+            "prefix and a sentinel, so one contig's cuts would overwrite the "
+            "other's and the run would look "
+            "complete.".format(len(selection_plans), len(plan_by_unit))
+        )
+    launch_order = [
+        plan_by_unit[(u.contig_acc, u.contig_strand)]
+        for u in CpuBudget.order_longest_first(selection_units)
+    ]
+
+    seeded = len(selection_plans)
+    mem_cap, mem_note = prep_memory_cap(args.cpu_budget)
+    # The queue GROWS, so the seed length is a LOWER bound on it and sizing the
+    # pool from the seed alone would run a single-contig invocation's extractions
+    # one at a time -- which is exactly the serial stage-3 loop this phase exists
+    # to remove, and the only part of it a WDL per-contig shard can use (a chr1
+    # shard is 25 extractions and 103.9 s of them, measured).
+    allocation = CpuBudget.allocate(
+        budget=args.cpu_budget,
+        num_units=max(seeded, args.cpu_budget),
+        max_unit_workers=mem_cap,
+    )
+    print(CpuBudget.format_allocation(allocation, phase="make_chunks"), flush=True)
+    shortfall = CpuBudget.budget_shortfall_note(allocation)
+    if shortfall:
+        print(shortfall, flush=True)
+    if mem_note:
+        print(mem_note, flush=True)
+    print(
+        "make_chunks queue: {} cut selection(s) seeded over {} contig(s) x {} "
+        "source bam(s), longest-first on mapped reads; each contig's chunk "
+        "extractions join the SAME pool when its own selection finishes, so the "
+        "queue grows past the seed and there is no stage barrier.".format(
+            seeded, len(contigs), len(sources)
+        ),
+        flush=True,
+    )
+
+    selections_by_contig = {}
+    cuts_records = {}
+    extractions = {}
+    failures = []
+    lock = threading.Lock()
+    abort = threading.Event()
+    futures = []
+
+    sampler = RssSampler(os.getpid(), rss_interval)
+    sampler.start()
+    started = time.time()
+    try:
+        with ThreadPoolExecutor(max_workers=allocation.unit_workers) as pool:
+
+            def submit(fn, payload):
+                # The lock is held ACROSS the submit so the drain loop cannot
+                # observe a future that exists inside the pool but not yet in
+                # ``futures`` -- which would let it exit while an extraction was
+                # still queued.
+                with lock:
+                    futures.append(pool.submit(fn, payload))
+
+            def extraction_task(plan):
+                if abort.is_set():
+                    return
+                try:
+                    record, manifest = run_extraction(
+                        plan, ckpt, outdir, rss_interval
+                    )
+                    with lock:
+                        extractions[plan["chunk_id"]] = (plan, record, manifest)
+                except Exception as err:  # noqa: BLE001 - collected, raised below
+                    abort.set()
+                    with lock:
+                        failures.append(
+                            (plan["unit_id"], plan["log"], str(err))
+                        )
+
+            def selection_task(plan):
+                if abort.is_set():
+                    return
+                try:
+                    record, selection = run_cut_selection(
+                        plan, ckpt, outdir, rss_interval
+                    )
+                    with lock:
+                        cuts_records[(plan["key"], plan["contig"])] = record
+                        selections_by_contig[(plan["key"], plan["contig"])] = (
+                            selection
+                        )
+                except Exception as err:  # noqa: BLE001 - collected, raised below
+                    abort.set()
+                    with lock:
+                        failures.append(
+                            (plan["unit_id"], plan["log"], str(err))
+                        )
+                    return
+                if select_only or abort.is_set():
+                    return
+                # Guarded too, and not out of caution: a future's exception is
+                # never retrieved here (``wait`` does not raise), so an error
+                # thrown while BUILDING the fan-out -- an unwritable chunk
+                # directory, say -- would vanish and surface later as
+                # "planned but never extracted" with nothing named.
+                try:
+                    source = source_by_key[plan["key"]]
+                    for planned in planned_chunks_for_selection(source, selection):
+                        submit(
+                            extraction_task,
+                            extraction_plan(
+                                args, outdir, chunk_root, planned, plan["token"]
+                            ),
+                        )
+                except Exception as err:  # noqa: BLE001 - collected, raised below
+                    abort.set()
+                    with lock:
+                        failures.append(
+                            (
+                                plan["unit_id"] + " (fanning out its chunks)",
+                                plan["log"],
+                                str(err),
+                            )
+                        )
+
+            for plan in launch_order:
+                submit(selection_task, plan)
+
+            # Drain: every round waits for the futures known at its start, and
+            # only a task in that set can create new ones. Exiting the ``with``
+            # block before the queue is empty would call shutdown() and make a
+            # still-running selection's submit raise instead of extracting.
+            waited = set()
+            while True:
+                with lock:
+                    fresh = [f for f in futures if f not in waited]
+                if not fresh:
+                    break
+                waited.update(fresh)
+                wait(fresh)
+    finally:
+        sampler.stop()
+    makespan = time.time() - started
+
+    if failures:
+        lines = [
+            "make_chunks unit {} FAILED -- log: {}\n  {}".format(uid, log, msg)
+            for uid, log, msg in failures
+        ]
+        raise PipelineError(
+            "{} make-chunks unit(s) failed out of {} cut selection(s) and {} "
+            "extraction(s) that reported; refusing to extract or merge a partial "
+            "result.\n{}".format(
+                len(failures),
+                len(cuts_records),
+                len(extractions),
+                "\n".join(lines),
+            )
+        )
+
+    missing = [
+        (key, contig)
+        for key in source_by_key
+        for contig in contigs
+        if (key, contig) not in selections_by_contig
+    ]
+    if missing:
+        raise PipelineError(
+            "{} of {} cut selection(s) never reported: {}. Refusing to assemble a "
+            "selection list with holes in it -- the missing contigs would simply "
+            "be absent from the run.".format(
+                len(missing),
+                seeded,
+                ", ".join("{}{}".format(c, k or "") for k, c in missing[:5]),
+            )
+        )
+
+    # THE ORDER NORMALISATION. Per-contig selections complete in whatever order
+    # the pool finishes them in; ``selections[key]`` is rebuilt in ``contigs``
+    # order, which is the selector's own ``sorted(lengths)``. That list feeds
+    # planned_chunks -> the ``order`` counter -> chunk_quant_units ->
+    # ordered_units -> merge_and_translate, so this one sort is what keeps the
+    # merged table's row order identical to a serial run's.
+    selections = {}
+    for source in sources:
+        key, tag = source[0], source[1]
+        selections[key] = [selections_by_contig[(key, c)] for c in contigs]
+        timing.setdefault("stages", {})["cuts_" + tag] = [
+            cuts_records[(key, c)] for c in contigs
+        ]
+
+    if select_only:
+        chunks = []
+        reused_source = 0
+    else:
+        chunks = assemble_chunks(args, timing, sources, selections, extractions)
+        reused_source = sum(
+            1 for c in chunks if c["manifest"].get("bam_reused_from_source")
+        )
+    timing.setdefault("arms", {}).setdefault("make_chunks", {}).update(
+        {
+            "cpu_budget": allocation.budget,
+            "concurrent_unit_workers": allocation.unit_workers,
+            "memory_cap_unit_workers": mem_cap,
+            "memory_note": mem_note,
+            "unit_peak_rss_budget_mib": PREP_UNIT_PEAK_MIB,
+            "contigs": len(contigs),
+            "cut_selections": seeded,
+            "select_only": bool(select_only),
+            "extractions": len(chunks),
+            "extractions_reusing_source_bam": reused_source,
+            "makespan_s": round(makespan, 3),
+            "summed_wall_s": round(
+                sum(
+                    r.get("wall_s", 0.0)
+                    for r in list(cuts_records.values())
+                    + [rec for _p, rec, _m in extractions.values()]
+                ),
+                3,
+            ),
+            "observed_peak_concurrent_tree_rss_kb": sampler.peak_kb,
+        }
+    )
+    print(
+        "make_chunks: {} cut selection(s) + {} extraction(s) in {:.1f}s at {} "
+        "worker(s); {} chunk(s) reused the source bam instead of copying "
+        "it".format(
+            seeded,
+            len(chunks),
+            makespan,
+            allocation.unit_workers,
+            reused_source,
+        ),
+        flush=True,
+    )
+    return selections, cut_dir, chunks, makespan, allocation
 
 
 def ordered_units(chunks):
@@ -1150,6 +1913,22 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     the GTF names, so a unit given both orientations reports the other
     orientation's transcripts as zero rows.
 
+    A chunk whose extraction was SKIPPED -- one covering its whole contig, whose
+    manifest names the source bam rather than a mini copy -- is split straight out
+    of that source, restricted to the contig. Sound, not merely cheaper:
+    ``separate_bam_by_strand`` retains exactly what ``retained_for_extraction``
+    retains (primary, non-duplicate, non-qcfail, intron within the same cap), so
+    the records it writes are the records the skipped copy would have held, and
+    ``verify_chunk_split`` still checks its output against the extractor's own
+    count of them. What differs is the accounting the splitter PRINTS: it now
+    reports the secondary, supplementary and long-intron records it discarded,
+    where a mini bam had none left to discard. Same record set, said one stage
+    earlier.
+
+    The restriction is a CONTIG NAME rather than a region on purpose. The reuse
+    only ever applies to a whole contig, and a name cannot carry the
+    1-based/0-based boundary error a region can.
+
     Returns ``(step record, token stages 4-5 chain onto, counts)``.
     """
 
@@ -1157,21 +1936,32 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
 
     cid = chunk["chunk_id"]
     prefix = chunk["prefix"]
+    manifest = chunk["manifest"]
     split_prefix = "{}.strand".format(prefix)
+    reused = bool(manifest.get("bam_reused_from_source"))
+    source_bam = manifest["files"]["bam"] if reused else "{}.bam".format(prefix)
     token = chain_token(
-        "stage3b_split_{}.maxintron_{}".format(cid, args.max_intron_length),
+        "stage3b_split_{}.maxintron_{}{}".format(
+            cid,
+            args.max_intron_length,
+            # In the sentinel because it decides WHICH FILE was read: a resumed
+            # run must not report a split of a mini bam as a split of the source.
+            ".srcbam_" + chunk["chrom"] if reused else "",
+        ),
         chunk["upstream_token"],
     )
     cmd = [
         sys.executable,
         SEPARATE_BAM,
         "--bam",
-        "{}.bam".format(prefix),
+        source_bam,
         "--output_prefix",
         split_prefix,
         "--max_intron_length",
         str(args.max_intron_length),
     ]
+    if reused:
+        cmd += ["--contig", chunk["chrom"]]
     if ckpt.done(token):
         step = {"step": "stage3b_strand_split", "reused": True, "cmd": cmd}
     else:
@@ -2919,8 +3709,20 @@ def run(args):
         if args.strandless_chunks:
             ensure_bam_index(args.bam)
         sources = cut_sources(args, strand_bams, inputs_token, split_token)
-        selections, cut_dir, cuts_tokens = stage_select_cuts(
-            args, ckpt, outdir, timing, sources, rss
+        # Stages 2 and 3 are ONE pool now rather than two serial loops, so they
+        # are entered together. A dry run selects and stops: the selection is real
+        # work whose result the printed plan describes, and extraction is the part
+        # a dry run must not do.
+        selections, cut_dir, chunks, prep_makespan, prep_allocation = (
+            run_prep_concurrently(
+                args,
+                ckpt,
+                outdir,
+                timing,
+                sources,
+                rss,
+                select_only=bool(args.dry_run),
+            )
         )
         flush()
         placement_text, placement = cut_placement_report(selections, args.discovery)
@@ -2940,9 +3742,6 @@ def run(args):
             outputs["cut_dir"] = cut_dir
             return outputs
 
-        chunks = stage_extract_chunks(
-            args, ckpt, outdir, timing, sources, selections, rss, cuts_tokens
-        )
         # Before the expensive phase, not after it: this is the check that keeps
         # the control's pruned bam and the chunked arm's inputs the same record
         # set, and it needs nothing but the manifests and the cut selection.
@@ -2976,6 +3775,11 @@ def run(args):
             "makespan_s": round(makespan, 3),
             "summed_wall_s": round(sum(c["wall_s"] for c in chunk_records), 3),
             "chunks_extracted": len(chunks),
+            # The make-chunks phase's own numbers, beside the processing phase's,
+            # because the two together are the run and the first used to be the
+            # serial half of it.
+            "make_chunks_makespan_s": round(prep_makespan, 3),
+            "make_chunks_unit_workers": prep_allocation.unit_workers,
             "quant_units": len(units),
             "chunks": chunk_records,
             "peak_rss_kb_summed_over_chunk_peaks": sum(

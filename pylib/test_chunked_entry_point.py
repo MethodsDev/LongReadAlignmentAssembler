@@ -14,7 +14,6 @@ three properties that make it safe to have one:
   quant-only run must not inherit.
 """
 
-import json
 import os
 import re
 import subprocess
@@ -352,7 +351,22 @@ def test_the_output_suffixes_are_the_ones_lraa_actually_writes():
     assert ChunkedRun.lraa_output_suffix(True, "a.gtf") == "LRAA.ref-guided"
 
 
-def test_cut_selection_is_identical_in_both_modes(tmp_path, monkeypatch):
+def _cut_plan(args, outdir, contig="chr1"):
+    """The stage-2 plan for one contig, which is where the selector command lives.
+
+    Stage 2 is a pool of per-contig ``cut_selection_plan`` calls now rather than one
+    loop, and the plan is pure: no subprocess runs and no cuts.json is read, so
+    these tests inspect the command and the sentinel directly instead of faking
+    ``run_step`` to get at them.
+    """
+
+    source = ("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")
+    return ChunkedRun.cut_selection_plan(
+        args, outdir, os.path.join(outdir, "cuts"), source, contig
+    )
+
+
+def test_cut_selection_is_identical_in_both_modes(tmp_path):
     """Discovery must not ask the selector for a different cut rule.
 
     An earlier revision passed ``--require_zero_severed`` here and only here. That
@@ -362,24 +376,10 @@ def test_cut_selection_is_identical_in_both_modes(tmp_path, monkeypatch):
     that command line is the only thing that reaches the selector.
     """
 
-    recorded = []
-
-    def fake_run_step(name, cmd, log_path, cwd, rss_interval, append=True):
-        recorded.append(cmd)
-        prefix = cmd[cmd.index("--output_prefix") + 1]
-        with open(prefix + ".cuts.json", "wt") as fh:
-            json.dump([], fh)
-        return {"step": name, "cmd": cmd}
-
-    monkeypatch.setattr(ChunkedRun, "run_step", fake_run_step)
-
     outdir = str(tmp_path / "out")
     os.makedirs(os.path.join(outdir, "logs"))
-    ckpt = ChunkedRun.Checkpoints(os.path.join(outdir, "__ckpt"))
-    sources = [("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")]
 
     for discovery, gtf in ((False, "annot.gtf"), (True, None)):
-        recorded.clear()
         args = ChunkedRun.default_args(
             bam="b",
             genome_fa="g",
@@ -387,37 +387,23 @@ def test_cut_selection_is_identical_in_both_modes(tmp_path, monkeypatch):
             output_dir=outdir,
             discovery=discovery,
         )
-        ChunkedRun.stage_select_cuts(args, ckpt, outdir, {}, sources, 0.5)
-        assert len(recorded) == 1
-        assert "--require_zero_severed" not in recorded[0]
+        cmd = _cut_plan(args, outdir)["cmd"]
+        assert "--require_zero_severed" not in cmd
         # the severing cost's shape is passed in both modes, and it is the same
-        weight = recorded[0][recorded[0].index("--severed_multiexon_weight") + 1]
+        weight = cmd[cmd.index("--severed_multiexon_weight") + 1]
         assert weight == str(LRAA_Globals.config["chunk_severed_multiexon_weight"])
-        assert ("--gtf" in recorded[0]) is (gtf is not None)
+        assert ("--gtf" in cmd) is (gtf is not None)
 
 
-def test_the_selector_command_carries_the_weight_it_is_given(tmp_path, monkeypatch):
+def test_the_selector_command_carries_the_weight_it_is_given(tmp_path):
     """The weight decides the cut coordinates, so it must not be a config read.
 
     A selector left to read its own config would place cuts under one weight while
     the run recorded another.
     """
 
-    recorded = []
-
-    def fake_run_step(name, cmd, log_path, cwd, rss_interval, append=True):
-        recorded.append(cmd)
-        prefix = cmd[cmd.index("--output_prefix") + 1]
-        with open(prefix + ".cuts.json", "wt") as fh:
-            json.dump([], fh)
-        return {"step": name, "cmd": cmd}
-
-    monkeypatch.setattr(ChunkedRun, "run_step", fake_run_step)
-
     outdir = str(tmp_path / "out")
     os.makedirs(os.path.join(outdir, "logs"))
-    ckpt = ChunkedRun.Checkpoints(os.path.join(outdir, "__ckpt"))
-    sources = [("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")]
     args = ChunkedRun.default_args(
         bam="b",
         genome_fa="g",
@@ -427,48 +413,42 @@ def test_the_selector_command_carries_the_weight_it_is_given(tmp_path, monkeypat
         severed_multiexon_weight=3,
     )
 
-    ChunkedRun.stage_select_cuts(args, ckpt, outdir, {}, sources, 0.5)
+    cmd = _cut_plan(args, outdir)["cmd"]
 
-    cmd = recorded[0]
     assert cmd[cmd.index("--severed_multiexon_weight") + 1] == "3"
 
 
-def test_the_weight_is_in_the_stage_2_cache_token(tmp_path, monkeypatch):
+def test_the_weight_is_in_the_stage_2_cache_token(tmp_path):
     """It moves the cuts, so a stale hit would serve one geometry as another.
 
     The values are baked into the sentinel, and a token that omitted the objective
     would turn a changed weight into a cache HIT that reuses the old coordinates
-    while the run asserts the new ones.
+    while the run asserts the new ones. Whether an annotation constrains placement
+    at all is the same kind of input and is checked the same way: the per-contig
+    sentinel this stage now writes carries both.
     """
 
-    def fake_run_step(name, cmd, log_path, cwd, rss_interval, append=True):
-        prefix = cmd[cmd.index("--output_prefix") + 1]
-        with open(prefix + ".cuts.json", "wt") as fh:
-            json.dump([], fh)
-        return {"step": name, "cmd": cmd}
+    seen = []
 
-    monkeypatch.setattr(ChunkedRun, "run_step", fake_run_step)
-    sources = [("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")]
-
-    tokens = []
-    for weight in (10, 3):
-        outdir = str(tmp_path / "out{}".format(weight))
+    def token_for(**overrides):
+        seen.append(overrides)
+        outdir = str(tmp_path / "out{}".format(len(seen)))
         os.makedirs(os.path.join(outdir, "logs"))
-        ckpt = ChunkedRun.Checkpoints(os.path.join(outdir, "__ckpt"))
-        args = ChunkedRun.default_args(
-            bam="b",
-            genome_fa="g",
-            gtf=None,
-            output_dir=outdir,
-            discovery=True,
-            severed_multiexon_weight=weight,
-        )
-        _, _, cuts_tokens = ChunkedRun.stage_select_cuts(
-            args, ckpt, outdir, {}, sources, 0.5
-        )
-        tokens.append(cuts_tokens[""])
+        params = {
+            "bam": "b",
+            "genome_fa": "g",
+            "gtf": None,
+            "output_dir": outdir,
+            "discovery": True,
+        }
+        params.update(overrides)
+        args = ChunkedRun.default_args(**params)
+        return _cut_plan(args, outdir)["token"]
 
-    assert tokens[0] != tokens[1]
+    assert token_for(severed_multiexon_weight=10) != token_for(
+        severed_multiexon_weight=3
+    )
+    assert token_for(gtf=None) != token_for(gtf="annot.gtf")
 
 
 def test_a_severed_read_no_longer_fails_the_run(tmp_path):

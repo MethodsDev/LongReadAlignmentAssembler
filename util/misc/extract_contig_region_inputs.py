@@ -158,6 +158,7 @@ the caller to remember the order.
 import argparse
 import bisect
 import collections
+import contextlib
 import json
 import logging
 import os
@@ -995,6 +996,29 @@ def _rebase_gtf_line(line, offset, mini_contig_name, mini_length, what):
     return "\t".join(vals)
 
 
+def _require_source_index(bam_filename):
+    """Refuse to hand a consumer a source bam it cannot fetch a region out of.
+
+    Under ``--reuse_source_bam`` the manifest names this file as the chunk's bam,
+    and every downstream reader restricts it by contig, which needs the index.
+    The region fetch above already needed one, so this cannot normally fail --
+    but the manifest is a contract with a later stage in a later process, and an
+    index deleted between them would surface as pysam's contextless
+    ``fetch called on bamfile without index`` inside the strand split.
+    """
+
+    for suffix in (".bai", ".csi"):
+        if os.path.exists(bam_filename + suffix):
+            return
+    raise ExtractionError(
+        "--reuse_source_bam names {0} as the chunk's bam, but it has no .bai or "
+        ".csi beside it. Every consumer of a reused source restricts it by "
+        "contig, so the index is load-bearing rather than incidental. Index it "
+        "(samtools index {0}) or drop --reuse_source_bam and let the chunk be "
+        "extracted.".format(bam_filename)
+    )
+
+
 def extract_partition(
     genome_fa,
     bam,
@@ -1007,6 +1031,7 @@ def extract_partition(
     gtf_index_cache_dir=None,
     mixed_orientation_source="warn",
     max_intron_length=None,
+    reuse_source_bam=False,
 ):
     """Extract one chunk. Returns the manifest, also written as JSON.
 
@@ -1033,6 +1058,36 @@ def extract_partition(
     different from the default would make extraction retain a different record
     set than selection costed and than the in-chunk split will keep. ``None``
     reads ``LRAA_Globals.config``, 0 disables.
+
+    ``reuse_source_bam`` is for the one chunk shape where the mini bam would be a
+    RESTATEMENT of the source: a strandless chunk spanning its whole contig,
+    ``[1, contig_length]``, offset 0, mini contig named and sized like the real
+    one. There the emitted record stream is the source's own records on that
+    contig, unmoved, minus what ``retained_for_extraction`` rejects -- and the
+    tool that reads it next applies exactly that filter itself. So the copy buys
+    nothing and costs the whole of the extraction: MEASURED on chrM of a 6.9 GB
+    HG002 bam, 1,199,182 mapped records over 16,569 bp, the full extraction is
+    67.5 s while the same fetch and the same predicates WITHOUT the rebase, the
+    bgzf write and the index is 5.45 s -- 92 % of the cost is the copy.
+
+    The region is still read and still counted, so the manifest states what a
+    full extraction would have stated and remains this tool's own measurement
+    rather than a number handed in from outside. What changes is that no bam is
+    written and ``files.bam`` names the SOURCE, with
+    ``bam_reused_from_source`` set so a consumer cannot mistake one for the
+    other. Only whole-contig strandless regions qualify, and anything else is
+    refused rather than approximated: a partial region needs the coordinate
+    rebase, and a strand-suffixed one needs the orientation filter that only the
+    written copy carries.
+
+    ONE MEASURED DIFFERENCE, and it is in an intermediate rather than a result.
+    ``_rebase_alignment`` normalises RNEXT/PNEXT/TLEN to ``*``/0/0 for an unpaired
+    read; a reused source carries whatever the aligner wrote. On the bundled
+    minigenome that is every one of 1,177 forward records differing in column 8
+    alone -- PNEXT 0 against 1 -- with all ten other columns and every tag equal.
+    Nothing downstream reads a mate coordinate for an unpaired read, and the
+    merged ``quant.expr`` and ``quant.tracking`` come out identical across the two
+    paths, which is the check that establishes it rather than the argument.
     """
 
     if secondary_alignments not in ("exclude", "reject"):
@@ -1053,6 +1108,22 @@ def extract_partition(
         region = parse_region(region)
     if mini_contig_name is None:
         mini_contig_name = region.chrom
+    if reuse_source_bam and region.strand:
+        raise ExtractionError(
+            "--reuse_source_bam is defined only for a STRANDLESS whole-contig "
+            "region, and {}{}:{}-{} names an orientation. A strand-suffixed chunk "
+            "gets its orientation from the filter applied while the copy is "
+            "written, so there is no copy to skip: reusing the source would hand "
+            "the consumer both orientations.".format(
+                region.chrom, region.strand, region.lend, region.rend
+            )
+        )
+    if reuse_source_bam and mini_contig_name != region.chrom:
+        raise ExtractionError(
+            "--reuse_source_bam cannot rename the mini contig to {!r}: the reused "
+            "records still carry {!r}, so the name has to be the source "
+            "one.".format(mini_contig_name, region.chrom)
+        )
 
     with pysam.FastaFile(genome_fa) as fasta:
         if region.chrom not in fasta.references:
@@ -1064,6 +1135,21 @@ def extract_partition(
             raise ExtractionError(
                 "requested partition {}:{}-{} runs past the end of {} ({} bp)".format(
                     region.chrom, region.lend, region.rend, region.chrom, contig_length
+                )
+            )
+        if reuse_source_bam and (region.lend != 1 or region.rend != contig_length):
+            raise ExtractionError(
+                "--reuse_source_bam needs the region to span the whole contig, "
+                "and {}:{}-{} covers {} bp of {}'s {}. A partial region rebases "
+                "every alignment by {} and drops the ones that overhang, neither "
+                "of which the source bam has had done to it.".format(
+                    region.chrom,
+                    region.lend,
+                    region.rend,
+                    region.rend - region.lend + 1,
+                    region.chrom,
+                    contig_length,
+                    region.lend - 1,
                 )
             )
 
@@ -1130,11 +1216,25 @@ def extract_partition(
     # from inside it, so the partial chunk is removed rather than left to be
     # mistaken for output.
     mixed_orientation_offender = None
-    bam_filename = "{}.bam".format(output_prefix)
+    # The region is READ and COUNTED either way -- only the writing is optional.
+    # A manifest whose counts came from somewhere other than this loop would be
+    # a different tool's claim about this chunk, and the downstream split
+    # accounting checks itself against these numbers.
+    bam_filename = (
+        os.path.abspath(bam) if reuse_source_bam else "{}.bam".format(output_prefix)
+    )
     with pysam.AlignmentFile(bam, "rb") as bamreader:
-        mini_header = _mini_header(bamreader.header, mini_contig_name, mini_length)
+        mini_header = (
+            None
+            if reuse_source_bam
+            else _mini_header(bamreader.header, mini_contig_name, mini_length)
+        )
         nonprimary = []
-        with pysam.AlignmentFile(bam_filename, "wb", header=mini_header) as bamwriter:
+        with (
+            contextlib.nullcontext(None)
+            if reuse_source_bam
+            else pysam.AlignmentFile(bam_filename, "wb", header=mini_header)
+        ) as bamwriter:
             for aln in bamreader.fetch(region.chrom, region.lend - 1, region.rend):
                 if aln.is_unmapped:
                     continue
@@ -1179,16 +1279,24 @@ def extract_partition(
                     counts["alignments_emitted_forward"] += 1
                 else:
                     counts["alignments_emitted_reverse"] += 1
-                bamwriter.write(
-                    _rebase_alignment(
-                        aln, offset, mini_header, mini_contig_name, mini_length
+                if bamwriter is not None:
+                    bamwriter.write(
+                        _rebase_alignment(
+                            aln, offset, mini_header, mini_contig_name, mini_length
+                        )
                     )
-                )
 
     if mixed_orientation_offender is not None:
         # Nothing partial survives: a chunk bam holding the reads seen before the
         # offending one is not a smaller correct answer, it is a truncated one.
-        for path in (fasta_filename, fasta_filename + ".fai", bam_filename):
+        # bam_filename is the SOURCE under --reuse_source_bam, and this branch is
+        # unreachable there (it needs a strand-suffixed region, which reuse
+        # refuses). Named explicitly anyway: the cost of getting that wrong once
+        # is somebody's input bam.
+        removable = [fasta_filename, fasta_filename + ".fai"]
+        if not reuse_source_bam:
+            removable.append(bam_filename)
+        for path in removable:
             if os.path.exists(path):
                 os.remove(path)
         raise ExtractionError(
@@ -1298,7 +1406,13 @@ def extract_partition(
             file=sys.stderr,
         )
 
-    pysam.index(bam_filename)
+    if reuse_source_bam:
+        # The source was fetched by region above, so it is already indexed -- and
+        # indexing it again would write into the input directory, which is often
+        # read-only and never this tool's to touch.
+        _require_source_index(bam_filename)
+    else:
+        pysam.index(bam_filename)
 
     emitted_transcript_ids = []
     gtf_filename = None
@@ -1368,6 +1482,15 @@ def extract_partition(
         # is this, hence no window straddles a cut.
         "window_origin": offset,
         "disjoint_hard_cut": True,
+        # Whether files.bam is a mini bam this run WROTE or the SOURCE it read.
+        # A consumer that splits, normalizes or quantifies the chunk needs to
+        # know, because a reused source is not restricted to this contig: it
+        # holds every other one too, and the reader has to say which it wants.
+        "bam_reused_from_source": bool(reuse_source_bam),
+        # True only when the chunk covers the whole contig, which is what makes
+        # the reuse legal in the first place, and stated separately so the
+        # condition can be checked rather than inferred from the flag.
+        "spans_whole_contig": region.lend == 1 and region.rend == contig_length,
         "mini_contig_name": mini_contig_name,
         "mini_length": mini_length,
         "contig_length": contig_length,
@@ -1496,6 +1619,20 @@ def main(argv=None):
         "filtering on aligner orientation.",
     )
 
+    parser.add_argument(
+        "--reuse_source_bam",
+        action="store_true",
+        default=False,
+        help="for a STRANDLESS region spanning the whole contig, do not write a "
+        "mini bam: count the region as usual and name --bam itself as the "
+        "chunk's bam. At offset 0 over the full contig the mini bam is the "
+        "source's own records unmoved, so the copy is pure cost -- measured 67.5 s "
+        "against 5.45 s for the count alone on a 1.2 M-record contig. The "
+        "manifest sets bam_reused_from_source, and the reader MUST restrict the "
+        "source by contig: it holds every other contig too. Refused for a "
+        "partial or strand-suffixed region.",
+    )
+
     args = parser.parse_args(argv)
     region = parse_region(args.region)
     output_prefix = args.output_prefix
@@ -1514,10 +1651,11 @@ def main(argv=None):
         gtf_index_cache_dir=args.gtf_index_cache_dir,
         mixed_orientation_source=args.mixed_orientation_source,
         max_intron_length=args.max_intron_length,
+        reuse_source_bam=args.reuse_source_bam,
     )
 
     print(
-        "chunk {}{}:{}-{} -> mini contig {} bp; {} primary alignments emitted, "
+        "chunk {}{}:{}-{} -> mini contig {} bp; {} primary alignments {}, "
         "{} dropped for overhang; {} transcripts emitted whole; margin {} bp".format(
             manifest["chrom"],
             manifest["strand"] or "",
@@ -1525,6 +1663,9 @@ def main(argv=None):
             manifest["partition_rend"],
             manifest["mini_length"],
             manifest["counts"]["alignments_emitted"],
+            "counted, bam reused from the source"
+            if manifest["bam_reused_from_source"]
+            else "emitted",
             manifest["counts"]["alignments_dropped_overhang"],
             manifest["counts"]["gtf_transcripts_emitted"],
             manifest["margin"],
