@@ -6179,8 +6179,22 @@ def count_reads_from_bam(bam_filename):
             bam_filename,
             threads,
         )
-        with open(tmp_path, "wt") as tmp_fh:
-            subprocess.check_call(samtools_cmd, stdout=tmp_fh)
+        # The tmp file is removed if samtools fails. Without this a failed count --
+        # a missing bam, a truncated one, samtools not on PATH -- leaves a
+        # zero-length <bam>.mapped_primary.count.tmp in the working directory. The
+        # rename below is what makes the cache atomic, so a partial file is never
+        # read as a count; the cleanup is so a failed run does not litter, which
+        # matters because the name is derived from the bam's basename and lands
+        # wherever the process happens to be.
+        try:
+            with open(tmp_path, "wt") as tmp_fh:
+                subprocess.check_call(samtools_cmd, stdout=tmp_fh)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
         os.rename(tmp_path, read_count_file)
 
     with open(read_count_file, "rt") as fh:
