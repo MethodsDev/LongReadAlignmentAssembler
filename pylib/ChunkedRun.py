@@ -441,6 +441,40 @@ def count_records(bam):
     return int(out.strip())
 
 
+def ensure_bam_index(bam):
+    """A strandless run fetches the RAW bam by region, so it needs its index.
+
+    Strand-first never did.  Its cut selection and extraction read the stage-1
+    output, which is written indexed, and nothing else in the pipeline touches the
+    input by coordinate -- so an unindexed input has always been fine, and the
+    corpora that exercise chunking all ship a committed .bai, which is why nothing
+    noticed.  ``LRAA --chunk`` makes it worse: it dispatches before LRAA's own
+    "missing index, will try to make it" step, so the one thing that would have
+    built the index is bypassed.  Observed as
+    ``ValueError: fetch called on bamfile without index`` raised out of pysam
+    inside stage 2, naming neither the file nor the reason.
+
+    Built beside the bam, where every reader looks for it.  An input directory that
+    cannot be written to is refused with that said, rather than left to surface as
+    the same pysam error one stage later.
+    """
+
+    for suffix in (".bai", ".csi"):
+        if os.path.exists(bam + suffix):
+            return
+    print("missing index for {}, building it".format(bam), flush=True)
+    try:
+        pysam.index(bam)
+    except Exception as err:
+        raise PipelineError(
+            "--strandless_chunks needs a coordinate index for {0}, which has "
+            "none, and building one beside it failed: {1}. Strandless cut "
+            "selection and extraction fetch the raw bam by region. Index it "
+            "where it lives (samtools index {0}), or stage the bam somewhere "
+            "writable first.".format(bam, err)
+        )
+
+
 def severed_read_names(cut_dir):
     """Every read the extractor drops at a cut, across both orientations.
 
@@ -2302,6 +2336,13 @@ def run(args):
     flush()
 
     if args.arm in ("chunked", "both"):
+        # Only the strandless arm reads the input by coordinate, so only it pays for
+        # an index build -- imposing one on strand-first would cost a whole-bam pass
+        # for an index that arm never opens. After argument validation, not before:
+        # a missing -N is a refusal that should arrive immediately rather than
+        # behind minutes of indexing.
+        if args.strandless_chunks:
+            ensure_bam_index(args.bam)
         sources = cut_sources(args, strand_bams, inputs_token, split_token)
         selections, cut_dir, cuts_tokens = stage_select_cuts(
             args, ckpt, outdir, timing, sources, rss

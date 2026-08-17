@@ -424,6 +424,65 @@ def test_strand_first_cut_selection_reads_the_split_bams():
     assert {s[3] for s in sources} == {"split.up_1"}
 
 
+def test_a_strandless_run_builds_the_raw_bam_index_it_needs(tmp_path):
+    """The raw bam is a FETCH source only in strandless mode, so only it needs this.
+
+    Strand-first reads the stage-1 output, which is written indexed, so an unindexed
+    input was never a prerequisite of a chunked run -- and every corpus that
+    exercises chunking ships a committed .bai, which is why nothing noticed. The
+    first caller without one was the WDL layer, whose per-contig shard bam is
+    localized alone, and it died inside pysam with "fetch called on bamfile without
+    index" naming neither the file nor the reason.
+    """
+
+    bam = str(write_bam(tmp_path / "raw.bam", 3, 2))
+    assert not os.path.exists(bam + ".bai")
+
+    ChunkedRun.ensure_bam_index(bam)
+
+    assert os.path.exists(bam + ".bai")
+    # and it is a usable index, not merely a file: this is the call that failed
+    with pysam.AlignmentFile(bam, "rb") as fh:
+        assert len(list(fh.fetch("chunk", 0, 100000))) == 5
+
+
+def test_an_existing_index_is_left_alone(tmp_path):
+    """Indexing is a whole-bam pass; a run that resumes must not repeat it."""
+
+    bam = str(write_bam(tmp_path / "raw.bam", 1, 1))
+    pysam.index(bam)
+    before = os.stat(bam + ".bai")
+
+    ChunkedRun.ensure_bam_index(bam)
+
+    after = os.stat(bam + ".bai")
+    assert (after.st_mtime_ns, after.st_size) == (before.st_mtime_ns, before.st_size)
+
+
+def test_an_unwritable_input_directory_is_refused_by_name(tmp_path):
+    """Say which file and why, rather than leaving pysam to say neither.
+
+    The index has to go beside the bam, because that is where every reader looks
+    for it. An input directory that cannot be written to is therefore a real limit,
+    and one a caller can act on -- but only if the error names it.
+    """
+
+    ro_dir = tmp_path / "ro"
+    ro_dir.mkdir()
+    bam = str(write_bam(ro_dir / "raw.bam", 1, 1))
+    os.chmod(ro_dir, 0o500)
+    try:
+        with pytest.raises(ChunkedRun.PipelineError) as err:
+            ChunkedRun.ensure_bam_index(bam)
+    finally:
+        os.chmod(ro_dir, 0o700)
+
+    message = str(err.value)
+    assert bam in message
+    assert "--strandless_chunks" in message
+    assert "fetch the raw bam by region" in message
+
+
 def test_a_strandless_region_carries_no_orientation():
     """The extractor keeps both orientations for a strandless region, and
     refuses a strand-suffixed one over a bam that still holds both."""

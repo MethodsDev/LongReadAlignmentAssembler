@@ -67,12 +67,24 @@ test_chunked_route_parity: test_chunked_entry_point
 # -N only sets the TPM denominator here and the assertions are structural, so it
 # does not have to agree with any particular stage's count -- but it does have to
 # be passed, which is the next test.
+#
+# Run from an UNINDEXED copy of the bam, deliberately. Only the strandless arm
+# fetches the raw bam by region; strand-first reads the indexed stage-1 output, so
+# an unindexed input was never a prerequisite of a chunked run, and every corpus
+# here ships a committed .bai -- which is exactly why nobody noticed that the
+# strandless arm needs one and that LRAA --chunk dispatches before LRAA's own
+# index step. It surfaced as pysam's "fetch called on bamfile without index" the
+# first time a caller had no .bai, which was the WDL layer. Testing against the
+# indexed corpus copy would restore that blind spot.
 test_chunked_strandless:
+	cp pacbio.PBLR.bam __strandless_input.bam
+	test ! -f __strandless_input.bam.bai
 	../../LRAA --chunk --strandless_chunks --quant_only \
-	    --num_total_reads $$(samtools view -c -F 0x904 pacbio.PBLR.bam) \
-	    --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
+	    --num_total_reads $$(samtools view -c -F 0x904 __strandless_input.bam) \
+	    --bam __strandless_input.bam --genome ref_genome.fa --gtf ref_annot.gtf \
 	    --cpu_budget 4 --HiFi --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1 \
 	    --output_prefix __strandless
+	test -f __strandless_input.bam.bai
 	test -s __strandless.LRAA.quant-only.quant.expr
 	python3 -c 'import json,collections; d=json.load(open("__strandless.chunked_work/timing.json")); assert "cuts_strandless" in d["stages"] and "cuts_plus" not in d["stages"], "cut selection was not strandless: %r" % (sorted(d["stages"]),); assert "skipped" in d["stages"]["strand_split"], "the whole-bam strand split still ran: %r" % (d["stages"]["strand_split"],); assert d["stage1_retained_records"] is None, "stage 1 still ran"; m=d["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("strandless intervals per contig: %r, quant units: %d" % (dict(per), d["arms"]["chunked"]["quant_units"])); assert max(per.values()) > 1, "no contig was cut: %r" % ([c["region"] for c in m],); assert all(c["split_counts"] for c in m), "intervals carry no per-chunk split accounting, so the split did not run inside them"'
 
