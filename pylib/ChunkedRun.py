@@ -1393,16 +1393,42 @@ def run_extraction(plan, ckpt, outdir, rss_interval):
             "wrong chunk. Extract strandlessly and split "
             "afterwards.".format(chunk_id, excluded)
         )
-    # A manifest that says it reused the source while the plan asked for an
-    # extraction (or the reverse) means the chunk directory and this run
-    # disagree about where the chunk's reads live, and stage 3b would then read
-    # the wrong file with no error of its own.
+    # Where the chunk's reads live has to be agreed by the manifest and this run,
+    # because stage 3b reads that file and would otherwise split the wrong bam
+    # with no error of its own -- which is exactly the defect this check caught
+    # on a coordinate-remapped corpus before it could reach a number.
+    #
+    # The two directions are NOT symmetric, and the asymmetry is the point.
+    #
+    # PLANNED A COPY, GOT A REUSE is impossible to reach honestly and stays
+    # fatal: nothing downgrades an extraction into a reuse, so the only way to
+    # observe it is a chunk directory left by a different plan.
+    #
+    # PLANNED A REUSE, GOT A COPY is a legitimate outcome the extractor chooses
+    # for itself. Reuse is sound only for a chunk that drops nothing, and whether
+    # anything is dropped cannot be known until the region has been read, so the
+    # extractor withdraws reuse and materialises the mini bam when it finds an
+    # alignment reaching past the contig end. See the REUSE block in
+    # util/misc/extract_contig_region_inputs.py at the drop site. Accepting the
+    # downgrade here is what lets such a corpus run at all; the alternative is
+    # refusing a bam for a defect in the bam rather than in the partition.
+    #
+    # It is accepted, not ignored: files.bam names the real chunk bam either way,
+    # so every later stage follows the manifest and nothing keys on the request.
     reused = bool(manifest.get("bam_reused_from_source"))
-    if reused != plan["reuse_source_bam"]:
+    if reused and not plan["reuse_source_bam"]:
         raise PipelineError(
-            "chunk {}'s manifest reports bam_reused_from_source={} but this run "
-            "planned {}. The chunk directory predates the plan; use a fresh "
-            "--output_dir.".format(chunk_id, reused, plan["reuse_source_bam"])
+            "chunk {}'s manifest reports bam_reused_from_source=True but this run "
+            "planned a full extraction. Nothing upgrades a copy into a reuse, so "
+            "the chunk directory predates the plan; use a fresh "
+            "--output_dir.".format(chunk_id)
+        )
+    if plan["reuse_source_bam"] and not reused:
+        print(
+            "  chunk {}: planned to reuse the source bam, extractor materialised "
+            "the chunk bam instead (an alignment reaches past the contig end); "
+            "proceeding with the manifest's bam.".format(chunk_id),
+            flush=True,
         )
     return record, manifest
 

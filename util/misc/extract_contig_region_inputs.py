@@ -1070,6 +1070,16 @@ def extract_partition(
     67.5 s while the same fetch and the same predicates WITHOUT the rebase, the
     bgzf write and the index is 5.45 s -- 92 % of the cost is the copy.
 
+    THAT PREMISE HAS ONE EXCEPTION and it is not hypothetical: an alignment whose
+    aligned end lies past the contig's own length is dropped even by a
+    whole-contig region, because ``region.rend`` IS ``contig_length``. Such a
+    chunk emits FEWER records than the source holds, the restatement argument
+    fails, and reuse is withdrawn for that chunk alone -- see the block at the
+    drop site, which explains the failure mode and why the fix is to spend the
+    write rather than to stop dropping. A request to reuse is therefore a
+    request, not a guarantee; read ``bam_reused_from_source`` in the manifest to
+    learn what happened, never the flag that was passed in.
+
     The region is still read and still counted, so the manifest states what a
     full extraction would have stated and remains this tool's own measurement
     rather than a number handed in from outside. What changes is that no bam is
@@ -1364,6 +1374,80 @@ def extract_partition(
     with open(dropped_reads_filename, "wt") as ofh:
         for name in dropped_names:
             print(name, file=ofh)
+
+    # ------------------------------------------------------------------ REUSE
+    # WHY THIS EXISTS, because it cost a day to find and the reasoning that
+    # produced the bug was superficially airtight.
+    #
+    # ``reuse_source_bam`` skips writing the mini bam when the chunk spans its
+    # whole contig, on the argument that the mini bam would then be a
+    # restatement of the source's records on that contig. The three guards above
+    # enforce the premise of that argument -- strandless, unrenamed contig,
+    # region == [1, contig_length] -- and they are individually correct.
+    #
+    # The argument is still wrong, because "the region spans the whole contig"
+    # does NOT imply "extraction emits every retained record". One drop reason
+    # survives a whole-contig region: an alignment whose aligned END lies past
+    # the contig's own length. Nothing in the region test rules that out --
+    # region.rend IS contig_length, so ``end > region.rend`` still fires -- and
+    # such records are routine in coordinate-remapped bams. testing/sep_contigs
+    # has 453 of 2,507, one ending at 199,427 on a 77,313 bp contig.
+    #
+    # Reusing the source there hands every downstream stage records this chunk
+    # says it dropped. It is caught rather than silent, and by two independent
+    # checks, which is why this is a refusal to run and never was a wrong number:
+    #   - verify_chunk_split compares the strand split's record count against
+    #     the emitted count and fails: MEASURED on FANCI^ENSG00000140525.17,
+    #     323 + 262 = 585 split records against 556 emitted, the 29 being exactly
+    #     the overhanging alignments.
+    #   - had the split agreed, ChunkedRun.verify_severed_accounting would have
+    #     written those names to EXTRACTION_ONLY_DROPS so the parity BASELINE
+    #     subtracts them, while the reused source still fed them to the CHUNKED
+    #     arm -- the arms consuming different records while both report success.
+    #
+    # So the condition for reuse is not "the region covers the contig", it is
+    # "this chunk dropped nothing". That cannot be known before the scan, and
+    # the scan is not what reuse saves: on chrM of a 6.9 GB HG002 bam the whole
+    # extraction is 67.5 s of which the scan is 5.45 s, so 92 % is the write.
+    # Hence: scan under reuse as planned, and if anything was dropped, spend the
+    # write after all. Clean contigs -- every well-formed bam -- keep the full
+    # saving and take this branch never.
+    #
+    # DO NOT "fix" a future recurrence by making the overhang drop conditional,
+    # by truncating, or by widening the region. Truncating invents an alignment
+    # the aligner never made and widening breaks chunk disjointness; both are
+    # refused deliberately elsewhere in this file. The record set is right. Only
+    # the decision to skip materialising it was wrong.
+    if reuse_source_bam and dropped:
+        print(
+            "NOTE: not reusing the source bam for {}:{}-{} after all: {} "
+            "alignment(s) end past the contig's {} bp, so the source holds "
+            "records this chunk drops and every stage reading it would see "
+            "them. Writing the mini bam instead, which costs this chunk the "
+            "extraction that reuse exists to skip and changes nothing about "
+            "its contents.".format(
+                region.chrom,
+                region.lend,
+                region.rend,
+                len(dropped),
+                contig_length,
+            ),
+            file=sys.stderr,
+        )
+        return extract_partition(
+            genome_fa,
+            bam,
+            region,
+            output_prefix,
+            gtf=gtf,
+            margin=margin,
+            secondary_alignments=secondary_alignments,
+            mini_contig_name=mini_contig_name,
+            gtf_index_cache_dir=gtf_index_cache_dir,
+            mixed_orientation_source=mixed_orientation_source,
+            max_intron_length=max_intron_length,
+            reuse_source_bam=False,
+        )
 
     if dropped:
         print(

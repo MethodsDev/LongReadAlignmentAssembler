@@ -965,6 +965,88 @@ def test_a_whole_contig_chunk_reuses_the_source_and_states_the_same_numbers(tmp_
     )
 
 
+class OverhangingContigCorpus(WholeContigCorpus):
+    """``WholeContigCorpus`` plus one alignment that ends past the contig's end.
+
+    Coordinate-remapped bams carry these routinely -- testing/sep_contigs has 453
+    of 2,507, one ending at 199,427 on a 77,313 bp contig -- and they are the one
+    thing a whole-contig region still drops, which is what makes reuse unsound
+    without disqualifying the chunk on any of the three planned criteria.
+    """
+
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        reads = []
+        for i in range(6):
+            reads.append(("keep_f{}".format(i), self.contig, 500 + 100 * i, 80, 0))
+        for i in range(4):
+            reads.append(("keep_r{}".format(i), self.contig, 2000 + 100 * i, 80, 16))
+        reads.append(("drop_secondary", self.contig, 3000, 80, 0x100))
+        reads.append(("drop_supplementary", self.contig, 3100, 80, 0x800))
+        reads.append(("drop_duplicate", self.contig, 3200, 80, 0x400))
+        reads.append(("other_contig", "cOther", 500, 80, 0))
+        # the whole point: retained by every flag and intron predicate, inside the
+        # contig by its START, and past the contig's length by its END
+        reads.append(("overhangs_contig_end", self.contig, self.length - 40, 200, 0))
+        self.bam = write_reads(tmp_path / "wc_over.bam", self.contigs, reads)
+
+
+def test_reuse_is_withdrawn_when_an_alignment_reaches_past_the_contig_end(tmp_path):
+    """Reuse is a request, not a guarantee, and this is the case that withdraws it.
+
+    Reuse rests on the mini bam being a restatement of the source's records on the
+    contig. An alignment ending past the contig's length breaks that: a whole-contig
+    region still DROPS it, because region.rend is contig_length, so the chunk holds
+    fewer records than the source does. Reusing there feeds every later stage a
+    record the chunk says it dropped -- caught downstream by verify_chunk_split as a
+    count mismatch, and had that agreed, by the parity baseline subtracting names the
+    chunked arm still processed.
+
+    The assertions below are deliberately non-vacuous about WHY reuse was declined:
+    all three planned criteria still hold -- strandless, unrenamed, whole-contig --
+    so this cannot pass by the chunk being disqualified for some other reason.
+    """
+
+    corpus = OverhangingContigCorpus(tmp_path)
+    full_dir = tmp_path / "ov_full"
+    reuse_dir = tmp_path / "ov_reuse"
+    full_dir.mkdir()
+    reuse_dir.mkdir()
+
+    full = corpus.extract(full_dir / "chunk", reuse=False)
+    asked_to_reuse = corpus.extract(reuse_dir / "chunk", reuse=True)
+
+    # the premise of reuse still holds, which is what makes this the real case
+    assert asked_to_reuse["spans_whole_contig"] is True
+    # ...and reuse was withdrawn anyway
+    assert asked_to_reuse["bam_reused_from_source"] is False
+    assert full["bam_reused_from_source"] is False
+
+    # the overhanging read is the reason, and it is named rather than only counted
+    assert asked_to_reuse["counts"]["alignments_dropped_overhang"] == 1
+    assert asked_to_reuse["dropped_read_names"] == ["overhangs_contig_end"]
+
+    # a real mini bam exists and files.bam names IT, not the source: this is the
+    # assertion that fails if reuse is ever permitted here again, because a reused
+    # manifest names the source and writes no bam at all
+    assert (reuse_dir / "chunk.bam").exists()
+    assert asked_to_reuse["files"]["bam"] == str(reuse_dir / "chunk.bam")
+    assert asked_to_reuse["files"]["bam"] != os.path.abspath(corpus.bam)
+
+    # asking for reuse changed NOTHING except which paths the files live at, so the
+    # fallback is the full extraction rather than some third behaviour
+    assert {k: v for k, v in asked_to_reuse.items() if k != "files"} == {
+        k: v for k, v in full.items() if k != "files"
+    }
+
+    # the invariant the downstream split enforces: the bam holds exactly what the
+    # manifest says was emitted, so extraction and the split cannot disagree
+    with pysam.AlignmentFile(str(reuse_dir / "chunk.bam"), "rb") as handle:
+        written = [a for a in handle.fetch(until_eof=True)]
+    assert len(written) == asked_to_reuse["counts"]["alignments_emitted"]
+    assert "overhangs_contig_end" not in {a.query_name for a in written}
+
+
 def test_splitting_the_reused_source_by_contig_equals_splitting_the_copy(tmp_path):
     """The downstream stage really does accept the source in place of the copy.
 
