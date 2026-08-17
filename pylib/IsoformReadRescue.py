@@ -51,6 +51,7 @@ def rescue_unassigned_reads_to_transcriptome(
     read_names,
     read_path_mapper=None,
     reads_without_graph_path=None,
+    return_read_details=False,
 ):
     """
     Rescue previously unassigned reads by aligning them to local transcript sequences and
@@ -58,6 +59,14 @@ def rescue_unassigned_reads_to_transcriptome(
 
     Acceptance rules:
     - mapped alignment only
+    - the target's exons must overlap the read's own genome alignment blocks. The genome
+      alignment is trusted for LOCALITY but not for optimality: rescue runs because the
+      alignment fits badly, so it may refine placement within the locus the read sits in
+      and may not move the read to another one. Measured on chr21 HG002 quant-only
+      ref-guided, 22 of the 33 (read, transcript) credits rescue made went to models the
+      read does not overlap, the farthest by 26.6 Mb. Coordinate overlap only -- no
+      minimum overlap, no fraction of the read, no intron-chain or path-compatibility
+      reasoning, since a suboptimal alignment's structure is not evidence about anything.
     - no reference-skip (N) cigar operations
     - after Pretty_alignment-style small-gap merging, exactly one merged transcript block remains
     - if multiple top-scoring transcript hits survive for a read, they must all project to the same node path
@@ -78,6 +87,7 @@ def rescue_unassigned_reads_to_transcriptome(
         require_unique_path_across_best_hits=True,
         reads_without_graph_path=reads_without_graph_path,
         log_label="transcriptome rescue",
+        return_read_details=return_read_details,
     )
 
 
@@ -181,8 +191,19 @@ def build_transcriptome_alignment_multipaths(
             read_name_to_seq,
             read_name_to_genome_explained,
             read_name_to_genome_gap_id,
+            read_name_to_allowed_target_ids,
         ) = _collect_read_sequences(
-            bam_file, contig_acc, region_lend, region_rend, read_names, target_strand
+            bam_file,
+            contig_acc,
+            region_lend,
+            region_rend,
+            read_names,
+            target_strand,
+            # Locality is unconditional and is not a mode: every rescue is confined to
+            # targets the read's own genome alignment overlaps. It is one additional
+            # rejection layered onto the rules already here -- same offered reads, same
+            # thresholds, same genome baseline, same order.
+            exon_overlap_index=_build_exon_overlap_index(transcript_models),
         )
         # No exemption for reads_without_graph_path. Lacking a graph path says the
         # graph cannot represent the read's structure; it says nothing about whether
@@ -272,13 +293,27 @@ def build_transcriptome_alignment_multipaths(
                 if _normalize_read_identifier(read_name) is not None
             }
 
+        # Rescue outcomes, not a genome-versus-transcriptome adjudication: how many
+        # reads were offered, how many came back, and for those that did not, which rule
+        # declined them. locality_displaced_reads is the one to watch -- reads whose best
+        # transcriptome hit sat at a locus the read is not at, which is exactly what the
+        # locality criterion refuses.
         logger.info(
-            "[%s%s] %s: requested=%d rescued=%d",
+            "[%s%s] %s: offered=%d rescued=%d locality_declined_reads=%d locality_displaced_reads=%d rejections=%s",
             splice_graph.get_contig_acc(),
             splice_graph.get_contig_strand(),
             log_label,
             len(read_name_to_seq),
             len(rescued_mps),
+            read_details.get("reads_locality_declined", 0),
+            read_details.get("reads_locality_displaced", 0),
+            ",".join(
+                f"{reason}={count}"
+                for reason, count in sorted(
+                    read_details.get("alignment_rejections", {}).items()
+                )
+            )
+            or "none",
         )
 
         if return_read_details:
@@ -321,11 +356,20 @@ def _collect_read_sequences(
     region_rend,
     target_read_names=None,
     target_strand=None,
+    exon_overlap_index=None,
 ):
+    """Read sequences plus what each read's own genome alignment establishes about it.
+
+    Three things come off the one primary record in a single pass, because all three are
+    properties of that record and a second pass over the region would cost the same scan
+    again: the sequence to realign, the baseline the rescue has to beat, and -- when an
+    exon overlap index is supplied -- which targets the read's aligned blocks touch.
+    """
     remaining = None if target_read_names is None else set(target_read_names)
     read_name_to_seq = {}
     read_name_to_genome_explained = {}
     read_name_to_genome_gap_id = {}
+    read_name_to_allowed_target_ids = None if exon_overlap_index is None else {}
     with pysam.AlignmentFile(bam_file, "rb") as bam_reader:
         if region_lend is not None and region_rend is not None:
             fetch_iter = bam_reader.fetch(contig_acc, max(int(region_lend) - 1, 0), int(region_rend))
@@ -361,11 +405,34 @@ def _collect_read_sequences(
                 genome_gap_id = _gap_aware_identity(read)
                 if genome_gap_id is not None:
                     read_name_to_genome_gap_id[read_name] = genome_gap_id
+                if read_name_to_allowed_target_ids is not None:
+                    # The genome alignment is trusted for LOCALITY but not assumed
+                    # optimal. Rescue exists because that alignment fits badly, so it
+                    # refines placement WITHIN the locus the read already occupies and
+                    # never relocates the read to a different one. That is the whole of
+                    # the criterion, which is why plain coordinate overlap of the
+                    # aligned blocks against the target's exons is sufficient, and why
+                    # nothing structural is wanted: a suboptimal alignment's intron
+                    # chain is not evidence about anything.
+                    #
+                    # An empty set is recorded rather than skipped. The read stays in
+                    # the offered population and is still realigned exactly as before;
+                    # it simply has no target it may be credited to. Dropping it here
+                    # instead would change which reads rescue is asked about, and this
+                    # is meant to add one rejection, not reshape the candidate set.
+                    read_name_to_allowed_target_ids[read_name] = set(
+                        _get_alignment_overlapping_targets(read, exon_overlap_index)
+                    )
                 if remaining is not None:
                     remaining.discard(read_name)
             if remaining is not None and not remaining:
                 break
-    return read_name_to_seq, read_name_to_genome_explained, read_name_to_genome_gap_id
+    return (
+        read_name_to_seq,
+        read_name_to_genome_explained,
+        read_name_to_genome_gap_id,
+        read_name_to_allowed_target_ids,
+    )
 
 
 def _collect_genome_gated_read_targets(
@@ -629,6 +696,15 @@ def _parse_rescue_alignments(
     read_name_to_genome_gap_id=None,
 ):
     read_to_hits = defaultdict(list)
+    # Why alignments were declined, in rescue's own terms. Rescue previously reported
+    # only how many reads came back, which leaves an unrescued read indistinguishable
+    # from an unoffered one and gives no way to see which rule is doing the work --
+    # locality above all, since it is the one that can silently do nothing.
+    rejections = defaultdict(int)
+    # Best score among a read's locality-declined alignments, so the report can name the
+    # population that matters: reads whose BEST transcriptome hit was somewhere the read
+    # is not. A read with only a lower-scoring non-local hit lost nothing.
+    locality_declined_best_score = {}
     min_per_id = float(_resolve_rescue_min_per_id())
     min_aligned_frac = float(
         LRAA_Globals.config.get("rescue_unassigned_min_aligned_read_frac", 0) or 0
@@ -639,16 +715,13 @@ def _parse_rescue_alignments(
     with _rescue_alignment_records(rescue_alignments) as alignment_records:
         for read in alignment_records:
             if read.is_unmapped or read.is_supplementary:
+                rejections["unmapped_or_supplementary"] += 1
                 continue
             if read.reference_name not in transcript_models:
-                continue
-            if read_name_to_allowed_target_ids is not None and (
-                read.query_name not in read_name_to_allowed_target_ids
-                or read.reference_name
-                not in read_name_to_allowed_target_ids[read.query_name]
-            ):
+                rejections["target_not_modelled"] += 1
                 continue
             if any(code == 3 for code, _ in (read.cigartuples or [])):
+                rejections["reference_skip"] += 1
                 continue
             # A long indel is structural disagreement, not sequencing error: the read
             # skips (D) or carries (I) a stretch the target does not share, which is
@@ -666,8 +739,10 @@ def _parse_rescue_alignments(
                 code in (1, 2) and length >= max_indel_length
                 for code, length in (read.cigartuples or [])
             ):
+                rejections["long_indel"] += 1
                 continue
             if not _passes_percent_identity(read, min_per_id):
+                rejections["low_per_id"] += 1
                 continue
             # The genome-baseline test below only constrains reads that already had a
             # genome alignment. Reads with no graph path -- the bulk of what rescue
@@ -684,6 +759,7 @@ def _parse_rescue_alignments(
                 aligned_length = read.query_alignment_length
                 if read_length and aligned_length is not None:
                     if (aligned_length / read_length) < min_aligned_frac:
+                        rejections["low_aligned_read_frac"] += 1
                         continue
             if read_name_to_genome_explained:
                 # An alignment explaining less of the read than the genome already does
@@ -704,6 +780,7 @@ def _parse_rescue_alignments(
                         rescue_explained is not None
                         and rescue_explained < genome_explained
                     ):
+                        rejections["explains_less_than_genome"] += 1
                         continue
             if read_name_to_genome_gap_id:
                 # Explained bases cannot separate a clean spliced genome alignment from
@@ -716,9 +793,35 @@ def _parse_rescue_alignments(
                 if genome_gap_id is not None:
                     rescue_gap_id = _gap_aware_identity(read)
                     if rescue_gap_id is not None and rescue_gap_id < genome_gap_id:
+                        rejections["agrees_worse_than_genome"] += 1
                         continue
+            # Locality, last of the content rules and the only one about WHERE the
+            # target is rather than how well it fits. Everything above has already
+            # passed, so an alignment declined here was a viable placement refused for
+            # sitting somewhere the read does not: that is what makes the counters below
+            # mean something. Still above the merge and projection, which are the
+            # expensive steps.
+            #
+            # The genome alignment is trusted for locality and not for optimality --
+            # rescue runs precisely because it fits badly -- so the test is plain
+            # coordinate overlap of the read's aligned blocks against the target's exons,
+            # computed once per read in _collect_read_sequences. No minimum overlap, no
+            # fraction of the read, no intron-chain or path-compatibility reasoning; a
+            # suboptimal alignment's structure is not evidence about anything.
+            if read_name_to_allowed_target_ids is not None and (
+                read.query_name not in read_name_to_allowed_target_ids
+                or read.reference_name
+                not in read_name_to_allowed_target_ids[read.query_name]
+            ):
+                rejections["locality"] += 1
+                score = _alignment_score(read)
+                prior = locality_declined_best_score.get(read.query_name)
+                if prior is None or score > prior:
+                    locality_declined_best_score[read.query_name] = score
+                continue
             merged_segments = Pretty_alignment.read_to_pretty_alignment_segments(read)
             if len(merged_segments) != 1:
+                rejections["not_one_merged_block"] += 1
                 continue
             merged_lend, merged_rend = merged_segments[0]
             left_soft_clipping, right_soft_clipping = _get_soft_clipping_lengths(read)
@@ -731,6 +834,7 @@ def _parse_rescue_alignments(
                 right_soft_clipping=right_soft_clipping,
             )
             if not projected_path:
+                rejections["no_graph_projection"] += 1
                 continue
             read_to_hits[read.query_name].append(
                 {
@@ -792,10 +896,24 @@ def _parse_rescue_alignments(
             rescued_mps.append(multipath)
             read_name_to_multipaths[read_key].append(multipath)
 
+    # Reads whose placement locality actually changed: some alignment that cleared every
+    # content rule was declined for locality, and it outscored whatever survived -- or
+    # nothing survived, so the read would have been credited non-locally or not at all.
+    # This is the size of the defect. Counted after the loop because "best" is not known
+    # until every alignment has been seen.
+    locality_displaced = 0
+    for declined_read_name, declined_score in locality_declined_best_score.items():
+        kept = read_to_hits.get(declined_read_name)
+        if not kept or declined_score > max(hit["score"] for hit in kept):
+            locality_displaced += 1
+
     return rescued_mps, {
         "read_name_to_multipaths": dict(read_name_to_multipaths),
         "read_name_to_best_score": read_name_to_best_score,
         "read_name_to_best_per_id": read_name_to_best_per_id,
+        "alignment_rejections": dict(rejections),
+        "reads_locality_declined": len(locality_declined_best_score),
+        "reads_locality_displaced": locality_displaced,
     }
 
 

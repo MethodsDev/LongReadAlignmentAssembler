@@ -4654,6 +4654,7 @@ def _build_rescue_unassigned_summary_stats(
     rescued_multipaths=None,
     failed_genome_read_names=None,
     quant_unassigned_read_names=None,
+    rescue_alignment_details=None,
 ):
     genome_read_names = set()
     for mp_count_pair in genome_mp_counter.get_all_MultiPathCountPairs():
@@ -4709,11 +4710,11 @@ def _build_rescue_unassigned_summary_stats(
         "reads_selected_tx_failed_genome": len(
             rescued_read_names & failed_genome_read_names
         ),
-        "reads_selected_tx_higher_per_id": 0,
-        "reads_tx_present_but_kept_genome": 0,
-        "reads_tx_tied_per_id_kept_genome": 0,
-        "reads_tx_lower_per_id_kept_genome": 0,
-        "reads_tx_per_id_unavailable_kept_genome": 0,
+        # The four per-identity arbitration counters this used to report as 0 are
+        # gone. Rescue does not adjudicate all-genome against all-transcriptome, so it
+        # never computed them, and a measured zero and an inapplicable one are not the
+        # same claim. They remain in the summary header, defaulted, because genome_tx_arb
+        # does compute them.
         "reads_rescue_requested": len(requested_read_names),
         "reads_rescue_rescued": len(rescued_read_names),
         "reads_rescue_unrescued": len(rescue_unrescued_read_names),
@@ -4724,6 +4725,24 @@ def _build_rescue_unassigned_summary_stats(
             requested_read_names & quant_unassigned_read_names
         ),
     }
+
+    # Why rescue declined what it declined, locality named among the reasons. Without
+    # this the summary could only say how many reads came back, which cannot distinguish
+    # a rule that rejected nothing from a rule that is not running.
+    rescue_alignment_details = rescue_alignment_details or {}
+    alignment_rejections = rescue_alignment_details.get("alignment_rejections") or {}
+    stats["reads_rescue_declined_locality"] = int(
+        rescue_alignment_details.get("reads_locality_declined", 0) or 0
+    )
+    stats["reads_rescue_displaced_locality"] = int(
+        rescue_alignment_details.get("reads_locality_displaced", 0) or 0
+    )
+    stats["alignments_rescue_rejected_locality"] = int(
+        alignment_rejections.get("locality", 0) or 0
+    )
+    stats["rescue_alignment_rejections"] = ",".join(
+        f"{reason}={count}" for reason, count in sorted(alignment_rejections.items())
+    )
     if stats["reads_rescue_requested"] > 0:
         stats["frac_rescue_rescued_of_requested"] = (
             stats["reads_rescue_rescued"] / stats["reads_rescue_requested"]
@@ -4737,7 +4756,7 @@ def _build_rescue_unassigned_summary_stats(
 
     requested = max(1, stats["reads_rescue_requested"])
     logger.info(
-        "[%s%s] rescue_unassigned summary: total=%d rescue_requested=%d rescued=%d (%.3f of requested) unrescued=%d failed_genome_requested=%d quant_unassigned_requested=%d kept_genome=%d",
+        "[%s%s] rescue summary: total=%d offered=%d rescued=%d (%.3f of offered) unrescued=%d declined_locality=%d displaced_locality=%d failed_genome_offered=%d quant_unassigned_offered=%d kept_genome=%d rejections=%s",
         splice_graph.get_contig_acc(),
         splice_graph.get_contig_strand(),
         stats["reads_total"],
@@ -4745,9 +4764,12 @@ def _build_rescue_unassigned_summary_stats(
         stats["reads_rescue_rescued"],
         stats["reads_rescue_rescued"] / requested,
         stats["reads_rescue_unrescued"],
+        stats["reads_rescue_declined_locality"],
+        stats["reads_rescue_displaced_locality"],
         stats["reads_rescue_requested_failed_genome"],
         stats["reads_rescue_requested_unassigned_quant"],
         stats["reads_kept_genome"],
+        stats["rescue_alignment_rejections"] or "none",
     )
 
     return stats
@@ -4797,6 +4819,10 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         "frac_rescue_requested_failed_genome",
         "reads_rescue_requested_unassigned_quant",
         "frac_rescue_requested_unassigned_quant",
+        "reads_rescue_declined_locality",
+        "reads_rescue_displaced_locality",
+        "alignments_rescue_rejected_locality",
+        "rescue_alignment_rejections",
     ]
 
     row = {
@@ -4877,6 +4903,16 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         "frac_rescue_requested_unassigned_quant": "{:.6f}".format(
             _frac("reads_rescue_requested_unassigned_quant")
         ),
+        "reads_rescue_declined_locality": int(
+            stats.get("reads_rescue_declined_locality", 0) or 0
+        ),
+        "reads_rescue_displaced_locality": int(
+            stats.get("reads_rescue_displaced_locality", 0) or 0
+        ),
+        "alignments_rescue_rejected_locality": int(
+            stats.get("alignments_rescue_rejected_locality", 0) or 0
+        ),
+        "rescue_alignment_rejections": stats.get("rescue_alignment_rejections", ""),
     }
 
     with open(summary_path, "wt", newline="") as ofh:
@@ -4912,6 +4948,9 @@ def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
         "reads_rescue_unrescued",
         "reads_rescue_requested_failed_genome",
         "reads_rescue_requested_unassigned_quant",
+        "reads_rescue_declined_locality",
+        "reads_rescue_displaced_locality",
+        "alignments_rescue_rejected_locality",
     ]
     totals = {key: 0 for key in total_keys}
 
@@ -5246,6 +5285,7 @@ def run_quant_only(
             rescue_read_names = set(failed_genome_read_names)
             quant_unassigned_read_names = set()
             rescued_mps = []
+            rescue_alignment_details = None
             q_probe = Quantify(
                 run_EM,
                 LRAA_Globals.config["max_EM_iterations_quant_only"],
@@ -5290,17 +5330,20 @@ def run_quant_only(
                     contig_strand,
                     len(rescue_read_names),
                 )
-                rescued_mps = rescue_unassigned_reads_to_transcriptome(
-                    sg,
-                    input_transcripts,
-                    contig_seq_str,
-                    bam_file_for_quant,
-                    contig_acc,
-                    restrict_region_lend,
-                    restrict_region_rend,
-                    rescue_read_names,
-                    read_path_mapper=lraa_obj._map_read_to_graph,
-                    reads_without_graph_path=failed_genome_read_names,
+                rescued_mps, rescue_alignment_details = (
+                    rescue_unassigned_reads_to_transcriptome(
+                        sg,
+                        input_transcripts,
+                        contig_seq_str,
+                        bam_file_for_quant,
+                        contig_acc,
+                        restrict_region_lend,
+                        restrict_region_rend,
+                        rescue_read_names,
+                        read_path_mapper=lraa_obj._map_read_to_graph,
+                        reads_without_graph_path=failed_genome_read_names,
+                        return_read_details=True,
+                    )
                 )
 
             genome_tx_arb_stats = _build_rescue_unassigned_summary_stats(
@@ -5310,6 +5353,7 @@ def run_quant_only(
                 rescued_multipaths=rescued_mps,
                 failed_genome_read_names=failed_genome_read_names,
                 quant_unassigned_read_names=quant_unassigned_read_names,
+                rescue_alignment_details=rescue_alignment_details,
             )
             if arb_summary_path is not None:
                 _write_genome_tx_arb_summary(
