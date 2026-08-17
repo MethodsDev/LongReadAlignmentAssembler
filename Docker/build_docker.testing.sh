@@ -20,6 +20,26 @@ VERSIONED_TAG=${LRAA_VERSION}-testing
 # now do.  They differ only in the tags they write.
 LRAA_CO=`git rev-parse HEAD`
 
+# NEITHER tag above is stable enough to identify a benchmark run, and that is what
+# this third one is for.  ${VERSION} moves on every build; ${VERSIONED_TAG} moves
+# on every build that does not bump VERSION.txt, which during a release cycle is
+# most of them -- 0.22.0-testing named three different commits in one afternoon.
+# A result attributed to either is unreproducible the moment someone rebuilds.
+#
+# So: one tag per commit, never reused, because the commit is in the name.  A
+# benchmarking run pins THIS, records it beside its outputs, and stays
+# reattributable years later.  It is still -testing-lineage rather than a release
+# alias: the bare version tags remain the exclusive property of the release
+# scripts, for the reason given further down.
+#
+# Short SHA rather than full, because it is a docker tag a human retypes into an
+# inputs JSON; the immutability comes from never moving it, and the full SHA is
+# recorded in the image's own org.opencontainers.image.revision label, which the
+# loop below asserts against this build.  Resolve a tag to its digest with
+#   docker inspect --format '{{index .RepoDigests 0}}' <image>:<tag>
+# if a run needs a reference that cannot be re-tagged even by mistake.
+COMMIT_TAG=${LRAA_VERSION}-`git rev-parse --short=7 HEAD`
+
 REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
 
 # Must stay in step with the URL the Dockerfiles curl the checkout from; the
@@ -116,7 +136,8 @@ build_image() {
         --build-arg LRAA_VERSION=v${LRAA_VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
         -t ${REGISTRY}/${name}:${VERSION} \
-        -t ${REGISTRY}/${name}:${VERSIONED_TAG} .
+        -t ${REGISTRY}/${name}:${VERSIONED_TAG} \
+        -t ${REGISTRY}/${name}:${COMMIT_TAG} .
 }
 
 # Every image is built and checked before ANY of them is pushed.  Pushing inside
@@ -176,4 +197,18 @@ echo "lraa-core:${VERSION} reports ${REPORTED}, built from ${LRAA_CO}"
 for name in ${IMAGES}; do
     docker push ${REGISTRY}/${name}:${VERSION}
     docker push ${REGISTRY}/${name}:${VERSIONED_TAG}
+    docker push ${REGISTRY}/${name}:${COMMIT_TAG}
+done
+
+# The pin a benchmark run should record, printed rather than left to be
+# reconstructed: the tag names the commit, and the digest is what cannot be moved
+# even deliberately.  BENCHMARKING.md's WDLs default to :latest, so a run that
+# wants this code has to pass `docker` explicitly -- these are the strings to pass.
+echo ""
+echo "immutable pins for this build (commit ${LRAA_CO}):"
+for name in ${IMAGES}; do
+    DIGEST=`docker inspect ${REGISTRY}/${name}:${COMMIT_TAG} \
+        --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}<unpushed>{{end}}'`
+    echo "  ${REGISTRY}/${name}:${COMMIT_TAG}"
+    echo "      ${DIGEST}"
 done
