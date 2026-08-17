@@ -29,25 +29,46 @@ LRAA_CO=`git rev-parse HEAD`
 # by `git ls-remote` still 404s here for twenty to thirty seconds.  Failing on
 # the first attempt turns "you pushed a moment ago" into "you did not push",
 # which is the opposite of what this check is for.
-reachable=no
-for attempt in 1 2 3 4 5 6; do
-    if curl -sSf -o /dev/null -L https://github.com/${GITHUB_REPO}/archive/${LRAA_CO}.tar.gz; then
-        reachable=yes
-        break
-    fi
-    [ $attempt -lt 6 ] && sleep 10
-done
-if [ "${reachable}" != "yes" ]; then
+# The commit must be pushed before it is built.  Not because the build fetches it
+# -- it no longer does -- but because an image labelled with a commit nobody else
+# can obtain is not reproducible.  Checked locally: a commit reachable from any
+# remote-tracking branch is on the remote.  The previous check GET'd
+# https://github.com/<repo>/archive/<sha>.tar.gz to /dev/null, which downloaded
+# 88MB to answer a yes/no question, and retried it six times.
+git -C .. fetch --quiet origin || true
+if [ -z "`git -C .. branch -r --contains ${LRAA_CO} 2>/dev/null`" ]; then
     set +x
     echo "" >&2
-    echo "commit ${LRAA_CO} is not fetchable from ${GITHUB_REPO} after 6 attempts" >&2
-    echo "over ~50s.  The Dockerfiles fetch the LRAA checkout by SHA from GitHub, so" >&2
-    echo "this commit must be pushed before it can be built.  Push it and re-run:" >&2
+    echo "commit ${LRAA_CO} is not on any remote-tracking branch of ${GITHUB_REPO}." >&2
+    echo "Images are labelled with this SHA, so it must be pushed for the image to be" >&2
+    echo "reproducible by anyone else.  Push it and re-run:" >&2
     echo "" >&2
     echo "    git push origin HEAD" >&2
     echo "" >&2
     exit 1
 fi
+
+# The checkout is staged into the build context by git archive rather than fetched
+# from GitHub.  git archive reads content-addressed objects, so the tarball is
+# byte-determined by the SHA -- the same guarantee fetching by SHA gave -- without
+# the network, and without shipping testing/.  That matters more than it sounds:
+# the GitHub archive of this repo is 88MB because it CONTAINS testing/, and every
+# Dockerfile downloaded all of it and then ran `rm -rf LRAA/testing` to delete
+# ~84MB of it.  Four images plus the old reachability GET made it ~440MB per build
+# to install 1.2MB of content, and it put every build at the mercy of an endpoint
+# that rate-limits: two builds were lost to a 429 body being written into the
+# tarball and surfacing as "gzip: stdin: not in gzip format".
+#
+# The sidecar .sha is not decoration.  A stale tarball left in the context by an
+# interrupted build would otherwise be reused under a new LRAA_CO, producing an
+# image whose label names a commit it does not contain.  The Dockerfiles refuse
+# unless the two agree.
+rm -f lraa_checkout.tar.gz lraa_checkout.sha
+git -C .. archive --format=tar.gz --prefix=LRAA/ ${LRAA_CO} \
+    `git -C .. ls-tree --name-only ${LRAA_CO} | grep -vx testing` \
+    > lraa_checkout.tar.gz
+echo ${LRAA_CO} > lraa_checkout.sha
+echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (testing/ excluded)"
 
 REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
 

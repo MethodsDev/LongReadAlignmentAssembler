@@ -58,3 +58,7 @@ doc_audit/
 *.lraa_tabix.gtf.gz
 *.lraa_tabix.gtf.gz.tbi
 *.lraa_tabix.json
+
+# staged by Docker/build_docker.*.sh via git archive; regenerated every build
+Docker/lraa_checkout.tar.gz
+Docker/lraa_checkout.sha

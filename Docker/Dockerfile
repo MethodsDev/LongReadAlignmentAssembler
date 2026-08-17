@@ -240,11 +240,22 @@ LABEL org.opencontainers.image.revision=${LRAA_CO}
 # consults git, and a clone of this repository carries ~85MB of pack history.
 # testing/ holds ~155MB of fixture data that only the repo's own Makefiles read,
 # from a host checkout, so it is not shipped.
+#
+# The archive is now staged into the build context by the build script's
+# `git archive`, not fetched from GitHub. Same reasoning, one step further: the
+# GitHub archive of this repo is 88MB precisely BECAUSE it contains testing/, so
+# fetching it and then deleting testing/ downloaded ~84MB in order to discard it.
+# git archive reads content-addressed objects, so the tarball is still
+# byte-determined by the SHA, and testing/ is excluded before it is ever sent.
+COPY lraa_checkout.tar.gz lraa_checkout.sha /tmp/
 RUN if [ -z "${LRAA_CO}" ]; then echo "build arg LRAA_CO is required; the build scripts pass git rev-parse HEAD" >&2; exit 1; fi; \
-    wget -q https://github.com/MethodsDev/LongReadAlignmentAssembler/archive/${LRAA_CO}.tar.gz && \
-    tar xzf ${LRAA_CO}.tar.gz && \
-    mv LongReadAlignmentAssembler-${LRAA_CO} LRAA && \
-    rm -rf ${LRAA_CO}.tar.gz LRAA/testing
+    if [ "`cat /tmp/lraa_checkout.sha`" != "${LRAA_CO}" ]; then \
+        echo "the staged checkout is `cat /tmp/lraa_checkout.sha` but LRAA_CO is ${LRAA_CO}: the build context holds a stale tarball, so this image would be labelled with a commit it does not contain. Re-run the build script, which regenerates it." >&2; \
+        exit 1; \
+    fi; \
+    cd ${SRC} && \
+    tar xzf /tmp/lraa_checkout.tar.gz && \
+    rm -f /tmp/lraa_checkout.tar.gz /tmp/lraa_checkout.sha
 
 
 
