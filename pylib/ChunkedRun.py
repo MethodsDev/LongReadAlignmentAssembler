@@ -1430,6 +1430,34 @@ def run_extraction(plan, ckpt, outdir, rss_interval):
             "proceeding with the manifest's bam.".format(chunk_id),
             flush=True,
         )
+    # AND THE STATE THAT MUST NOT EXIST: reused AND dropping. The extractor
+    # withdraws reuse precisely to prevent it, so this is unreachable today -- but
+    # that is a property of the current extractor rather than of the contract, and
+    # the contract is what later stages rely on. A chunk naming the source while
+    # reporting a drop is the SILENT failure: verify_severed_accounting writes the
+    # dropped names to EXTRACTION_ONLY_DROPS so the baseline subtracts them, while
+    # the reused source still feeds them to the chunked arm, and the two arms then
+    # quantify different record sets with both reporting success.
+    #
+    # Checked here because here it is cheap and precise. verify_chunk_split would
+    # catch it a stage later -- reuse is strandless-only, so the split always runs
+    # -- but it surfaces as an unexplained record-count mismatch after the chunk
+    # has been split, rather than as the contradiction it is, before the expensive
+    # phase starts.
+    overhang = manifest["counts"].get("alignments_dropped_overhang", 0)
+    if reused and overhang:
+        raise PipelineError(
+            "chunk {} reports bam_reused_from_source=True and {} alignment(s) "
+            "dropped for overhang. Those cannot both hold: the manifest says the "
+            "chunk holds {} record(s) while naming the source bam, which "
+            "restricted to this contig still holds the dropped ones too. Every "
+            "stage reading a reused chunk would consume them, and the parity "
+            "baseline subtracts them, so the two arms would quantify different "
+            "record sets and both report success. Reuse is sound only for a chunk "
+            "that dropped nothing.".format(
+                chunk_id, overhang, manifest["counts"].get("alignments_emitted")
+            )
+        )
     return record, manifest
 
 
