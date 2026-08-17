@@ -1437,28 +1437,38 @@ def extract_partition(
         # WHAT THE RECURSION COSTS, so the next reader inherits a choice rather
         # than an accident. Re-entering the whole function re-does the cheap
         # artifacts as well as the bam: this chunk's mini fasta, its faidx and its
-        # mini GTF are written twice, and the region is scanned twice. On
-        # testing/sep_contigs that is 1,006,292 bytes across the 10 chunks that
-        # withdraw -- noise. On a whole-contig chunk of a large contig it is not
-        # noise: chr1 would rewrite roughly 249 MB of mini fasta [INFERRED from
-        # this control flow, never measured, because no remapped whole-genome
-        # corpus was to hand].
+        # mini GTF are written twice, and the region is scanned twice.
         #
-        # Kept anyway, and the reasoning is conditional rather than absolute. The
-        # cost is paid only by a chunk that withdraws, withdrawal needs an
-        # alignment past a contig end, and a well-formed aligner output has none:
-        # measured 0 such records in testing/single_contig, testing/sirvs and
-        # testing/ont_sep_contigs, against 453 of 2,507 in the remapped minigenome.
-        # So on every clean corpus this branch executes never and the duplicate
-        # write is zero.
+        # It is BOUNDED SMALL, and the bound is a property of what can reach this
+        # branch at all. Reuse is only requested for a chunk that spans its whole
+        # contig in ONE segment, so every large chromosome is excluded by the
+        # partition itself -- chr1 is cut into 25 segments at the shipped 10 Mb
+        # geometry and never requests reuse. MEASURED off the real whole-genome
+        # selections: of 475 chunks, 171 are whole-contig and the largest of those
+        # is chr16_KI270728v1_random at 1,872,759 bp. So the worst case for one
+        # withdrawn chunk on a whole human genome is a 1.9 MB fasta rewritten, and
+        # all 171 mini fastas together are 11.7 MB. On testing/sep_contigs the
+        # real figure is 1,006,292 bytes across the 10 chunks that withdraw.
+        #
+        # (An earlier version of this comment said 249 MB, reasoning that a
+        # whole-contig chunk of chr1 would rewrite chr1. That is unreachable for
+        # the reason above, and the figure was wrong by two orders of magnitude.
+        # Recorded because a scary wrong number in a comment outlives the person
+        # who wrote it.)
+        #
+        # And it is conditional on top of being small: the cost is paid only by a
+        # chunk that withdraws, withdrawal needs an alignment past a contig end,
+        # and a well-formed aligner output has none -- measured 0 such records in
+        # testing/single_contig, testing/sirvs and testing/ont_sep_contigs against
+        # 453 of 2,507 in the remapped minigenome. On every clean corpus this
+        # branch executes never and the duplicate write is zero.
         #
         # The narrower alternative is to factor the bam pass out and re-run only
         # that, paying one extra index-backed fetch instead of a second full
-        # extraction. It was declined because this function has already produced
-        # one subtle defect -- the very premise this block repairs -- and six
-        # obviously-correct lines are worth more here than a saved fasta write on
-        # an input nobody has yet benchmarked. If a remapped whole-genome corpus
-        # does turn up, measure it and then make the change.
+        # extraction. Declined: this function has already produced one subtle
+        # defect -- the very premise this block repairs -- and six obviously
+        # correct lines are worth more than 1.9 MB of avoided writes on malformed
+        # input. Nothing about that trade changes unless the bound above does.
         return extract_partition(
             genome_fa,
             bam,
