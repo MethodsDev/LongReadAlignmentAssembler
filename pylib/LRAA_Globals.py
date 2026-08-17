@@ -253,10 +253,42 @@ config = {
     "approx_MB_per_cut": 10,
     # TOTAL width of the search window centred on each target, in megabases --
     # the whole window, not the half-width. A target at T is searched over
-    # [T - wiggle/2, T + wiggle/2], so the default 1 means T +/- 0.5 Mb. Within
-    # that window the cut is placed where it severs the fewest retained primary
-    # alignments; the window is never widened to find a zero-crossing position.
+    # [T - wiggle/2, T + wiggle/2], so the default 1 means T +/- 0.5 Mb. This is
+    # the MAXIMUM radius, not the radius searched: the selector starts small and
+    # widens progressively, stopping as soon as a compliant position severs
+    # nothing.
+    #
+    # ABSOLUTE, and deliberately not derived from approx_MB_per_cut. THE
+    # MISREADING TO PREVENT is making this proportional to the spacing, which
+    # looks tidy because 10% of the shipped 10 Mb spacing is exactly this 1.
+    # Measured on HG002 PacBio Kinnex at 2 Mb spacing, de novo, counting the
+    # retained primary alignments the cuts sever:
+    #
+    #     contig | 20 kb window | 200 kb window | 1 Mb window
+    #     chr21  |          940 |           743 |          0
+    #     chr1   |         2598 |            87 |          0
+    #
+    # A proportional rule would give 200 kb at 2 Mb spacing, which still severs
+    # 743 alignments on chr21 where this absolute 1 Mb severs none. And chr1 and
+    # chr21 disagree 8.5-fold at identical parameters -- 87 against 743 -- because
+    # chr1 offers 6,258 read-free gap runs to chr21's 1,295. The distance a search
+    # must travel is a property of the sequence and the library in BASES: the
+    # closest zero-cost grid position sits up to 382.8 kb from a chr21 target and
+    # 348.3 kb from a chr1 one. It tracks the GENOME, not the geometry, so it
+    # cannot be expressed as a fraction of the chunk.
+    #
+    # Callers testing a finer spacing may of course pass a smaller window, and a
+    # run that then severs reads is not a malfunction: the selector still places
+    # the best position it can reach and reports what that cost.
     "approx_MB_per_cut_wiggle_window": 1,
+    # What a severed MULTI-EXON alignment costs cut selection, against 1 for a
+    # monoexonic one. Severing is a cost to minimise and never a veto -- at depth
+    # every base is covered, so a rule forbidding it would decline every cut --
+    # but the two are not worth the same: a spliced alignment carries junction
+    # evidence, which is what the splice graph's edges are built from, while a
+    # monoexonic one carries none. 10 makes one severed junction-bearing read
+    # outweigh nine severed monoexonic ones.
+    "chunk_severed_multiexon_weight": 10,
     #
     # The remaining chunking constants. Each of these previously existed as two
     # to four independent copies across LRAA, ChunkedRun, select_contig_cut_points

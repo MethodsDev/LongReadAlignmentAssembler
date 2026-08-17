@@ -78,18 +78,22 @@ component index, every chunk's mini contig carries the SAME contig name, so
 ``t:chr1:+:comp-1:iso-1`` is emitted by every chunk that has a first component
 and an unpatched concatenation fuses unrelated models into one record.
 
-The one substantive difference is at stage 2, and it is a REFUSAL. Quantifying,
-a cut that severs a read costs one read: it is dropped, counted and named, and
-the model set is unchanged. Discovering, a cut that severs a read can split a
-LOCUS -- measured on chr21, where forcing 2 Mb cuts severs 940 alignments, 17 of
-the 20 models then lost span a cut, and an eight-isoform gene whose first exon
-crosses a cut is replaced by two spurious MONOEXONIC models. So discovery passes
-``--require_zero_severed`` and the selector DECLINES any target whose window
-holds no position severing zero alignments, leaving a larger chunk rather than a
-bad cut. A run that placed fewer cuts than it was asked for SAYS so, per
-contig-strand, with the reason for each: ``cut_placement_report`` below, printed
-and stored in ``timing.json``. A partition that quietly shrank is a performance
-regression nobody can explain afterwards.
+Stage 2 is IDENTICAL in the two modes. An earlier revision had discovery pass
+``--require_zero_severed``, refusing any cut that severs a read; that contract
+was REJECTED, because as libraries deepen every base ends up covered and the rule
+would decline every cut -- silently disabling chunking on exactly the inputs that
+need it. Severing is a cost the selector minimises, weighted so a spliced
+alignment counts for ``--severed_multiexon_weight`` monoexonic ones, and a severed
+read in discovery is treated as in quantification: dropped, counted and named.
+
+Which makes the placement report load-bearing rather than decorative. Severing is
+now EXPECTED, so the report is the only place anyone sees what the partition cost:
+per contig-strand, targets requested, cuts placed, targets declined for the
+annotation (the only remaining decline reason), and per cut how many alignments it
+severs split monoexonic against multi-exon. Printed before the expensive phase and
+stored in ``timing.json`` and ``outputs.json``. A partition that quietly shrank,
+or quietly severed thousands of junctions, is a regression nobody can explain
+afterwards.
 
 MEASUREMENT NOTES. Wall time is measured around each subprocess. Peak RSS is
 sampled from ``/proc`` at ``--rss_sample_interval`` over the step's whole
@@ -619,7 +623,7 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
         # (the inputs, not a split), so neither mode can read the other's cuts.
         token = chain_token(
             "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}"
-            ".zerosev_{}_annot_{}".format(
+            ".mxw_{}_annot_{}".format(
                 tag,
                 args.approx_MB_per_cut,
                 args.approx_MB_per_cut_wiggle_window,
@@ -627,13 +631,15 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
                 args.margin,
                 effective_min_per_id,
                 effective_min_mapq,
-                # Two more things that decide the cut coordinates. Discovery
-                # forbids severing outright and so places DIFFERENT cuts from a
-                # quant run of the same geometry; and whether an annotation
-                # constrains placement at all is now a property of the run rather
-                # than a given. Neither was in the token, and a stale hit here
-                # reuses one mode's cuts under the other's name.
-                bool(args.discovery),
+                # Two more things that decide the cut COORDINATES. The severed
+                # multi-exon weight is the objective itself, so changing it moves
+                # cuts; and whether an annotation constrains placement at all is
+                # now a property of the run rather than a given. Neither was in
+                # the token, and a stale hit here reuses one geometry's cuts under
+                # another's name. ``discovery`` is deliberately NOT here: stage 2
+                # is identical in the two modes, so including it would force a
+                # needless re-selection rather than prevent a wrong reuse.
+                args.severed_multiexon_weight,
                 bool(args.gtf),
             ),
             parent_token,
@@ -676,13 +682,20 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
             str(args.margin),
             "--max_intron_length",
             str(args.max_intron_length),
+            # The severing cost's shape, and therefore the cut coordinates. Passed
+            # explicitly rather than left to the selector's config read so the
+            # value that chose the cuts is the value this run recorded.
+            "--severed_multiexon_weight",
+            str(args.severed_multiexon_weight),
             # Always, not on request.  A consumer deciding whether a chunk boundary
             # dissolved a read-sharing component needs the severed alignments
             # themselves: names cannot be fetched from a coordinate-indexed bam,
             # and a span cannot answer compatibility, which follows exon blocks.
             # Without it the only alternative is trusting per-chunk components
-            # silently, and the set is small by construction -- a cut severing many
-            # reads is one the selector rejects.
+            # silently.  The set is bounded by the placement report rather than by
+            # a refusal: the selector minimises severing but will take a dirty
+            # position when the window holds nothing better, so on deep inputs this
+            # bam is how anyone sees which reads it cost.
             "--severed_reads_bam",
             "{}.severed_reads.bam".format(prefix),
             # The values LRAA will apply, not the selector's own defaults: --HiFi
@@ -694,15 +707,9 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
             "--output_prefix",
             prefix,
         ]
-        if args.discovery:
-            # The one difference discovery makes to cut selection, and the whole
-            # point of the mode. A cut no retained alignment spans cannot split a
-            # locus: the splice graph's nodes are alignment blocks and its edges
-            # are N ops, so nothing crosses the position and the graph is already
-            # disconnected there. A cut that severs reads cuts THROUGH a locus,
-            # and measurably manufactures truncated and spurious models. Severing
-            # therefore stops being a price and becomes a refusal.
-            cmd.append("--require_zero_severed")
+        # Nothing mode-specific here: severing is priced the same way for
+        # quantification and for discovery, because a rule refusing to sever
+        # anything declines every cut once every base is covered.
         if key:
             # the bam is orientation-pure already, so --strand is omitted (every
             # record counts); the orientation for the region strings comes from
@@ -1879,7 +1886,7 @@ def merge_and_translate(outdir, units, discovery=False):
     return merged
 
 
-def verify_severed_accounting(cut_dir, chunks, discovery=False):
+def verify_severed_accounting(cut_dir, chunks):
     """The set the control subtracts must BE the set the chunks dropped.
 
     WHAT IS COUNTED, exactly. ``run_baseline`` prunes the whole-contig bam by the
@@ -1917,25 +1924,13 @@ def verify_severed_accounting(cut_dir, chunks, discovery=False):
         mentions += len(names)
         dropped.update(names)
 
-    if discovery and dropped:
-        # The hard constraint, enforced against what EXTRACTION actually did
-        # rather than against what selection predicted. Selection promised zero
-        # by refusing every severing position; if a read was nonetheless dropped,
-        # the two tools disagree about which alignments are retained, and in
-        # discovery that disagreement can split a locus and manufacture spurious
-        # monoexonic models. Refused here, before the expensive phase.
-        raise PipelineError(
-            "discovery chunking requires ZERO severed reads and extraction "
-            "dropped {} (e.g. {}). Cut selection ran with "
-            "--require_zero_severed, so it placed only positions it scored at "
-            "zero spanning alignments -- a nonzero drop here means selection "
-            "and extraction disagree about which alignments are retained, not "
-            "that the geometry was too tight. Do not relax this: a severed read "
-            "in discovery can split a locus.".format(
-                len(dropped), ", ".join(sorted(dropped)[:5])
-            )
-        )
-
+    # Deliberately NOT a place where a nonzero drop fails the run, in either mode.
+    # An earlier revision raised here whenever discovery dropped anything, because
+    # selection had promised zero by refusing every severing position. That promise
+    # is gone: severing is priced, not forbidden, so a nonzero drop is the expected
+    # outcome on any dense input. What still has to hold is the IDENTITY below --
+    # the reads selection named are the reads extraction dropped -- which is a
+    # statement about the two tools agreeing, not about the geometry being clean.
     if selected != dropped:
         missed = sorted(dropped - selected)
         unrealized = sorted(selected - dropped)
@@ -1961,9 +1956,6 @@ def verify_severed_accounting(cut_dir, chunks, discovery=False):
         "dropped_by_extraction": len(dropped),
         "per_chunk_drop_mentions": mentions,
         "sets_identical": True,
-        # Stated, not implied by the zero above: quant-only can legitimately
-        # report zero on a substrate whose cuts happened to be clean.
-        "zero_severed_required": bool(discovery),
     }
 
 
@@ -2219,10 +2211,10 @@ def build_parser():
         action="store_true",
         help="run isoform DISCOVERY per chunk instead of quantification against "
         "a supplied annotation: stage 5 drops --quant_only and stage 6 also "
-        "merges the per-chunk model gtfs. Cut selection is then run with "
-        "--require_zero_severed, because a severed read costs quantification "
-        "one read but can cost discovery a whole locus, so a target with no "
-        "clean position in its window is DECLINED and its chunks stay joined",
+        "merges the per-chunk model gtfs. Cut selection is IDENTICAL to "
+        "quant-only's -- severing is a cost the selector minimises, weighted by "
+        "--severed_multiexon_weight, and a severed read is dropped, counted and "
+        "named in both modes",
     )
     parser.add_argument(
         "--output_dir", default=None, help="output directory; created if absent"
@@ -2290,7 +2282,17 @@ def build_parser():
     parser.add_argument(
         "--approx_MB_per_cut_wiggle_window",
         type=float,
+        # The MAXIMUM search window, and an ABSOLUTE default: not derived from
+        # --approx_MB_per_cut. The config comment on the key carries the
+        # measurement that rules out a proportional form.
         default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
+    )
+    parser.add_argument(
+        "--severed_multiexon_weight",
+        type=int,
+        default=LRAA_Globals.config["chunk_severed_multiexon_weight"],
+        help="what a severed MULTI-EXON alignment costs cut selection, against 1 "
+        "for a monoexonic one. 1 makes the cost a plain alignment count",
     )
     parser.add_argument(
         "--depth_window",
@@ -2394,17 +2396,23 @@ def claim_pipeline_mode(ckpt, mode):
 
 
 def cut_placement_report(selections, discovery):
-    """What the partition was asked for, what it got, and why the difference.
+    """What the partition was asked for, what it got, and what it cost.
 
-    A run that quietly produced fewer chunks than its geometry implies is a
-    performance regression with no visible cause six months later. Discovery can
-    decline a cut ON PURPOSE -- that is what the zero-severed requirement is --
-    so the decline has to be as loud as a failure would be, and per target,
-    naming the reason, not as a single total at the end.
+    Two things a run must not do quietly. Produce fewer chunks than its geometry
+    implies -- six months later that is a performance regression with no visible
+    cause. And sever reads -- which is now the EXPECTED outcome rather than a
+    refused one, so this report is the only place anyone sees which reads a cut
+    cost, and whether they carried junctions.
 
-    Printed in BOTH modes. Quant-only has always been able to leave a target
-    unplaced (annotation-blocked window, minimum-span collision) and has always
-    only said so inside the selector's own report file.
+    Hence per contig-strand: requested, placed, declined for the ANNOTATION (the
+    only remaining decline reason -- a locus straddling a boundary is emitted by
+    neither chunk, and unlike a read it cannot be dropped and counted), otherwise
+    unplaced, tail-merged, chunks. Then per placed cut, the alignments it severs
+    split monoexonic against multi-exon, because a cut that dropped three reads of
+    depth and one that dropped three junctions are not the same event.
+
+    Printed in BOTH modes, and identical in both: severing is priced the same way
+    for quantification and for discovery.
 
     Returns ``(text, summary)``: the text is printed, the summary is stored in
     timing.json and outputs.json.
@@ -2414,11 +2422,10 @@ def cut_placement_report(selections, discovery):
     per_selection = []
     lines = [
         "",
-        "CUT PLACEMENT ({} mode): zero severed is {}".format(
-            "discovery" if discovery else "quant-only",
-            "REQUIRED, and a target with no clean position is DECLINED"
-            if discovery
-            else "preferred; a severed read is dropped, counted and named",
+        "CUT PLACEMENT ({} mode): severing is a COST, never a veto -- a severed "
+        "read is dropped, counted and named, and a multi-exon one costs more than "
+        "a monoexonic one. Only the annotation can decline a target.".format(
+            "discovery" if discovery else "quant-only"
         ),
         "",
     ]
@@ -2427,17 +2434,24 @@ def cut_placement_report(selections, discovery):
             counts = selection["counts"]
             label = "{}{}".format(selection["chrom"], key or "")
             unplaced = selection["unplaced_targets"]
-            declined = [i for i in unplaced if i.get("declined_zero_severed")]
-            other = [i for i in unplaced if not i.get("declined_zero_severed")]
+            declined = [i for i in unplaced if i.get("declined_annotation")]
+            other = [i for i in unplaced if not i.get("declined_annotation")]
+            severed = counts.get("alignments_dropped_at_cuts") or 0
+            monoexonic = counts.get("alignments_dropped_monoexonic") or 0
+            multiexon = counts.get("alignments_dropped_multiexon") or 0
             totals["targets"] += counts["targets"]
             totals["placed"] += counts["cuts_placed"]
             totals["declined"] += len(declined)
             totals["unplaced_other"] += len(other)
             totals["tail_merged"] += counts["targets_tail_merged"]
             totals["chunks"] += counts["segments"]
+            totals["severed"] += severed
+            totals["severed_monoexonic"] += monoexonic
+            totals["severed_multiexon"] += multiexon
             lines.append(
-                "  {:<14} {} requested, {} placed, {} declined for severing, {} "
-                "otherwise unplaced, {} tail-merged -> {} chunk(s)".format(
+                "  {:<14} {} requested, {} placed, {} declined for annotation, {} "
+                "otherwise unplaced, {} tail-merged -> {} chunk(s); {} alignment(s) "
+                "severed ({} monoexonic, {} multi-exon)".format(
                     label,
                     counts["targets"],
                     counts["cuts_placed"],
@@ -2445,8 +2459,26 @@ def cut_placement_report(selections, discovery):
                     len(other),
                     counts["targets_tail_merged"],
                     counts["segments"],
+                    severed,
+                    monoexonic,
+                    multiexon,
                 )
             )
+            for cut in selection["cuts"]:
+                if not cut.get("spanning_alignments_dropped"):
+                    continue
+                lines.append(
+                    "      cut at {} (target {}, {:+d}) severs {} alignment(s): {} "
+                    "monoexonic, {} multi-exon; searched {} bp".format(
+                        cut["position"],
+                        cut["target"],
+                        cut["offset_from_target"],
+                        cut["spanning_alignments_dropped"],
+                        cut.get("severed_monoexonic", 0),
+                        cut.get("severed_multiexon", 0),
+                        cut.get("search_radius"),
+                    )
+                )
             for item in declined:
                 lines.append(
                     "      DECLINED target {}: {}".format(
@@ -2466,10 +2498,24 @@ def cut_placement_report(selections, discovery):
                     "strand": selection["strand"],
                     "targets": counts["targets"],
                     "cuts_placed": counts["cuts_placed"],
-                    "cuts_declined_zero_severed": len(declined),
+                    "cuts_declined_annotation": len(declined),
                     "targets_unplaced_other": len(other),
                     "targets_tail_merged": counts["targets_tail_merged"],
                     "chunks": counts["segments"],
+                    "alignments_severed": severed,
+                    "alignments_severed_monoexonic": monoexonic,
+                    "alignments_severed_multiexon": multiexon,
+                    "cuts": [
+                        {
+                            "target": cut["target"],
+                            "position": cut["position"],
+                            "severed": cut["spanning_alignments_dropped"],
+                            "severed_monoexonic": cut.get("severed_monoexonic"),
+                            "severed_multiexon": cut.get("severed_multiexon"),
+                            "search_radius": cut.get("search_radius"),
+                        }
+                        for cut in selection["cuts"]
+                    ],
                     "declined": [
                         {
                             "target": item["target"],
@@ -2484,38 +2530,51 @@ def cut_placement_report(selections, discovery):
             )
     lines.append("")
     lines.append(
-        "  TOTAL {} cut(s) requested, {} placed, {} declined for severing, {} "
-        "otherwise unplaced, {} tail-merged -> {} chunk(s)".format(
+        "  TOTAL {} cut(s) requested, {} placed, {} declined for annotation, {} "
+        "otherwise unplaced, {} tail-merged -> {} chunk(s); {} alignment(s) severed "
+        "({} monoexonic, {} multi-exon)".format(
             totals["targets"],
             totals["placed"],
             totals["declined"],
             totals["unplaced_other"],
             totals["tail_merged"],
             totals["chunks"],
+            totals["severed"],
+            totals["severed_monoexonic"],
+            totals["severed_multiexon"],
         )
     )
     if totals["declined"]:
         lines.append(
-            "  {} cut(s) were DECLINED rather than placed badly. The chunks they "
-            "would have separated stay joined, so this run is slower than its "
-            "geometry suggests and that is the intended trade: a larger chunk is "
-            "slower, a cut through a locus is wrong.".format(totals["declined"])
+            "  {} cut(s) were DECLINED because the annotation left their windows "
+            "with no admissible position. The chunks they would have separated stay "
+            "joined, so this run is slower than its geometry suggests: a read can "
+            "be dropped and counted, a locus cannot.".format(totals["declined"])
+        )
+    if totals["severed"]:
+        lines.append(
+            "  {} alignment(s) were severed and are dropped, counted and named "
+            "(<cuts>.dropped_reads.tsv, <cuts>.severed_reads.bam). {} of them "
+            "carried junctions, which is the part that can cost a model.".format(
+                totals["severed"], totals["severed_multiexon"]
+            )
         )
     lines.append("")
 
     summary = {
         "mode": "discovery" if discovery else "quant_only",
-        "zero_severed_required": bool(discovery),
         "targets": totals["targets"],
         "cuts_placed": totals["placed"],
-        "cuts_declined_zero_severed": totals["declined"],
+        "cuts_declined_annotation": totals["declined"],
         "targets_unplaced_other": totals["unplaced_other"],
         "targets_tail_merged": totals["tail_merged"],
         "chunks": totals["chunks"],
+        "alignments_severed": totals["severed"],
+        "alignments_severed_monoexonic": totals["severed_monoexonic"],
+        "alignments_severed_multiexon": totals["severed_multiexon"],
         "per_selection": per_selection,
     }
     return "\n".join(lines), summary
-
 
 
 def format_plan(args, mode, sources, selections):
@@ -2649,6 +2708,15 @@ def run(args):
     elif args.cpu_budget < 1:
         raise PipelineError("cpu_budget must be >= 1")
 
+    # No wiggle resolution here: the MAXIMUM search window is an ABSOLUTE default,
+    # deliberately not derived from the spacing. See the config comment on
+    # approx_MB_per_cut_wiggle_window for the measurement behind that.
+    if args.severed_multiexon_weight < 1:
+        raise PipelineError(
+            "severed_multiexon_weight must be >= 1: 0 would make severing a "
+            "spliced alignment free"
+        )
+
     required = ["bam", "genome_fa", "output_dir"]
     if not args.discovery:
         required.append("gtf")
@@ -2689,6 +2757,7 @@ def run(args):
     timing["chunk_order"] = mode
     timing["dry_run"] = bool(args.dry_run)
     timing["discovery"] = bool(args.discovery)
+    timing["severed_multiexon_weight"] = args.severed_multiexon_weight
 
     for tool in (SEPARATE_BAM, SELECT_CUTS, EXTRACT_CHUNK, NORMALIZE_BAM, LRAA):
         if not os.path.exists(tool):
@@ -2821,9 +2890,7 @@ def run(args):
         # Before the expensive phase, not after it: this is the check that keeps
         # the control's pruned bam and the chunked arm's inputs the same record
         # set, and it needs nothing but the manifests and the cut selection.
-        timing["severed_read_accounting"] = verify_severed_accounting(
-            cut_dir, chunks, discovery=args.discovery
-        )
+        timing["severed_read_accounting"] = verify_severed_accounting(cut_dir, chunks)
         flush()
         print(
             "extracted {} chunk(s): {}".format(

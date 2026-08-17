@@ -304,7 +304,7 @@ def test_a_target_with_no_compliant_position_is_reported_not_skipped(tmp_path):
     unplaced = selection.unplaced[0]
     assert unplaced.grid_positions > 0
     assert unplaced.annotation_blocked == unplaced.grid_positions
-    assert "blocked" in unplaced.reason
+    assert "inside an annotated locus" in unplaced.reason
     assert 3000 not in [cut.target for cut in selection.cuts]
 
     payload = selector.selection_to_dict(selection)
@@ -1435,16 +1435,31 @@ def test_strandless_cli_writes_a_manifest_the_extractor_can_consume(tmp_path):
         assert manifest["strand_split_required"] is True
 
 
-# -- zero severed as a HARD constraint (discovery) ------------------------------
+# -- severing is a COST, never a veto ------------------------------------------
+#
+# An earlier revision made zero severed a HARD constraint in discovery: severing
+# positions were struck from the candidate set and a target whose window held none
+# was DECLINED. That contract was REJECTED, because at depth every base is covered
+# by some read, so the rule would decline every cut and silently disable chunking
+# exactly where it pays most. The tests below encode what replaced it: a severing
+# position IS selectable, the run proceeds, and what it severs is counted, split by
+# structure and named.
+#
+# The alignments here are SYNTHETIC on purpose, and the mono/spliced mix is chosen
+# per test. On real corpora it cannot be chosen: measured at 2 Mb spacing on HG002
+# PacBio Kinnex, 98-100% of severed alignments are spliced (chr21 20 kb: 14 mono
+# against 926 spliced; chr1 200 kb: 2 against 85), because spanning probability
+# scales with genomic span and a monoexonic read is a kb or two long. Real data
+# therefore cannot exercise the weighting crossover at all, in either direction.
 
 
 def _every_position_severed(tmp_path):
     """A window in which no grid position is free of spanning alignments.
 
     Target 3000 with a 200 bp window admits exactly 2900, 3000 and 3100; 3000
-    carries one read and the two edges carry three each. Zero-cost positions
-    exist OUTSIDE the window, and the window is never widened, so this is the
-    case where quantification takes the cheapest cut and discovery must refuse.
+    carries one read and the two edges carry three each. Zero-cost positions exist
+    OUTSIDE the maximum window, so this is the case where the selector has to take
+    a severing position and price it.
     """
 
     fixture = Fixture(tmp_path, length=5000)
@@ -1455,221 +1470,180 @@ def _every_position_severed(tmp_path):
     return fixture.build()
 
 
-def test_quantification_takes_the_cheapest_cut_and_pays_for_it(tmp_path):
-    """The contract that must NOT change: severing is priced, not refused."""
+class _RecordingBam:
+    """A pysam.AlignmentFile that records the intervals fetched through it.
+
+    Annulus-only fetching is invisible in the ANSWER -- re-scanning from the target
+    at every rung chooses the same position -- so the only way to hold the code to
+    it is to observe the fetches.
+    """
+
+    def __init__(self, path, mode, log):
+        self._bam = pysam.AlignmentFile(path, mode)
+        self._log = log
+
+    def fetch(self, chrom, start=None, end=None, **kwargs):
+        self._log.append((start, end))
+        return self._bam.fetch(chrom, start, end, **kwargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self._bam.close()
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._bam, name)
+
+
+def _record_fetches(monkeypatch):
+    log = []
+    monkeypatch.setattr(
+        selector, "_open_bam", lambda path, mode: _RecordingBam(path, mode, log)
+    )
+    return log
+
+
+def _search_fetches(log, depth_window=100):
+    """The scoring fetches, without the two-base per-cut name lookups."""
+
+    return [(start, end) for start, end in log if end - start > depth_window]
+
+
+def test_a_severing_position_is_selected_when_nothing_better_exists(tmp_path):
+    """The contract the rejected hard rule got wrong: price it, do not refuse it.
+
+    Every position in the window severs something. The cut is placed at the
+    cheapest one, the read it severs is dropped, counted and NAMED, and the run
+    goes on to produce two chunks. Under the rejected rule this target came back
+    declined with one chunk covering the whole contig.
+    """
 
     fixture = _every_position_severed(tmp_path)
 
     selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
 
-    assert selection.require_zero_severed is False
     assert [cut.position for cut in selection.cuts] == [3000]
     assert selection.cuts[0].spanning_dropped == 1
     assert selection.total_dropped == 1
     assert set(selection.dropped_read_names) == {"single"}
     assert not selection.unplaced
+    # the cut happened, so the contig really is partitioned
+    assert [(s.lend, s.rend) for s in selection.segments] == [(1, 3000), (3001, 5000)]
 
 
-def test_discovery_declines_the_cut_quantification_would_have_taken(tmp_path):
-    """Same window, same reads: the cut is refused and the chunk stays whole.
+def test_a_window_covered_end_to_end_still_places_its_cut(tmp_path):
+    """The regime the hard rule would have broken: no clean position anywhere.
 
-    A severed read costs quantification one read. It can cost discovery a locus:
-    the splice graph is cut through, and the two halves are reconstructed as
-    separate models. So the position is not admissible at any price.
+    One alignment covers the entire maximum window, which is what deep data looks
+    like everywhere. The selector must still cut, take the collateral, and say what
+    it took.
     """
 
-    fixture = _every_position_severed(tmp_path)
+    fixture = Fixture(tmp_path, length=20000)
+    fixture.add_read("blanket", "+", [(8500, 11500)])
+    fixture.build()
 
-    selection = _select(
-        fixture,
-        segment_span=3000,
-        wiggle=200,
-        minimum_span=1000,
-        require_zero_severed=True,
-    )
+    selection = _select(fixture, segment_span=10000, wiggle=2000, minimum_span=5000)
 
-    assert selection.require_zero_severed is True
-    assert selection.cuts == []
-    assert len(selection.unplaced) == 1
-    declined = selection.unplaced[0]
-    assert declined.target == 3000
-    assert declined.declined_zero_severed is True
-    # what the cheapest admissible-but-for-severing position would have cost
-    assert declined.best_spanning == 1
-
-    # the refusal is what makes zero true, not the substrate
-    assert selection.total_dropped == 0
-    assert not selection.dropped_read_names
-
-    # skip-and-widen: one chunk covering the whole contig, not a failed run
-    assert len(selection.segments) == 1
-    assert selection.segments[0].span == fixture.length
+    assert [cut.position for cut in selection.cuts] == [10000]
+    assert selection.cuts[0].spanning_dropped == 1
+    assert selection.cuts[0].severed_monoexonic == 1
+    assert selection.cuts[0].severed_multiexon == 0
+    assert not selection.unplaced
+    assert selection.dropped_read_names == {"blanket": [10000]}
 
 
-def test_the_hard_constraint_is_inert_where_a_clean_position_exists(tmp_path):
-    """Discovery and quantification must agree whenever agreement is possible.
+# -- the multi-exon weighting ---------------------------------------------------
 
-    Otherwise the mode would change cut placement everywhere rather than only
-    where it has to, and no chunked comparison between the two would mean
-    anything.
+
+def _mono_against_multiexon(tmp_path, monoexonic_count):
+    """Target 3000 severing one SPLICED read; 2900 severing N monoexonic reads.
+
+    The other three grid positions in the window carry 20 monoexonic reads each,
+    so neither of the two positions under test can win by default. Nothing here is
+    clean, which is the point: the choice between dirty positions is the decision
+    the weighting exists to make.
     """
 
     fixture = Fixture(tmp_path, length=5000)
-    for i in range(4):
-        fixture.spanning_read("crowd{}".format(i), 3000)
-    fixture.spanning_read("one_left", 2900)
-    fixture.spanning_read("one_right", 3100)
-    fixture.build()
-
-    soft = _select(fixture, segment_span=3000, wiggle=1000, minimum_span=1000)
-    hard = _select(
-        fixture,
-        segment_span=3000,
-        wiggle=1000,
-        minimum_span=1000,
-        require_zero_severed=True,
-    )
-
-    assert [c.position for c in soft.cuts] == [c.position for c in hard.cuts] == [2800]
-    assert soft.total_dropped == hard.total_dropped == 0
-    assert not hard.unplaced
+    # the spliced read's INTRON crosses 3000; its blocks do not reach it
+    fixture.add_read("spliced_at_3000", "+", [(2950, 2980), (3020, 3050)])
+    for i in range(monoexonic_count):
+        fixture.spanning_read("mono_2900_{}".format(i), 2900)
+    for position in (2800, 3100, 3200):
+        for i in range(20):
+            fixture.spanning_read("filler_{}_{}".format(position, i), position)
+    return fixture.build()
 
 
-def test_only_the_targets_that_cannot_be_placed_cleanly_are_declined(tmp_path):
-    """One blocked window among three does not cost the other two their cuts."""
+def test_one_severed_multiexon_read_loses_to_three_monoexonic_ones(tmp_path):
+    """K=10: a junction-bearing read is worth more than three reads of depth."""
 
-    fixture = Fixture(tmp_path, length=20000)
-    # blanket the middle target's whole window; leave the outer two clear
-    for position in (9900, 10000, 10100):
-        fixture.spanning_read("block_{}".format(position), position)
-    fixture.build()
+    fixture = _mono_against_multiexon(tmp_path, 3)
 
     selection = _select(
         fixture,
-        segment_span=5000,
-        wiggle=200,
-        minimum_span=2500,
-        require_zero_severed=True,
+        segment_span=3000,
+        wiggle=400,
+        minimum_span=1000,
+        multiexon_weight=10,
     )
 
-    assert selection.targets == [5000, 10000, 15000]
-    assert [cut.position for cut in selection.cuts] == [5000, 15000]
-    assert [item.target for item in selection.unplaced] == [10000]
-    assert selection.unplaced[0].declined_zero_severed is True
-    assert selection.total_dropped == 0
-    # the declined cut's two chunks are joined: 5000-15000 in one piece
-    assert [(s.lend, s.rend) for s in selection.segments] == [
-        (1, 5000),
-        (5001, 15000),
-        (15001, 20000),
-    ]
+    cut = selection.cuts[0]
+    assert cut.position == 2900, "3000 severs one spliced read, which costs 10"
+    assert (cut.severed_monoexonic, cut.severed_multiexon) == (3, 0)
+    assert cut.spanning_dropped == 3
+    assert cut.severed_weight == 3
 
 
-def test_a_declined_cut_is_reported_in_the_manifest_and_the_report(tmp_path):
-    """Silent degradation is the failure mode this mode could most easily hide.
+@pytest.mark.parametrize(
+    "weight,monoexonic_count,expected",
+    (
+        # unweighted: one alignment beats three, so the spliced read is chosen
+        (1, 3, 3000),
+        # K=10 moves the crossover to "more than ten monoexonic reads"
+        (10, 3, 2900),
+        (10, 9, 2900),
+        (10, 11, 3000),
+        # K=4 moves it again, and in the direction K predicts
+        (4, 3, 2900),
+        (4, 5, 3000),
+    ),
+)
+def test_the_weighting_crossover_moves_with_K(
+    tmp_path, weight, monoexonic_count, expected
+):
+    """The crossover sits at K monoexonic reads, and K is what moves it.
 
-    A partition that quietly produced fewer chunks than its geometry implies is
-    a performance regression with no visible cause, so the count, the reason and
-    the cost of the cheapest rejected position all have to be on the record.
+    Asserting the position rather than the cost, because the position is what the
+    pipeline consumes. A weight that were merely recorded and not applied would
+    pass a cost assertion and fail this one.
     """
 
-    fixture = _every_position_severed(tmp_path)
+    fixture = _mono_against_multiexon(tmp_path, monoexonic_count)
+
     selection = _select(
         fixture,
         segment_span=3000,
-        wiggle=200,
+        wiggle=400,
         minimum_span=1000,
-        require_zero_severed=True,
+        multiexon_weight=weight,
     )
 
-    payload = selector.selection_to_dict(selection)
-    assert payload["params"]["require_zero_severed"] is True
-    assert payload["counts"]["targets"] == 1
-    assert payload["counts"]["cuts_placed"] == 0
-    assert payload["counts"]["targets_declined_zero_severed"] == 1
-    entry = payload["unplaced_targets"][0]
-    assert entry["declined_zero_severed"] is True
-    assert entry["best_spanning_in_window"] == 1
-    assert "zero-severed" in entry["reason"]
-
-    report = selector.format_report(selection)
-    assert "ZERO SEVERED is a HARD constraint" in report
-    assert "1 declined for severing" in report
-    assert "DECLINED under the zero-severed requirement" in report
-    assert "the cheapest severs 1" in report
+    assert [cut.position for cut in selection.cuts] == [expected]
 
 
-def test_the_manifest_says_so_when_the_requirement_is_off(tmp_path):
-    """The flag is recorded either way, so a manifest states its own contract."""
+def test_a_severed_spliced_read_is_counted_by_its_reference_span(tmp_path):
+    """The invariant the whole cost rests on: the SPAN severs, not the blocks.
 
-    fixture = _every_position_severed(tmp_path)
-    selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
-
-    payload = selector.selection_to_dict(selection)
-    assert payload["params"]["require_zero_severed"] is False
-    assert payload["counts"]["targets_declined_zero_severed"] == 0
-    assert "ZERO SEVERED is a HARD constraint" not in selector.format_report(selection)
-
-
-def test_the_cli_flag_reaches_the_selection(tmp_path):
-    """--require_zero_severed is the pipeline's only lever on this; it must work."""
-
-    fixture = _every_position_severed(tmp_path)
-    prefix = str(tmp_path / "hard")
-
-    assert (
-        selector.main(
-            [
-                "--bam",
-                fixture.bam,
-                "--genome_fa",
-                fixture.fasta,
-                "--strand",
-                "+",
-                "--approx_MB_per_cut",
-                "0.003",
-                "--approx_MB_per_cut_wiggle_window",
-                "0.0002",
-                "--depth_window",
-                "100",
-                "--margin",
-                "0",
-                "--minimum_span",
-                "1000",
-                "--require_zero_severed",
-                "--output_prefix",
-                prefix,
-            ]
-        )
-        == 0
-    )
-
-    with open(prefix + ".cuts.json", "rt") as fh:
-        payload = json.load(fh)[0]
-    assert payload["params"]["require_zero_severed"] is True
-    assert payload["counts"]["cuts_placed"] == 0
-    assert payload["counts"]["targets_declined_zero_severed"] == 1
-    assert payload["counts"]["alignments_dropped_at_cuts"] == 0
-    with open(prefix + ".dropped_reads.txt", "rt") as fh:
-        assert fh.read().strip() == ""
-
-
-def test_an_intron_crossing_the_window_makes_every_position_inadmissible(tmp_path):
-    """The invariant the "no severed COMPONENT" guarantee rests on.
-
-    Zero spanning alignments is worth more than it looks: it implies no connected
-    component of the splice graph straddles the cut. Nodes come from alignment
-    blocks and edges from N ops, both of which lie inside an alignment's REFERENCE
-    span, so if no alignment's reference span contains the position then nothing on
-    the left shares a node or an edge with anything on the right, and connectivity
-    cannot cross. Damage to a model 87 kb from a cut -- observed on chr21, where a
-    cut inside a component's span repartitioned models nowhere near the boundary --
-    is therefore prevented by construction, not by a distance heuristic.
-
-    That argument fails if the cost counts aligned BLOCKS rather than the reference
-    span, because an intron would then cross a cut for free while its alignment's
-    two halves stayed connected through the N edge. This read has no aligned base
-    anywhere in the window; only its intron is there.
+    An alignment's reference span contains its introns, and the splice graph's
+    edges come from exactly those N ops. A cost that counted aligned BLOCKS would
+    let an intron cross a cut for free while the alignment's two halves stayed
+    connected through the edge -- so the cut would sever a locus and be scored as
+    clean. This read has no aligned base anywhere in the window; only its intron is
+    there. It must still be severed, and it must be classified MULTI-EXON.
     """
 
     fixture = Fixture(tmp_path, length=6000)
@@ -1681,18 +1655,363 @@ def test_an_intron_crossing_the_window_makes_every_position_inadmissible(tmp_pat
     for block in ((2000, 2100), (3900, 4000)):
         assert block[1] < window[0] or block[0] > window[1], "no aligned base here"
 
-    soft = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
-    assert [cut.position for cut in soft.cuts] == [3000]
-    assert soft.cuts[0].spanning_dropped == 1
-
-    hard = _select(
+    selection = _select(
         fixture,
         segment_span=3000,
         wiggle=200,
         minimum_span=1000,
-        require_zero_severed=True,
+        multiexon_weight=10,
     )
-    assert hard.cuts == []
-    assert hard.unplaced[0].declined_zero_severed is True
-    assert hard.unplaced[0].best_spanning == 1
-    assert hard.total_dropped == 0
+
+    cut = selection.cuts[0]
+    assert cut.position == 3000
+    assert cut.spanning_dropped == 1
+    assert (cut.severed_monoexonic, cut.severed_multiexon) == (0, 1)
+    assert cut.severed_weight == 10
+    assert selection.dropped_read_names == {"spliced": [3000]}
+
+
+def test_the_weight_must_not_make_a_spliced_read_cheaper(tmp_path):
+    """0 would make severing junctions free, which is the one thing K must not do."""
+
+    fixture = Fixture(tmp_path, length=5000).build()
+    with pytest.raises(selector.SelectionError):
+        _select(fixture, segment_span=3000, minimum_span=1000, multiexon_weight=0)
+
+
+# -- progressive expansion ------------------------------------------------------
+
+
+def _zero_only_beyond_2kb(tmp_path):
+    """One read covering target 20000 +/- 2 kb, in a 4 kb maximum radius.
+
+    Every position within 2 kb of the target severs it, so the search cannot stop
+    before the third rung; positions beyond 2 kb are clean. The nearest clean
+    positions are 17900 and 22100, tying on distance, and the lower coordinate wins.
+    """
+
+    fixture = Fixture(tmp_path, length=40000)
+    fixture.add_read("blanket", "+", [(17950, 22050)])
+    return fixture.build()
+
+
+def test_only_the_new_annulus_is_fetched_as_the_search_widens(
+    tmp_path, monkeypatch
+):
+    """The measured reason expansion is safe at depth, asserted on the FETCHES.
+
+    Re-scanning from the target at every rung returns the same answer, so a test on
+    the chosen position cannot tell the two apart. It is the I/O that differs, and
+    it differs in the wrong direction: the ladder's radii sum to more than the
+    window, so naive re-scanning costs MORE than never expanding at all. Here the
+    three rungs would cost 2002 + 4002 + 8002 = 14006 bases re-scanned against 8002
+    for one flat scan of the whole window; the annuli cost 7610.
+    """
+
+    fixture = _zero_only_beyond_2kb(tmp_path)
+    log = _record_fetches(monkeypatch)
+
+    selection = _select(
+        fixture,
+        segment_span=20000,
+        wiggle=8000,
+        minimum_span=10000,
+        count_denominator=False,
+        expansion_radii=(1000, 2000, 4000),
+    )
+
+    assert [cut.position for cut in selection.cuts] == [17900]
+    assert selection.cuts[0].search_radius == 4000
+
+    # rung 1 is one interval around the target; rungs 2 and 3 are two annuli each,
+    # and NONE of them re-reads the middle
+    assert _search_fetches(log) == [
+        (18999, 21001),  # radius 1000
+        (17999, 18901),  # radius 2000, left annulus
+        (21099, 22001),  # radius 2000, right annulus
+        (15999, 17901),  # radius 4000, left annulus
+        (22099, 24001),  # radius 4000, right annulus
+    ]
+    fetched = sum(end - start for start, end in _search_fetches(log))
+    assert fetched == 7610
+    # the flat cost of scanning the maximum window once, which annulus fetching
+    # must not exceed and naive re-scanning does exceed by 1.75x
+    assert fetched < 8002
+
+
+def test_the_search_stops_at_the_first_rung_that_severs_nothing(
+    tmp_path, monkeypatch
+):
+    """Early termination: one fetch, not five, when the target itself is clean."""
+
+    fixture = Fixture(tmp_path, length=40000)
+    # far from the window, so nothing in it is severed
+    fixture.spanning_read("elsewhere", 5000)
+    fixture.build()
+    log = _record_fetches(monkeypatch)
+
+    selection = _select(
+        fixture,
+        segment_span=20000,
+        wiggle=8000,
+        minimum_span=10000,
+        count_denominator=False,
+        expansion_radii=(1000, 2000, 4000),
+    )
+
+    assert [cut.position for cut in selection.cuts] == [20000]
+    assert selection.cuts[0].spanning_dropped == 0
+    assert selection.cuts[0].search_radius == 1000
+    assert _search_fetches(log) == [(18999, 21001)]
+
+
+def test_reaching_the_maximum_window_takes_the_best_available(tmp_path):
+    """No clean position at any radius: take the cheapest and own the collateral.
+
+    Distinct costs, so "best" means something: every position severs the blanket
+    read, and the target additionally severs four more. The answer is the cheapest
+    position nearest the target, at the maximum radius, with the severed reads
+    counted and named rather than the target declined.
+    """
+
+    fixture = Fixture(tmp_path, length=40000)
+    fixture.add_read("blanket", "+", [(15900, 24100)])
+    for i in range(4):
+        fixture.spanning_read("extra_{}".format(i), 20000)
+    fixture.build()
+
+    selection = _select(
+        fixture,
+        segment_span=20000,
+        wiggle=8000,
+        minimum_span=10000,
+        expansion_radii=(1000, 2000, 4000),
+    )
+
+    cut = selection.cuts[0]
+    assert cut.position == 19900, "20000 severs five, its neighbours one"
+    assert cut.spanning_dropped == 1
+    assert cut.search_radius == 4000, "the maximum was reached, not exceeded"
+    assert not selection.unplaced
+    assert set(selection.dropped_read_names) == {"blanket"}
+
+
+def test_expansion_reaches_the_position_a_flat_scan_would(tmp_path):
+    """Progressive search is an I/O strategy, not a different objective.
+
+    A single rung at the maximum radius IS the flat scan the module used to do.
+    Whatever the ladder, the position must match it.
+    """
+
+    fixture = _zero_only_beyond_2kb(tmp_path)
+
+    common = dict(segment_span=20000, wiggle=8000, minimum_span=10000)
+    laddered = _select(fixture, expansion_radii=(1000, 2000, 4000), **common)
+    flat = _select(fixture, expansion_radii=(4000,), **common)
+
+    assert [c.position for c in laddered.cuts] == [c.position for c in flat.cuts]
+    assert laddered.total_dropped == flat.total_dropped
+
+
+def test_the_rung_ladder_never_exceeds_the_maximum_and_always_reaches_it():
+    """The window width is a promise: the last rung is the maximum, exactly."""
+
+    assert selector.expansion_rungs(500000) == [5000, 25000, 100000, 250000, 500000]
+    # clipped, and the ladder stops as soon as it reaches the maximum
+    assert selector.expansion_rungs(30000) == [5000, 25000, 30000]
+    assert selector.expansion_rungs(3000) == [3000]
+    assert selector.expansion_rungs(0) == [0]
+    # beyond the last default radius the maximum is still reached in one more step
+    assert selector.expansion_rungs(700000)[-1] == 700000
+
+
+def test_an_annulus_never_re_covers_what_the_inner_radius_already_did():
+    """The arithmetic annulus fetching rests on, checked without a bam."""
+
+    assert selector.annulus_intervals(1000, None, 100, 1, 5000) == [(900, 1100)]
+    assert selector.annulus_intervals(1000, 100, 300, 1, 5000) == [
+        (700, 899),
+        (1101, 1300),
+    ]
+    # clipped to the window, and an interval the window already excludes is dropped
+    assert selector.annulus_intervals(1000, 100, 300, 950, 1150) == [(1101, 1150)]
+    assert selector.annulus_intervals(1000, 300, 300, 1, 5000) == []
+
+
+# -- the maximum window is ABSOLUTE --------------------------------------------
+
+
+@pytest.mark.parametrize("spacing_MB", (0.2, 2, 10, 20, 100))
+def test_the_maximum_window_does_not_track_the_spacing(tmp_path, spacing_MB):
+    """The default window is 1 Mb at every spacing, and deliberately so.
+
+    A proportional rule looks tidy because 10% of the shipped 10 Mb spacing is
+    exactly the 1 Mb default, and it is wrong: at 2 Mb spacing it would give
+    200 kb, which still severs 743 alignments on chr21 where 1 Mb severs none,
+    and chr1 and chr21 disagree 8.5-fold at identical parameters (87 against 743).
+    The distance to a read-free position is a property of the genome and the
+    library in BASES. This test exists to fail if anyone couples the two.
+    """
+
+    fixture = Fixture(tmp_path, length=1000).build()
+
+    selection = _select(
+        fixture, segment_span=int(spacing_MB * selector.MB), minimum_span=1000
+    )
+
+    assert selection.wiggle == 1 * selector.MB
+
+
+def test_an_explicit_maximum_window_is_honoured_exactly(tmp_path):
+    """Testing a finer spacing means passing a smaller window, and getting it."""
+
+    fixture = Fixture(tmp_path, length=1000).build()
+
+    selection = _select(
+        fixture, segment_span=2 * selector.MB, wiggle=20000, minimum_span=1000
+    )
+
+    assert selection.wiggle == 20000
+
+
+# -- the annotation is the only remaining decline reason ------------------------
+
+
+def test_a_fully_blocked_window_is_declined_for_the_annotation(tmp_path):
+    """A read can be dropped and counted. A locus cannot, so this stays hard.
+
+    ``genes_contained`` emits a gene whole or not at all, so a locus straddling a
+    boundary is emitted by NEITHER neighbouring chunk. A target whose whole window
+    is inside an annotated locus is therefore declined, its chunks stay joined, and
+    that is accepted behaviour rather than a defect.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    fixture.add_transcript("g1", "t1", "+", [(2500, 3500)])
+    fixture.spanning_read("noise", 3000)
+    fixture.build()
+
+    selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
+
+    assert selection.cuts == []
+    assert len(selection.unplaced) == 1
+    declined = selection.unplaced[0]
+    assert declined.target == 3000
+    assert declined.declined_annotation is True
+    assert declined.best_spanning is None, "no admissible position was costed"
+    assert selection.total_dropped == 0
+    # the two chunks it would have separated stay joined
+    assert len(selection.segments) == 1
+    assert selection.segments[0].span == fixture.length
+
+    payload = selector.selection_to_dict(selection)
+    assert payload["counts"]["targets_declined_annotation"] == 1
+    assert payload["unplaced_targets"][0]["declined_annotation"] is True
+    report = selector.format_report(selection)
+    assert "1 declined for annotation" in report
+    assert "DECLINED for the annotation" in report
+
+
+def test_a_severing_cut_is_never_reported_as_declined(tmp_path):
+    """The rejected contract's fingerprint, asserted absent."""
+
+    fixture = _every_position_severed(tmp_path)
+    selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
+
+    payload = selector.selection_to_dict(selection)
+    assert payload["counts"]["cuts_placed"] == 1
+    assert payload["counts"]["targets_unplaced"] == 0
+    assert payload["counts"]["targets_declined_annotation"] == 0
+    assert payload["counts"]["alignments_dropped_at_cuts"] == 1
+
+
+# -- the accounting a reader sees ----------------------------------------------
+
+
+def test_the_manifest_and_report_split_severing_by_structure(tmp_path):
+    """Severing is expected now, so the report is the only place its cost shows.
+
+    A bare total cannot distinguish a cut that dropped three reads of depth from
+    one that dropped three junctions, and those are not the same event.
+    """
+
+    fixture = Fixture(tmp_path, length=6000)
+    fixture.add_read("spliced_a", "+", [(2900, 2960), (3040, 3100)])
+    fixture.spanning_read("mono_a", 3000)
+    fixture.spanning_read("mono_b", 3000)
+    fixture.build()
+
+    selection = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=0,
+        minimum_span=1000,
+        multiexon_weight=10,
+    )
+
+    cut = selection.cuts[0]
+    assert cut.position == 3000
+    assert (cut.severed_monoexonic, cut.severed_multiexon) == (2, 1)
+    assert cut.spanning_dropped == 3
+    assert cut.severed_weight == 12
+
+    payload = selector.selection_to_dict(selection)
+    assert payload["params"]["severed_multiexon_weight"] == 10
+    assert payload["cuts"][0]["severed_monoexonic"] == 2
+    assert payload["cuts"][0]["severed_multiexon"] == 1
+    assert payload["cuts"][0]["severed_weighted_cost"] == 12
+    assert payload["counts"]["alignments_dropped_monoexonic"] == 2
+    assert payload["counts"]["alignments_dropped_multiexon"] == 1
+    assert payload["counts"]["severed_weighted_cost_at_cuts"] == 12
+
+    report = selector.format_report(selection)
+    assert "severed multi-exon weight 10" in report
+    assert "severing is a COST, never a veto" in report
+    assert "2 monoexonic and 1 multi-exon, weighted cost 12" in report
+
+
+def test_the_cli_flag_reaches_the_selection(tmp_path):
+    """--severed_multiexon_weight is the pipeline's lever on the cost; it must work."""
+
+    fixture = _mono_against_multiexon(tmp_path, 3)
+
+    def run(weight):
+        prefix = str(tmp_path / "w{}".format(weight))
+        assert (
+            selector.main(
+                [
+                    "--bam",
+                    fixture.bam,
+                    "--genome_fa",
+                    fixture.fasta,
+                    "--strand",
+                    "+",
+                    "--approx_MB_per_cut",
+                    "0.003",
+                    "--approx_MB_per_cut_wiggle_window",
+                    "0.0004",
+                    "--depth_window",
+                    "100",
+                    "--margin",
+                    "0",
+                    "--minimum_span",
+                    "1000",
+                    "--severed_multiexon_weight",
+                    str(weight),
+                    "--output_prefix",
+                    prefix,
+                ]
+            )
+            == 0
+        )
+        with open(prefix + ".cuts.json", "rt") as fh:
+            return json.load(fh)[0]
+
+    weighted = run(10)
+    assert weighted["params"]["severed_multiexon_weight"] == 10
+    assert weighted["cuts"][0]["position"] == 2900
+    assert weighted["counts"]["alignments_dropped_monoexonic"] == 3
+
+    unweighted = run(1)
+    assert unweighted["cuts"][0]["position"] == 3000
+    assert unweighted["counts"]["alignments_dropped_multiexon"] == 1

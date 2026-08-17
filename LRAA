@@ -1168,11 +1168,12 @@ def main():
         "mini contig and a worker then holds only that chunk's sequence rather "
         "than the whole chromosome's. With --quant_only a --gtf is required. "
         "Without --quant_only this runs chunked DISCOVERY -- de novo when no "
-        "--gtf is given, ref-guided when one is -- and every cut is then "
-        "required to sever zero reads, so a cut that cannot be placed cleanly "
-        "is declined and its chunks stay joined. Without this flag LRAA runs "
-        "exactly as it always has, and --contig/--region are unaffected either "
-        "way",
+        "--gtf is given, ref-guided when one is. Cut placement is the same in "
+        "both modes: the alignments a cut severs are a cost the selector "
+        "minimises, weighted by --chunk_severed_multiexon_weight, and the reads "
+        "it does sever are dropped, counted and named. Without this flag LRAA "
+        "runs exactly as it always has, and --contig/--region are unaffected "
+        "either way",
     )
     contig_group_setting.add_argument(
         "--strandless_chunks",
@@ -1195,8 +1196,19 @@ def main():
         "--approx_MB_per_cut_wiggle_window",
         type=float,
         default=LRAA_Globals.config["approx_MB_per_cut_wiggle_window"],
-        help="--chunk: TOTAL width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched over [T - w/2, T + w/2] (default: {})".format(
+        help="--chunk: MAXIMUM total width in MEGABASES of the search window centred on each target cut, not the half-width; a target at T is searched outward from T up to [T - w/2, T + w/2], stopping early on a position that severs nothing. ABSOLUTE, not a fraction of --approx_MB_per_cut (default: {})".format(
             LRAA_Globals.config["approx_MB_per_cut_wiggle_window"]
+        ),
+    )
+    contig_group_setting.add_argument(
+        "--chunk_severed_multiexon_weight",
+        type=int,
+        default=LRAA_Globals.config["chunk_severed_multiexon_weight"],
+        help="--chunk: what a severed MULTI-EXON alignment costs cut selection, "
+        "against 1 for a monoexonic one. A spliced alignment carries the junction "
+        "evidence a splice graph's edges come from; a monoexonic one carries "
+        "depth. 1 makes the cost a plain alignment count (default: {})".format(
+            LRAA_Globals.config["chunk_severed_multiexon_weight"]
         ),
     )
     contig_group_setting.add_argument(
@@ -1390,6 +1402,9 @@ def main():
     LRAA_Globals.config["approx_MB_per_cut"] = args.approx_MB_per_cut
     LRAA_Globals.config["approx_MB_per_cut_wiggle_window"] = (
         args.approx_MB_per_cut_wiggle_window
+    )
+    LRAA_Globals.config["chunk_severed_multiexon_weight"] = (
+        args.chunk_severed_multiexon_weight
     )
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
@@ -2842,30 +2857,43 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
 def _run_chunked_mode(args):
     """Run the chunked pipeline, then leave its results where LRAA's would be.
 
-    Quant-only and discovery are both reachable. What separates them is what a
-    chunk boundary is allowed to COST, and the pipeline enforces that difference
-    at cut selection rather than here.
+    Quant-only and discovery are both reachable, and cut selection is the SAME in
+    both. What differs is only what stage 5 runs and what stage 6 merges.
 
     QUANT-ONLY. A chunk quantifies a supplied annotation, so the only thing a
     boundary must not split is a locus -- ``genes_contained`` emits a gene whole
     or not at all. A read the boundary severs is dropped, counted and named, and
-    the model set is unchanged. Severing is a priced cost.
+    the model set is unchanged.
 
     DISCOVERY, with or without ``--gtf``. The models come FROM the reads, so a
-    boundary that severs a read can split a locus. Measured on chr21 (HG002
-    PacBio Kinnex): forcing 2 Mb cuts severs 940 alignments, 17 of the 20 models
-    then lost span a cut, and an eight-isoform gene whose first exon crosses a
-    cut is replaced by two spurious MONOEXONIC fragments. Discovery therefore
-    runs cut selection with ``--require_zero_severed``, and a target that cannot
-    be placed cleanly is DECLINED -- the chunk stays larger rather than the cut
-    being taken. Declined cuts are reported per target, with the reason.
+    boundary that severs a read can split a locus, and that damage is real:
+    measured on chr21 (HG002 PacBio Kinnex), forcing 2 Mb cuts into a 20 kb window
+    severs 940 alignments, 17 of the 20 models then lost span a cut, and an
+    eight-isoform gene whose first exon crosses a cut is replaced by two spurious
+    MONOEXONIC fragments.
 
-    Zero severed is also worth more than it says: because the cost counts an
-    alignment's whole REFERENCE span, introns included, a position no alignment
-    spans cannot be straddled by any splice-graph COMPONENT either -- nodes are
-    blocks and edges are N ops, both inside that span, so connectivity cannot
-    cross. That matters because boundary damage was measured at component
-    granularity, on a model 87 kb from its cut.
+    An earlier revision answered that by REFUSING to sever anything in discovery,
+    declining any cut that could not be placed cleanly. That was rejected. As
+    libraries deepen, every base ends up covered by a read, so the refusal would
+    decline every cut and silently disable chunking on exactly the inputs that
+    need it -- and it cannot be tuned out of that regime, because the problem is
+    not a window that is too small but a genome with no clean position in it. The
+    same measurement read the other way says the window was starved 40-fold: at
+    the shipped 1 Mb window those cuts sever ZERO alignments on both chr21 and
+    chr1.
+
+    So severing is a COST. The selector searches outward from each target, stops
+    as soon as a position severs nothing, and on reaching the maximum window takes
+    the best position available; a severed multi-exon alignment costs
+    ``--chunk_severed_multiexon_weight`` monoexonic ones, because a spliced read
+    carries the junctions the splice graph's edges come from. What it severs is
+    dropped, counted, named and REPORTED per cut, split by structure, before the
+    expensive phase -- the placement report is the only place that cost is visible
+    now that it is expected rather than refused.
+
+    The ANNOTATION is still a hard block, and is the only thing that can decline a
+    cut: a read can be dropped and accounted for, a locus straddling a boundary is
+    emitted by neither neighbour.
 
     Discovery is NOT free of partition dependence even so, and saying so is part
     of offering the mode: ``pylib/IsoformReadRescue.py`` is scoped to a whole
@@ -2926,6 +2954,7 @@ def _run_chunked_mode(args):
         strandless_chunks=args.strandless_chunks,
         approx_MB_per_cut=args.approx_MB_per_cut,
         approx_MB_per_cut_wiggle_window=args.approx_MB_per_cut_wiggle_window,
+        severed_multiexon_weight=args.chunk_severed_multiexon_weight,
         depth_window=args.chunk_depth_window,
         margin=args.chunk_margin,
         max_intron_length=args.max_intron_length,
@@ -2937,15 +2966,20 @@ def _run_chunked_mode(args):
     placement = outputs.get("cut_placement") or {}
     if placement:
         # The partition, at the level a user of LRAA sees. The pipeline printed
-        # the per-target detail; this is the one line that says whether the run
-        # got the geometry it asked for.
+        # the per-target detail; this is the one line that says whether the run got
+        # the geometry it asked for and what the boundaries cost. Severing is
+        # expected now, so it belongs in the summary rather than only in the detail.
         logger.info(
             "chunked mode: %d cut(s) requested, %d placed, %d declined for "
-            "severing -> %d chunk(s)",
+            "annotation -> %d chunk(s); %d alignment(s) severed (%d monoexonic, "
+            "%d multi-exon), dropped, counted and named",
             placement.get("targets", 0),
             placement.get("cuts_placed", 0),
-            placement.get("cuts_declined_zero_severed", 0),
+            placement.get("cuts_declined_annotation", 0),
             placement.get("chunks", 0),
+            placement.get("alignments_severed", 0),
+            placement.get("alignments_severed_monoexonic", 0),
+            placement.get("alignments_severed_multiexon", 0),
         )
 
     output_prefix = _append_lraa_output_mode_suffix(

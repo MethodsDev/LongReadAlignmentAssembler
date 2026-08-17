@@ -352,12 +352,14 @@ def test_the_output_suffixes_are_the_ones_lraa_actually_writes():
     assert ChunkedRun.lraa_output_suffix(True, "a.gtf") == "LRAA.ref-guided"
 
 
-def test_discovery_asks_cut_selection_to_refuse_severing(tmp_path, monkeypatch):
-    """The gate is set in ONE place, and only discovery sets it.
+def test_cut_selection_is_identical_in_both_modes(tmp_path, monkeypatch):
+    """Discovery must not ask the selector for a different cut rule.
 
-    Checked on the command line stage 2 builds, because that command line is the
-    only thing that reaches the selector: a discovery run whose stage 2 omitted
-    the flag would take least-bad cuts and look entirely successful.
+    An earlier revision passed ``--require_zero_severed`` here and only here. That
+    contract was rejected -- at depth every base is covered, so refusing to sever
+    declines every cut -- so the two modes now differ in what stage 5 runs and in
+    NOTHING about placement. Checked on the command line stage 2 builds, because
+    that command line is the only thing that reaches the selector.
     """
 
     recorded = []
@@ -387,16 +389,94 @@ def test_discovery_asks_cut_selection_to_refuse_severing(tmp_path, monkeypatch):
         )
         ChunkedRun.stage_select_cuts(args, ckpt, outdir, {}, sources, 0.5)
         assert len(recorded) == 1
-        assert ("--require_zero_severed" in recorded[0]) is discovery
+        assert "--require_zero_severed" not in recorded[0]
+        # the severing cost's shape is passed in both modes, and it is the same
+        weight = recorded[0][recorded[0].index("--severed_multiexon_weight") + 1]
+        assert weight == str(LRAA_Globals.config["chunk_severed_multiexon_weight"])
         assert ("--gtf" in recorded[0]) is (gtf is not None)
 
 
-def test_discovery_refuses_a_read_that_extraction_actually_severed(tmp_path):
-    """Zero severed is enforced against what happened, not only what was planned.
+def test_the_selector_command_carries_the_weight_it_is_given(tmp_path, monkeypatch):
+    """The weight decides the cut coordinates, so it must not be a config read.
 
-    Selection promised zero by striking every severing position, so a nonzero
-    drop at extraction means the two tools disagree about which alignments are
-    retained -- and in discovery that disagreement can split a locus.
+    A selector left to read its own config would place cuts under one weight while
+    the run recorded another.
+    """
+
+    recorded = []
+
+    def fake_run_step(name, cmd, log_path, cwd, rss_interval, append=True):
+        recorded.append(cmd)
+        prefix = cmd[cmd.index("--output_prefix") + 1]
+        with open(prefix + ".cuts.json", "wt") as fh:
+            json.dump([], fh)
+        return {"step": name, "cmd": cmd}
+
+    monkeypatch.setattr(ChunkedRun, "run_step", fake_run_step)
+
+    outdir = str(tmp_path / "out")
+    os.makedirs(os.path.join(outdir, "logs"))
+    ckpt = ChunkedRun.Checkpoints(os.path.join(outdir, "__ckpt"))
+    sources = [("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")]
+    args = ChunkedRun.default_args(
+        bam="b",
+        genome_fa="g",
+        gtf=None,
+        output_dir=outdir,
+        discovery=True,
+        severed_multiexon_weight=3,
+    )
+
+    ChunkedRun.stage_select_cuts(args, ckpt, outdir, {}, sources, 0.5)
+
+    cmd = recorded[0]
+    assert cmd[cmd.index("--severed_multiexon_weight") + 1] == "3"
+
+
+def test_the_weight_is_in_the_stage_2_cache_token(tmp_path, monkeypatch):
+    """It moves the cuts, so a stale hit would serve one geometry as another.
+
+    The values are baked into the sentinel, and a token that omitted the objective
+    would turn a changed weight into a cache HIT that reuses the old coordinates
+    while the run asserts the new ones.
+    """
+
+    def fake_run_step(name, cmd, log_path, cwd, rss_interval, append=True):
+        prefix = cmd[cmd.index("--output_prefix") + 1]
+        with open(prefix + ".cuts.json", "wt") as fh:
+            json.dump([], fh)
+        return {"step": name, "cmd": cmd}
+
+    monkeypatch.setattr(ChunkedRun, "run_step", fake_run_step)
+    sources = [("", ChunkedRun.STRANDLESS_TAG, "raw.bam", "root")]
+
+    tokens = []
+    for weight in (10, 3):
+        outdir = str(tmp_path / "out{}".format(weight))
+        os.makedirs(os.path.join(outdir, "logs"))
+        ckpt = ChunkedRun.Checkpoints(os.path.join(outdir, "__ckpt"))
+        args = ChunkedRun.default_args(
+            bam="b",
+            genome_fa="g",
+            gtf=None,
+            output_dir=outdir,
+            discovery=True,
+            severed_multiexon_weight=weight,
+        )
+        _, _, cuts_tokens = ChunkedRun.stage_select_cuts(
+            args, ckpt, outdir, {}, sources, 0.5
+        )
+        tokens.append(cuts_tokens[""])
+
+    assert tokens[0] != tokens[1]
+
+
+def test_a_severed_read_no_longer_fails_the_run(tmp_path):
+    """The rejected contract raised here. Severing is now the expected outcome.
+
+    What still has to hold is the IDENTITY: the reads selection NAMED are the reads
+    extraction DROPPED. That is a statement about two tools agreeing, and it is
+    what the parity comparison's pruned baseline depends on.
     """
 
     cut_dir = tmp_path / "cuts"
@@ -404,79 +484,108 @@ def test_discovery_refuses_a_read_that_extraction_actually_severed(tmp_path):
     (cut_dir / "plus.dropped_reads.txt").write_text("readA\n")
     chunks = [{"manifest": {"dropped_read_names": ["readA"]}}]
 
-    # quant-only: the drop is named, accounted for, and allowed. Unchanged.
-    quant = ChunkedRun.verify_severed_accounting(str(cut_dir), chunks)
-    assert quant["severed_reads"] == 1
-    assert quant["sets_identical"] is True
-    assert quant["zero_severed_required"] is False
+    accounting = ChunkedRun.verify_severed_accounting(str(cut_dir), chunks)
 
-    with pytest.raises(ChunkedRun.PipelineError) as err:
-        ChunkedRun.verify_severed_accounting(str(cut_dir), chunks, discovery=True)
-    assert "requires ZERO severed" in str(err.value)
-    assert "readA" in str(err.value)
+    assert accounting["severed_reads"] == 1
+    assert accounting["sets_identical"] is True
+    assert "zero_severed_required" not in accounting
 
 
-def test_discovery_accepts_a_partition_that_severed_nothing(tmp_path):
+def test_a_disagreement_between_selection_and_extraction_still_fails(tmp_path):
+    """Removing the severing veto must not remove the accounting check with it."""
+
     cut_dir = tmp_path / "cuts"
     cut_dir.mkdir()
-    (cut_dir / "plus.dropped_reads.txt").write_text("")
-    chunks = [{"manifest": {"dropped_read_names": []}}]
+    (cut_dir / "plus.dropped_reads.txt").write_text("readA\n")
+    chunks = [{"manifest": {"dropped_read_names": ["readB"]}}]
 
-    accounting = ChunkedRun.verify_severed_accounting(
-        str(cut_dir), chunks, discovery=True
-    )
-    assert accounting["severed_reads"] == 0
-    assert accounting["zero_severed_required"] is True
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.verify_severed_accounting(str(cut_dir), chunks)
+    assert "accounting is inexact" in str(err.value)
 
 
-def test_declined_cuts_are_reported_rather_than_absorbed():
-    """A partition that quietly shrank is a regression nobody can explain later.
+def _placement_selection(**overrides):
+    selection = {
+        "chrom": "chrT",
+        "strand": "+",
+        "counts": {
+            "targets": 3,
+            "cuts_placed": 2,
+            "targets_unplaced": 1,
+            "targets_declined_annotation": 1,
+            "targets_tail_merged": 0,
+            "segments": 3,
+            "alignments_dropped_at_cuts": 4,
+            "alignments_dropped_monoexonic": 1,
+            "alignments_dropped_multiexon": 3,
+        },
+        "cuts": [
+            {
+                "target": 1000,
+                "position": 1100,
+                "offset_from_target": 100,
+                "spanning_alignments_dropped": 4,
+                "severed_monoexonic": 1,
+                "severed_multiexon": 3,
+                "search_radius": 25000,
+            },
+            {
+                "target": 3000,
+                "position": 3000,
+                "offset_from_target": 0,
+                "spanning_alignments_dropped": 0,
+                "severed_monoexonic": 0,
+                "severed_multiexon": 0,
+                "search_radius": 5000,
+            },
+        ],
+        "unplaced_targets": [
+            {
+                "target": 2000,
+                "declined_annotation": True,
+                "best_spanning_in_window": None,
+                "reason": "DECLINED: no position in the window is both on the "
+                "100 bp depth-window grid and outside every annotated locus",
+            }
+        ],
+    }
+    selection.update(overrides)
+    return {"+": [selection]}
 
-    So the report states what was asked for, what was placed, what was declined
-    and why, per contig-strand -- not a single total, and not only inside the
-    selector's own log.
+
+def test_the_placement_report_names_what_each_cut_severed():
+    """Severing is expected now, so this report is the only place it is visible.
+
+    Per cut, split monoexonic against multi-exon: a cut that dropped three reads of
+    depth and one that dropped three junctions are not the same event, and a bare
+    total cannot tell them apart.
     """
 
-    selections = {
-        "+": [
-            {
-                "chrom": "chrT",
-                "strand": "+",
-                "counts": {
-                    "targets": 3,
-                    "cuts_placed": 2,
-                    "targets_unplaced": 1,
-                    "targets_declined_zero_severed": 1,
-                    "targets_tail_merged": 0,
-                    "segments": 3,
-                },
-                "unplaced_targets": [
-                    {
-                        "target": 2000,
-                        "declined_zero_severed": True,
-                        "best_spanning_in_window": 7,
-                        "reason": "DECLINED under the zero-severed requirement: "
-                        "the cheapest severs 7",
-                    }
-                ],
-            }
-        ]
-    }
+    text, summary = ChunkedRun.cut_placement_report(
+        _placement_selection(), discovery=True
+    )
 
-    text, summary = ChunkedRun.cut_placement_report(selections, discovery=True)
-
-    assert summary["zero_severed_required"] is True
     assert summary["targets"] == 3
     assert summary["cuts_placed"] == 2
-    assert summary["cuts_declined_zero_severed"] == 1
-    assert summary["per_selection"][0]["declined"][0]["best_spanning_in_window"] == 7
-    assert "3 requested, 2 placed, 1 declined for severing" in text
+    assert summary["cuts_declined_annotation"] == 1
+    assert summary["alignments_severed"] == 4
+    assert summary["alignments_severed_monoexonic"] == 1
+    assert summary["alignments_severed_multiexon"] == 3
+    assert "zero_severed_required" not in summary
+    assert summary["per_selection"][0]["cuts"][0]["severed_multiexon"] == 3
+
+    assert "3 requested, 2 placed, 1 declined for annotation" in text
+    assert "4 alignment(s) severed (1 monoexonic, 3 multi-exon)" in text
+    assert "cut at 1100 (target 1000, +100) severs 4 alignment(s)" in text
+    assert "1 monoexonic, 3 multi-exon; searched 25000 bp" in text
+    # a clean cut is not listed: only what something cost is worth a line
+    assert "cut at 3000" not in text
     assert "DECLINED target 2000" in text
-    assert "slower than its geometry suggests" in text
+    assert "3 of them" in text or "3 of them carried junctions" in text
 
 
-def test_the_placement_report_says_nothing_was_declined_when_nothing_was():
-    """Printed in quant-only too, and it must not imply a refusal it did not make."""
+def test_the_placement_report_claims_no_refusal_it_did_not_make():
+    """Printed in quant-only too, and the wording must match the actual rule."""
 
     selections = {
         "+": [
@@ -487,10 +596,14 @@ def test_the_placement_report_says_nothing_was_declined_when_nothing_was():
                     "targets": 2,
                     "cuts_placed": 2,
                     "targets_unplaced": 0,
-                    "targets_declined_zero_severed": 0,
+                    "targets_declined_annotation": 0,
                     "targets_tail_merged": 0,
                     "segments": 3,
+                    "alignments_dropped_at_cuts": 0,
+                    "alignments_dropped_monoexonic": 0,
+                    "alignments_dropped_multiexon": 0,
                 },
+                "cuts": [],
                 "unplaced_targets": [],
             }
         ]
@@ -498,10 +611,11 @@ def test_the_placement_report_says_nothing_was_declined_when_nothing_was():
 
     text, summary = ChunkedRun.cut_placement_report(selections, discovery=False)
 
-    assert summary["zero_severed_required"] is False
-    assert summary["cuts_declined_zero_severed"] == 0
-    assert "a severed read is dropped, counted and named" in text
-    assert "slower than its geometry suggests" not in text
+    assert summary["cuts_declined_annotation"] == 0
+    assert summary["alignments_severed"] == 0
+    assert "severing is a COST, never a veto" in text
+    assert "were DECLINED" not in text
+    assert "carried junctions" not in text
 
 
 def test_the_merged_gtf_is_rebased_and_its_model_ids_cannot_collide(tmp_path):

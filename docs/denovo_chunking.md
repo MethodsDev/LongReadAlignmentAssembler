@@ -1,8 +1,10 @@
 # Chunked DISCOVERY: why the guard was relaxed, and what replaced it
 
-Proposed 2026-08-16 on branch `denovo-chunking`, branched from `devel`. This is a
-proposal for review, not a merge. Everything below is either MEASURED, with the
-measurement named, or marked `[INFERENCE]`.
+Proposed 2026-08-16 on branch `denovo-chunking`, branched from `devel`. Revised
+2026-08-17 after review: the first revision made zero severed a HARD constraint in
+discovery, and that was REJECTED. This is a proposal for review, not a merge.
+Everything below is either MEASURED, with the measurement named, or marked
+`[INFERENCE]`.
 
 ## What changed
 
@@ -16,18 +18,61 @@ measurement named, or marked `[INFERENCE]`.
         )
 ```
 
-It now serves three configurations:
+It now serves three configurations, and cut selection is IDENTICAL in all three:
 
 | invocation | mode | cut rule |
 |---|---|---|
 | `--chunk --quant_only --gtf A` | quantification | severing is PRICED: minimise it, drop/count/name what is severed |
-| `--chunk --gtf A` | ref-guided discovery | severing is FORBIDDEN: a target with no clean position is DECLINED |
-| `--chunk` | de novo discovery | same as above |
+| `--chunk --gtf A` | ref-guided discovery | same rule |
+| `--chunk` | de novo discovery | same rule |
 
-`--gtf` is now required only by `--quant_only`. Quant-only behaviour is byte-for-byte
-unchanged; see "Quant mode is unchanged" below, which is a measurement, not a claim.
+The price is weighted: a severed monoexonic alignment costs 1, a severed multi-exon
+one costs `--chunk_severed_multiexon_weight` (default 10). The search around each
+target widens progressively up to the wiggle window and stops at the first position
+that severs nothing; on reaching the maximum it takes the best position available.
+The ANNOTATION remains a hard block and is the only thing that can decline a cut.
 
-## The theory the change rests on
+`--gtf` is now required only by `--quant_only`. Quant-only behaviour is unchanged;
+see "Quant mode is unchanged" below, which is a measurement, not a claim.
+
+## The rule this proposal first shipped, and why it was rejected
+
+The first revision promoted severing from a cost to a REFUSAL in discovery:
+`--require_zero_severed` struck every severing position from the candidate set, and
+a target whose window held none was DECLINED. The reasoning was that a severed read
+costs quantification one read but can cost discovery a whole locus, which is true
+and is still the reason severing is priced at all.
+
+The USER rejected it, and the reason is about where the data is going rather than
+about this corpus:
+
+> I don't think zero-severed should ever be a hard constraint. It's a preferred
+> situation but it will be impossible to achieve as data sets get deeper. At some
+> point, every base will be covered by a read. We will find reasonable cut points
+> though and collateral severed reads is an acceptable cost.
+
+That is decisive, and the failure mode it names is the worst kind. A rule that
+forbids severing does not degrade into "fewer cuts"; on a contig where every base is
+covered it declines EVERY target, so chunking silently switches itself off on
+precisely the inputs it exists for, while the run reports success. Nor can it be
+tuned back on by widening the window: the problem is not a window that is too small,
+it is a genome with no clean position anywhere in it.
+
+Measured on the shipped corpus, at a geometry tight enough to force the choice --
+`testing/single_contig`, de novo, strandless, 0.2 Mb spacing, 0.02 Mb window, 2,266
+retained primary alignments:
+
+| contract | cuts placed / 16 | declined | chunks | alignments severed |
+|---|---|---|---|---|
+| REJECTED, `--require_zero_severed` | 11 | 5, for severing | 12 | 0 |
+| this revision, severing priced | **16** | 0 | **17** | 44 (0 monoexonic, 44 multi-exon) |
+
+The hard rule gave up 5 of 16 cuts -- and 5 chunks of parallelism -- to avoid
+severing 44 alignments out of 2,266, or 1.94%. Reproduced by running the selector
+from `483aaa4` (the last commit carrying the hard rule) beside the current one on the
+identical bam.
+
+## The theory, and what it does and does not license
 
 A chunk boundary at position `b` can damage discovery only by cutting through a
 locus. In de novo mode a locus IS a connected component of the splice graph, whose
@@ -38,28 +83,34 @@ component, the partition cannot change what is reconstructed. If an alignment DO
 span `b`, the graph is cut through a locus and both halves are reconstructed
 separately, as truncated or spurious models.
 
-So severing is not a cost to be minimised in discovery. It is the whole failure
-mode, and the correct treatment of it is refusal.
+What that licenses is the SHAPE of the cost -- severing is scored on an alignment's
+whole REFERENCE span, introns included, and a spliced alignment costs more than a
+monoexonic one because the `N` op is an edge. What it does NOT license is a veto,
+for the reason above. The theory says which positions are better; it cannot say that
+the best available position is unacceptable, because something has to be chosen.
 
-### The corollary that matters: no severed COMPONENT, not just no severed read
+### Why the cost is the REFERENCE span, and what a zero costs buys
 
-Worth spelling out, because a weaker gate is the obvious thing to reach for and it
-would miss a whole damage class. `Chr21DenovoParity` revised their own diagnostic
-after finding that `comp-2240:iso-10` was damaged while sitting 87 kb from the
-nearest cut: the cut at 40,005,600 fell inside its COMPONENT's span
-(39,953,924-40,137,010), and cutting a component repartitions models that never come
-near the boundary. Their conclusion, correctly, is that a gate on "no model within
-X bp of a cut differs" misses this, and the right granularity is the component.
+Worth spelling out, because the obvious cheap cost function misses a whole damage
+class. `Chr21DenovoParity` revised their own diagnostic after finding that
+`comp-2240:iso-10` was damaged while sitting 87 kb from the nearest cut: the cut at
+40,005,600 fell inside its COMPONENT's span (39,953,924-40,137,010), and cutting a
+component repartitions models that never come near the boundary. Their conclusion,
+correctly, is that a gate on "no model within X bp of a cut differs" misses this, and
+the right granularity is the component.
 
-The spanning-alignment gate already IS that gate, and it holds both by construction
-and by measurement. Construction first. The cost counts an alignment as severed when
-its full REFERENCE span contains the position — `aln.reference_start` to
-`aln.reference_end`, introns included, not its aligned blocks. So zero spanning
-alignments means every retained alignment lies wholly left or wholly right of `b`.
-Nodes are blocks and edges are `N` ops, and both lie inside an alignment's reference
-span, so nothing on the left shares a node or an edge with anything on the right, and
-connectivity — which is transitive through shared nodes and edges — cannot cross `b`.
-No component can straddle a position no alignment spans.
+The spanning cost is at that granularity by construction. It counts an alignment as
+severed when its full REFERENCE span contains the position — `aln.reference_start` to
+`aln.reference_end`, introns included, not its aligned blocks. So a position scoring
+ZERO has every retained alignment wholly left or wholly right of it. Nodes are blocks
+and edges are `N` ops, and both lie inside an alignment's reference span, so nothing
+on the left shares a node or an edge with anything on the right, and connectivity —
+which is transitive through shared nodes and edges — cannot cross `b`. No component
+can straddle a position no alignment spans.
+
+That is what a zero-cost cut buys, and it is why the search hunts for one rather than
+settling near the target. What it is NOT is a promise the selector can keep on
+demand: whether a zero exists is a fact about the data.
 
 Measured independently by `Chr21DenovoParity` over the 535 components of the
 unchunked chr21 de novo run, using LRAA's `gene_id` as the component id, so nothing
@@ -73,27 +124,22 @@ is inferred:
 Those three cuts sever 861 / 30 / 47 alignments. The two stress cuts that sever
 exactly ONE alignment each straddle NO component — so zero spanning alignments is
 SUFFICIENT for zero straddling components without being tight: a single severed
-alignment did not happen to connect two loci at either cut. The gate can therefore
-decline more than it strictly must, which is the right direction for a correctness
-constraint to err in.
+alignment did not happen to connect two loci at either cut.
 
-The consequence is the strongest claim in this note, and it is theirs rather than
-mine: **on that corpus the gate eliminates 100% of the boundary damage they could
-produce.** Every boundary difference measured in the rescue-off stress arm — all 18
-lost models, now attributed 18 of 18 to a severed COMPONENT where the model-span
-diagnostic had reached 17 of 18 — sits at one of those three cuts. That includes the
-two spurious MONOEXONIC models this whole design is motivated by: the cut at
-41,992,400 that manufactured them severs 47 alignments, so `--require_zero_severed`
-refuses it and they cannot be produced. It also includes the 87 kb collateral case
-above, since 40,005,600 severs 30. What remains after that is the rescue divergence,
-which is zero with rescue off and is the follow-up named below.
+Read correctly, that table is an argument about GEOMETRY, not about a gate. At the
+shipped 10 Mb spacing the cuts sever nothing and no component straddles one, so the
+partition is provably harmless there — and the selector reaches that outcome by
+searching, not by refusing. At the stress geometry, whose window was starved 40-fold
+below what the data need, three cuts sever and three components straddle. The fix for
+that is a window wide enough to find the gaps that exist, which the 1 Mb default
+already is: at 2 Mb spacing with the full 1 Mb window, chr21 places all 22 cuts at
+ZERO severed (measured here, section "Progressive expansion").
 
-The reference-span detail is load-bearing for that argument and is pinned by
-`test_an_intron_crossing_the_window_makes_every_position_inadmissible`. Fail-verified
-by mutating the cost to count the first aligned block instead of the reference span:
-the spliced read's intron then crosses the window for free, `spanning_dropped` falls
-from 1 to 0, the cut is placed, and both that test and the pre-existing
-`test_long_intron_alignments_do_not_influence_selection` fail. Restored, 54 pass.
+The reference-span detail is load-bearing and is pinned by
+`test_a_severed_spliced_read_is_counted_by_its_reference_span`, whose fixture has no
+aligned base anywhere in the window — only an intron. Fail-verified by mutating the
+cost to count every alignment at weight 1: the spliced read's cost falls from 10 to 1
+and that test fails, along with six others. Restored, 73 pass.
 
 ## The evidence
 
@@ -131,83 +177,188 @@ discovery flavours reach zero by different routes, and both reach it.
 
 Read together: the guard was well founded in KIND, and wrong in DEGREE. The
 mechanism it feared is real, is local, and is caused by severing — which the
-selector already measures per candidate position and can therefore refuse.
+selector measures per candidate position and can therefore SEARCH AWAY FROM. The
+first revision of this note ended that sentence with "and can therefore refuse",
+which is the step the user rejected.
 
-## The design decision: skip and widen, not fail the run
+## The design: search outward, price what is left, never refuse
 
-When no position in a target's wiggle window severs zero alignments, discovery
-**declines that cut**. The two chunks it would have separated stay joined as one
-larger chunk. The run continues.
+### Progressive expansion, with the wiggle window as a maximum
 
-The alternative was to fail the run. Rejected, for three reasons:
+The search starts at a small radius around the target and widens through
+`DEFAULT_EXPANSION_RADII` — 5 kb, 25 kb, 100 kb, 250 kb, 500 kb — clipped to the
+wiggle half-width, stopping as soon as an annotation-compliant position severs
+NOTHING. On reaching the maximum it takes the cheapest position available and the
+alignments it severs are collateral: counted, named, and reported per cut.
 
-1. **Asymmetric consequences.** A larger chunk is SLOWER and uses more memory. A bad
-   cut is WRONG — it deletes real models and invents fake ones. Trading correctness
-   for speed at a cut is never the right trade; trading speed for correctness at a
-   cut always is.
-2. **Chunk spans are already uneven, by design.** The tail-merge rule produces a
-   14.4 Mb final chunk on chr20 at the shipped defaults, and the wiggle window means
-   a realised span is nominal ± up to the window width. Nothing downstream assumes
-   equal chunks, so a wider one is a performance fact, not a structural surprise.
-3. **Failing would make the mode unusable on the substrates that need it most.** A
-   dense contig is exactly where chunking pays, and exactly where some windows are
-   fully covered. A mode that refuses to run there is a mode nobody runs.
+Terminating early is not an approximation, and this matters because it is what makes
+the whole scheme free. If any compliant position at radius R severs nothing then the
+whole-window minimum is also zero, and among zero-cost positions the tie-break is
+distance from the target, so every candidate that could win already lies inside R.
+Where windows overlap and the anti-sliver floor binds, a target the joint solve had
+to compromise is expanded another rung and the solve repeated, which carries the
+property over to the joint problem. Verified on chr21, strandless de novo, by running
+the laddered search and a single-rung search at the maximum radius (which IS the flat
+scan this module used to do) and comparing: **identical cut positions at both 10 Mb
+and 2 Mb spacing.**
 
-A third option — widen the window until a clean position is found — was also
-rejected. The window is a promise about chunk geometry, and the selector's docstring
-already states that it is never widened; a mode that silently widened it would make
-chunk coordinates depend on read depth in a way no caller could predict. Declining
-is the same outcome (a bigger chunk) reached by a rule that is stated in advance.
+### Each rung fetches only the new ANNULUS
+
+This is the part that is easy to get wrong in the direction of a regression. The
+ladder's radii sum to more than the window: re-scanning `target ± radius` from
+scratch at every rung costs `2*(5+25+100+250+500)` kb = 1.76 Mb per target against
+the flat 1 Mb of scanning the whole window once. So in the regime where nothing
+terminates early — which is the deep regime this design exists to serve — naive
+expansion is 1.76x WORSE than never expanding at all. Each rung therefore reads only
+the two intervals the previous rung did not cover, and carries the running best
+forward.
+
+Measured on chr21 (46.7 Mb, 199,153 retained primary alignments), strandless de novo,
+1 Mb maximum window, counting bases requested from `pysam.fetch`:
+
+| spacing | annulus | naive re-scan | flat, no expansion |
+|---|---|---|---|
+| 10 Mb, 4 cuts | **1.03 Mb** in 12 intervals | 1.79 Mb in 8 | 4.00 Mb in 4 |
+| 2 Mb, 22 cuts | **2.55 Mb** in 50 intervals | 4.17 Mb in 36 | 22.00 Mb in 22 |
+
+All three choose the same positions. Annulus fetching is 1.74x cheaper than naive
+re-scanning at 10 Mb and 1.64x at 2 Mb, and 3.9x / 8.6x cheaper than not expanding.
+
+One honest qualification, because the two numbers above are easy to conflate. On THIS
+corpus naive re-scanning is still cheaper than flat (1.79 against 4.00 Mb), because
+early termination is nearly universal here — 3 of the 4 chr21 targets stop at the
+first 5 kb rung. The 1.76x-worse-than-flat figure is the WORST CASE, reached when
+nothing terminates early. Both are true; the annulus form is the one that is never
+worse than flat, which is why it is what is built.
+
+### The top of the ladder is load-bearing on real data
+
+The terminal search radii on chr21 at 10 Mb spacing are **5 kb, 5 kb, 5 kb and
+500 kb**. Three targets find a clean cut almost on top of themselves; the fourth has
+to travel to the maximum, and lands at 40,382,800 — the +382.8 kb offset
+`FINDINGS.index_span_probe.md` reports independently. At 2 Mb spacing, 15 of 22
+targets stop at 5 kb, four at 25 kb, one at 100 kb and two at 500 kb.
+
+That is a second, independent argument for the wiggle window staying ABSOLUTE: one
+chr21 target in four needs a search radius of more than 250 kb, and a window derived
+as 10% of a 2 Mb spacing would offer a 100 kb half-width and could not reach it.
+
+### The severing cost is weighted by exon structure
+
+A severed monoexonic alignment costs 1; a severed multi-exon one costs
+`--chunk_severed_multiexon_weight`, default 10. The asymmetry is the same mechanism
+as the reference-span rule: an `N` op is an edge of the splice graph, so severing a
+spliced read removes structure while severing a monoexonic read removes depth.
+
+Recorded honestly, because a later reader running a sweep will otherwise conclude the
+feature is broken: **on real data the weight is nearly inert.** Of the alignments
+severed at 2 Mb spacing, monoexonic against spliced — chr21 20 kb window: 14 / 926;
+chr21 200 kb: 0 / 743; chr1 20 kb: 5 / 2593; chr1 200 kb: 2 / 85. 98-100% spliced at
+every geometry measured, because spanning probability scales with genomic span and a
+monoexonic read is a kb or two long against tens of kb for a spliced one. It shows up
+in the shipped corpus too: at 0.5 Mb spacing on `minigenome` every one of the 5
+severed alignments is multi-exon, so `best_spanning_ignoring_annotation` goes from 1
+to 10 and from 2 to 20 when the weight is applied.
+
+It is not inert everywhere, and where it acts is the interesting part. At 2 Mb spacing
+with a 0.02 Mb window on chr21, K=10 against K=1 moves exactly ONE of the 22 cuts —
+and it is **41,992,400 → 41,990,700**, the cut this whole design is motivated by, the
+one that replaced an eight-isoform gene with two spurious monoexonic models:
+
+| | position | severed | monoexonic | multi-exon | weighted |
+|---|---|---|---|---|---|
+| K=1 | 41,992,400 | 47 | 12 | 35 | 47 |
+| K=10 | 41,990,700 | 49 | 25 | 24 | 265 |
+
+K=10 gives up 13 more monoexonic severings to save 11 spliced ones. Whether that
+particular trade rescues that particular gene is not measured here — it needs a
+discovery arm, and the geometry is a stress arm nobody should run — but the direction
+is the one the cost function is meant to express, and it fires at the worst cut in
+the corpus rather than at an irrelevant one.
+
+**What NOT to do with the inertness.** It is not a licence to count multi-exon
+alignments only and let monoexonic severing be free. At depth the mix is exactly what
+is in motion, and a free class of severing is an unbounded cost waiting for the data
+that produces it.
+
+### The annotation is still a hard block
+
+Unchanged, and the only reason a target can now be DECLINED. A read can be dropped
+and accounted for; a locus cannot — `genes_contained` emits a gene whole or not at
+all, so a locus straddling a boundary is contained by neither neighbour and both omit
+it. A target whose whole window is annotation-blocked is declined, the two chunks it
+would have separated stay joined, and the run continues. That is accepted behaviour,
+not a defect to be fixed by relaxing the block.
+
+On `testing/single_contig` at 0.2 Mb spacing with a 0.002 Mb window that fires hard:
+14 of 16 targets per orientation are declined, every one of them for the annotation,
+and the two that place sever 2 alignments between them. `devel` leaves exactly the
+same targets unplaced at that geometry, with the same reason and the same wording
+intent — only the message text differs.
 
 ## Silent degradation was the real risk, so it is reported
 
-A run that produced fewer chunks than its geometry implies, for good reasons, is
-indistinguishable six months later from a performance regression. So every run —
-quant-only as well as discovery — now prints a placement report before the expensive
-phase, and stores it in `timing.json` and `outputs.json` under `cut_placement`:
+Two things a run must not do quietly: produce fewer chunks than its geometry implies,
+and sever reads. The second is now the EXPECTED outcome rather than a refused one, so
+the placement report is the only place anyone sees what the boundaries cost. Every
+run — quant-only as well as discovery — prints it before the expensive phase and
+stores it in `timing.json` and `outputs.json` under `cut_placement`. Actual output
+from the de novo smoke run below:
 
 ```
-CUT PLACEMENT (discovery mode): zero severed is REQUIRED, and a target with no clean position is DECLINED
+CUT PLACEMENT (discovery mode): severing is a COST, never a veto -- a severed read is dropped,
+counted and named, and a multi-exon one costs more than a monoexonic one. Only the annotation
+can decline a target.
 
-  minigenome+    16 requested, 9 placed, 7 declined for severing, 0 otherwise unplaced, 1 tail-merged -> 10 chunk(s)
-      DECLINED target 600000: DECLINED under the zero-severed requirement: none of the 21 compliant
-      position(s) in the window severs zero retained primary alignments, the cheapest severs 2. The cut
-      is skipped and the two chunks it would have separated stay joined as one larger chunk
-      ...
-  minigenome-    16 requested, 7 placed, 9 declined for severing, 0 otherwise unplaced, 1 tail-merged -> 8 chunk(s)
-      ...
-  TOTAL 32 cut(s) requested, 16 placed, 16 declined for severing, 0 otherwise unplaced, 2 tail-merged -> 18 chunk(s)
-  16 cut(s) were DECLINED rather than placed badly. The chunks they would have separated stay joined, so
-  this run is slower than its geometry suggests and that is the intended trade: a larger chunk is slower,
-  a cut through a locus is wrong.
+  minigenome+    6 requested, 6 placed, 0 declined for annotation, 0 otherwise unplaced,
+                 0 tail-merged -> 7 chunk(s); 1 alignment(s) severed (0 monoexonic, 1 multi-exon)
+      cut at 520300 (target 500000, +20300) severs 1 alignment(s): 0 monoexonic, 1 multi-exon;
+      searched 50000 bp
+  minigenome-    6 requested, 6 placed, 0 declined for annotation, 0 otherwise unplaced,
+                 0 tail-merged -> 7 chunk(s); 0 alignment(s) severed (0 monoexonic, 0 multi-exon)
+
+  TOTAL 12 cut(s) requested, 12 placed, 0 declined for annotation, 0 otherwise unplaced,
+  0 tail-merged -> 14 chunk(s); 1 alignment(s) severed (0 monoexonic, 1 multi-exon)
+  1 alignment(s) were severed and are dropped, counted and named
+  (<cuts>.dropped_reads.tsv, <cuts>.severed_reads.bam). 1 of them carried junctions,
+  which is the part that can cost a model.
 ```
 
-Each declined target carries the number of annotation-compliant positions its window
-held and what the cheapest of them would have severed, so a reader can tell "the
-window was crowded" from "the window was empty" without rerunning anything.
+Only cuts that cost something get a line, so the report stays readable on a
+chromosome; a clean cut is visible in the per-contig-strand totals. Each declined
+target carries how many grid positions its window held and the radius the search
+reached, so a reader can tell "the annotation blocked everything" from "the window was
+narrow" without rerunning anything.
 
-## Where the rule is enforced
+## Where the cost is computed and reported
 
-Three places, deliberately, because each catches a different way of getting it wrong.
+1. **`util/misc/select_contig_cut_points.py`.** One objective, `spanning_counts`,
+   weighted by `--severed_multiexon_weight`, minimised jointly by the existing DP.
+   Nothing is struck from the candidate set. The per-cut monoexonic/multi-exon split
+   is counted in the same pass that gathers the dropped read names, so it costs no
+   extra I/O and cannot disagree with the names.
+2. **`ChunkedRun.verify_severed_accounting`.** Unchanged in kind: the reads selection
+   NAMED must be the reads extraction DROPPED. The first revision additionally raised
+   whenever discovery dropped anything; that raise is gone, because a nonzero drop is
+   now the expected outcome. The identity check remains, because the parity
+   comparison's pruned baseline depends on it.
+3. **`ChunkedRun.cut_placement_report`.** One function, both modes, printed and
+   stored. There is no mode-conditional cut rule left to test, so the unit test
+   asserts the opposite of what it used to: that `--require_zero_severed` appears on
+   NEITHER command line and that both modes pass the same weight.
 
-1. **`util/misc/select_contig_cut_points.py --require_zero_severed`.** Positions with
-   nonzero spanning cost are STRUCK from the candidate set, not priced within it. The
-   joint solver minimises unplaced targets first, so a severing position left in the
-   set would be chosen whenever the window held nothing better — pricing it at
-   infinity would not do.
-2. **`ChunkedRun.verify_severed_accounting(..., discovery=True)`.** Enforced against
-   what EXTRACTION actually dropped, before the expensive phase. Selection promised
-   zero; if extraction drops anything, the two tools disagree about which alignments
-   are retained, and that is a bug rather than a tight geometry.
-3. **The pipeline sets the flag in exactly one place**, `stage_select_cuts`, keyed on
-   `args.discovery`, and a unit test asserts the flag appears on the selector command
-   line for discovery and does not for quant-only.
+## What discovery chunking does NOT guarantee
 
-## What discovery chunking still does NOT guarantee
+A zero-cost cut is provably harmless (section "Why the cost is the REFERENCE span"),
+and at the shipped geometry every cut is zero-cost on both measured chromosomes. What
+is NOT guaranteed is that a zero-cost cut exists — that is a fact about the data, and
+where none does the selector takes the cheapest position and says so. On a deep enough
+library there will be no clean position anywhere, every cut will sever, and the
+reported counts are the only honest account of what that cost. This is the trade the
+user accepted explicitly, and it replaces a rule that would have declined every cut
+instead.
 
-Zero severed is necessary, not sufficient — but the residual is smaller than that
-phrasing suggests, and it is ELIMINABLE, which a first version of this note got
-wrong by calling it simply unfixable.
+Separately, and independent of severing:
 
 `pylib/IsoformReadRescue.py` is scoped to a whole contig-strand and is position-blind:
 it maps read sequences against a FASTA of ALL models on that contig-strand with
@@ -245,35 +396,73 @@ this slice does not answer it.
 ## Quant mode is unchanged
 
 Verified by running `LRAA --chunk --quant_only` on `testing/single_contig` from this
-branch and from its branch point (`f6019a1`, a detached worktree), at two geometries:
+branch and from `devel` (`fdd6da7`, the main worktree), same corpus, same geometry,
+at two geometries:
 
 | geometry | severed | merged `quant.expr` | merged `quant.tracking` | cut positions | dropped read names | drop detail | severed bam |
 |---|---|---|---|---|---|---|---|
-| 0.5 Mb / 0.2 Mb wiggle | 0 | byte-identical | md5 identical | identical | identical | identical | 0 = 0 |
-| 0.2 Mb / 0.002 Mb wiggle | 2 | byte-identical | md5 identical | identical | identical | identical | 2 = 2 |
+| 0.5 Mb / 0.1 Mb wiggle | 5 | md5 identical | md5 identical | identical, both orientations | identical | identical | 1 = 1, 3 = 3 |
+| 0.2 Mb / 0.002 Mb wiggle | 2 | md5 identical | md5 identical | identical, both orientations | identical | identical | 2 = 2, 0 = 0 |
 
-The second row is the one that matters: it exercises the cost-minimising selection
-and the drop-count-and-name path, and both produce exactly what they produced before.
-A key-by-key comparison of the cut manifests, flattened, reports zero changed
-values and zero removed keys in both orientations. Five keys are ADDED, and all
-five state the contract rather than change it: `params.require_zero_severed` and
-`counts.targets_declined_zero_severed` in the manifest, `declined_zero_severed`
-and `best_spanning_in_window` on each unplaced target, and
-`severed_read_accounting.zero_severed_required` in `timing.json`. All are false or
-null on a quant-only run.
+The second row is the one that exercises the annotation-decline path and the first the
+cost-minimising selection with real severing; both produce the same cuts and the same
+quantification as `devel`.
+
+On a real chromosome as well as the synthetic one. Selector-only, chr21 strandless de
+novo, 1 Mb window: **4 cuts at 10 Mb spacing and 22 at 2 Mb, positions identical to
+`devel`'s**, including the 40,382,800 offset the published findings report.
+
+A key-by-key comparison of the flattened cut manifests against `devel` reports **zero
+REMOVED keys** and two kinds of changed value:
+
+* `cuts[].best_spanning_ignoring_annotation`, from 1 to 10 and from 2 to 20. This is
+  the same alignments priced with the multi-exon weight — a reported diagnostic, not a
+  coordinate — and the exact 10x confirms every severed alignment on this corpus is
+  spliced.
+* `unplaced_targets[].reason`, reworded to name the annotation as the decline reason.
+
+Everything else is ADDED: `params.severed_multiexon_weight`,
+`counts.targets_declined_annotation`, `counts.alignments_dropped_monoexonic`,
+`counts.alignments_dropped_multiexon`, `counts.severed_weighted_cost_at_cuts`, and per
+cut `severed_monoexonic`, `severed_multiexon`, `severed_weighted_cost`,
+`search_radius`; per unplaced target `declined_annotation`, `best_spanning_in_window`,
+`search_radius`. `severed_read_accounting.zero_severed_required`, which the first
+revision added to `timing.json`, is GONE.
+
+**Where design and measurement pull in different directions, stated rather than
+resolved silently.** The weighted cost is one objective serving both modes, so in
+principle it can reorder two DIRTY positions in a quant run and move a quant cut. It
+cannot move a cut whenever some position in the window severs nothing, because
+weighted zero and unweighted zero are the same set — and that is every target measured
+at shipped geometry on chr1 and chr21. It did not move one anywhere on this corpus, at
+either geometry, in either orientation. The one place it does move a cut is chr21 at a
+deliberately starved 0.02 Mb window (above), which is a stress geometry, not a quant
+default. `--severed_multiexon_weight 1` reproduces `devel`'s ranking exactly if that
+is ever wanted. The alternative — a weight that applies to discovery only — was
+rejected: it would be two objectives that have to agree on cut coordinates, which is
+two chances to disagree, and quant's own manifest already prices a severed read at
+what it costs.
 
 ## Smoke evidence for the new mode
 
 `testing/single_contig`, `minigenome`, 3,421,379 bp, 2,507 alignments, `--HiFi`,
-`--cpu_budget 2`, strand-first:
+`--cpu_budget 4`, strand-first, de novo (`--chunk` with no `--gtf`), 0.5 Mb spacing /
+0.1 Mb window:
 
-* **0.5 Mb / 0.2 Mb wiggle.** 12 cuts requested, 12 placed, 0 declined, 0 severed, 14
-  chunks (7 per contig-strand). Exit 0. Wrote `dn.LRAA.ref-free.gtf`,
-  `.quant.expr`, `.quant.tracking.gz`. Merged GTF: 49 transcripts, 49 distinct
-  transcript ids.
-* **0.2 Mb / 0.002 Mb wiggle.** 32 requested, 16 placed, **16 declined for severing**,
-  0 severed, 18 chunks. Exit 0. Under the soft rule the same geometry severs reads;
-  under the hard rule it declines instead and reports every decline.
+**Exit 0. 12 cuts requested, 12 placed, 6 per contig-strand, 0 declined, 14 chunks.**
+Six cuts on each of `minigenome+` and `minigenome-`, so the partition is genuinely
+multi-cut per contig-strand rather than the vacuous one-chunk-per-orientation. Wrote
+`dn.LRAA.ref-free.gtf`, `.quant.expr`, `.quant.tracking.gz`; merged GTF has 49
+transcripts and 49 distinct transcript ids.
+
+One cut, `minigenome+` at 520,300, severs one MULTI-EXON alignment after searching to
+its 50 kb maximum radius. That is the new contract exercised end to end: under the
+rejected rule that target would have been declined and the run would have produced 13
+chunks with a silently doubled one. The severed read is in `dropped_reads.tsv` and in
+`severed_reads.bam`, and the placement report names it above.
+
+Terminal search radii across the 12 cuts: 5 kb (4 cuts), 25 kb (4), 50 kb = the
+maximum (4). Median 25 kb, which is the figure the chr1 measurement predicted.
 
 The id namespacing is load-bearing rather than decorative: on the first run, stripping
 the per-unit prefix collapses those 49 transcript ids to 46, i.e. three real
@@ -283,17 +472,14 @@ chunk emits a `comp-1`. Unpatched concatenation fuses unrelated models; that is 
 produced 37 spurious chromosome-crossing "models" in the chr21 work before it was
 diagnosed.
 
-## How often does the refusal bind, and on what does that depend?
+## How much does the window width actually buy?
 
-A constraint that fires constantly is a footgun rather than a safeguard, so this was
-measured. It also produced one wrong reading of my own, corrected below, because the
-first sweep confounded two variables.
+Measured while the hard rule was still in place, which makes the table more useful
+than it looks: the "declined" column is what the REJECTED contract would have thrown
+away, and the last column is what this revision severs instead. Swept on `minigenome`
+at 0.2 Mb spacing, selector only, strandless:
 
-### The cost of the refusal is self-limiting
-
-Swept on `minigenome` at 0.2 Mb spacing, selector only, strandless:
-
-| wiggle | placed / requested | declined | alignments the SOFT rule would sever |
+| wiggle | placed / requested under the REJECTED rule | it declined | alignments THIS revision severs |
 |---|---|---|---|
 | 0.002 Mb | 7 / 16 | 9 | 378 |
 | 0.01 Mb | 8 / 16 | 8 | 331 |
@@ -303,12 +489,19 @@ Swept on `minigenome` at 0.2 Mb spacing, selector only, strandless:
 | 0.14 Mb | 15 / 16 | 1 | 1 |
 | 0.2 Mb | 15 / 16 | 1 | 1 |
 
-Declines TRACK what the soft rule would have severed: 9 declines buy back 378 severed
-alignments, 1 decline buys back 1. The refusal binds hardest exactly where taking the
-cut would do most damage, and becomes nearly free where taking it would be nearly
-harmless. That is what makes a hard constraint safe to impose — its cost is
-concentrated precisely where the alternative is worst — and it is a stronger claim
-than "it rarely fires".
+Read as a statement about the WINDOW, which is what it is, this is the strongest
+argument in the note for widening rather than refusing. Every row that declines a cut
+is a row where a wider window would have found a clean one: going from 0.002 Mb to
+0.2 Mb takes the severing cost from 378 alignments to 1 and the declines from 9 to 1,
+on the same reads, with no change to the rule. The damage is a property of the search
+radius, not of the contract.
+
+It also disposes of the argument the first revision made from this table — that the
+refusal is safe because its cost concentrates where the alternative is worst. True as
+far as it goes, and irrelevant to the case the user named: at depth the last column
+never reaches zero at any width, so the "declined" column never reaches zero either,
+and a rule whose cost is concentrated where the alternative is worst becomes a rule
+that declines everything.
 
 ### The requirement is ABSOLUTE, not proportional to spacing
 
@@ -376,11 +569,40 @@ inside any one of them.
 **Do not make the default wiggle proportional to spacing.** A "keep the ratio at 0.1"
 rule looks harmless and is calibrated by the 10 Mb / 1 Mb default, but at 2 Mb spacing
 it yields a 0.2 Mb window — below the 382.8 kb that chr21 actually needs. That is not
-a hypothetical: 2 Mb spacing with a starved window is the geometry that severed 940
-alignments, lost 20 models of which 17 span a cut, and replaced an eight-isoform gene
-with two spurious monoexonic fragments. The wiggle default must stay absolute, and if
-anything it should be floored at the genome's measured nearest-zero distance rather
-than scaled down with spacing.
+a hypothetical, and it has now been measured directly at 2 Mb spacing on HG002 PacBio
+Kinnex, de novo, counting the retained primary alignments the cuts would sever:
+
+| contig | 20 kb window | 200 kb window | 1 Mb window |
+|---|---|---|---|
+| chr21 | 940 | **743** | **0** |
+| chr1 | 2598 | 87 | **0** |
+
+The 200 kb column IS the proportional reading at 2 Mb spacing, and on chr21 it still
+severs 743 alignments where the absolute 1 Mb default severs NONE. The formula does
+not give less margin; it gives a window that fails. And chr1 and chr21 disagree
+8.5-fold at identical parameters — 87 against 743 — because chr1 offers 6,258 read-free
+gap runs to chr21's 1,295. The requirement tracks the GENOME, not the geometry.
+
+The progressive search adds a third, independent confirmation: at 10 Mb spacing on
+chr21 the four terminal search radii are 5 kb, 5 kb, 5 kb and **500 kb**. One target
+in four needs more than half the default window, and a 200 kb window would give it a
+100 kb half-width.
+
+**No proportional term was added, not even as a floor.** An earlier draft of this
+revision implemented `max(1 Mb, 0.10 * spacing)`, on the reading that a floor binds
+only at coarse spacing and so is harmless. That was withdrawn: the 10% figure was
+about what to pass when TESTING at 2 Mb spacing, not a rule to encode, and a
+production default of 1 Mb absolute already exists and is correct. Coupling the two
+parameters at all — even in the direction that only ever enlarges the window — invents
+a relationship the data does not support and gives the next reader a formula to
+generalise. `approx_MB_per_cut_wiggle_window` is an absolute default that a caller may
+override, and `pylib/test_select_contig_cut_points.py` asserts it stays 1 Mb across a
+500x range of spacings so that anyone who couples them fails a test.
+
+A caller testing a finer spacing should pass a smaller window and expect severing.
+That run still exercises cut placement as it exists — the selector still searches for
+the best position it can reach — and the reads it severs are reported. What it is not
+is a parity arm.
 
 Under an absolute rule the smoke section's decline demonstration is a starved window
 in absolute terms — 0.002 Mb on a corpus whose gaps need tens of kb — which is the
@@ -391,18 +613,13 @@ arithmetic, not the mechanism, and it should not be quoted as one.)
 
 ### What NOT to conclude from this corpus
 
-That one decline persists on `minigenome` even at 0.2 Mb wiggle is not evidence
-against the chromosome-scale result. This is a claim about the decline RATE, not about
-which variable governs it — absolute wiggle governs it here as it does on a
-chromosome, per the section above. `minigenome` is a synthetic 3.4 Mb contig carrying
-2,507 alignments packed far more densely per Mb than a real chromosome, so its
-read-free gaps are scarcer in ABSOLUTE terms and a window of any given width in bases
-is likelier to be crowded; and 16 targets at 0.2 Mb spacing is 50x finer than the
-shipped 10 Mb default. At the smoke section's
-own sane geometry — 0.5 Mb spacing, 0.2 Mb wiggle — it placed 12 of 12 with nothing
-declined. `[INFERENCE]` At the shipped 10 Mb / 1 Mb defaults on a real chromosome the
-refusal should be rare to absent, consistent with chr21 (0 severed at 4 cuts) and chr1
-(24 of 24 targets placeable at 0 severed); that was not rerun here.
+That `minigenome` still severs at 0.2 Mb wiggle is not evidence against the
+chromosome-scale result. `minigenome` is a synthetic 3.4 Mb contig carrying 2,507
+alignments packed far more densely per Mb than a real chromosome, so its read-free gaps
+are scarcer in ABSOLUTE terms and a window of any given width in bases is likelier to
+be crowded; and 16 targets at 0.2 Mb spacing is 50x finer than the shipped 10 Mb
+default. At the smoke section's own sane geometry — 0.5 Mb spacing, 0.1 Mb window — it
+places 12 of 12 and severs 5 alignments out of 2,507.
 
 ## Why only the strandless arm needs the raw bam indexed
 
@@ -445,3 +662,18 @@ needed, the other that it correctly does not fire when it is not.
   though it says quant-only while `pylib/LRAA.py` reads the key on the de novo path
   too (282, 1233, 1416, 1470). Reported rather than fixed: it is not this slice's
   file, and a sibling found it.
+* **No discovery arm at the geometry where K moves a cut.** K=10 moves chr21's
+  41,992,400 cut to 41,990,700 at a 0.02 Mb window, and whether that recovers the
+  eight-isoform gene is the interesting question. Answering it needs a full de novo
+  discovery arm at a geometry nobody should run in production, which is a science
+  slice rather than a change to this one. The selector-level trade is measured and
+  reported above; the model-level consequence is not.
+* **No expansion-ladder tuning.** 5/25/100/250/500 kb was chosen to make the common
+  case pay one 5 kb rung and the rare case still reach the maximum in five steps, and
+  it is measurably adequate — median terminal radius 5 kb on chr21, 25 kb on
+  `minigenome`. It is not optimised, and it does not need to be: the ladder cannot
+  change which position is chosen, only how much is read to find it.
+* **No `--severed_multiexon_weight` sweep for a best value.** 10 is the value the user
+  asked for. It is a policy statement about what a junction is worth relative to a
+  read of depth, not a parameter with an optimum, and on today's data it is nearly
+  inert either way (see the mix measurement above).
