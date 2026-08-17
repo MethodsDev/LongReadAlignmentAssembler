@@ -200,50 +200,96 @@ chunk emits a `comp-1`. Unpatched concatenation fuses unrelated models; that is 
 produced 37 spurious chromosome-crossing "models" in the chr21 work before it was
 diagnosed.
 
-## How often does the refusal actually bind?
+## How often does the refusal bind, and on what does that depend?
 
-A constraint that fires constantly is a footgun, so this was measured rather than
-assumed. `SpanIndexProbe` measured on real chromosomes that ~0.7-0.8 Mb of TOTAL
-wiggle suffices to give every 2 Mb target a zero-cost position, and the shipped
-default is already 1 Mb -- i.e. at sane geometries the constraint should not bind.
-Note that the 940-severed stress result came from a 20 kb wiggle OVERRIDE, not from
-2 Mb spacing: a wiggle-to-spacing ratio of 0.01.
+A constraint that fires constantly is a footgun rather than a safeguard, so this was
+measured. It also produced one wrong reading of my own, corrected below, because the
+first sweep confounded two variables.
 
-Swept on `minigenome` at 0.2 Mb spacing, selector only, strandless. The right axis
-is the wiggle-to-spacing RATIO, because that is what decides how many grid positions
-a window offers:
+### The cost of the refusal is self-limiting
 
-| ratio | wiggle | placed / requested | declined | alignments the SOFT rule would sever |
-|---|---|---|---|---|
-| 0.01 | 0.002 Mb | 7 / 16 | 9 | 378 |
-| 0.05 | 0.01 Mb | 8 / 16 | 8 | 331 |
-| 0.10 | 0.02 Mb | 11 / 16 | 5 | 44 |
-| 0.30 | 0.06 Mb | 13 / 16 | 3 | 24 |
-| 0.40 | 0.08 Mb | 14 / 16 | 2 | 16 |
-| 0.70 | 0.14 Mb | 15 / 16 | 1 | 1 |
-| 1.00 | 0.2 Mb | 15 / 16 | 1 | 1 |
+Swept on `minigenome` at 0.2 Mb spacing, selector only, strandless:
 
-Two things to read out of it, and one thing not to.
+| wiggle | placed / requested | declined | alignments the SOFT rule would sever |
+|---|---|---|---|
+| 0.002 Mb | 7 / 16 | 9 | 378 |
+| 0.01 Mb | 8 / 16 | 8 | 331 |
+| 0.02 Mb | 11 / 16 | 5 | 44 |
+| 0.06 Mb | 13 / 16 | 3 | 24 |
+| 0.08 Mb | 14 / 16 | 2 | 16 |
+| 0.14 Mb | 15 / 16 | 1 | 1 |
+| 0.2 Mb | 15 / 16 | 1 | 1 |
 
-Declines fall monotonically with the ratio and TRACK what the soft rule would have
-severed: at ratio 0.01 the refusal costs 9 cuts and buys back 378 severed
-alignments; at ratio 1.0 it costs 1 cut and buys back 1. The constraint is
-self-limiting -- it binds hardest exactly where the soft rule does most damage, and
-becomes nearly free where the soft rule is nearly harmless.
+Declines TRACK what the soft rule would have severed: 9 declines buy back 378 severed
+alignments, 1 decline buys back 1. The refusal binds hardest exactly where taking the
+cut would do most damage, and becomes nearly free where taking it would be nearly
+harmless. That is what makes a hard constraint safe to impose — its cost is
+concentrated precisely where the alternative is worst — and it is a stronger claim
+than "it rarely fires".
 
-The decline demonstration in the smoke section is at ratio 0.01, which is the SAME
-ratio as the measured chr21 damage case (2 Mb spacing, 0.02 Mb wiggle). It is the
-scaled analogue of a geometry known to fragment loci, not an arbitrary stress.
+### The requirement is ABSOLUTE, not proportional to spacing
 
-What NOT to read out of it: that the constraint still binds once at ratio 1.0 on this
-corpus is not evidence against the chromosome-scale finding. `minigenome` is a
-synthetic 3.4 Mb test contig carrying 2,507 alignments packed far more densely per Mb
-than a real chromosome, and its 16 targets at 0.2 Mb spacing are 50x finer than the
-shipped 10 Mb default. At the smoke section's own sane geometry -- 0.5 Mb spacing with
-0.2 Mb wiggle, ratio 0.4 -- it placed 12 of 12 with nothing declined. `[INFERENCE]`
-At the shipped 10 Mb / 1 Mb defaults on a real chromosome the refusal should be rare
-to absent, which is what chr21 (0 severed at 4 cuts) and chr1 (24 of 24 targets
-placeable at 0 severed) both show; that has not been rerun here.
+The table above holds spacing FIXED, so wiggle in bases and the wiggle-to-spacing
+ratio move together and cannot be told apart in it. An earlier draft of this note
+read it as the ratio being operative. **That reading was wrong**, and it matters,
+because it is the premise of a change that would reintroduce the exact damage this
+mode exists to prevent.
+
+Deconfounded by varying spacing at FIXED absolute wiggle, same corpus:
+
+| spacing | wiggle | ratio | targets | declined | decline fraction |
+|---|---|---|---|---|---|
+| 0.2 Mb | 0.04 Mb | 0.200 | 16 | 5 | 0.312 |
+| 0.4 Mb | 0.04 Mb | 0.100 | 8 | 2 | 0.250 |
+| 0.8 Mb | 0.04 Mb | 0.050 | 3 | 1 | 0.333 |
+| 0.2 Mb | 0.1 Mb | 0.500 | 16 | 2 | 0.125 |
+| 0.4 Mb | 0.1 Mb | 0.250 | 8 | 1 | 0.125 |
+| 0.8 Mb | 0.1 Mb | 0.125 | 3 | 1 | 0.333 |
+
+Hold absolute wiggle at 0.04 Mb and the decline fraction stays near 0.3 while the
+ratio falls 4x. Hold it at 0.1 Mb and the fraction stays near 0.125 over the same 4x
+ratio range. Compare across the two blocks instead and the fraction halves when
+absolute wiggle rises — 0.312 to 0.125 at spacing 0.2, 0.250 to 0.125 at spacing 0.4.
+The ratio predicts nothing: ratio 0.200 gives 0.312 while the LARGER ratio 0.250 gives
+0.125, and ratio 0.125 gives a higher decline fraction than the smaller ratio 0.100.
+(The 0.8 Mb rows carry only 3 targets; the 16- and 8-target rows are the load-bearing
+ones.)
+
+So `SpanIndexProbe` is right and this corpus agrees with it: the distance you may have
+to travel to reach a read-free gap is a property of the sequence and the library, in
+BASES. Measured at chromosome scale, max nearest-zero distance 431.4 kb on chr1 and
+382.8 kb on chr21, which is why ~0.7-0.8 Mb of total wiggle suffices at 2 Mb spacing
+and why the shipped 1 Mb default already covers it. Spacing decides how many windows
+there are, not how likely each one is to succeed.
+
+### The misreading to prevent
+
+**Do not make the default wiggle proportional to spacing.** A "keep the ratio at 0.1"
+rule looks harmless and is calibrated by the 10 Mb / 1 Mb default, but at 2 Mb spacing
+it yields a 0.2 Mb window — below the 382.8 kb that chr21 actually needs. That is not
+a hypothetical: 2 Mb spacing with a starved window is the geometry that severed 940
+alignments, lost 20 models of which 17 span a cut, and replaced an eight-isoform gene
+with two spurious monoexonic fragments. The wiggle default must stay absolute, and if
+anything it should be floored at the genome's measured nearest-zero distance rather
+than scaled down with spacing.
+
+Under an absolute rule the smoke section's decline demonstration is a starved window
+in absolute terms — 0.002 Mb on a corpus whose gaps need tens of kb — which is the
+same failure the chr21 stress case had at 0.02 Mb against a genome needing hundreds of
+kb. Both starve the search. (Those two geometries also happen to share a
+wiggle-to-spacing ratio of 0.01; on the evidence above that is a coincidence of the
+arithmetic, not the mechanism, and it should not be quoted as one.)
+
+### What NOT to conclude from this corpus
+
+That one decline persists on `minigenome` even at 0.2 Mb wiggle is not evidence
+against the chromosome-scale result. `minigenome` is a synthetic 3.4 Mb contig carrying
+2,507 alignments packed far more densely per Mb than a real chromosome, and 16 targets
+at 0.2 Mb spacing is 50x finer than the shipped 10 Mb default. At the smoke section's
+own sane geometry — 0.5 Mb spacing, 0.2 Mb wiggle — it placed 12 of 12 with nothing
+declined. `[INFERENCE]` At the shipped 10 Mb / 1 Mb defaults on a real chromosome the
+refusal should be rare to absent, consistent with chr21 (0 severed at 4 cuts) and chr1
+(24 of 24 targets placeable at 0 severed); that was not rerun here.
 
 ## Why only the strandless arm needs the raw bam indexed
 
