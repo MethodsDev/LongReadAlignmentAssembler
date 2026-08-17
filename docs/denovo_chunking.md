@@ -200,6 +200,69 @@ chunk emits a `comp-1`. Unpatched concatenation fuses unrelated models; that is 
 produced 37 spurious chromosome-crossing "models" in the chr21 work before it was
 diagnosed.
 
+## How often does the refusal actually bind?
+
+A constraint that fires constantly is a footgun, so this was measured rather than
+assumed. `SpanIndexProbe` measured on real chromosomes that ~0.7-0.8 Mb of TOTAL
+wiggle suffices to give every 2 Mb target a zero-cost position, and the shipped
+default is already 1 Mb -- i.e. at sane geometries the constraint should not bind.
+Note that the 940-severed stress result came from a 20 kb wiggle OVERRIDE, not from
+2 Mb spacing: a wiggle-to-spacing ratio of 0.01.
+
+Swept on `minigenome` at 0.2 Mb spacing, selector only, strandless. The right axis
+is the wiggle-to-spacing RATIO, because that is what decides how many grid positions
+a window offers:
+
+| ratio | wiggle | placed / requested | declined | alignments the SOFT rule would sever |
+|---|---|---|---|---|
+| 0.01 | 0.002 Mb | 7 / 16 | 9 | 378 |
+| 0.05 | 0.01 Mb | 8 / 16 | 8 | 331 |
+| 0.10 | 0.02 Mb | 11 / 16 | 5 | 44 |
+| 0.30 | 0.06 Mb | 13 / 16 | 3 | 24 |
+| 0.40 | 0.08 Mb | 14 / 16 | 2 | 16 |
+| 0.70 | 0.14 Mb | 15 / 16 | 1 | 1 |
+| 1.00 | 0.2 Mb | 15 / 16 | 1 | 1 |
+
+Two things to read out of it, and one thing not to.
+
+Declines fall monotonically with the ratio and TRACK what the soft rule would have
+severed: at ratio 0.01 the refusal costs 9 cuts and buys back 378 severed
+alignments; at ratio 1.0 it costs 1 cut and buys back 1. The constraint is
+self-limiting -- it binds hardest exactly where the soft rule does most damage, and
+becomes nearly free where the soft rule is nearly harmless.
+
+The decline demonstration in the smoke section is at ratio 0.01, which is the SAME
+ratio as the measured chr21 damage case (2 Mb spacing, 0.02 Mb wiggle). It is the
+scaled analogue of a geometry known to fragment loci, not an arbitrary stress.
+
+What NOT to read out of it: that the constraint still binds once at ratio 1.0 on this
+corpus is not evidence against the chromosome-scale finding. `minigenome` is a
+synthetic 3.4 Mb test contig carrying 2,507 alignments packed far more densely per Mb
+than a real chromosome, and its 16 targets at 0.2 Mb spacing are 50x finer than the
+shipped 10 Mb default. At the smoke section's own sane geometry -- 0.5 Mb spacing with
+0.2 Mb wiggle, ratio 0.4 -- it placed 12 of 12 with nothing declined. `[INFERENCE]`
+At the shipped 10 Mb / 1 Mb defaults on a real chromosome the refusal should be rare
+to absent, which is what chr21 (0 severed at 4 cuts) and chr1 (24 of 24 targets
+placeable at 0 severed) both show; that has not been rerun here.
+
+## Why only the strandless arm needs the raw bam indexed
+
+Stated because the next person to add a chunked mode will face the same question, and
+because "I tested it and it was fine" does not survive a new mode. The raw bam is
+fetched by coordinate only when there is no stage-1 split output to read, and
+`--strandless_chunks` is precisely the flag that skips stage 1. Those are not two
+conditions that happen to agree today -- they are one condition named twice, so
+`ensure_bam_index`'s `if args.strandless_chunks:` guard is co-extensive with the need
+by construction rather than by coincidence.
+
+Discovery does not change that: de novo strand-first reads the stage-1 strand-split
+bams for cut selection and for extraction exactly as quant strand-first does.
+Verified on a deliberately unindexed copy of the corpus bam, both arms: strand-first
+de novo exits 0, places 12 of 12 cuts, and leaves the directory holding `reads.bam`
+and no `.bai`; strandless de novo over the same unindexed copy exits 0 and logs
+`missing index for .../reads.bam, building it`. One arm proves the guard fires when
+needed, the other that it correctly does not fire when it is not.
+
 ## Deliberately not done
 
 * **No WDL wiring.** `885a39f` has just landed WDL chunk parameters and a sibling is
