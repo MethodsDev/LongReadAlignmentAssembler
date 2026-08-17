@@ -147,11 +147,13 @@ From `FINDINGS.chr21_denovo_parity.md` (LRAA_PAPER_Analyses `05af6d8`), measured
 a sibling slice on chr21, HG002 PacBio Kinnex, 199,153 retained primary alignments.
 It is not re-derived here.
 
-**At the shipped 10 Mb spacing the cuts sever ZERO alignments**, and chunked de novo
-discovery differs from the unchunked run by ONE model out of 1462, none gained. That
-one model sits 2,724,898 bp from the nearest cut, so it is not a boundary artifact.
-The monoexonic bucket — the one that would carry severed-read damage — is identical,
-120 against 120, every span matching.
+**At the shipped 10 Mb spacing the cuts sever ZERO alignments.** The sibling slice
+measured chunked de novo discovery differing from the unchunked run by ONE model out
+of 1,462, none gained, 2,724,898 bp from the nearest cut and so already not a boundary
+artifact. That residual is gone. It was a `min_per_id` defect in stage 4, fixed in
+devel `5e8b818`, and at this branch's base the two arms agree exactly — see "Parity at
+the current base" below for the re-measurement and for the control that puts the
+difference back.
 
 **Forced to a 2 Mb spacing with a 0.02 Mb window the selector has to sever 940
 alignments, and the damage is exactly the predicted shape.** 17 of the 20 lost
@@ -180,6 +182,51 @@ mechanism it feared is real, is local, and is caused by severing — which the
 selector measures per candidate position and can therefore SEARCH AWAY FROM. The
 first revision of this note ended that sentence with "and can therefore refuse",
 which is the step the user rejected.
+
+### Parity at the current base, and what the last residual actually was
+
+Re-measured directly rather than cited, because devel `5e8b818` changed the arm under
+test: `denovo-chunking` rebased onto `5e8b818`, driven through the branch's own CLI
+(`LRAA --chunk`, no `--gtf`, no `--quant_only`), shipped geometry, `--HiFi`, chr21
+HG002 PacBio Kinnex, 199,153 retained primary alignments, 0 severed. The comparator is
+keyed on intron chain and exact exon structure, with monoexonic models in their own
+overlap-matched bucket, and never on transcript_id.
+
+| arm pair | models | exact structures | only in one arm |
+| --- | --- | --- | --- |
+| unchunked vs chunked, rescue ON (ships) | 1460 = 1460 | 1340 = 1340 | 0 / 0 |
+| unchunked vs chunked, rescue OFF | 1461 = 1461 | 1341 = 1341 | 0 / 0 |
+| unchunked twice, rescue ON | 1460 = 1460 | 1340 = 1340 | 0 / 0 |
+| unchunked twice, rescue OFF | 1461 = 1461 | 1341 = 1341 | 0 / 0 |
+| zero cuts placed, `--approx_MB_per_cut 100` | 1460 = 1460 | 1340 = 1340 | 0 / 0 |
+
+Keyed on GTF coordinates rather than on the comparator's structures — a coarser
+question, since it also catches a boundary that moved on an otherwise shared model —
+every one of those pairs differs on 0 of 11,811 rows, or 0 of 11,823 with rescue off.
+The monoexonic bucket is 120 against 120 with every span matching throughout.
+
+**The residual this note used to report was a `min_per_id` defect in stage 4, not a
+partition effect.** Stage 4 ran `util/normalize_bam_by_strand.py` without
+`--min_per_id`, so the normalizer used its own default of 0 while the rest of the run
+filtered at 97 under `--HiFi`. It discards alignments below the threshold BEFORE
+measuring depth, so the two arms thinned different reads. Only the CHUNKED arm went
+through that code, which is why the difference had exactly one side.
+
+Not asserted, demonstrated. The same tree with ONLY the stage-4 `--min_per_id`
+forwarding removed puts the difference back, and puts back the identical one:
+`chr21(-):39,342,321-39,349,073`, a six-exon model whose 5'-terminal exon's right end
+moves 4 bp to 39,349,069, two GTF rows of 11,811, one differing structure each way.
+Restore the forwarding and it is gone. The stage-4 command recorded in `timing.json`
+carries `--min_per_id 97.0` on all 10 units of every fixed arm and carries none on any
+of the control's 10, so the mechanism was live in the arm that was measured.
+
+The zero-cuts arm is the load-bearing control on both sides of that. It places no cut
+at all on a 46.7 Mb contig and still runs the whole extract / normalize / rebase /
+merge path: before the fix it REPRODUCED the difference, which is what ruled out the
+boundaries; after the fix it is exact, which is what says the pipeline path is now
+clean. The unchunked-twice arms are the floor — the unchunked path is not
+byte-reproducible against itself, because transcript ids are minted per run, and it is
+exactly structure-reproducible, which is why ids can key nothing here.
 
 ## The design: search outward, price what is left, never refuse
 
@@ -364,29 +411,40 @@ Separately, and independent of severing:
 it maps read sequences against a FASTA of ALL models on that contig-strand with
 `minimap2 -a --secondary=yes -N 50`. In the unchunked chr21 run, a read whose only
 primary alignment is at `chr21:6,500,980` was assigned to a paralogous model at
-`chr21:43,109,302` — 36.6 Mb away. Chunking confines rescue to a chunk, that
-assignment cannot happen, and the model it supported drops from 2 reads to 1 and is
-not reported. That is the single default-spacing difference, and 17 of 230,864
-assignment rows in that run cross a default chunk boundary (8 reads, 12 transcripts).
+`chr21:43,109,302` — 36.6 Mb away. Chunking confines rescue to a chunk, so that
+assignment cannot happen, and 17 of 230,864 assignment rows in that run cross a
+default chunk boundary (8 reads, 12 transcripts). The scope difference is real and
+this branch does not change it.
 
-**Measured since, by `Chr21DenovoParity`: with transcript-space rescue ablated in
-BOTH arms, the 5-chunk de novo arm reproduces the whole-contig arm EXACTLY** — 1461
-against 1461, zero differences in intron chains, in exact exon structures and in
-monoexonic spans. So the entire default-spacing divergence was rescue scope, and at
-the shipped 10 Mb spacing on chr21 there is no residual partition effect at all once
-it is removed. Note also that the config key governs the de novo path despite its CLI
-help saying quant-only (`pylib/LRAA.py` reads it at 282, 1233, 1416, 1470), which is
-its own small documentation defect.
+**What is no longer true is that it costs a model.** An earlier revision of this note
+read the one divergent model as rescue scope, and offered "rescue on, one divergent
+model; rescue off, zero" as the ready-made acceptance test for rescoping. Re-measured
+at this branch's base, rescue ON is exact and rescue OFF is exact ("Parity at the
+current base"), and the divergence that reading rested on was the stage-4 `min_per_id`
+defect. So rescue scoping is a difference in what the feature SEES, not a measured
+difference in what either arm REPORTS on this corpus at this geometry, and it is not
+what stood between this mode and exact reproducibility.
 
-Two consequences, and neither is implemented here.
+Rescoping rescue to the merged model set is still the better design — it keeps the
+feature and removes the scope dependence — and it is still not in this slice, because
+where a post-merge pass belongs is a decision that does not belong behind a review
+about cut placement. What it has lost is its cheap acceptance test: the honest
+expectation is now zero divergent models either way, so a rescoping change has to
+argue from scope rather than from a model count.
 
-1. Exact reproducibility is REACHABLE, not merely close: disable rescue inside chunks,
-   or better, scope it to the whole contig by running one rescue pass over the MERGED
-   model set after stage 6. The second keeps the feature and removes the scope
-   dependence, so it is the one I would build; it needs a design decision about where
-   a post-merge pass belongs, which is why it is not in this proposal.
-2. The ablation is a ready-made acceptance test for whoever does it: rescue on, expect
-   exactly one divergent model on chr21 at 10 Mb spacing; rescue off, expect zero.
+One trap for whoever repeats that ablation. `ChunkedRun.lraa_cmd` forwards `--HiFi` to
+the per-chunk LRAA and nothing else off LRAA's own flag surface, and
+`ChunkedRun.default_args` takes an explicit parameter list that does not include the
+rescue toggle, so `--no_rescue_unassigned_reads_via_transcriptome_alignment` on a
+`--chunk` command line is silently DROPPED. Measured: a chunked run given that flag is
+BYTE-IDENTICAL to the rescue-on chunked run and its per-chunk logs still show rescue
+running, while the same ablation applied to the `LRAA_Globals.config` default reaches
+every subprocess and its chunk logs do not mention rescue once. The rescue-OFF row
+above was produced the second way. This is devel's behaviour, not this branch's —
+`lraa_cmd` is unchanged here — and repairing the passthrough is a separate change.
+Note also that the config key governs the de novo path despite its CLI help saying
+quant-only (`pylib/LRAA.py` reads it at 282, 1233, 1416, 1470), which is its own small
+documentation defect.
 
 What remains genuinely out of reach of any CUT rule is the choice itself — whether
 position-blind rescue, which can rest a model's support on a locus 36.6 Mb from the
@@ -650,13 +708,19 @@ needed, the other that it correctly does not fire when it is not.
   artifacts that look comparable and are not.
 * **No change to the strandless path**, beyond it inheriting the same discovery
   switch as strand-first.
-* **The chr21 parity science was not re-run.** It is done, committed and cited.
-* **No change to rescue scoping**, although the measurement now shows that is what
-  stands between this mode and exact reproducibility on chr21. Scoping
-  `IsoformReadRescue` to the merged model set is a design decision about where a
-  post-merge pass belongs, and folding it into a proposal about cut placement would
-  put two independent decisions behind one review. The acceptance test for it already
-  exists: rescue on, one divergent model; rescue off, zero.
+* **The chr21 parity science WAS re-run**, at this branch's base, because devel
+  `5e8b818` changed the arm it measures: see "Parity at the current base". The stress
+  geometry and the chr1 placement figures are the cited sibling's and are not
+  re-derived here.
+* **No change to rescue scoping.** Scoping `IsoformReadRescue` to the merged model set
+  is a design decision about where a post-merge pass belongs, and folding it into a
+  proposal about cut placement would put two independent decisions behind one review.
+  It no longer comes with a model-count acceptance test: both rescue configurations are
+  exact at this base.
+* **No repair of the chunked-mode flag passthrough.** `ChunkedRun.lraa_cmd` forwards
+  only `--HiFi`, so LRAA tuning flags given to a `--chunk` run do not reach the chunk
+  workers — measured for the rescue toggle, which a `--chunk` run silently ignores.
+  Pre-existing in devel, unchanged here, and a separate change.
 * **The CLI help for
   `--no_rescue_unassigned_reads_via_transcriptome_alignment` was not corrected**,
   though it says quant-only while `pylib/LRAA.py` reads the key on the de novo path
