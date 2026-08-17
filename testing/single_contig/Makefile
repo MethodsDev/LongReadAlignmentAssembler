@@ -143,7 +143,7 @@ include ../lraa_test_docker.mk
 
 # MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
-test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_ORF_prediction
+test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_chunked_strandless test_wdl_ORF_prediction
 
 test_wdl_ID_ref_free:
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
@@ -183,6 +183,28 @@ test_wdl_chunked:
 	rm -rf __wdl_chunked
 	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.Quant_only_chunked_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunked/. --verbose
 	python3 -c 'import json,collections; r=json.load(open("__wdl_chunked/outputs.json"))["LRAA_wf.chunkReports"]; assert len(r)==1, "expected one shard chunk report, got %r" % (r,); m=json.load(open(r[0]))["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("chunks per contig-strand: %r" % (dict(per),)); assert max(per.values()) > 1, "no contig-strand was cut, so chunking never happened: %r" % ([c["region"] for c in m],)'
+
+# Strandless chunking, through the WDL layer.
+#
+# The mode was reachable from util/misc/run_chunked_quant_pipeline.py and from
+# nothing else -- --strandless_chunks lived in ChunkedRun's parser alone, so LRAA
+# could not pass it and no WDL could reach it. test_chunked_strandless above covers
+# the LRAA half; this covers the WDL half, which is the half that was missing.
+#
+# No num_total_reads in the inputs, deliberately. The strandless arm runs no stage 1
+# and so requires -N, and LRAA refuses without it (test_chunked_strandless_requires_N).
+# The scattered path already counts the bam and passes the count to every shard, so
+# the requirement is satisfied without the caller knowing it exists -- and if that
+# ever stops being true this run fails on the refusal rather than quietly.
+#
+# Asserts the strandless SHAPE, not that a Boolean was accepted: cut selection is one
+# strandless pass rather than one per orientation, stage 1 is skipped, some contig was
+# cut, and each interval carries the split it did internally. A --strandless_chunks
+# that plumbed through and then ran strand-first satisfies none of those.
+test_wdl_chunked_strandless:
+	rm -rf __wdl_chunked_strandless
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.Quant_only_chunked_strandless_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunked_strandless/. --verbose
+	python3 -c 'import json,collections; r=json.load(open("__wdl_chunked_strandless/outputs.json"))["LRAA_wf.chunkReports"]; assert len(r)==1, "expected one shard chunk report, got %r" % (r,); d=json.load(open(r[0])); assert "cuts_strandless" in d["stages"] and "cuts_plus" not in d["stages"], "cut selection was not strandless: %r" % (sorted(d["stages"]),); assert "skipped" in d["stages"]["strand_split"], "the whole-bam strand split still ran: %r" % (d["stages"]["strand_split"],); m=d["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("strandless intervals: %r, quant units: %d, -N from: %s" % (dict(per), d["arms"]["chunked"]["quant_units"], d["num_total_reads_source"])); assert max(per.values()) > 1, "no contig was cut: %r" % ([c["region"] for c in m],); assert all(c["split_counts"] for c in m), "intervals carry no per-chunk split accounting, so the split did not run inside them"'
 
 test_wdl_ORF_prediction:
 	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json $(LRAA_WDL_DOCKER_ORF) --verbose
