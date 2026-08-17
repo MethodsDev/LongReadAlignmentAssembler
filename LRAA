@@ -2860,13 +2860,23 @@ def _run_chunked_mode(args):
     be placed cleanly is DECLINED -- the chunk stays larger rather than the cut
     being taken. Declined cuts are reported per target, with the reason.
 
-    Discovery is NOT free of partition dependence even at zero severed, and
-    saying so is part of offering the mode: ``pylib/IsoformReadRescue.py`` is
-    scoped to a whole contig-strand and is position-blind, so a read can be
-    rescued onto a paralogous model megabases away, and chunking confines that.
-    Measured cost on chr21 at the shipped 10 Mb spacing: one model of 1462, and
-    that one 2.7 Mb from the nearest cut. It is the residual the zero-severed
-    rule does not remove.
+    Zero severed is also worth more than it says: because the cost counts an
+    alignment's whole REFERENCE span, introns included, a position no alignment
+    spans cannot be straddled by any splice-graph COMPONENT either -- nodes are
+    blocks and edges are N ops, both inside that span, so connectivity cannot
+    cross. That matters because boundary damage was measured at component
+    granularity, on a model 87 kb from its cut.
+
+    Discovery is NOT free of partition dependence even so, and saying so is part
+    of offering the mode: ``pylib/IsoformReadRescue.py`` is scoped to a whole
+    contig-strand and is position-blind, so a read can be rescued onto a
+    paralogous model megabases away, and chunking confines that. Measured cost on
+    chr21 at the shipped 10 Mb spacing: one model of 1462, that one 2.7 Mb from
+    the nearest cut. It is ELIMINABLE rather than inherent -- with rescue ablated
+    in both arms the chunked and whole-contig arms agree exactly, 1461 against
+    1461 -- but eliminating it means scoping rescue to the merged model set rather
+    than to a chunk, which is a design decision this mode does not make. See
+    docs/denovo_chunking.md.
     """
 
     import ChunkedRun

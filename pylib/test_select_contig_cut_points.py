@@ -1652,3 +1652,47 @@ def test_the_cli_flag_reaches_the_selection(tmp_path):
     assert payload["counts"]["alignments_dropped_at_cuts"] == 0
     with open(prefix + ".dropped_reads.txt", "rt") as fh:
         assert fh.read().strip() == ""
+
+
+def test_an_intron_crossing_the_window_makes_every_position_inadmissible(tmp_path):
+    """The invariant the "no severed COMPONENT" guarantee rests on.
+
+    Zero spanning alignments is worth more than it looks: it implies no connected
+    component of the splice graph straddles the cut. Nodes come from alignment
+    blocks and edges from N ops, both of which lie inside an alignment's REFERENCE
+    span, so if no alignment's reference span contains the position then nothing on
+    the left shares a node or an edge with anything on the right, and connectivity
+    cannot cross. Damage to a model 87 kb from a cut -- observed on chr21, where a
+    cut inside a component's span repartitioned models nowhere near the boundary --
+    is therefore prevented by construction, not by a distance heuristic.
+
+    That argument fails if the cost counts aligned BLOCKS rather than the reference
+    span, because an intron would then cross a cut for free while its alignment's
+    two halves stayed connected through the N edge. This read has no aligned base
+    anywhere in the window; only its intron is there.
+    """
+
+    fixture = Fixture(tmp_path, length=6000)
+    # blocks 2000-2100 and 3900-4000, intron 2101-3899 across the whole window
+    fixture.add_read("spliced", "+", [(2000, 2100), (3900, 4000)])
+    fixture.build()
+
+    window = (2900, 3100)
+    for block in ((2000, 2100), (3900, 4000)):
+        assert block[1] < window[0] or block[0] > window[1], "no aligned base here"
+
+    soft = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
+    assert [cut.position for cut in soft.cuts] == [3000]
+    assert soft.cuts[0].spanning_dropped == 1
+
+    hard = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+        require_zero_severed=True,
+    )
+    assert hard.cuts == []
+    assert hard.unplaced[0].declined_zero_severed is True
+    assert hard.unplaced[0].best_spanning == 1
+    assert hard.total_dropped == 0

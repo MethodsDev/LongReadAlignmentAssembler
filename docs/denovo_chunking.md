@@ -41,6 +41,36 @@ separately, as truncated or spurious models.
 So severing is not a cost to be minimised in discovery. It is the whole failure
 mode, and the correct treatment of it is refusal.
 
+### The corollary that matters: no severed COMPONENT, not just no severed read
+
+Worth spelling out, because a weaker gate is the obvious thing to reach for and it
+would miss a whole damage class. `Chr21DenovoParity` revised their own diagnostic
+after finding that `comp-2240:iso-10` was damaged while sitting 87 kb from the
+nearest cut: the cut at 40,005,600 fell inside its COMPONENT's span
+(39,953,924-40,137,010), and cutting a component repartitions models that never come
+near the boundary. Their conclusion, correctly, is that a gate on "no model within
+X bp of a cut differs" misses this, and the right granularity is the component.
+
+The spanning-alignment gate already IS that gate, by construction rather than by
+measurement. The cost counts an alignment as severed when its full REFERENCE span
+contains the position — `aln.reference_start` to `aln.reference_end`, introns
+included, not its aligned blocks. So zero spanning alignments means every retained
+alignment lies wholly left or wholly right of `b`. Nodes are blocks and edges are `N`
+ops, and both lie inside an alignment's reference span, so nothing on the left shares
+a node or an edge with anything on the right, and connectivity — which is transitive
+through shared nodes and edges — cannot cross `b`. No component can straddle a
+position no alignment spans.
+
+That specific cut is the check: 40,005,600 severed 30 alignments in the stress arm,
+so it is inadmissible under this gate and the 87 kb collateral never arises.
+
+The reference-span detail is load-bearing for that argument and is pinned by
+`test_an_intron_crossing_the_window_makes_every_position_inadmissible`. Fail-verified
+by mutating the cost to count the first aligned block instead of the reference span:
+the spliced read's intron then crosses the window for free, `spanning_dropped` falls
+from 1 to 0, the cut is placed, and both that test and the pre-existing
+`test_long_intron_alignments_do_not_influence_selection` fail. Restored, 54 pass.
+
 ## The evidence
 
 From `FINDINGS.chr21_denovo_parity.md` (LRAA_PAPER_Analyses `05af6d8`), measured by
@@ -144,7 +174,9 @@ Three places, deliberately, because each catches a different way of getting it w
 
 ## What discovery chunking still does NOT guarantee
 
-Zero severed is necessary, not sufficient, and the measurement says so directly.
+Zero severed is necessary, not sufficient — but the residual is smaller than that
+phrasing suggests, and it is ELIMINABLE, which a first version of this note got
+wrong by calling it simply unfixable.
 
 `pylib/IsoformReadRescue.py` is scoped to a whole contig-strand and is position-blind:
 it maps read sequences against a FASTA of ALL models on that contig-strand with
@@ -155,9 +187,29 @@ assignment cannot happen, and the model it supported drops from 2 reads to 1 and
 not reported. That is the single default-spacing difference, and 17 of 230,864
 assignment rows in that run cross a default chunk boundary (8 reads, 12 transcripts).
 
-This is stated here rather than fixed here. It is not a boundary artifact, no cut
-rule can address it, and whether position-blind rescue is desirable is a separate
-question for the authors.
+**Measured since, by `Chr21DenovoParity`: with transcript-space rescue ablated in
+BOTH arms, the 5-chunk de novo arm reproduces the whole-contig arm EXACTLY** — 1461
+against 1461, zero differences in intron chains, in exact exon structures and in
+monoexonic spans. So the entire default-spacing divergence was rescue scope, and at
+the shipped 10 Mb spacing on chr21 there is no residual partition effect at all once
+it is removed. Note also that the config key governs the de novo path despite its CLI
+help saying quant-only (`pylib/LRAA.py` reads it at 282, 1233, 1416, 1470), which is
+its own small documentation defect.
+
+Two consequences, and neither is implemented here.
+
+1. Exact reproducibility is REACHABLE, not merely close: disable rescue inside chunks,
+   or better, scope it to the whole contig by running one rescue pass over the MERGED
+   model set after stage 6. The second keeps the feature and removes the scope
+   dependence, so it is the one I would build; it needs a design decision about where
+   a post-merge pass belongs, which is why it is not in this proposal.
+2. The ablation is a ready-made acceptance test for whoever does it: rescue on, expect
+   exactly one divergent model on chr21 at 10 Mb spacing; rescue off, expect zero.
+
+What remains genuinely out of reach of any CUT rule is the choice itself — whether
+position-blind rescue, which can rest a model's support on a locus 36.6 Mb from the
+read's own primary alignment, is desirable. That is a question for the authors, and
+this slice does not answer it.
 
 ## Quant mode is unchanged
 
@@ -351,3 +403,14 @@ needed, the other that it correctly does not fire when it is not.
 * **No change to the strandless path**, beyond it inheriting the same discovery
   switch as strand-first.
 * **The chr21 parity science was not re-run.** It is done, committed and cited.
+* **No change to rescue scoping**, although the measurement now shows that is what
+  stands between this mode and exact reproducibility on chr21. Scoping
+  `IsoformReadRescue` to the merged model set is a design decision about where a
+  post-merge pass belongs, and folding it into a proposal about cut placement would
+  put two independent decisions behind one review. The acceptance test for it already
+  exists: rescue on, one divergent model; rescue off, zero.
+* **The CLI help for
+  `--no_rescue_unassigned_reads_via_transcriptome_alignment` was not corrected**,
+  though it says quant-only while `pylib/LRAA.py` reads the key on the de novo path
+  too (282, 1233, 1416, 1470). Reported rather than fixed: it is not this slice's
+  file, and a sibling found it.
