@@ -37,6 +37,40 @@ task LRAA_runner_task {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
+        # Chunked quantification. Off by default: without it LRAA runs exactly the
+        # command it ran before these inputs existed.
+        #
+        # Chunking splits each contig-strand at low-coverage positions between
+        # annotated loci, quantifies the chunks concurrently under one --cpu_budget,
+        # and merges. It is what lets a task go faster than its longest contig, and it
+        # bounds peak memory by the chunk size instead of the contig size -- measured
+        # on chr1 at budget 8, 3.58 GB peak against 10.03 GB unchunked, 2.8x wall.
+        #
+        # LRAA requires --quant_only and --gtf for this: a chunk sees only the isoforms
+        # inside it, so discovery across a cut would produce two partial models of one
+        # locus. Setting chunk without both of those is refused by LRAA, not silently
+        # ignored. Chunked mode also has no single-cell plumbing -- cell_list,
+        # cell_barcode_tag and read_umi_tag do not reach the chunk workers -- so do not
+        # combine it with the single-cell callers of this task.
+        #
+        # The per-chunk intermediates go to <output_prefix>.chunked_work in the task's
+        # own working directory, which is writable and is not delocalized. They can be
+        # several times the input BAM, so a chunked run wants the same diskSizeGB
+        # headroom an unchunked one gets, not less.
+        Boolean chunk = false
+        # Approximate MEGABASES between cuts. Larger chunks, fewer of them, higher peak
+        # memory per chunk. LRAA's default is 10; a contig shorter than this yields no
+        # cuts at all and chunking degenerates to a single-chunk run of the whole thing.
+        Float? approx_MB_per_cut
+        # TOTAL width in MEGABASES of the search window centred on each target cut, not
+        # the half-width. LRAA's default is 1, so it must come down alongside a small
+        # approx_MB_per_cut or neighbouring windows overlap.
+        Float? approx_MB_per_cut_wiggle_window
+        # Move the orientation split out of the serial whole-BAM phase and into the
+        # per-chunk parallel phase. Requires num_total_reads: the whole-BAM pass that
+        # would otherwise count the TPM denominator no longer runs.
+        Boolean strandless_chunks = false
+
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         # TOTAL cores for this task: both the runtime cpu request and the --cpu_budget
@@ -61,7 +95,24 @@ task LRAA_runner_task {
     Float mem_raw_mid_small_uncapped = if bam_size_gib > 0.5 then 32.0 + (40.0 * (bam_size_gib - 0.5)) else 32.0
     Float mem_raw_mid_small = if mem_raw_mid_small_uncapped > 40.0 then 40.0 else mem_raw_mid_small_uncapped
     Float mem_raw = if mem_raw_size > mem_raw_mid_small then mem_raw_size else mem_raw_mid_small
-    Int computed_memoryGB = if mem_raw > 32.0 then ceil(mem_raw) else 32
+    Int computed_memoryGB_unchunked = if mem_raw > 32.0 then ceil(mem_raw) else 32
+
+    # A chunked run does not scale with the shard. Its peak is the number of chunks it
+    # runs at once times what one chunk holds, and BOTH sides of that are bounded by
+    # cpu: chunk concurrency is derived from --cpu_budget, and a chunk holds only its
+    # own extracted mini-contig, whose length is approx_MB_per_cut and not the
+    # chromosome's. Sizing it off the shard BAM instead would ask for 40+ GiB to do
+    # work measured at 3.58 GB, and on a scattered whole-genome run that is the
+    # difference between shards that schedule and shards that queue.
+    #
+    # 2 GiB/core against 0.45 GiB/core measured (3.58 GB at cpu_budget 8, chr1, default
+    # 10 Mb cuts) -- 4x, off one corpus, with a 16 GiB floor for the serial phases and
+    # the final merge. A caller who raises approx_MB_per_cut far past the default makes
+    # each chunk proportionally bigger and should pass memoryGB, which still overrides.
+    Float mem_raw_chunked = 2.0 * cpu
+    Int computed_memoryGB_chunked = if mem_raw_chunked > 16.0 then ceil(mem_raw_chunked) else 16
+
+    Int computed_memoryGB = if chunk then computed_memoryGB_chunked else computed_memoryGB_unchunked
     Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
 
     String no_norm_flag = if (no_norm) then "--no_norm" else ""
@@ -201,6 +252,10 @@ task LRAA_runner_task {
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
+                                 ~{true="--chunk" false='' chunk} \
+                                 ~{if (chunk && strandless_chunks) then "--strandless_chunks" else ""} \
+                                 ~{if (chunk && defined(approx_MB_per_cut)) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
+                                 ~{if (chunk && defined(approx_MB_per_cut_wiggle_window)) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
                                  ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
                   > command_output.log 2>&1
         )
@@ -253,6 +308,23 @@ task LRAA_runner_task {
             fi
         fi
 
+        # The one thing worth keeping out of the chunk work directory: the record of what
+        # the run actually partitioned into. It carries one entry per chunk under
+        # chunk_manifests, plus per-chunk wall times and the concurrency the budget was
+        # split into, and it is the only way to tell a chunked run from an unchunked one
+        # after the fact -- the quant tables are supposed to be indistinguishable. A few
+        # KB per chunk, against a work directory that holds every chunk's BAM, so the
+        # report is lifted out and the directory itself is left behind undelocalized.
+        if [[ "~{chunk}" == "true" ]]; then
+            chunk_report_out="~{output_prefix_use}.~{output_suffix}.chunk_report.json"
+            chunk_timing="~{output_prefix_use}.~{output_suffix}.chunked_work/timing.json"
+            if [[ -s "$chunk_timing" ]]; then
+                cp "$chunk_timing" "$chunk_report_out"
+            else
+                echo "WARNING: chunked run left no timing.json at $chunk_timing" >&2
+            fi
+        fi
+
         
     >>>
 
@@ -263,6 +335,8 @@ task LRAA_runner_task {
         File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
         File? LRAA_normalized_splice_graph_bam = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam"
         File? LRAA_normalized_splice_graph_bai = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam.bai"
+        # Present only for a chunked run: the chunk manifests and per-chunk timings.
+        File? LRAA_chunk_report = "~{output_prefix_use}.~{output_suffix}.chunk_report.json"
     }
 
 
@@ -310,6 +384,14 @@ workflow LRAA_runner {
 
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
+
+        # Chunked quantification; see the task's inputs for what each of these does and
+        # what chunking requires. Off by default, so a caller that ignores them gets the
+        # command this task built before they existed.
+        Boolean chunk = false
+        Float? approx_MB_per_cut
+        Float? approx_MB_per_cut_wiggle_window
+        Boolean strandless_chunks = false
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -351,6 +433,10 @@ workflow LRAA_runner {
             min_alt_unspliced_freq=min_alt_unspliced_freq,
             cell_barcode_tag = cell_barcode_tag,
             read_umi_tag = read_umi_tag,
+            chunk = chunk,
+            approx_MB_per_cut = approx_MB_per_cut,
+            approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+            strandless_chunks = strandless_chunks,
             shardno=shardno,
             docker=docker,
             cpu=cpu,
@@ -369,6 +455,7 @@ workflow LRAA_runner {
         File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
         File? LRAA_normalized_splice_graph_bam = LRAA_runner_task.LRAA_normalized_splice_graph_bam
         File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
+        File? LRAA_chunk_report = LRAA_runner_task.LRAA_chunk_report
     }
 
 }

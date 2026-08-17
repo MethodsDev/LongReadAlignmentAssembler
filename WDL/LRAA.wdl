@@ -40,6 +40,25 @@ workflow LRAA_wf {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
+        # Chunked quantification, off by default. The scatter below parallelises per
+        # CONTIG, so a whole-genome run's makespan is its longest chromosome and more
+        # cores cannot shorten it. Chunking is what breaks that floor: it splits each
+        # contig-strand at low-coverage positions between annotated loci INSIDE the
+        # per-contig task, runs the pieces concurrently under that task's one
+        # --cpu_budget, and merges. On chr1 at budget 8: 2.8x end to end, and peak RSS
+        # 3.58 GB against 10.03 GB, which is the part that decides whether a
+        # whole-genome run fits on a machine at all.
+        #
+        # Requires quant_only plus annot_gtf -- a chunk sees only the isoforms inside it,
+        # so discovery cannot span a cut. LRAA refuses the combination rather than
+        # quietly producing partial models. See subwdls/LRAA_runner.wdl for the rest.
+        Boolean chunk = false
+        Float? approx_MB_per_cut
+        Float? approx_MB_per_cut_wiggle_window
+        # Needs num_total_reads, which the scattered path always computes but the direct
+        # path only has if the caller supplies it.
+        Boolean strandless_chunks = false
+
         #  non-scattered runs
         # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across
         # work units. numThreadsPerWorker and num_parallel_contigs multiplied instead:
@@ -63,6 +82,11 @@ workflow LRAA_wf {
     # Direct (non-scattered) run: 1.5× full BAM size, floor 64 GiB.
     # Scattered workers self-size at 25× their shard BAM (see LRAA_runner_task); an optional
     # memoryGBPerWorkerScattered override is passed through to the task when set.
+    # A chunked run is sized by the task instead, off cpu rather than off the BAM -- its
+    # peak is set by how many chunks run at once, not by how big the input is. Computing
+    # it a second time here would be a copy of that formula free to drift from it, so the
+    # direct call below simply declines to override for a chunked run. An explicitly
+    # supplied memoryGB still wins in either case.
     Float inputBAMsizeGiB = size(inputBAM, "GiB")
     Float mem_raw_direct = 1.5 * inputBAMsizeGiB
     Int computed_memoryGB = if mem_raw_direct > 64.0 then ceil(mem_raw_direct) else 64
@@ -125,11 +149,15 @@ workflow LRAA_wf {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
+                    chunk = chunk,
+                    approx_MB_per_cut = approx_MB_per_cut,
+                    approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                    strandless_chunks = strandless_chunks,
                     cpu = cpuScattered,
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
-                    memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes from shard BAM using size and mid-small-shard estimates (floor 32 GiB)
+                    memoryGB = memoryGBPerWorkerScattered,  # Int? — if unset, task self-sizes: from the shard BAM unchunked (floor 32 GiB), from cpu when chunk is set (floor 16 GiB)
                     diskSizeGB = diskSizeGB
             }
         }
@@ -181,13 +209,17 @@ workflow LRAA_wf {
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
+                chunk = chunk,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                strandless_chunks = strandless_chunks,
                 cpu = cpu,
                 num_total_reads = num_total_reads,
                 cell_list = cell_list,
                 min_mapping_quality = min_mapping_quality,
                 min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                 docker = docker,
-                memoryGB = effective_memoryGB,
+                memoryGB = if chunk then memoryGB else effective_memoryGB,
                 diskSizeGB = diskSizeGB
         }
 
@@ -205,6 +237,10 @@ workflow LRAA_wf {
     # so this is one BAM per shard rather than one whole-genome BAM.
     Array[File] normalizedSpliceGraphBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bam]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bam, []]))
     Array[File] normalizedSpliceGraphBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bai]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bai, []]))
+    # One per chunked shard: the chunk manifests and per-chunk timings of a run that
+    # actually chunked. Empty when chunk is false, which is how a caller tells the two
+    # apart -- the quant tables are meant to be the same either way.
+    Array[File] chunkReports = if (run_without_splitting) then select_all([LRAA_direct.LRAA_chunk_report]) else select_all(select_first([LRAA_scatter.LRAA_chunk_report, []]))
     }
 }
 

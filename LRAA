@@ -1171,6 +1171,15 @@ def main():
         "are unaffected either way",
     )
     contig_group_setting.add_argument(
+        "--strandless_chunks",
+        action="store_true",
+        help="--chunk: cut and extract STRANDLESS chunks and run the "
+        "orientation split inside each chunk, concurrently with every other "
+        "chunk, instead of splitting the whole bam up front as a serial phase. "
+        "Requires --num_total_reads, because the whole-bam pass that would "
+        "otherwise supply the TPM denominator does not run",
+    )
+    contig_group_setting.add_argument(
         "--approx_MB_per_cut",
         type=float,
         default=LRAA_Globals.config["approx_MB_per_cut"],
@@ -2851,6 +2860,17 @@ def _run_chunked_mode(args):
         )
     if not args.gtf:
         sys.exit("Error: --chunk requires --gtf (the transcripts to quantify).")
+    if args.strandless_chunks and not args.num_total_reads:
+        # The strandless arm skips the whole-bam strand split, and that pass is
+        # what would otherwise count the retained records the TPM denominator
+        # defaults to. Refused here rather than deep in the pipeline, where the
+        # same refusal arrives after cut selection has already run.
+        sys.exit(
+            "Error: --strandless_chunks requires --num_total_reads. The "
+            "orientation split runs per chunk, so the whole-bam pass that "
+            "supplies the TPM denominator never runs and there is nothing to "
+            "default it to."
+        )
 
     work_dir = args.chunk_work_dir or "{}.chunked_work".format(args.output_prefix)
     logger.info("chunked mode: staging under %s", work_dir)
@@ -2865,6 +2885,7 @@ def _run_chunked_mode(args):
         HiFi=args.HiFi,
         arm="chunked",
         num_total_reads=args.num_total_reads,
+        strandless_chunks=args.strandless_chunks,
         approx_MB_per_cut=args.approx_MB_per_cut,
         approx_MB_per_cut_wiggle_window=args.approx_MB_per_cut_wiggle_window,
         depth_window=args.chunk_depth_window,
