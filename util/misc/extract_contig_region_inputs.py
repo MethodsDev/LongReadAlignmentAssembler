@@ -127,6 +127,32 @@ the run's own assigned reads, not the library. Secondary alignments need no such
 care: LRAA
 processes primary non-supplementary alignments only, so there is no rescue
 grouping left to span a boundary.
+
+Strandless chunks, and the one ordering that must not be reversed
+-----------------------------------------------------------------
+A region with no strand suffix (``chr1:1-10000000``) is a STRANDLESS chunk: one
+mini contig, one GTF carrying both strands' features, one BAM carrying both
+orientations, and the strand split deferred to a per-chunk step downstream. That
+is the whole point -- the split is the largest serial phase in the pipeline, and
+cutting first moves it into the parallel phase. It also halves the mini-FASTA:
+two strand chunks over the same interval each wrote the same sequence, and one
+strandless chunk writes it once.
+
+Nothing in the emission path needed widening for it. ``_strand_matches`` returns
+True for both orientations on a falsy strand, ``find_islands`` unions both
+strands' loci, and ``admissibility_offenders`` therefore refuses a boundary that
+cuts a locus on EITHER strand. What is new is the accounting -- per-orientation
+emitted counts, ``"strand": null`` and ``"strand_split_required"`` -- and a
+refusal.
+
+The refusal is the ordering constraint. ``separate_bam_by_strand.py`` REWRITES
+``is_reverse`` when a read's inferred transcribed strand disagrees with the
+aligner, and the strand filter here reads the RAW flag. So a chunk must be
+extracted strandlessly and split AFTERWARDS. Extracting ``chr1+:...`` from a raw
+bam would silently assign every flipped read to the wrong strand and still
+produce output that looks fine, which is why the CLI refuses a strand-suffixed
+region whose source bam still holds the other orientation rather than trusting
+the caller to remember the order.
 """
 
 import argparse
@@ -841,6 +867,14 @@ def admissibility_offenders(annotation, region, contig_length, margin=DEFAULT_MA
     and named; a LOCUS crossing a boundary cannot be dropped, because
     ``genes_contained`` would omit it from both neighbours and its isoforms would
     disappear from the run. So this stays a hard refusal and takes no bam.
+
+    A STRANDLESS region (``region.strand == ""``) is checked against the UNION:
+    the strand test below falls through, and the annotation a strandless region
+    loads carries both strands, so a boundary is refused if it cuts a locus on
+    EITHER strand. That is the right rule and not merely a convenient
+    fall-through -- a strandless chunk is the sole container for both strands'
+    loci over its interval, so a locus it splits is lost exactly as a
+    same-strand one would be.
     """
 
     edges = []
@@ -952,18 +986,46 @@ def extract_partition(
     secondary_alignments="exclude",
     mini_contig_name=None,
     gtf_index_cache_dir=None,
+    mixed_orientation_source="warn",
+    max_intron_length=None,
 ):
     """Extract one chunk. Returns the manifest, also written as JSON.
 
     Alignments that would extend past either boundary are DROPPED: counted,
     named into ``{output_prefix}.dropped_reads.txt``, and logged. Annotated loci
     are not droppable and a boundary that cuts one is refused outright.
+
+    A region with NO strand suffix is a STRANDLESS chunk: both orientations are
+    emitted into one bam over one mini contig, the manifest carries
+    ``"strand": null`` and ``"strand_split_required": true``, and the split is a
+    downstream step. ``mixed_orientation_source`` decides what a STRAND-SUFFIXED
+    region does when the source bam still holds the other orientation -- see the
+    refusal message for why that combination is a wrong answer rather than a
+    filtered one. ``"warn"`` here, ``"refuse"`` at the CLI: filtering a mixed bam
+    by raw orientation is a real capability with real callers, but nothing in the
+    pipeline invokes it and inside the pipeline the combination can only be the
+    ordering mistake.
+
+    ``max_intron_length`` is the intron cap the RUN uses, not this module's
+    default, and it has to be passed for the accounting to close. Under the
+    strand-first pipeline the bam reaching this point had already been filtered
+    at the run's value by the strand split, so reading the configured default
+    here was invisible; a strandless chunk is cut from the RAW bam, so a value
+    different from the default would make extraction retain a different record
+    set than selection costed and than the in-chunk split will keep. ``None``
+    reads ``LRAA_Globals.config``, 0 disables.
     """
 
     if secondary_alignments not in ("exclude", "reject"):
         raise ExtractionError(
             "secondary_alignments must be 'exclude' or 'reject', got {!r}".format(
                 secondary_alignments
+            )
+        )
+    if mixed_orientation_source not in ("warn", "refuse"):
+        raise ExtractionError(
+            "mixed_orientation_source must be 'warn' or 'refuse', got {!r}".format(
+                mixed_orientation_source
             )
         )
     if margin < 0:
@@ -1044,6 +1106,11 @@ def extract_partition(
 
     counts = collections.Counter()
     dropped = []  # (name, start, end, side) in source coordinates
+    # Set when a strand-suffixed region is being filtered out of a bam that still
+    # carries the other orientation. Reported after the writer closes rather than
+    # from inside it, so the partial chunk is removed rather than left to be
+    # mistaken for output.
+    mixed_orientation_offender = None
     bam_filename = "{}.bam".format(output_prefix)
     with pysam.AlignmentFile(bam, "rb") as bamreader:
         mini_header = _mini_header(bamreader.header, mini_contig_name, mini_length)
@@ -1056,7 +1123,18 @@ def extract_partition(
                     counts["nonprimary_seen"] += 1
                     if len(nonprimary) < 5:
                         nonprimary.append(aln.query_name)
-                if not retained_for_extraction(aln, region.strand):
+                # Retention is asked ORIENTATION-BLIND and the orientation tested
+                # separately, because the two questions have different answers: a
+                # record rejected for its flags or its introns says nothing about
+                # which orientations the source bam holds, and that is exactly
+                # what has to be known to tell a strand-split bam from a raw one.
+                if not retained_for_extraction(aln, "", max_intron_length):
+                    continue
+                if not _strand_matches(aln, region.strand):
+                    counts["opposite_orientation_seen"] += 1
+                    if mixed_orientation_source == "refuse":
+                        mixed_orientation_offender = aln.query_name
+                        break
                     continue
                 start = aln.reference_start + 1
                 end = aln.reference_end
@@ -1075,11 +1153,84 @@ def extract_partition(
                     dropped.append((aln.query_name, start, end, "+".join(sides)))
                     continue
                 counts["alignments_emitted"] += 1
+                # Per orientation as well as in total, because for a strandless
+                # chunk "both strands are in here" is the property the downstream
+                # split depends on, and a single total cannot state it.
+                if aln.is_forward:
+                    counts["alignments_emitted_forward"] += 1
+                else:
+                    counts["alignments_emitted_reverse"] += 1
                 bamwriter.write(
                     _rebase_alignment(
                         aln, offset, mini_header, mini_contig_name, mini_length
                     )
                 )
+
+    if mixed_orientation_offender is not None:
+        # Nothing partial survives: a chunk bam holding the reads seen before the
+        # offending one is not a smaller correct answer, it is a truncated one.
+        for path in (fasta_filename, fasta_filename + ".fai", bam_filename):
+            if os.path.exists(path):
+                os.remove(path)
+        raise ExtractionError(
+            "REFUSED: region {}{}:{}-{} asks for one orientation but {} still "
+            "holds the other (e.g. {}), so this bam has NOT been strand-separated. "
+            "separate_bam_by_strand.py REWRITES is_reverse on every read whose "
+            "inferred transcribed strand disagrees with the aligner, and the "
+            "strand filter here reads the RAW flag -- filtering before that "
+            "rewrite assigns every flipped read to the wrong chunk and still "
+            "produces output that looks fine. Extract STRANDLESSLY (drop the {} "
+            "suffix) and split the chunk afterwards, or point --bam at the "
+            "strand-separated bam. Pass --mixed_orientation_source warn only if "
+            "you mean to filter on aligner orientation. Nothing was kept.".format(
+                region.chrom,
+                region.strand,
+                region.lend,
+                region.rend,
+                bam,
+                mixed_orientation_offender,
+                region.strand,
+            )
+        )
+
+    if counts["opposite_orientation_seen"]:
+        print(
+            "NOTE: {} retained primary alignment(s) in {}{}:{}-{} carry the "
+            "opposite orientation and were excluded by the strand filter. If this "
+            "bam has not been strand-separated, that filter reads pre-flip flags "
+            "and the exclusion is wrong; count recorded in the manifest.".format(
+                counts["opposite_orientation_seen"],
+                region.chrom,
+                region.strand,
+                region.lend,
+                region.rend,
+            ),
+            file=sys.stderr,
+        )
+
+    if (
+        not region.strand
+        and counts["alignments_emitted"]
+        and not (
+            counts["alignments_emitted_forward"]
+            and counts["alignments_emitted_reverse"]
+        )
+    ):
+        # Reported, not refused: a sparse region can legitimately hold one
+        # orientation. Over a real chunk it means the source was already split,
+        # so the downstream per-chunk split will produce an empty partner.
+        print(
+            "NOTE: strandless chunk {}:{}-{} emitted {} forward and {} reverse "
+            "alignment(s). A single orientation means the source bam was already "
+            "strand-separated, so this chunk does not carry both strands.".format(
+                region.chrom,
+                region.lend,
+                region.rend,
+                counts["alignments_emitted_forward"],
+                counts["alignments_emitted_reverse"],
+            ),
+            file=sys.stderr,
+        )
 
     dropped_reads_filename = "{}.dropped_reads.txt".format(output_prefix)
     dropped_names = sorted({name for name, _, _, _ in dropped})
@@ -1178,7 +1329,15 @@ def extract_partition(
 
     manifest = {
         "chrom": region.chrom,
-        "strand": region.strand,
+        # null, not "", when the chunk carries both orientations: a consumer
+        # asking "which strand is this" must get an answer that cannot be
+        # mistaken for one, and "" reads as a strand in a format string.
+        "strand": region.strand or None,
+        # The ordering constraint, stated in the artifact rather than left to the
+        # caller's memory: this bam has NOT been strand-separated, so anything
+        # that filters on orientation must run the split FIRST. is_reverse here
+        # is still the aligner's, and the split rewrites it.
+        "strand_split_required": not region.strand,
         "partition_lend": region.lend,
         "partition_rend": region.rend,
         "offset": offset,
@@ -1201,7 +1360,10 @@ def extract_partition(
         "emitted_transcript_ids": sorted(emitted_transcript_ids),
         "counts": {
             "alignments_emitted": counts["alignments_emitted"],
+            "alignments_emitted_forward": counts["alignments_emitted_forward"],
+            "alignments_emitted_reverse": counts["alignments_emitted_reverse"],
             "alignments_dropped_overhang": counts["alignments_dropped_overhang"],
+            "opposite_orientation_excluded": counts["opposite_orientation_seen"],
             "nonprimary_excluded": counts["nonprimary_seen"],
             "gtf_transcripts_emitted": counts["gtf_transcripts_emitted"],
             "gtf_lines_emitted": counts["gtf_lines_emitted"],
@@ -1292,6 +1454,29 @@ def main(argv=None):
         "directory is not writable. The GTF itself is never modified.",
     )
 
+    parser.add_argument(
+        "--max_intron_length",
+        type=int,
+        default=LRAA_Globals.config["max_intron_length"],
+        help="alignments carrying a longer intron are not extracted, matching "
+        "the strand split and cut selection. Pass the value the RUN uses: a "
+        "strandless chunk is cut from the raw bam, so a mismatch here retains a "
+        "different record set than the selector costed. 0 disables.",
+    )
+
+    parser.add_argument(
+        "--mixed_orientation_source",
+        choices=("refuse", "warn"),
+        default="refuse",
+        help="what a STRAND-SUFFIXED --region does when the bam still holds the "
+        "other orientation, i.e. has not been strand-separated. 'refuse' is the "
+        "default because separate_bam_by_strand.py rewrites is_reverse and this "
+        "tool's strand filter reads the raw flag, so filtering first assigns "
+        "every flipped read to the wrong chunk while looking fine. Extract "
+        "strandlessly and split afterwards. 'warn' only for deliberately "
+        "filtering on aligner orientation.",
+    )
+
     args = parser.parse_args(argv)
     region = parse_region(args.region)
     output_prefix = args.output_prefix
@@ -1308,13 +1493,15 @@ def main(argv=None):
         secondary_alignments=args.secondary_alignments,
         mini_contig_name=args.mini_contig_name,
         gtf_index_cache_dir=args.gtf_index_cache_dir,
+        mixed_orientation_source=args.mixed_orientation_source,
+        max_intron_length=args.max_intron_length,
     )
 
     print(
         "chunk {}{}:{}-{} -> mini contig {} bp; {} primary alignments emitted, "
         "{} dropped for overhang; {} transcripts emitted whole; margin {} bp".format(
             manifest["chrom"],
-            manifest["strand"],
+            manifest["strand"] or "",
             manifest["partition_lend"],
             manifest["partition_rend"],
             manifest["mini_length"],

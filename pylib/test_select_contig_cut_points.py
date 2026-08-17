@@ -1157,3 +1157,279 @@ def test_the_emitted_bam_records_its_scope(tmp_path):
     assert "min_per_id=80.0" in notes
     assert "NOT the quant-visible set" in notes
     assert "refuse rather than approximate" in notes
+
+
+
+# -- strandless selection -------------------------------------------------------
+#
+# One set of cuts over the RAW bam, serving both strands, so the strand split can
+# move inside the chunk. Nothing in the arithmetic is new -- a falsy strand
+# already unions the islands and costs both orientations -- so these tests exist
+# to CHECK that rather than assume it, and each one contrasts the strandless
+# answer with the per-strand answer over the same fixture. A test that only
+# asserted "strandless produces cuts" would pass against a selector that quietly
+# ignored the other strand entirely.
+
+
+def _union_fixture(tmp_path):
+    """A locus per strand, each blocking a different position in one window.
+
+    Window 2900-3100 at depth_window 100, so exactly three candidates. The minus
+    locus blocks 2900 and 3000, the plus locus blocks 3200-3300 (outside the
+    window, present only so the plus-filtered annotation is not empty).
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    fixture.add_transcript("gMinus", "tMinus", "-", [(2900, 3100)])
+    fixture.add_transcript("gPlus", "tPlus", "+", [(3200, 3300)])
+    fixture.add_read("fwd", "+", [(1000, 1200)])
+    fixture.add_read("rev", "-", [(1400, 1600)])
+    return fixture.build()
+
+
+def test_strandless_islands_block_a_locus_on_either_strand(tmp_path):
+    """Union blocking, contrasted against the per-strand answer.
+
+    The minus locus covers the target itself. A plus-filtered selection never
+    sees it and cuts at 3000; a strandless selection must clear it, because the
+    chunk it bounds is the sole container of BOTH strands' loci over that
+    interval and a locus it splits is lost from both neighbours exactly as a
+    same-strand one would be.
+    """
+
+    fixture = _union_fixture(tmp_path)
+    common = dict(segment_span=3000, wiggle=200, minimum_span=1000)
+
+    plus = _select(fixture, strand="+", **common)
+    assert [cut.position for cut in plus.cuts] == [3000]
+
+    strandless = _select(fixture, strand="", strandless=True, **common)
+    assert [cut.position for cut in strandless.cuts] == [3100]
+    # and it is the annotation that moved it: the window held three candidates
+    # and the minus locus removed two of them
+    assert strandless.cuts[0].grid_positions == 3
+    assert strandless.cuts[0].annotation_blocked == 2
+    assert plus.cuts[0].annotation_blocked == 0
+
+
+def test_strandless_cut_cost_counts_alignments_on_both_strands(tmp_path):
+    """A shared boundary is priced by everything it severs, either orientation.
+
+    Three minus-strand reads straddle the target and one plus-strand read
+    straddles each neighbour. Filtered to plus, the target looks free and wins.
+    Strandless, the target costs 3 against a neighbour's 1, so the selector pays
+    the smaller price -- which is the correct objective, because the two strand
+    chunks share this boundary and therefore share its cost.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    fixture.spanning_read("plus_at_2900", 2900, strand="+")
+    fixture.spanning_read("plus_at_3100", 3100, strand="+")
+    for i in range(3):
+        fixture.spanning_read("minus_at_3000_{}".format(i), 3000, strand="-")
+    fixture.build()
+
+    common = dict(segment_span=3000, wiggle=200, minimum_span=1000)
+
+    plus = _select(fixture, strand="+", **common)
+    assert plus.cuts[0].position == 3000
+    assert plus.cuts[0].spanning_dropped == 0, "the minus reads are invisible to it"
+
+    strandless = _select(fixture, strand="", strandless=True, **common)
+    assert strandless.cuts[0].position == 2900
+    assert strandless.cuts[0].spanning_dropped == 1
+    # the position the plus run chose would have severed all three minus reads
+    with pysam.AlignmentFile(fixture.bam, "rb") as bam:
+        assert selector.spanning_counts(bam, fixture.contig, "", [3000]) == [3]
+
+
+def test_strandless_selection_labels_its_segments_without_a_strand(tmp_path):
+    """The region strings are consumed by the extractor, so they must parse.
+
+    Before strandless selection existed the CLI threaded argparse's None into the
+    format string and emitted "chrTNone:1-3000" -- a region no consumer could
+    parse, unnoticed because the driver rebuilt the region from the strand it
+    already knew. A strandless run has no such fallback: these strings ARE the
+    interface.
+    """
+
+    fixture = _union_fixture(tmp_path)
+    selection = _select(
+        fixture,
+        strand="",
+        strandless=True,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+    )
+    payload = selector.selection_to_dict(selection)
+
+    assert payload["strand"] is None
+    assert payload["strandless"] is True
+    regions = [segment["region"] for segment in payload["segments"]]
+    assert regions == ["chrT:1-3100", "chrT:3101-5000"]
+    for region in regions:
+        parsed = extractor.parse_region(region)
+        assert parsed.strand == ""
+        assert parsed.chrom == fixture.contig
+    assert "None" not in selector.format_report(selection)
+
+
+def test_an_unset_strand_also_stops_emitting_the_word_None(tmp_path):
+    """The same regression, on the path the chunked driver has always used.
+
+    Omitting --strand is still "already strand-split, count everything"; it is
+    not the strandless declaration. What it must not do is name a region after
+    Python's None.
+    """
+
+    fixture = _union_fixture(tmp_path)
+    selection = _select(
+        fixture, strand=None, segment_span=3000, wiggle=200, minimum_span=1000
+    )
+    payload = selector.selection_to_dict(selection)
+
+    assert payload["strandless"] is False
+    assert all("None" not in s["region"] for s in payload["segments"])
+    assert "None" not in selector.format_report(selection)
+
+
+def test_strandless_reports_the_denominator_per_orientation(tmp_path):
+    """Both orientations counted, and they sum to the denominator.
+
+    This is the evidence that the input really was raw. A strandless selection
+    over a strand-separated bam would place perfectly reasonable cuts and serve
+    one strand, and the only thing that distinguishes the two cases is this
+    split.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for i in range(3):
+        fixture.add_read("fwd{}".format(i), "+", [(500 + i * 200, 600 + i * 200)])
+    for i in range(2):
+        fixture.add_read("rev{}".format(i), "-", [(1500 + i * 200, 1600 + i * 200)])
+    fixture.build()
+
+    selection = _select(
+        fixture,
+        strand="",
+        strandless=True,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+    )
+    counts = selector.selection_to_dict(selection)["counts"]
+
+    assert counts["retained_primary_forward"] == 3
+    assert counts["retained_primary_reverse"] == 2
+    assert counts["retained_primary_alignments"] == 5
+    assert "3 forward, 2 reverse" in selector.format_report(selection)
+
+
+def test_strandless_over_a_strand_separated_bam_is_reported_not_absorbed(
+    tmp_path, capsys
+):
+    """One orientation means the caller passed a split bam. Say so.
+
+    The cuts are still valid coordinates, so this is a report rather than a
+    refusal -- but silence would look exactly like success, and the chunks would
+    come out with an empty partner after the in-chunk split.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for i in range(3):
+        fixture.add_read("fwd{}".format(i), "+", [(500 + i * 200, 600 + i * 200)])
+    fixture.build()
+
+    selection = _select(
+        fixture,
+        strand="",
+        strandless=True,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+    )
+
+    assert selection.cuts, "the cuts are still placed"
+    stderr = capsys.readouterr().err
+    assert "only one orientation" in stderr
+    assert "already strand-separated" in stderr
+
+
+def test_strandless_and_strand_are_incompatible(tmp_path):
+    """Costing a shared cut against one orientation prices half the reads."""
+
+    fixture = _union_fixture(tmp_path)
+    with pytest.raises(selector.SelectionError) as excinfo:
+        _select(
+            fixture,
+            strand="+",
+            strandless=True,
+            segment_span=3000,
+            wiggle=200,
+            minimum_span=1000,
+        )
+    assert "cannot also filter by orientation" in str(excinfo.value)
+
+    with pytest.raises(SystemExit):
+        selector.main(
+            [
+                "--bam",
+                fixture.bam,
+                "--contig",
+                fixture.contig,
+                "--strandless",
+                "--strand",
+                "+",
+                "--output_prefix",
+                str(tmp_path / "never"),
+            ]
+        )
+
+
+def test_strandless_cli_writes_a_manifest_the_extractor_can_consume(tmp_path):
+    """End to end: the CLI's own output drives a strandless extraction."""
+
+    fixture = _union_fixture(tmp_path)
+    prefix = str(tmp_path / "sel")
+    rc = selector.main(
+        [
+            "--bam",
+            fixture.bam,
+            "--gtf",
+            fixture.gtf,
+            "--contig",
+            fixture.contig,
+            "--strandless",
+            "--approx_MB_per_cut",
+            "0.003",
+            "--approx_MB_per_cut_wiggle_window",
+            "0.0002",
+            "--minimum_span",
+            "1000",
+            "--margin",
+            "0",
+            "--output_prefix",
+            prefix,
+        ]
+    )
+    assert rc == 0
+
+    payload = json.loads(Path(prefix + ".cuts.json").read_text())[0]
+    assert payload["strandless"] is True
+    assert payload["strand"] is None
+    assert payload["cuts"][0]["position"] == 3100
+    assert payload["counts"]["retained_primary_forward"] == 1
+    assert payload["counts"]["retained_primary_reverse"] == 1
+
+    for index, segment in enumerate(payload["segments"]):
+        manifest = extractor.extract_partition(
+            genome_fa=fixture.fasta,
+            bam=fixture.bam,
+            region=segment["region"],
+            output_prefix=str(tmp_path / "chunk{}".format(index)),
+            gtf=fixture.gtf,
+            margin=0,
+        )
+        assert manifest["strand"] is None
+        assert manifest["strand_split_required"] is True

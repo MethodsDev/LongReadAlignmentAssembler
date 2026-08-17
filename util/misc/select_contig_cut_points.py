@@ -128,6 +128,32 @@ merged into its predecessor and reported as ``tail_merged``. The tail is the ONL
 place that floor can act at the shipped defaults -- a 1 Mb wiggle leaves adjacent
 cuts at least ``span - wiggle`` = 9 Mb apart, comfortably above 5 Mb -- so between
 targets the constraint is provably slack and only an enlarged wiggle can engage it.
+
+Strandless selection
+--------------------
+``--strandless`` chooses ONE set of cuts over the RAW bam, serving both strands,
+so that the strand split can move out of the whole-genome serial phase and into
+the per-chunk parallel phase. Both conditions above become the union without any
+new machinery, and that is worth stating precisely because it is easy to assume
+instead of check:
+
+* the annotation. ``find_islands`` skips its strand filter on a falsy strand, so
+  the islands are the union of both strands' gene loci and a cut must clear every
+  locus on either strand. Measured on chr1 with the shipped margin, the union
+  blocks 148.7 Mb -- 40.3% of the contig admissible against 67-69% per strand --
+  and at the 10 Mb default all 24 targets still place with a median of 3,726
+  admissible positions per wiggle window. At 2.5 Mb it degrades and the selector
+  reports it; it is not silently absorbed.
+* the alignments. ``spanning_counts`` scores a position through
+  ``extractor.retained_for_extraction``, which admits both orientations on a
+  falsy strand, so a position is priced by everything it severs on either strand.
+  That is the correct objective: the two strand chunks share the boundary, so
+  they share its cost.
+
+What ``--strandless`` adds over simply omitting ``--strand`` is the declaration
+and its accounting -- strandless region strings, a per-orientation denominator,
+and a warning if the bam turns out to hold one orientation, which means a
+strand-separated bam was passed and the "strandless" cuts serve one strand.
 """
 
 import argparse
@@ -208,7 +234,11 @@ Selection = collections.namedtuple(
     "Selection",
     "chrom strand contig_length depth_window grid_origin segment_span wiggle "
     "minimum_span targets cuts segments unplaced tail_merged "
-    "total_retained_primary total_dropped dropped_read_names",
+    "total_retained_primary total_dropped dropped_read_names "
+    # Declared, and the two orientation counts that substantiate it. Defaulted so
+    # a caller that predates strandless selection constructs the same tuple.
+    "strandless retained_primary_forward retained_primary_reverse",
+    defaults=(False, None, None),
 )
 
 
@@ -297,6 +327,21 @@ def spanning_counts(bam, chrom, strand, positions, max_intron_length=None):
     range ``[s, e - 1]``; the contributions are accumulated as a difference array
     over the candidate grid rather than tested position by position, which keeps
     this linear in the alignments overlapping the window rather than quadratic.
+
+    The strand reaches the cost only through ``retained_for_extraction``, which
+    reads a falsy strand as "either orientation". So a STRANDLESS selection costs
+    a position by every alignment it severs on both strands, which is the correct
+    objective for a cut that has to serve both: the two strand chunks share the
+    boundary, so they share its price.
+
+    Every severed alignment costs 1. A monoexonic read arguably costs less than a
+    spliced one -- it carries no junction, so severing it removes less evidence --
+    and a weighted cost would go here, as a per-alignment weight on the difference
+    array instead of the constant 1. It is deliberately NOT built: measured at the
+    10 Mb default on chr1, zero monoexonic alignments span any sampled cut target
+    and the selector already reaches 0 severed, so a weight would change nothing
+    it could be checked against. It starts to matter only at 2.5 Mb under union
+    blocking, where positions are scarce enough that ties on cost appear.
     """
 
     if not positions:
@@ -458,11 +503,35 @@ def write_severed_alignments_bam(
 def count_retained_primary(bam, chrom, strand, max_intron_length=None):
     """The denominator: retained primary alignments on this contig-strand."""
 
-    total = 0
-    for aln in bam.fetch(chrom):
-        if extractor.retained_for_extraction(aln, strand, max_intron_length):
-            total += 1
+    total, _, _ = count_retained_primary_by_orientation(
+        bam, chrom, strand, max_intron_length
+    )
     return total
+
+
+def count_retained_primary_by_orientation(bam, chrom, strand, max_intron_length=None):
+    """``(total, forward, reverse)`` over the same set the denominator counts.
+
+    One pass, because the whole-contig scan is the expensive part and the split
+    is what tells a raw bam from a strand-separated one: after
+    ``separate_bam_by_strand.py`` every retained record carries the orientation
+    it was assigned to, so a zero on either side means the input was already
+    split. Reported, never inferred from, since a sparse contig can be one-sided
+    for honest reasons.
+    """
+
+    total = 0
+    forward = 0
+    reverse = 0
+    for aln in bam.fetch(chrom):
+        if not extractor.retained_for_extraction(aln, strand, max_intron_length):
+            continue
+        total += 1
+        if aln.is_forward:
+            forward += 1
+        else:
+            reverse += 1
+    return total, forward, reverse
 
 
 def _solve(candidates, costs, targets, minimum_span, contig_length):
@@ -610,12 +679,31 @@ def select_cut_points(
     # config reads: --HiFi changes min_per_id inside LRAA, so the caller decides.
     min_per_id=None,
     min_mapping_quality=None,
+    strandless=False,
 ):
     """Choose cut points for one contig-strand. Returns a ``Selection``.
 
     ``segment_span`` and ``wiggle`` are in BASES here; the megabase values live
     in the config and are converted by the CLI, so this function has one unit.
+
+    ``strandless=True`` declares that the bam holds BOTH orientations and the
+    cuts must serve both. It does not change the arithmetic -- a falsy ``strand``
+    already unions the annotation islands and costs both orientations -- it
+    changes what the run says about itself: the segments are labelled without a
+    strand suffix, the denominator is reported per orientation, and a bam that
+    turns out to hold only one orientation is reported rather than passed off as
+    a strandless selection. Keeping it a declaration rather than a mode is
+    deliberate: two code paths that must agree on cut coordinates are two chances
+    to disagree.
     """
+
+    if strandless and strand:
+        raise SelectionError(
+            "a strandless selection cannot also filter by orientation, got "
+            "strand {!r}. A strandless cut serves BOTH strands; filtering to one "
+            "would cost it against half the alignments it will actually "
+            "sever.".format(strand)
+        )
 
     if segment_span is None:
         segment_span = int(LRAA_Globals.config["approx_MB_per_cut"] * MB)
@@ -776,10 +864,36 @@ def select_cut_points(
                 if cut.position == owner:
                     severed_sink.append(aln)
 
-        total_retained = (
-            count_retained_primary(bam, chrom, strand, max_intron_length)
-            if count_denominator
-            else None
+        if count_denominator:
+            (
+                total_retained,
+                retained_forward,
+                retained_reverse,
+            ) = count_retained_primary_by_orientation(
+                bam, chrom, strand, max_intron_length
+            )
+        else:
+            total_retained = retained_forward = retained_reverse = None
+
+    if (
+        strandless
+        and total_retained
+        and not (retained_forward and retained_reverse)
+    ):
+        # Reported, not refused: the cuts are still valid coordinates. What is
+        # not true is the claim the flag makes -- these cuts were costed against
+        # one orientation, so they are per-strand cuts wearing a strandless
+        # label, and the chunks they produce will have an empty partner after the
+        # in-chunk split. Silent here would look exactly like success.
+        print(
+            "WARNING: --strandless was given but {} holds only one orientation "
+            "over {} ({} forward, {} reverse retained primary alignment(s)): this "
+            "looks like an already strand-separated bam. Strandless cuts must be "
+            "chosen over the RAW bam, with the strand split moved inside the "
+            "chunk.".format(
+                bam_filename, chrom, retained_forward, retained_reverse
+            ),
+            file=sys.stderr,
         )
 
     segments = []
@@ -820,6 +934,9 @@ def select_cut_points(
         total_retained_primary=total_retained,
         total_dropped=sum(cut.spanning_dropped for cut in cuts),
         dropped_read_names=dropped_read_names,
+        strandless=strandless,
+        retained_primary_forward=retained_forward,
+        retained_primary_reverse=retained_reverse,
     )
 
 
@@ -828,7 +945,10 @@ def selection_to_dict(selection):
 
     return {
         "chrom": selection.chrom,
-        "strand": selection.strand,
+        # null when there is no orientation to report, never "" and never the
+        # string "None": these region strings are consumed by the extractor.
+        "strand": selection.strand or None,
+        "strandless": selection.strandless,
         "contig_length": selection.contig_length,
         "params": {
             "segment_span": selection.segment_span,
@@ -859,7 +979,10 @@ def selection_to_dict(selection):
         "segments": [
             {
                 "region": "{}{}:{}-{}".format(
-                    selection.chrom, selection.strand, segment.lend, segment.rend
+                    selection.chrom,
+                    selection.strand or "",
+                    segment.lend,
+                    segment.rend,
                 ),
                 "lend": segment.lend,
                 "rend": segment.rend,
@@ -885,6 +1008,8 @@ def selection_to_dict(selection):
             "targets_tail_merged": len(selection.tail_merged),
             "segments": len(selection.segments),
             "retained_primary_alignments": selection.total_retained_primary,
+            "retained_primary_forward": selection.retained_primary_forward,
+            "retained_primary_reverse": selection.retained_primary_reverse,
             "alignments_dropped_at_cuts": selection.total_dropped,
             "distinct_dropped_read_names": len(selection.dropped_read_names),
         },
@@ -942,6 +1067,13 @@ def format_report(selection):
 
     lines = []
     label = "{}{}".format(selection.chrom, selection.strand or "")
+    if selection.strandless:
+        lines.append(
+            "# STRANDLESS selection over {}: one set of cuts serving BOTH "
+            "strands. Islands are the union of both strands' loci and each "
+            "position is costed by the alignments it severs in either "
+            "orientation.".format(label)
+        )
     lines.append(
         "# {} length {} bp; segment span {} bp; wiggle window {} bp (target +/- {}); "
         "depth_window {} bp; grid origin {}; minimum span {} bp".format(
@@ -1004,7 +1136,7 @@ def format_report(selection):
             "{}\t{}{}:{}-{}\t{}\t{}".format(
                 segment.index,
                 selection.chrom,
-                selection.strand,
+                selection.strand or "",
                 segment.lend,
                 segment.rend,
                 segment.span,
@@ -1041,6 +1173,13 @@ def format_report(selection):
             else " ({:.4f}%)".format(100.0 * selection.total_dropped / denominator),
         )
     )
+    if selection.retained_primary_forward is not None:
+        lines.append(
+            "# denominator by orientation: {} forward, {} reverse".format(
+                selection.retained_primary_forward,
+                selection.retained_primary_reverse,
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1082,6 +1221,16 @@ def main(argv=None):
         choices=("+", "-"),
         help="orientation to select for. Omit for an already strand-split bam, "
         "in which case every record counts.",
+    )
+    parser.add_argument(
+        "--strandless",
+        action="store_true",
+        help="the bam holds BOTH orientations and one set of cuts must serve "
+        "both: islands are the union of both strands' loci and each position is "
+        "costed by what it severs in either orientation. Point --bam at the RAW "
+        "bam and move the strand split inside the chunk, AFTER extraction -- "
+        "separate_bam_by_strand.py rewrites is_reverse, so any strand filter "
+        "applied to a raw bam reads pre-flip flags. Incompatible with --strand.",
     )
     parser.add_argument(
         "--approx_MB_per_cut",
@@ -1172,9 +1321,15 @@ def main(argv=None):
 
     segment_span = int(args.approx_MB_per_cut * MB)
     wiggle = int(args.approx_MB_per_cut_wiggle_window * MB)
+    if args.strandless and args.strand:
+        parser.error(
+            "--strandless and --strand are incompatible: a strandless cut serves "
+            "both strands, so costing it against one orientation would price it "
+            "against half the alignments it severs"
+        )
     # Thread argparse's None through rather than coercing it, so the retention
-    # predicates receive the value their contract is written against. The two
-    # report sites that interpolate a strand supply their own placeholder.
+    # predicates receive the value their contract is written against. The report
+    # sites that interpolate a strand supply their own placeholder.
     strand = args.strand
 
     if args.genome_fa:
@@ -1224,6 +1379,7 @@ def main(argv=None):
                 severed_sink=severed_sink,
                 min_per_id=args.min_per_id,
                 min_mapping_quality=args.min_mapping_quality,
+                strandless=args.strandless,
             )
         )
 

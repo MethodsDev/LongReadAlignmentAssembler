@@ -1105,3 +1105,306 @@ def test_a_read_flush_against_a_boundary_is_still_emitted_at_a_positive_margin(
     assert emitted["rFlushRight"][1] == manifest["mini_length"]
     assert manifest["counts"]["alignments_dropped_overhang"] == 0
     assert manifest["dropped_read_names"] == []
+
+
+
+# -- strandless chunks ----------------------------------------------------------
+#
+# A region with no strand suffix carries BOTH orientations in one chunk, over one
+# mini contig, with the strand split deferred to a downstream per-chunk step.
+# These tests check the three things that could each be true by accident: that
+# both orientations really are emitted, that the boundary rule became the union
+# rather than falling through to "no rule", and that the sequence is written once
+# where two strand chunks previously wrote it twice.
+
+
+def _both_strands_fixture(tmp_path):
+    """Loci and reads of both orientations inside [10001, 20000].
+
+    Deliberately asymmetric -- three forward reads to two reverse -- so a test
+    that mixed the two counts up would fail rather than pass on a coincidence.
+    """
+
+    fixture = Fixture(tmp_path, length=30000)
+    fixture.add_transcript("gPlus", "tPlus", "+", [(12000, 12300), (13000, 13400)])
+    fixture.add_transcript("gMinus", "tMinus", "-", [(16000, 16400)])
+    fixture.add_read("rPlusA", "+", [(12000, 12300), (13000, 13400)])
+    fixture.add_read("rPlusB", "+", [(12500, 12800)])
+    fixture.add_read("rPlusC", "+", [(18000, 18400)])
+    fixture.add_read("rMinusA", "-", [(16000, 16400)])
+    fixture.add_read("rMinusB", "-", [(17000, 17200)])
+    # outside the chunk on both strands, so containment still has to be enforced
+    fixture.add_read("rOutsidePlus", "+", [(5000, 5200)])
+    fixture.add_read("rOutsideMinus", "-", [(25000, 25200)])
+    return fixture.build()
+
+
+def test_a_strandless_chunk_emits_both_orientations_and_says_so(tmp_path):
+    fixture = _both_strands_fixture(tmp_path)
+
+    manifest = extractor.extract_partition(
+        genome_fa=fixture.fasta,
+        bam=fixture.bam,
+        region="{}:10001-20000".format(fixture.contig),
+        output_prefix=str(tmp_path / "chunk"),
+        gtf=fixture.gtf,
+        margin=200,
+    )
+
+    assert manifest["strand"] is None, "null, not '', so it cannot read as a strand"
+    assert manifest["strand_split_required"] is True
+
+    # counted from the records actually written, not from the fixture's intent
+    forward = reverse = 0
+    with pysam.AlignmentFile(manifest["files"]["bam"], "rb") as bam:
+        names = set()
+        for aln in bam:
+            names.add(aln.query_name)
+            if aln.is_forward:
+                forward += 1
+            else:
+                reverse += 1
+    assert names == {"rPlusA", "rPlusB", "rPlusC", "rMinusA", "rMinusB"}
+    assert (forward, reverse) == (3, 2)
+    assert manifest["counts"]["alignments_emitted_forward"] == forward
+    assert manifest["counts"]["alignments_emitted_reverse"] == reverse
+    assert manifest["counts"]["alignments_emitted"] == forward + reverse
+    assert manifest["counts"]["opposite_orientation_excluded"] == 0
+
+    # both strands' features travel in the one GTF, and both strands' loci are
+    # the chunk's responsibility because nothing else will contain them
+    assert manifest["emitted_gene_ids"] == ["gMinus", "gPlus"]
+
+
+def test_a_strand_specific_chunk_is_unchanged_by_the_strandless_path(tmp_path):
+    """The non-strandless path stays in service and stays exact."""
+
+    fixture = _both_strands_fixture(tmp_path)
+
+    manifest = extractor.extract_partition(
+        genome_fa=fixture.fasta,
+        bam=fixture.bam,
+        region="{}+:10001-20000".format(fixture.contig),
+        output_prefix=str(tmp_path / "plus"),
+        gtf=fixture.gtf,
+        margin=200,
+    )
+
+    assert manifest["strand"] == "+"
+    assert manifest["strand_split_required"] is False
+    assert set(_emitted_alignments(manifest["files"]["bam"])) == {
+        "rPlusA",
+        "rPlusB",
+        "rPlusC",
+    }
+    assert manifest["counts"]["alignments_emitted_reverse"] == 0
+    # the minus reads were filtered, and that is recorded rather than implied
+    assert manifest["counts"]["opposite_orientation_excluded"] == 2
+    assert manifest["emitted_gene_ids"] == ["gPlus"]
+
+
+def test_a_strandless_boundary_is_refused_by_a_locus_on_either_strand(tmp_path):
+    """Union admissibility, contrasted against the per-strand answer.
+
+    A minus locus straddling the right boundary is invisible to a plus chunk and
+    fatal to a strandless one, because the strandless chunk is the only container
+    that locus has over this interval.
+    """
+
+    fixture = Fixture(tmp_path, length=30000)
+    fixture.add_transcript("gPlus", "tPlus", "+", [(12000, 12400)])
+    fixture.add_transcript("gStraddle", "tStraddle", "-", [(19800, 20200)])
+    fixture.add_read("rPlus", "+", [(12000, 12400)])
+    fixture.add_read("rMinus", "-", [(19800, 20200)])
+    fixture.build()
+
+    plus = extractor.extract_partition(
+        genome_fa=fixture.fasta,
+        bam=fixture.bam,
+        region="{}+:10001-20000".format(fixture.contig),
+        output_prefix=str(tmp_path / "plus"),
+        gtf=fixture.gtf,
+        margin=0,
+    )
+    assert plus["counts"]["alignments_emitted"] == 1
+
+    with pytest.raises(extractor.ExtractionError) as excinfo:
+        extractor.extract_partition(
+            genome_fa=fixture.fasta,
+            bam=fixture.bam,
+            region="{}:10001-20000".format(fixture.contig),
+            output_prefix=str(tmp_path / "strandless"),
+            gtf=fixture.gtf,
+            margin=0,
+        )
+    message = str(excinfo.value)
+    assert "gStraddle" in message
+    assert "straddles" in message
+    for suffix in (".fa", ".bam", ".partition.json"):
+        assert not Path(str(tmp_path / "strandless") + suffix).exists()
+
+
+def test_one_mini_fasta_serves_both_strands(tmp_path):
+    """The saving that motivates chunking before the split, stated as a test.
+
+    Two strand chunks over one interval each wrote the same sequence. The
+    strandless chunk writes it once, and it is byte-identical to each of them --
+    which is what makes replacing two with one a saving rather than a change.
+    """
+
+    fixture = _both_strands_fixture(tmp_path)
+    region = "{}:10001-20000".format(fixture.contig)
+
+    written = {}
+    for tag, region_string in (
+        ("plus", region.replace(":", "+:")),
+        ("minus", region.replace(":", "-:")),
+        ("strandless", region),
+    ):
+        manifest = extractor.extract_partition(
+            genome_fa=fixture.fasta,
+            bam=fixture.bam,
+            region=region_string,
+            output_prefix=str(tmp_path / tag),
+            gtf=fixture.gtf,
+            margin=200,
+            # the per-strand arms are the historical behaviour being replaced, and
+            # this fixture's bam is raw, so they need the filter to stay allowed
+            mixed_orientation_source="warn",
+        )
+        written[tag] = Path(manifest["files"]["fasta"]).read_bytes()
+
+    assert written["plus"] == written["minus"] == written["strandless"]
+    # one copy replaces two: the saving is exactly what the second copy cost
+    assert len(written["strandless"]) == len(written["plus"])
+    assert Path(str(tmp_path / "strandless.fa.fai")).exists()
+
+
+def test_extraction_filters_at_the_intron_cap_the_caller_names(tmp_path):
+    """The run's cap, not this module's default.
+
+    Under the strand-first pipeline the bam reaching extraction had already been
+    filtered at the run's value, so reading the configured default here was
+    invisible. A strandless chunk is cut from the RAW bam, so extraction is the
+    first place the cap applies and it must be the same value the selector costed
+    at -- otherwise the emitted set and the severed set describe different runs.
+    """
+
+    fixture = Fixture(tmp_path, length=30000)
+    # a 5 kb intron: kept at the shipped cap, discarded at a 1 kb one
+    fixture.add_read("rLongIntron", "+", [(11000, 11200), (16200, 16400)])
+    fixture.add_read("rPlain", "+", [(12000, 12400)])
+    fixture.build()
+
+    kept = extractor.extract_partition(
+        genome_fa=fixture.fasta,
+        bam=fixture.bam,
+        region="{}:10001-20000".format(fixture.contig),
+        output_prefix=str(tmp_path / "kept"),
+        margin=0,
+    )
+    assert set(_emitted_alignments(kept["files"]["bam"])) == {
+        "rLongIntron",
+        "rPlain",
+    }
+
+    capped = extractor.extract_partition(
+        genome_fa=fixture.fasta,
+        bam=fixture.bam,
+        region="{}:10001-20000".format(fixture.contig),
+        output_prefix=str(tmp_path / "capped"),
+        margin=0,
+        max_intron_length=1000,
+    )
+    assert set(_emitted_alignments(capped["files"]["bam"])) == {"rPlain"}
+
+
+def test_cli_refuses_a_strand_suffixed_region_against_an_unsplit_bam(tmp_path):
+    """The ordering constraint, enforced where it would be violated.
+
+    separate_bam_by_strand.py REWRITES is_reverse when a read's inferred
+    transcribed strand disagrees with the aligner, and this tool's strand filter
+    reads the raw flag. Extracting chr1+ from a raw bam therefore assigns every
+    flipped read to the wrong chunk and still produces output that looks fine --
+    the one failure mode of this design that yields a plausible wrong answer. The
+    only observable that distinguishes a raw bam from a split one is that the raw
+    one still holds the other orientation, so that is what is checked, and the
+    default is refusal rather than a note nobody reads.
+    """
+
+    fixture = _both_strands_fixture(tmp_path)
+    prefix = str(tmp_path / "cli")
+
+    with pytest.raises(extractor.ExtractionError) as excinfo:
+        extractor.main(
+            [
+                "--genome_fa",
+                fixture.fasta,
+                "--bam",
+                fixture.bam,
+                "--region",
+                "{}+:10001-20000".format(fixture.contig),
+                "--output_prefix",
+                prefix,
+                "--margin",
+                "0",
+            ]
+        )
+    message = str(excinfo.value)
+    assert "has NOT been strand-separated" in message
+    assert "rewrite assigns every flipped read to the wrong chunk" in message
+    # nothing partial is left behind to be mistaken for a chunk
+    for suffix in (".fa", ".fa.fai", ".bam", ".partition.json"):
+        assert not Path(prefix + suffix).exists()
+
+    # the strandless region is what the pipeline is supposed to ask for, and it
+    # goes through the same CLI untouched
+    rc = extractor.main(
+        [
+            "--genome_fa",
+            fixture.fasta,
+            "--bam",
+            fixture.bam,
+            "--region",
+            "{}:10001-20000".format(fixture.contig),
+            "--output_prefix",
+            prefix,
+            "--margin",
+            "0",
+        ]
+    )
+    assert rc == 0
+    manifest = json.loads(Path(prefix + ".partition.json").read_text())
+    assert manifest["strand"] is None
+    assert manifest["counts"]["alignments_emitted_forward"] == 3
+    assert manifest["counts"]["alignments_emitted_reverse"] == 2
+
+
+def test_cli_can_be_told_to_filter_a_mixed_bam_deliberately(tmp_path, capsys):
+    """The escape hatch exists, is explicit, and still reports what it did."""
+
+    fixture = _both_strands_fixture(tmp_path)
+    prefix = str(tmp_path / "warned")
+
+    rc = extractor.main(
+        [
+            "--genome_fa",
+            fixture.fasta,
+            "--bam",
+            fixture.bam,
+            "--region",
+            "{}+:10001-20000".format(fixture.contig),
+            "--output_prefix",
+            prefix,
+            "--margin",
+            "0",
+            "--mixed_orientation_source",
+            "warn",
+        ]
+    )
+    assert rc == 0
+    assert "opposite orientation" in capsys.readouterr().err
+
+    manifest = json.loads(Path(prefix + ".partition.json").read_text())
+    assert manifest["counts"]["opposite_orientation_excluded"] == 2
+    assert manifest["counts"]["alignments_emitted"] == 3
