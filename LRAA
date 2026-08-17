@@ -346,7 +346,7 @@ def main():
             "--chunk",
             action="store_true",
             default=False,
-            help="chunked mode: split each contig-strand between annotated loci and quantify the chunks independently, bounding peak memory (requires --quant_only and --gtf)",
+            help="chunked mode: split each contig at positions no read spans, process the chunks independently and merge, bounding peak memory. Works for quant-only (--gtf required) and for discovery (--gtf optional)",
         )
 
         lite_quant = lite_parser.add_argument_group("common quant/discovery settings")
@@ -1163,12 +1163,16 @@ def main():
         "--chunk",
         action="store_true",
         help="chunked mode: split each contig-strand at low-coverage positions "
-        "between annotated loci, quantify the chunks independently and merge. "
+        "between annotated loci, process the chunks independently and merge. "
         "Bounds peak memory, because a chunk is extracted as a self-contained "
         "mini contig and a worker then holds only that chunk's sequence rather "
-        "than the whole chromosome's. Requires --quant_only and --gtf. Without "
-        "this flag LRAA runs exactly as it always has, and --contig/--region "
-        "are unaffected either way",
+        "than the whole chromosome's. With --quant_only a --gtf is required. "
+        "Without --quant_only this runs chunked DISCOVERY -- de novo when no "
+        "--gtf is given, ref-guided when one is -- and every cut is then "
+        "required to sever zero reads, so a cut that cannot be placed cleanly "
+        "is declined and its chunks stay joined. Without this flag LRAA runs "
+        "exactly as it always has, and --contig/--region are unaffected either "
+        "way",
     )
     contig_group_setting.add_argument(
         "--strandless_chunks",
@@ -2838,11 +2842,31 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
 def _run_chunked_mode(args):
     """Run the chunked pipeline, then leave its results where LRAA's would be.
 
-    Chunked mode is quant-only by construction. A chunk sees only the isoforms
-    inside it, so discovery across a boundary would produce two partial models
-    of one locus with nothing able to reconcile them; quantification against a
-    supplied annotation has no such dependence, which is why the cut rule only
-    has to keep whole loci on one side.
+    Quant-only and discovery are both reachable. What separates them is what a
+    chunk boundary is allowed to COST, and the pipeline enforces that difference
+    at cut selection rather than here.
+
+    QUANT-ONLY. A chunk quantifies a supplied annotation, so the only thing a
+    boundary must not split is a locus -- ``genes_contained`` emits a gene whole
+    or not at all. A read the boundary severs is dropped, counted and named, and
+    the model set is unchanged. Severing is a priced cost.
+
+    DISCOVERY, with or without ``--gtf``. The models come FROM the reads, so a
+    boundary that severs a read can split a locus. Measured on chr21 (HG002
+    PacBio Kinnex): forcing 2 Mb cuts severs 940 alignments, 17 of the 20 models
+    then lost span a cut, and an eight-isoform gene whose first exon crosses a
+    cut is replaced by two spurious MONOEXONIC fragments. Discovery therefore
+    runs cut selection with ``--require_zero_severed``, and a target that cannot
+    be placed cleanly is DECLINED -- the chunk stays larger rather than the cut
+    being taken. Declined cuts are reported per target, with the reason.
+
+    Discovery is NOT free of partition dependence even at zero severed, and
+    saying so is part of offering the mode: ``pylib/IsoformReadRescue.py`` is
+    scoped to a whole contig-strand and is position-blind, so a read can be
+    rescued onto a paralogous model megabases away, and chunking confines that.
+    Measured cost on chr21 at the shipped 10 Mb spacing: one model of 1462, and
+    that one 2.7 Mb from the nearest cut. It is the residual the zero-severed
+    rule does not remove.
     """
 
     import ChunkedRun
@@ -2853,13 +2877,13 @@ def _run_chunked_mode(args):
             "plain LRAA on each chunk; re-entering it here would fork without "
             "bound."
         )
-    if not args.quant_only:
+    if args.quant_only and not args.gtf:
         sys.exit(
-            "Error: --chunk requires --quant_only. Isoform discovery cannot be "
-            "split across chunk boundaries."
+            "Error: --chunk --quant_only requires --gtf (the transcripts to "
+            "quantify). Without --quant_only, --gtf is optional: absent runs "
+            "de novo chunked discovery, present runs ref-guided chunked "
+            "discovery."
         )
-    if not args.gtf:
-        sys.exit("Error: --chunk requires --gtf (the transcripts to quantify).")
     if args.strandless_chunks and not args.num_total_reads:
         # The strandless arm skips the whole-bam strand split, and that pass is
         # what would otherwise count the retained records the TPM denominator
@@ -2879,6 +2903,10 @@ def _run_chunked_mode(args):
         bam=args.bam,
         genome_fa=args.genome,
         gtf=args.gtf,
+        # Quant-only is the pipeline's default; discovery is this flag's absence,
+        # translated once here rather than re-derived from `gtf is None` further
+        # down, where it would be wrong for ref-guided discovery.
+        discovery=not args.quant_only,
         output_dir=work_dir,
         cpu_budget=args.cpu_budget,
         contig=args.contig,
@@ -2896,14 +2924,34 @@ def _run_chunked_mode(args):
 
     outputs = ChunkedRun.run(chunk_args)
 
+    placement = outputs.get("cut_placement") or {}
+    if placement:
+        # The partition, at the level a user of LRAA sees. The pipeline printed
+        # the per-target detail; this is the one line that says whether the run
+        # got the geometry it asked for.
+        logger.info(
+            "chunked mode: %d cut(s) requested, %d placed, %d declined for "
+            "severing -> %d chunk(s)",
+            placement.get("targets", 0),
+            placement.get("cuts_placed", 0),
+            placement.get("cuts_declined_zero_severed", 0),
+            placement.get("chunks", 0),
+        )
+
     output_prefix = _append_lraa_output_mode_suffix(
-        args.output_prefix, True, args.gtf
+        args.output_prefix, bool(args.quant_only), args.gtf
     )
     merged = outputs.get("chunked") or {}
-    for key, dest in (
+    wanted = [
         ("quant_expr", "{}.quant.expr".format(output_prefix)),
         ("quant_tracking", None),
-    ):
+    ]
+    if not args.quant_only:
+        # Discovery's primary artifact, and required rather than optional: a
+        # discovery run that produced no model set failed, it did not find
+        # nothing.
+        wanted.append(("gtf", "{}.gtf".format(output_prefix)))
+    for key, dest in wanted:
         src = merged.get(key)
         if not src or not os.path.exists(src):
             sys.exit(

@@ -51,6 +51,40 @@ Three conditions on a position, in order of authority
    reach a zero-crossing position: staying inside it keeps chunk spans predictable,
    and the price is counted rather than hidden.
 
+Zero severed, a HARD constraint in DISCOVERY
+--------------------------------------------
+``require_zero_severed`` promotes condition 3 from an objective to a
+requirement: only positions no retained primary alignment spans are admissible,
+and a target whose window holds none is DECLINED rather than placed at the
+least-bad position. The two chunks it would have separated stay joined.
+
+The asymmetry with quantification is deliberate and measured. Quantifying
+against a supplied annotation, a severed read is dropped, counted and named,
+and the model set is unchanged -- the cost is a read, and it is accounted for.
+Discovering, a severed read can split a LOCUS. The splice graph's nodes come
+from alignment blocks and its edges from N ops, so a position no alignment
+spans carries neither a node nor an edge across it: the graph is already
+disconnected there and per-component reconstruction cannot tell the boundary
+from a read-free gap. A position alignments DO span is the opposite -- the
+graph is cut through a locus, and both halves are reconstructed as models.
+
+Measured on chr21, HG002 PacBio Kinnex (``FINDINGS.chr21_denovo_parity.md``,
+LRAA_PAPER_Analyses ``05af6d8``): at the shipped 10 Mb spacing the cuts sever
+ZERO alignments and de novo discovery differs from the unchunked run by one
+model in 1462, and that one sits 2,724,898 bp from the nearest cut. Forced to
+2 Mb spacing with a 0.02 Mb window the selector has to sever 940 alignments;
+17 of the 20 models then lost SPAN a cut, and at ``chr21(-):41,986,832`` a gene
+of eight isoforms whose first exon crosses the cut at 41,992,400 loses all
+eight while the chunked arm emits two SPURIOUS MONOEXONIC models whose left
+ends coincide with the originals'. The same shape recurs at two other cuts.
+
+Hence skip-and-widen rather than fail-the-run: a larger chunk is slower, a cut
+through a locus is wrong, and realised chunk spans are uneven already (the
+tail-merge rule below produces a 14.4 Mb chunk on chr20 at the defaults). What
+is not acceptable is doing it quietly, so every declined target is reported
+with the number of compliant positions it had and what the cheapest of them
+would have severed.
+
 Selection is JOINT, not per-target
 ----------------------------------
 Positions must be strictly increasing and no realised chunk may fall below
@@ -225,7 +259,12 @@ CutChoice = collections.namedtuple(
 
 UnplacedTarget = collections.namedtuple(
     "UnplacedTarget",
-    "index target window_lend window_rend grid_positions annotation_blocked reason",
+    "index target window_lend window_rend grid_positions annotation_blocked reason "
+    # The cheapest ANNOTATION-COMPLIANT position in the window, and whether its
+    # cost is why the target was refused. Defaulted, so the two pre-existing
+    # unplaced reasons construct the same tuple as before.
+    "best_spanning declined_zero_severed",
+    defaults=(None, False),
 )
 
 Segment = collections.namedtuple("Segment", "index lend rend span")
@@ -237,8 +276,11 @@ Selection = collections.namedtuple(
     "total_retained_primary total_dropped dropped_read_names "
     # Declared, and the two orientation counts that substantiate it. Defaulted so
     # a caller that predates strandless selection constructs the same tuple.
-    "strandless retained_primary_forward retained_primary_reverse",
-    defaults=(False, None, None),
+    "strandless retained_primary_forward retained_primary_reverse "
+    # Whether zero severing was demanded or merely preferred. False is the
+    # quantification contract and every pre-existing caller's.
+    "require_zero_severed",
+    defaults=(False, None, None, False),
 )
 
 
@@ -680,6 +722,7 @@ def select_cut_points(
     min_per_id=None,
     min_mapping_quality=None,
     strandless=False,
+    require_zero_severed=False,
 ):
     """Choose cut points for one contig-strand. Returns a ``Selection``.
 
@@ -695,6 +738,14 @@ def select_cut_points(
     a strandless selection. Keeping it a declaration rather than a mode is
     deliberate: two code paths that must agree on cut coordinates are two chances
     to disagree.
+
+    ``require_zero_severed=True`` makes the spanning-alignment cost a hard
+    constraint instead of an objective, for DISCOVERY. See the module docstring:
+    a severed read costs quantification one read and can cost discovery a whole
+    locus, so a target with no zero-severing position in its window is declined
+    and its chunks stay joined. Every declined target appears in ``unplaced``
+    with ``declined_zero_severed`` set, and ``total_dropped`` is then zero by
+    construction rather than by luck.
     """
 
     if strandless and strand:
@@ -739,6 +790,12 @@ def select_cut_points(
     candidates = []
     costs = []
     unconstrained_best = []
+    # The annotation-compliant set BEFORE the zero-severed filter. Kept because a
+    # declined target has to be able to say how many positions it had and what
+    # the best of them would have severed; without it "every compliant position
+    # severs a read" cannot be told from "the annotation left nothing".
+    compliant_counts = []
+    best_compliant = []
     blocked_counts = []
     all_grid_counts = []
 
@@ -765,8 +822,25 @@ def select_cut_points(
                     for position, cost in zip(on_grid, grid_costs)
                     if position in keep
                 ]
-            candidates.append(compliant)
-            costs.append(compliant_costs)
+            compliant_counts.append(len(compliant))
+            best_compliant.append(min(compliant_costs) if compliant_costs else None)
+
+            if require_zero_severed:
+                # Struck from the candidate set, not priced within it: _solve
+                # minimises unplaced FIRST, so leaving a severing position in the
+                # set would guarantee it gets chosen whenever the window holds
+                # nothing better. An empty set here is a declined cut, reported
+                # below, and that is the intended outcome.
+                admissible = [
+                    position
+                    for position, cost in zip(compliant, compliant_costs)
+                    if cost == 0
+                ]
+                candidates.append(admissible)
+                costs.append([0] * len(admissible))
+            else:
+                candidates.append(compliant)
+                costs.append(compliant_costs)
 
         chosen = _solve(candidates, costs, targets, minimum_span, contig_length)
         placed = {t_index: (position, cost) for t_index, position, cost in chosen}
@@ -776,11 +850,24 @@ def select_cut_points(
         for t_index, target in enumerate(targets):
             window_lend, window_rend = windows[t_index]
             if t_index not in placed:
-                if not candidates[t_index]:
+                declined = False
+                best_here = best_compliant[t_index]
+                if not compliant_counts[t_index]:
                     reason = (
                         "no position in the window is both on the {} bp depth-window "
                         "grid and outside every annotated locus ({} grid positions, "
                         "all blocked)".format(depth_window, all_grid_counts[t_index])
+                    )
+                elif require_zero_severed and not candidates[t_index]:
+                    declined = True
+                    reason = (
+                        "DECLINED under the zero-severed requirement: none of the {} "
+                        "compliant position(s) in the window severs zero retained "
+                        "primary alignments, the cheapest severs {}. The cut is "
+                        "skipped and the two chunks it would have separated stay "
+                        "joined as one larger chunk".format(
+                            compliant_counts[t_index], best_here
+                        )
                     )
                 else:
                     reason = (
@@ -798,6 +885,8 @@ def select_cut_points(
                         grid_positions=all_grid_counts[t_index],
                         annotation_blocked=blocked_counts[t_index],
                         reason=reason,
+                        best_spanning=best_here,
+                        declined_zero_severed=declined,
                     )
                 )
                 continue
@@ -937,6 +1026,7 @@ def select_cut_points(
         strandless=strandless,
         retained_primary_forward=retained_forward,
         retained_primary_reverse=retained_reverse,
+        require_zero_severed=require_zero_severed,
     )
 
 
@@ -956,6 +1046,7 @@ def selection_to_dict(selection):
             "depth_window": selection.depth_window,
             "grid_origin": selection.grid_origin,
             "minimum_span": selection.minimum_span,
+            "require_zero_severed": selection.require_zero_severed,
         },
         "targets": selection.targets,
         "tail_merged_targets": selection.tail_merged,
@@ -997,6 +1088,11 @@ def selection_to_dict(selection):
                 "window": [item.window_lend, item.window_rend],
                 "grid_positions_in_window": item.grid_positions,
                 "grid_positions_blocked_by_annotation": item.annotation_blocked,
+                # The two questions a partition with fewer chunks than targets
+                # raises: was this cut refused because it could not be made
+                # clean, and how dirty was the cleanest position on offer.
+                "declined_zero_severed": item.declined_zero_severed,
+                "best_spanning_in_window": item.best_spanning,
                 "reason": item.reason,
             }
             for item in selection.unplaced
@@ -1005,6 +1101,9 @@ def selection_to_dict(selection):
             "targets": len(selection.targets),
             "cuts_placed": len(selection.cuts),
             "targets_unplaced": len(selection.unplaced),
+            "targets_declined_zero_severed": sum(
+                1 for item in selection.unplaced if item.declined_zero_severed
+            ),
             "targets_tail_merged": len(selection.tail_merged),
             "segments": len(selection.segments),
             "retained_primary_alignments": selection.total_retained_primary,
@@ -1087,12 +1186,21 @@ def format_report(selection):
             selection.minimum_span,
         )
     )
+    if selection.require_zero_severed:
+        lines.append(
+            "# ZERO SEVERED is a HARD constraint for this selection: a target "
+            "whose window holds no position severing zero retained primary "
+            "alignments is DECLINED, not placed at the least-bad position. In "
+            "discovery a severed read can split a locus."
+        )
+    declined = [item for item in selection.unplaced if item.declined_zero_severed]
     lines.append(
-        "# {} target(s), {} cut(s) placed, {} unplaced, {} tail-merged -> {} "
-        "segment(s)".format(
+        "# {} target(s), {} cut(s) placed, {} unplaced ({} declined for severing), "
+        "{} tail-merged -> {} segment(s)".format(
             len(selection.targets),
             len(selection.cuts),
             len(selection.unplaced),
+            len(declined),
             len(selection.tail_merged),
             len(selection.segments),
         )
@@ -1275,6 +1383,17 @@ def main(argv=None):
         "floored to a depth_window multiple.",
     )
     parser.add_argument(
+        "--require_zero_severed",
+        action="store_true",
+        help="refuse any cut that severs a retained primary alignment, turning "
+        "the soft objective into a hard constraint. A target whose window holds "
+        "no zero-severing position is DECLINED and its two chunks stay joined, "
+        "rather than the least-bad position being taken. For DISCOVERY, where a "
+        "severed read can split a locus and manufacture spurious monoexonic "
+        "models; quantification drops, counts and names a severed read instead "
+        "and does not need this.",
+    )
+    parser.add_argument(
         "--max_intron_length",
         type=int,
         default=LRAA_Globals.config["max_intron_length"],
@@ -1380,6 +1499,7 @@ def main(argv=None):
                 min_per_id=args.min_per_id,
                 min_mapping_quality=args.min_mapping_quality,
                 strandless=args.strandless,
+                require_zero_severed=args.require_zero_severed,
             )
         )
 
@@ -1421,10 +1541,18 @@ def main(argv=None):
     )
 
     unplaced = sum(len(selection.unplaced) for selection in selections)
+    declined = sum(
+        1
+        for selection in selections
+        for item in selection.unplaced
+        if item.declined_zero_severed
+    )
     if unplaced:
         print(
-            "WARNING: {} target(s) could not be placed; see the report. These are "
-            "reported rather than skipped silently.".format(unplaced),
+            "WARNING: {} target(s) could not be placed, {} of them DECLINED "
+            "because no position in the window severs zero retained primary "
+            "alignments; see the report. These are reported rather than skipped "
+            "silently.".format(unplaced, declined),
             file=sys.stderr,
         )
     return 0

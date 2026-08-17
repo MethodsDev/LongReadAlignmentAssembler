@@ -52,6 +52,8 @@ BASE_SETTINGS = dict(
     HiFi=False,
     contig=None,
     cpu_budget=16,
+    # These fixtures are quant-only, which is what the sentinels below encode.
+    discovery=False,
 )
 
 

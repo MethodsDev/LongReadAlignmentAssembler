@@ -1433,3 +1433,222 @@ def test_strandless_cli_writes_a_manifest_the_extractor_can_consume(tmp_path):
         )
         assert manifest["strand"] is None
         assert manifest["strand_split_required"] is True
+
+
+# -- zero severed as a HARD constraint (discovery) ------------------------------
+
+
+def _every_position_severed(tmp_path):
+    """A window in which no grid position is free of spanning alignments.
+
+    Target 3000 with a 200 bp window admits exactly 2900, 3000 and 3100; 3000
+    carries one read and the two edges carry three each. Zero-cost positions
+    exist OUTSIDE the window, and the window is never widened, so this is the
+    case where quantification takes the cheapest cut and discovery must refuse.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for position in (2900, 3100):
+        for i in range(3):
+            fixture.spanning_read("crowd_{}_{}".format(position, i), position)
+    fixture.spanning_read("single", 3000)
+    return fixture.build()
+
+
+def test_quantification_takes_the_cheapest_cut_and_pays_for_it(tmp_path):
+    """The contract that must NOT change: severing is priced, not refused."""
+
+    fixture = _every_position_severed(tmp_path)
+
+    selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
+
+    assert selection.require_zero_severed is False
+    assert [cut.position for cut in selection.cuts] == [3000]
+    assert selection.cuts[0].spanning_dropped == 1
+    assert selection.total_dropped == 1
+    assert set(selection.dropped_read_names) == {"single"}
+    assert not selection.unplaced
+
+
+def test_discovery_declines_the_cut_quantification_would_have_taken(tmp_path):
+    """Same window, same reads: the cut is refused and the chunk stays whole.
+
+    A severed read costs quantification one read. It can cost discovery a locus:
+    the splice graph is cut through, and the two halves are reconstructed as
+    separate models. So the position is not admissible at any price.
+    """
+
+    fixture = _every_position_severed(tmp_path)
+
+    selection = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+        require_zero_severed=True,
+    )
+
+    assert selection.require_zero_severed is True
+    assert selection.cuts == []
+    assert len(selection.unplaced) == 1
+    declined = selection.unplaced[0]
+    assert declined.target == 3000
+    assert declined.declined_zero_severed is True
+    # what the cheapest admissible-but-for-severing position would have cost
+    assert declined.best_spanning == 1
+
+    # the refusal is what makes zero true, not the substrate
+    assert selection.total_dropped == 0
+    assert not selection.dropped_read_names
+
+    # skip-and-widen: one chunk covering the whole contig, not a failed run
+    assert len(selection.segments) == 1
+    assert selection.segments[0].span == fixture.length
+
+
+def test_the_hard_constraint_is_inert_where_a_clean_position_exists(tmp_path):
+    """Discovery and quantification must agree whenever agreement is possible.
+
+    Otherwise the mode would change cut placement everywhere rather than only
+    where it has to, and no chunked comparison between the two would mean
+    anything.
+    """
+
+    fixture = Fixture(tmp_path, length=5000)
+    for i in range(4):
+        fixture.spanning_read("crowd{}".format(i), 3000)
+    fixture.spanning_read("one_left", 2900)
+    fixture.spanning_read("one_right", 3100)
+    fixture.build()
+
+    soft = _select(fixture, segment_span=3000, wiggle=1000, minimum_span=1000)
+    hard = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=1000,
+        minimum_span=1000,
+        require_zero_severed=True,
+    )
+
+    assert [c.position for c in soft.cuts] == [c.position for c in hard.cuts] == [2800]
+    assert soft.total_dropped == hard.total_dropped == 0
+    assert not hard.unplaced
+
+
+def test_only_the_targets_that_cannot_be_placed_cleanly_are_declined(tmp_path):
+    """One blocked window among three does not cost the other two their cuts."""
+
+    fixture = Fixture(tmp_path, length=20000)
+    # blanket the middle target's whole window; leave the outer two clear
+    for position in (9900, 10000, 10100):
+        fixture.spanning_read("block_{}".format(position), position)
+    fixture.build()
+
+    selection = _select(
+        fixture,
+        segment_span=5000,
+        wiggle=200,
+        minimum_span=2500,
+        require_zero_severed=True,
+    )
+
+    assert selection.targets == [5000, 10000, 15000]
+    assert [cut.position for cut in selection.cuts] == [5000, 15000]
+    assert [item.target for item in selection.unplaced] == [10000]
+    assert selection.unplaced[0].declined_zero_severed is True
+    assert selection.total_dropped == 0
+    # the declined cut's two chunks are joined: 5000-15000 in one piece
+    assert [(s.lend, s.rend) for s in selection.segments] == [
+        (1, 5000),
+        (5001, 15000),
+        (15001, 20000),
+    ]
+
+
+def test_a_declined_cut_is_reported_in_the_manifest_and_the_report(tmp_path):
+    """Silent degradation is the failure mode this mode could most easily hide.
+
+    A partition that quietly produced fewer chunks than its geometry implies is
+    a performance regression with no visible cause, so the count, the reason and
+    the cost of the cheapest rejected position all have to be on the record.
+    """
+
+    fixture = _every_position_severed(tmp_path)
+    selection = _select(
+        fixture,
+        segment_span=3000,
+        wiggle=200,
+        minimum_span=1000,
+        require_zero_severed=True,
+    )
+
+    payload = selector.selection_to_dict(selection)
+    assert payload["params"]["require_zero_severed"] is True
+    assert payload["counts"]["targets"] == 1
+    assert payload["counts"]["cuts_placed"] == 0
+    assert payload["counts"]["targets_declined_zero_severed"] == 1
+    entry = payload["unplaced_targets"][0]
+    assert entry["declined_zero_severed"] is True
+    assert entry["best_spanning_in_window"] == 1
+    assert "zero-severed" in entry["reason"]
+
+    report = selector.format_report(selection)
+    assert "ZERO SEVERED is a HARD constraint" in report
+    assert "1 declined for severing" in report
+    assert "DECLINED under the zero-severed requirement" in report
+    assert "the cheapest severs 1" in report
+
+
+def test_the_manifest_says_so_when_the_requirement_is_off(tmp_path):
+    """The flag is recorded either way, so a manifest states its own contract."""
+
+    fixture = _every_position_severed(tmp_path)
+    selection = _select(fixture, segment_span=3000, wiggle=200, minimum_span=1000)
+
+    payload = selector.selection_to_dict(selection)
+    assert payload["params"]["require_zero_severed"] is False
+    assert payload["counts"]["targets_declined_zero_severed"] == 0
+    assert "ZERO SEVERED is a HARD constraint" not in selector.format_report(selection)
+
+
+def test_the_cli_flag_reaches_the_selection(tmp_path):
+    """--require_zero_severed is the pipeline's only lever on this; it must work."""
+
+    fixture = _every_position_severed(tmp_path)
+    prefix = str(tmp_path / "hard")
+
+    assert (
+        selector.main(
+            [
+                "--bam",
+                fixture.bam,
+                "--genome_fa",
+                fixture.fasta,
+                "--strand",
+                "+",
+                "--approx_MB_per_cut",
+                "0.003",
+                "--approx_MB_per_cut_wiggle_window",
+                "0.0002",
+                "--depth_window",
+                "100",
+                "--margin",
+                "0",
+                "--minimum_span",
+                "1000",
+                "--require_zero_severed",
+                "--output_prefix",
+                prefix,
+            ]
+        )
+        == 0
+    )
+
+    with open(prefix + ".cuts.json", "rt") as fh:
+        payload = json.load(fh)[0]
+    assert payload["params"]["require_zero_severed"] is True
+    assert payload["counts"]["cuts_placed"] == 0
+    assert payload["counts"]["targets_declined_zero_severed"] == 1
+    assert payload["counts"]["alignments_dropped_at_cuts"] == 0
+    with open(prefix + ".dropped_reads.txt", "rt") as fh:
+        assert fh.read().strip() == ""

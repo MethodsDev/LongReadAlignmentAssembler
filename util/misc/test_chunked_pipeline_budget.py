@@ -36,7 +36,8 @@ DRIVER = _load_driver()
 
 
 def _args(**overrides):
-    base = dict(HiFi=False, cpu_budget=16)
+    # quant-only, which is the arm whose command shape these tests pin
+    base = dict(HiFi=False, cpu_budget=16, discovery=False)
     base.update(overrides)
     return argparse.Namespace(**base)
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 
-"""Run the chunked quant-only pipeline end to end, or the whole-contig control.
+"""Run the chunked pipeline end to end, or the whole-contig control.
 
 This is a thin driver over six tools that already exist and are already tested.
-It adds no quantification logic of its own; it wires the stages together, runs
-the per-chunk work concurrently, and records what each stage cost.
+It adds no quantification or discovery logic of its own; it wires the stages
+together, runs the per-chunk work concurrently, and records what each cost.
 
     stage 1  util/separate_bam_by_strand.py         orientation split
     stage 2  util/misc/select_contig_cut_points.py  cut selection
     stage 3  util/misc/extract_contig_region_inputs.py  chunk extraction
     stage 4  util/normalize_bam_by_strand.py        per-chunk normalization
-    stage 5  LRAA --quant_only                      per-chunk quantification
+    stage 5  LRAA, quant-only or discovery          per-chunk work
     stage 6  merge + coordinate translation         this script
 
 Two arms, selected by ``--arm``, sharing stage 1 and every downstream setting so
@@ -68,6 +68,29 @@ the extractor refuses a strand-suffixed region over a mixed-orientation bam,
 for one orientation, and the post-split record counts are checked against the
 extractor's own per-orientation tallies.
 
+DISCOVERY CHUNKING, ``--discovery``. Off by default, and quant-only is unchanged
+in every particular while it is off. With it, stage 5 drops ``--quant_only``,
+the annotation becomes OPTIONAL -- absent is de novo, present is ref-guided
+discovery -- and stage 6 additionally merges the per-chunk GTFs, shifting
+coordinates back into the whole-contig frame and namespacing model ids per unit.
+The namespacing is not cosmetic: LRAA names a model after its contig and its
+component index, every chunk's mini contig carries the SAME contig name, so
+``t:chr1:+:comp-1:iso-1`` is emitted by every chunk that has a first component
+and an unpatched concatenation fuses unrelated models into one record.
+
+The one substantive difference is at stage 2, and it is a REFUSAL. Quantifying,
+a cut that severs a read costs one read: it is dropped, counted and named, and
+the model set is unchanged. Discovering, a cut that severs a read can split a
+LOCUS -- measured on chr21, where forcing 2 Mb cuts severs 940 alignments, 17 of
+the 20 models then lost span a cut, and an eight-isoform gene whose first exon
+crosses a cut is replaced by two spurious MONOEXONIC models. So discovery passes
+``--require_zero_severed`` and the selector DECLINES any target whose window
+holds no position severing zero alignments, leaving a larger chunk rather than a
+bad cut. A run that placed fewer cuts than it was asked for SAYS so, per
+contig-strand, with the reason for each: ``cut_placement_report`` below, printed
+and stored in ``timing.json``. A partition that quietly shrank is a performance
+regression nobody can explain afterwards.
+
 MEASUREMENT NOTES. Wall time is measured around each subprocess. Peak RSS is
 sampled from ``/proc`` at ``--rss_sample_interval`` over the step's whole
 process tree and summed across that tree, so a chunk's figure already includes
@@ -122,9 +145,26 @@ STRAND_FIRST_MODE = "strand_first"
 STRANDLESS_MODE = "strandless"
 PIPELINE_MODES = (STRAND_FIRST_MODE, STRANDLESS_MODE)
 PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
-# LRAA rewrites --output_prefix to "<prefix>.LRAA.quant-only" in quant-only mode
-# (LRAA:_append_lraa_output_mode_suffix), so the files land under that name.
+# LRAA rewrites --output_prefix to "<prefix>.<mode suffix>"
+# (LRAA:_get_lraa_output_mode_suffix), so the files land under that name and the
+# mode decides which name.
 LRAA_QUANT_ONLY_SUFFIX = "LRAA.quant-only"
+LRAA_REF_GUIDED_SUFFIX = "LRAA.ref-guided"
+LRAA_REF_FREE_SUFFIX = "LRAA.ref-free"
+
+
+def lraa_output_suffix(discovery, gtf):
+    """What LRAA appends to --output_prefix, mirroring its own three-way choice.
+
+    Restated here rather than imported: LRAA is a script, not a module, and
+    importing it would run its argument parser. pylib/test_chunked_entry_point.py
+    asserts these three against LRAA's own, so a rename there fails a test rather
+    than quietly producing paths that nothing writes.
+    """
+
+    if not discovery:
+        return LRAA_QUANT_ONLY_SUFFIX
+    return LRAA_REF_GUIDED_SUFFIX if gtf else LRAA_REF_FREE_SUFFIX
 
 # LRAA gzips quant.tracking since v0.20.0; v0.19.x and earlier wrote it plain.
 # Both are accepted on read so a run at either version resolves its own artifact,
@@ -578,7 +618,8 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
         # rather than "plus"/"minus" -- and the parent token differs as well
         # (the inputs, not a split), so neither mode can read the other's cuts.
         token = chain_token(
-            "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}".format(
+            "stage2_cuts_{}.mb_{}_wig_{}_dw_{}_margin_{}.sev_pid_{}_mq_{}"
+            ".zerosev_{}_annot_{}".format(
                 tag,
                 args.approx_MB_per_cut,
                 args.approx_MB_per_cut_wiggle_window,
@@ -586,10 +627,35 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
                 args.margin,
                 effective_min_per_id,
                 effective_min_mapq,
+                # Two more things that decide the cut coordinates. Discovery
+                # forbids severing outright and so places DIFFERENT cuts from a
+                # quant run of the same geometry; and whether an annotation
+                # constrains placement at all is now a property of the run rather
+                # than a given. Neither was in the token, and a stale hit here
+                # reuses one mode's cuts under the other's name.
+                bool(args.discovery),
+                bool(args.gtf),
             ),
             parent_token,
         )
         cuts_tokens[key] = token
+        gtf_args = (
+            [
+                "--gtf",
+                os.path.abspath(args.gtf),
+                # Both stages name the same fallback, so a read-only reference
+                # directory costs one index build for the run rather than one per
+                # invocation -- and cut selection, which runs first and once, is
+                # what pays for it.
+                "--gtf_index_cache_dir",
+                gtf_index_cache_dir(outdir),
+            ]
+            if args.gtf
+            # De novo discovery has no annotation, and the selector treats the
+            # annotation constraint as optional: with none supplied every
+            # grid-aligned position in the window is admissible on that axis.
+            else []
+        )
         cmd = [
             sys.executable,
             SELECT_CUTS,
@@ -597,14 +663,7 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
             bam,
             "--genome_fa",
             os.path.abspath(args.genome_fa),
-            "--gtf",
-            os.path.abspath(args.gtf),
-            # Both stages name the same fallback, so a read-only reference
-            # directory costs one index build for the run rather than one per
-            # invocation -- and cut selection, which runs first and once, is
-            # what pays for it.
-            "--gtf_index_cache_dir",
-            gtf_index_cache_dir(outdir),
+            *gtf_args,
             "--approx_MB_per_cut",
             str(args.approx_MB_per_cut),
             "--approx_MB_per_cut_wiggle_window",
@@ -635,6 +694,15 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
             "--output_prefix",
             prefix,
         ]
+        if args.discovery:
+            # The one difference discovery makes to cut selection, and the whole
+            # point of the mode. A cut no retained alignment spans cannot split a
+            # locus: the splice graph's nodes are alignment blocks and its edges
+            # are N ops, so nothing crosses the position and the graph is already
+            # disconnected there. A cut that severs reads cuts THROUGH a locus,
+            # and measurably manufactures truncated and spurious models. Severing
+            # therefore stops being a price and becomes a refusal.
+            cmd.append("--require_zero_severed")
         if key:
             # the bam is orientation-pure already, so --strand is omitted (every
             # record counts); the orientation for the region strings comes from
@@ -669,8 +737,22 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
 # --------------------------------------------------------------------- stage 3
 
 
-def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
-    """The quant units one extracted chunk feeds, and where each one's files go.
+def chunk_quant_units(
+    chunk_id,
+    cdir,
+    prefix,
+    strand,
+    offset,
+    order,
+    # Defaulted to the quant-only shape this function has always produced, so a
+    # caller that predates discovery builds the same units it always did. The
+    # real caller passes both explicitly, and a caller that forgot would get
+    # paths its LRAA invocation does not write -- a missing file, loudly, not a
+    # wrong number.
+    lraa_suffix=LRAA_QUANT_ONLY_SUFFIX,
+    has_gtf=True,
+):
+    """The LRAA units one extracted chunk feeds, and where each one's files go.
 
     Strand-first: one unit, at exactly the paths and sentinel names this stage
     has always used, so an existing output directory still resumes.
@@ -683,6 +765,12 @@ def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
     orientation's -- 1,110 rows where the strand-first arm emits 555, on the
     same 36 rows carrying reads. Stage 5 consumes exactly what it consumes
     today: one orientation's bam against one orientation's models.
+
+    ``has_gtf`` is False for annotation-free discovery, and the unit then has NO
+    annotation rather than an empty one -- an empty GTF handed to LRAA is
+    ref-guided discovery against nothing, which is a different run.
+    ``lraa_suffix`` is what LRAA will append to --output_prefix, which differs by
+    mode, so the paths named here are the paths that mode actually writes.
     """
 
     if strand:
@@ -693,7 +781,7 @@ def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
                 "chunk.norm.bam",
                 "chunk_quant",
                 "{}.bam".format(prefix),
-                "{}.gtf".format(prefix),
+                "{}.gtf".format(prefix) if has_gtf else None,
             )
         ]
     else:
@@ -705,7 +793,7 @@ def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
                 "chunk_quant_{}".format(STRAND_TAG[s]),
                 # both written by stage 3b, inside this chunk's own work
                 "{}.strand.{}.bam".format(prefix, s),
-                "{}.strand.{}.gtf".format(prefix, s),
+                "{}.strand.{}.gtf".format(prefix, s) if has_gtf else None,
             )
             for s in ("+", "-")
         ]
@@ -725,9 +813,7 @@ def chunk_quant_units(chunk_id, cdir, prefix, strand, offset, order):
             "gtf": gtf,
             "norm_bam": os.path.join(cdir, norm_name),
             "quant_name": quant_name,
-            "quant_prefix": os.path.join(
-                cdir, quant_name + "." + LRAA_QUANT_ONLY_SUFFIX
-            ),
+            "quant_prefix": os.path.join(cdir, quant_name + "." + lraa_suffix),
         }
         for s, unit_id, norm_name, quant_name, bam, gtf in units
     ]
@@ -806,6 +892,19 @@ def stage_extract_chunks(
         prefix = os.path.join(cdir, "chunk")
         log = os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id))
         token = chain_token(local, cuts_tokens[key])
+        gtf_args = (
+            [
+                "--gtf",
+                os.path.abspath(args.gtf),
+                "--gtf_index_cache_dir",
+                gtf_index_cache_dir(outdir),
+            ]
+            if args.gtf
+            # No annotation to partition. The extractor then writes no mini GTF
+            # and reports zero transcripts emitted, which is what a de novo chunk
+            # is: a mini contig and its reads.
+            else []
+        )
         cmd = [
             sys.executable,
             EXTRACT_CHUNK,
@@ -813,10 +912,7 @@ def stage_extract_chunks(
             os.path.abspath(args.genome_fa),
             "--bam",
             planned["bam"],
-            "--gtf",
-            os.path.abspath(args.gtf),
-            "--gtf_index_cache_dir",
-            gtf_index_cache_dir(outdir),
+            *gtf_args,
             "--region",
             region,
             "--output_prefix",
@@ -890,6 +986,9 @@ def stage_extract_chunks(
                 "extract": record,
                 # what stages 3b-5 chain their own sentinels onto
                 "upstream_token": token,
+                # Whether this chunk has an annotation at all: stage 3b splits a
+                # GTF that exists, and de novo discovery has none.
+                "has_gtf": bool(args.gtf),
                 "units": chunk_quant_units(
                     chunk_id,
                     cdir,
@@ -897,6 +996,8 @@ def stage_extract_chunks(
                     key,
                     manifest["offset"],
                     planned["order"],
+                    lraa_output_suffix(args.discovery, args.gtf),
+                    bool(args.gtf),
                 ),
             }
         )
@@ -936,6 +1037,13 @@ def lraa_cmd(
     exactly one unit: CpuBudget.allocate() gives 1 unit worker and lends the whole share
     to that worker's native tool steps. Nothing is double-counted, because the share is
     already what this pipeline's own chunk concurrency left over.
+
+    Quant-only and discovery differ by exactly two tokens -- whether ``--quant_only``
+    is passed, and whether there is a ``--gtf`` to pass -- and in nothing else. The
+    splice graph is still built from the per-chunk NORMALIZED bam while the reads are
+    counted against the full one, which is what ``--bam_for_sg`` with ``--no_norm``
+    says. That is the same composition LRAA performs internally when it normalizes
+    for itself, moved out to stage 4 so it runs per chunk and in parallel.
     """
     cmd = [
         sys.executable,
@@ -944,9 +1052,12 @@ def lraa_cmd(
         genome,
         "--bam",
         bam_for_quant,
-        "--gtf",
-        gtf,
-        "--quant_only",
+    ]
+    if gtf:
+        cmd += ["--gtf", gtf]
+    if not args.discovery:
+        cmd.append("--quant_only")
+    cmd += [
         "--bam_for_sg",
         bam_for_sg,
         "--no_norm",
@@ -1053,7 +1164,10 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     # Rewritten on every pass, sentinel or not: it is a few hundred kB of text
     # and a resumed run must find the files, not the sentinel that says they
     # were once written.
-    counts.update(split_chunk_gtf_by_strand(chunk, split_prefix))
+    # Defaulted True: a chunk record built before annotation-free discovery
+    # existed always had a mini GTF, because the pipeline required one.
+    if chunk.get("has_gtf", True):
+        counts.update(split_chunk_gtf_by_strand(chunk, split_prefix))
     step["counts"] = counts
     return step, token, counts
 
@@ -1349,6 +1463,14 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
                     log,
                 )
             )
+        if args.discovery:
+            gtf_path = quant_prefix + ".gtf"
+            if not os.path.exists(gtf_path):
+                raise PipelineError(
+                    "chunk {} unit {} produced no {}; discovery is what this run "
+                    "is for, so a missing model set is a failure, not an empty "
+                    "result. log: {}".format(cid, unit["unit_id"], gtf_path, log)
+                )
 
     return {
         "chunk_id": cid,
@@ -1487,7 +1609,86 @@ def read_tsv(path):
     return comments, header, rows
 
 
-def merge_and_translate(outdir, units):
+# gene_id / transcript_id in a GTF attribute column, quoted.
+_GTF_ID_ATTR = re.compile(r'(gene_id|transcript_id)\s+"([^"]*)"')
+
+
+def _namespace_id(unit_id, value):
+    """A chunk-local model id made unique across the run."""
+
+    return "{}|{}".format(unit_id, value)
+
+
+def merge_discovery_gtf(merged_dir, units):
+    """Concatenate the per-chunk MODEL gtfs, back in the whole-run frame.
+
+    Two rewrites, both mandatory.
+
+    COORDINATES. The extractor rebases each chunk onto a mini contig that starts
+    at 1 and is NAMED after the real contig, so a chunk's models carry chunk-local
+    coordinates under a contig name that looks absolute. Columns 4 and 5 take the
+    chunk offset; nothing else in a GTF line is a coordinate.
+
+    IDS. LRAA names a model after its contig, its strand and a per-run component
+    index -- ``t:chr1:+:comp-1:iso-1`` -- and every chunk of a contig shares the
+    contig name and restarts the component counter at 1. Concatenating unpatched
+    therefore FUSES unrelated models from different chunks into single records
+    spanning the chromosome. That is not hypothetical: it happened, and produced
+    37 spurious chromosome-crossing "models" that had to be diagnosed before any
+    conclusion could be drawn from a chunked de novo comparison
+    (FINDINGS.chr21_denovo_parity.md, section 2). Prefixing every gene_id and
+    transcript_id with the unit id is the smallest change that cannot collide,
+    and quant.expr and quant.tracking get the same prefix so the three artifacts
+    name the same models.
+    """
+
+    gtf_out = os.path.join(merged_dir, "chunked.gtf")
+    lines_written = 0
+    transcripts = 0
+    with open(gtf_out, "wt") as ofh:
+        print(
+            "# LRAA chunked discovery merge: {} unit(s); coordinates translated "
+            "to the whole-contig frame, model ids namespaced per unit".format(
+                len(units)
+            ),
+            file=ofh,
+        )
+        for unit in units:
+            offset = unit["offset"]
+            path = unit["quant_prefix"] + ".gtf"
+            with open(path, "rt") as fh:
+                for line in fh:
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) < 9:
+                        raise PipelineError(
+                            "unit {} gtf line carries {} field(s), not 9: "
+                            "{}".format(
+                                unit["unit_id"], len(fields), line.rstrip()
+                            )
+                        )
+                    fields[3] = str(int(fields[3]) + offset)
+                    fields[4] = str(int(fields[4]) + offset)
+                    fields[8] = _GTF_ID_ATTR.sub(
+                        lambda m: '{} "{}"'.format(
+                            m.group(1), _namespace_id(unit["unit_id"], m.group(2))
+                        ),
+                        fields[8],
+                    )
+                    print("\t".join(fields), file=ofh)
+                    lines_written += 1
+                    if fields[2] == "transcript":
+                        transcripts += 1
+
+    return {
+        "gtf": gtf_out,
+        "gtf_lines": lines_written,
+        "gtf_transcripts": transcripts,
+    }
+
+
+def merge_and_translate(outdir, units, discovery=False):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
     Three fields carry chunk-local COORDINATES: ``exons`` and ``introns``, and the
@@ -1511,7 +1712,13 @@ def merge_and_translate(outdir, units):
     ``mp_id`` in quant.tracking is a per-process MultiPath counter, not a
     coordinate; it is left as emitted and is not comparable across any two runs.
 
-    Transcript ids come from the supplied GTF, so no id translation is needed.
+    Quantifying, transcript ids come from the supplied GTF and are already
+    global, so no id translation is needed. DISCOVERING they are chunk-local and
+    collide, so ``discovery`` additionally namespaces every gene_id and
+    transcript_id by unit and merges the per-chunk model GTFs; see
+    ``merge_discovery_gtf``. A quant-only run takes neither branch and emits
+    exactly the bytes it emitted before.
+
     A quant UNIT rather than a chunk is what is concatenated here: strand-first
     they are the same thing, and strandless each chunk contributes two, one per
     orientation, from the one extraction. ``ordered_units`` puts them back into
@@ -1548,6 +1755,16 @@ def merge_and_translate(outdir, units):
                     )
                 )
             row = list(row)
+            if discovery:
+                # The model ids are this chunk's, and every chunk names a
+                # comp-1. The merged GTF applies the identical prefix, so the
+                # table and the models keep naming the same things.
+                row[col["gene_id"]] = _namespace_id(
+                    unit["unit_id"], row[col["gene_id"]]
+                )
+                row[col["transcript_id"]] = _namespace_id(
+                    unit["unit_id"], row[col["transcript_id"]]
+                )
             row[col["exons"]] = _shift_coord_string(row[col["exons"]], offset)
             introns = row[col["introns"]]
             if introns:
@@ -1622,6 +1839,13 @@ def merge_and_translate(outdir, units):
         col = {name: i for i, name in enumerate(header)}
         for row in rows:
             row = list(row)
+            if discovery:
+                row[col["gene_id"]] = _namespace_id(
+                    unit["unit_id"], row[col["gene_id"]]
+                )
+                row[col["transcript_id"]] = _namespace_id(
+                    unit["unit_id"], row[col["transcript_id"]]
+                )
             old = row[col["transcript_splice_hash_code"]]
             row[col["transcript_splice_hash_code"]] = hash_remap.get(
                 (unit["unit_id"], old), old
@@ -1641,7 +1865,7 @@ def merge_and_translate(outdir, units):
         for row in track_rows:
             print("\t".join(row), file=ofh)
 
-    return {
+    merged = {
         "quant_expr": expr_out,
         "quant_tracking": track_out,
         "tpm_chunk_local_audit": tpm_audit,
@@ -1650,9 +1874,12 @@ def merge_and_translate(outdir, units):
         "splice_hash_codes_recomputed": len(hash_remap),
         "merged_scope_total_all_reads": total_reported_read_count,
     }
+    if discovery:
+        merged.update(merge_discovery_gtf(merged_dir, units))
+    return merged
 
 
-def verify_severed_accounting(cut_dir, chunks):
+def verify_severed_accounting(cut_dir, chunks, discovery=False):
     """The set the control subtracts must BE the set the chunks dropped.
 
     WHAT IS COUNTED, exactly. ``run_baseline`` prunes the whole-contig bam by the
@@ -1690,6 +1917,25 @@ def verify_severed_accounting(cut_dir, chunks):
         mentions += len(names)
         dropped.update(names)
 
+    if discovery and dropped:
+        # The hard constraint, enforced against what EXTRACTION actually did
+        # rather than against what selection predicted. Selection promised zero
+        # by refusing every severing position; if a read was nonetheless dropped,
+        # the two tools disagree about which alignments are retained, and in
+        # discovery that disagreement can split a locus and manufacture spurious
+        # monoexonic models. Refused here, before the expensive phase.
+        raise PipelineError(
+            "discovery chunking requires ZERO severed reads and extraction "
+            "dropped {} (e.g. {}). Cut selection ran with "
+            "--require_zero_severed, so it placed only positions it scored at "
+            "zero spanning alignments -- a nonzero drop here means selection "
+            "and extraction disagree about which alignments are retained, not "
+            "that the geometry was too tight. Do not relax this: a severed read "
+            "in discovery can split a locus.".format(
+                len(dropped), ", ".join(sorted(dropped)[:5])
+            )
+        )
+
     if selected != dropped:
         missed = sorted(dropped - selected)
         unrealized = sorted(selected - dropped)
@@ -1715,6 +1961,9 @@ def verify_severed_accounting(cut_dir, chunks):
         "dropped_by_extraction": len(dropped),
         "per_chunk_drop_mentions": mentions,
         "sets_identical": True,
+        # Stated, not implied by the zero above: quant-only can legitimately
+        # report zero on a substrate whose cuts happened to be clean.
+        "zero_severed_required": bool(discovery),
     }
 
 
@@ -1958,7 +2207,23 @@ def build_parser():
     # `parse_args` enforces the requirement for CLI callers, `run` for both.
     parser.add_argument("--bam", default=None, help="input bam of aligned reads")
     parser.add_argument("--genome_fa", default=None, help="genome fasta")
-    parser.add_argument("--gtf", default=None, help="reference annotation gtf")
+    parser.add_argument(
+        "--gtf",
+        default=None,
+        help="reference annotation gtf. Required for quant-only; OPTIONAL with "
+        "--discovery, where absent means de novo and present means ref-guided "
+        "discovery",
+    )
+    parser.add_argument(
+        "--discovery",
+        action="store_true",
+        help="run isoform DISCOVERY per chunk instead of quantification against "
+        "a supplied annotation: stage 5 drops --quant_only and stage 6 also "
+        "merges the per-chunk model gtfs. Cut selection is then run with "
+        "--require_zero_severed, because a severed read costs quantification "
+        "one read but can cost discovery a whole locus, so a target with no "
+        "clean position in its window is DECLINED and its chunks stay joined",
+    )
     parser.add_argument(
         "--output_dir", default=None, help="output directory; created if absent"
     )
@@ -2065,9 +2330,14 @@ def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    for required in ("bam", "genome_fa", "gtf", "output_dir"):
-        if not getattr(args, required, None):
-            parser.error("--{} is required".format(required))
+    required = ["bam", "genome_fa", "output_dir"]
+    if not args.discovery:
+        # Quant-only has nothing to quantify without it. Discovery does: no gtf
+        # is de novo, which is the mode this option exists to reach.
+        required.append("gtf")
+    for name in required:
+        if not getattr(args, name, None):
+            parser.error("--{} is required".format(name))
     if args.cpu_budget is not None and args.cpu_budget < 1:
         parser.error("--cpu_budget must be >= 1")
 
@@ -2123,6 +2393,131 @@ def claim_pipeline_mode(ckpt, mode):
     ckpt.mark("mode_" + mode, mode)
 
 
+def cut_placement_report(selections, discovery):
+    """What the partition was asked for, what it got, and why the difference.
+
+    A run that quietly produced fewer chunks than its geometry implies is a
+    performance regression with no visible cause six months later. Discovery can
+    decline a cut ON PURPOSE -- that is what the zero-severed requirement is --
+    so the decline has to be as loud as a failure would be, and per target,
+    naming the reason, not as a single total at the end.
+
+    Printed in BOTH modes. Quant-only has always been able to leave a target
+    unplaced (annotation-blocked window, minimum-span collision) and has always
+    only said so inside the selector's own report file.
+
+    Returns ``(text, summary)``: the text is printed, the summary is stored in
+    timing.json and outputs.json.
+    """
+
+    totals = collections.Counter()
+    per_selection = []
+    lines = [
+        "",
+        "CUT PLACEMENT ({} mode): zero severed is {}".format(
+            "discovery" if discovery else "quant-only",
+            "REQUIRED, and a target with no clean position is DECLINED"
+            if discovery
+            else "preferred; a severed read is dropped, counted and named",
+        ),
+        "",
+    ]
+    for key in sorted(selections):
+        for selection in selections[key]:
+            counts = selection["counts"]
+            label = "{}{}".format(selection["chrom"], key or "")
+            unplaced = selection["unplaced_targets"]
+            declined = [i for i in unplaced if i.get("declined_zero_severed")]
+            other = [i for i in unplaced if not i.get("declined_zero_severed")]
+            totals["targets"] += counts["targets"]
+            totals["placed"] += counts["cuts_placed"]
+            totals["declined"] += len(declined)
+            totals["unplaced_other"] += len(other)
+            totals["tail_merged"] += counts["targets_tail_merged"]
+            totals["chunks"] += counts["segments"]
+            lines.append(
+                "  {:<14} {} requested, {} placed, {} declined for severing, {} "
+                "otherwise unplaced, {} tail-merged -> {} chunk(s)".format(
+                    label,
+                    counts["targets"],
+                    counts["cuts_placed"],
+                    len(declined),
+                    len(other),
+                    counts["targets_tail_merged"],
+                    counts["segments"],
+                )
+            )
+            for item in declined:
+                lines.append(
+                    "      DECLINED target {}: {}".format(
+                        item["target"], item["reason"]
+                    )
+                )
+            for item in other:
+                lines.append(
+                    "      UNPLACED target {}: {}".format(
+                        item["target"], item["reason"]
+                    )
+                )
+            per_selection.append(
+                {
+                    "label": label,
+                    "chrom": selection["chrom"],
+                    "strand": selection["strand"],
+                    "targets": counts["targets"],
+                    "cuts_placed": counts["cuts_placed"],
+                    "cuts_declined_zero_severed": len(declined),
+                    "targets_unplaced_other": len(other),
+                    "targets_tail_merged": counts["targets_tail_merged"],
+                    "chunks": counts["segments"],
+                    "declined": [
+                        {
+                            "target": item["target"],
+                            "best_spanning_in_window": item.get(
+                                "best_spanning_in_window"
+                            ),
+                            "reason": item["reason"],
+                        }
+                        for item in declined
+                    ],
+                }
+            )
+    lines.append("")
+    lines.append(
+        "  TOTAL {} cut(s) requested, {} placed, {} declined for severing, {} "
+        "otherwise unplaced, {} tail-merged -> {} chunk(s)".format(
+            totals["targets"],
+            totals["placed"],
+            totals["declined"],
+            totals["unplaced_other"],
+            totals["tail_merged"],
+            totals["chunks"],
+        )
+    )
+    if totals["declined"]:
+        lines.append(
+            "  {} cut(s) were DECLINED rather than placed badly. The chunks they "
+            "would have separated stay joined, so this run is slower than its "
+            "geometry suggests and that is the intended trade: a larger chunk is "
+            "slower, a cut through a locus is wrong.".format(totals["declined"])
+        )
+    lines.append("")
+
+    summary = {
+        "mode": "discovery" if discovery else "quant_only",
+        "zero_severed_required": bool(discovery),
+        "targets": totals["targets"],
+        "cuts_placed": totals["placed"],
+        "cuts_declined_zero_severed": totals["declined"],
+        "targets_unplaced_other": totals["unplaced_other"],
+        "targets_tail_merged": totals["tail_merged"],
+        "chunks": totals["chunks"],
+        "per_selection": per_selection,
+    }
+    return "\n".join(lines), summary
+
+
+
 def format_plan(args, mode, sources, selections):
     """The ``--dry_run`` report: what would run, how much of it, and over what.
 
@@ -2141,7 +2536,9 @@ def format_plan(args, mode, sources, selections):
 
     lines = [
         "",
-        "PLAN (--dry_run): {} chunking, arm={}".format(mode, args.arm),
+        "PLAN (--dry_run): {} chunking, {}, arm={}".format(
+            mode, "discovery" if args.discovery else "quant-only", args.arm
+        ),
         "",
     ]
     if strandless:
@@ -2242,11 +2639,26 @@ def run(args):
     elif args.cpu_budget < 1:
         raise PipelineError("cpu_budget must be >= 1")
 
-    for required in ("bam", "genome_fa", "gtf", "output_dir"):
-        if not getattr(args, required, None):
+    required = ["bam", "genome_fa", "output_dir"]
+    if not args.discovery:
+        required.append("gtf")
+    for name in required:
+        if not getattr(args, name, None):
             raise PipelineError(
-                "the chunked pipeline needs {}".format(required)
+                "the chunked pipeline needs {}".format(name)
             )
+    if args.discovery and args.arm in ("baseline", "both"):
+        # The control arm is a whole-contig QUANT run against a supplied
+        # annotation; it has no discovery counterpart here. Refused rather than
+        # served, because silently running a quant baseline beside a discovery
+        # chunked arm would produce two artifacts that look comparable and are
+        # not.
+        raise PipelineError(
+            "--discovery has no baseline arm: the control is a whole-contig "
+            "quantification against a supplied annotation, which is not the "
+            "comparison a discovery run wants. Run --arm chunked, and produce "
+            "the unchunked discovery control with a plain LRAA invocation."
+        )
 
     mode = STRANDLESS_MODE if args.strandless_chunks else STRAND_FIRST_MODE
     outdir = os.path.abspath(args.output_dir)
@@ -2266,6 +2678,7 @@ def run(args):
     timing["arm"] = args.arm
     timing["chunk_order"] = mode
     timing["dry_run"] = bool(args.dry_run)
+    timing["discovery"] = bool(args.discovery)
 
     for tool in (SEPARATE_BAM, SELECT_CUTS, EXTRACT_CHUNK, NORMALIZE_BAM, LRAA):
         if not os.path.exists(tool):
@@ -2285,7 +2698,9 @@ def run(args):
         None,
         Util_funcs.file_identity_token(args.bam),
         Util_funcs.file_identity_token(args.genome_fa),
-        Util_funcs.file_identity_token(args.gtf),
+        # De novo discovery has no annotation, and a null identity is not the
+        # identity of some other file: it is the absence of an input.
+        Util_funcs.file_identity_token(args.gtf) if args.gtf else "no_gtf",
         args.contig or "",
     )
 
@@ -2373,6 +2788,11 @@ def run(args):
             args, ckpt, outdir, timing, sources, rss
         )
         flush()
+        placement_text, placement = cut_placement_report(selections, args.discovery)
+        print(placement_text, flush=True)
+        timing["cut_placement"] = placement
+        outputs["cut_placement"] = placement
+        flush()
 
         if args.dry_run:
             plan = format_plan(args, mode, sources, selections)
@@ -2391,7 +2811,9 @@ def run(args):
         # Before the expensive phase, not after it: this is the check that keeps
         # the control's pruned bam and the chunked arm's inputs the same record
         # set, and it needs nothing but the manifests and the cut selection.
-        timing["severed_read_accounting"] = verify_severed_accounting(cut_dir, chunks)
+        timing["severed_read_accounting"] = verify_severed_accounting(
+            cut_dir, chunks, discovery=args.discovery
+        )
         flush()
         print(
             "extracted {} chunk(s): {}".format(
@@ -2412,7 +2834,7 @@ def run(args):
         load_after = loadavg()
 
         units = ordered_units(chunks)
-        merged = merge_and_translate(outdir, units)
+        merged = merge_and_translate(outdir, units, discovery=args.discovery)
         timing.setdefault("arms", {})["chunked"] = {
             "cpu_budget": chunk_allocation.budget,
             "concurrent_chunk_workers": chunk_allocation.unit_workers,

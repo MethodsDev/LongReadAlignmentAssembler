@@ -44,6 +44,9 @@ SETTINGS = dict(
     HiFi=False,
     contig=None,
     cpu_budget=16,
+    # The parity arms are quant-only; discovery has no baseline arm to compare
+    # against, and run() refuses that combination.
+    discovery=False,
 )
 
 
