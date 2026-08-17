@@ -282,12 +282,14 @@ def test_the_fixture_misassigns_when_the_locality_predicate_is_neutralised(
 def test_locality_leaves_the_existing_genome_baseline_untouched(tmp_path):
     """One added criterion, nothing else disturbed.
 
-    Locality was added to the acceptance path rescue already used rather than by
-    switching rescue onto the genome_target_gating flow, because that flow also empties
-    the explained-bases and gap-aware-identity baseline and applies read filters of its
-    own. Measured on chr21 HiFi, that baseline declines 668 rescues where locality
-    declines 16, so losing it silently would be the larger change and not the one asked
-    for. Asserts the same collector still reports both baselines alongside the new
+    Locality was added to the acceptance path rescue already used rather than by switching
+    rescue onto the genome-gated target flow, because that flow also emptied the
+    explained-bases and gap-aware-identity baseline and applied read filters of its own.
+    Measured on chr21 HiFi, that baseline declines 668 rescues where locality declines 16,
+    so losing it silently would have been the larger change and not the one asked for.
+    That gated flow has since been deleted along with the whole-genome-versus-whole-
+    transcriptome modes it served, which is what makes these baselines unconditional.
+    Asserts the same collector still reports both baselines alongside the new
     allowed-target sets, over the same offered reads.
     """
     from IsoformReadRescue import (

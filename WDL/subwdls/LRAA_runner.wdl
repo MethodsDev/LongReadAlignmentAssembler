@@ -332,7 +332,7 @@ task LRAA_runner_task {
         File? LRAA_gtf = "~{output_prefix_use}.~{output_suffix}.gtf"
         File LRAA_quant_expr = "~{output_prefix_use}.~{output_suffix}.quant.expr"
         File LRAA_quant_tracking = "~{output_prefix_use}.~{output_suffix}.quant.tracking.gz"
-        File? LRAA_genome_tx_arb_summary = "~{output_prefix_use}.~{output_suffix}.genome_tx_arb.summary.tsv"
+        File? LRAA_read_assignment_summary = "~{output_prefix_use}.~{output_suffix}.read_assignment.summary.tsv"
         File? LRAA_normalized_splice_graph_bam = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam"
         File? LRAA_normalized_splice_graph_bai = "~{output_prefix_use}.~{output_suffix}.splice_graph_normalized.bam.bai"
         # Present only for a chunked run: the chunk manifests and per-chunk timings.
@@ -452,7 +452,7 @@ workflow LRAA_runner {
         File? LRAA_gtf = LRAA_runner_task.LRAA_gtf
         File LRAA_quant_expr = LRAA_runner_task.LRAA_quant_expr
         File LRAA_quant_tracking = LRAA_runner_task.LRAA_quant_tracking
-        File? LRAA_genome_tx_arb_summary = LRAA_runner_task.LRAA_genome_tx_arb_summary
+        File? LRAA_read_assignment_summary = LRAA_runner_task.LRAA_read_assignment_summary
         File? LRAA_normalized_splice_graph_bam = LRAA_runner_task.LRAA_normalized_splice_graph_bam
         File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
         File? LRAA_chunk_report = LRAA_runner_task.LRAA_chunk_report

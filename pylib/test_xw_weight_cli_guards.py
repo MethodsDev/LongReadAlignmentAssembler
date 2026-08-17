@@ -142,27 +142,24 @@ def test_weighted_quant_refuses_discovery_mode(tmp_path, inputs):
     assert "supported only with --quant_only" in (r.stdout + r.stderr)
 
 
-def test_stream_reads_requires_genome_assignment_mode(tmp_path, inputs):
+def test_stream_reads_requires_rescue_turned_off(tmp_path, inputs):
     """The streaming pass maps genomically and cannot reproduce transcriptome rescue.
 
-    The default mode is rescue_unassigned, whose first pass rescues the reads that failed
-    genomic assignment in the NORMALIZED bam. Reads present only in the full bam reach the
-    second pass and are assigned genomically or resolved, never rescued -- so the run's
-    assignments would differ from the default path's while the rescue summary described only
-    the first pass.
+    Rescue is on by default, and its first pass rescues the reads that failed genomic
+    assignment in the NORMALIZED bam. Reads present only in the full bam reach the second
+    pass and are assigned genomically or resolved, never rescued -- so the run's
+    assignments would differ from the default path's while the rescue summary described
+    only the first pass.
     """
     gtf, genome = inputs
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads",
-           "--quant_read_assignment_mode", "rescue_unassigned"]
+           "--stream_reads"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
-    assert "--stream_reads requires --quant_read_assignment_mode genome" in (
-        r.stdout + r.stderr
-    )
+    assert "cannot reproduce transcriptome rescue" in (r.stdout + r.stderr)
     assert not list(tmp_path.glob("out*quant.expr")), "and must not emit results"
 
 
@@ -174,7 +171,7 @@ def test_stream_reads_needs_a_thinner_first_pass_bam(tmp_path, inputs):
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--quant_read_assignment_mode", "genome",
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment",
            "--normalize_max_cov_level", "0"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
@@ -200,7 +197,7 @@ def test_stream_reads_accepts_an_externally_normalized_bam_for_sg(tmp_path, inpu
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--quant_read_assignment_mode", "genome"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert "needs a first-pass bam thinner than the one it streams" not in (
         r.stdout + r.stderr
@@ -216,7 +213,7 @@ def test_stream_reads_refuses_when_bam_for_sg_is_the_streamed_bam(tmp_path, inpu
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--quant_read_assignment_mode", "genome"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
@@ -234,7 +231,7 @@ def test_stream_reads_refuses_tag_bam(tmp_path, inputs):
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--quant_read_assignment_mode", "genome", "--tag_bam"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment", "--tag_bam"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "cannot be combined with --tag_bam" in (r.stdout + r.stderr)

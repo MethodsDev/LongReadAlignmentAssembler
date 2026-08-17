@@ -331,7 +331,6 @@ class LRAA:
             self._splice_graph._region_rend,
             rescue_read_names,
             read_path_mapper=self._map_read_to_graph,
-            reads_without_graph_path=self.get_failed_read_names_for_rescue(),
         )
 
         for rescued_mp in rescued_mps:
@@ -1280,8 +1279,8 @@ class LRAA:
         # whether a streaming assignment pass can recompute paths read-locally.
         #
         # Appended, and tagged with the pass counter, because this function runs more
-        # than once per contig/strand in discovery and in genome_tx_arb -- truncating
-        # would silently leave only the last pass and make the dump look complete.
+        # than once per contig/strand in discovery -- truncating would silently leave
+        # only the last pass and make the dump look complete.
         read_path_dump_fh = None
         _dump_prefix = LRAA_Globals.config.get("dump_read_path_map") or None
         if _dump_prefix:

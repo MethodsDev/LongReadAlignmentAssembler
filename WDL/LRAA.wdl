@@ -171,9 +171,9 @@ workflow LRAA_wf {
                 docker = docker,
         }
 
-        call mergeGenomeTxArbSummaries {
+        call mergeReadAssignmentSummaries {
             input:
-                summaryFiles = select_all(LRAA_scatter.LRAA_genome_tx_arb_summary),
+                summaryFiles = select_all(LRAA_scatter.LRAA_read_assignment_summary),
                 outputFilePrefix = LRAA_output_prefix,
                 docker = docker
         }
@@ -229,8 +229,8 @@ workflow LRAA_wf {
     File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
     File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
     File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
-    Array[File] shardGenomeTxArbSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_genome_tx_arb_summary]) else select_all(select_first([LRAA_scatter.LRAA_genome_tx_arb_summary, []]))
-    File? mergedGenomeTxArbSummary = if (run_without_splitting) then LRAA_direct.LRAA_genome_tx_arb_summary else mergeGenomeTxArbSummaries.mergedSummaryFile
+    Array[File] shardReadAssignmentSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_read_assignment_summary]) else select_all(select_first([LRAA_scatter.LRAA_read_assignment_summary, []]))
+    File? mergedReadAssignmentSummary = if (run_without_splitting) then LRAA_direct.LRAA_read_assignment_summary else mergeReadAssignmentSummaries.mergedSummaryFile
     # The depth-normalized BAM(s) the splice graph -- and therefore isoform identification --
     # was built from. Quantification does not use these; it runs against the unnormalized quant
     # BAM. Empty when no_norm is set. Scattered runs normalize each chromosome shard separately,
@@ -379,7 +379,7 @@ CODE
     }
 }
 
-task mergeGenomeTxArbSummaries {
+task mergeReadAssignmentSummaries {
     input {
         Array[File] summaryFiles
         String outputFilePrefix
@@ -394,7 +394,7 @@ import csv
 from pathlib import Path
 
 summary_files = [Path(p) for p in """~{sep="\n" summaryFiles}""".splitlines() if p.strip()]
-out_path = Path("~{outputFilePrefix}.genome_tx_arb.summary.tsv")
+out_path = Path("~{outputFilePrefix}.read_assignment.summary.tsv")
 
 fieldnames = None
 worker_rows = []
@@ -404,11 +404,14 @@ total_keys = [
     "reads_selected_tx_total",
     "reads_selected_tx_missing_genome",
     "reads_selected_tx_failed_genome",
-    "reads_selected_tx_higher_per_id",
-    "reads_tx_present_but_kept_genome",
-    "reads_tx_tied_per_id_kept_genome",
-    "reads_tx_lower_per_id_kept_genome",
-    "reads_tx_per_id_unavailable_kept_genome",
+    "reads_rescue_requested",
+    "reads_rescue_rescued",
+    "reads_rescue_unrescued",
+    "reads_rescue_requested_failed_genome",
+    "reads_rescue_requested_unassigned_quant",
+    "reads_rescue_declined_locality",
+    "reads_rescue_displaced_locality",
+    "alignments_rescue_rejected_locality",
 ]
 totals = {key: 0 for key in total_keys}
 
@@ -438,16 +441,22 @@ if fieldnames is None:
         "frac_selected_tx_missing_genome",
         "reads_selected_tx_failed_genome",
         "frac_selected_tx_failed_genome",
-        "reads_selected_tx_higher_per_id",
-        "frac_selected_tx_higher_per_id",
-        "reads_tx_present_but_kept_genome",
-        "frac_tx_present_but_kept_genome",
-        "reads_tx_tied_per_id_kept_genome",
-        "frac_tx_tied_per_id_kept_genome",
-        "reads_tx_lower_per_id_kept_genome",
-        "frac_tx_lower_per_id_kept_genome",
-        "reads_tx_per_id_unavailable_kept_genome",
-        "frac_tx_per_id_unavailable_kept_genome",
+        "reads_rescue_requested",
+        "frac_rescue_requested",
+        "reads_rescue_rescued",
+        "frac_rescue_rescued",
+        "frac_rescue_rescued_of_requested",
+        "reads_rescue_unrescued",
+        "frac_rescue_unrescued",
+        "frac_rescue_unrescued_of_requested",
+        "reads_rescue_requested_failed_genome",
+        "frac_rescue_requested_failed_genome",
+        "reads_rescue_requested_unassigned_quant",
+        "frac_rescue_requested_unassigned_quant",
+        "reads_rescue_declined_locality",
+        "reads_rescue_displaced_locality",
+        "alignments_rescue_rejected_locality",
+        "rescue_alignment_rejections",
     ]
 
 total_reads = totals["reads_total"]
@@ -467,11 +476,20 @@ total_row["frac_kept_genome"] = frac("reads_kept_genome")
 total_row["frac_selected_tx_total"] = frac("reads_selected_tx_total")
 total_row["frac_selected_tx_missing_genome"] = frac("reads_selected_tx_missing_genome")
 total_row["frac_selected_tx_failed_genome"] = frac("reads_selected_tx_failed_genome")
-total_row["frac_selected_tx_higher_per_id"] = frac("reads_selected_tx_higher_per_id")
-total_row["frac_tx_present_but_kept_genome"] = frac("reads_tx_present_but_kept_genome")
-total_row["frac_tx_tied_per_id_kept_genome"] = frac("reads_tx_tied_per_id_kept_genome")
-total_row["frac_tx_lower_per_id_kept_genome"] = frac("reads_tx_lower_per_id_kept_genome")
-total_row["frac_tx_per_id_unavailable_kept_genome"] = frac("reads_tx_per_id_unavailable_kept_genome")
+total_row["frac_rescue_requested"] = frac("reads_rescue_requested")
+total_row["frac_rescue_rescued"] = frac("reads_rescue_rescued")
+total_row["frac_rescue_unrescued"] = frac("reads_rescue_unrescued")
+requested = totals["reads_rescue_requested"]
+rescued = totals["reads_rescue_rescued"]
+unrescued = totals["reads_rescue_unrescued"]
+if requested > 0:
+    total_row["frac_rescue_rescued_of_requested"] = f"{float(rescued) / float(requested):.6f}"
+    total_row["frac_rescue_unrescued_of_requested"] = f"{float(unrescued) / float(requested):.6f}"
+else:
+    total_row["frac_rescue_rescued_of_requested"] = "0.000000"
+    total_row["frac_rescue_unrescued_of_requested"] = "0.000000"
+total_row["frac_rescue_requested_failed_genome"] = frac("reads_rescue_requested_failed_genome")
+total_row["frac_rescue_requested_unassigned_quant"] = frac("reads_rescue_requested_unassigned_quant")
 
 with out_path.open("wt", newline="") as ofh:
     writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
@@ -483,7 +501,7 @@ with out_path.open("wt", newline="") as ofh:
     >>>
 
     output {
-        File mergedSummaryFile = "~{outputFilePrefix}.genome_tx_arb.summary.tsv"
+        File mergedSummaryFile = "~{outputFilePrefix}.read_assignment.summary.tsv"
     }
 
     runtime {

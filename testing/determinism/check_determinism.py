@@ -56,7 +56,7 @@ PRINCIPAL_SUFFIXES = (
     # would drop the most direct witness of the bug this test guards.  Launch
     # order is now deterministic unconditionally (longest-first on a cost proxy,
     # replacing an unseeded shuffle), so this file has no remaining knob.
-    ".genome_tx_arb.summary.tsv",
+    ".read_assignment.summary.tsv",
 )
 
 # LRAA stamps its own argv into a leading comment.  Two runs invoked from

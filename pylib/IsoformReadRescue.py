@@ -40,6 +40,21 @@ RESCUE_CANDIDATE_CATEGORIES = (
 )
 
 
+def _no_rescue_read_details():
+    """The shape _parse_rescue_alignments returns, with nothing in it.
+
+    One definition rather than one per early return: the two early returns below used to
+    disagree about which keys they carried, so which keys a caller could rely on depended
+    on which way rescue happened to bail out.
+    """
+    return {
+        "read_name_to_multipaths": {},
+        "alignment_rejections": {},
+        "reads_locality_declined": 0,
+        "reads_locality_displaced": 0,
+    }
+
+
 def rescue_unassigned_reads_to_transcriptome(
     splice_graph,
     transcripts,
@@ -50,12 +65,18 @@ def rescue_unassigned_reads_to_transcriptome(
     region_rend,
     read_names,
     read_path_mapper=None,
-    reads_without_graph_path=None,
     return_read_details=False,
 ):
     """
     Rescue previously unassigned reads by aligning them to local transcript sequences and
     projecting accepted transcript hits back into splice-graph node paths.
+
+    This is the only transcriptome-alignment path there is. Rescue is on or off; there is
+    no mode that assigns every read by transcript alignment, and none that adjudicates a
+    whole-genome assignment against a whole-transcriptome one. Rescue is always a retry
+    for reads the genomic graph could not place, always confined to the locus the read's
+    own genome alignment sits in, and always judged against what that alignment already
+    explains.
 
     Acceptance rules:
     - mapped alignment only
@@ -72,50 +93,12 @@ def rescue_unassigned_reads_to_transcriptome(
     - if multiple top-scoring transcript hits survive for a read, they must all project to the same node path
     """
 
-    return build_transcriptome_alignment_multipaths(
-        splice_graph,
-        transcripts,
-        contig_seq_str,
-        bam_file,
-        contig_acc,
-        region_lend,
-        region_rend,
-        read_names=read_names,
-        read_path_mapper=read_path_mapper,
-        target_strand=splice_graph.get_contig_strand(),
-        include_monoexonic=False,
-        require_unique_path_across_best_hits=True,
-        reads_without_graph_path=reads_without_graph_path,
-        log_label="transcriptome rescue",
-        return_read_details=return_read_details,
-    )
-
-
-def build_transcriptome_alignment_multipaths(
-    splice_graph,
-    transcripts,
-    contig_seq_str,
-    bam_file,
-    contig_acc,
-    region_lend,
-    region_rend,
-    read_names=None,
-    read_path_mapper=None,
-    target_strand=None,
-    include_monoexonic=False,
-    require_unique_path_across_best_hits=True,
-    split_multipaths_by_gene=False,
-    genome_target_gating=False,
-    reads_without_graph_path=None,
-    log_label="transcriptome alignment",
-    return_read_details=False,
-):
     minimap2_exe = shutil.which("minimap2")
     if minimap2_exe is None:
         # Skipping here would drop every read this call was meant to recover and
         # let the run report the smaller number as if it were the answer.
         raise RuntimeError(
-            f"minimap2 not found in PATH, so {log_label} cannot run. "
+            "minimap2 not found in PATH, so transcriptome rescue cannot run. "
             "Install minimap2, or disable it with "
             "--no_rescue_unassigned_reads_via_transcriptome_alignment."
         )
@@ -124,112 +107,46 @@ def build_transcriptome_alignment_multipaths(
         splice_graph,
         transcripts,
         contig_seq_str,
-        include_monoexonic=include_monoexonic,
     )
     if not transcript_models:
         if return_read_details:
-            return [], {
-                "read_name_to_multipaths": {},
-                "read_name_to_best_score": {},
-                "read_name_to_primary_score": {},
-                "requested_read_names": set(),
-            }
+            return [], _no_rescue_read_details()
         return []
 
-    candidate_rows = None
-    read_name_to_allowed_target_ids = None
-    read_name_to_primary_score = {}
-    read_name_to_primary_per_id = {}
-    # Empty under genome gating, which runs its own genome-versus-transcript
-    # arbitration; the baseline check below then imposes nothing there.
-    read_name_to_genome_explained = {}
-    read_name_to_genome_gap_id = {}
-    if genome_target_gating:
-        candidate_tsv = None
-        (
-            read_name_to_seq,
-            read_name_to_allowed_target_ids,
-            gating_stats,
-            candidate_rows,
-            read_name_to_primary_score,
-            read_name_to_primary_per_id,
-        ) = (
-            _collect_genome_gated_read_targets(
-                bam_file,
-                contig_acc,
-                region_lend,
-                region_rend,
-                transcript_models,
-                target_read_names=read_names,
-                target_strand=target_strand,
-            )
-        )
-        primary_considered = gating_stats["primary_considered"]
-        primary_retained = gating_stats["primary_retained_for_fastq"]
-        retain_frac = (
-            primary_retained / primary_considered if primary_considered > 0 else 0.0
-        )
-        avg_targets_per_read = (
-            gating_stats["candidate_target_links"] / gating_stats["candidate_reads"]
-            if gating_stats["candidate_reads"] > 0
-            else 0.0
-        )
-        logger.info(
-            "[%s%s] %s genome gating: primary_retained=%d/%d (%.3f), candidate_reads=%d, candidate_primary_alignments=%d, avg_targets_per_read=%.2f",
-            splice_graph.get_contig_acc(),
-            splice_graph.get_contig_strand(),
-            log_label,
-            primary_retained,
-            primary_considered,
-            retain_frac,
-            gating_stats["candidate_reads"],
-            gating_stats["candidate_primary_alignments"],
-            avg_targets_per_read,
-        )
-    else:
-        (
-            read_name_to_seq,
-            read_name_to_genome_explained,
-            read_name_to_genome_gap_id,
-            read_name_to_allowed_target_ids,
-        ) = _collect_read_sequences(
-            bam_file,
-            contig_acc,
-            region_lend,
-            region_rend,
-            read_names,
-            target_strand,
-            # Locality is unconditional and is not a mode: every rescue is confined to
-            # targets the read's own genome alignment overlaps. It is one additional
-            # rejection layered onto the rules already here -- same offered reads, same
-            # thresholds, same genome baseline, same order.
-            exon_overlap_index=_build_exon_overlap_index(transcript_models),
-        )
-        # No exemption for reads_without_graph_path. Lacking a graph path says the
-        # graph cannot represent the read's structure; it says nothing about whether
-        # the read's genome alignment is measurable. Measured on chr20 HG002, the
-        # rescued reads that lacked a path had genome alignments explaining a median
-        # 99.8% of the read at MAPQ 60, so the baseline is both available and
-        # meaningful for them. Declining a rescue that explains less than that
-        # baseline costs nothing either: the read simply stays unassigned, which is
-        # where it already was.
+    (
+        read_name_to_seq,
+        read_name_to_genome_explained,
+        read_name_to_genome_gap_id,
+        read_name_to_allowed_target_ids,
+    ) = _collect_read_sequences(
+        bam_file,
+        contig_acc,
+        region_lend,
+        region_rend,
+        read_names,
+        splice_graph.get_contig_strand(),
+        # Locality is unconditional and is not a mode: every rescue is confined to
+        # targets the read's own genome alignment overlaps. It is one additional
+        # rejection layered onto the rules already here -- same offered reads, same
+        # thresholds, same genome baseline, same order.
+        exon_overlap_index=_build_exon_overlap_index(transcript_models),
+    )
+    # Reads that lack a graph path get no exemption from the genome baselines above.
+    # Lacking a graph path says the graph cannot represent the read's structure; it says
+    # nothing about whether the read's genome alignment is measurable. Measured on chr20
+    # HG002, the rescued reads that lacked a path had genome alignments explaining a
+    # median 99.8% of the read at MAPQ 60, so the baseline is both available and
+    # meaningful for them. Declining a rescue that explains less than that baseline costs
+    # nothing either: the read simply stays unassigned, which is where it already was.
 
     if not read_name_to_seq:
         logger.info(
-            "[%s%s] %s skipped: no reads with retrievable sequences",
+            "[%s%s] transcriptome rescue skipped: no reads with retrievable sequences",
             splice_graph.get_contig_acc(),
             splice_graph.get_contig_strand(),
-            log_label,
         )
         if return_read_details:
-            return [], {
-                "read_name_to_multipaths": {},
-                "read_name_to_best_score": {},
-                "read_name_to_primary_score": read_name_to_primary_score,
-                "read_name_to_best_per_id": {},
-                "read_name_to_primary_per_id": read_name_to_primary_per_id,
-                "requested_read_names": set(),
-            }
+            return [], _no_rescue_read_details()
         return []
 
     # Keep the scratch tree inside the run's per-(contig,strand) temp dir so that it is
@@ -250,16 +167,9 @@ def build_transcriptome_alignment_multipaths(
         transcript_fa = os.path.join(tmp_dir, "transcripts.fa")
         reads_fa = os.path.join(tmp_dir, "reads.fa")
         rescue_sam = os.path.join(tmp_dir, "rescue.sam")
-        candidate_tsv = os.path.join(tmp_dir, "genome_target_candidates.tsv")
 
         _write_transcript_fasta(transcript_fa, transcript_models)
         _write_reads_fasta(reads_fa, read_name_to_seq)
-        if candidate_rows is not None:
-            _write_candidate_tsv(
-                candidate_tsv,
-                candidate_rows,
-                retained_read_names=set(read_name_to_seq.keys()),
-            )
         _run_minimap2_transcriptome_alignment(
             transcript_fa, reads_fa, rescue_sam, minimap2_exe
         )
@@ -269,40 +179,19 @@ def build_transcriptome_alignment_multipaths(
             splice_graph,
             transcript_models,
             read_path_mapper=read_path_mapper,
-            require_unique_path_across_best_hits=require_unique_path_across_best_hits,
-            split_multipaths_by_gene=split_multipaths_by_gene,
             read_name_to_allowed_target_ids=read_name_to_allowed_target_ids,
             read_name_to_genome_explained=read_name_to_genome_explained,
             read_name_to_genome_gap_id=read_name_to_genome_gap_id,
         )
 
-        if return_read_details:
-            read_details["read_name_to_primary_score"] = {
-                _normalize_read_identifier(read_name): score
-                for read_name, score in read_name_to_primary_score.items()
-                if _normalize_read_identifier(read_name) is not None
-            }
-            read_details["read_name_to_primary_per_id"] = {
-                _normalize_read_identifier(read_name): per_id
-                for read_name, per_id in read_name_to_primary_per_id.items()
-                if _normalize_read_identifier(read_name) is not None
-            }
-            read_details["requested_read_names"] = {
-                _normalize_read_identifier(read_name)
-                for read_name in read_name_to_seq.keys()
-                if _normalize_read_identifier(read_name) is not None
-            }
-
-        # Rescue outcomes, not a genome-versus-transcriptome adjudication: how many
-        # reads were offered, how many came back, and for those that did not, which rule
-        # declined them. locality_displaced_reads is the one to watch -- reads whose best
-        # transcriptome hit sat at a locus the read is not at, which is exactly what the
-        # locality criterion refuses.
+        # Rescue outcomes: how many reads were offered, how many came back, and for those
+        # that did not, which rule declined them. locality_displaced_reads is the one to
+        # watch -- reads whose best transcriptome hit sat at a locus the read is not at,
+        # which is exactly what the locality criterion refuses.
         logger.info(
-            "[%s%s] %s: offered=%d rescued=%d locality_declined_reads=%d locality_displaced_reads=%d rejections=%s",
+            "[%s%s] transcriptome rescue: offered=%d rescued=%d locality_declined_reads=%d locality_displaced_reads=%d rejections=%s",
             splice_graph.get_contig_acc(),
             splice_graph.get_contig_strand(),
-            log_label,
             len(read_name_to_seq),
             len(rescued_mps),
             read_details.get("reads_locality_declined", 0),
@@ -435,117 +324,6 @@ def _collect_read_sequences(
     )
 
 
-def _collect_genome_gated_read_targets(
-    bam_file,
-    contig_acc,
-    region_lend,
-    region_rend,
-    transcript_models,
-    target_read_names=None,
-    target_strand=None,
-):
-    exon_overlap_index = _build_exon_overlap_index(transcript_models)
-    remaining = None if target_read_names is None else set(target_read_names)
-    read_name_to_seq = {}
-    read_name_to_allowed_target_ids = defaultdict(set)
-    read_name_to_primary_score = {}
-    read_name_to_primary_per_id = {}
-    candidate_rows = []
-
-    stats = {
-        "primary_considered": 0,
-        "primary_retained_for_fastq": 0,
-        "candidate_reads": 0,
-        "candidate_target_links": 0,
-        "candidate_primary_alignments": 0,
-    }
-
-    with pysam.AlignmentFile(bam_file, "rb") as bam_reader:
-        if region_lend is not None and region_rend is not None:
-            fetch_iter = bam_reader.fetch(
-                contig_acc, max(int(region_lend) - 1, 0), int(region_rend)
-            )
-        else:
-            fetch_iter = bam_reader.fetch(contig_acc)
-
-        for read in fetch_iter:
-            if target_strand is not None:
-                if read.is_forward and target_strand != "+":
-                    continue
-                if read.is_reverse and target_strand != "-":
-                    continue
-
-            if read.is_unmapped or read.is_supplementary or read.is_secondary:
-                continue
-            if read.is_paired and not read.is_proper_pair:
-                continue
-            if read.is_duplicate or read.is_qcfail:
-                continue
-            if read.mapping_quality < int(LRAA_Globals.config["min_mapping_quality"]):
-                continue
-
-            read_name = Util_funcs.get_read_name_include_sc_encoding(read)
-            if remaining is not None and read_name not in remaining:
-                continue
-
-            stats["primary_considered"] += 1
-
-            target_id_to_overlap_bp = _get_alignment_overlapping_targets(
-                read, exon_overlap_index
-            )
-            if not target_id_to_overlap_bp:
-                continue
-
-            stats["candidate_primary_alignments"] += 1
-
-            seq = read.query_sequence
-            if seq and read_name not in read_name_to_seq:
-                if read.is_reverse:
-                    seq = _reverse_complement(seq)
-                read_name_to_seq[read_name] = seq
-                stats["primary_retained_for_fastq"] += 1
-            if remaining is not None:
-                remaining.discard(read_name)
-            read_name_to_primary_score[read_name] = _alignment_score(read)
-            read_name_to_primary_per_id[read_name] = _gap_aware_identity(read)
-
-            for target_id, overlap_bp in target_id_to_overlap_bp.items():
-                read_name_to_allowed_target_ids[read_name].add(target_id)
-                model = transcript_models[target_id]
-                candidate_rows.append(
-                    {
-                        "read_name": read_name,
-                        "target_id": target_id,
-                        "gene_id": model["gene_id"],
-                        "transcript_id": model["transcript_id"],
-                        "mapq": int(read.mapping_quality),
-                        "genomic_lend": int(read.reference_start) + 1,
-                        "genomic_rend": int(read.reference_end),
-                        "overlap_bp": int(overlap_bp),
-                    }
-                )
-
-    retained_read_names = set(read_name_to_seq.keys())
-    read_name_to_allowed_target_ids = {
-        read_name: target_ids
-        for read_name, target_ids in read_name_to_allowed_target_ids.items()
-        if read_name in retained_read_names
-    }
-    stats["candidate_reads"] = len(read_name_to_allowed_target_ids)
-    stats["candidate_target_links"] = sum(
-        len(target_ids) for target_ids in read_name_to_allowed_target_ids.values()
-    )
-
-    return (
-        read_name_to_seq,
-        read_name_to_allowed_target_ids,
-        stats,
-        candidate_rows,
-        read_name_to_primary_score,
-        read_name_to_primary_per_id,
-    )
-
-
 def _build_transcript_models(
     splice_graph, transcripts, contig_seq_str, include_monoexonic=False
 ):
@@ -630,44 +408,6 @@ def _write_reads_fasta(reads_fa, read_name_to_seq):
             print(seq, file=ofh)
 
 
-def _write_candidate_tsv(candidate_tsv, candidate_rows, retained_read_names=None):
-    retained = None if retained_read_names is None else set(retained_read_names)
-    with open(candidate_tsv, "wt") as ofh:
-        print(
-            "\t".join(
-                [
-                    "read_name",
-                    "target_id",
-                    "gene_id",
-                    "transcript_id",
-                    "mapq",
-                    "genomic_lend",
-                    "genomic_rend",
-                    "overlap_bp",
-                ]
-            ),
-            file=ofh,
-        )
-        for row in candidate_rows:
-            if retained is not None and row["read_name"] not in retained:
-                continue
-            print(
-                "\t".join(
-                    [
-                        str(row["read_name"]),
-                        str(row["target_id"]),
-                        str(row["gene_id"]),
-                        str(row["transcript_id"]),
-                        str(row["mapq"]),
-                        str(row["genomic_lend"]),
-                        str(row["genomic_rend"]),
-                        str(row["overlap_bp"]),
-                    ]
-                ),
-                file=ofh,
-            )
-
-
 @contextmanager
 def _rescue_alignment_records(source):
     """Alignment records from a SAM path, or an already-open iterable of them.
@@ -689,8 +429,6 @@ def _parse_rescue_alignments(
     splice_graph,
     transcript_models,
     read_path_mapper=None,
-    require_unique_path_across_best_hits=True,
-    split_multipaths_by_gene=False,
     read_name_to_allowed_target_ids=None,
     read_name_to_genome_explained=None,
     read_name_to_genome_gap_id=None,
@@ -839,62 +577,33 @@ def _parse_rescue_alignments(
             read_to_hits[read.query_name].append(
                 {
                     "score": _alignment_score(read),
-                    "per_id": _gap_aware_identity(read),
                     "path": tuple(projected_path),
-                    "target_id": read.reference_name,
-                    "transcript_id": transcript_models[read.reference_name][
-                        "transcript_id"
-                    ],
-                    "gene_id": transcript_models[read.reference_name]["gene_id"],
                 }
             )
 
     rescued_mps = []
     read_name_to_multipaths = defaultdict(list)
-    read_name_to_best_score = {}
-    read_name_to_best_per_id = {}
     for read_name, hits in read_to_hits.items():
         read_key = _normalize_read_identifier(read_name)
         if read_key is None:
             continue
         best_score = max(hit["score"] for hit in hits)
         best_hits = [hit for hit in hits if hit["score"] == best_score]
-        read_name_to_best_score[read_key] = best_score
-        read_name_to_best_per_id[read_key] = max(
-            hit.get("per_id", 0.0) for hit in best_hits
+        # Every top-scoring hit has to imply the same graph path. A read whose best
+        # alignments disagree about its structure is not evidence for either of them.
+        projected_paths = {hit["path"] for hit in best_hits}
+        if len(projected_paths) != 1:
+            continue
+        mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
+        multipath = MultiPath(
+            splice_graph,
+            mp_paths,
+            read_types={"PacBio"},
+            read_names={read_name},
+            read_count=1,
         )
-        if split_multipaths_by_gene:
-            gene_to_hits = defaultdict(list)
-            for hit in best_hits:
-                gene_to_hits[hit["gene_id"]].append(hit)
-            for gene_hits in gene_to_hits.values():
-                projected_paths = {hit["path"] for hit in gene_hits}
-                if require_unique_path_across_best_hits and len(projected_paths) != 1:
-                    continue
-                mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
-                multipath = MultiPath(
-                    splice_graph,
-                    mp_paths,
-                    read_types={"PacBio"},
-                    read_names={read_name},
-                    read_count=1,
-                )
-                rescued_mps.append(multipath)
-                read_name_to_multipaths[read_key].append(multipath)
-        else:
-            projected_paths = {hit["path"] for hit in best_hits}
-            if require_unique_path_across_best_hits and len(projected_paths) != 1:
-                continue
-            mp_paths = [list(path_tuple) for path_tuple in sorted(projected_paths)]
-            multipath = MultiPath(
-                splice_graph,
-                mp_paths,
-                read_types={"PacBio"},
-                read_names={read_name},
-                read_count=1,
-            )
-            rescued_mps.append(multipath)
-            read_name_to_multipaths[read_key].append(multipath)
+        rescued_mps.append(multipath)
+        read_name_to_multipaths[read_key].append(multipath)
 
     # Reads whose placement locality actually changed: some alignment that cleared every
     # content rule was declined for locality, and it outscored whatever survived -- or
@@ -909,8 +618,6 @@ def _parse_rescue_alignments(
 
     return rescued_mps, {
         "read_name_to_multipaths": dict(read_name_to_multipaths),
-        "read_name_to_best_score": read_name_to_best_score,
-        "read_name_to_best_per_id": read_name_to_best_per_id,
         "alignment_rejections": dict(rejections),
         "reads_locality_declined": len(locality_declined_best_score),
         "reads_locality_displaced": locality_displaced,
@@ -1213,17 +920,15 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
 #    can be quantified by the same downstream graph/EM machinery as ordinary
 #    genome-derived read paths.
 #
-# Entry points
-# ------------
-# rescue_unassigned_reads_to_transcriptome() is the narrow rescue entry point
-# for reads that were unassigned by the genome read-path process. It delegates
-# to build_transcriptome_alignment_multipaths().
-#
-# build_transcriptome_alignment_multipaths() is the general implementation. It
-# can operate either on an explicit read-name set or on reads fetched from the
-# current contig/region. It also supports genome_target_gating, where genome
-# alignment overlap is used to restrict which transcript targets a read is
-# allowed to rescue against.
+# Entry point
+# -----------
+# rescue_unassigned_reads_to_transcriptome() is the only one. Rescue is on or off:
+# it always operates on an explicit read-name set -- the reads the genome read-path
+# process could not place -- against the transcript models of the current splice
+# graph, and always confined to the targets the read's own genome alignment
+# overlaps. There is no mode that assigns every read by transcript alignment, and
+# none that adjudicates a whole-genome assignment against a whole-transcriptome
+# one.
 #
 # Transcript model construction
 # -----------------------------
@@ -1239,10 +944,12 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
 #
 # Read sequence extraction and orientation
 # ----------------------------------------
-# _collect_read_sequences() and _collect_genome_gated_read_targets() pull read
-# sequences from the genome BAM. If the BAM record is on the reverse strand, the
-# read sequence is reverse-complemented before transcriptome alignment. This
-# makes the extracted sequence correspond to the transcript/cDNA orientation.
+# _collect_read_sequences() pulls read sequences from the genome BAM. If the BAM
+# record is on the reverse strand, the read sequence is reverse-complemented before
+# transcriptome alignment. This makes the extracted sequence correspond to the
+# transcript/cDNA orientation. The same pass records the two genome baselines a
+# rescue has to beat and the targets the read's aligned blocks touch, because all
+# three are properties of the one primary record.
 #
 # Transcriptome alignment
 # -----------------------
@@ -1259,16 +966,14 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
 #
 # - be mapped and non-supplementary;
 # - map to one of the local transcript models;
-# - pass optional genome target gating, if enabled;
+# - overlap the read's own genome alignment blocks (locality, unconditional);
 # - contain no reference-skip (N) cigar operation;
 # - pass the configured percent identity threshold;
 # - collapse to exactly one merged transcript block after Pretty_alignment-style
 #   small-gap merging.
 #
-# For each read, only best-scoring transcriptome alignments are retained. If
-# require_unique_path_across_best_hits is true, a read is rescued only when all
-# best-scoring hits project to the same graph path. If split_multipaths_by_gene
-# is true, this uniqueness check is applied separately within each gene.
+# For each read, only best-scoring transcriptome alignments are retained, and the
+# read is rescued only when all of them project to the same graph path.
 #
 # Projection back to genome/read paths
 # ------------------------------------
@@ -1290,13 +995,9 @@ def _project_interval_to_path(model, tx_lend, tx_rend):
 #     alignments use the same splice-graph read-path construction logic used for
 #     genome alignments, including TSS and PolyA boundary-node refinement.
 #
-#     Current LRAA execution paths provide read_path_mapper for transcriptome
-#     rescue/assignment:
-#
-#     - quant_read_assignment_mode == "rescue_unassigned"
-#     - quant_read_assignment_mode == "transcriptome_only"
-#     - quant_read_assignment_mode == "genome_tx_arb"
-#     - early transcriptome rescue during isoform reconstruction
+#     Both LRAA execution paths that rescue provide read_path_mapper: final
+#     quantification, and the early transcriptome rescue during isoform
+#     reconstruction.
 #
 #     Therefore, normal LRAA quant/rescue operation uses this genome-equivalent
 #     path and can incorporate TSS/PolyA nodes through the shared mapper.

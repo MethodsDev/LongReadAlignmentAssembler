@@ -321,7 +321,6 @@ config = {
     "max_EM_iterations_quant_only": 250,  # don't set too high, as even at 1000 small biases get greatly amplified.
     "max_EM_iterations_during_asm": 1000,  # for asm, want higher iterations to amplify small diffs and weed out poorly supported isoforms.
     "aggressively_assign_reads": False,
-    "quant_read_assignment_mode": "rescue_unassigned",
     "rescue_unassigned_reads_via_transcriptome_alignment": True,
     "rescue_unassigned_minimap2_preset": "auto",
     "rescue_unassigned_minimap2_filter_fraction": 0,
@@ -403,9 +402,9 @@ config = {
     # Rescue candidates against the local transcriptome from inside the streaming pass,
     # using a resident mappy index instead of the batch path's minimap2 subprocess. Off
     # by default, and refused unless --stream_reads_rescue_unassigned is given: without
-    # it --stream_reads still requires --quant_read_assignment_mode genome, because a
-    # streaming pass that silently skipped rescue would report the first pass's rescue
-    # summary as if it covered the whole bam.
+    # it --stream_reads requires transcriptome rescue turned off, because a streaming
+    # pass that silently skipped rescue would report the first pass's rescue summary as
+    # if it covered the whole bam.
     #
     # The candidate population is exactly the one the batch path collects at its three
     # gated sites -- reads the extractor discarded for low_perID, reads whose graph path

@@ -123,20 +123,29 @@ algorithm (`pylib/Quantify.py`). Assignment logic:
   compatibility weights prioritize agreement of read 3' ends with transcript 3' ends.
 
 Transcriptome rescue realigns reads that cannot be placed on the splice graph to local
-multi-exon transcript sequences using minimap2 in non-splice mode. It runs in two places, not
-only in quantification-only mode. During reference-guided discovery, only reads with no path
+multi-exon transcript sequences using minimap2 in non-splice mode. Rescue is on or off
+(`config['rescue_unassigned_reads_via_transcriptome_alignment']`); there is no mode that
+assigns every read by transcript alignment, and none that adjudicates a whole-genome
+assignment against a whole-transcriptome one. It runs in two places, not only in
+quantification-only mode. During reference-guided discovery, only reads with no path
 through the splice graph are eligible: a read that has a path but matches no supplied model is
 evidence for a novel isoform, and reshaping it onto a reference structure would suppress that
-isoform. During final quantification, the eligible reads and the rescue targets depend on
-`config['quant_read_assignment_mode']`; the default `rescue_unassigned` targets the isoforms
-being quantified, `transcriptome_only` and `genome_tx_arb` apply their own target rules, and
-`genome` performs no rescue. Rescue alignments are accepted only when, after the same
+isoform. During final quantification the eligible reads are those the genomic graph could not
+place plus those whose path matched no target, and the rescue targets are the isoforms being
+quantified. A rescue is confined to targets the read's own genome alignment overlaps: the
+genome alignment is trusted for locality but not for optimality, so rescue may refine
+placement within the locus the read occupies and may not move it to another one. Rescue
+alignments are accepted only when, after the same
 small-indel block-merging logic used for genomic pretty alignments, the alignment collapses to
 a single contiguous transcript-coordinate interval and at least
 `config['rescue_unassigned_min_aligned_read_frac']` of the read's length aligns to the target.
 That coverage bar is aligned length over read length, not matched bases, so it is independent
 of platform error rate; percent identity is measured over the aligned portion only and cannot
-see a read that aligns locally and clips the remainder. Accepted rescue hits are projected back
+see a read that aligns locally and clips the remainder. An alignment that explains fewer of
+the read's bases than its genome alignment already does, or that agrees with its target worse
+than the genome alignment agrees with the genome, is declined -- an accepted rescue detaches
+the read from the path it already had, so admitting a worse alignment would withdraw support
+from the better structure. Accepted rescue hits are projected back
 onto splice-graph node paths; ambiguous transcriptome hits are retained only when all top hits
 imply the same node path. These rescued paths are merged into the evidence set before the first
 EM iteration, so quantification continues under the same compatibility and weighting model as

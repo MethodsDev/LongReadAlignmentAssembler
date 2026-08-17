@@ -30,14 +30,11 @@ sys.path.insert(
 )
 from Splice_graph import Splice_graph
 from LRAA import LRAA, _detach_rescued_reads_from_original_paths
-from MultiPath import MultiPath
-from MultiPathCounter import MultiPathCounter
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
 import IsoformReadRescue
 from IsoformReadRescue import (
     _normalize_read_identifier,
-    build_transcriptome_alignment_multipaths,
     rescue_unassigned_reads_to_transcriptome,
 )
 from ResourceMonitor import ResourceMonitor, summarize_resource_log
@@ -144,9 +141,7 @@ def _bam_looks_single_cell(bam_filename, barcode_tag, umi_tag, max_records=2000)
     return False
 
 
-def _require_minimap2_for_transcriptome_alignment(
-    rescue_enabled, quant_read_assignment_mode
-):
+def _require_minimap2_for_transcriptome_alignment(rescue_enabled):
     """Refuse to run a configuration that silently degrades without minimap2.
 
     Transcriptome alignment is skipped outright when the binary is missing, so
@@ -155,22 +150,15 @@ def _require_minimap2_for_transcriptome_alignment(
     to do must fail instead.
     """
 
-    modes_requiring_alignment = ("transcriptome_only", "genome_tx_arb")
-    mode_requires = quant_read_assignment_mode in modes_requiring_alignment
-    if not (rescue_enabled or mode_requires):
+    if not rescue_enabled:
         return
     if shutil.which("minimap2") is not None:
         return
 
-    requirement = (
-        f"--quant_read_assignment_mode {quant_read_assignment_mode}"
-        if mode_requires
-        else "transcriptome read rescue"
-    )
     sys.exit(
-        f"Error, {requirement} aligns reads with minimap2, which was not found in PATH. "
-        "Install minimap2, or run with --no_rescue_unassigned_reads_via_transcriptome_alignment "
-        "and --quant_read_assignment_mode genome to proceed without it."
+        "Error, transcriptome read rescue aligns reads with minimap2, which was not "
+        "found in PATH. Install minimap2, or run with "
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment to proceed without it."
     )
 
 
@@ -566,9 +554,8 @@ def main():
             "--normalize_max_cov_level 1000, two overlapping MKKS annotations sharing 1,624 "
             "of 2,522 reads differed by 394 reads, while the other 1,478 genes agreed to "
             "0.2. Raise the target if a locus like that matters. Requires --quant_only, a "
-            "first-pass bam thinner than the streamed one, and "
-            "--quant_read_assignment_mode genome, or rescue_unassigned together with "
-            "--stream_reads_rescue_unassigned "
+            "first-pass bam thinner than the streamed one, and either transcriptome "
+            "rescue turned off or --stream_reads_rescue_unassigned "
             f"(default: {LRAA_Globals.config['stream_reads']})"
         ),
     )
@@ -577,7 +564,7 @@ def main():
         action="store_true",
         default=LRAA_Globals.config["stream_reads_rescue_unassigned"],
         help=(
-            "let --stream_reads run under --quant_read_assignment_mode rescue_unassigned "
+            "let --stream_reads run with transcriptome rescue enabled "
             "by rescuing candidates against the local transcriptome from inside the "
             "streaming pass, using a resident mappy index instead of the batch path's "
             "minimap2 subprocess. Without this the combination is refused, because a "
@@ -641,25 +628,6 @@ def main():
         action="store_true",
         default=argparse.SUPPRESS,
         help=argparse.SUPPRESS,
-    )
-    primary.add_argument(
-        "--quant_read_assignment_mode",
-        type=str,
-        choices=[
-            "genome",
-            "rescue_unassigned",
-            "transcriptome_only",
-            "genome_tx_arb",
-        ],
-        default=LRAA_Globals.config["quant_read_assignment_mode"],
-        help=(
-            "quant read-assignment strategy for run_quant_only(): "
-            "'genome' uses only genomic graph assignments; "
-            "'rescue_unassigned' uses genomic assignments plus transcriptome rescue for failed reads; "
-            "'transcriptome_only' assigns all reads by direct read-to-transcript alignment and projects those hits to graph paths; "
-            "'genome_tx_arb' starts with genome assignments and replaces a read with its transcriptome-projected path only when transcriptome alignment scores better or genome produced no usable path "
-            f"(default: {LRAA_Globals.config['quant_read_assignment_mode']})"
-        ),
     )
     primary.add_argument(
         "--no_EM",
@@ -1417,17 +1385,11 @@ def main():
     # value that fits the budget rather than a stale per-worker guess.
     LRAA_Globals.config["tool_threads"] = int(TOTAL_THREADS_FOR_SINGLETON_STAGE)
     LRAA_Globals.config["component_workers"] = 0
-    quant_read_assignment_mode = args.quant_read_assignment_mode
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
-    if quant_read_assignment_mode == "rescue_unassigned" and not rescue_enabled:
-        quant_read_assignment_mode = "genome"
-    LRAA_Globals.config["quant_read_assignment_mode"] = quant_read_assignment_mode
     LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"] = (
         rescue_enabled
     )
-    _require_minimap2_for_transcriptome_alignment(
-        rescue_enabled, quant_read_assignment_mode
-    )
+    _require_minimap2_for_transcriptome_alignment(rescue_enabled)
     LRAA_Globals.config["min_PolyA_iso_fraction"] = (
         LRAA_Globals.resolve_min_polya_iso_fraction(
             args.min_isoform_fraction,
@@ -1495,29 +1457,10 @@ def main():
                 "already-normalized bam as --bam_for_sg. Given neither, both passes read "
                 "the same bam and the mode only adds work."
             )
-    if args.stream_reads and args.quant_read_assignment_mode in (
-        "transcriptome_only",
-        "genome_tx_arb",
-    ):
-        # Named individually rather than as "not genome": rescue_unassigned is reachable
-        # under --stream_reads_rescue_unassigned, and a message refusing every non-genome
-        # mode would send a reader looking for a flag that exists.
-        #
-        # These two build their first pass from the FULL bam and replace or arbitrate
-        # every read's path against a transcriptome alignment, so streaming would cost a
-        # second traversal of the same bam and save nothing. That is a different problem
-        # from rescue, which touches only the reads genome assignment failed on.
-        sys.exit(
-            "Error, --stream_reads requires --quant_read_assignment_mode genome or "
-            f"rescue_unassigned, not {args.quant_read_assignment_mode}. That mode "
-            "assigns every read by transcriptome alignment from the full bam, so the "
-            "first pass would read what the second pass streams and the mode would only "
-            "add work."
-        )
     if (
         args.stream_reads
-        and args.quant_read_assignment_mode == "rescue_unassigned"
-        and not (args.stream_reads_rescue_unassigned and rescue_enabled)
+        and rescue_enabled
+        and not args.stream_reads_rescue_unassigned
     ):
         # The streaming pass maps every record genomically through _map_read_to_graph. Left
         # to itself it runs no transcriptome alignment, and the first pass rescues only the
@@ -1529,16 +1472,25 @@ def main():
         # stream against a resident mappy index. It is opt-in because its outcomes are not
         # identical to the batch path's and it has been measured on one corpus.
         sys.exit(
-            "Error, --stream_reads requires --quant_read_assignment_mode genome. The "
-            "streaming pass assigns reads by genomic graph mapping only, so it cannot "
-            "reproduce transcriptome rescue or arbitration for reads the first pass never "
-            "saw. Add --stream_reads_rescue_unassigned to rescue those reads inside the "
-            "streaming pass instead"
-            + (
-                "."
-                if rescue_enabled
-                else ", which additionally needs transcriptome rescue left enabled."
-            )
+            "Error, --stream_reads cannot reproduce transcriptome rescue for reads the "
+            "first pass never saw: the streaming pass assigns reads by genomic graph "
+            "mapping only. Add --stream_reads_rescue_unassigned to rescue those reads "
+            "inside the streaming pass, or "
+            "--no_rescue_unassigned_reads_via_transcriptome_alignment to stream without "
+            "rescue."
+        )
+    if args.stream_reads and args.stream_reads_rescue_unassigned and not rescue_enabled:
+        # The two flags ask for opposite things. Previously this combination was caught
+        # because --no_rescue... downgraded the assignment mode out from under the
+        # streaming flag; with the modes gone the contradiction has to be named directly.
+        # Ignoring it would leave a run that asked to rescue inside the stream, rescued
+        # nothing, and said so nowhere.
+        sys.exit(
+            "Error, --stream_reads_rescue_unassigned rescues reads against the local "
+            "transcriptome inside the streaming pass, while "
+            "--no_rescue_unassigned_reads_via_transcriptome_alignment turns rescue off. "
+            "Drop one of them; this combination would stream without transcriptome "
+            "rescue left enabled and report nothing to say so."
         )
     if args.stream_reads and args.tag_bam:
         # Tagging annotates each bam record with the gene/transcript it was assigned to,
@@ -1583,7 +1535,7 @@ def main():
                 "is minimap2's own Python binding and is what holds the resident "
                 "transcript index. Install it pinned to your minimap2 release "
                 "(pip install 'mappy==2.28'), or drop the flag and run "
-                "--quant_read_assignment_mode genome."
+                "--no_rescue_unassigned_reads_via_transcriptome_alignment."
             )
     if args.use_XW_read_weights_for_quant:
         # Discovery is out of scope on purpose. Its absolute support gates --
@@ -3531,7 +3483,7 @@ def _run_jobs_schedule_and_merge(
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     quant_expr_tmp_paths = list()
-    genome_tx_arb_summary_paths = list()
+    read_assignment_summary_paths = list()
     rescue_summary_paths = list()
     for j in jobs:
         tmp_root_new = f"__{j['output_prefix']}.contigtmp"
@@ -3545,14 +3497,16 @@ def _run_jobs_schedule_and_merge(
             merged_track_fh,
             expected_num_fields=len(tracking_header_final),
         )
-        genome_tx_arb_summary_paths.append(f"{tmp_prefix}.genome_tx_arb.summary.tsv")
+        read_assignment_summary_paths.append(
+            f"{tmp_prefix}.read_assignment.summary.tsv"
+        )
         rescue_summary_paths.append(f"{tmp_prefix}.rescue.tsv")
 
     _merge_quant_expr_files(quant_expr_tmp_paths, quant_out_fn, quant_header_final)
     merged_track_fh.close()
 
-    _merge_genome_tx_arb_summary_files(
-        genome_tx_arb_summary_paths, f"{output_prefix}.genome_tx_arb.summary.tsv"
+    _merge_read_assignment_summary_files(
+        read_assignment_summary_paths, f"{output_prefix}.read_assignment.summary.tsv"
     )
     _merge_streaming_rescue_summary_files(
         rescue_summary_paths, f"{output_prefix}.rescue.summary.tsv"
@@ -3877,11 +3831,11 @@ def _contig_job_runner(job):
         # permissions or stale-handle failure still raises, since leaving the file is what
         # the deletion exists to prevent.
         pass
-    genome_tx_arb_summary_tmp = f"{tmp_prefix}.genome_tx_arb.summary.tsv"
+    read_assignment_summary_tmp = f"{tmp_prefix}.read_assignment.summary.tsv"
     rescue_summary_tmp = f"{tmp_prefix}.rescue.tsv"
     try:
-        if os.path.exists(genome_tx_arb_summary_tmp):
-            os.unlink(genome_tx_arb_summary_tmp)
+        if os.path.exists(read_assignment_summary_tmp):
+            os.unlink(read_assignment_summary_tmp)
     except Exception:
         pass
 
@@ -4027,7 +3981,7 @@ def _contig_job_runner(job):
                     job["prereconstruct_info_dir"],
                     report_quants=True,
                     splice_graph_cache_dir=splice_graph_cache_dir,
-                    arb_summary_path=genome_tx_arb_summary_tmp,
+                    read_assignment_summary_path=read_assignment_summary_tmp,
                     rescue_summary_path=rescue_summary_tmp,
                     # QUANT_ONLY is only reachable with --gtf, so here
                     # input_transcripts really is the user's annotation.
@@ -4056,7 +4010,7 @@ def _contig_job_runner(job):
                     job["ME_only"],
                     job["SE_only"],
                     splice_graph_cache_dir=splice_graph_cache_dir,
-                    arb_summary_path=genome_tx_arb_summary_tmp,
+                    read_assignment_summary_path=read_assignment_summary_tmp,
                     rescue_summary_path=rescue_summary_tmp,
                 )
 
@@ -4608,157 +4562,7 @@ def _summarize_contig_resource_logs(output_prefix, jobs):
         pass
 
 
-def _clone_multipath_for_single_read(splice_graph, multipath_obj, read_name):
-    return MultiPath(
-        splice_graph,
-        [multipath_obj.get_simple_path()],
-        read_types=set(multipath_obj.get_read_types()),
-        read_names={read_name},
-        read_count=1,
-    )
-
-
-def _explode_mp_counter_to_read_multipaths(splice_graph, mp_counter):
-    read_name_to_multipaths = defaultdict(list)
-    for mp_count_pair in mp_counter.get_all_MultiPathCountPairs():
-        multipath_obj, _ = mp_count_pair.get_multipath_and_count()
-        for read_name in multipath_obj.get_read_names():
-            read_key = _normalize_read_identifier(read_name)
-            if read_key is None:
-                continue
-            read_name_to_multipaths[read_key].append(
-                _clone_multipath_for_single_read(splice_graph, multipath_obj, read_name)
-            )
-    return read_name_to_multipaths
-
-
-def _build_mp_counter_from_read_multipaths(read_name_to_multipaths):
-    mp_counter = MultiPathCounter()
-    for multipaths in read_name_to_multipaths.values():
-        for multipath_obj in multipaths:
-            mp_counter.add(multipath_obj)
-    return mp_counter
-
-
-def _arbitrate_genome_vs_transcriptome_read_paths(
-    splice_graph,
-    genome_mp_counter,
-    transcriptome_read_details,
-    failed_genome_read_names=None,
-):
-    failed_genome_read_names = {
-        normalized_name
-        for normalized_name in (
-            _normalize_read_identifier(read_name)
-            for read_name in (failed_genome_read_names or [])
-        )
-        if normalized_name is not None
-    }
-    read_name_to_genome_multipaths = _explode_mp_counter_to_read_multipaths(
-        splice_graph, genome_mp_counter
-    )
-    read_name_to_tx_multipaths = transcriptome_read_details.get(
-        "read_name_to_multipaths", {}
-    )
-    read_name_to_tx_best_per_id = transcriptome_read_details.get(
-        "read_name_to_best_per_id", {}
-    )
-    read_name_to_genome_primary_per_id = transcriptome_read_details.get(
-        "read_name_to_primary_per_id", {}
-    )
-
-    all_read_names = set(read_name_to_genome_multipaths.keys()) | set(
-        read_name_to_tx_multipaths.keys()
-    )
-
-    chosen_read_name_to_multipaths = {}
-    stats = {
-        "reads_total": len(all_read_names),
-        "reads_kept_genome": 0,
-        "reads_selected_tx_missing_genome": 0,
-        "reads_selected_tx_failed_genome": 0,
-        "reads_selected_tx_higher_per_id": 0,
-        "reads_tx_present_but_kept_genome": 0,
-        "reads_tx_tied_per_id_kept_genome": 0,
-        "reads_tx_lower_per_id_kept_genome": 0,
-        "reads_tx_per_id_unavailable_kept_genome": 0,
-    }
-
-    for read_name in all_read_names:
-        genome_multipaths = read_name_to_genome_multipaths.get(read_name)
-        transcriptome_multipaths = read_name_to_tx_multipaths.get(read_name)
-
-        if not transcriptome_multipaths:
-            if genome_multipaths:
-                chosen_read_name_to_multipaths[read_name] = genome_multipaths
-                stats["reads_kept_genome"] += 1
-            continue
-
-        if not genome_multipaths:
-            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
-            stats["reads_selected_tx_missing_genome"] += 1
-            continue
-
-        if read_name in failed_genome_read_names:
-            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
-            stats["reads_selected_tx_failed_genome"] += 1
-            continue
-
-        tx_best_per_id = read_name_to_tx_best_per_id.get(read_name)
-        genome_primary_per_id = read_name_to_genome_primary_per_id.get(read_name)
-        if (
-            tx_best_per_id is not None
-            and genome_primary_per_id is not None
-            and tx_best_per_id > genome_primary_per_id
-        ):
-            chosen_read_name_to_multipaths[read_name] = transcriptome_multipaths
-            stats["reads_selected_tx_higher_per_id"] += 1
-        else:
-            chosen_read_name_to_multipaths[read_name] = genome_multipaths
-            stats["reads_kept_genome"] += 1
-            stats["reads_tx_present_but_kept_genome"] += 1
-            if tx_best_per_id is None or genome_primary_per_id is None:
-                stats["reads_tx_per_id_unavailable_kept_genome"] += 1
-            elif tx_best_per_id == genome_primary_per_id:
-                stats["reads_tx_tied_per_id_kept_genome"] += 1
-            else:
-                stats["reads_tx_lower_per_id_kept_genome"] += 1
-
-    reads_selected_tx_total = (
-        stats["reads_selected_tx_missing_genome"]
-        + stats["reads_selected_tx_failed_genome"]
-        + stats["reads_selected_tx_higher_per_id"]
-    )
-    stats["reads_selected_tx_total"] = reads_selected_tx_total
-
-    total_reads = max(1, stats["reads_total"])
-    kept_genome_frac = stats["reads_kept_genome"] / total_reads
-    selected_tx_frac = reads_selected_tx_total / total_reads
-    tied_kept_genome_frac = stats["reads_tx_tied_per_id_kept_genome"] / total_reads
-
-    logger.info(
-        "[%s%s] genome_tx_arb summary: total=%d kept_genome=%d (%.3f) selected_tx=%d (%.3f) tx_missing_genome=%d tx_failed_genome=%d tx_higher_per_id=%d tx_present_but_kept_genome=%d tied_per_id_kept_genome=%d (%.3f) lower_per_id_kept_genome=%d per_id_unavailable_kept_genome=%d",
-        splice_graph.get_contig_acc(),
-        splice_graph.get_contig_strand(),
-        stats["reads_total"],
-        stats["reads_kept_genome"],
-        kept_genome_frac,
-        reads_selected_tx_total,
-        selected_tx_frac,
-        stats["reads_selected_tx_missing_genome"],
-        stats["reads_selected_tx_failed_genome"],
-        stats["reads_selected_tx_higher_per_id"],
-        stats["reads_tx_present_but_kept_genome"],
-        stats["reads_tx_tied_per_id_kept_genome"],
-        tied_kept_genome_frac,
-        stats["reads_tx_lower_per_id_kept_genome"],
-        stats["reads_tx_per_id_unavailable_kept_genome"],
-    )
-
-    return _build_mp_counter_from_read_multipaths(chosen_read_name_to_multipaths), stats
-
-
-def _build_rescue_unassigned_summary_stats(
+def _build_rescue_summary_stats(
     splice_graph,
     genome_mp_counter,
     rescue_requested_read_names=None,
@@ -4813,19 +4617,15 @@ def _build_rescue_unassigned_summary_stats(
     rescue_unrescued_read_names = requested_read_names - rescued_read_names
 
     stats = {
-        "quant_read_assignment_mode": "rescue_unassigned",
         "reads_total": len(all_read_names),
         "reads_kept_genome": len(genome_read_names - rescued_read_names),
+        # "selected_tx" is the reads whose assignment came from a transcript alignment
+        # rather than from the genomic graph, i.e. the ones rescue recovered.
         "reads_selected_tx_total": len(rescued_read_names),
         "reads_selected_tx_missing_genome": len(rescued_read_names - genome_read_names),
         "reads_selected_tx_failed_genome": len(
             rescued_read_names & failed_genome_read_names
         ),
-        # The four per-identity arbitration counters this used to report as 0 are
-        # gone. Rescue does not adjudicate all-genome against all-transcriptome, so it
-        # never computed them, and a measured zero and an inapplicable one are not the
-        # same claim. They remain in the summary header, defaulted, because genome_tx_arb
-        # does compute them.
         "reads_rescue_requested": len(requested_read_names),
         "reads_rescue_rescued": len(rescued_read_names),
         "reads_rescue_unrescued": len(rescue_unrescued_read_names),
@@ -4886,7 +4686,13 @@ def _build_rescue_unassigned_summary_stats(
     return stats
 
 
-def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats):
+def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stats):
+    """One row per work unit: how quantification assigned its reads.
+
+    Genomic graph assignment against transcriptome rescue, plus why rescue declined what
+    it declined. Merged across work units by _merge_read_assignment_summary_files.
+    """
+
     total_reads = int(stats.get("reads_total", 0) or 0)
 
     def _frac(key):
@@ -4907,17 +4713,6 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         "frac_selected_tx_missing_genome",
         "reads_selected_tx_failed_genome",
         "frac_selected_tx_failed_genome",
-        "reads_selected_tx_higher_per_id",
-        "frac_selected_tx_higher_per_id",
-        "reads_tx_present_but_kept_genome",
-        "frac_tx_present_but_kept_genome",
-        "reads_tx_tied_per_id_kept_genome",
-        "frac_tx_tied_per_id_kept_genome",
-        "reads_tx_lower_per_id_kept_genome",
-        "frac_tx_lower_per_id_kept_genome",
-        "reads_tx_per_id_unavailable_kept_genome",
-        "frac_tx_per_id_unavailable_kept_genome",
-        "quant_read_assignment_mode",
         "reads_rescue_requested",
         "frac_rescue_requested",
         "reads_rescue_rescued",
@@ -4956,39 +4751,6 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         ),
         "frac_selected_tx_failed_genome": "{:.6f}".format(
             _frac("reads_selected_tx_failed_genome")
-        ),
-        "reads_selected_tx_higher_per_id": int(
-            stats.get("reads_selected_tx_higher_per_id", 0) or 0
-        ),
-        "frac_selected_tx_higher_per_id": "{:.6f}".format(
-            _frac("reads_selected_tx_higher_per_id")
-        ),
-        "reads_tx_present_but_kept_genome": int(
-            stats.get("reads_tx_present_but_kept_genome", 0) or 0
-        ),
-        "frac_tx_present_but_kept_genome": "{:.6f}".format(
-            _frac("reads_tx_present_but_kept_genome")
-        ),
-        "reads_tx_tied_per_id_kept_genome": int(
-            stats.get("reads_tx_tied_per_id_kept_genome", 0) or 0
-        ),
-        "frac_tx_tied_per_id_kept_genome": "{:.6f}".format(
-            _frac("reads_tx_tied_per_id_kept_genome")
-        ),
-        "reads_tx_lower_per_id_kept_genome": int(
-            stats.get("reads_tx_lower_per_id_kept_genome", 0) or 0
-        ),
-        "frac_tx_lower_per_id_kept_genome": "{:.6f}".format(
-            _frac("reads_tx_lower_per_id_kept_genome")
-        ),
-        "reads_tx_per_id_unavailable_kept_genome": int(
-            stats.get("reads_tx_per_id_unavailable_kept_genome", 0) or 0
-        ),
-        "frac_tx_per_id_unavailable_kept_genome": "{:.6f}".format(
-            _frac("reads_tx_per_id_unavailable_kept_genome")
-        ),
-        "quant_read_assignment_mode": str(
-            stats.get("quant_read_assignment_mode", "genome_tx_arb") or "genome_tx_arb"
         ),
         "reads_rescue_requested": int(stats.get("reads_rescue_requested", 0) or 0),
         "frac_rescue_requested": "{:.6f}".format(_frac("reads_rescue_requested")),
@@ -5032,7 +4794,9 @@ def _write_genome_tx_arb_summary(summary_path, contig_acc, contig_strand, stats)
         writer.writerow(row)
 
 
-def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
+def _merge_read_assignment_summary_files(summary_paths, output_path):
+    """Concatenate the per-work-unit rows and append a TOTAL row over every counter."""
+
     summary_paths = [path for path in summary_paths if os.path.exists(path)]
     if not summary_paths:
         try:
@@ -5049,11 +4813,6 @@ def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
         "reads_selected_tx_total",
         "reads_selected_tx_missing_genome",
         "reads_selected_tx_failed_genome",
-        "reads_selected_tx_higher_per_id",
-        "reads_tx_present_but_kept_genome",
-        "reads_tx_tied_per_id_kept_genome",
-        "reads_tx_lower_per_id_kept_genome",
-        "reads_tx_per_id_unavailable_kept_genome",
         "reads_rescue_requested",
         "reads_rescue_rescued",
         "reads_rescue_unrescued",
@@ -5100,22 +4859,6 @@ def _merge_genome_tx_arb_summary_files(summary_paths, output_path):
     total_row["frac_selected_tx_failed_genome"] = _frac(
         "reads_selected_tx_failed_genome"
     )
-    total_row["frac_selected_tx_higher_per_id"] = _frac(
-        "reads_selected_tx_higher_per_id"
-    )
-    total_row["frac_tx_present_but_kept_genome"] = _frac(
-        "reads_tx_present_but_kept_genome"
-    )
-    total_row["frac_tx_tied_per_id_kept_genome"] = _frac(
-        "reads_tx_tied_per_id_kept_genome"
-    )
-    total_row["frac_tx_lower_per_id_kept_genome"] = _frac(
-        "reads_tx_lower_per_id_kept_genome"
-    )
-    total_row["frac_tx_per_id_unavailable_kept_genome"] = _frac(
-        "reads_tx_per_id_unavailable_kept_genome"
-    )
-    total_row["quant_read_assignment_mode"] = "merged"
     total_row["frac_rescue_requested"] = _frac("reads_rescue_requested")
     total_row["frac_rescue_rescued"] = _frac("reads_rescue_rescued")
     total_row["frac_rescue_unrescued"] = _frac("reads_rescue_unrescued")
@@ -5163,7 +4906,7 @@ def run_quant_only(
     report_quants=True,
     prebuilt_splice_graph=None,
     splice_graph_cache_dir=None,
-    arb_summary_path=None,
+    read_assignment_summary_path=None,
     rescue_summary_path=None,
     reference_transcripts=None,
 ):
@@ -5295,191 +5038,112 @@ def run_quant_only(
             LG.MP_READ_ID_STORE = None
         except Exception:
             pass
-    quant_read_assignment_mode = LRAA_Globals.config.get(
-        "quant_read_assignment_mode", "rescue_unassigned"
+    read_assignment_stats = None
+    # In streaming mode this first pass exists only to estimate abundances, so it reads
+    # the coverage-normalized bam: that is the whole saving, since the default path
+    # materializes every retained read of whichever bam it is given. The second pass
+    # below streams bam_file_for_quant and is what makes the tracking file complete.
+    bam_file_for_pass1 = (
+        bam_file_for_sg if LRAA_Globals.config["stream_reads"] else bam_file_for_quant
     )
-    genome_tx_arb_stats = None
-    if quant_read_assignment_mode == "transcriptome_only":
-        logger.info(
-            "[%s%s] quant read assignment mode: transcriptome_only",
-            contig_acc,
-            contig_strand,
+    mp_counter = lraa_obj._populate_read_multi_paths(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file_for_pass1,
+        allow_spacers,
+        restrict_splice_type=None,
+    )
+
+    # Rescue is on or off. Reads are assigned from the genomic splice graph either way;
+    # rescue only retries the ones that assignment could not place, against the models
+    # being quantified and within the locus each read's own genome alignment sits in.
+    if LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"]:
+        failed_genome_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
+        rescue_read_names = set(failed_genome_read_names)
+        quant_unassigned_read_names = set()
+        rescued_mps = []
+        rescue_alignment_details = None
+        q_probe = Quantify(
+            run_EM,
+            LRAA_Globals.config["max_EM_iterations_quant_only"],
+            quant_mode="final",
         )
-        mp_counter = MultiPathCounter()
-        transcriptome_mps = build_transcriptome_alignment_multipaths(
-            sg,
-            input_transcripts,
-            contig_seq_str,
-            bam_file_for_quant,
-            contig_acc,
-            restrict_region_lend,
-            restrict_region_rend,
-            read_names=None,
-            target_strand=contig_strand,
-            include_monoexonic=True,
-            require_unique_path_across_best_hits=False,
-            split_multipaths_by_gene=True,
-            genome_target_gating=True,
-            read_path_mapper=lraa_obj._map_read_to_graph,
-            log_label="transcriptome-only quant assignment",
-        )
-        for transcriptome_mp in transcriptome_mps:
-            mp_counter.add(transcriptome_mp)
-    elif quant_read_assignment_mode == "genome_tx_arb":
-        logger.info(
-            "[%s%s] quant read assignment mode: genome_tx_arb",
-            contig_acc,
-            contig_strand,
-        )
-        genome_mp_counter = lraa_obj._populate_read_multi_paths(
-            contig_acc,
-            contig_strand,
-            contig_seq_str,
-            bam_file_for_quant,
-            allow_spacers,
-            restrict_splice_type=None,
-        )
-        transcriptome_mps, transcriptome_read_details = (
-            build_transcriptome_alignment_multipaths(
-                sg,
-                input_transcripts,
-                contig_seq_str,
-                bam_file_for_quant,
-                contig_acc,
-                restrict_region_lend,
-                restrict_region_rend,
-                read_names=None,
-                target_strand=contig_strand,
-                include_monoexonic=True,
-                require_unique_path_across_best_hits=False,
-                split_multipaths_by_gene=True,
-                genome_target_gating=True,
-                read_path_mapper=lraa_obj._map_read_to_graph,
-                log_label="genome_tx_arb transcriptome assignment",
-                return_read_details=True,
+        for transcript in input_transcripts:
+            transcript.init_quant_info()
+        q_probe._assign_path_nodes_to_gene(input_transcripts)
+        q_probe._assign_reads_to_transcripts(sg, mp_counter)
+        quant_unassigned_read_names = set(q_probe.get_unassigned_read_names())
+        rescue_read_names.update(quant_unassigned_read_names)
+
+        # Diagnostic, off unless config['dump_rescue_candidates'] names a prefix. This
+        # is the reproduction control for streaming rescue: the same population written
+        # by the batch path, per read and per reason, so the streaming pass's dump can
+        # be diffed against it read for read. Counts alone would let two different
+        # sets of the same size look equal.
+        _rescue_dump_prefix = LRAA_Globals.config.get("dump_rescue_candidates") or None
+        if _rescue_dump_prefix:
+            import StreamingRescue
+
+            _by_reason = lraa_obj.get_failed_read_names_for_rescue_by_reason()
+            # The probe category is not one of the graph-mapping reasons and is not
+            # held on the LRAA object, so it is added here rather than there: these
+            # reads DID map to a path, it just matched no target.
+            _by_reason[IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS] = set(
+                quant_unassigned_read_names
             )
-        )
-        mp_counter, genome_tx_arb_stats = _arbitrate_genome_vs_transcriptome_read_paths(
-            sg,
-            genome_mp_counter,
-            transcriptome_read_details,
-            failed_genome_read_names=lraa_obj.get_failed_read_names_for_rescue(),
-        )
-        if arb_summary_path is not None and genome_tx_arb_stats is not None:
-            _write_genome_tx_arb_summary(
-                arb_summary_path,
+            StreamingRescue.write_candidate_dump(
+                "{}.{}.{}.batch_candidates.tsv".format(
+                    _rescue_dump_prefix, contig_acc, contig_strand
+                ),
+                _by_reason,
+            )
+
+        if rescue_read_names:
+            logger.info(
+                "[%s%s] transcriptome rescue: retrying %d unassigned reads",
                 contig_acc,
                 contig_strand,
-                genome_tx_arb_stats,
+                len(rescue_read_names),
             )
-    else:
-        # In streaming mode this first pass exists only to estimate abundances, so it reads
-        # the coverage-normalized bam: that is the whole saving, since the default path
-        # materializes every retained read of whichever bam it is given. The second pass
-        # below streams bam_file_for_quant and is what makes the tracking file complete.
-        bam_file_for_pass1 = (
-            bam_file_for_sg
-            if LRAA_Globals.config["stream_reads"]
-            else bam_file_for_quant
-        )
-        mp_counter = lraa_obj._populate_read_multi_paths(
-            contig_acc,
-            contig_strand,
-            contig_seq_str,
-            bam_file_for_pass1,
-            allow_spacers,
-            restrict_splice_type=None,
-        )
-
-        if quant_read_assignment_mode == "rescue_unassigned":
-            failed_genome_read_names = set(lraa_obj.get_failed_read_names_for_rescue())
-            rescue_read_names = set(failed_genome_read_names)
-            quant_unassigned_read_names = set()
-            rescued_mps = []
-            rescue_alignment_details = None
-            q_probe = Quantify(
-                run_EM,
-                LRAA_Globals.config["max_EM_iterations_quant_only"],
-                quant_mode="final",
-            )
-            for transcript in input_transcripts:
-                transcript.init_quant_info()
-            q_probe._assign_path_nodes_to_gene(input_transcripts)
-            q_probe._assign_reads_to_transcripts(sg, mp_counter)
-            quant_unassigned_read_names = set(q_probe.get_unassigned_read_names())
-            rescue_read_names.update(quant_unassigned_read_names)
-
-            # Diagnostic, off unless config['dump_rescue_candidates'] names a prefix. This
-            # is the reproduction control for streaming rescue: the same population written
-            # by the batch path, per read and per reason, so the streaming pass's dump can
-            # be diffed against it read for read. Counts alone would let two different
-            # sets of the same size look equal.
-            _rescue_dump_prefix = (
-                LRAA_Globals.config.get("dump_rescue_candidates") or None
-            )
-            if _rescue_dump_prefix:
-                import StreamingRescue
-
-                _by_reason = lraa_obj.get_failed_read_names_for_rescue_by_reason()
-                # The probe category is not one of the graph-mapping reasons and is not
-                # held on the LRAA object, so it is added here rather than there: these
-                # reads DID map to a path, it just matched no target.
-                _by_reason[
-                    IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS
-                ] = set(quant_unassigned_read_names)
-                StreamingRescue.write_candidate_dump(
-                    "{}.{}.{}.batch_candidates.tsv".format(
-                        _rescue_dump_prefix, contig_acc, contig_strand
-                    ),
-                    _by_reason,
-                )
-
-            if rescue_read_names:
-                logger.info(
-                    "[%s%s] transcriptome rescue: retrying %d unassigned reads",
+            rescued_mps, rescue_alignment_details = (
+                rescue_unassigned_reads_to_transcriptome(
+                    sg,
+                    input_transcripts,
+                    contig_seq_str,
+                    bam_file_for_quant,
                     contig_acc,
-                    contig_strand,
-                    len(rescue_read_names),
+                    restrict_region_lend,
+                    restrict_region_rend,
+                    rescue_read_names,
+                    read_path_mapper=lraa_obj._map_read_to_graph,
+                    return_read_details=True,
                 )
-                rescued_mps, rescue_alignment_details = (
-                    rescue_unassigned_reads_to_transcriptome(
-                        sg,
-                        input_transcripts,
-                        contig_seq_str,
-                        bam_file_for_quant,
-                        contig_acc,
-                        restrict_region_lend,
-                        restrict_region_rend,
-                        rescue_read_names,
-                        read_path_mapper=lraa_obj._map_read_to_graph,
-                        reads_without_graph_path=failed_genome_read_names,
-                        return_read_details=True,
-                    )
-                )
-
-            genome_tx_arb_stats = _build_rescue_unassigned_summary_stats(
-                sg,
-                mp_counter,
-                rescue_requested_read_names=rescue_read_names,
-                rescued_multipaths=rescued_mps,
-                failed_genome_read_names=failed_genome_read_names,
-                quant_unassigned_read_names=quant_unassigned_read_names,
-                rescue_alignment_details=rescue_alignment_details,
             )
-            if arb_summary_path is not None:
-                _write_genome_tx_arb_summary(
-                    arb_summary_path,
-                    contig_acc,
-                    contig_strand,
-                    genome_tx_arb_stats,
-                )
 
-            for rescued_mp in rescued_mps:
-                mp_counter.add(rescued_mp)
-
-            _detach_rescued_reads_from_original_paths(
-                mp_counter, rescued_mps, contig_acc, contig_strand
+        read_assignment_stats = _build_rescue_summary_stats(
+            sg,
+            mp_counter,
+            rescue_requested_read_names=rescue_read_names,
+            rescued_multipaths=rescued_mps,
+            failed_genome_read_names=failed_genome_read_names,
+            quant_unassigned_read_names=quant_unassigned_read_names,
+            rescue_alignment_details=rescue_alignment_details,
+        )
+        if read_assignment_summary_path is not None:
+            _write_read_assignment_summary(
+                read_assignment_summary_path,
+                contig_acc,
+                contig_strand,
+                read_assignment_stats,
             )
+
+        for rescued_mp in rescued_mps:
+            mp_counter.add(rescued_mp)
+
+        _detach_rescued_reads_from_original_paths(
+            mp_counter, rescued_mps, contig_acc, contig_strand
+        )
 
     q = Quantify(
         run_EM, LRAA_Globals.config["max_EM_iterations_quant_only"], quant_mode="final"
@@ -5573,7 +5237,7 @@ def run_quant_only(
         rescuer = None
         _rescue_dump_prefix = LRAA_Globals.config.get("dump_rescue_candidates") or None
         if LRAA_Globals.config.get("stream_reads_rescue_unassigned", False) and (
-            quant_read_assignment_mode == "rescue_unassigned"
+            LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"]
         ):
             rescuer = StreamingRescue.StreamingRescuer(
                 sg,
@@ -5674,10 +5338,6 @@ def run_quant_only(
             pass
 
     LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
-    try:
-        q.genome_tx_arb_summary_stats = genome_tx_arb_stats
-    except Exception:
-        pass
     return q
 
 
@@ -5703,7 +5363,7 @@ def run_transcript_assembly(
     ME_only,
     SE_only,
     splice_graph_cache_dir=None,
-    arb_summary_path=None,
+    read_assignment_summary_path=None,
     rescue_summary_path=None,
 ):
 
@@ -6262,7 +5922,7 @@ def run_transcript_assembly(
         prereconstruct_info_dir,
         report_quants=False,
         splice_graph_cache_dir=splice_graph_cache_dir,
-        arb_summary_path=arb_summary_path,
+        read_assignment_summary_path=read_assignment_summary_path,
         rescue_summary_path=rescue_summary_path,
         # `transcripts` above are the models LRAA just assembled; the genuine annotation
         # is the reference subset, and only it may waive the internal-priming veto.

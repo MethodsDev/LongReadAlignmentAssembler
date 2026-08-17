@@ -65,7 +65,7 @@ def main():
     )
 
     case_dir = Path(args.case_dir)
-    summary_path = case_dir / f"{args.output_prefix}.genome_tx_arb.summary.tsv"
+    summary_path = case_dir / f"{args.output_prefix}.read_assignment.summary.tsv"
     tracking_path = case_dir / f"{args.output_prefix}.quant.tracking.gz"
     expr_path = case_dir / f"{args.output_prefix}.quant.expr"
     expected_names_path = case_dir / args.expected_read_names

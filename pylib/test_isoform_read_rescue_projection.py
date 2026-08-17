@@ -215,6 +215,80 @@ def test_rescue_declined_when_it_explains_less_of_the_read_than_the_genome():
     assert _explained_read_bases(_aln("96M4I", 4)) == 96
 
 
+def _gap_baseline_rescue_sam(tmp_path):
+    """One rescue alignment that ties the explained-bases baseline and loses on gaps.
+
+    40M20I40M over a 100-base target: 80 read bases are matched, so explained bases are
+    80 either way, which is exactly the tie the explained-bases test cannot break. The 20
+    inserted bases enter the gap-aware span, so the alignment agrees with its target over
+    100 positions rather than 80 -- 0.80 where a clean genome alignment scores 1.00.
+    """
+    sam = tmp_path / "gap_baseline.sam"
+    sam.write_text(
+        "@HD\tVN:1.6\tSO:unknown\n"
+        "@SQ\tSN:g1^t1\tLN:100\n"
+        "r1\t0\tg1^t1\t1\t60\t40M20I40M\t*\t0\t0\t{}\t*\tAS:i:80\tNM:i:20\n".format(
+            "A" * 100
+        )
+    )
+    return sam
+
+
+@pytest.mark.parametrize(
+    "genome_gap_id, expect_declined",
+    [
+        # The genome agrees with the genome perfectly, the rescue agrees with its target
+        # over a longer span at 0.80: the rescue is the worse account and is declined.
+        (1.0, True),
+        # Non-vacuity control for the case above. Same alignment, same explained-bases
+        # tie, same locality -- only the baseline moves, and now the rescue is accepted.
+        # Without this, a fixture that never reached the rule would look like a pass.
+        (0.5, False),
+    ],
+)
+def test_rescue_declined_when_it_agrees_worse_with_its_target_than_the_genome(
+    tmp_path, monkeypatch, genome_gap_id, expect_declined
+):
+    """The gap-aware baseline is enforced, not merely recorded, and is unconditional.
+
+    Both genome baselines used to be emptied for callers that passed genome target
+    gating, which was how the whole-genome-versus-whole-transcriptome modes ran; those
+    modes and that flag are gone, so there is no longer any way to reach rescue with the
+    baselines switched off. Measured on chr21 HiFi, these baselines decline 668 candidate
+    rescues against 16 for locality, so they are the larger of the two rules and the one
+    whose silent loss would matter most.
+
+    The two content thresholds are pinned rather than inherited: at their defaults the
+    20-base insertion is refused as a long indel and 0.80 identity sits exactly on the
+    LowFi floor, and either would decline the alignment before the rule under test ran.
+    """
+    monkeypatch.setitem(LRAA_Globals.config, "rescue_unassigned_max_indel_length", 0)
+    monkeypatch.setitem(LRAA_Globals.config, "rescue_unassigned_min_per_id", 50)
+    splice_graph, transcript_models = _build_minus_strand_boundary_fixture()[:2]
+
+    rescued_mps, details = _parse_rescue_alignments(
+        str(_gap_baseline_rescue_sam(tmp_path)),
+        splice_graph,
+        transcript_models,
+        read_path_mapper=LRAA(splice_graph)._map_read_to_graph,
+        read_name_to_allowed_target_ids={"r1": {"g1^t1"}},
+        # Explained bases tie at 80, so this rule must pass the alignment through.
+        read_name_to_genome_explained={"r1": 80},
+        read_name_to_genome_gap_id={"r1": genome_gap_id},
+    )
+
+    rejections = details["alignment_rejections"]
+    assert (
+        "explains_less_than_genome" not in rejections
+    ), "the explained-bases rule must tie here, or this fixture tests the wrong rule"
+    if expect_declined:
+        assert rejections == {"agrees_worse_than_genome": 1}, rejections
+        assert rescued_mps == []
+    else:
+        assert "agrees_worse_than_genome" not in rejections, rejections
+        assert len(rescued_mps) == 1, rejections
+
+
 def test_rescue_raises_rather_than_skipping_when_minimap2_is_absent(monkeypatch):
     """Returning empty here would silently drop every read rescue was to recover."""
 
@@ -228,33 +302,27 @@ def test_rescue_raises_rather_than_skipping_when_minimap2_is_absent(monkeypatch)
     assert rescue_shutil is IsoformReadRescue.shutil
 
     with pytest.raises(RuntimeError, match="minimap2"):
-        IsoformReadRescue.build_transcriptome_alignment_multipaths(
-            None, [], "", "reads.bam", "chr1", 1, 1000
+        IsoformReadRescue.rescue_unassigned_reads_to_transcriptome(
+            None, [], "", "reads.bam", "chr1", 1, 1000, set()
         )
 
 
-def test_lraa_exits_before_doing_work_when_a_configured_alignment_has_no_minimap2(
-    monkeypatch,
-):
-    """The CLI guard must fire on rescue and on the two transcriptome quant modes."""
+def test_lraa_exits_before_doing_work_when_rescue_has_no_minimap2(monkeypatch):
+    """The CLI guard must fire when rescue is enabled, and only then."""
 
     lraa_cli = _load_lraa_cli()
     monkeypatch.setattr(lraa_cli.shutil, "which", lambda name: None, raising=True)
 
-    for rescue_enabled, mode, expected in (
-        (True, "rescue_unassigned", "transcriptome read rescue"),
-        (False, "transcriptome_only", "transcriptome_only"),
-        (False, "genome_tx_arb", "genome_tx_arb"),
-    ):
-        with pytest.raises(SystemExit) as exit_info:
-            lraa_cli._require_minimap2_for_transcriptome_alignment(
-                rescue_enabled, mode
-            )
-        assert "minimap2" in str(exit_info.value)
-        assert expected in str(exit_info.value)
+    with pytest.raises(SystemExit) as exit_info:
+        lraa_cli._require_minimap2_for_transcriptome_alignment(True)
+    assert "minimap2" in str(exit_info.value)
+    assert "transcriptome read rescue" in str(exit_info.value)
+    assert "--no_rescue_unassigned_reads_via_transcriptome_alignment" in str(
+        exit_info.value
+    ), "and must name the way to run without it"
 
-    # genome-only assignment never aligns to transcripts, so it must still run
-    lraa_cli._require_minimap2_for_transcriptome_alignment(False, "genome")
+    # rescue turned off never aligns to transcripts, so it must still run
+    lraa_cli._require_minimap2_for_transcriptome_alignment(False)
 
 
 def _load_lraa_cli():

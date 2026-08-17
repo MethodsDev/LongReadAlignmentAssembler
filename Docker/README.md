@@ -49,7 +49,7 @@ in `WDL/`, 18 run on core, 8 on sc, 1 on orf.
 
 | image | tasks |
 |---|---|
-| core | `LRAA_runner_task`; the five tasks in `LRAA.wdl` (`merge_GTFs`, `mergeQuantResults`, `mergeGenomeTxArbSummaries`, `count_bam`, `filterBamToSecondaryRescue`); `partition_by_chromosome_task`; `normalize_bam_by_strand`; `partition_bam_by_cell_cluster`; `run_gffcompare`; `incorporate_gene_symbols_sc`; `merge_bams`; `validate_pre_normalized_inputs`; the tar, merge and pseudobulk tasks in `LRAA-cell_cluster_guided.wdl` |
+| core | `LRAA_runner_task`; the five tasks in `LRAA.wdl` (`merge_GTFs`, `mergeQuantResults`, `mergeReadAssignmentSummaries`, `count_bam`, `filterBamToSecondaryRescue`); `partition_by_chromosome_task`; `normalize_bam_by_strand`; `partition_bam_by_cell_cluster`; `run_gffcompare`; `incorporate_gene_symbols_sc`; `merge_bams`; `validate_pre_normalized_inputs`; the tar, merge and pseudobulk tasks in `LRAA-cell_cluster_guided.wdl` |
 | sc | `run_seurat_from_gene_sparseM`; `run_filter_good_cells`; `sc_build_sparse_matrices`; `sc_build_sparse_matrices_from_tracking`; `LRAA_sqanti_like_reads_eval_task`; the two `summarize_mult_samples` tasks; `RunSaturation` |
 | orf | `LRAA_ORF_prediction_task` |
 

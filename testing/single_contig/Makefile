@@ -119,7 +119,7 @@ test_chunked_strandless_requires_N:
 # monitor's write interval as lasting 0.0 seconds.
 test_observability:
 	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
-	    --quant_only --stream_reads --quant_read_assignment_mode rescue_unassigned \
+	    --quant_only --stream_reads \
 	    --stream_reads_rescue_unassigned --cpu_budget 4 --HiFi \
 	    --output_prefix LRAA.observability
 	test -s LRAA.observability.LRAA.quant-only.rescue.summary.tsv

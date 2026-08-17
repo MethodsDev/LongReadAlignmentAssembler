@@ -153,8 +153,8 @@ workflow LRAA_quant_by_cluster {
         # Per-cluster quantification outputs
         Array[File] quant_exprs = LRAA_quant_cluster.mergedQuantExpr
         Array[File] quant_trackings = LRAA_quant_cluster.mergedQuantTracking
-        Array[Array[File]] genome_tx_arb_shard_summaries_by_cluster = LRAA_quant_cluster.shardGenomeTxArbSummaries
-        Array[File] genome_tx_arb_merged_summaries_by_cluster = select_all(LRAA_quant_cluster.mergedGenomeTxArbSummary)
+        Array[Array[File]] read_assignment_shard_summaries_by_cluster = LRAA_quant_cluster.shardReadAssignmentSummaries
+        Array[File] read_assignment_merged_summaries_by_cluster = select_all(LRAA_quant_cluster.mergedReadAssignmentSummary)
         
         # Intermediate outputs (for debugging/reuse)
         Array[File]? partitioned_bams = partition_bam_by_cell_cluster.partitioned_bams

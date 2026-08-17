@@ -602,35 +602,41 @@ def _guard_run(tmp_path, *extra):
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
 
 
-def test_streaming_still_refuses_rescue_unassigned_without_the_flag(tmp_path):
-    """The pre-existing refusal has to keep refusing: rescue inside the stream is opt in,
-    and a run that silently skipped rescue would report the first pass's rescue summary as
-    though it covered the whole bam."""
-    r = _guard_run(tmp_path, "--quant_read_assignment_mode", "rescue_unassigned")
+def test_streaming_refuses_rescue_without_the_flag(tmp_path):
+    """The pre-existing refusal has to keep refusing, and now it is the DEFAULT case:
+    rescue is on unless turned off, rescue inside the stream is opt in, and a run that
+    silently skipped rescue would report the first pass's rescue summary as though it
+    covered the whole bam."""
+    r = _guard_run(tmp_path)
     assert r.returncode != 0
     out = r.stdout + r.stderr
-    assert "--stream_reads requires --quant_read_assignment_mode genome" in out
-    assert "--stream_reads_rescue_unassigned" in out, "and must name the way out"
+    assert "cannot reproduce transcriptome rescue" in out
+    assert "--stream_reads_rescue_unassigned" in out, "and must name the way in"
+    assert (
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment" in out
+    ), "and the way out"
     assert not list(tmp_path.glob("out*quant.expr")), "and must not emit results"
 
 
-@pytest.mark.parametrize("mode", ["transcriptome_only", "genome_tx_arb"])
-def test_streaming_refuses_the_two_modes_that_stay_refused(tmp_path, mode):
-    """These assign every read by transcriptome alignment from the full bam, so streaming
-    would read in pass 1 exactly what pass 2 streams. The message must name the mode rather
-    than refuse everything non-genome, now that rescue_unassigned is reachable."""
-    r = _guard_run(tmp_path, "--quant_read_assignment_mode", mode)
+def test_the_retired_assignment_mode_flag_is_rejected_rather_than_ignored(tmp_path):
+    """--quant_read_assignment_mode is gone. A script still passing `genome` was asking
+    for rescue OFF, and rescue is on by default -- so silently accepting and ignoring the
+    flag would turn rescue on for that run with nothing to say so. argparse must refuse
+    the unknown argument instead."""
+    r = _guard_run(tmp_path, "--quant_read_assignment_mode", "genome")
     assert r.returncode != 0
     out = r.stdout + r.stderr
-    assert "genome or rescue_unassigned" in out
-    assert mode in out
+    assert "unrecognized arguments" in out
+    assert "--quant_read_assignment_mode" in out
+    assert not list(tmp_path.glob("out*quant.expr")), "and must not emit results"
 
 
 def test_the_fourth_category_flag_is_refused_on_its_own(tmp_path):
     """It extends streaming rescue and does nothing without it. Ignoring it would leave a
     run that asked for the extension, got the base behaviour, and said so nowhere."""
     r = _guard_run(
-        tmp_path, "--quant_read_assignment_mode", "genome",
+        tmp_path,
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
         "--stream_reads_rescue_unassigned_to_targets",
     )
     assert r.returncode != 0
@@ -638,10 +644,11 @@ def test_the_fourth_category_flag_is_refused_on_its_own(tmp_path):
 
 
 def test_streaming_rescue_needs_rescue_left_enabled(tmp_path):
-    """--no_rescue... downgrades the mode to genome, so asking for streaming rescue at the
-    same time asks for a rescue that was turned off."""
+    """Asking to rescue inside the stream while turning rescue off asks for opposite
+    things. This used to be caught because --no_rescue... downgraded the assignment mode;
+    with the modes gone the contradiction is named directly."""
     r = _guard_run(
-        tmp_path, "--quant_read_assignment_mode", "rescue_unassigned",
+        tmp_path,
         "--stream_reads_rescue_unassigned",
         "--no_rescue_unassigned_reads_via_transcriptome_alignment",
     )

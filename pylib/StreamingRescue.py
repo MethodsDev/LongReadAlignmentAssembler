@@ -54,7 +54,7 @@ mappy always sets MM_F_CIGAR.  Two things are NOT reproducible through the bindi
     p->dp_score, which is what SAM's AS tag holds.  _alignment_score() therefore takes
     its documented no-AS branch, matched-minus-NM, for streaming hits and the DP score
     for batch hits.  That changes only which hits tie for best, so it changes acceptance
-    only where require_unique_path_across_best_hits has to arbitrate.
+    only where the same-path requirement across best-scoring hits has to arbitrate.
 
 Everything else about a hit -- reference, coordinates, CIGAR, NM, secondary and
 supplementary status -- is reproduced exactly, including minimap2's rule for which of
@@ -371,8 +371,6 @@ class StreamingRescuer:
             self._splice_graph,
             self._transcript_models,
             read_path_mapper=self._read_path_mapper,
-            require_unique_path_across_best_hits=True,
-            split_multipaths_by_gene=False,
             read_name_to_allowed_target_ids={read_name: allowed_target_ids},
             read_name_to_genome_explained=(
                 {} if genome_explained is None else {read_name: genome_explained}
