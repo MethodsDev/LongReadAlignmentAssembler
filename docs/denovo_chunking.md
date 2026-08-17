@@ -51,18 +51,42 @@ nearest cut: the cut at 40,005,600 fell inside its COMPONENT's span
 near the boundary. Their conclusion, correctly, is that a gate on "no model within
 X bp of a cut differs" misses this, and the right granularity is the component.
 
-The spanning-alignment gate already IS that gate, by construction rather than by
-measurement. The cost counts an alignment as severed when its full REFERENCE span
-contains the position — `aln.reference_start` to `aln.reference_end`, introns
-included, not its aligned blocks. So zero spanning alignments means every retained
-alignment lies wholly left or wholly right of `b`. Nodes are blocks and edges are `N`
-ops, and both lie inside an alignment's reference span, so nothing on the left shares
-a node or an edge with anything on the right, and connectivity — which is transitive
-through shared nodes and edges — cannot cross `b`. No component can straddle a
-position no alignment spans.
+The spanning-alignment gate already IS that gate, and it holds both by construction
+and by measurement. Construction first. The cost counts an alignment as severed when
+its full REFERENCE span contains the position — `aln.reference_start` to
+`aln.reference_end`, introns included, not its aligned blocks. So zero spanning
+alignments means every retained alignment lies wholly left or wholly right of `b`.
+Nodes are blocks and edges are `N` ops, and both lie inside an alignment's reference
+span, so nothing on the left shares a node or an edge with anything on the right, and
+connectivity — which is transitive through shared nodes and edges — cannot cross `b`.
+No component can straddle a position no alignment spans.
 
-That specific cut is the check: 40,005,600 severed 30 alignments in the stress arm,
-so it is inadmissible under this gate and the 87 kb collateral never arises.
+Measured independently by `Chr21DenovoParity` over the 535 components of the
+unchunked chr21 de novo run, using LRAA's `gene_id` as the component id, so nothing
+is inferred:
+
+| partition | alignments severed | components straddling a cut |
+|---|---|---|
+| 4 default cuts | 0 | **0 of 535** |
+| 22 stress cuts | 940 | **3**, at 26,000,200 / 40,005,600 / 41,992,400 |
+
+Those three cuts sever 861 / 30 / 47 alignments. The two stress cuts that sever
+exactly ONE alignment each straddle NO component — so zero spanning alignments is
+SUFFICIENT for zero straddling components without being tight: a single severed
+alignment did not happen to connect two loci at either cut. The gate can therefore
+decline more than it strictly must, which is the right direction for a correctness
+constraint to err in.
+
+The consequence is the strongest claim in this note, and it is theirs rather than
+mine: **on that corpus the gate eliminates 100% of the boundary damage they could
+produce.** Every boundary difference measured in the rescue-off stress arm — all 18
+lost models, now attributed 18 of 18 to a severed COMPONENT where the model-span
+diagnostic had reached 17 of 18 — sits at one of those three cuts. That includes the
+two spurious MONOEXONIC models this whole design is motivated by: the cut at
+41,992,400 that manufactured them severs 47 alignments, so `--require_zero_severed`
+refuses it and they cannot be produced. It also includes the 87 kb collateral case
+above, since 40,005,600 severs 30. What remains after that is the rescue divergence,
+which is zero with rescue off and is the follow-up named below.
 
 The reference-span detail is load-bearing for that argument and is pinned by
 `test_an_intron_crossing_the_window_makes_every_position_inadmissible`. Fail-verified
@@ -90,6 +114,13 @@ whose first exon crosses the cut at 41,992,400 loses ALL EIGHT, and the chunked 
 emits two SPURIOUS MONOEXONIC models at 634 bp and 797 bp from the cut whose left
 ends coincide with the originals'. The same shape recurs at 26,000,200 and
 40,005,600.
+
+Those two figures are from different arms and different diagnostics, and conflating
+them would overstate the case, so: the 20 lost models are the stress arm with rescue
+ON, keyed by model span. With rescue OFF the stress arm loses 18, and under the
+component-level diagnostic all 18 are attributed to a severed component rather than
+17 of 18 by span. The severing damage and the rescue damage are separable, and both
+counts are of severing once rescue is taken out of the picture.
 
 Independently, on chr1 at the 10 Mb default, all 24 cut targets are placeable with
 zero spanning retained alignments, de novo and ref-guided alike, at a median search
