@@ -700,6 +700,17 @@ class LRAA:
         contig_acc = self._splice_graph.get_contig_acc()
         contig_strand = self._splice_graph.get_contig_strand()
 
+        # ME and SE reconstruction run on separate MultiPathGraph objects, each
+        # numbering its components from 1, so the component counter alone is not
+        # unique across the pair: 90 of 1441 ids collided on chr21 c3(+), and a
+        # colliding pair shared the minted GENE id too. Reclustering renames every
+        # draft over a partition before anything keys on these ids, so the collision
+        # had no downstream consequence -- but it made __init_clusters.tsv unusable
+        # as a join key. The splice-type label disambiguates at the point of minting.
+        # Empty for the combined pass (restrict_splice_type None), whose ids are
+        # therefore unchanged.
+        splice_type_label = self._restrict_splice_type or ""
+
         using_multiprocessing = shard_store is not None
         component_size = len(mpg_component)
         logger.info(
@@ -712,7 +723,12 @@ class LRAA:
         )
 
         gene_id_use = ":".join(
-            ["g", contig_acc, contig_strand, "comp-" + str(component_counter)]
+            [
+                "g",
+                contig_acc,
+                contig_strand,
+                "comp-" + splice_type_label + str(component_counter),
+            ]
         )
 
         ## exclude those mpgn's that are contained by many transcripts to reduce the trellis size.
@@ -892,7 +908,7 @@ class LRAA:
                     "t",
                     contig_acc,
                     contig_strand,
-                    "comp-" + str(component_counter),
+                    "comp-" + splice_type_label + str(component_counter),
                     "iso-" + str(transcript_counter),
                 ]
             )
