@@ -536,6 +536,21 @@ def cut_sources(args, strand_bams, inputs_token, split_token):
     ]
 
 
+def resolve_min_per_id(args):
+    """The min_per_id this run actually filters on.
+
+    ``--HiFi`` raises it to 97 inside LRAA and nothing else propagates that, so
+    every stage that filters alignments has to derive it the same way. This exists
+    as one function because it previously did not: stage 2 computed 97 while stage
+    4 passed nothing and the normalizer defaulted to 0, even though
+    ``normalize_bam_by_strand.py``'s own help says the value "must match the
+    consumer's min_per_id". The two arms then disagreed on one TSS by 4 bp on
+    chr21 -- reproducible with a control that placed no cuts at all, so it was the
+    pipeline path rather than any boundary.
+    """
+    return 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
+
+
 def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
     cut_dir = os.path.join(outdir, "cuts")
     os.makedirs(cut_dir, exist_ok=True)
@@ -550,7 +565,7 @@ def stage_select_cuts(args, ckpt, outdir, timing, sources, rss_interval):
         # --HiFi raises min_per_id to 97 inside LRAA, and the emitted severed set is
         # filtered on the value the quant step will use, so the thresholds belong in
         # the token: the same cuts with a different min_per_id emit a different bam.
-        effective_min_per_id = 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
+        effective_min_per_id = resolve_min_per_id(args)
         # Stage 5 runs LRAA --quant_only, which swaps
         # min_mapping_quality_for_final_quant into min_mapping_quality before it
         # filters (LRAA:4201-4204).  Reading the discovery key here would be wrong
@@ -1213,14 +1228,18 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
         norm_bam = unit["norm_bam"]
         norm_token = chain_token(
             # maxintron is passed to the normalizer below, so it decides these
-            # contents and has to name them
-            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}".format(
+            # contents and has to name them. So does min_per_id: the normalizer
+            # discards alignments below it before measuring depth, so the same input
+            # at a different threshold yields a different normalized bam, and a
+            # cache written before it was forwarded must not be reused.
+            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}_minperid_{}".format(
                 uid,
                 args.normalize_max_cov_level,
                 args.depth_window,
                 args.random_seed,
                 chunk["window_origin"],
                 args.max_intron_length,
+                resolve_min_per_id(args),
             ),
             upstream_token,
         )
@@ -1237,6 +1256,12 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
             str(args.depth_window),
             "--random_seed",
             str(args.random_seed),
+            # The normalizer discards alignments below this before measuring depth,
+            # so it has to be the same value the rest of the run filters on. Its own
+            # help says "must match the consumer's min_per_id"; it did not, and the
+            # chunked and unchunked arms disagreed on a TSS by 4 bp as a result.
+            "--min_per_id",
+            str(resolve_min_per_id(args)),
             "--max_intron_length",
             str(args.max_intron_length),
             # true of both modes' units: strand-first because the whole bam was
