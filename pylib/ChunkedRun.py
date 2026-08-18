@@ -141,13 +141,16 @@ import argparse
 import collections
 import glob
 import gzip
+import heapq
 import json
+import operator
 import os
 import re
 import resource
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -2722,6 +2725,45 @@ def read_tsv(path):
     return comments, header, rows
 
 
+def iter_tsv(path):
+    """``read_tsv`` without the list: returns (header_fields, row_iterator).
+
+    Same file grammar as ``read_tsv`` -- first non-comment line is the header,
+    ``#`` lines are skipped wherever they appear, no header is a
+    ``PipelineError`` -- but rows arrive one at a time and are never
+    accumulated. Comments are dropped rather than collected, because the one
+    caller that streams (the stage-6 tracking merge) discards them anyway.
+
+    The handle is closed when the iterator is exhausted or closed, so the caller
+    MUST either drain it or let it be garbage collected; holding a half-read
+    iterator holds the file open.
+    """
+
+    fh = open_text(path)
+    header = None
+    for line in fh:
+        line = line.rstrip("\n")
+        if line.startswith("#"):
+            continue
+        header = line.split("\t")
+        break
+    if header is None:
+        fh.close()
+        raise PipelineError("{} has no header line".format(path))
+
+    def rows():
+        try:
+            for line in fh:
+                line = line.rstrip("\n")
+                if line.startswith("#"):
+                    continue
+                yield line.split("\t")
+        finally:
+            fh.close()
+
+    return header, rows()
+
+
 # gene_id / transcript_id in a GTF attribute column, quoted.
 _GTF_ID_ATTR = re.compile(r'(gene_id|transcript_id)\s+"([^"]*)"')
 
@@ -2809,6 +2851,183 @@ def merge_discovery_gtf(merged_dir, units):
     }
 
 
+# Rows held in one in-memory sorted run of the stage-6 tracking sort.
+#
+# WHY A CAP AT ALL: the merged quant.tracking is the largest table the pipeline
+# produces -- one row per (read, assigned transcript) -- and materialising it to
+# sort it was MEASURED at 588 B of Python object per 140 B of data, 4.2x, which
+# put the serial merge at 41.6 GiB on a 63.8M-row PBMC arm and made stage 6 the
+# peak of the whole run in all four measured arms. Capping the only container
+# that grows with row count replaces that with a peak set by this constant.
+#
+# WHY 500k AND NOT SMALLER: peak resident rows is max(cap, rows/cap), so the cap
+# IS the peak for any table below cap**2 -- 2.5e11 rows, against the 63.8M of
+# the largest arm ever measured. Below about 20k the trade reverses: each
+# spilled run is an open GzipFile during the merge, and MEASURED on 240k
+# synthetic rows the allocation peak rose from 7.7 MiB at cap 20k to 9.5 MiB at
+# cap 2k, the run buffer shrinking by 10x and the readers more than eating it.
+#
+# At 500k the same measurement gives 383 B per buffered row against the
+# materialising implementation's 568 B, so ~0.19 GiB here against ~34 GiB there
+# at PBMC arm B's row count. It is also FASTER: 29.4 s against 36.7 s on 2.4M
+# rows, because five 500k sorts under `operator.itemgetter` beat one 2.4M sort
+# under a key lambda by more than the spill round trip costs.
+_TRACKING_SORT_RUN_ROWS = 500_000
+
+# (sort_key, output_line) pairs are sorted on the key alone. NOT a bare
+# `list.sort()`: that would fall through to comparing the line on equal keys and
+# so reorder rows the materialising implementation left in input order.
+_by_sort_key = operator.itemgetter(0)
+
+
+def _read_sorted_run(path, key_columns, live):
+    """Stream a spilled run back as (sort_key, line), counting what is resident.
+
+    ``live`` is a two-slot list [current, peak]. ``heapq.merge`` holds exactly
+    one pulled item per source at a time, so incrementing on the way out of the
+    yield and decrementing when the source is resumed makes ``live[1]`` the
+    MEASURED high-water mark of rows the merge held, rather than an assertion
+    about heapq's internals. It is what the returned
+    ``tracking_merge_peak_resident_rows`` reports.
+    """
+
+    read_i, tx_i, gene_i = key_columns
+    with gzip.open(path, "rt") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            fields = line.split("\t")
+            live[0] += 1
+            if live[0] > live[1]:
+                live[1] = live[0]
+            yield (fields[read_i], fields[tx_i], fields[gene_i]), line
+            live[0] -= 1
+
+
+def _merge_tracking_streaming(units, hash_remap, discovery, track_out):
+    """Stage 6's quant.tracking merge, as an external sort rather than a list.
+
+    Byte-for-byte the previous implementation's output, reached differently:
+    read every unit's rows applying the per-row transforms, buffer at most
+    ``_TRACKING_SORT_RUN_ROWS`` of them, sort and spill each full buffer, then
+    ``heapq.merge`` the spilled runs straight into the gzip writer.
+
+    THE PREREQUISITE DOES NOT HOLD, which is why the sort is here rather than a
+    plain k-way merge over the unit files. A per-unit quant.tracking is emitted
+    transcript-major -- ``Quantify.report_quant_results`` walks transcripts by
+    descending read count and only the read names WITHIN one multipath are
+    sorted -- and LRAA's own shard merge concatenates those files without
+    reordering (``LRAA:_append_without_first_line``). Checked on the 14
+    strandless-parity gate chunks: 11 of the 14 are not in
+    ``(read_name, transcript_id, gene_id)`` order, and the three that are have
+    0, 1 and 2 rows. So the rows have to be sorted; only the container they are
+    sorted in is negotiable.
+
+    TRANSFORMS RUN ON THE WAY IN, not in a second pass, because the sort key is
+    taken from the namespaced ids: discovery prefixes gene_id and transcript_id,
+    two thirds of the key, so a merge over untransformed rows would order the
+    table on strings that never get written.
+
+    STABILITY, which byte-identity depends on. ``list.sort`` is stable, so the
+    old implementation left equal-keyed rows in (unit order, within-unit file
+    order). Reproduced by two facts: each run's buffer is sorted stably on the
+    key alone, and ``heapq.merge`` breaks ties by source position. Runs are
+    appended in read order, so source position IS (unit, offset in unit).
+
+    Returns (track_header, n_rows, peak_resident_rows).
+    """
+
+    track_header = None
+    tcol = None
+    key_columns = None
+    gene_i = tx_i = hash_i = read_i = None
+
+    buf = []
+    run_paths = []
+    tmp_dir = None
+    n_rows = 0
+    buf_peak = 0
+
+    def spill():
+        nonlocal buf, tmp_dir
+        if tmp_dir is None:
+            # Beside the output rather than in /tmp: a node's scratch is often
+            # far smaller than the space already provisioned for the merged
+            # table, and these runs are the same order of magnitude as it.
+            tmp_dir = tempfile.mkdtemp(
+                dir=os.path.dirname(track_out), prefix="__tracking_sort."
+            )
+        buf.sort(key=_by_sort_key)
+        path = os.path.join(tmp_dir, "run.{:05d}.tsv.gz".format(len(run_paths)))
+        # compresslevel=1: written once, read once, deleted. The cheapest
+        # setting that keeps the spill from costing more disk than the output.
+        with gzip.open(path, "wt", compresslevel=1) as ofh:
+            for _, line in buf:
+                ofh.write(line)
+                ofh.write("\n")
+        run_paths.append(path)
+        buf = []
+
+    try:
+        for unit in units:
+            header, rows = iter_tsv(resolve_tracking(unit["quant_prefix"]))
+            if track_header is None:
+                track_header = header
+                tcol = {name: i for i, name in enumerate(header)}
+                gene_i = tcol["gene_id"]
+                tx_i = tcol["transcript_id"]
+                hash_i = tcol["transcript_splice_hash_code"]
+                read_i = tcol["read_name"]
+                key_columns = (read_i, tx_i, gene_i)
+            elif header != track_header:
+                raise PipelineError(
+                    "unit {} quant.tracking header differs from the first "
+                    "unit's".format(unit["unit_id"])
+                )
+            unit_id = unit["unit_id"]
+            for row in rows:
+                if discovery:
+                    row[gene_i] = _namespace_id(unit_id, row[gene_i])
+                    row[tx_i] = _namespace_id(unit_id, row[tx_i])
+                old = row[hash_i]
+                row[hash_i] = hash_remap.get((unit_id, old), old)
+                buf.append(
+                    ((row[read_i], row[tx_i], row[gene_i]), "\t".join(row))
+                )
+                n_rows += 1
+                if len(buf) >= _TRACKING_SORT_RUN_ROWS:
+                    buf_peak = _TRACKING_SORT_RUN_ROWS
+                    spill()
+
+        # The buffer only grows between spills, so its high-water mark is the
+        # cap if it ever filled and the leftover otherwise. No per-row check.
+        buf_peak = max(buf_peak, len(buf))
+
+        live = [0, 0]
+        if not run_paths:
+            # Nothing spilled: the whole table fit inside one run, which is
+            # already the bounded case. Sort it and write it, no temp files and
+            # no merge -- the path every run smaller than the cap takes.
+            buf.sort(key=_by_sort_key)
+            merged = iter(buf)
+        else:
+            if buf:
+                spill()
+            merged = heapq.merge(
+                *[_read_sorted_run(p, key_columns, live) for p in run_paths],
+                key=_by_sort_key,
+            )
+
+        with gzip.open(track_out, "wt") as ofh:
+            print("\t".join(track_header), file=ofh)
+            for _, line in merged:
+                print(line, file=ofh)
+    finally:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return track_header, n_rows, max(buf_peak, live[1])
+
+
 def merge_and_translate(outdir, units, discovery=False):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
@@ -2841,6 +3060,12 @@ def merge_and_translate(outdir, units, discovery=False):
 
     ``mp_id`` in quant.tracking is a per-process MultiPath counter, not a
     coordinate; it is left as emitted and is not comparable across any two runs.
+
+    THE TWO TABLES ARE MERGED DIFFERENTLY, deliberately. quant.expr is one row
+    per model and fits anywhere, so it is sorted as a list here. quant.tracking
+    is one row per (read, assigned transcript) and does not: it was the peak of
+    the whole run in all four measured arms. It goes through
+    ``_merge_tracking_streaming``, an external sort, and never exists as a list.
 
     Quantifying, transcript ids come from the supplied GTF and are already
     global, so no id translation is needed. DISCOVERING they are chunk-local and
@@ -2959,55 +3184,24 @@ def merge_and_translate(outdir, units, discovery=False):
                 file=ofh,
             )
 
-    track_header = None
-    track_rows = []
-    for unit in units:
-        _, header, rows = read_tsv(resolve_tracking(unit["quant_prefix"]))
-        if track_header is None:
-            track_header = header
-        elif header != track_header:
-            raise PipelineError(
-                "unit {} quant.tracking header differs from the first "
-                "unit's".format(unit["unit_id"])
-            )
-        col = {name: i for i, name in enumerate(header)}
-        for row in rows:
-            row = list(row)
-            if discovery:
-                row[col["gene_id"]] = _namespace_id(
-                    unit["unit_id"], row[col["gene_id"]]
-                )
-                row[col["transcript_id"]] = _namespace_id(
-                    unit["unit_id"], row[col["transcript_id"]]
-                )
-            old = row[col["transcript_splice_hash_code"]]
-            row[col["transcript_splice_hash_code"]] = hash_remap.get(
-                (unit["unit_id"], old), old
-            )
-            track_rows.append(row)
-
-    tcol = {name: i for i, name in enumerate(track_header)}
-    track_rows.sort(
-        key=lambda r: (
-            r[tcol["read_name"]],
-            r[tcol["transcript_id"]],
-            r[tcol["gene_id"]],
-        )
+    _track_header, track_row_count, track_peak_rows = _merge_tracking_streaming(
+        units, hash_remap, discovery, track_out
     )
-    with gzip.open(track_out, "wt") as ofh:
-        print("\t".join(track_header), file=ofh)
-        for row in track_rows:
-            print("\t".join(row), file=ofh)
 
     merged = {
         "quant_expr": expr_out,
         "quant_tracking": track_out,
         "tpm_chunk_local_audit": tpm_audit,
         "expr_rows": len(expr_rows),
-        "tracking_rows": len(track_rows),
+        "tracking_rows": track_row_count,
         "splice_hash_codes_recomputed": len(hash_remap),
         "merged_scope_total_all_reads": total_reported_read_count,
         "coordinates_translated": translate,
+        # The high-water mark of tracking rows the merge held at once, MEASURED
+        # rather than derived (see ``_read_sorted_run``). Reported because this
+        # table is what set the run's memory ceiling, and a number that can be
+        # read off a run is the only way to notice if it starts climbing again.
+        "tracking_merge_peak_resident_rows": track_peak_rows,
     }
     if discovery:
         merged.update(merge_discovery_gtf(merged_dir, units))
