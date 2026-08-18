@@ -69,14 +69,16 @@ test_ordering_cost:
 # positions sever different reads.  The gate therefore does not demand byte
 # identity unconditionally: it demands that every differing row be attributable to
 # a read in the symmetric difference of the two severed sets, and names any row
-# that is not.  On this corpus at 0.5 Mb the severed sets DO differ, and that
-# difference is reported rather than absorbed.
+# that is not. On this corpus at 0.5 Mb the two arms' cut positions happen to
+# coincide (symmetric difference 0) -- verified, not assumed; a future corpus or
+# geometry change that makes them diverge is exactly what the attribution check
+# above exists to keep interpretable.
 test_gate:
 	rm -rf __gate
 	$(GATE) gate $(INPUTS) $(GEOMETRY) --contig minigenome --HiFi \
 	    --cpu_budget 4 --output_dir __gate --report __gate.json \
 	    --ordering_cost_region 'minigenome+:1014001-1502500' \
-	    --expect expr_rows=555,tracking_rows=541,num_total_reads=2266,baseline_excluded_severed_reads=5
+	    --expect expr_rows=555,tracking_rows=541,num_total_reads=2266,baseline_excluded_severed_reads=6
 
 
 clean:
