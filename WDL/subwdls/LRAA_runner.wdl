@@ -61,9 +61,13 @@ task LRAA_runner_task {
         # has always distinguished the three. The one refusal left in LRAA is
         # --chunk --quant_only WITHOUT --gtf, which has nothing to quantify.
         #
-        # Chunked mode still has no single-cell plumbing -- cell_list,
-        # cell_barcode_tag and read_umi_tag do not reach the chunk workers -- so do not
-        # combine it with the single-cell callers of this task.
+        # Chunked mode has no single-cell plumbing -- cell_list, cell_barcode_tag and
+        # read_umi_tag do not reach the chunk workers -- and LRAA now REFUSES the
+        # combination rather than quantifying in bulk under a single-cell request. So do
+        # not combine chunking with the single-cell callers of this task: it will fail
+        # the run, which is the point. See the tag flags in the command below, which are
+        # emitted only when they differ from the defaults declared above so that a BULK
+        # chunked run -- every existing caller -- is not caught by that refusal.
         #
         # The per-chunk intermediates go to <output_prefix>.chunked_work in the task's
         # own working directory, which is writable and is not delocalized. They can be
@@ -279,7 +283,7 @@ task LRAA_runner_task {
                                  ~{if (chunk && chunk_by_strand) then "--chunk_by_strand" else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut)) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut_wiggle_window)) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
-                                 ~{"--cell_barcode_tag " + cell_barcode_tag} ~{"--read_umi_tag " + read_umi_tag} \
+                                 ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
                   > command_output.log 2>&1
         )
         cmd_status=$?

@@ -1095,18 +1095,28 @@ def main():
     ## single cell settings
     config_group_single_cell = parser.add_argument_group("Single cell settings")
 
+    # Defaulted to argparse.SUPPRESS, not to the config value, so that a user-supplied
+    # tag is DISTINGUISHABLE from the default that every bulk run also carries. The
+    # --chunk refusal below has to know which of the two it is looking at: refusing on a
+    # mere present value would refuse every existing chunked run, since "CB"/"XM" are
+    # always populated. This is the same mechanism --min_alt_splice_freq uses to tell an
+    # explicit setting from a HiFi-derived one (see _apply_hifi_splice_default).
     config_group_single_cell.add_argument(
         "--cell_barcode_tag",
         type=str,
-        default=LRAA_Globals.config["cell_barcode_tag"],
-        help="bam tag for cell barcode",
+        default=argparse.SUPPRESS,
+        help="bam tag for cell barcode (default: {})".format(
+            LRAA_Globals.config["cell_barcode_tag"]
+        ),
     )
 
     config_group_single_cell.add_argument(
         "--read_umi_tag",
         type=str,
-        default=LRAA_Globals.config["read_umi_tag"],
-        help="bam tag for read umi",
+        default=argparse.SUPPRESS,
+        help="bam tag for read umi (default: {})".format(
+            LRAA_Globals.config["read_umi_tag"]
+        ),
     )
 
     ## restrict to contig and optionally region of contig
@@ -1294,6 +1304,42 @@ def main():
             "Error: --LowFi has been removed. LowFi parameters are the default, so pass "
             "nothing for them; use --HiFi to opt into the more stringent HiFi settings."
         )
+
+    # Also BEFORE the dispatch, for the reason recorded just above: ChunkedRun's
+    # ``lraa_cmd`` forwards nine setting-bearing flags plus a forced --no_norm, and none
+    # of the single-cell or streaming ones, so a chunked run given them DROPS them. The
+    # failure shape is the worst available. Util_funcs.get_read_name_include_sc_encoding
+    # composes ``barcode^umi^query_name`` only when both tags are configured and returns
+    # the bare query name otherwise, so an unforwarded -- or partially forwarded -- flag
+    # set quantifies in bulk and emits output that is complete, internally consistent,
+    # and indistinguishable from a correct single-cell result without inspecting read
+    # names. A warning is what let this survive undetected, so this refuses.
+    #
+    # Refusing on a tag's mere presence would refuse every chunked run ever made, since
+    # cell_barcode_tag/read_umi_tag always hold "CB"/"XM"; the tag flags default to
+    # argparse.SUPPRESS so that only a USER-SPECIFIED tag is named here.
+    if args.chunk:
+        unsupported_with_chunk = []
+        if hasattr(args, "cell_barcode_tag"):
+            unsupported_with_chunk.append("--cell_barcode_tag")
+        if hasattr(args, "read_umi_tag"):
+            unsupported_with_chunk.append("--read_umi_tag")
+        if args.cell_list is not None:
+            unsupported_with_chunk.append("--cell_list")
+        if args.stream_reads:
+            unsupported_with_chunk.append("--stream_reads")
+        if unsupported_with_chunk:
+            sys.exit(
+                "Error: --chunk cannot be combined with {}. The chunked pipeline does "
+                "not forward single-cell or streaming settings to its chunk workers, so "
+                "the run would quantify in BULK and still write a complete, internally "
+                "consistent set of outputs -- one that looks like a correct single-cell "
+                "result and can only be told apart by inspecting read names for the "
+                "barcode^umi encoding. Run single cell and --stream_reads UNCHUNKED "
+                "(drop --chunk); chunked mode does not support them today.".format(
+                    ", ".join(unsupported_with_chunk)
+                )
+            )
 
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
@@ -1660,8 +1706,12 @@ def main():
         args.monitor_children
     )
 
-    LRAA_Globals.config["cell_barcode_tag"] = args.cell_barcode_tag
-    LRAA_Globals.config["read_umi_tag"] = args.read_umi_tag
+    # Absent means the flag was not given, so the config default already standing is the
+    # answer -- assigning args.<tag> unconditionally would require reintroducing the
+    # argparse default that made a user-supplied tag indistinguishable.
+    for _sc_tag_key in ("cell_barcode_tag", "read_umi_tag"):
+        if hasattr(args, _sc_tag_key):
+            LRAA_Globals.config[_sc_tag_key] = getattr(args, _sc_tag_key)
 
     # choose disk-backed store backend early (before spawning workers or instantiating stores)
     LRAA_Globals.config["store_backend"] = args.store_backend
