@@ -737,9 +737,13 @@ def enumerate_prep_contigs(args):
 def _extractor_module():
     """``extract_contig_region_inputs``, imported into this process.
 
-    For ``ensure_gtf_index`` alone. Everything else this pipeline asks of the
-    extractor it asks through a subprocess, so that a per-chunk failure lands in
-    that chunk's own log rather than killing the driver.
+    For ``ensure_gtf_index``, and for reusing ``_attribute`` (the extractor's
+    GTF attribute parser) in ``split_chunk_gtf_by_strand`` -- a pure,
+    side-effect-free helper, not the extraction work itself. Everything that
+    actually EXTRACTS this pipeline still asks of the extractor through a
+    subprocess, so that a per-chunk failure lands in that chunk's own log
+    rather than killing the driver; that isolation is about extraction's own
+    failure modes (a malformed region, a missing index), not a regex search.
     """
 
     path = os.path.join(REPO_ROOT, "util", "misc")
@@ -2364,18 +2368,30 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
 def split_chunk_gtf_by_strand(chunk, split_prefix):
     """Partition the chunk's mini GTF into one file per orientation.
 
-    Column 7 and nothing else: every line the extractor emitted for a gene
-    carries that gene's orientation, and the coordinates were rebased when it
-    was written, so this selects lines and moves nothing. The transcript counts
-    are checked against the extractor's own tally, which is the same discipline
-    the bam split gets -- a partition that does not add up is a partition that
-    lost a model, and a lost model is a row missing from the merged table rather
-    than an error anyone would see.
+    Column 7 and nothing else decides which file a line goes to: every line the
+    extractor emitted for a gene carries that gene's orientation, and the
+    coordinates were rebased when it was written, so this selects lines and
+    moves nothing. The transcript counts are checked against the extractor's
+    own tally, which is the same discipline the bam split gets -- a partition
+    that does not add up is a partition that lost a model, and a lost model is
+    a row missing from the merged table rather than an error anyone would see.
+
+    Counted by DISTINCT transcript_id, not by a literal ``transcript`` feature
+    row: a transcript is identifiable from its exon lines' shared
+    ``transcript_id`` alone, a GTF is not required to also carry a summary
+    ``transcript`` row for it, and the extractor's own
+    ``gtf_transcripts_emitted`` (util/misc/extract_contig_region_inputs.py's
+    ``_GtfIngest``) counts registered transcript ids, not row types. Counting
+    row types here disagreed with it on any GTF containing an exon-only
+    transcript -- 5 of 654 on ``testing/single_cells/data/chr19.gtf`` alone --
+    and failed the chunk outright. Reuses ``_attribute``, the extractor's own
+    parser, rather than a second implementation free to disagree with it again.
     """
 
     source = "{}.gtf".format(chunk["prefix"])
-    written = {"+": 0, "-": 0}
+    seen = {"+": set(), "-": set()}
     handles = {}
+    attribute = _extractor_module()._attribute
     try:
         for strand in ("+", "-"):
             handles[strand] = open("{}.{}.gtf".format(split_prefix, strand), "wt")
@@ -2393,20 +2409,23 @@ def split_chunk_gtf_by_strand(chunk, split_prefix):
                         )
                     )
                 handles[strand].write(line)
-                if fields[2] == "transcript":
-                    written[strand] += 1
+                if len(fields) > 8:
+                    transcript_id = attribute(fields[8], "transcript_id")
+                    if transcript_id is not None:
+                        seen[strand].add(transcript_id)
     finally:
         for handle in handles.values():
             handle.close()
 
+    written = {strand: len(ids) for strand, ids in seen.items()}
     emitted = chunk["manifest"]["counts"]["gtf_transcripts_emitted"]
     total = written["+"] + written["-"]
     if total != emitted:
         raise PipelineError(
-            "chunk {} annotation split accounting: {} + {} = {} transcript "
-            "line(s) across the two orientations, but extraction emitted {}. "
-            "Every model the chunk holds has to reach exactly one of the two "
-            "quant units.".format(
+            "chunk {} annotation split accounting: {} + {} = {} distinct "
+            "transcript(s) across the two orientations, but extraction emitted "
+            "{}. Every model the chunk holds has to reach exactly one of the "
+            "two quant units.".format(
                 chunk["chunk_id"], written["+"], written["-"], total, emitted
             )
         )

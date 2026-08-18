@@ -286,6 +286,47 @@ def test_a_model_lost_in_the_partition_fails_the_chunk(tmp_path):
     assert "annotation split accounting" in str(err.value)
 
 
+def test_a_transcript_with_no_explicit_transcript_row_still_counts(tmp_path):
+    """A transcript identified only by its exon lines' shared transcript_id, with
+    no summary ``transcript`` feature row, is valid GTF -- and is what 5 of the
+    654 transcripts in testing/single_cells/data/chr19.gtf look like. Counting
+    literal ``transcript`` rows instead of distinct transcript_id undercounted
+    this to 0 and failed the whole chunk outright, even though the extractor's
+    own ``gtf_transcripts_emitted`` (this count is checked against) counts
+    registered transcript_id, not row type -- the two must agree on the same
+    convention or every exon-only transcript makes its chunk unrunnable.
+    """
+
+    chunk = make_chunk(tmp_path, emitted=(1, 0), transcripts=(("+", 0),))
+    with open(chunk["prefix"] + ".gtf", "wt") as ofh:
+        ofh.write(gtf_line("chunk", "gene", 100, 150, "+", "G1"))
+        ofh.write(gtf_line("chunk", "exon", 100, 150, "+", "G1", "T1"))
+    chunk["manifest"]["counts"]["gtf_transcripts_emitted"] = 1
+
+    counts = ChunkedRun.split_chunk_gtf_by_strand(chunk, chunk["prefix"] + ".strand")
+    assert counts["gtf_transcripts_plus"] == 1
+    assert counts["gtf_transcripts_minus"] == 0
+
+
+def test_a_multi_exon_transcript_counts_once_not_per_exon(tmp_path):
+    """Counting by distinct transcript_id, not by exon line, matters just as
+    much the other direction: a naive per-exon-line count would OVER-count a
+    spliced transcript and fail this chunk just as surely as the undercount
+    above did."""
+
+    chunk = make_chunk(tmp_path, emitted=(1, 0), transcripts=(("+", 0),))
+    with open(chunk["prefix"] + ".gtf", "wt") as ofh:
+        ofh.write(gtf_line("chunk", "gene", 100, 400, "+", "G1"))
+        ofh.write(gtf_line("chunk", "transcript", 100, 400, "+", "G1", "T1"))
+        ofh.write(gtf_line("chunk", "exon", 100, 200, "+", "G1", "T1"))
+        ofh.write(gtf_line("chunk", "exon", 300, 400, "+", "G1", "T1"))
+    chunk["manifest"]["counts"]["gtf_transcripts_emitted"] = 1
+
+    counts = ChunkedRun.split_chunk_gtf_by_strand(chunk, chunk["prefix"] + ".strand")
+    assert counts["gtf_transcripts_plus"] == 1
+    assert counts["gtf_transcripts_minus"] == 0
+
+
 # ------------------------------------------------------------- severed reads
 
 
