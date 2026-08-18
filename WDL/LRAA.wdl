@@ -86,7 +86,17 @@ workflow LRAA_wf {
         Int? memoryGB
 
         # scattered runs
-        Int cpuScattered = 5
+        # Per-shard, not uniform: chr1 and chrM used to request the SAME 5 cores despite
+        # differing 25x in chunk count, so chr1's chunk phase was core-starved while chrM's
+        # sat mostly idle on cores it had no chunks to fill. Computed below from each
+        # shard's own contig length, one array entry per contig_index; this stays an
+        # OVERRIDE (unset = computed), the same shape as memoryGBPerWorkerScattered below --
+        # a caller that still wants one fixed value for every shard can ask for it explicitly.
+        Int? cpuScattered
+        # Ceiling on the COMPUTED per-shard value only; an explicit cpuScattered above
+        # ignores it. 16 matches the fleet-standard n2-standard-16 box this pipeline was
+        # benchmarked on.
+        Int max_cpu_per_chunked_shard = 16
         Int? memoryGBPerWorkerScattered
         
         
@@ -146,6 +156,28 @@ workflow LRAA_wf {
 
         scatter (contig_index in range(num_chromosomes)) {
             String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
+
+            # Chunk-count ESTIMATE for THIS shard, from its own contig length -- not a
+            # second scatter, not a re-read of the BAM. chromosomeFASTAs is already
+            # materialised by splitByChr above, and a FASTA's byte size is sequence length
+            # plus a header line and one newline per wrapped row, so this reads a few bytes
+            # high rather than low. That is the SAFE direction: the true placed-cut count
+            # (util/misc/select_contig_cut_points.py) can only be <= this estimate, because
+            # annotation-blocked or too-short targets are declined or tail-merged AWAY, never
+            # added, so a request sized off this ceiling never under-provisions a shard that
+            # turns out to need more cores than guessed.
+            #
+            # Only the CPU REQUEST is computed here. Memory for a chunked shard already
+            # follows from cpu alone inside LRAA_runner.wdl (2 GiB/core, floor 16 GiB) --
+            # recomputing that formula here would be a second copy free to drift from it,
+            # which the comment above the direct-run memory block already declines to do.
+            Float shard_contig_length_bp = size(splitByChr.chromosomeFASTAs[contig_index], "B")
+            Float effective_approx_mb_per_cut = select_first([approx_MB_per_cut, 10.0])
+            Int shard_chunks_estimate = ceil(shard_contig_length_bp / (effective_approx_mb_per_cut * 1000000.0))
+            Int shard_chunks_estimate_floored = if shard_chunks_estimate < 1 then 1 else shard_chunks_estimate
+            Int shard_cpu_computed = if !chunk then 5
+                else if shard_chunks_estimate_floored > max_cpu_per_chunked_shard then max_cpu_per_chunked_shard
+                else shard_chunks_estimate_floored
             # Run LRAA separately per chromosome  
             call LRAA_runner.LRAA_runner as LRAA_scatter {
                 input:
@@ -172,7 +204,7 @@ workflow LRAA_wf {
                     approx_MB_per_cut = approx_MB_per_cut,
                     approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                     chunk_by_strand = chunk_by_strand,
-                    cpu = cpuScattered,
+                    cpu = select_first([cpuScattered, shard_cpu_computed]),  # explicit override, else per-shard estimate above
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
