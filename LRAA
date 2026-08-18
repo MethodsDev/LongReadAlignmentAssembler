@@ -642,7 +642,10 @@ def main():
         default=False,
         help="high fidelity mode (more stringent): min_per_id: 97, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
     )
-    # Backward compatibility: accept deprecated --LowFi flag (now default); no-op with warning
+    # Declared only so argparse produces the removal message below rather than
+    # "unrecognized arguments". It is NOT a no-op and it does NOT warn -- an earlier
+    # version of this comment claimed both, and was wrong on both counts for years.
+    # The rejection is enforced before the chunked dispatch so it applies to every path.
     parser.add_argument(
         "--LowFi",
         action="store_true",
@@ -1280,6 +1283,18 @@ def main():
     if args.ME_only and args.SE_only:
         sys.exit("Error: Cannot specify both --ME_only and --SE_only")
 
+    # BEFORE the chunked dispatch below, because a removed flag has to be removed for the
+    # whole program. This check used to live at the top of the unchunked setup, several
+    # hundred lines past that dispatch, so `--chunk --LowFi` never reached it: the same
+    # flag killed an unchunked run in 0.5 s and was silently accepted by a chunked one.
+    # A flag whose meaning depends on which code path is reached first is worse than
+    # either answer on its own, and nothing in the output said which had happened.
+    if args.LowFi:
+        sys.exit(
+            "Error: --LowFi has been removed. LowFi parameters are the default, so pass "
+            "nothing for them; use --HiFi to opt into the more stringent HiFi settings."
+        )
+
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
     # everything else sees, and before any state is built that it would discard.
@@ -1680,11 +1695,6 @@ def main():
     logger.info(f"read-store backend: {resolved_backend}")
 
     # low-memory behavior is always on (externalized read-name store; spans always tracked)
-
-    if args.LowFi:
-        sys.exit(
-            "Error: --LowFi has been removed. Use --HiFi to enable the more stringent HiFi parameters."
-        )
 
     if args.HiFi:
         # Override defaults with stringent HiFi settings

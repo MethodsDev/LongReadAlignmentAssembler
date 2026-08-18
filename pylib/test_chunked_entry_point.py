@@ -729,3 +729,33 @@ def test_chunk_by_strand_selects_the_strand_first_ordering():
     # strandless -- the failure this rename exists to remove
     with pytest.raises(SystemExit):
         ChunkedRun.build_parser().parse_args(["--no_strandless_chunks"])
+
+
+@pytest.mark.parametrize("extra", [[], ["--chunk"]], ids=["unchunked", "chunked"])
+def test_the_removed_LowFi_flag_is_rejected_on_every_path(tmp_path, extra):
+    """A removed flag has to be removed for the whole program, not for whichever code
+    path is reached first.
+
+    --LowFi was declared with argparse.SUPPRESS and a comment calling it a no-op, while
+    400 lines later an unchunked run exited on it. The chunked dispatch sits between the
+    two, so `--chunk --LowFi` was silently accepted and `--LowFi` alone died in 0.5 s --
+    the same flag, two answers, nothing in either output saying which had happened. Found
+    by running both arms rather than by reading the declaration, which is how I got it
+    wrong: the declaration says no-op and the program does not.
+
+    Parametrized over both paths on purpose. A single-path version of this test is what
+    allowed the divergence in the first place.
+    """
+
+    result = _lraa(
+        "--genome", "genome.fa", "--bam", "reads.bam", "--gtf", "annot.gtf",
+        "--quant_only", "--output_prefix", str(tmp_path / "s"), "--LowFi", *extra,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "--LowFi has been removed" in combined
+    # and it must say what to do instead, or the rejection just blocks the user
+    assert "--HiFi" in combined
+    # rejected BEFORE any work: reaching the pipeline would mean the check moved back
+    # behind the dispatch again
+    assert "counting genome-mapped reads" not in combined
