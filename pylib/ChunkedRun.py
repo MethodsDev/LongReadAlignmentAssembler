@@ -447,6 +447,49 @@ def chain_token(local, parent, *opaque):
     return "{}.up_{}".format(local, Util_funcs.get_hash_code(payload)[:12])
 
 
+def argv_digest(argv):
+    """A stable digest of the COMMAND a step runs, order-normalised over its flags.
+
+    A sentinel named for a hand-listed set of settings goes stale the moment a
+    caller forwards a new flag: the list is maintained by hand, the new flag is
+    not in it, and a resumed run serves the old mode's output as the new mode's.
+    ``stage5_quant`` named the unit, the read denominator and ``--HiFi`` and so
+    named neither quant-only versus discovery nor anything a later forward would
+    add.  The argv a step actually issues is the one description of that step
+    that cannot fall behind what it does, so it is what the sentinel is keyed on:
+    adding, removing or changing any argument moves the digest with no edit here.
+
+    Flags are paired with their values BEFORE sorting, so reordering
+    ``--a 1 --b 2`` is inert while swapping to ``--a 2 --b 1`` is not -- sorting
+    the bare token stream would lose that distinction.  Leading positionals
+    (interpreter, script) keep their relative order, because their position is
+    what makes them arguments of each other rather than of a flag.
+
+    A changed ``--cpu_budget`` or interpreter path moves the digest too, and that
+    is deliberate rather than tolerated: those are a MISS, costing a rerun, and
+    the alternative is an exclusion list that has to be right forever.
+    """
+    positionals = []
+    flags = []
+    i = 0
+    n = len(argv)
+    while i < n:
+        tok = str(argv[i])
+        if tok.startswith("--"):
+            # A value is any following token that is not itself a long flag; that
+            # keeps negative numbers attached to the flag they belong to.
+            if i + 1 < n and not str(argv[i + 1]).startswith("--"):
+                flags.append("{}\x1f{}".format(tok, argv[i + 1]))
+                i += 2
+                continue
+            flags.append(tok)
+        else:
+            positionals.append(tok)
+        i += 1
+    payload = "\x1e".join(["argv0\x1f" + "\x1f".join(positionals)] + sorted(flags))
+    return Util_funcs.get_hash_code(payload)
+
+
 # ------------------------------------------------------------ coord translation
 
 _COORD_LIST = re.compile(r"\d+")
@@ -2300,10 +2343,6 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
         # "__/abs/path.contigtmp" rooted at the cwd. Give it a bare name and let
         # cwd place the outputs.
         quant_prefix = unit["quant_prefix"]
-        quant_token = chain_token(
-            "stage5_quant_{}.N_{}_hifi_{}".format(uid, num_total_reads, args.HiFi),
-            norm_token,
-        )
         quant_cmd = lraa_cmd(
             args,
             bam_for_quant=unit["bam"],
@@ -2316,6 +2355,16 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
             out_prefix=unit["quant_name"],
             num_total_reads=num_total_reads,
             cpu_budget=cpu_budget,
+        )
+        # Built BEFORE the sentinel because the sentinel is keyed on it. The old
+        # key named the unit, the read denominator and --HiFi, so quant-only
+        # versus discovery was absent from it and so was every flag a caller
+        # might later forward -- a resumed run could serve one mode's output for
+        # the other, which no downstream check can detect. args.discovery needs
+        # no field of its own: it IS the presence of --quant_only in this argv.
+        quant_token = chain_token(
+            "stage5_quant_{}.argv_{}".format(uid, argv_digest(quant_cmd)[:12]),
+            norm_token,
         )
         if ckpt.done(quant_token):
             steps.append(
@@ -3065,9 +3114,6 @@ def run_baseline(
     # bare prefix, cwd=bdir: see the note in chunk_worker about LRAA's scratch
     # roots being string concatenations on --output_prefix
     quant_prefix = os.path.join(bdir, "baseline_quant." + LRAA_QUANT_ONLY_SUFFIX)
-    quant_token = chain_token(
-        "baseline_quant.N_{}_hifi_{}".format(num_total_reads, args.HiFi), norm_token
-    )
     quant_cmd = lraa_cmd(
         args,
         bam_for_quant=quant_bam,
@@ -3083,6 +3129,14 @@ def run_baseline(
     )
     if args.contig:
         quant_cmd += ["--contig", args.contig]
+    # AFTER the --contig append, and after the command is complete: the sentinel
+    # is keyed on the argv this arm actually runs, so the restriction is part of
+    # the key rather than a setting the old hand-listed name happened to omit.
+    # Same defect and same fix as the chunk arm's stage-5 token; leaving either
+    # one enumerated leaves the whole class reachable.
+    quant_token = chain_token(
+        "baseline_quant.argv_{}".format(argv_digest(quant_cmd)[:12]), norm_token
+    )
     if ckpt.done(quant_token):
         steps.append({"step": "baseline_quant", "reused": True, "cmd": quant_cmd})
     else:
