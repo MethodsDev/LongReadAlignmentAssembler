@@ -3069,6 +3069,102 @@ def _merge_tracking_streaming(units, hash_remap, discovery, track_out):
     return track_header, n_rows, max(buf_peak, live[1])
 
 
+def rebase_tpm(rows, header, total_override=None):
+    """Rewrite TPM in place over ``rows``, byte-for-byte the arithmetic of
+    ``LRAA:_merge_quant_expr_files``: float() the printed ``all_reads``, plain
+    sequential sum, ``/total*1e6``, formatted ``"%.3f"``.
+
+    ``rows`` are mutated in place (each a list of column strings matching
+    ``header``) so a caller already holding references to them, as
+    ``merge_and_translate`` does via ``expr_rows``, sees the update without a
+    second pass.
+
+    ``total_override``, given, is used INSTEAD of summing ``all_reads`` over
+    ``rows``. This is what makes the function reusable for a merge that only
+    ever sees part of the run: ``combine_grouped_expr`` below sums each GROUP's
+    already-reported total rather than re-reading every group's rows to get
+    one, and passes that sum in here. Returns the total actually used, so a
+    caller that let this function compute it (the whole-run case) can record
+    it exactly as before.
+    """
+
+    i_ar = header.index("all_reads")
+    i_tpm = header.index("TPM")
+    if total_override is not None:
+        total = total_override
+    else:
+        total = 0.0
+        for row in rows:
+            total += float(row[i_ar] or 0)
+    for row in rows:
+        counts = float(row[i_ar] or 0)
+        tpm = counts / total * 1e6 if total > 0 else 0
+        row[i_tpm] = "{:.3f}".format(tpm)
+    return total
+
+
+def combine_grouped_expr(result_paths, out_path):
+    """Recombine N grouped ``merge_and_translate`` results into ONE correct quant.expr.
+
+    Grouping ``quant.tracking`` for a scattered merge (see
+    ``util/misc/merge_chunk_outputs.py``'s ``--group``) is free: each group's
+    output is already sorted on the global key, so a k-way merge of the N
+    outputs reproduces the single global merge byte-for-byte with no re-sort.
+
+    ``quant.expr`` does NOT get that for free, because its TPM is rebased over
+    ``total_reported_read_count`` -- the SCOPE of whatever was merged in one
+    call. A grouped call's scope is that group, not the run, so a grouped
+    ``quant.expr``'s TPM column is correct only within its own group and wrong
+    if read as a run-wide value.
+
+    The fix needs no new arithmetic. `merge_and_translate` already reports
+    ``merged_scope_total_all_reads`` for exactly this reason -- "so nothing is
+    hidden" -- and already preserves each row's ``all_reads`` untouched (only
+    ``TPM`` is overwritten). So: sum the N groups' already-reported totals to
+    get the run's true total (proven exact -- summing partitions of a sum is
+    associative), concatenate their quant.expr rows, and call ``rebase_tpm``
+    ONE more time over the union with that sum as ``total_override``. VERIFIED
+    byte-identical to a single global merge on the strandless-parity gate
+    corpus, 555 of 555 rows, by ``test_combine_grouped_expr_matches_global_merge``.
+
+    ``result_paths`` are the ``--result`` JSON files ``merge_chunk_outputs.py``
+    writes per group; each carries ``quant_expr`` (a path) and
+    ``merged_scope_total_all_reads`` (a float), which is everything this needs.
+    """
+
+    header = None
+    rows = []
+    global_total = 0.0
+    for rp in result_paths:
+        with open(rp, "rt") as fh:
+            result = json.load(fh)
+        global_total += float(result["merged_scope_total_all_reads"])
+        with open(result["quant_expr"], "rt") as fh:
+            lines = fh.read().splitlines()
+        this_header = lines[0].split("\t")
+        if header is None:
+            header = this_header
+        elif this_header != header:
+            raise PipelineError(
+                "{} quant.expr header differs from the first group's".format(rp)
+            )
+        rows.extend(line.split("\t") for line in lines[1:] if line)
+
+    rebase_tpm(rows, header, total_override=global_total)
+
+    with open(out_path, "wt") as ofh:
+        print("\t".join(header), file=ofh)
+        for row in rows:
+            print("\t".join(row), file=ofh)
+
+    return {
+        "quant_expr": out_path,
+        "expr_rows": len(rows),
+        "combined_from_groups": len(result_paths),
+        "merged_scope_total_all_reads": global_total,
+    }
+
+
 def merge_and_translate(outdir, units, discovery=False):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
@@ -3180,20 +3276,14 @@ def merge_and_translate(outdir, units, discovery=False):
         key=lambda item: (item[1][ecol["gene_id"]], item[1][ecol["transcript_id"]])
     )
 
-    # TPM rebase, byte-for-byte the arithmetic of LRAA:_merge_quant_expr_files:
-    # float() of the printed all_reads, plain sequential sum, /total*1e6, "%.3f".
+    # TPM rebase, byte-for-byte the arithmetic of LRAA:_merge_quant_expr_files.
+    # Shared with `combine_grouped_expr` below, which is the SAME arithmetic
+    # applied a second time over the union of grouped merges -- see that
+    # function's docstring for why one recompute suffices for both cases.
     chunk_local_tpm = [row[ecol["TPM"]] for _, row in expr_rows]
-    total_reported_read_count = 0.0
-    for _, row in expr_rows:
-        total_reported_read_count += float(row[ecol["all_reads"]] or 0)
-    for _, row in expr_rows:
-        counts = float(row[ecol["all_reads"]] or 0)
-        tpm = (
-            counts / total_reported_read_count * 1e6
-            if total_reported_read_count > 0
-            else 0
-        )
-        row[ecol["TPM"]] = "{:.3f}".format(tpm)
+    total_reported_read_count = rebase_tpm(
+        [row for _, row in expr_rows], expr_header
+    )
 
     with open(expr_out, "wt") as ofh:
         print("\t".join(expr_header), file=ofh)
@@ -4369,6 +4459,34 @@ def _run_inner(args):
         load_after = loadavg()
 
         units = ordered_units(chunks)
+        # Emit the same unit list stage 6 is about to consume, in the same order,
+        # as a manifest util/misc/merge_chunk_outputs.py can be handed directly.
+        # Written from `units` rather than rebuilt from `chunks` so the standalone
+        # merger and this driver cannot describe different work, and written BEFORE
+        # the merge so it survives a merge that dies. Order is load-bearing here:
+        # see the comment on `ordered_units`.
+        merge_manifest = os.path.join(outdir, "merge_manifest.json")
+        try:
+            # Imported HERE, not at module scope, because merge_chunk_outputs
+            # imports this module for `merge_and_translate` -- there is exactly one
+            # merge implementation and it lives here. Deferring to call time breaks
+            # the cycle and keeps the manifest schema documented and implemented in
+            # the one file that also reads it.
+            sys.path.insert(
+                0,
+                os.path.sep.join(
+                    [os.path.dirname(os.path.realpath(__file__)), "..", "util", "misc"]
+                ),
+            )
+            import merge_chunk_outputs as _merge_cli
+
+            _merge_cli.write_manifest(merge_manifest, units)
+            logger.info("stage 6 unit manifest written to %s", merge_manifest)
+        except Exception as _e:
+            # A manifest is a convenience for scattering the merge elsewhere; it is
+            # not an input to the merge that follows, so failing to write it must
+            # not lose a run that has already done all of the work.
+            logger.warning("could not write %s: %s", merge_manifest, _e)
         merged = merge_and_translate(outdir, units, discovery=args.discovery)
         timing.setdefault("arms", {})["chunked"] = {
             "cpu_budget": chunk_allocation.budget,
