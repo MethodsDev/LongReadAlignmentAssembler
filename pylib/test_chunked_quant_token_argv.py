@@ -174,6 +174,23 @@ def _append(*extra):
     return lambda cmd: cmd + list(extra)
 
 
+def _mutate_at(pos):
+    """Rewrite one argv position, whatever it is -- flag, value or positional."""
+    return lambda cmd: cmd[:pos] + ["MUTATED"] + cmd[pos + 1 :]
+
+
+def _captured_command(tmp_path, token_of):
+    """The argv an arm really hands its digest, so a test can enumerate IT.
+
+    The baseline appends ``--contig`` after ``lraa_cmd`` returns, which this does
+    not see; that one argument has its own test.
+    """
+    seen = []
+    token_of(tmp_path, cmd_hook=lambda cmd: seen.append(list(cmd)) or cmd)
+    assert len(seen) == 1, seen
+    return seen[0]
+
+
 # ------------------------------------------------------- the digest by itself
 
 
@@ -299,13 +316,33 @@ def test_reordering_the_command_alone_does_not_move_the_sentinel(
 
 
 @pytest.mark.parametrize("token_of,prefix", ARMS)
-def test_a_changed_argument_value_moves_the_sentinel(tmp_path, token_of, prefix):
+def test_a_changed_output_prefix_moves_the_sentinel(tmp_path, token_of, prefix):
     """The regression guard: this is what fails if the argv leaves the key.
 
-    ``--cpu_budget`` is named by no other component of either token -- not by the
-    stage prefix, not by the inherited normalization token -- so a key rebuilt
-    from a hand-listed set of settings passes every other test here and fails
-    this one.
+    ``--output_prefix`` decides which files the step writes and is named by no
+    other component of either token -- not by the stage prefix, not by the
+    inherited normalization token -- so a key rebuilt from a hand-listed set of
+    settings passes most of the file and fails here.
+    """
+
+    def rename(cmd):
+        out = list(cmd)
+        out[out.index("--output_prefix") + 1] = "somewhere_else"
+        return out
+
+    assert token_of(tmp_path) != token_of(tmp_path, cmd_hook=rename)
+
+
+@pytest.mark.parametrize("token_of,prefix", ARMS)
+def test_the_cpu_budget_value_is_gated_out_of_the_sentinel(tmp_path, token_of, prefix):
+    """Resuming at a lower concurrency must not discard finished work.
+
+    ``--cpu_budget`` is this invocation's SHARE, and a chunk is one quant unit
+    whose internal pool clamps to 1 regardless, so it determines nothing about
+    the output. A signature naming a non-determining input is as defective as one
+    missing a field -- and concretely, a whole-genome run OOM-killed at 16 and
+    resumed at 8 would redo every finished unit. This fails if the gating in
+    ``quant_command_digest`` is removed.
     """
 
     def rebudget(cmd):
@@ -313,7 +350,50 @@ def test_a_changed_argument_value_moves_the_sentinel(tmp_path, token_of, prefix)
         out[out.index("--cpu_budget") + 1] = "99"
         return out
 
-    assert token_of(tmp_path) != token_of(tmp_path, cmd_hook=rebudget)
+    assert token_of(tmp_path) == token_of(tmp_path, cmd_hook=rebudget)
+
+
+@pytest.mark.parametrize("token_of,prefix", ARMS)
+def test_dropping_cpu_budget_entirely_still_moves_the_sentinel(
+    tmp_path, token_of, prefix
+):
+    """The VALUE is gated, not the flag.
+
+    Gating by deleting the pair would make "budget forwarded" and "budget not
+    forwarded" the same token, so a stage that stopped receiving it would be
+    invisible. The flag stays in the payload with an inert value instead, which
+    is the ``onone`` convention the normalize cache stem uses for an unset field.
+    """
+
+    def unbudget(cmd):
+        out = list(cmd)
+        at = out.index("--cpu_budget")
+        del out[at : at + 2]
+        return out
+
+    assert token_of(tmp_path) != token_of(tmp_path, cmd_hook=unbudget)
+
+
+@pytest.mark.parametrize("token_of,prefix", ARMS)
+def test_cpu_budget_is_the_only_gated_field(tmp_path, token_of, prefix):
+    """Derived from the real command rather than from a list restated here.
+
+    Every argument the stage issues -- interpreter, script, genome, both bams,
+    the gtf, the denominator, the output prefix, --quant_only, --no_norm and the
+    --cpu_budget FLAG itself -- is mutated in turn, and exactly one position, the
+    budget's value, may leave the token where it was. A second gated field, or
+    the argv leaving the key altogether, fails this.
+    """
+    real = _captured_command(tmp_path, token_of)
+    unmutated = token_of(tmp_path)
+    inert = [
+        pos
+        for pos in range(len(real))
+        if token_of(tmp_path, cmd_hook=_mutate_at(pos)) == unmutated
+    ]
+    assert inert == [real.index("--cpu_budget") + 1], [
+        (pos, real[pos]) for pos in inert
+    ]
 
 
 @pytest.mark.parametrize("token_of,prefix", ARMS)

@@ -468,9 +468,12 @@ def argv_digest(argv):
     (interpreter, script) keep their relative order, because their position is
     what makes them arguments of each other rather than of a flag.
 
-    A changed ``--cpu_budget`` or interpreter path moves the digest too, and that
-    is deliberate rather than tolerated: those are a MISS, costing a rerun, and
-    the alternative is an exclusion list that has to be right forever.
+    Every argument reaches the digest.  A field that does NOT determine the
+    step's output is gated by the caller, visibly and one at a time -- see
+    ``quant_command_digest`` -- rather than filtered out by a list here: a
+    signature naming a non-determining input is as defective as one missing a
+    field, because it makes the token unauditable, and that is how missing
+    fields survive.
     """
     positionals = []
     flags = []
@@ -491,6 +494,44 @@ def argv_digest(argv):
         i += 1
     payload = "\x1e".join(["argv0\x1f" + "\x1f".join(positionals)] + sorted(flags))
     return Util_funcs.get_hash_code(payload)
+
+
+def quant_command_digest(cmd):
+    """``argv_digest`` of an LRAA quant command, with ``--cpu_budget`` gated inert.
+
+    ``--cpu_budget`` cannot change what a quant step produces.  It is this
+    invocation's SHARE of the total, and a chunk is single-contig and
+    strand-pure, so LRAA's internal queue inside it is one unit and its own pool
+    clamps to 1 regardless (see this module's docstring, ONE CPU BUDGET).  The
+    baseline control divides its share across the two strands of one contig by
+    the same allocator.  Neither changes a count.
+
+    Naming it anyway is not the safe direction.  It breaks the recovery path this
+    pipeline most needs to keep working: a whole-genome run OOM-killed at
+    ``--cpu_budget 16`` and resumed at 8 would discard every finished stage-5
+    sentinel and redo units that are already correct on disk.
+
+    The VALUE is gated, not the flag, following the ``onone`` convention the
+    normalize cache stem uses for an unset origin: the flag still appears in the
+    payload, so dropping ``--cpu_budget`` from ``lraa_cmd`` altogether still moves
+    the digest and remains auditable.  Exactly one field is gated, on the stated
+    reason above; anything else added here needs its own.  ``--num_total_reads``
+    is the TPM denominator and ``--output_prefix`` decides which files exist, so
+    neither qualifies, and a test holds every other argument of the real command
+    to moving the token.
+    """
+    gated = []
+    i = 0
+    n = len(cmd)
+    while i < n:
+        tok = str(cmd[i])
+        gated.append(tok)
+        if tok == "--cpu_budget" and i + 1 < n and not str(cmd[i + 1]).startswith("--"):
+            gated.append("inert")
+            i += 2
+            continue
+        i += 1
+    return argv_digest(gated)
 
 
 # ------------------------------------------------------------ coord translation
@@ -2525,7 +2566,7 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
         # the other, which no downstream check can detect. args.discovery needs
         # no field of its own: it IS the presence of --quant_only in this argv.
         quant_token = chain_token(
-            "stage5_quant_{}.argv_{}".format(uid, argv_digest(quant_cmd)[:12]),
+            "stage5_quant_{}.argv_{}".format(uid, quant_command_digest(quant_cmd)[:12]),
             norm_token,
         )
         if ckpt.done(quant_token):
@@ -3505,7 +3546,7 @@ def run_baseline(
     # Same defect and same fix as the chunk arm's stage-5 token; leaving either
     # one enumerated leaves the whole class reachable.
     quant_token = chain_token(
-        "baseline_quant.argv_{}".format(argv_digest(quant_cmd)[:12]), norm_token
+        "baseline_quant.argv_{}".format(quant_command_digest(quant_cmd)[:12]), norm_token
     )
     if ckpt.done(quant_token):
         steps.append({"step": "baseline_quant", "reused": True, "cmd": quant_cmd})
