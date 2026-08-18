@@ -4609,6 +4609,13 @@ def _run_inner(args):
         )
 
         load_before = loadavg()
+        # Spans chunk processing AND the stage-6 merge that follows, not just the
+        # former. It used to stop the instant run_chunks_concurrently returned, so
+        # "observed_peak_concurrent_tree_rss_kb" undercounted a whole-genome run's
+        # real peak by up to 2.67x -- the peak lives in the merge (an external
+        # merge sort over every unit's tracking rows), which is SERIAL and ran
+        # entirely outside the old window. Renamed without "concurrent": the merge
+        # is not concurrent with anything, and the field now covers both phases.
         arm_sampler = RssSampler(os.getpid(), rss)
         arm_sampler.start()
         try:
@@ -4617,46 +4624,46 @@ def _run_inner(args):
                     args, ckpt, outdir, chunks, num_total_reads, rss
                 )
             )
+            load_after = loadavg()
+
+            units = ordered_units(chunks)
+            # Emit the same unit list stage 6 is about to consume, in the same order,
+            # as a manifest util/misc/merge_chunk_outputs.py can be handed directly.
+            # Written from `units` rather than rebuilt from `chunks` so the standalone
+            # merger and this driver cannot describe different work, and written BEFORE
+            # the merge so it survives a merge that dies. Order is load-bearing here:
+            # see the comment on `ordered_units`.
+            merge_manifest = os.path.join(outdir, "merge_manifest.json")
+            try:
+                # Imported HERE, not at module scope, because merge_chunk_outputs
+                # imports this module for `merge_and_translate` -- there is exactly one
+                # merge implementation and it lives here. Deferring to call time breaks
+                # the cycle and keeps the manifest schema documented and implemented in
+                # the one file that also reads it.
+                sys.path.insert(
+                    0,
+                    os.path.sep.join(
+                        [os.path.dirname(os.path.realpath(__file__)), "..", "util", "misc"]
+                    ),
+                )
+                import merge_chunk_outputs as _merge_cli
+
+                _merge_cli.write_manifest(merge_manifest, units)
+                print(
+                    "stage 6 unit manifest written to {}".format(merge_manifest),
+                    flush=True,
+                )
+            except Exception as _e:
+                # A manifest is a convenience for scattering the merge elsewhere; it is
+                # not an input to the merge that follows, so failing to write it must
+                # not lose a run that has already done all of the work.
+                print(
+                    "NOTE: could not write {}: {}".format(merge_manifest, _e),
+                    flush=True,
+                )
+            merged = merge_and_translate(outdir, units, discovery=args.discovery)
         finally:
             arm_sampler.stop()
-        load_after = loadavg()
-
-        units = ordered_units(chunks)
-        # Emit the same unit list stage 6 is about to consume, in the same order,
-        # as a manifest util/misc/merge_chunk_outputs.py can be handed directly.
-        # Written from `units` rather than rebuilt from `chunks` so the standalone
-        # merger and this driver cannot describe different work, and written BEFORE
-        # the merge so it survives a merge that dies. Order is load-bearing here:
-        # see the comment on `ordered_units`.
-        merge_manifest = os.path.join(outdir, "merge_manifest.json")
-        try:
-            # Imported HERE, not at module scope, because merge_chunk_outputs
-            # imports this module for `merge_and_translate` -- there is exactly one
-            # merge implementation and it lives here. Deferring to call time breaks
-            # the cycle and keeps the manifest schema documented and implemented in
-            # the one file that also reads it.
-            sys.path.insert(
-                0,
-                os.path.sep.join(
-                    [os.path.dirname(os.path.realpath(__file__)), "..", "util", "misc"]
-                ),
-            )
-            import merge_chunk_outputs as _merge_cli
-
-            _merge_cli.write_manifest(merge_manifest, units)
-            print(
-                "stage 6 unit manifest written to {}".format(merge_manifest),
-                flush=True,
-            )
-        except Exception as _e:
-            # A manifest is a convenience for scattering the merge elsewhere; it is
-            # not an input to the merge that follows, so failing to write it must
-            # not lose a run that has already done all of the work.
-            print(
-                "NOTE: could not write {}: {}".format(merge_manifest, _e),
-                flush=True,
-            )
-        merged = merge_and_translate(outdir, units, discovery=args.discovery)
         timing.setdefault("arms", {})["chunked"] = {
             "cpu_budget": chunk_allocation.budget,
             "concurrent_chunk_workers": chunk_allocation.unit_workers,
@@ -4672,10 +4679,13 @@ def _run_inner(args):
             "make_chunks_unit_workers": prep_allocation.unit_workers,
             "quant_units": len(units),
             "chunks": chunk_records,
-            "peak_rss_kb_summed_over_chunk_peaks": sum(
-                c["peak_tree_rss_kb"] for c in chunk_records
-            ),
-            "observed_peak_concurrent_tree_rss_kb": arm_sampler.peak_kb,
+            # peak_rss_kb_summed_over_chunk_peaks (removed): summing each chunk's
+            # OWN peak treated concurrent, independent peaks as if they stacked.
+            # MEASURED 12.0x over the real concurrent peak on HG002, 17.5x on ONT,
+            # and its own control showed zero discriminating power -- chunked and
+            # unchunked summed peaks agreed within 4.5% while their real peaks
+            # differed 5.2x. Per-chunk peaks remain available above, in `chunks`.
+            "observed_peak_tree_rss_kb": arm_sampler.peak_kb,
             # Reported whether or not the bound reduced anything: the estimate beside
             # the observed peak is what makes the guard's error measurable on every
             # run instead of only on the ones it changed.
