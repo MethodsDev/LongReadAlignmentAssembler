@@ -441,10 +441,10 @@ class StreamingTotals:
         # dropped: every one of their reads is still assigned, and this is the measure
         # of how much work the first pass failed to precompute.
         self.paths_resolved_in_stream = 0
-        # reads landing on those paths. The guard divides by reads, so it has to count
-        # reads: incrementing only per distinct path made the threshold unreachable --
-        # 10k novel paths over 100M reads reads as 0.01%, and a first pass that
-        # precomputed nothing would never trip it.
+        # reads landing on those paths. Counted per READ rather than per distinct path
+        # because reads are what the cost is paid in: 10k novel paths over 100M reads is
+        # 0.01% of paths and can be most of the run's compatibility work. Its complement
+        # over reads_streamed is the served fraction _report logs.
         self.reads_on_stream_resolved_paths = 0
         # Reads matched to isoforms whose fractions all came out zero, which happens when
         # every compatible isoform of the gene has theta 0. Those reads are counted as
@@ -458,9 +458,9 @@ class StreamingTotals:
         # from the counters above rather than folded into them: a rescued read is not a
         # streamed read -- a low_perID candidate never passes the retention filter, so
         # counting it as assigned would make reads_assigned exceed reads_streamed -- and
-        # rescue-driven path resolution must stay out of the fallback guard, whose
-        # denominator is assigned plus unassignable reads and would otherwise be smaller
-        # than its own numerator.
+        # rescue-driven path resolution must stay out of the served/unseen accounting,
+        # whose accounted denominator is assigned plus unassignable reads and would
+        # otherwise be smaller than its own numerator.
         self.rescue_offered = defaultdict(int)
         self.rescue_assigned = defaultdict(int)
         self.rescue_unassignable = defaultdict(int)
@@ -584,7 +584,6 @@ def stream_assign(
     try_correct_alignments=True,
     region_lend=None,
     region_rend=None,
-    max_fallback_path_frac=None,
     rescuer=None,
 ):
     """Stream the bam, emit one tracking row per (read, compatible isoform).
@@ -594,9 +593,9 @@ def stream_assign(
     A path the table has never seen is resolved once by `resolver` and the verdict is
     cached, so the read at hand and every later one on that path are still assigned. No
     read is dropped for being unfamiliar -- completeness of the tracking file is why this
-    pass exists. `max_fallback_path_frac` bounds how much fallback resolution is
-    tolerable before the run is refused, since a table built from too thin a normalized
-    bam would degrade into re-resolving everything.
+    pass exists. How much of the unit the table answered directly is REPORTED as the
+    served fraction, never gated on: by the time the stream ends every read is already
+    written, so a refusal there could only discard a complete, correct result.
 
     One record per read is a structural guarantee rather than a check:
     Util_funcs.quant_discard_reason rejects secondary and supplementary alignments,
@@ -637,8 +636,8 @@ def stream_assign(
 
     # Paths resolved during this stream. Bounded by the number of distinct novel paths,
     # not by reads, and needed so a path's later reads are attributed to the fallback
-    # rather than counted as table hits -- the guard divides by reads, so it has to see
-    # every read that depended on in-stream resolution, not just the first.
+    # rather than counted as table hits -- the served fraction divides by reads, so it has
+    # to see every read that depended on in-stream resolution, not just the first.
     stream_resolved = set()
 
     def assign_path(read, path, count_fallback=True):
@@ -648,12 +647,13 @@ def stream_assign(
         isoforms through exactly the machinery a genomically mapped read does. Returns
         the number of tracking rows written; 0 means the path matched no isoform.
 
-        `count_fallback` False keeps rescue out of the fallback-fraction guard. That
-        guard's denominator is assigned plus unassignable reads, which by construction
-        excludes rescued reads, so charging rescue resolutions to its numerator could
-        push the ratio past 1 and fail a healthy run for a reason the message does not
-        describe. The path still joins stream_resolved either way: a later genomic read
-        landing on it did land on a path the first pass never saw, whoever resolved it.
+        `count_fallback` False keeps rescue out of the served/unseen accounting. That
+        accounting's denominator is assigned plus unassignable reads, which by
+        construction excludes rescued reads, so charging rescue resolutions to its
+        numerator could push the ratio past 1 and report a healthy unit as having missed
+        more reads than it accounted for. The path still joins stream_resolved either
+        way: a later genomic read landing on it did land on a path the first pass never
+        saw, whoever resolved it.
         """
         canon = splice_graph.canonical_simple_path(path)
         rows = table.lookup(canon)
@@ -773,7 +773,7 @@ def stream_assign(
                 continue
             totals.reads_assigned += 1
 
-    _report(contig_acc, contig_strand, totals, max_fallback_path_frac)
+    _report(contig_acc, contig_strand, totals, len(table))
     return totals
 
 
@@ -835,7 +835,32 @@ def write_expr(transcripts, totals, ofh, quant_only=True):
         print("\t".join(vals), file=ofh)
 
 
-def _report(contig_acc, contig_strand, totals, max_fallback_path_frac):
+def served_read_fraction(totals):
+    """Share of a unit's reads answered straight out of the first pass's table.
+
+    `(reads_streamed - reads_on_stream_resolved_paths) / reads_streamed`, and None when
+    the unit streamed nothing -- a rate over zero reads is undefined, and reporting it as
+    0.0 would read as "the table answered none of it" on a unit that asked nothing.
+
+    A PERFORMANCE measure and not a correctness one, which is why nothing gates on it. A
+    miss is resolved in-stream by the same cascade and theta the first pass would have
+    used, so it says how much work pass 1 precomputed and nothing about whether pass 1's
+    abundances were usable -- a table built from unusable abundances serves a high
+    fraction just as happily.
+
+    Worth reading comparatively, within one run. MEASURED across the 42 PBMC units that
+    streamed: 5.3% to 93.9%, median 79.1%. The 5.3% unit was chr21+ against a nearest
+    neighbour of 43.7%, and an 8x gap to the rest of the run pointed straight at that
+    contig's splice graph.
+    """
+    if not totals.reads_streamed:
+        return None
+    return (
+        totals.reads_streamed - totals.reads_on_stream_resolved_paths
+    ) / totals.reads_streamed
+
+
+def _report(contig_acc, contig_strand, totals, table_size):
     tag = f"[{contig_acc}{contig_strand}]"
     logger.info(
         "%s streamed %d reads: %d assigned, %d matched no isoform, %d no graph path, "
@@ -880,38 +905,43 @@ def _report(contig_acc, contig_strand, totals, max_fallback_path_frac):
             "assigned no mass; raise --normalize_max_cov_level if this is a large share",
             tag, totals.reads_zero_fraction,
         )
-    accounted = totals.reads_assigned + totals.reads_unassignable
-    if not accounted:
+    frac_served = served_read_fraction(totals)
+    if frac_served is None:
         return
-    # Every read is assigned either way, so this bounds wasted work, not lost data: a table
-    # built from too thin a normalized bam degrades into re-resolving everything, which is
-    # slow rather than wrong.
-    #
-    # Checked after the stream, so it reports rather than prevents: the shard has already
-    # done the work by the time this runs. Deliberate -- the rate is only trustworthy over
-    # the whole shard, since coordinate order means early reads sample one locus, not the
-    # library. It fails the run so a pipeline does not silently keep paying the cost.
-    #
-    # Measured over READS, not distinct paths. Counting paths made this unreachable: ten
-    # thousand novel paths across a hundred million reads reads as 0.01%, so a first pass
-    # that precomputed nothing would never have tripped it.
-    frac_fallback = totals.reads_on_stream_resolved_paths / accounted
-    logger.info(
-        "%s reads needing in-stream path resolution: %.4f%% of accounted reads",
-        tag, 100.0 * frac_fallback,
+    accounted = totals.reads_assigned + totals.reads_unassignable
+    # Kept on the accounted denominator it has always had rather than folded into the
+    # served fraction's: accounted excludes reads with no graph path and reads on a spacer
+    # path, so the two describe different populations, and silently redefining a reported
+    # quantity would break comparison against every run already measured. Zero denominator
+    # implies zero numerator here -- reads_on_stream_resolved_paths only increments inside
+    # assign_path, which only an accounted read reaches -- so 0.0 is a measurement.
+    frac_unseen = totals.reads_on_stream_resolved_paths / accounted if accounted else 0.0
+    # What caching a resolution bought: one cascade answered this many reads. Near 1.0
+    # means the cache never paid, which is a different complaint from a low served
+    # fraction and is why both are printed.
+    reads_per_resolve = (
+        totals.reads_on_stream_resolved_paths / totals.paths_resolved_in_stream
+        if totals.paths_resolved_in_stream
+        else 0.0
     )
-    # `is not None`, so an explicit 0.0 means "refuse any fallback" rather than "disabled".
-    # A falsy test silently turns the strictest possible setting into no setting at all.
-    if max_fallback_path_frac is not None and frac_fallback > max_fallback_path_frac:
-        raise RuntimeError(
-            "{} {:.2%} of accounted reads landed on paths the first pass never saw, above "
-            "the {:.2%} limit. Assignments are still complete -- those paths were resolved "
-            "here -- but the first pass precomputed too little to be worth the second, so "
-            "the compatibility work is being done twice. Raise "
-            "--normalize_max_cov_level, or drop --stream_reads.".format(
-                tag, frac_fallback, max_fallback_path_frac
-            )
-        )
+    # Says what the number MEANS, because the actionable reading is comparative and no
+    # absolute value is wrong on its own -- the thinning ratio alone moves it, measured at
+    # 66.5% retention on HG002 bulk PacBio against 42.8% on 5-prime single cell at the same
+    # depth target. There is deliberately no threshold: this used to abort the run above
+    # 25% unseen, after the stream had written every tracking row, which could only destroy
+    # a finished correct result.
+    logger.info(
+        "%s first-pass table served %.1f%% of this unit's %d streamed reads; %d paths were "
+        "unseen and resolved here (%.1f reads per resolve, %.4f%% of accounted reads) "
+        "against a table of %d paths. A low served fraction costs time, not correctness -- "
+        "every read is assigned either way -- and means the first pass precomputed little "
+        "of THIS unit's work: inspect this contig's splice graph, and the normalization "
+        "target (--normalize_max_cov_level) that set how much of the bam the first pass "
+        "saw. Act on it when one unit sits far below the rest of the same run.",
+        tag, 100.0 * frac_served, totals.reads_streamed,
+        totals.paths_resolved_in_stream, reads_per_resolve, 100.0 * frac_unseen,
+        table_size,
+    )
 
 
 def open_tracking_writer(path):

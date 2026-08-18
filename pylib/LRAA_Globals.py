@@ -403,18 +403,17 @@ config = {
     # default path re-estimates them, so its counts are close to but not identical
     # with the default's. Left off so the standard behaviour is untouched.
     "stream_reads": False,
-    # Refuse the run when more than this share of streamed reads land on paths the table
-    # never saw. Not a correctness bound: those reads are resolved in-stream by the same
-    # cascade and theta the first pass would have used, so they are assigned, not dropped.
-    # It is a "the table is not doing its job" tripwire -- a graph mismatch, or a first pass
-    # thinned so far it precomputed nothing useful, shows up here as a rate near 100%.
-    #
-    # Measured on ONT chr20 with the default target of 1000: 7.39% of reads on chr20+ and
-    # 7.55% on chr20- landed on unseen paths, across 985 and 998 distinct paths against
-    # tables of 4724 and 4621. Resolution is cached per path, so that is ~4.6 reads per
-    # resolve and roughly 21% extra cascade work rather than 7.5%. The earlier 2% default
-    # was calibrated against a different quantity and fired on healthy data.
-    "stream_reads_max_unseen_path_read_frac": 0.25,
+    # No key here bounds how much of a streamed unit the first pass's table has to answer.
+    # How much it DID answer -- the served fraction -- is reported per contig-strand by
+    # StreamingQuant and gated on by nothing. A max-unseen-path-read-fraction tripwire used
+    # to sit here at 0.25 and was enforced after the streaming loop returned, by which point
+    # every read had been mapped, looked up, written to the tracking file and dropped: it
+    # refused a complete and correct output for having been slow, and no threshold value
+    # makes that right. It was also blind to the failure that matters -- a miss resolves
+    # with the same theta the first pass would have used, so if pass 1 was starved theta is
+    # unreliable for the cache HITS too, and a high hit rate over unusable abundances passed
+    # in silence. A correctness gate belongs on pass 1, asking whether its abundance
+    # estimates are usable, BEFORE pass 2 spends the work; not implemented here.
     # Rescue candidates against the local transcriptome from inside the streaming pass,
     # using a resident mappy index instead of the batch path's minimap2 subprocess. Off
     # by default, and refused unless --stream_reads_rescue_unassigned is given: without

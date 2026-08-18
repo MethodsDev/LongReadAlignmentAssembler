@@ -5298,9 +5298,6 @@ def run_quant_only(
                 resolver=resolver,
                 region_lend=restrict_region_lend,
                 region_rend=restrict_region_rend,
-                max_fallback_path_frac=LRAA_Globals.config[
-                    "stream_reads_max_unseen_path_read_frac"
-                ],
                 rescuer=rescuer,
             )
         finally:
