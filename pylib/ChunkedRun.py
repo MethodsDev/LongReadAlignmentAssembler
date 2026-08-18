@@ -4481,12 +4481,18 @@ def _run_inner(args):
             import merge_chunk_outputs as _merge_cli
 
             _merge_cli.write_manifest(merge_manifest, units)
-            logger.info("stage 6 unit manifest written to %s", merge_manifest)
+            print(
+                "stage 6 unit manifest written to {}".format(merge_manifest),
+                flush=True,
+            )
         except Exception as _e:
             # A manifest is a convenience for scattering the merge elsewhere; it is
             # not an input to the merge that follows, so failing to write it must
             # not lose a run that has already done all of the work.
-            logger.warning("could not write %s: %s", merge_manifest, _e)
+            print(
+                "NOTE: could not write {}: {}".format(merge_manifest, _e),
+                flush=True,
+            )
         merged = merge_and_translate(outdir, units, discovery=args.discovery)
         timing.setdefault("arms", {})["chunked"] = {
             "cpu_budget": chunk_allocation.budget,
