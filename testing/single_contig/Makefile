@@ -41,9 +41,16 @@ test_chunked_entry_point:
 # same orchestration, so their merged output is compared rather than pinned to
 # expected numbers -- a relationship survives a legitimate change to the corpus
 # or the algorithm, and a hardcoded row count does not.
+# --arm chunked skips stage 1 (strandless is the default since the
+# chunk_by_strand flip), so ChunkedRun has no retained-record count to default
+# -N to and requires it explicitly -- unlike `LRAA --chunk` above, which counts
+# genome-mapped reads itself with the same -F 0x904 mask when -N is omitted.
+# Passed explicitly here so both routes quantify against the same denominator;
+# a mismatch would fail the diff below for a TPM reason, not a structural one.
 test_chunked_route_parity: test_chunked_entry_point
 	python3 ../../util/misc/run_chunked_quant_pipeline.py \
 	    --bam pacbio.PBLR.bam --genome_fa ref_genome.fa --gtf ref_annot.gtf \
+	    --num_total_reads $$(samtools view -c -F 0x904 pacbio.PBLR.bam) \
 	    --output_dir __chunked_pipeline --arm chunked --cpu_budget 4 --HiFi \
 	    --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1
 	diff __chunked_pipeline/merged/chunked.quant.expr LRAA.chunked.LRAA.quant-only.quant.expr
@@ -88,20 +95,23 @@ test_chunked_strandless:
 	test -s __strandless.LRAA.quant-only.quant.expr
 	python3 -c 'import json,collections; d=json.load(open("__strandless.chunked_work/timing.json")); assert "cuts_strandless" in d["stages"] and "cuts_plus" not in d["stages"], "cut selection was not strandless: %r" % (sorted(d["stages"]),); assert "skipped" in d["stages"]["strand_split"], "the whole-bam strand split still ran: %r" % (d["stages"]["strand_split"],); assert d["stage1_retained_records"] is None, "stage 1 still ran"; m=d["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("strandless intervals per contig: %r, quant units: %d" % (dict(per), d["arms"]["chunked"]["quant_units"])); assert max(per.values()) > 1, "no contig was cut: %r" % ([c["region"] for c in m],); assert all(c["split_counts"] for c in m), "intervals carry no per-chunk split accounting, so the split did not run inside them"'
 
-# The refusal that goes with it. Strandless skips the whole-bam pass, so there is
-# no retained record count to default the TPM denominator to. Defaulting it to
-# anything would move every RPM row for a reason unrelated to chunking, and the
-# parity gate never saw this because it fed -N from the strand-first arm, which a
-# production run does not have. Asserts the message says WHY, not merely that
-# something is missing -- a bare argparse "required" would send the reader
-# looking for a value the run cannot produce.
+# The refusal that goes with it -- but not through LRAA. LRAA's own wrapper
+# auto-counts genome-mapped reads itself when -N is omitted (same -F 0x904
+# helper, cached beside the bam), unconditionally of --strandless_chunks, so
+# `LRAA --chunk --strandless_chunks` without -N now succeeds rather than
+# refuses. The refusal above ChunkedRun's own parser doc still describes is
+# real, just reachable only one level down: the --arm harness bypasses LRAA's
+# auto-fill, and --arm chunked has no stage-1 count to default to either.
+# Asserts the message says WHY, not merely that something is missing -- a bare
+# argparse "required" would send the reader looking for a value the run cannot
+# produce.
 test_chunked_strandless_requires_N:
-	! ../../LRAA --chunk --strandless_chunks --quant_only \
-	    --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
-	    --output_prefix __strandless_no_N > __strandless_no_N.log 2>&1
-	grep -q -- '--strandless_chunks requires --num_total_reads' __strandless_no_N.log
-	grep -q 'TPM denominator' __strandless_no_N.log
-	test ! -d __strandless_no_N.chunked_work
+	! python3 ../../util/misc/run_chunked_quant_pipeline.py \
+	    --bam pacbio.PBLR.bam --genome_fa ref_genome.fa --gtf ref_annot.gtf \
+	    --output_dir __strandless_no_N --arm chunked --cpu_budget 4 --HiFi \
+	    > __strandless_no_N.log 2>&1
+	grep -q -- '-N is required with --strandless_chunks --arm chunked' __strandless_no_N.log
+	grep -q 'does not run stage 1' __strandless_no_N.log
 
 # Observability of a run that succeeds.
 #
