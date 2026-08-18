@@ -840,6 +840,164 @@ def prep_memory_cap(budget, available_mib=None):
     )
 
 
+# Per-CHUNK peak RSS in the chunk-processing phase, as a linear function of the
+# chunk's own genomic SPAN. Unlike the make-chunks phase, this one cannot be
+# guarded by a single constant: measured per-chunk peak runs from 50 MiB on an
+# empty scaffold to 5,594.7 MiB on a whole chr1, a 112x range inside one run, so a
+# constant is either useless at whole-chromosome span or destroys the 475-chunk
+# default's concurrency. The cost has to be charged per unit, from something known
+# before the unit starts.
+#
+# SPAN, not read count, and the two disagree sharply. MEASURED over the 195-contig
+# whole-genome run (per-contig quant peaks reported by MeasurePerContig from the
+# ``stage5_quant_strandless`` step footers in ``chunk_work/logs/chunk_*.log``) plus
+# 1,480 per-chunk records from the 475-chunk HG002 PacBio and ONT runs, the chr1
+# 50-chunk sweep, and the chr21 discovery runs:
+#
+#   MiB per genomic Mb, chunks >= 5 Mb: p50 32.2, p95 51.9, max 74.0 -- 10.6x range
+#   MiB per million alignments:         p50 12,552, max 31,066     -- 56x range
+#
+# A span fit over the 110 contigs carrying reads reaches R2 0.970 against 0.850 for
+# a read-count fit. The reason span wins is that memory tracks the splice graph and
+# the multipath structures built over the unit's interval, not the record count:
+# chrM carries 1.19 M reads in 16.6 kb and peaks at 655 MiB, the SMALLEST of the
+# large-contig set, while chr4 carries 366 k reads over 190 Mb and peaks at 3,110.
+#
+# The two constants are an upper ENVELOPE, not that fit. A least-squares span fit
+# (88 + 19.6 MiB/Mb) predicts 88 MiB for chrM and is 7.4x UNDER its measured 655;
+# the 1 GiB fixed term is what covers that second regime, which is why no read term
+# is needed. Envelope verified against all 1,487 measured points: zero exceed it.
+# Tightest margins are the ones that matter -- whole chr1 1.16x (6,501 estimated
+# against 5,594.7 measured), whole chr21 in DISCOVERY mode 1.20x (2,051 against
+# 1,710). It is loosest where it is harmless: 2.3x on a 20 Mb quant chunk, up to
+# 20x on an empty scaffold, where the fixed term dominates.
+#
+# How wrong it can be, said plainly: it over-charges a quant-only 10 Mb chunk by
+# about 1.7x, so the cap starts binding on the 475-chunk default at roughly 22 GiB
+# available rather than the ~9 GiB that partition actually needs at 16-wide. That
+# is the price of an envelope that also holds at whole-chromosome span and in
+# discovery mode. It is calibrated on human/GRCh38 with GENCODE v39 at PacBio and
+# ONT depth; a corpus with much deeper coverage per Mb would need it re-measured,
+# and the run report carries the estimate beside the observed peak so that
+# re-measurement is a subtraction rather than a new experiment.
+CHUNK_UNIT_FIXED_MIB = 1024
+CHUNK_UNIT_MIB_PER_GENOMIC_MB = 22
+
+
+ChunkMemoryBound = collections.namedtuple(
+    "ChunkMemoryBound",
+    "cap note available_mib largest_unit_mib charged_mib",
+)
+
+
+def chunk_unit_peak_mib(span_bp):
+    """Guard on one chunk's peak RSS, from its genomic span. See the constants."""
+
+    span_mb = max(0, int(span_bp)) / 1e6
+    return CHUNK_UNIT_FIXED_MIB + int(CHUNK_UNIT_MIB_PER_GENOMIC_MB * span_mb)
+
+
+def chunk_memory_cap(budget, unit_spans_bp, available_mib=None):
+    """Concurrency this box can hold in the chunk-processing phase.
+
+    Same mechanism as ``prep_memory_cap`` -- ``MemAvailable`` against a measured
+    per-unit guard, handed to ``CpuBudget.allocate`` as ``max_unit_workers`` -- and
+    the same reason: the core bound is the user's ``--cpu_budget``, the memory bound
+    is the box's, and only the first was being checked here. ``min(cpu_budget,
+    units)`` put 16 whole-chromosome quant units resident at once and the kernel OOM
+    killer took the chr1+ worker 3,825 s into a 195-chunk whole-genome run, at a
+    process-tree peak of 45.74 GiB on a 62 GiB box with 358 of 390 units still to go.
+
+    What differs from prep is that the per-unit cost is not one number: it is
+    ``chunk_unit_peak_mib`` of each unit's own span. So the cap is the largest K for
+    which the K MOST EXPENSIVE units fit together. Charging the K largest rather
+    than the K that happen to launch first is deliberate: it is an upper bound over
+    every K-subset of the queue, which makes it independent of the launch order --
+    and the launch order here is longest-first on ALIGNMENTS, a different ranking
+    from the span-based estimate, so a bound that assumed the two agreed would not
+    hold.
+
+    REDUCE, not refuse, and the cap never falls below 1 -- the same choice as
+    ``prep_memory_cap:766``. Refusing a partition whose single largest unit does not
+    fit was considered and rejected: the estimate is an envelope carrying up to 2.3x
+    of deliberate margin, so refusal would kill runs that would have completed, and
+    the OOM this fixes came from 16-way RESIDENCY rather than from one unit -- that
+    unit's 4.59 GiB fits a 62 GiB box 13 times over. What a refusal would buy is
+    honesty about the case concurrency cannot fix, and that is bought instead by
+    ``note`` saying so explicitly when even one unit is over the line.
+
+    A cap of ``None`` means unbounded by memory. ``largest_unit_mib`` and
+    ``charged_mib`` are returned whether or not the cap binds, so the run report
+    carries the estimate that was compared against the box even on the runs where it
+    changed nothing.
+    """
+
+    budget = max(1, int(budget))
+    estimates = sorted((chunk_unit_peak_mib(span) for span in unit_spans_bp), reverse=True)
+    if not estimates:
+        return ChunkMemoryBound(None, None, available_mib, 0, 0)
+    largest = estimates[0]
+    considered = estimates[: min(budget, len(estimates))]
+    if available_mib is None:
+        available_mib = available_memory_mib()
+    if available_mib is None:
+        return ChunkMemoryBound(
+            None,
+            "chunk-processing concurrency is bounded by --cpu_budget alone: "
+            "/proc/meminfo could not be read, so the memory bound could not be "
+            "applied on this box. The largest chunk of this partition is "
+            "estimated at {} MiB and {} of them would be resident at "
+            "once.".format(largest, len(considered)),
+            None,
+            largest,
+            sum(considered),
+        )
+    available_mib = int(available_mib)
+    affordable = 0
+    charged = 0
+    for estimate in considered:
+        if charged + estimate > available_mib:
+            break
+        charged += estimate
+        affordable += 1
+    if affordable >= len(considered):
+        return ChunkMemoryBound(None, None, available_mib, largest, charged)
+    affordable = max(1, affordable)
+    charged = sum(considered[:affordable])
+    note = (
+        "chunk-processing concurrency capped at {} worker(s) by MEMORY rather than "
+        "by --cpu_budget {}: {} MiB available, and the {} largest chunk(s) of this "
+        "partition are estimated at {} MiB together ({} MiB fixed + {} MiB per "
+        "genomic Mb of chunk span, measured; largest single chunk {} MiB). {} "
+        "core(s) of the budget sit idle in this phase deliberately; {} worker(s) "
+        "charge {} MiB, which the box does have.".format(
+            affordable,
+            budget,
+            available_mib,
+            len(considered),
+            sum(considered),
+            CHUNK_UNIT_FIXED_MIB,
+            CHUNK_UNIT_MIB_PER_GENOMIC_MB,
+            largest,
+            budget - affordable,
+            affordable,
+            charged,
+        )
+    )
+    if largest > available_mib:
+        # Concurrency has nothing left to give at one worker, so say what the user
+        # would otherwise learn from dmesg: the PARTITION is the problem, not the
+        # width. Not a refusal -- see the docstring -- but not silent either.
+        note += (
+            " WARNING: one chunk alone is estimated at {} MiB against {} MiB "
+            "available, so even a single worker may not fit. A smaller "
+            "--approx_MB_per_cut is the only thing that reduces this; the "
+            "estimate carries up to 2.3x margin, so the run is attempted "
+            "rather than refused.".format(largest, available_mib)
+        )
+    return ChunkMemoryBound(affordable, note, available_mib, largest, charged)
+
+
 # Extraction refuses some alignments for reasons no cut selection can predict: a
 # record whose aligned end lies past the END OF ITS CONTIG overhangs the last chunk
 # without any cut being responsible for it. Those reads are genuinely absent from
@@ -1607,10 +1765,11 @@ def run_prep_concurrently(
 
     Mechanics are ``run_chunks_concurrently``'s, deliberately: one
     ``ThreadPoolExecutor``, ``order_longest_first`` for the launch order, a
-    ``failures`` list under a lock with a ``threading.Event`` abort, and a refusal
-    to go on with a partial result. Two things are this phase's own -- the pool is
-    bounded by MEMORY as well as by the budget (``prep_memory_cap``), and the
-    queue GROWS while it drains, which the wait loop below has to account for.
+    ``failures`` list under a lock with a ``threading.Event`` abort, a refusal to go
+    on with a partial result, and a pool bounded by MEMORY as well as by the budget
+    (``prep_memory_cap`` here, ``chunk_memory_cap`` there). One thing is this
+    phase's own: the queue GROWS while it drains, which the wait loop below has to
+    account for.
 
     ``select_only`` runs the cut selections and stops, for ``--dry_run``: the
     selection is real work whose result the plan describes, and extraction is
@@ -2448,6 +2607,11 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
     one. For a strandless chunk that cost is both orientations together, which is
     what the chunk's worker will actually do.
 
+    The pool is bounded by MEMORY as well as by the budget (``chunk_memory_cap``),
+    for the same reason the make-chunks pool is: this phase's per-unit footprint is
+    multi-GiB at whole-chromosome span, and ``min(cpu_budget, units)`` alone let 16
+    of them go resident at once.
+
     A chunk failure is fatal: the exception names the chunk and its log, and no
     merge is attempted. Chunks already running are allowed to finish so their
     logs are complete, but nothing new is started.
@@ -2465,11 +2629,23 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
         )
         for chunk in chunks
     ]
-    allocation = CpuBudget.allocate(budget=args.cpu_budget, num_units=len(units))
+    # Both bounds, not just the budget: a partition whose units are whole
+    # chromosomes puts every worker's multi-GiB quant footprint resident at once,
+    # which is what the kernel OOM killer ended a 195-chunk whole-genome run over.
+    bound = chunk_memory_cap(
+        args.cpu_budget, [unit.region[1] - unit.region[0] + 1 for unit in units]
+    )
+    allocation = CpuBudget.allocate(
+        budget=args.cpu_budget,
+        num_units=len(units),
+        max_unit_workers=bound.cap,
+    )
     print(CpuBudget.format_allocation(allocation, phase="chunks"), flush=True)
     shortfall = CpuBudget.budget_shortfall_note(allocation)
     if shortfall:
         print(shortfall, flush=True)
+    if bound.note:
+        print(bound.note, flush=True)
 
     by_unit = dict(zip(units, chunks))
     launch_order = [by_unit[u] for u in CpuBudget.order_longest_first(units)]
@@ -2520,7 +2696,7 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
             "result".format(len(results), len(chunks))
         )
     ordered = [results[c["chunk_id"]] for c in chunks]
-    return ordered, makespan, allocation
+    return ordered, makespan, allocation, bound
 
 
 # --------------------------------------------------------------------- stage 6
@@ -3948,8 +4124,10 @@ def _run_inner(args):
         arm_sampler = RssSampler(os.getpid(), rss)
         arm_sampler.start()
         try:
-            chunk_records, makespan, chunk_allocation = run_chunks_concurrently(
-                args, ckpt, outdir, chunks, num_total_reads, rss
+            chunk_records, makespan, chunk_allocation, chunk_mem = (
+                run_chunks_concurrently(
+                    args, ckpt, outdir, chunks, num_total_reads, rss
+                )
             )
         finally:
             arm_sampler.stop()
@@ -3976,6 +4154,14 @@ def _run_inner(args):
                 c["peak_tree_rss_kb"] for c in chunk_records
             ),
             "observed_peak_concurrent_tree_rss_kb": arm_sampler.peak_kb,
+            # Reported whether or not the bound reduced anything: the estimate beside
+            # the observed peak is what makes the guard's error measurable on every
+            # run instead of only on the ones it changed.
+            "memory_cap_chunk_workers": chunk_mem.cap,
+            "memory_note": chunk_mem.note,
+            "memory_available_mib_at_dispatch": chunk_mem.available_mib,
+            "largest_chunk_estimate_mib": chunk_mem.largest_unit_mib,
+            "concurrent_chunk_estimate_mib": chunk_mem.charged_mib,
             "loadavg_before": load_before,
             "loadavg_after": load_after,
         }
