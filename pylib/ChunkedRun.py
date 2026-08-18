@@ -473,6 +473,26 @@ def _shift_coord_string(text, offset):
     )
 
 
+def coords_already_whole_contig(units):
+    """True when nothing needs shifting, because no unit is a piece of a contig.
+
+    A unit's ``offset`` is where its mini contig begins inside the real one, so
+    offset 0 means the mini contig IS the contig: chunk-local coordinates ARE
+    whole-contig coordinates, and every shift the merge would apply is ``+ 0``.
+
+    All-zero over the whole unit list is the one-chunk-per-contig whole-genome
+    mode, where no contig is cut -- and it is not a corner case even when
+    contigs are cut: 171 of the 475 chunks of the shipped HG002 partition
+    already spanned their whole contig.
+
+    DERIVED FROM THE UNITS, never configured. There is no flag: a caller can
+    neither ask for the shift to be skipped when it would move a coordinate, nor
+    ask for it to be applied when it provably would not.
+    """
+
+    return all(unit["offset"] == 0 for unit in units)
+
+
 # --------------------------------------------------------------------- stage 1
 
 
@@ -2495,7 +2515,9 @@ def merge_discovery_gtf(merged_dir, units):
     COORDINATES. The extractor rebases each chunk onto a mini contig that starts
     at 1 and is NAMED after the real contig, so a chunk's models carry chunk-local
     coordinates under a contig name that looks absolute. Columns 4 and 5 take the
-    chunk offset; nothing else in a GTF line is a coordinate.
+    chunk offset; nothing else in a GTF line is a coordinate. Uncut contigs are
+    exempt: ``coords_already_whole_contig`` means both columns already hold
+    whole-contig coordinates and they are written through as read.
 
     IDS. LRAA names a model after its contig, its strand and a per-run component
     index -- ``t:chr1:+:comp-1:iso-1`` -- and every chunk of a contig shares the
@@ -2513,11 +2535,16 @@ def merge_discovery_gtf(merged_dir, units):
     gtf_out = os.path.join(merged_dir, "chunked.gtf")
     lines_written = 0
     transcripts = 0
+    translate = not coords_already_whole_contig(units)
     with open(gtf_out, "wt") as ofh:
         print(
-            "# LRAA chunked discovery merge: {} unit(s); coordinates translated "
-            "to the whole-contig frame, model ids namespaced per unit".format(
-                len(units)
+            "# LRAA chunked discovery merge: {} unit(s); {}, model ids "
+            "namespaced per unit".format(
+                len(units),
+                "coordinates translated to the whole-contig frame"
+                if translate
+                else "every unit spans its whole contig, so coordinates were "
+                "already in the whole-contig frame and none were translated",
             ),
             file=ofh,
         )
@@ -2536,8 +2563,9 @@ def merge_discovery_gtf(merged_dir, units):
                                 unit["unit_id"], len(fields), line.rstrip()
                             )
                         )
-                    fields[3] = str(int(fields[3]) + offset)
-                    fields[4] = str(int(fields[4]) + offset)
+                    if translate:
+                        fields[3] = str(int(fields[3]) + offset)
+                        fields[4] = str(int(fields[4]) + offset)
                     fields[8] = _GTF_ID_ATTR.sub(
                         lambda m: '{} "{}"'.format(
                             m.group(1), _namespace_id(unit["unit_id"], m.group(2))
@@ -2562,6 +2590,15 @@ def merge_and_translate(outdir, units, discovery=False):
     Three fields carry chunk-local COORDINATES: ``exons`` and ``introns``, and the
     splice hash code, which is a blake2s digest OF the introns string and so has
     to be recomputed rather than shifted.
+
+    NONE OF THAT APPLIES WHEN NO CONTIG WAS CUT. ``coords_already_whole_contig``
+    asks the units, and all-zero offsets mean every unit's mini contig IS its
+    contig: each shift would be ``+ 0``, and the digest would be a digest of an
+    unchanged string. Both are skipped and the three fields pass through exactly
+    as emitted, which is what makes the skip an identity rather than a shortcut.
+    ``coordinates_translated`` in the returned dict says which path ran, and
+    ``splice_hash_codes_recomputed`` is 0 in the skipping one because nothing was
+    recomputed.
 
     One field carries a chunk-local DENOMINATOR: ``TPM`` is
     ``all_reads / (total all_reads emitted by the same job) * 1e6``
@@ -2603,6 +2640,7 @@ def merge_and_translate(outdir, units, discovery=False):
     expr_header = None
     expr_rows = []
     hash_remap = {}  # (unit_id, old_hash) -> new_hash
+    translate = not coords_already_whole_contig(units)
     for unit in units:
         offset = unit["offset"]
         _, header, rows = read_tsv(unit["quant_prefix"] + ".quant.expr")
@@ -2633,14 +2671,17 @@ def merge_and_translate(outdir, units, discovery=False):
                 row[col["transcript_id"]] = _namespace_id(
                     unit["unit_id"], row[col["transcript_id"]]
                 )
-            row[col["exons"]] = _shift_coord_string(row[col["exons"]], offset)
-            introns = row[col["introns"]]
-            if introns:
-                introns = _shift_coord_string(introns, offset)
-                row[col["introns"]] = introns
-                new_hash = Util_funcs.get_hash_code(introns)
-                hash_remap[(unit["unit_id"], row[col["splice_hash_code"]])] = new_hash
-                row[col["splice_hash_code"]] = new_hash
+            if translate:
+                row[col["exons"]] = _shift_coord_string(row[col["exons"]], offset)
+                introns = row[col["introns"]]
+                if introns:
+                    introns = _shift_coord_string(introns, offset)
+                    row[col["introns"]] = introns
+                    new_hash = Util_funcs.get_hash_code(introns)
+                    hash_remap[(unit["unit_id"], row[col["splice_hash_code"]])] = (
+                        new_hash
+                    )
+                    row[col["splice_hash_code"]] = new_hash
             expr_rows.append((unit["unit_id"], row))
 
     ecol = {name: i for i, name in enumerate(expr_header)}
@@ -2741,6 +2782,7 @@ def merge_and_translate(outdir, units, discovery=False):
         "tracking_rows": len(track_rows),
         "splice_hash_codes_recomputed": len(hash_remap),
         "merged_scope_total_all_reads": total_reported_read_count,
+        "coordinates_translated": translate,
     }
     if discovery:
         merged.update(merge_discovery_gtf(merged_dir, units))
