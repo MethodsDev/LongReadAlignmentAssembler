@@ -1758,11 +1758,45 @@ def main(argv=None):
         with pysam.AlignmentFile(args.bam, "rb") as bam:
             lengths = dict(zip(bam.references, bam.lengths))
 
+    # A REFERENCE CONTIG THE BAM DOES NOT CARRY IS SKIPPED, NOT FATAL.
+    #
+    # The contig list comes from the genome fasta when one is given, but every
+    # candidate is priced by FETCHING it from the bam, and pysam raises
+    # `ValueError: invalid contig` on a name absent from the bam header. A reference
+    # carrying sequences the alignment does not is the normal case rather than the
+    # exceptional one -- decoys, EBV, alt scaffolds, anything the aligner was not
+    # given or the reads never reached. GRCh38_no_alt.fa has 195 sequences and a
+    # 10x SBX PBMC bam aligned against the same assembly has 194: chrEBV, holding
+    # zero reads and zero gencode records, killed a whole-genome chunked run at 246 s.
+    #
+    # Such a contig cannot be partitioned in any case: with no alignments there is no
+    # depth to place a cut against and nothing for a chunk to contain. Skipping is the
+    # answer rather than refusing, and the count is reported so a reference/bam
+    # mismatch big enough to matter is still visible.
+    with pysam.AlignmentFile(args.bam, "rb") as bam:
+        bam_contigs = set(bam.references)
+    absent = [c for c in sorted(lengths) if c not in bam_contigs]
+    if absent:
+        shown = ", ".join(absent[:5])
+        print(
+            "NOTE: {} of {} reference sequence(s) are absent from the bam header and "
+            "are skipped, having no alignments to partition: {}{}".format(
+                len(absent),
+                len(lengths),
+                shown,
+                "" if len(absent) <= 5 else ", ...",
+            ),
+            file=sys.stderr,
+        )
+        lengths = {c: n for c, n in lengths.items() if c in bam_contigs}
+
     if args.contig:
         if args.contig not in lengths:
             raise SelectionError(
-                "contig {} is absent; known: {}".format(
-                    args.contig, ", ".join(sorted(lengths))
+                "contig {} is absent{}; known: {}".format(
+                    args.contig,
+                    " from the bam" if args.contig in bam_contigs or absent else "",
+                    ", ".join(sorted(lengths)),
                 )
             )
         contigs = [args.contig]

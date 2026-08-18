@@ -11,6 +11,7 @@ and to the accounting rule that nothing is dropped without being counted and nam
 """
 
 import importlib.util
+import os
 import json
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -2015,3 +2016,47 @@ def test_the_cli_flag_reaches_the_selection(tmp_path):
     unweighted = run(1)
     assert unweighted["cuts"][0]["position"] == 3000
     assert unweighted["counts"]["alignments_dropped_multiexon"] == 1
+
+
+def test_a_reference_contig_absent_from_the_bam_is_skipped_not_fatal(tmp_path, capsys):
+    """A reference carrying sequences the alignment does not is the NORMAL case.
+
+    The contig list comes from the genome fasta when one is given, but every candidate is
+    priced by FETCHING it from the bam, and pysam raises ValueError on a name the bam
+    header lacks. Decoys, EBV and alt scaffolds routinely sit in a reference a given bam
+    never used: GRCh38_no_alt.fa has 195 sequences against a 10x SBX PBMC bam's 194, and
+    chrEBV -- zero reads, zero gencode records -- killed a whole-genome chunked run 246 s
+    in, because one failed make-chunks unit makes the pipeline refuse to extract or merge.
+
+    Such a contig cannot be partitioned anyway: no alignments means no depth to place a
+    cut against. So it is skipped and COUNTED, not refused.
+    """
+
+    fixture = Fixture(tmp_path, length=9000)
+    for i in range(12):
+        fixture.add_read("r{}".format(i), "+", [(400 + 200 * i, 460 + 200 * i)])
+    fixture.add_transcript("g1", "t1", "+", [(300, 900)])
+    fixture.build()
+
+    # Append a contig to the FASTA that the bam header has never heard of. The bam is
+    # left exactly as built, which is the whole point: reference and alignment disagree.
+    with open(fixture.fasta, "at") as ofh:
+        print(">cAbsentFromBam", file=ofh)
+        print("ACGT" * 30, file=ofh)
+    os.remove(fixture.fasta + ".fai")
+    pysam.faidx(fixture.fasta)
+
+    argv = [
+        "--bam", fixture.bam,
+        "--genome_fa", fixture.fasta,
+        "--gtf", fixture.gtf,
+        "--approx_MB_per_cut", "0.002",
+        "--strandless",
+        "--output_prefix", str(tmp_path / "cuts"),
+    ]
+    rc = selector.main(argv)
+
+    assert rc == 0, "a reference contig the bam lacks must not fail the selection"
+    err = capsys.readouterr().err
+    assert "absent from the bam header" in err, "the skip must be reported, not silent"
+    assert "cAbsentFromBam" in err, "and must name what was skipped"
