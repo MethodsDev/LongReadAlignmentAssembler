@@ -22,14 +22,15 @@ user-supplied tag from the default every bulk run also carries. These tests
 assert the forward reaches the worker's actual argv, read from its chunk log
 -- not merely that the run exits 0, which a dropped flag would too.
 
-``--chunk_by_strand`` throughout, not the default ``--strandless_chunks``:
-this minimal fixture (and, separately, ``testing/single_cells/data/chr19.gtf``
-at whole-gene scale) trips a PRE-EXISTING, unrelated bug in the strandless
-split's own annotation accounting (``chunk chr1_00 annotation split
-accounting: 0 + 0 = 0 transcript line(s) ... but extraction emitted 1``),
-reproducible with no single-cell flag at all. Filed as a separate concern;
-not fixed here. Every property this file asserts is mode-agnostic --
-``lraa_cmd``'s new forwarding does not condition on ``strandless_chunks``.
+Uses the default ``--strandless_chunks``, not ``--chunk_by_strand``. It did not
+always: this minimal fixture (and, separately,
+``testing/single_cells/data/chr19.gtf`` at whole-gene scale) used to trip an
+unrelated bug in the strandless split's own annotation accounting (``chunk
+chr1_00 annotation split accounting: 0 + 0 = 0 transcript line(s) ... but
+extraction emitted 1``), reproducible with no single-cell flag at all -- fixed
+in c8c09f2 (``split_chunk_gtf_by_strand`` now counts distinct transcript_id
+rather than literal ``transcript`` feature rows). Running the production
+default here exercises that path instead of avoiding it.
 """
 
 import gzip
@@ -108,7 +109,6 @@ def _chunked(tmp_path, bam, gtf, genome, *extra):
         gtf,
         genome,
         "--chunk",
-        "--chunk_by_strand",
         "--chunk_work_dir", str(tmp_path / "work"),
         *extra,
     )

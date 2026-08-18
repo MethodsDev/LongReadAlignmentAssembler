@@ -10,11 +10,11 @@ test: test_chunked_single_cell_forwarding
 # this a validation recipe in the C1 sense -- zero cuts, so a difference has
 # nothing to be attributed to but the forward itself.
 #
-# --chunk_by_strand rather than --strandless_chunks: this GTF trips an
-# unrelated, pre-existing chunk-worker bug under the strandless split
-# (annotation split accounting mismatch, 393+256 != 654 transcript lines),
-# reproducible identically with no --cell_list at all, so it is not this
-# item's concern. Filed separately; not fixed here.
+# Default --strandless_chunks, not --chunk_by_strand: this GTF used to trip an
+# unrelated chunk-worker bug under the strandless split (annotation split
+# accounting mismatch, 393+256 != 654 transcript lines, reproducible with no
+# --cell_list at all) -- fixed in c8c09f2. Running the production-default mode
+# here now also exercises that path rather than dodging it.
 #
 # The roster is HALF the bam's own distinct barcodes, built here rather than
 # committed, so it can never drift from the bam it filters. A roster of ALL
@@ -26,7 +26,7 @@ test_chunked_single_cell_forwarding:
 	python3 -c 'import pysam; bam = pysam.AlignmentFile("../data/chr19.bam"); cbs = sorted({r.get_tag("CB") for r in bam.fetch(until_eof=True) if r.has_tag("CB") and r.has_tag("XM")}); half = cbs[: len(cbs) // 2]; assert half, "no barcodes found"; open("__cell_roster.txt", "w").write("\n".join(half) + "\n"); print("roster: %d of %d distinct barcodes" % (len(half), len(cbs)))'
 	../../../LRAA --genome ../data/chr19.genome.fa --bam ../data/chr19.bam --gtf ../data/chr19.gtf \
 	    --quant_only --HiFi --cell_list __cell_roster.txt --output_prefix __sc_unchunked
-	../../../LRAA --chunk --chunk_by_strand --approx_MB_per_cut 100 \
+	../../../LRAA --chunk --approx_MB_per_cut 100 \
 	    --genome ../data/chr19.genome.fa --bam ../data/chr19.bam --gtf ../data/chr19.gtf \
 	    --quant_only --HiFi --cell_list __cell_roster.txt --output_prefix __sc_chunked
 	python3 -c 'import json; d = json.load(open("__sc_chunked.chunked_work/timing.json")); cp = d["cut_placement"]; assert cp["cuts_placed"] == 0, "cuts were placed: %r" % (cp,); assert cp["alignments_severed"] == 0, "alignments were severed: %r" % (cp,); print("structural invariants hold: %d chunks, 0 cuts, 0 severed" % cp["chunks"])'
