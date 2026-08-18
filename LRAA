@@ -1305,41 +1305,16 @@ def main():
             "nothing for them; use --HiFi to opt into the more stringent HiFi settings."
         )
 
-    # Also BEFORE the dispatch, for the reason recorded just above: ChunkedRun's
-    # ``lraa_cmd`` forwards nine setting-bearing flags plus a forced --no_norm, and none
-    # of the single-cell or streaming ones, so a chunked run given them DROPS them. The
-    # failure shape is the worst available. Util_funcs.get_read_name_include_sc_encoding
-    # composes ``barcode^umi^query_name`` only when both tags are configured and returns
-    # the bare query name otherwise, so an unforwarded -- or partially forwarded -- flag
-    # set quantifies in bulk and emits output that is complete, internally consistent,
-    # and indistinguishable from a correct single-cell result without inspecting read
-    # names. A warning is what let this survive undetected, so this refuses.
-    #
-    # Refusing on a tag's mere presence would refuse every chunked run ever made, since
-    # cell_barcode_tag/read_umi_tag always hold "CB"/"XM"; the tag flags default to
-    # argparse.SUPPRESS so that only a USER-SPECIFIED tag is named here.
-    if args.chunk:
-        unsupported_with_chunk = []
-        if hasattr(args, "cell_barcode_tag"):
-            unsupported_with_chunk.append("--cell_barcode_tag")
-        if hasattr(args, "read_umi_tag"):
-            unsupported_with_chunk.append("--read_umi_tag")
-        if args.cell_list is not None:
-            unsupported_with_chunk.append("--cell_list")
-        if args.stream_reads:
-            unsupported_with_chunk.append("--stream_reads")
-        if unsupported_with_chunk:
-            sys.exit(
-                "Error: --chunk cannot be combined with {}. The chunked pipeline does "
-                "not forward single-cell or streaming settings to its chunk workers, so "
-                "the run would quantify in BULK and still write a complete, internally "
-                "consistent set of outputs -- one that looks like a correct single-cell "
-                "result and can only be told apart by inspecting read names for the "
-                "barcode^umi encoding. Run single cell and --stream_reads UNCHUNKED "
-                "(drop --chunk); chunked mode does not support them today.".format(
-                    ", ".join(unsupported_with_chunk)
-                )
-            )
+    # Also BEFORE the dispatch, mirroring the --stream_reads/--quant_only check the
+    # unchunked setup makes further down: a chunk worker IS a full LRAA invocation and
+    # will refuse this combination itself, but only after cut selection, extraction and
+    # normalization have already run for however many chunks came before the first
+    # worker fails. Caught here instead, before any of that work starts.
+    if args.chunk and args.stream_reads and not args.quant_only:
+        sys.exit(
+            "Error, --stream_reads requires --quant_only. The streaming pass is a "
+            "final quant strategy; there is no discovery equivalent."
+        )
 
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
@@ -2979,6 +2954,14 @@ def _run_chunked_mode(args):
     work_dir = args.chunk_work_dir or "{}.chunked_work".format(args.output_prefix)
     logger.info("chunked mode: staging under %s", work_dir)
 
+    # SUPPRESS-defaulted on this parser too (see ChunkedRun.build_parser), so an
+    # override is passed only when the user actually set one -- absence must stay
+    # absence, not become a config-default value indistinguishable from a real one.
+    sc_tag_overrides = {
+        _tag_key: getattr(args, _tag_key)
+        for _tag_key in ("cell_barcode_tag", "read_umi_tag")
+        if hasattr(args, _tag_key)
+    }
     chunk_args = ChunkedRun.default_args(
         bam=args.bam,
         genome_fa=args.genome,
@@ -3001,6 +2984,13 @@ def _run_chunked_mode(args):
         margin=args.chunk_margin,
         max_intron_length=args.max_intron_length,
         normalize_max_cov_level=args.normalize_max_cov_level,
+        cell_list=args.cell_list,
+        stream_reads=args.stream_reads,
+        stream_reads_rescue_unassigned=args.stream_reads_rescue_unassigned,
+        stream_reads_rescue_unassigned_to_targets=args.stream_reads_rescue_unassigned_to_targets,
+        min_mapping_quality=args.min_mapping_quality,
+        min_mapping_quality_for_final_quant=args.min_mapping_quality_for_final_quant,
+        **sc_tag_overrides,
     )
 
     outputs = ChunkedRun.run(chunk_args)

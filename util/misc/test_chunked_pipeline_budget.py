@@ -37,7 +37,21 @@ DRIVER = _load_driver()
 
 def _args(**overrides):
     # quant-only, which is the arm whose command shape these tests pin
-    base = dict(HiFi=False, cpu_budget=16, discovery=False)
+    base = dict(
+        HiFi=False,
+        cpu_budget=16,
+        discovery=False,
+        # lraa_cmd forwards these unconditionally (mapq) or on presence/truthiness
+        # (the rest) -- see pylib/test_chunked_quant_token_argv.py's BASE_SETTINGS
+        # for the same fixture-drift fix and why cell_barcode_tag/read_umi_tag are
+        # deliberately absent rather than defaulted.
+        cell_list=None,
+        stream_reads=False,
+        stream_reads_rescue_unassigned=False,
+        stream_reads_rescue_unassigned_to_targets=False,
+        min_mapping_quality=0,
+        min_mapping_quality_for_final_quant=0,
+    )
     base.update(overrides)
     return argparse.Namespace(**base)
 

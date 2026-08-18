@@ -1135,6 +1135,31 @@ def resolve_min_per_id(args):
     return 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
 
 
+def resolve_min_mapping_quality(args):
+    """The min_mapping_quality this run's cut selection and normalization filter on.
+
+    Mirrors LRAA's own quant-only/discovery resolution
+    (``_normalize_bam_for_splice_graph``): a quant-only chunk has every
+    downstream reader of the normalized bam inside the final-quant swap, so the
+    final-quant floor is the only one that applies. A discovery chunk builds its
+    splice graph from this bam OUTSIDE that swap, at the permissive floor, while
+    the same chunk's own final quant reads it inside -- so, like LRAA's own
+    resolution, take the more permissive of the two rather than withholding
+    evidence discovery wants. Previously this read
+    ``LRAA_Globals.config["min_mapping_quality_for_final_quant"]`` directly,
+    unconditionally of mode, and that global is never populated from the
+    caller's args in chunked mode at all: the config write in ``LRAA`` runs
+    after the chunked dispatch already exited, so a non-default value from the
+    command line never reached it. This reads the chunked pipeline's own args
+    instead, which are now populated by ``lraa_cmd``'s caller either way.
+    """
+    discovery_mapq = int(args.min_mapping_quality)
+    final_mapq = int(args.min_mapping_quality_for_final_quant)
+    if not args.discovery:
+        return final_mapq
+    return min(discovery_mapq, final_mapq)
+
+
 def cut_selection_plan(args, outdir, cut_dir, source, contig):
     """One per-contig cut selection: where it writes, what it runs, its sentinel.
 
@@ -1169,12 +1194,13 @@ def cut_selection_plan(args, outdir, cut_dir, source, contig):
     effective_min_per_id = resolve_min_per_id(args)
     # Stage 5 runs LRAA --quant_only, which swaps
     # min_mapping_quality_for_final_quant into min_mapping_quality before it
-    # filters (LRAA:4201-4204).  Reading the discovery key here would be wrong
-    # for every run that raises the final-quant threshold; both default to 0,
-    # so nothing would have failed until someone set it.
-    effective_min_mapq = int(
-        LRAA_Globals.config["min_mapping_quality_for_final_quant"]
-    )
+    # filters (LRAA:4201-4204). Reading the discovery key unconditionally would be
+    # wrong for every run that raises the final-quant threshold; both default to
+    # 0, so nothing would have failed until someone set it. Previously read the
+    # global directly rather than through this resolver, and unconditionally of
+    # discovery mode -- see resolve_min_mapping_quality's docstring for why both
+    # were wrong.
+    effective_min_mapq = resolve_min_mapping_quality(args)
     # ``tag`` carries the mode into the sentinel filename -- "strandless"
     # rather than "plus"/"minus" -- and the parent token differs as well
     # (the inputs, not a split), so neither mode can read the other's cuts.
@@ -2151,6 +2177,19 @@ def lraa_cmd(
     counted against the full one, which is what ``--bam_for_sg`` with ``--no_norm``
     says. That is the same composition LRAA performs internally when it normalizes
     for itself, moved out to stage 4 so it runs per chunk and in parallel.
+
+    ``--min_mapping_quality``/``--min_mapping_quality_for_final_quant`` are forwarded
+    RAW, not through ``resolve_min_mapping_quality`` -- that resolver is for THIS
+    pipeline's own shared stage-2/stage-4 preprocessing, which has one bam to filter
+    for two possible consumers. The worker is a full LRAA invocation with its own
+    quant-only/discovery swap already built in (LRAA:``_normalize_bam_for_splice_graph``,
+    run_quant_only), so it needs both floors distinctly, exactly as the unchunked path
+    does, not one pre-collapsed value.
+
+    Single-cell tags follow LRAA's own SUPPRESS convention: forwarded only when the
+    caller set one, so an unforwarded default cannot be mistaken for a user's choice.
+    ``--cell_list`` is forwarded as the absolute path ``default_args``/``parse_args``
+    already resolved it to, since a chunk worker's cwd is its own chunk directory.
     """
     cmd = [
         sys.executable,
@@ -2174,9 +2213,25 @@ def lraa_cmd(
         str(cpu_budget),
         "--output_prefix",
         out_prefix,
+        "--min_mapping_quality",
+        str(args.min_mapping_quality),
+        "--min_mapping_quality_for_final_quant",
+        str(args.min_mapping_quality_for_final_quant),
     ]
     if args.HiFi:
         cmd.append("--HiFi")
+    if hasattr(args, "cell_barcode_tag"):
+        cmd += ["--cell_barcode_tag", args.cell_barcode_tag]
+    if hasattr(args, "read_umi_tag"):
+        cmd += ["--read_umi_tag", args.read_umi_tag]
+    if args.cell_list:
+        cmd += ["--cell_list", args.cell_list]
+    if args.stream_reads:
+        cmd.append("--stream_reads")
+        if args.stream_reads_rescue_unassigned:
+            cmd.append("--stream_reads_rescue_unassigned")
+        if args.stream_reads_rescue_unassigned_to_targets:
+            cmd.append("--stream_reads_rescue_unassigned_to_targets")
     return cmd
 
 
@@ -2479,8 +2534,12 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
             # contents and has to name them. So does min_per_id: the normalizer
             # discards alignments below it before measuring depth, so the same input
             # at a different threshold yields a different normalized bam, and a
-            # cache written before it was forwarded must not be reused.
-            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}_minperid_{}".format(
+            # cache written before it was forwarded must not be reused. Same for
+            # min_mapping_quality, added alongside it below -- previously absent
+            # from both this token and norm_cmd, so a non-default value from the
+            # command line silently normalized as though it were 0.
+            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}"
+            ".minperid_{}_minmapq_{}".format(
                 uid,
                 args.normalize_max_cov_level,
                 args.depth_window,
@@ -2488,6 +2547,7 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
                 chunk["window_origin"],
                 args.max_intron_length,
                 resolve_min_per_id(args),
+                resolve_min_mapping_quality(args),
             ),
             upstream_token,
         )
@@ -2510,6 +2570,8 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
             # chunked and unchunked arms disagreed on a TSS by 4 bp as a result.
             "--min_per_id",
             str(resolve_min_per_id(args)),
+            "--min_mapping_quality",
+            str(resolve_min_mapping_quality(args)),
             "--max_intron_length",
             str(args.max_intron_length),
             # true of both modes' units: strand-first because the whole bam was
@@ -3577,12 +3639,17 @@ def run_baseline(
     norm_bam = os.path.join(bdir, "whole.norm.bam")
     norm_token = chain_token(
         # maxintron is passed to the normalizer below; it was missing here, which
-        # is what let a new cap rerun the merge and then reuse this bam
-        "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0_maxintron_{}".format(
+        # is what let a new cap rerun the merge and then reuse this bam.
+        # min_mapping_quality was missing the same way: the chunk arm's own
+        # stage-4 token gained it for the identical reason (see chunk_worker),
+        # and the baseline control has to name the same inputs or a non-default
+        # value would make the two arms disagree without either being wrong.
+        "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0_maxintron_{}_minmapq_{}".format(
             args.normalize_max_cov_level,
             args.depth_window,
             args.random_seed,
             args.max_intron_length,
+            resolve_min_mapping_quality(args),
         ),
         input_token,
     )
@@ -3601,6 +3668,8 @@ def run_baseline(
         str(args.random_seed),
         "--max_intron_length",
         str(args.max_intron_length),
+        "--min_mapping_quality",
+        str(resolve_min_mapping_quality(args)),
         # THE control's grid must be pinned to absolute 0. The default anchors on
         # the first aligned base per contig and no chunk grid can match it.
         "--window_origin",
@@ -3832,6 +3901,66 @@ def build_parser():
         type=int,
         default=LRAA_Globals.config["chunk_random_seed"],
     )
+    # Mirrors LRAA's own flags exactly -- same names, same SUPPRESS-vs-real-default
+    # split -- because `lraa_cmd` forwards them to a per-chunk LRAA invocation
+    # unchanged, and `default_args`'s override validation and the presence checks
+    # below both depend on that. See LRAA_Globals.py and LRAA's "Single cell
+    # settings" / "--stream_reads" argument groups for the values these mirror.
+    parser.add_argument(
+        "--cell_barcode_tag",
+        type=str,
+        default=argparse.SUPPRESS,
+        help="bam tag for cell barcode (default: {})".format(
+            LRAA_Globals.config["cell_barcode_tag"]
+        ),
+    )
+    parser.add_argument(
+        "--read_umi_tag",
+        type=str,
+        default=argparse.SUPPRESS,
+        help="bam tag for read umi (default: {})".format(
+            LRAA_Globals.config["read_umi_tag"]
+        ),
+    )
+    parser.add_argument(
+        "--cell_list",
+        type=str,
+        default=None,
+        help="file of cell barcodes considered real cells, one per line. "
+        "Resolved to an absolute path immediately, because a chunk worker's "
+        "cwd is its own chunk directory, not the caller's",
+    )
+    parser.add_argument(
+        "--stream_reads",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads"],
+        help="pass --stream_reads to every chunk worker. Requires --discovery to "
+        "be off (LRAA:--stream_reads requires --quant_only), checked before any "
+        "chunking work starts",
+    )
+    parser.add_argument(
+        "--stream_reads_rescue_unassigned",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads_rescue_unassigned"],
+    )
+    parser.add_argument(
+        "--stream_reads_rescue_unassigned_to_targets",
+        action="store_true",
+        default=LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"],
+    )
+    parser.add_argument(
+        "--min_mapping_quality",
+        type=int,
+        default=LRAA_Globals.config["min_mapping_quality"],
+        help="forwarded to every chunk worker AND to stage 2 cut selection and "
+        "stage 4 normalization, resolved the same way LRAA itself resolves it "
+        "(see resolve_min_mapping_quality)",
+    )
+    parser.add_argument(
+        "--min_mapping_quality_for_final_quant",
+        type=int,
+        default=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
+    )
     parser.add_argument(
         "--rss_sample_interval",
         type=float,
@@ -3857,6 +3986,13 @@ def parse_args(argv=None):
             parser.error("--{} is required".format(name))
     if args.cpu_budget is not None and args.cpu_budget < 1:
         parser.error("--cpu_budget must be >= 1")
+    if args.stream_reads and args.discovery:
+        parser.error("--stream_reads requires quant-only mode (drop --discovery)")
+    # A chunk worker's cwd is its own chunk directory (run_step passes cwd=cdir),
+    # not the caller's -- resolved here, once, rather than trusting every caller
+    # of this parser to remember to.
+    if args.cell_list:
+        args.cell_list = os.path.abspath(args.cell_list)
 
     return args
 
@@ -3869,13 +4005,21 @@ def default_args(**overrides):
     on the one whose argparse got edited.
     """
 
-    args = build_parser().parse_args([])
+    parser = build_parser()
+    args = parser.parse_args([])
+    # Checked against the parser's declared destinations, not `hasattr(args,
+    # key)` on the freshly parsed namespace: a SUPPRESS-defaulted flag (the
+    # single-cell tags) has no attribute at all until something sets one, so a
+    # presence check here would reject the exact override that flag exists for.
+    valid_dests = {action.dest for action in parser._actions}
     for key, value in overrides.items():
-        if not hasattr(args, key):
+        if key not in valid_dests:
             raise PipelineError(
                 "no such chunked-pipeline setting: {}".format(key)
             )
         setattr(args, key, value)
+    if getattr(args, "cell_list", None):
+        args.cell_list = os.path.abspath(args.cell_list)
     return args
 
 

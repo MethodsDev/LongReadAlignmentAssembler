@@ -47,6 +47,15 @@ SETTINGS = dict(
     # The parity arms are quant-only; discovery has no baseline arm to compare
     # against, and run() refuses that combination.
     discovery=False,
+    # C2's forwarded settings (see pylib/test_chunked_quant_token_argv.py's
+    # identical fixture fix for why cell_barcode_tag/read_umi_tag are absent
+    # rather than defaulted).
+    cell_list=None,
+    stream_reads=False,
+    stream_reads_rescue_unassigned=False,
+    stream_reads_rescue_unassigned_to_targets=False,
+    min_mapping_quality=0,
+    min_mapping_quality_for_final_quant=0,
 )
 
 

@@ -19,11 +19,12 @@ added, removed or changed -- with no edit at either site.
 
 The tests drive the real ``chunk_worker`` and ``run_baseline`` rather than
 rebuilding a token string, because a test that restates the format cannot notice
-a field being dropped from it. Where a property depends on a flag the pipeline
-does not forward YET (the single-cell tags, ``--stream_reads``), the forward is
-simulated by wrapping ``lraa_cmd``: that is the property those forwards need in
-place BEFORE they land, and it is what makes an experiment on them trustworthy
-instead of answerable from a stale sentinel.
+a field being dropped from it. The single-cell tags and ``--stream_reads`` are
+now forwarded for real (``lraa_cmd``, C2), so those tests set the real fields
+``_args`` passes through rather than simulating the forward with ``cmd_hook``.
+``cmd_hook`` remains for properties of the digest mechanism itself -- ordering,
+mutation, an argument this pipeline may never forward -- where wrapping
+``lraa_cmd`` is the point rather than a stand-in for a landed feature.
 
 Neither stage runs a subprocess here: ``run_step`` is replaced, and each function
 is allowed to fail on its missing outputs once it has produced its sentinels,
@@ -55,6 +56,16 @@ BASE_SETTINGS = dict(
     contig=None,
     cpu_budget=16,
     discovery=False,
+    # C2's forwarded settings. cell_barcode_tag/read_umi_tag are deliberately
+    # ABSENT here, not defaulted to None: lraa_cmd forwards them on presence
+    # (hasattr), mirroring LRAA's own argparse.SUPPRESS convention, so a bulk
+    # fixture must omit the attribute rather than set it to a falsy value.
+    cell_list=None,
+    stream_reads=False,
+    stream_reads_rescue_unassigned=False,
+    stream_reads_rescue_unassigned_to_targets=False,
+    min_mapping_quality=0,
+    min_mapping_quality_for_final_quant=0,
 )
 
 
@@ -226,6 +237,76 @@ def test_a_negative_value_stays_attached_to_its_flag():
     )
 
 
+# ------------------------------------------------ resolve_min_mapping_quality
+#
+# Exercised directly, not only through the token-moves-or-not tests above: those
+# prove a changed value produces a DIFFERENT token, not which value it resolved
+# to, and the mode-dependent swap below is exactly the kind of thing that could
+# be silently wrong in a way no token-difference test would catch.
+
+
+def _mapq_args(discovery, min_mapping_quality, min_mapping_quality_for_final_quant):
+    return argparse.Namespace(
+        discovery=discovery,
+        min_mapping_quality=min_mapping_quality,
+        min_mapping_quality_for_final_quant=min_mapping_quality_for_final_quant,
+    )
+
+
+def test_quant_only_always_takes_the_final_quant_floor():
+    """Every reader of the normalized bam is inside the final-quant swap when
+    there is no discovery pass, so the discovery floor must not matter at all."""
+    args = _mapq_args(
+        discovery=False, min_mapping_quality=0, min_mapping_quality_for_final_quant=30
+    )
+    assert ChunkedRun.resolve_min_mapping_quality(args) == 30
+    # The discovery floor's value is irrelevant in this mode -- not merely
+    # smaller or larger, unreachable -- so raising it must not move the result.
+    args.min_mapping_quality = 97
+    assert ChunkedRun.resolve_min_mapping_quality(args) == 30
+
+
+def test_discovery_takes_the_more_permissive_of_the_two_floors():
+    """Discovery builds the splice graph outside the swap; quant reads the same
+    bam inside it. Taking the stricter value would withhold evidence discovery
+    wants; taking the looser one is LRAA's own resolution, mirrored here."""
+    assert (
+        ChunkedRun.resolve_min_mapping_quality(
+            _mapq_args(
+                discovery=True,
+                min_mapping_quality=0,
+                min_mapping_quality_for_final_quant=30,
+            )
+        )
+        == 0
+    )
+    assert (
+        ChunkedRun.resolve_min_mapping_quality(
+            _mapq_args(
+                discovery=True,
+                min_mapping_quality=30,
+                min_mapping_quality_for_final_quant=0,
+            )
+        )
+        == 0
+    )
+
+
+def test_discovery_and_quant_only_agree_when_the_floors_agree():
+    for discovery in (True, False):
+        assert (
+            ChunkedRun.resolve_min_mapping_quality(
+                _mapq_args(
+                    discovery=discovery,
+                    min_mapping_quality=20,
+                    min_mapping_quality_for_final_quant=20,
+                )
+            )
+            == 20
+        )
+
+
+
 # ------------------------------------------------------------- both quant arms
 
 
@@ -258,16 +339,12 @@ def test_quant_only_and_discovery_do_not_share_a_sentinel(tmp_path, token_of, pr
 def test_a_forwarded_single_cell_tag_moves_the_sentinel(tmp_path, token_of, prefix):
     """The failure this item exists for: bulk output served for a single-cell run.
 
-    The tags are not forwarded yet. This asserts the property that has to hold
-    the moment they are -- the sentinel follows whatever ``lraa_cmd`` emits --
-    so the experiment that forwards them cannot be answered from a bulk
-    checkpoint.
+    Real forward now (C2's ``lraa_cmd``), not simulated: the sentinel follows
+    whatever ``lraa_cmd`` actually emits for these fields, so a resumed
+    single-cell experiment cannot be answered from a bulk checkpoint.
     """
     bulk = token_of(tmp_path)
-    single_cell = token_of(
-        tmp_path,
-        cmd_hook=_append("--cell_barcode_tag", "CB", "--read_umi_tag", "XM"),
-    )
+    single_cell = token_of(tmp_path, cell_barcode_tag="CB", read_umi_tag="XM")
     assert bulk != single_cell
 
 
@@ -277,17 +354,28 @@ def test_a_partial_single_cell_forward_moves_it_too(tmp_path, token_of, prefix):
     silently produces bulk. It must still be a distinct sentinel from both the
     bulk run and the complete forward, or one of the three serves the others."""
     bulk = token_of(tmp_path)
-    partial = token_of(tmp_path, cmd_hook=_append("--cell_barcode_tag", "CB"))
-    both = token_of(
-        tmp_path,
-        cmd_hook=_append("--cell_barcode_tag", "CB", "--read_umi_tag", "XM"),
-    )
+    partial = token_of(tmp_path, cell_barcode_tag="CB")
+    both = token_of(tmp_path, cell_barcode_tag="CB", read_umi_tag="XM")
     assert len({bulk, partial, both}) == 3
 
 
 @pytest.mark.parametrize("token_of,prefix", ARMS)
 def test_stream_reads_moves_the_sentinel(tmp_path, token_of, prefix):
-    assert token_of(tmp_path) != token_of(tmp_path, cmd_hook=_append("--stream_reads"))
+    assert token_of(tmp_path) != token_of(tmp_path, stream_reads=True)
+
+
+@pytest.mark.parametrize("token_of,prefix", ARMS)
+def test_cell_list_moves_the_sentinel(tmp_path, token_of, prefix):
+    roster = tmp_path / "cells.txt"
+    roster.write_text("AAACCCAAGAAACACT-1\n")
+    assert token_of(tmp_path) != token_of(tmp_path, cell_list=str(roster))
+
+
+@pytest.mark.parametrize("token_of,prefix", ARMS)
+def test_a_forwarded_min_mapping_quality_moves_the_sentinel(tmp_path, token_of, prefix):
+    assert token_of(tmp_path) != token_of(
+        tmp_path, min_mapping_quality_for_final_quant=30
+    )
 
 
 @pytest.mark.parametrize("token_of,prefix", ARMS)
