@@ -1805,6 +1805,22 @@ def main():
         except Exception:
             pass
 
+    # Resolve which contigs --contig / --restrict_to_chromosomes limit this run to,
+    # before normalization below (which must see only those contigs, not the whole
+    # library -- C3) and before the quant loop further below (which iterates
+    # genome_contigs_list). Nothing between here and there can change args.contig,
+    # args.restrict_to_chromosomes, or genome_fasta_filename.
+    genome_contigs_list, restricted_contig, restrict_to_contig_orient = (
+        _resolve_contig_restriction(args, genome_fasta_filename)
+    )
+    # Whole contigs only: --region narrows to a sub-span of a single contig further
+    # below, and a read whose alignment spans just outside that narrow span still
+    # needs margin-safety reasoning whole-contig scoping does not, so --region is
+    # deliberately excluded from what normalization is scoped to.
+    contig_restriction_scope = None
+    if (args.contig or args.restrict_to_chromosomes) and genome_contigs_list:
+        contig_restriction_scope = sorted(set(genome_contigs_list))
+
     allow_spacers = False
     # allow_spacers = args.allow_spacers
 
@@ -1846,6 +1862,7 @@ def main():
                 runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
                 QUANT_ONLY,
+                contig_scope=contig_restriction_scope,
             )
             logger.info(
                 "splice-graph evidence will use normalized user-supplied BAM: %s",
@@ -1864,6 +1881,7 @@ def main():
                 runtime_config["normalize_max_cov_level"],
                 normalization_cache_dir,
                 QUANT_ONLY,
+                contig_scope=contig_restriction_scope,
             )
             logger.info(
                 "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
@@ -1914,43 +1932,8 @@ def main():
     # build from reads.
     # define coverage intervals and introns as graph components.
 
-    restricted_contig = None
-    restrict_to_contig_orient = None
-
-    # Parse chromosome restriction list if provided
-    allowed_chromosomes = None
-    if args.restrict_to_chromosomes:
-        # Split by spaces and/or commas
-        chrom_tokens = re.split(r"[\s,]+", args.restrict_to_chromosomes.strip())
-        allowed_chromosomes = set(tok for tok in chrom_tokens if tok)
-        if allowed_chromosomes:
-            logger.info(f"Restricting to chromosomes: {sorted(allowed_chromosomes)}")
-        else:
-            logger.warning(
-                "--restrict_to_chromosomes provided but no valid chromosome names found"
-            )
-            allowed_chromosomes = None
-
-    if args.contig:
-        restricted_contig = args.contig
-        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
-        if m is not None:
-            restricted_contig = m.group(1)
-            restrict_to_contig_orient = m.group(2)
-
-        genome_contigs_list = [restricted_contig]
-    else:
-        genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
-        # Filter by allowed chromosomes if specified
-        if allowed_chromosomes is not None:
-            original_count = len(genome_contigs_list)
-            genome_contigs_list = [
-                c for c in genome_contigs_list if c in allowed_chromosomes
-            ]
-            filtered_count = len(genome_contigs_list)
-            logger.info(
-                f"Filtered genome contigs from {original_count} to {filtered_count} based on --restrict_to_chromosomes"
-            )
+    # genome_contigs_list, restricted_contig, and restrict_to_contig_orient were
+    # already resolved above, before normalization -- which needs them too.
 
     restrict_region_lend, restrict_region_rend = None, None
     if args.region:
@@ -2476,12 +2459,66 @@ def _store_splice_graph_in_cache(cache_dir, cache_key, signature, splice_graph_o
         return None
 
 
+def _resolve_contig_restriction(args, genome_fasta_filename):
+    """Whole contigs kept by --contig / --restrict_to_chromosomes, ignoring --region.
+
+    Returns (genome_contigs_list, restricted_contig, restrict_to_contig_orient): the
+    same three values the driver's quant loop has always derived from these two
+    flags. A caller that only needs WHICH CONTIGS are in play -- not the orientation
+    suffix, and not the further sub-contig narrowing --region applies afterward --
+    reads genome_contigs_list. --region intentionally has no representation here:
+    a caller using this to scope something to whole contigs (C3's normalization
+    pre-filter) must not have that scope narrowed by a flag that names a sub-contig
+    span rather than a set of contigs.
+    """
+    restricted_contig = None
+    restrict_to_contig_orient = None
+
+    # Parse chromosome restriction list if provided
+    allowed_chromosomes = None
+    if args.restrict_to_chromosomes:
+        # Split by spaces and/or commas
+        chrom_tokens = re.split(r"[\s,]+", args.restrict_to_chromosomes.strip())
+        allowed_chromosomes = set(tok for tok in chrom_tokens if tok)
+        if allowed_chromosomes:
+            logger.info(f"Restricting to chromosomes: {sorted(allowed_chromosomes)}")
+        else:
+            logger.warning(
+                "--restrict_to_chromosomes provided but no valid chromosome names found"
+            )
+            allowed_chromosomes = None
+
+    if args.contig:
+        restricted_contig = args.contig
+        m = re.search("^(\\S*[^\\+\\-])([\\+\\-])?$", restricted_contig)
+        if m is not None:
+            restricted_contig = m.group(1)
+            restrict_to_contig_orient = m.group(2)
+
+        genome_contigs_list = [restricted_contig]
+    else:
+        genome_contigs_list = get_genome_contigs_listing(genome_fasta_filename)
+        # Filter by allowed chromosomes if specified
+        if allowed_chromosomes is not None:
+            original_count = len(genome_contigs_list)
+            genome_contigs_list = [
+                c for c in genome_contigs_list if c in allowed_chromosomes
+            ]
+            filtered_count = len(genome_contigs_list)
+            logger.info(
+                f"Filtered genome contigs from {original_count} to {filtered_count} based on --restrict_to_chromosomes"
+            )
+
+    return genome_contigs_list, restricted_contig, restrict_to_contig_orient
+
+
 def _normalize_bam_for_splice_graph(
     input_bam,
     normalize_max_cov_level,
     cache_dir,
     quant_only,
     label=None,
+    contig_scope=None,
 ):
     if normalize_max_cov_level <= 0:
         return input_bam
@@ -2552,6 +2589,7 @@ def _normalize_bam_for_splice_graph(
     norm_window_origin = NORM_WINDOW_ORIGIN
 
     max_intron_length = int(LRAA_Globals.config["max_intron_length"])
+    scope = sorted(set(contig_scope)) if contig_scope else None
     cache_stem = Util_funcs.splice_graph_norm_cache_stem(
         base_root,
         normalize_max_cov_level,
@@ -2562,9 +2600,7 @@ def _normalize_bam_for_splice_graph(
         norm_depth_window,
         norm_random_seed,
         norm_window_origin,
-        # Always the whole source today: this function has no contig-restriction
-        # parameter of its own yet (C3, blocked on this field existing at all).
-        None,
+        scope,
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
@@ -2573,6 +2609,8 @@ def _normalize_bam_for_splice_graph(
     # not be picked up by this run
     work_dir = cache_path / f"work_{cache_stem}"
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    normalize_input_path = input_path
 
     logger.info(
         "Preparing splice-graph BAM normalization: input=%s output=%s max_coverage=%s cache_dir=%s",
@@ -2583,10 +2621,71 @@ def _normalize_bam_for_splice_graph(
     )
 
     if not checkpoint_path.exists():
+        # --contig / --restrict_to_chromosomes (C3): only a fraction of a whole-genome
+        # bam's reads are ever quantified under either flag, but normalize_bam_by_strand.py
+        # has no region argument and always measures and thins depth over its entire
+        # input. Left unscoped, normalizing --contig chr21 of a full library spent 3,324
+        # of a 3,474s total run on coverage normalization while chr21 held 1.56% of the
+        # library's reads. Pre-filtering the input to just the requested contigs, rather
+        # than teaching the utility about regions, is safe here specifically because it
+        # stays WHOLE-contig: the utility's depth accumulation is keyed per contig
+        # already (window_bases, in normalize_bam_by_strand.sift_bam) and window_origin
+        # -- which this driver always passes -- anchors window boundaries at absolute
+        # coordinates, so dropping OTHER contigs cannot move a kept contig's window
+        # boundaries or its measured depth. A sub-contig --region would not have this
+        # property: a read whose alignment spans just outside a narrow span still has to
+        # be seen to measure that span's true depth, so --region is deliberately left
+        # unscoped (a separate, harder problem than C3). Gated on the same checkpoint as
+        # the normalization run itself: a cache hit on normalized_path must do no work
+        # at all, prefiltering included.
+        if scope is not None:
+            scoped_bam_path = cache_path / f"{cache_stem}.contigscope.bam"
+            scoped_checkpoint_path = scoped_bam_path.parent / (
+                scoped_bam_path.name + ".ok"
+            )
+            if not scoped_checkpoint_path.exists():
+                logger.info(
+                    "Restricting normalization input to %d contig(s): %s",
+                    len(scope),
+                    ", ".join(scope),
+                )
+                with pysam.AlignmentFile(str(input_path), "rb") as reader:
+                    present_scope = [c for c in scope if c in reader.references]
+                    header = reader.header
+                if present_scope:
+                    pysam.view(
+                        "-h",
+                        "-b",
+                        "-o",
+                        str(scoped_bam_path),
+                        str(input_path),
+                        *present_scope,
+                        catch_stdout=False,
+                    )
+                else:
+                    # None of the requested contigs are in this bam's header at all
+                    # (as opposed to being in the header with zero reads, the
+                    # ordinary case for a contig with no alignments) -- write an
+                    # empty bam rather than pass no region args to samtools view,
+                    # which would mean "no filter" and silently normalize the
+                    # whole, unscoped source under this scoped name.
+                    logger.warning(
+                        "None of the requested contig(s) %s appear in %s's "
+                        "header; writing an empty normalization input",
+                        ", ".join(scope),
+                        input_path,
+                    )
+                    with pysam.AlignmentFile(
+                        str(scoped_bam_path), "wb", header=header
+                    ) as writer:
+                        pass
+                scoped_checkpoint_path.touch()
+            normalize_input_path = scoped_bam_path
+
         cmd = [
             os.path.join(UTILDIR, "normalize_bam_by_strand.py"),
             "--input_bam",
-            str(input_path),
+            str(normalize_input_path),
             "--normalize_max_cov_level",
             str(normalize_max_cov_level),
             "--min_per_id",

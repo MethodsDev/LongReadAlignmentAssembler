@@ -166,8 +166,18 @@ contigs.
 `+`-joined contig names it was restricted to (a long `--restrict_to_chromosomes` list is bounded
 to a count and a digest instead, so the stem cannot exceed a filesystem's path-component limit).
 Without it, normalizing one contig directly from a shared whole-genome BAM would collide with a
-whole-BAM normalization of that same file — two different outputs, one cache key. Every caller
-normalizes the whole source today, so every stem in the wild reads `scopenone`.
+whole-BAM normalization of that same file — two different outputs, one cache key. `--contig` and
+`--restrict_to_chromosomes` are the only callers that pass a restricted scope today; every other
+caller normalizes the whole source and reads `scopenone`. A restricted scope is not only a name:
+`_normalize_bam_for_splice_graph` pre-filters the utility's INPUT to just those contigs (writing
+a `<stem>.contigscope.bam` intermediate, gated behind the same checkpoint as the final output) so
+the utility never reads records normalization was never going to keep anyway. This is safe
+because it is WHOLE contigs only — `window_bases` in `sift_bam` accumulates depth per contig
+already, and the driver's fixed `--window_origin` anchors window boundaries at absolute
+coordinates, so which other contigs are present cannot move a kept contig's measured depth or
+its per-read accept/reject decisions. `--region`'s sub-contig narrowing is deliberately excluded
+from this scope: a read whose alignment spans just outside a narrow region still has to be seen
+to measure that region's true depth, a reasoning whole-contig scoping does not need.
 
 **Bump `LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD` whenever the normalizer changes which
 reads it keeps or what it records on them.** No consumer can detect a stale cache for itself: a

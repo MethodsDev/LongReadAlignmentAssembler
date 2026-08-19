@@ -1,4 +1,35 @@
 v0.22.0, August 17, 2026
+- FIXED: `--contig` and `--restrict_to_chromosomes` no longer force coverage
+  normalization to read the WHOLE input BAM before restricting to the requested
+  contig(s). `_normalize_bam_for_splice_graph`'s two call sites always passed
+  `scope=None` to `Util_funcs.splice_graph_norm_cache_stem` and handed
+  `normalize_bam_by_strand.py` the unrestricted input, because contig restriction was
+  parsed and applied only to `genome_contigs_list` -- which feeds the quant loop, not
+  normalization -- AFTER both call sites had already run. MEASURED on a real fleet run
+  (`[HG002-fleet]`, `BENCHMARKING.chunked_runs.md`): `--contig chr21` spent 3,324 of
+  3,474 total seconds on whole-library normalization, while chr21 held 199,153 of
+  12,741,361 alignments, 1.56% of the library. `_resolve_contig_restriction` (the same
+  --contig/--restrict_to_chromosomes parsing the quant loop already did, extracted
+  rather than duplicated) now runs before normalization too, and
+  `_normalize_bam_for_splice_graph` gained a `contig_scope` parameter: when either flag
+  is active it pre-filters the normalizer's input to just those contigs and passes the
+  actual restriction, not `None`, to the cache stem. Scoped to WHOLE contigs only --
+  `--region`'s sub-contig narrowing stays unscoped and out of reach of this fix, because
+  a read whose alignment spans just outside a narrow region still has to be seen to
+  measure that region's true depth, a reasoning whole-contig restriction does not need.
+  Correct because `normalize_bam_by_strand.py`'s depth accumulation is keyed per contig
+  already (`window_bases` in `sift_bam`) and the driver already fixes `--window_origin`,
+  which anchors window boundaries at absolute coordinates, so which OTHER contigs are
+  present cannot move a kept contig's measured depth or its per-read accept/reject
+  decisions. VERIFIED byte-for-byte on a real bam+genome fixture
+  (`testing/single_cells/sc_full_pipe_scattered/data/chr1_2_3_M.PBMCs.mini.bam`, four
+  contigs, single-cell PBMC reads): restricting normalization's input to chr1 alone
+  produces an identical retained-read set and an identical `XW` weight for every one of
+  chr1's 3,510 retained records, against extracting chr1 from a whole-bam normalization
+  of the same source. An end-to-end `LRAA --contig chr1` run's `.quant.expr`,
+  `.quant.tracking`, `.gtf`, and `.bed` are also byte-identical before and after this
+  change, apart from the `--output_prefix` value each file's own header comment records.
+
 - `WDL/LRAA.wdl`'s per-chromosome scatter no longer requests the SAME `cpu` for every
   shard when `chunk` is set. `cpuScattered` was a flat `Int = 5`: chr1 and chrM asked
   for identical cores despite differing 25x in chunk count (25 chunks against 1,
