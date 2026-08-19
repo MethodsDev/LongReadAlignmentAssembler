@@ -77,11 +77,26 @@ class Quantify:
         # someone relaxed it.  Stating it directly costs one line.
         self._component_identity_valid = False
 
+        # Snapshot of the last completed call's return value (transcript_id -> {mp:
+        # frac_assigned}), so a later quantify(prior=True) call on this object can
+        # carry forward the fractional read-assignment map for a component it skips
+        # re-quantifying, before this attribute is itself overwritten by that call.
+        self._transcript_to_fractional_read_assignment = dict()
+
         self._quant_mode = quant_mode
 
         return
 
-    def quantify(self, splice_graph, transcripts, mp_counter):
+    def quantify(self, splice_graph, transcripts, mp_counter, prior=False):
+
+        # Captured before the invalidation lines immediately below discard them:
+        # prior=True asks this call to diff against THIS OBJECT's own last completed
+        # quantify() call (run_transcript_assembly reuses one Quantify across its three
+        # same-mp_counter draft-mode calls) instead of reassigning/EM'ing every gene from
+        # scratch. Only two booleans here -- the containers themselves are read further
+        # down below the argument validation, still before anything clears them.
+        prior_call_was_valid = self._component_identity_valid
+        prior_theta_was_valid = self._theta_valid
 
         # FIRST executable statements, above the argument validation below. Those asserts
         # index transcripts[0], so quantify(sg, [], mp) raises before anything runs -- and
@@ -96,6 +111,75 @@ class Quantify:
         assert type(transcripts) == list
         assert type(transcripts[0]) == Transcript.Transcript
         assert type(mp_counter) == MultiPathCounter.MultiPathCounter
+
+        dirty_gene_ids = None
+        prior_mp_to_transcripts = None
+        prior_unassigned_mps = None
+        prior_frac_read_assignment = None
+        prior_theta = None
+
+        if prior:
+            assert prior_call_was_valid, (
+                "quantify(prior=True) requires a previously completed quantify() call "
+                "on this object to diff against; the first call on a Quantify object "
+                "must run with prior=False"
+            )
+
+            prior_mp_to_transcripts = dict(self._mp_to_transcripts)
+            prior_unassigned_mps = set(
+                mp_count_pair.get_multipath_and_count()[0]
+                for mp_count_pair in self._unassigned_mp_count_pairs
+            )
+            prior_transcript_id_to_component_id = dict(
+                self._transcript_id_to_component_id
+            )
+            prior_component_id_to_gene_ids = dict(self._component_id_to_gene_ids)
+            prior_frac_read_assignment = dict(
+                self._transcript_to_fractional_read_assignment
+            )
+            prior_theta = (
+                dict(self._transcript_id_to_theta) if prior_theta_was_valid else {}
+            )
+
+            # Transcript defines no __hash__/__eq__ (a set of them hashes by object
+            # identity), which is exactly what "removed" must mean here: the filter
+            # functions between calls (filter_transcripts_by_min_length,
+            # filter_novel_isoforms_by_min_read_support,
+            # prune_likely_degradation_products) return a filtered subset of the SAME
+            # objects, never reconstructed ones.
+            prior_transcripts = set()
+            for gene_transcripts in self._gene_id_to_transcript_objs.values():
+                prior_transcripts.update(gene_transcripts.values())
+            removed_transcripts = prior_transcripts - set(transcripts)
+
+            # The load-bearing refinement over a naive gene-level diff: a gene can lose
+            # an isoform that had ZERO assigned multipaths in the prior call (routine
+            # under filter_novel_isoforms_by_min_read_support, which removes isoforms
+            # BECAUSE they had too little support). Such a removal contributes no entry
+            # here, so its component is correctly left out of dirty_gene_ids below and
+            # gets no rerun at all.
+            affected_mps = {
+                mp
+                for mp, txs in prior_mp_to_transcripts.items()
+                if any(t in removed_transcripts for t in txs)
+            }
+
+            # Cross-gene ripple is captured for free: if a removed isoform of gene G was
+            # ambiguously shared with gene H's isoforms, the multipath expressing that
+            # ambiguity was assigned to transcripts of both G and H, which is exactly
+            # what _build_read_sharing_gene_components used to fuse them into one prior
+            # component. So "every gene of every prior component touched by
+            # affected_mps" already includes H; no separate cross-gene signal is needed.
+            dirty_gene_ids = set()
+            for mp in affected_mps:
+                for t in prior_mp_to_transcripts[mp]:
+                    component_id = prior_transcript_id_to_component_id.get(
+                        t.get_transcript_id()
+                    )
+                    if component_id is not None:
+                        dirty_gene_ids.update(
+                            prior_component_id_to_gene_ids.get(component_id, ())
+                        )
 
         # Every container below describes ONE quantification and is rebuilt by the
         # assignment steps in this call.  quantify() runs up to three times on one
@@ -151,11 +235,17 @@ class Quantify:
         self._gene_id_to_transcript_objs.clear()
         self._gene_id_of_transcript_id.clear()
 
-        # init transcript quant info
+        # init transcript quant info. Skipped for a carried-forward transcript
+        # (prior=True and its gene is not in dirty_gene_ids): init_quant_info() resets
+        # multipaths_evidence_assigned / _multipaths_evidence_weights /
+        # _read_counts_assigned to empty/None on the TRANSCRIPT OBJECT ITSELF, not on any
+        # container this call rebuilds below, so calling it unconditionally would wipe
+        # per-object state that a skipped (unaffected) component never repopulates.
         gene_to_transcripts = defaultdict(list)
         for transcript in transcripts:
-            transcript.init_quant_info()
             gene_id = transcript.get_gene_id()
+            if dirty_gene_ids is None or gene_id in dirty_gene_ids:
+                transcript.init_quant_info()
             gene_to_transcripts[gene_id].append(transcript)
 
         try:
@@ -173,7 +263,28 @@ class Quantify:
         # also assign gene_id to transcript objs
         self._assign_path_nodes_to_gene(transcripts)
 
-        self._assign_reads_to_transcripts(splice_graph, mp_counter)
+        # touched_gene_ids accumulates any gene that a reprocessed multipath's fresh
+        # assignment actually names, including a gene not itself in dirty_gene_ids: the
+        # affected-component closure above is computed from PRIOR assignments alone, so
+        # it cannot see a cross-gene match that only surfaces once a dirty gene's
+        # dominant isoform is gone and a reprocessed read's compatibility cascade falls
+        # through to a different gene entirely (still tested against the full, unscoped
+        # current candidate pool -- see _assign_reads_to_transcripts). dirty_gene_ids |
+        # touched_gene_ids is the true set of genes whose EM input changed this call.
+        touched_gene_ids = set() if dirty_gene_ids is not None else None
+
+        self._assign_reads_to_transcripts(
+            splice_graph,
+            mp_counter,
+            dirty_gene_ids=dirty_gene_ids,
+            prior_mp_to_transcripts=prior_mp_to_transcripts,
+            prior_unassigned_mps=prior_unassigned_mps,
+            touched_gene_ids=touched_gene_ids,
+        )
+
+        em_rerun_gene_ids = (
+            (dirty_gene_ids | touched_gene_ids) if dirty_gene_ids is not None else None
+        )
 
         # The EM unit is a read-sharing component of genes, not a single gene: a
         # read compatible with transcripts in two genes has to be apportioned by
@@ -211,11 +322,38 @@ class Quantify:
 
         transcript_to_fractional_read_assignment = dict()
 
+        num_components_carried_forward = 0
+        num_transcripts_carried_forward = 0
+
         for component_gene_ids in gene_components:
 
             transcripts_list = list()
             for gene_id in component_gene_ids:
                 transcripts_list.extend(gene_to_transcripts[gene_id])
+
+            if em_rerun_gene_ids is not None and not (
+                set(component_gene_ids) & em_rerun_gene_ids
+            ):
+                # Unaffected component: none of its genes lost a transcript with real
+                # evidence, and none picked up new evidence from a reprocessed
+                # multipath elsewhere (touched_gene_ids), so its transcripts were never
+                # reset above and never touched by _assign_reads_to_transcripts either
+                # -- their multipaths_evidence_assigned / _multipaths_evidence_weights /
+                # _read_counts_assigned / isoform_fraction are already exactly what a
+                # full rerun would produce. Only theta and the returned fractional
+                # read-assignment map need republishing into this call's structures.
+                num_components_carried_forward += 1
+                num_transcripts_carried_forward += len(transcripts_list)
+                for transcript in transcripts_list:
+                    transcript_id = transcript.get_transcript_id()
+                    transcript_to_fractional_read_assignment[transcript_id] = (
+                        prior_frac_read_assignment[transcript_id]
+                    )
+                    if self._run_EM:
+                        self._transcript_id_to_theta[transcript_id] = prior_theta[
+                            transcript_id
+                        ]
+                continue
 
             trans_coords = list()
             for transcript in transcripts_list:
@@ -285,6 +423,19 @@ class Quantify:
                     component_transcript_to_fractional_read_assignment[transcript_id]
                 )
 
+        if em_rerun_gene_ids is not None:
+            logger.info(
+                "[%s%s] incremental requant: carried forward %d/%d quant component(s) "
+                "(%d/%d transcripts) unchanged from the prior quantify() call on this "
+                "object",
+                contig_acc,
+                contig_strand,
+                num_components_carried_forward,
+                len(gene_components),
+                num_transcripts_carried_forward,
+                len(transcripts),
+            )
+
         # Marked valid only here, after every EM unit has been accumulated. Set at entry it
         # would vouch for a partial aggregate if a unit raised; set anywhere else it would
         # vouch for one no single call produced.
@@ -295,6 +446,13 @@ class Quantify:
         # Only here: every path that reaches this point built the maps from this
         # call's components.
         self._component_identity_valid = True
+
+        # Captured so a LATER quantify(prior=True) call on this object can carry
+        # forward this call's fractional read-assignment map for a component it skips,
+        # before this attribute is itself overwritten by that later call.
+        self._transcript_to_fractional_read_assignment = (
+            transcript_to_fractional_read_assignment
+        )
 
         return transcript_to_fractional_read_assignment
 
@@ -364,7 +522,29 @@ class Quantify:
         splice_graph,
         mp_counter,
         fraction_read_align_overlap=None,
+        dirty_gene_ids=None,
+        prior_mp_to_transcripts=None,
+        prior_unassigned_mps=None,
+        touched_gene_ids=None,
     ):
+        # dirty_gene_ids / prior_mp_to_transcripts / prior_unassigned_mps /
+        # touched_gene_ids are set together, only by quantify(prior=True), and only for
+        # calls 2/3 of run_transcript_assembly's three same-mp_counter draft-mode
+        # quantify() calls. Every other caller (run_quant_only, both rescue probes,
+        # direct test usage) leaves them None and gets exactly today's behavior: every
+        # multipath in mp_counter is tested against the full compatibility cascade
+        # below, unconditionally.
+        #
+        # When set, a multipath whose current candidate genes (top_genes, computed from
+        # the FULL current transcript set exactly as below -- never scoped down to
+        # dirty_gene_ids alone) do not intersect dirty_gene_ids is guaranteed to resolve
+        # identically to the prior call: _assign_path_to_transcript tests each candidate
+        # independently, so removing OTHER candidates can only ever let a later,
+        # looser cascade level introduce a NEW winner for a multipath whose winning set
+        # included one of them -- never change the outcome for a multipath whose entire
+        # winning set is untouched. That multipath's prior result is carried forward
+        # verbatim instead of re-run through the cascade.
+
         # FIRST statement, above the argument handling below.  This method writes
         # _mp_to_transcripts (:611), which is the input
         # _build_read_sharing_gene_components unions over -- so it mutates what
@@ -564,6 +744,29 @@ class Quantify:
 
                 continue
 
+            if dirty_gene_ids is not None and not (set(top_genes) & dirty_gene_ids):
+                # Carry forward verbatim (see the note on the class of parameters this
+                # gates, above): none of this multipath's current candidate genes lost
+                # any evidence, so its resolution is guaranteed identical to a full
+                # rerun's.
+                num_paths_anchored_to_gene += 1
+                num_read_counts_anchored_to_gene += count
+
+                if mp in prior_mp_to_transcripts:
+                    transcripts_assigned = prior_mp_to_transcripts[mp]
+                    self._mp_to_transcripts[mp] = transcripts_assigned
+                    num_paths_assigned += 1
+                    num_read_counts_assigned += count
+                else:
+                    assert mp in prior_unassigned_mps, (
+                        "multipath anchored to a gene but present in neither the prior "
+                        "assignment nor the prior unassigned set; mp_counter must not "
+                        "change between incremental quantify() calls on one object"
+                    )
+                    self._unassigned_mp_count_pairs.append(mp_count_pair)
+
+                continue
+
             logger.debug(
                 "mp_count_pair {} anchored to genes: {}".format(
                     mp_count_pair, top_genes
@@ -635,6 +838,8 @@ class Quantify:
                     # assign mp and weight to transcript
                     transcript.add_multipaths_evidence_assigned(mp)
                     transcript.set_multipaths_evidence_weights({mp: mp_read_weight})
+                    if touched_gene_ids is not None:
+                        touched_gene_ids.add(transcript.get_gene_id())
 
                 num_paths_assigned += 1
                 num_read_counts_assigned += count

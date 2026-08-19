@@ -1,4 +1,58 @@
 v0.22.0, August 17, 2026
+- `run_transcript_assembly`'s three draft-mode `Quantify.quantify()` calls against the
+  same `mp_all_counter` (`LRAA:5742`, `5835`, `5867` -- once after ME/SE assembly, once
+  after `filter_novel_isoforms_by_min_read_support`, once after
+  `prune_likely_degradation_products`) no longer each re-derive read/multipath-to-
+  transcript assignment and EM theta for the ENTIRE transcript set. Profiled on a real,
+  pathological chr21 pericentromeric chunk (paralog-dense, `py-spy`, ~10%-depth
+  reproduction): the three calls' assignment cascade plus EM summed to 22.38% of total
+  wall time, the single largest theme in the run, even though each filter step between
+  calls typically changes only a small subset of genes. `quantify()` gained an optional
+  `prior=True` (calls 2 and 3 only; call 1 still runs in full, unmodified, as does every
+  other caller -- `run_quant_only`, both rescue probes, direct test usage, none of which
+  pass it): it diffs the current transcript list against the SAME object's own previous
+  completed call by object identity (the filter functions return a filtered subset of the
+  same objects, never reconstructed ones), unions the prior read-sharing gene component(s)
+  touched by any multipath whose assigned transcripts include a removed one, and reruns
+  assignment plus EM for only those components. A component is the correct unit rather
+  than a gene because EM's theta is normalized jointly across a component, and cross-gene
+  ripple needs no separate signal: if a removed isoform of gene G was ambiguously shared
+  with gene H, the multipath expressing that ambiguity was, by construction, one of the
+  multipaths that already fused G and H into one prior component. The load-bearing
+  refinement over a naive gene-level diff is per-multipath rather than per-transcript: an
+  isoform removed with ZERO assigned multipaths (routine under
+  `filter_novel_isoforms_by_min_read_support`, which removes isoforms BECAUSE they had too
+  little support) triggers no rerun at all, pinned by a test that spies on both the
+  compatibility cascade and the EM estimator and asserts zero calls into either. A
+  carried-forward component's transcripts are never touched by
+  `Transcript.init_quant_info()`, which unconditionally reset `multipaths_evidence_
+  assigned` / `_multipaths_evidence_weights` / `_read_counts_assigned` to empty/None on
+  every transcript at the top of every `quantify()` call regardless of whether that
+  component's rerun was about to be skipped -- pinned by a second test that removes a
+  real-support isoform from a SIBLING gene's component and asserts the untouched gene's
+  evidence, weights and read counts survive unchanged.
+  VERIFIED byte-for-byte against the always-full-rerun path on two real corpora with
+  genuine multi-round filtering at both call sites (a fixture where nothing gets filtered
+  proves nothing): `testing/sirvs`' ref-guided scenario (`SIRV2+` 2->1 transcripts at the
+  first filter, `SIRV7-` 7->6 at degradation pruning -- the terminal-twin case
+  `testing/sirvs/Makefile` already documents) and a ~10%-depth downsample of the real
+  chr21 pericentromeric chunk from the profiling investigation (198->133->109 transcripts
+  across the two filters). `.gtf`, `.quant.expr`, `.bed` and `.quant.tracking(.gz)` are
+  identical to the pre-change commit on identical inputs in every case, apart from each
+  file's own `LRAA CMD:` header line recording the invocation path. On the chr21 chunk the
+  incremental path carried forward 40 of 43 quant components (58 of 133 transcripts) at
+  the second call and 40 of 44 (58 of 109) at the third; MEASURED wall-clock for the
+  post-graph-build discovery-quant-and-filter phase specifically (single contig-strand,
+  uncontended) was 6.3% faster on the second quantify call (12.599s -> 11.800s) and 2.6%
+  faster end to end across all three calls plus filtering (39.750s -> 38.718s). The third
+  call's own saving was within noise (12.938s -> 12.899s): on this corpus nearly all
+  cascade/EM cost concentrates in one 68-transcript, 7-gene ambiguous read-sharing
+  component that legitimately stays dirty on every round, so skipping the other 40+
+  small/singleton components -- correct and real, not a no-op -- recovers a modest
+  fraction of wall time rather than the full 22.38% ceiling; a corpus whose cost is more
+  evenly distributed across components would see more of it. Full unit suite (`pylib/
+  util/`, 956 tests) and `cd testing && make test` both pass clean.
+
 - FIXED: `--contig` and `--restrict_to_chromosomes` no longer force coverage
   normalization to read the WHOLE input BAM before restricting to the requested
   contig(s). `_normalize_bam_for_splice_graph`'s two call sites always passed

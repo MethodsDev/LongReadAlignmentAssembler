@@ -5832,7 +5832,7 @@ def run_transcript_assembly(
         logger.info(
             f"[{contig_acc}{contig_strand}] \n// -rerunning quant post filtering novel isoforms via read thresholds"
         )
-        frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter)
+        frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter, prior=True)
 
         #####################################
         # pruning likely degradation products
@@ -5864,7 +5864,7 @@ def run_transcript_assembly(
         logger.info(
             f"[{contig_acc}{contig_strand}] \n// -rerunning quant post-filtering of degradation products"
         )
-        frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter)
+        frac_read_assignments = q.quantify(sg_all, transcripts, mp_all_counter, prior=True)
 
         #######################################################
         # Filter isoforms according to minimum isoform fraction
