@@ -1,4 +1,4 @@
-v0.22.0, August 17, 2026
+v0.23.0, August 19, 2026
 - INVESTIGATED, NOT A BUG: `single_cell_monoexonic_cell_filter_deferral_plan.md` proposed
   deferring `min_monoexonic_supporting_cells` (`filter_novel_monoexonic_isoforms_by_min_cells`,
   called from `run_transcript_assembly` at `LRAA:6008`) to run after final quant, on the theory
