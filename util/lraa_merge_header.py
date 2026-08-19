@@ -30,6 +30,13 @@ VARIES_PLACEHOLDER = "<varies>"
 # incomplete with nothing about it to say so. One incomplete input is enough, since
 # the merge inherits its gaps.
 INCOMPLETE_TRACKING_MARKER = "use_XW_read_weights_for_quant"
+# Detection is scoped to a line starting with this prefix, not a blind substring scan
+# of the whole leading comment block: every input also carries a "# LRAA CMD: ..."
+# echo of its own command line, which contains INCOMPLETE_TRACKING_MARKER whenever
+# --use_XW_read_weights_for_quant was passed at all -- including a --stream_reads run,
+# whose tracking file is complete and does not carry the marker line. Matching the CMD
+# echo would mark that file incomplete on the strength of its own invocation text.
+INCOMPLETE_TRACKING_MARKER_LINE_PREFIX = "# WARNING:"
 INCOMPLETE_TRACKING_COMMENT = (
     "# WARNING: produced with --use_XW_read_weights_for_quant. Rows cover only reads "
     "retained by coverage normalization, and frac_assigned is NOT weighted by XW. "
@@ -104,7 +111,9 @@ def _marks_incomplete_tracking(path):
     """Whether this input declares that its rows cover only retained reads."""
     try:
         return any(
-            INCOMPLETE_TRACKING_MARKER in line for line in leading_comments(path)
+            line.startswith(INCOMPLETE_TRACKING_MARKER_LINE_PREFIX)
+            and INCOMPLETE_TRACKING_MARKER in line
+            for line in leading_comments(path)
         )
     except OSError:
         return False

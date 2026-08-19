@@ -23,6 +23,7 @@ guard exists to prevent -- so the declaration is required and detection is used 
 contradict it.
 """
 
+import gzip
 import os
 import subprocess
 import sys
@@ -93,6 +94,45 @@ def test_weighted_quant_refuses_single_cell(tmp_path, inputs):
     assert "single-cell quantification is not supported" in (r.stdout + r.stderr)
 
 
+def _leading_comment_lines(tracking_gz):
+    with gzip.open(tracking_gz, "rt") as fh:
+        lines = []
+        for line in fh:
+            if not line.startswith("#"):
+                break
+            lines.append(line)
+        return lines
+
+
+def _has_weighted_tracking_marker(comments):
+    """Matches only the dedicated WARNING line, never the always-present CMD echo,
+    which also contains --use_XW_read_weights_for_quant whenever that flag was passed
+    at all. Mirrors the real scoping in singlecell_tracking_to_sparse_matrix.py's
+    _reject_if_weighted_tracking.
+    """
+    return any(
+        line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line
+        for line in comments
+    )
+
+
+def test_weighted_quant_permits_single_cell_under_stream_reads(tmp_path, inputs):
+    """--stream_reads changes the premise the refusal is about: the merged tracking
+    file then covers the full bam, and the fraction split already reflects
+    XW-corrected theta, so single-cell quantification is no longer refused.
+    """
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    r = _run(bam, "--library_type", "single_cell", "--stream_reads",
+             "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+             gtf=gtf, genome=genome, tmp=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tracking = list(tmp_path.glob("out*quant.tracking.gz"))
+    assert tracking, "expected a tracking file to be produced"
+    comments = _leading_comment_lines(tracking[0])
+    assert not _has_weighted_tracking_marker(comments)
+
+
 def test_weighted_quant_refuses_a_cell_list(tmp_path, inputs):
     gtf, genome = inputs
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
@@ -102,6 +142,23 @@ def test_weighted_quant_refuses_a_cell_list(tmp_path, inputs):
              gtf=gtf, genome=genome, tmp=tmp_path)
     assert r.returncode != 0
     assert "single-cell quantification is not supported" in (r.stdout + r.stderr)
+
+
+def test_weighted_quant_permits_cell_list_under_stream_reads(tmp_path, inputs):
+    """Same relief as single_cell, for the --cell_list path."""
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    cells = tmp_path / "cells.txt"
+    cells.write_text("BARCODE-1\n")
+    r = _run(bam, "--library_type", "bulk", "--cell_list", str(cells),
+             "--stream_reads",
+             "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+             gtf=gtf, genome=genome, tmp=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tracking = list(tmp_path.glob("out*quant.tracking.gz"))
+    assert tracking, "expected a tracking file to be produced"
+    comments = _leading_comment_lines(tracking[0])
+    assert not _has_weighted_tracking_marker(comments)
 
 
 def test_a_bulk_declaration_is_overruled_by_tagged_reads(tmp_path, inputs):
@@ -122,6 +179,29 @@ def test_weighted_quant_refuses_bam_tagging(tmp_path, inputs):
              gtf=gtf, genome=genome, tmp=tmp_path)
     assert r.returncode != 0
     assert "--tag_bam is not supported" in (r.stdout + r.stderr)
+
+
+def test_weighted_quant_permits_bam_tagging_under_stream_reads(tmp_path, inputs):
+    """--tag_bam reads the merged tracking file, which --stream_reads makes complete.
+
+    Assert real tag content on a known read, not just that a tagged bam exists -- a
+    silently mismatched name encoding would produce a real but empty-of-matches tagged
+    bam that a returncode/existence-only check would miss.
+    """
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    r = _run(bam, "--library_type", "bulk", "--stream_reads",
+             "--no_rescue_unassigned_reads_via_transcriptome_alignment", "--tag_bam",
+             gtf=gtf, genome=genome, tmp=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tagged = tmp_path / "bulk.bam.tagged.bam"
+    assert tagged.exists(), "expected a *.tagged.bam to be produced"
+    with pysam.AlignmentFile(str(tagged), "rb") as fh:
+        reads_by_name = {a.query_name: a for a in fh.fetch(until_eof=True)}
+    assert "r0" in reads_by_name
+    r0 = reads_by_name["r0"]
+    assert r0.has_tag("XG") and r0.get_tag("XG") == "g1"
+    assert r0.has_tag("XI") and r0.get_tag("XI") == "t1"
 
 
 def test_weighted_quant_refuses_discovery_mode(tmp_path, inputs):
@@ -219,11 +299,11 @@ def test_stream_reads_refuses_when_bam_for_sg_is_the_streamed_bam(tmp_path, inpu
     assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
 
 
-def test_stream_reads_refuses_tag_bam(tmp_path, inputs):
-    """Tagging needs per-read assignments the streaming pass deliberately does not keep.
-
-    Unguarded, the run would tag from the first pass alone -- that is, from the normalized
-    bam -- and emit a bam whose tagged subset silently omits every read normalization removed.
+def test_stream_reads_permits_tag_bam(tmp_path, inputs):
+    """Change 4 removed the blanket refusal unconditionally, without needing XW: the
+    merged tracking file under --stream_reads covers the full bam, which is MORE
+    complete than the non-streaming default's retained-only file, so this combination
+    is the safer one, not a refused one.
     """
     gtf, genome = inputs
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
@@ -233,8 +313,15 @@ def test_stream_reads_refuses_tag_bam(tmp_path, inputs):
            "--stream_reads",
            "--no_rescue_unassigned_reads_via_transcriptome_alignment", "--tag_bam"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
-    assert r.returncode != 0
-    assert "cannot be combined with --tag_bam" in (r.stdout + r.stderr)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tagged = tmp_path / "bulk.bam.tagged.bam"
+    assert tagged.exists(), "expected a *.tagged.bam to be produced"
+    with pysam.AlignmentFile(str(tagged), "rb") as fh:
+        reads_by_name = {a.query_name: a for a in fh.fetch(until_eof=True)}
+    assert "r0" in reads_by_name
+    r0 = reads_by_name["r0"]
+    assert r0.has_tag("XG") and r0.get_tag("XG") == "g1"
+    assert r0.has_tag("XI") and r0.get_tag("XI") == "t1"
 
 
 def test_none_of_these_guards_fire_without_the_weighting_flag(tmp_path, inputs):
