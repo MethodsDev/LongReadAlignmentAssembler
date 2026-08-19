@@ -2562,6 +2562,9 @@ def _normalize_bam_for_splice_graph(
         norm_depth_window,
         norm_random_seed,
         norm_window_origin,
+        # Always the whole source today: this function has no contig-restriction
+        # parameter of its own yet (C3, blocked on this field existing at all).
+        None,
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")

@@ -369,12 +369,13 @@ def source_bam(tmp_path):
 
 
 def _stem(source, level=1000, max_intron_length=200000, min_per_id=0,
-          min_mapping_quality=0, depth_window=100, random_seed=42, window_origin=0):
+          min_mapping_quality=0, depth_window=100, random_seed=42, window_origin=0,
+          scope=None):
     import Util_funcs
 
     return Util_funcs.splice_graph_norm_cache_stem(
         "s.quant", level, str(source), max_intron_length, min_per_id,
-        min_mapping_quality, depth_window, random_seed, window_origin,
+        min_mapping_quality, depth_window, random_seed, window_origin, scope,
     )
 
 
@@ -422,6 +423,52 @@ def test_cache_name_separates_the_absolute_grid_from_the_per_contig_anchor(sourc
     assert _stem(source_bam, window_origin=None) != _stem(source_bam, window_origin=0)
     assert ".o0." in _stem(source_bam, window_origin=0)
     assert ".onone." in _stem(source_bam, window_origin=None)
+
+
+def test_cache_name_separates_a_restricted_scope_from_the_whole_source(source_bam):
+    """A2: normalizing a contig directly from a shared whole-genome bam must not
+    collide with a whole-bam normalization of that same file -- two different
+    outputs, and without this field, one cache key.
+    """
+    assert _stem(source_bam, scope=None) != _stem(source_bam, scope=["chr21"])
+    assert ".scopenone." in _stem(source_bam, scope=None)
+    assert ".scopechr21." in _stem(source_bam, scope=["chr21"])
+
+
+def test_cache_name_distinguishes_different_restricted_scopes(source_bam):
+    """Two different restrictions of the same source are two different bams."""
+    assert _stem(source_bam, scope=["chr21"]) != _stem(source_bam, scope=["chr22"])
+    assert _stem(source_bam, scope=["chr21"]) != _stem(
+        source_bam, scope=["chr21", "chr22"]
+    )
+
+
+def test_cache_name_for_a_scope_is_order_independent(source_bam):
+    """The same set of contigs is the same restriction regardless of argument
+    order, or the caller's iteration order becomes another axis this key would
+    need to track separately."""
+    assert _stem(source_bam, scope=["chr21", "chr22"]) == _stem(
+        source_bam, scope=["chr22", "chr21"]
+    )
+
+
+def test_cache_name_rejects_an_empty_scope(source_bam):
+    """Empty names neither the whole source nor any part of it."""
+    with pytest.raises(ValueError):
+        _stem(source_bam, scope=[])
+
+
+def test_cache_name_bounds_a_long_scope_list(source_bam):
+    """--restrict_to_chromosomes can name dozens of contigs; a stem long enough
+    to exceed a filesystem's path-component limit would fail every caller
+    rather than only the one that hit it. Still order-independent and still
+    distinct from a different long list once bounded."""
+    many = ["chr{}".format(i) for i in range(1, 40)]
+    stem = _stem(source_bam, scope=many)
+    assert "39contigs." in stem
+    assert len(stem) < 200
+    assert _stem(source_bam, scope=many) == _stem(source_bam, scope=list(reversed(many)))
+    assert _stem(source_bam, scope=many) != _stem(source_bam, scope=many[:-1])
 
 
 def test_cache_name_distinguishes_the_method(source_bam):

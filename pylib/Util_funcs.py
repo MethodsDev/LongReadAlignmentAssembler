@@ -370,6 +370,7 @@ def splice_graph_norm_cache_stem(
     depth_window,
     random_seed,
     window_origin,
+    scope,
 ):
     """Name for a normalized bam and its work directory.
 
@@ -410,8 +411,40 @@ def splice_graph_norm_cache_stem(
     depth-window boundaries and so decide which reads survive. The driver holds them fixed
     today, which is exactly why omitting them would be easy and would go unnoticed until
     someone changed a default.
+
+    ``scope`` names WHICH PART of ``source_bam`` was read: ``None`` for the whole file,
+    else an iterable of contig names the read was restricted to. Gated to render inert
+    (``"none"``, the same convention ``window_origin`` uses for "unset") rather than simply
+    omitted when unrestricted, so today's whole-source callers keep today's names. Without
+    this field, normalizing a contig directly from a shared whole-genome bam would collide
+    on the exact name a whole-bam normalization of the same file already uses -- two
+    different outputs sharing one cache key -- which is silent in exactly the way this
+    function's own docstring says every other field must not be. Each name is trusted
+    pre-sanitized, the same contract ``base_root`` already has; sorted here so the caller's
+    argument order is not another axis the key would need to track separately.
     """
-    return "{}.norm_{}.maxintron_{}.{}.pid{}.mapq{}.w{}.s{}.o{}.{}".format(
+    if scope is None:
+        scope_token = "none"
+    else:
+        sorted_scope = sorted(scope)
+        if not sorted_scope:
+            raise ValueError(
+                "scope must be None (unrestricted) or a non-empty iterable of contig "
+                "names; an empty iterable names neither"
+            )
+        joined = "+".join(sorted_scope)
+        # Bounded rather than always literal: --restrict_to_chromosomes can name dozens
+        # of contigs, and a stem long enough to exceed a filesystem's path-component
+        # limit would fail every caller rather than only the caller that hit it. The
+        # common case -- one contig from --contig or --region -- stays fully readable.
+        scope_token = (
+            joined
+            if len(joined) <= 80
+            else "{}contigs.{}".format(
+                len(sorted_scope), get_hash_code(joined)[:12]
+            )
+        )
+    return "{}.norm_{}.maxintron_{}.{}.pid{}.mapq{}.w{}.s{}.o{}.scope{}.{}".format(
         base_root,
         normalize_max_cov_level,
         max_intron_length,
@@ -424,6 +457,7 @@ def splice_graph_norm_cache_stem(
         # aligned base seen there, which is a different placement from the absolute grid
         # at 0, and collapsing the two here would let them share one cached bam.
         ("none" if window_origin is None else int(window_origin)),
+        scope_token,
         file_identity_token(source_bam),
     )
 

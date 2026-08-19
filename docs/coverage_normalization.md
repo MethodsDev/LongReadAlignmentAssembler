@@ -134,9 +134,9 @@ never consults the utility's own finer-grained token — anything missing from t
 invisible:
 
 ```
-<source>.norm_<target>.maxintron_<cap>.<method>.pid<min_per_id>.mapq<min_mapq>.w<window>.s<seed>.o<origin>.<identity>.bam
-    sample.quant.norm_1000.maxintron_200000.cov5.pid97.mapq0.w100.s42.o0.a56fdafac29c.bam
-work_<source>.norm_<target>.maxintron_<cap>.<method>.pid<...>.mapq<...>.w<...>.s<...>.o<...>.<identity>/
+<source>.norm_<target>.maxintron_<cap>.<method>.pid<min_per_id>.mapq<min_mapq>.w<window>.s<seed>.o<origin>.scope<scope>.<identity>.bam
+    sample.quant.norm_1000.maxintron_200000.cov5.pid97.mapq0.w100.s42.o0.scopenone.a56fdafac29c.bam
+work_<source>.norm_<target>.maxintron_<cap>.<method>.pid<...>.mapq<...>.w<...>.s<...>.o<...>.scope<...>.<identity>/
 ```
 
 Every component is required rather than defaulted, because a caller that omits one keys a BAM
@@ -161,6 +161,13 @@ anchors the window grid on each contig's first aligned base, which is a differen
 from the absolute grid at coordinate 0, so collapsing the two would let them share one cached
 BAM. The driver passes `0` explicitly (`NORM_WINDOW_ORIGIN`) because it normalizes whole
 contigs.
+
+`scope` is which part of `<source>` was read: `scopenone` for the whole file, or the sorted,
+`+`-joined contig names it was restricted to (a long `--restrict_to_chromosomes` list is bounded
+to a count and a digest instead, so the stem cannot exceed a filesystem's path-component limit).
+Without it, normalizing one contig directly from a shared whole-genome BAM would collide with a
+whole-BAM normalization of that same file — two different outputs, one cache key. Every caller
+normalizes the whole source today, so every stem in the wild reads `scopenone`.
 
 **Bump `LRAA_Globals.SPLICE_GRAPH_NORMALIZATION_METHOD` whenever the normalizer changes which
 reads it keeps or what it records on them.** No consumer can detect a stale cache for itself: a
