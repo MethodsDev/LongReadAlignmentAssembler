@@ -337,6 +337,22 @@ def get_hash_code(input_string):
     return hex_digest
 
 
+def format_splice_compatible_id_set(id_sets, transcript_id):
+    """Render one transcript's splice-compat-containment/contained-by entry.
+
+    Shared by Quantify.report_quant_results (the default path) and
+    StreamingQuant.write_expr (the --stream_reads path) so the two format the
+    splice_compat_contained/splice_contained_by columns identically -- both are sets
+    of transcript ids, whose iteration order is unspecified, so sorted() rather than
+    set order makes the column reproducible between runs and byte-identical between
+    the two quant paths. Absent from the map (no relationship recorded) prints "",
+    not "{}", matching how neither path emits an entry for it in the first place.
+    """
+    if transcript_id not in id_sets:
+        return ""
+    return "{" + ",".join(sorted(id_sets[transcript_id])) + "}"
+
+
 def file_identity_token(path):
     """Short digest of which file this is and whether it has changed since.
 

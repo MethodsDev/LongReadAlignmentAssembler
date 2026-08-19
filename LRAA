@@ -553,7 +553,10 @@ def main():
             "concentrates in components whose reads are largely ambiguous: at "
             "--normalize_max_cov_level 1000, two overlapping MKKS annotations sharing 1,624 "
             "of 2,522 reads differed by 394 reads, while the other 1,478 genes agreed to "
-            "0.2. Raise the target if a locus like that matters. Requires --quant_only, a "
+            "0.2. Raise the target if a locus like that matters. In discovery mode this "
+            "applies to the final-quant tail only, after isoform selection settles -- not "
+            "to the iterative selection loop, which uses a separate lighter scoring path. "
+            "Requires a "
             "first-pass bam thinner than the streamed one, and either transcriptome "
             "rescue turned off or --stream_reads_rescue_unassigned "
             f"(default: {LRAA_Globals.config['stream_reads']})"
@@ -1305,17 +1308,6 @@ def main():
             "nothing for them; use --HiFi to opt into the more stringent HiFi settings."
         )
 
-    # Also BEFORE the dispatch, mirroring the --stream_reads/--quant_only check the
-    # unchunked setup makes further down: a chunk worker IS a full LRAA invocation and
-    # will refuse this combination itself, but only after cut selection, extraction and
-    # normalization have already run for however many chunks came before the first
-    # worker fails. Caught here instead, before any of that work starts.
-    if args.chunk and args.stream_reads and not args.quant_only:
-        sys.exit(
-            "Error, --stream_reads requires --quant_only. The streaming pass is a "
-            "final quant strategy; there is no discovery equivalent."
-        )
-
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
     # everything else sees, and before any state is built that it would discard.
@@ -1476,14 +1468,6 @@ def main():
     LRAA_Globals.config["use_XW_read_weights_for_quant"] = (
         args.use_XW_read_weights_for_quant
     )
-    if args.stream_reads and not args.quant_only:
-        # Discovery quantifies repeatedly over changing transcript sets while selecting
-        # isoforms; the streaming pass is a final accounting over a settled set. Wiring it
-        # into discovery would stream the whole bam once per selection round.
-        sys.exit(
-            "Error, --stream_reads requires --quant_only. The streaming pass is a final "
-            "read accounting over a settled transcript set, not part of isoform selection."
-        )
     if args.stream_reads:
         # The invariant is that pass 1 reads a THINNER bam than pass 2, not that this process
         # is the one that thinned it. Two ways to satisfy it: normalize here, or be handed an
@@ -2551,8 +2535,10 @@ def _normalize_bam_for_splice_graph(
     #
     #   under --quant_only there is no discovery pass, so every read of this bam happens
     #   inside the swap and enforces the final-quant floor. Measuring at the discovery
-    #   floor mismeasures the only consumer there is. (--stream_reads requires
-    #   --quant_only, so it is covered by this branch rather than needing its own.)
+    #   floor mismeasures the only consumer there is. (Discovery's own final-quant tail
+    #   may now also set --stream_reads, but that changes nothing here: run_quant_only
+    #   is entered inside the swap either way, streaming or not, so this branch already
+    #   covers it without a case of its own.)
     #
     #   otherwise discovery builds a splice graph from this bam outside the swap, at the
     #   permissive floor, while the final quant stage reads it inside. The floor applies to
@@ -5111,7 +5097,7 @@ def run_quant_only(
         logger.info(f"-no isoforms to quant on {contig_acc} [{contig_strand}]")
         LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         # continue
-        return
+        return None, None
 
     cache_key = None
     cache_signature = None
@@ -5159,7 +5145,7 @@ def run_quant_only(
     if sg.is_empty():
         logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
         # continue
-        return
+        return None, None
 
     if splice_graph_cache_dir and cache_key and cache_signature and built_new_graph:
         _store_splice_graph_in_cache(
@@ -5184,7 +5170,7 @@ def run_quant_only(
             contig_acc,
             contig_strand,
         )
-        return
+        return None, None
 
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(
@@ -5380,11 +5366,21 @@ def run_quant_only(
             contig_strand,
         )
 
-    if report_quants and LRAA_Globals.config["stream_reads"]:
-        # Second pass. The first pass above estimated abundances from the normalized bam;
-        # this one walks the full bam and writes a tracking row per (read, isoform) without
-        # retaining any read, so the tracking file covers every read while peak memory stays
-        # bounded by the annotation rather than the library.
+    totals = None
+    if LRAA_Globals.config["stream_reads"]:
+        # Second pass. Runs whenever streaming is on, independent of report_quants: this
+        # is the accounting pass itself (it writes the tracking file), not reporting, and
+        # tracking_header_final needs no discovery-vs-quant-only handling (identical
+        # either way). The first pass above estimated abundances from the normalized bam;
+        # this one walks the full bam and writes a tracking row per (read, isoform)
+        # without retaining any read, so the tracking file covers every read while peak
+        # memory stays bounded by the annotation rather than the library. `totals` is
+        # returned to the caller: a caller that reports here (report_quants=True, i.e.
+        # quant-only's own top-level call) writes quant.expr below; the discovery tail
+        # call (report_quants=False) writes it itself afterward, over the FULL settled
+        # transcript set rather than this function's graph-filtered `input_transcripts`,
+        # so an isoform that failed to remap onto the final-quant splice graph still gets
+        # a reported (zero-count) row instead of silently vanishing.
         import StreamingQuant
         import StreamingRescue
 
@@ -5491,9 +5487,8 @@ def run_quant_only(
                         contig_strand,
                     )
                 rescuer.close()
-        StreamingQuant.write_expr(
-            input_transcripts, totals, ofh_quant_output, quant_only=True
-        )
+        if report_quants:
+            StreamingQuant.write_expr(input_transcripts, totals, ofh_quant_output)
     elif report_quants:
         q.report_quant_results(
             input_transcripts,
@@ -5517,7 +5512,7 @@ def run_quant_only(
             pass
 
     LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
-    return q
+    return q, totals
 
 
 def run_transcript_assembly(
@@ -6085,7 +6080,7 @@ def run_transcript_assembly(
         f"[{contig_acc}{contig_strand}] Running final quant for {len(transcripts)} transcripts"
     )
 
-    q = run_quant_only(
+    q, totals = run_quant_only(
         contig_acc,
         contig_strand,
         contig_seq_str,
@@ -6122,17 +6117,6 @@ def run_transcript_assembly(
     # gene-keyed sets, so the surviving list order otherwise varies between runs.
     transcripts = sorted(transcripts, key=Transcript.structural_sort_key)
 
-    # Build a contig/strand prefix for final quant logs
-    try:
-        _prefix = (
-            f"[{contig_acc}{contig_strand}] " if contig_acc and contig_strand else None
-        )
-    except Exception:
-        _prefix = None
-    frac_read_assignments = q._estimate_isoform_read_support(
-        transcripts, prefix_str=_prefix
-    )  ##//TODO: make frac read assignments a member of the quantifier obj. Shouldn't need to run it again here unless transcripts got filtered above.
-
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
     (
@@ -6140,14 +6124,49 @@ def run_transcript_assembly(
         transcript_splice_compatible_contained_by,
     ) = TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
 
-    q.report_quant_results(
-        transcripts,
-        frac_read_assignments,
-        ofh_quant_output,
-        ofh_quant_read_tracker,
-        splice_compatible_containments=transcript_splice_compatible_containments,
-        splice_compatible_contained_by=transcript_splice_compatible_contained_by,
-    )
+    if LRAA_Globals.config["stream_reads"]:
+        # `totals` came from run_quant_only's own streaming second pass over this
+        # settled transcript set; the tracking file is already written there. Safe to
+        # call write_expr over the FULL `transcripts` list rather than run_quant_only's
+        # own graph-filtered `input_transcripts`: unlike report_quant_results, it looks
+        # up each transcript's counts in totals.frac_sum with a 0.0 default, so an
+        # isoform that failed to remap onto the rebuilt final-quant splice graph still
+        # gets a reported zero-count row instead of silently vanishing -- the same
+        # guarantee the NOTE above describes for quant=0 paralog-cluster isoforms. No
+        # need to re-run _estimate_isoform_read_support here either: write_expr reads
+        # only totals and each transcript's own structural fields, none of which come
+        # from it.
+        import StreamingQuant
+
+        StreamingQuant.write_expr(
+            transcripts,
+            totals,
+            ofh_quant_output,
+            splice_compatible_containments=transcript_splice_compatible_containments,
+            splice_compatible_contained_by=transcript_splice_compatible_contained_by,
+        )
+    else:
+        # Build a contig/strand prefix for final quant logs
+        try:
+            _prefix = (
+                f"[{contig_acc}{contig_strand}] "
+                if contig_acc and contig_strand
+                else None
+            )
+        except Exception:
+            _prefix = None
+        frac_read_assignments = q._estimate_isoform_read_support(
+            transcripts, prefix_str=_prefix
+        )  ##//TODO: make frac read assignments a member of the quantifier obj. Shouldn't need to run it again here unless transcripts got filtered above.
+
+        q.report_quant_results(
+            transcripts,
+            frac_read_assignments,
+            ofh_quant_output,
+            ofh_quant_read_tracker,
+            splice_compatible_containments=transcript_splice_compatible_containments,
+            splice_compatible_contained_by=transcript_splice_compatible_contained_by,
+        )
 
     # Close external read tracking stores now that final reporting for this contig/strand is complete
     try:

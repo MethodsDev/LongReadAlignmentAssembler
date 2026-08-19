@@ -1948,16 +1948,16 @@ class Quantify:
             if splice_compatible_containments is not None:
                 # These are sets of transcript ids; emit them sorted so the report is
                 # reproducible between runs rather than following set iteration order.
-                def _format_id_set(id_sets, transcript_id):
-                    if transcript_id not in id_sets:
-                        return ""
-                    return "{" + ",".join(sorted(id_sets[transcript_id])) + "}"
-
+                # Shared with StreamingQuant.write_expr so the two format identically.
                 report_vals.append(
-                    _format_id_set(splice_compatible_containments, transcript_id)
+                    Util_funcs.format_splice_compatible_id_set(
+                        splice_compatible_containments, transcript_id
+                    )
                 )
                 report_vals.append(
-                    _format_id_set(splice_compatible_contained_by, transcript_id)
+                    Util_funcs.format_splice_compatible_id_set(
+                        splice_compatible_contained_by, transcript_id
+                    )
                 )
 
             report_vals.append(f"{rpm_total_reads:.3f}")

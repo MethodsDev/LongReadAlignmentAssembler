@@ -1,6 +1,6 @@
 
 
-test: test_ref_free_ID test_quant test_ref_guided_ID test_unsupported_ref_model
+test: test_ref_free_ID test_quant test_ref_guided_ID test_unsupported_ref_model test_stream_discovery_parity
 
 
 test_ref_free_ID:
@@ -103,6 +103,46 @@ test_unsupported_ref_model:
 	! awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=4590 && $$5<=4780 {found=1} END{exit !found}' __PRE-Tx-Filtering.transcripts.gtf
 	@echo "checking that the neighboring supported SIRV3 locus still reconstructs"
 	awk '$$1=="SIRV3" && $$3=="transcript" && $$4>=8700 && $$5<=10000 {n++} END{exit !(n>=2)}' __PRE-Tx-Filtering.transcripts.gtf
+
+
+# --stream_reads discovery byte-identity, a MATCHED-CONTROL comparison. Discovery's
+# final-quant tail could not use --stream_reads before this session; this pins that it
+# now reports identically to the default path. SIRVs is not a corpus that would pass
+# this trivially: dozens of loci carry genuine splice-compatible containment pairs
+# (SIRV7's terminal twins among them), so splice_compat_contained/splice_contained_by
+# is exercised on every run below, and the final assertion refuses a corpus that
+# stopped exercising it.
+#
+# --bam_for_sg points at a distinct copy of the same bam under --no_norm, satisfying
+# "pass 1 reads a thinner bam than pass 2" with a MATCHED control instead of an actual
+# thinning: both passes then read the identical read set, which is the configuration
+# CHANGELOG v0.20.0 measured the streaming E-step to reproduce exactly ("every gene and
+# all 5,822 transcripts agree to 0.0000 reads"). Rescue is off on both arms: mappy vs
+# minimap2 divergence is rescue's own, separately measured property (v0.20.1), not
+# something this target exists to check.
+#
+# Row order legitimately differs -- report_quant_results sorts by (read count,
+# transcript_id) descending, write_expr by transcript_id alone -- so both outputs are
+# sorted before diffing, matching neither path's own on-disk order.
+test_stream_discovery_parity:
+	rm -rf ./__streamparity*
+	cp data/sim.fasta.mm2.bam __streamparity_bam_for_sg.bam
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --HiFi \
+	    --no_norm --no_rescue_unassigned_reads_via_transcriptome_alignment \
+	    --output_prefix LRAA.streamparity_nostream --no_cleanup
+	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam \
+	    --bam_for_sg __streamparity_bam_for_sg.bam --no_norm --HiFi --stream_reads \
+	    --no_rescue_unassigned_reads_via_transcriptome_alignment \
+	    --output_prefix LRAA.streamparity_stream --no_cleanup
+	grep -v '^#' LRAA.streamparity_nostream.LRAA.ref-free.quant.expr | sort > __streamparity_nostream.expr.sorted
+	grep -v '^#' LRAA.streamparity_stream.LRAA.ref-free.quant.expr | sort > __streamparity_stream.expr.sorted
+	diff __streamparity_nostream.expr.sorted __streamparity_stream.expr.sorted
+	zcat LRAA.streamparity_nostream.LRAA.ref-free.quant.tracking.gz | grep -v '^#' | sort > __streamparity_nostream.tracking.sorted
+	zcat LRAA.streamparity_stream.LRAA.ref-free.quant.tracking.gz | grep -v '^#' | sort > __streamparity_stream.tracking.sorted
+	diff __streamparity_nostream.tracking.sorted __streamparity_stream.tracking.sorted
+	@echo "checking splice_compat_contained/splice_contained_by are non-trivially populated"
+	awk -F'\t' 'NR>1 && ($$11!="" || $$12!="") {n++} END{exit !(n>=20)}' __streamparity_nostream.expr.sorted
+	@echo "stream_discovery_parity: quant.expr and quant.tracking identical, containment columns populated"
 
 
 include ../lraa_test_docker.mk

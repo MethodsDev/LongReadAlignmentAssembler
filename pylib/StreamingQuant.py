@@ -777,7 +777,13 @@ def stream_assign(
     return totals
 
 
-def write_expr(transcripts, totals, ofh, quant_only=True):
+def write_expr(
+    transcripts,
+    totals,
+    ofh,
+    splice_compatible_containments=None,
+    splice_compatible_contained_by=None,
+):
     """Emit quant.expr from the streamed totals rather than from EM's own counts.
 
     The counts here are sums of per-read fractional assignments over the whole bam, so
@@ -791,6 +797,21 @@ def write_expr(transcripts, totals, ofh, quant_only=True):
     TPM is normalized over the transcripts passed in, which is this contig/strand's set.
     That matches the default path, whose per-shard quant.expr also sums to 1e6 and which
     the merge renormalizes genome-wide; measured identical on both modes.
+
+    ``splice_compatible_containments``/``splice_compatible_contained_by`` mirror
+    ``Quantify.report_quant_results``'s own parameters of the same name, formatted with
+    the same ``Util_funcs.format_splice_compatible_id_set`` so the two paths agree byte
+    for byte. Emitted exactly when ``splice_compatible_containments is not None`` --
+    the SAME decision point ``report_quant_results`` uses, rather than a second one --
+    so the caller that already knows whether this run's header carries the two extra
+    discovery columns (``quant_header_final``'s own ``if not quant_only``) makes it
+    once, by whether it passes the dicts at all. Quant-only's own call never passes
+    them; discovery's does, even when both dicts are empty.
+
+    ``transcripts`` is deliberately allowed to be a superset of what ``totals`` covers:
+    every lookup below defaults to zero rather than asserting presence, so an isoform
+    with no streamed support -- one that never even mapped onto the final-quant splice
+    graph -- still gets a reported zero-count row instead of vanishing from the file.
     """
     total_reported = sum(totals.frac_sum.get(t.get_transcript_id(), 0.0) for t in transcripts)
 
@@ -829,8 +850,17 @@ def write_expr(transcripts, totals, ofh, quant_only=True):
             (transcript.get_introns_string() if num_exons > 1 else ""),
             _splice_hash_code(transcript, num_exons),
         ]
-        if not quant_only:
-            vals += ["", ""]
+        if splice_compatible_containments is not None:
+            vals.append(
+                Util_funcs.format_splice_compatible_id_set(
+                    splice_compatible_containments, transcript_id
+                )
+            )
+            vals.append(
+                Util_funcs.format_splice_compatible_id_set(
+                    splice_compatible_contained_by, transcript_id
+                )
+            )
         vals.append(f"{rpm:.3f}")
         print("\t".join(vals), file=ofh)
 

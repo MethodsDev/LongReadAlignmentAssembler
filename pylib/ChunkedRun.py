@@ -3953,9 +3953,10 @@ def build_parser():
         "--stream_reads",
         action="store_true",
         default=LRAA_Globals.config["stream_reads"],
-        help="pass --stream_reads to every chunk worker. Requires --discovery to "
-        "be off (LRAA:--stream_reads requires --quant_only), checked before any "
-        "chunking work starts",
+        help="pass --stream_reads to every chunk worker, quant-only or discovery "
+        "alike. Each worker is a full LRAA invocation and validates the combination "
+        "itself (a thinner first-pass bam, rescue settings, --tag_bam), exactly as "
+        "the unchunked path would",
     )
     parser.add_argument(
         "--stream_reads_rescue_unassigned",
@@ -4005,8 +4006,6 @@ def parse_args(argv=None):
             parser.error("--{} is required".format(name))
     if args.cpu_budget is not None and args.cpu_budget < 1:
         parser.error("--cpu_budget must be >= 1")
-    if args.stream_reads and args.discovery:
-        parser.error("--stream_reads requires quant-only mode (drop --discovery)")
     # A chunk worker's cwd is its own chunk directory (run_step passes cwd=cdir),
     # not the caller's -- resolved here, once, rather than trusting every caller
     # of this parser to remember to.
