@@ -185,6 +185,7 @@ class LevelAccumulator:
 
 
 WEIGHTED_TRACKING_MARKER = "use_XW_read_weights_for_quant"
+WEIGHTED_TRACKING_MARKER_LINE_PREFIX = "# WARNING:"
 
 
 def _reject_if_weighted_tracking(filename, opener):
@@ -199,13 +200,24 @@ def _reject_if_weighted_tracking(filename, opener):
     LRAA marks such files in their leading comment block, and this reads it before pandas
     does, because the parser is configured to treat '#' as a comment and would drop the
     warning silently.
+
+    Matched only against the dedicated "# WARNING:"-prefixed marker line, not any
+    leading comment containing the substring: every tracking file also carries a
+    "# LRAA CMD: ..." echo of its own command line, which contains this same substring
+    whenever --use_XW_read_weights_for_quant was passed at all -- including a
+    --stream_reads run, whose merged file is complete and does not carry the marker
+    line. A blind substring scan would refuse that file too, on the strength of its own
+    command-line echo rather than anything describing incompleteness.
     """
     try:
         with opener(filename, "rt") as handle:
             for line in handle:
                 if not line.startswith("#"):
                     break
-                if WEIGHTED_TRACKING_MARKER in line:
+                if (
+                    line.startswith(WEIGHTED_TRACKING_MARKER_LINE_PREFIX)
+                    and WEIGHTED_TRACKING_MARKER in line
+                ):
                     sys.exit(
                         "Error, {} was produced with --{}.\n"
                         "Its rows cover only the reads retained by coverage "

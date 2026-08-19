@@ -1521,18 +1521,16 @@ def main():
             "Drop one of them; this combination would stream without transcriptome "
             "rescue left enabled and report nothing to say so."
         )
-    if args.stream_reads and args.tag_bam:
-        # Tagging annotates each bam record with the gene/transcript it was assigned to,
-        # which needs the read-name -> assignment associations the default path retains.
-        # The streaming pass drops every read once its tracking row is written -- that is
-        # what bounds its memory -- so it has nothing to tag from. Left unguarded, the run
-        # would tag from pass 1 alone, i.e. from the normalized bam, and emit a bam whose
-        # tagged subset silently excludes every read normalization removed.
-        sys.exit(
-            "Error, --stream_reads cannot be combined with --tag_bam. Tagging needs the "
-            "per-read assignments the streaming pass deliberately does not retain; pass 1 "
-            "alone would tag only the reads that survived coverage normalization."
-        )
+    # A blanket --stream_reads + --tag_bam refusal used to live here, on the premise
+    # that tagging needed per-read assignments the streaming pass does not retain. That
+    # premise does not hold: tag_bam is a subprocess call to
+    # annotate_bam_with_read_tracking_info.py (see near the end of run_quant_only),
+    # invoked only after every per-contig tracking shard has already been merged to
+    # disk, and it reads entirely from that finished, file-based tracking file plus the
+    # full bam -- never from anything the streaming pass held in memory. Under
+    # --stream_reads the merged tracking file is MORE complete than the non-streaming
+    # default (full bam vs. normalization-retained reads only), so this combination is
+    # the safer one, not one that needed refusing.
     LRAA_Globals.config["stream_reads"] = args.stream_reads
     LRAA_Globals.config["stream_reads_rescue_unassigned"] = bool(
         args.stream_reads and args.stream_reads_rescue_unassigned
@@ -1591,12 +1589,15 @@ def main():
         # that looks finished and is wrong. Both need the full-bam post-pass that would
         # reconstitute per-read rows for every read; until that exists, they are out of
         # scope for this mode.
-        if args.tag_bam:
+        if args.tag_bam and not args.stream_reads:
             sys.exit(
-                "Error, --tag_bam is not supported with --use_XW_read_weights_for_quant. "
-                "Tagging annotates reads from the tracking file, which covers only the "
-                "reads that survived coverage normalization, so the reads thinned away "
-                "would be written untagged and indistinguishable from unassigned ones."
+                "Error, --tag_bam is not supported with --use_XW_read_weights_for_quant "
+                "unless --stream_reads is also given. Without streaming, tagging "
+                "annotates reads from the tracking file, which covers only the reads "
+                "that survived coverage normalization, so the reads thinned away would "
+                "be written untagged and indistinguishable from unassigned ones. Add "
+                "--stream_reads, whose merged tracking file covers the full bam instead "
+                "of only the retained reads, to lift this."
             )
         # Single-cell-ness cannot be inferred safely. It is a property of the data --
         # identifiers become barcode^UMI^name only when Util_funcs.get_read_name finds
@@ -1613,17 +1614,25 @@ def main():
                 "produce correct per-cell output, and single-cell input cannot be "
                 "detected reliably enough to refuse it on your behalf."
             )
-        if args.library_type == "single_cell" or args.cell_list:
+        # --stream_reads changes the premise below: its merged tracking file has one row
+        # per read of the full bam, not one per normalization-retained read, and the
+        # frac_assigned split among a read's compatible isoforms already reflects
+        # XW-corrected theta (EM.py:87 feeds mp.get_read_weight() into EM unconditionally,
+        # which is XW-corrected when this flag is on). So the per-cell undercounting this
+        # refusal exists to prevent does not occur under streaming; only the non-streaming
+        # path is refused.
+        if (args.library_type == "single_cell" or args.cell_list) and not args.stream_reads:
             sys.exit(
                 "Error, single-cell quantification is not supported with "
-                "--use_XW_read_weights_for_quant. Per-cell matrices are built by summing "
-                "frac_assigned over tracking rows (util/sc/"
-                "singlecell_tracking_to_sparse_matrix.py), which ignores XW and counts "
-                "only retained reads, so every cell would be undercounted -- most at the "
-                "deep loci this mode is meant to fix. A weight cannot be apportioned "
-                "across the cells of reads that were discarded."
+                "--use_XW_read_weights_for_quant unless --stream_reads is also given. "
+                "Without streaming, per-cell matrices are built by summing frac_assigned "
+                "over tracking rows (util/sc/singlecell_tracking_to_sparse_matrix.py), "
+                "which ignores XW and counts only retained reads, so every cell would be "
+                "undercounted -- most at the deep loci this mode is meant to fix. Add "
+                "--stream_reads, whose merged tracking file covers the full bam, to lift "
+                "this."
             )
-        if _bam_looks_single_cell(
+        if not args.stream_reads and _bam_looks_single_cell(
             args.bam,
             LRAA_Globals.config.get("cell_barcode_tag"),
             LRAA_Globals.config.get("read_umi_tag"),
@@ -1632,7 +1641,7 @@ def main():
                 "Error, --library_type bulk was declared but reads in {} carry both the "
                 "cell-barcode ({}) and UMI ({}) tags, so read identifiers will be "
                 "single-cell. Weighted quantification cannot produce correct per-cell "
-                "output.".format(
+                "output unless --stream_reads is also given.".format(
                     args.bam,
                     LRAA_Globals.config.get("cell_barcode_tag"),
                     LRAA_Globals.config.get("read_umi_tag"),
@@ -3502,12 +3511,19 @@ def _run_jobs_schedule_and_merge(
         "frac_assigned",
         "read_weight",
     ]
-    if LRAA_Globals.config.get("use_XW_read_weights_for_quant", False):
-        # The column contract is unchanged, so the WDL merge that requires identical
-        # headers across shards still works. Recorded in the file because the file
-        # outlives the command line that made it, and a consumer summing frac_assigned
-        # has no other way to learn that these rows describe the retained reads rather
-        # than the library.
+    if LRAA_Globals.config.get(
+        "use_XW_read_weights_for_quant", False
+    ) and not LRAA_Globals.config.get("stream_reads", False):
+        # Without --stream_reads, this file has one row per read retained by coverage
+        # normalization, and frac_assigned is NOT weighted by XW, so it understates the
+        # library. Under --stream_reads, the merged tracking file instead has one row
+        # per read of the FULL bam (StreamingQuant.stream_assign iterates
+        # bam_file_for_quant, the original un-normalized bam) and each read's
+        # frac_assigned split already reflects XW-corrected theta (EM.py:87), so the
+        # file this warns about is not what streaming produces. Recorded in the file
+        # because the file outlives the command line that made it, and a consumer
+        # summing frac_assigned has no other way to learn that these rows describe the
+        # retained reads rather than the library.
         #
         # lraa_merge_header.py rebuilds the comment block rather than copying it, so it
         # does not carry arbitrary comments through; it recognizes this marker

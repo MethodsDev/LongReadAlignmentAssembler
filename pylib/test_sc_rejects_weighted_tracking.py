@@ -15,6 +15,7 @@ rather than copying it, so a marker that is not recognized explicitly is dropped
 merged file understates counts with nothing about it to say so.
 """
 
+import gzip
 import os
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import pytest
 UTIL = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "util")
 CONVERTER = os.path.join(UTIL, "sc", "singlecell_tracking_to_sparse_matrix.py")
 MERGE_HEADER = os.path.join(UTIL, "lraa_merge_header.py")
+LRAA = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "LRAA")
 
 HEADER = (
     "gene_id\ttranscript_id\ttranscript_splice_hash_code\tnum_exons\tmp_id\t"
@@ -146,3 +148,91 @@ def test_a_merged_marked_file_is_still_refused_by_the_converter(tmp_path):
     r = _convert(merged, tmp_path / "m")
     assert r.returncode != 0, "the merged file is just as incomplete as its inputs"
     assert "use_XW_read_weights_for_quant" in (r.stdout + r.stderr)
+
+
+# ------------------------------------------------------ real LRAA emission, end to end
+
+
+def _lraa_bam(path):
+    import pysam
+
+    header = pysam.AlignmentHeader.from_dict(
+        {"HD": {"VN": "1.6", "SO": "coordinate"},
+         "SQ": [{"SN": "chr1", "LN": 10000}]}
+    )
+    with pysam.AlignmentFile(str(path), "wb", header=header) as fh:
+        for i in range(10):
+            a = pysam.AlignedSegment(header)
+            a.query_name = f"r{i}"
+            a.reference_id = 0
+            a.reference_start = 100 + i
+            a.mapping_quality = 60
+            a.cigarstring = "100M"
+            a.query_sequence = "A" * 100
+            a.query_qualities = pysam.qualitystring_to_array("I" * 100)
+            fh.write(a)
+    pysam.index(str(path))
+    return path
+
+
+def _run_lraa_tracking(tmp_path, *extra):
+    """A normalizable bulk bam, quantified for real with --use_XW_read_weights_for_quant.
+
+    Returns the merged tracking file's text, so a test can inspect exactly what LRAA
+    emitted rather than a hand-built stand-in for it.
+    """
+    gtf = tmp_path / "a.gtf"
+    gtf.write_text(
+        'chr1\ttest\texon\t101\t200\t.\t+\t.\tgene_id "g1"; transcript_id "t1";\n'
+    )
+    genome = tmp_path / "g.fa"
+    genome.write_text(">chr1\n" + "A" * 10000 + "\n")
+    bam = _lraa_bam(tmp_path / "bulk.bam")
+    cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
+           "--gtf", str(gtf), "--genome", str(genome),
+           "--output_prefix", str(tmp_path / "out"),
+           "--use_XW_read_weights_for_quant", "--library_type", "bulk"] + list(extra)
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    tracking = list(tmp_path.glob("out*quant.tracking.gz"))
+    assert tracking, "expected a tracking file to be produced"
+    with gzip.open(tracking[0], "rt") as fh:
+        return fh.read()
+
+
+def test_lraa_omits_the_marker_under_stream_reads(tmp_path):
+    """Closes the loop between LRAA's emission logic and the converter's consumption
+    logic -- the gap that would otherwise have made the fix silently fail end-to-end.
+
+    Every tracking file, streamed or not, also carries a "# LRAA CMD: ..." echo of its
+    own command line, which contains the substring "use_XW_read_weights_for_quant"
+    whenever that flag was passed at all. So the marker itself is checked as the
+    dedicated "# WARNING:"-prefixed line -- exactly what
+    singlecell_tracking_to_sparse_matrix.py's _reject_if_weighted_tracking and
+    lraa_merge_header.py's _marks_incomplete_tracking now scope their own detection to,
+    after both were found to blind-match that CMD echo too.
+    """
+    text = _run_lraa_tracking(
+        tmp_path, "--stream_reads",
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+    )
+    comment_lines = [line for line in text.splitlines() if line.startswith("#")]
+    assert not any(
+        line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line
+        for line in comment_lines
+    )
+
+
+def test_lraa_still_emits_the_marker_without_stream_reads(tmp_path):
+    """The mirror-image regression test: change 5 narrows an existing condition, and
+    nothing in the hand-built-fixture tests above would catch a botched narrowing
+    (inverted logic, wrong config key) that silently stopped LRAA from ever emitting
+    the marker at all -- they test the converter's reaction to a marker that's already
+    there, not whether LRAA still writes it for the case that still needs it.
+    """
+    text = _run_lraa_tracking(tmp_path)
+    comment_lines = [line for line in text.splitlines() if line.startswith("#")]
+    assert any(
+        line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line
+        for line in comment_lines
+    )
