@@ -1,4 +1,43 @@
 v0.22.0, August 17, 2026
+- INVESTIGATED, NOT A BUG: `single_cell_monoexonic_cell_filter_deferral_plan.md` proposed
+  deferring `min_monoexonic_supporting_cells` (`filter_novel_monoexonic_isoforms_by_min_cells`,
+  called from `run_transcript_assembly` at `LRAA:6008`) to run after final quant, on the theory
+  that its cell counts came from `transcript.get_multipaths_evidence_assigned()` as populated
+  against the coverage-normalized splice-graph bam, in both `--stream_reads` and default mode --
+  making it prone to false negatives (a real, adequately-supported novel monoexonic isoform
+  wrongly dropped because normalization thinned its apparent cell count). Implementing that
+  fix required reusing `ea309c9`'s component-scoped incremental-requant mechanism at the final-
+  quant `Quantify` object, plus, for streaming, a new post-close shard-tracking-row correction
+  step (`stream_assign` writes every tracking row for a unit before the filter could act on it,
+  and the file is gzip-compressed and not concurrently readable while its writer is still open).
+  Before building either, the diagnosis itself was re-verified against the code the fix would
+  touch: `run_transcript_assembly`'s three draft-mode `quantify()` calls (`LRAA:5742`, `5835`,
+  `5867`, ea309c9's own subject) that populate the evidence this filter reads all resolve against
+  the SAME `mp_all_counter`, built once at `LRAA:5726-5735` from `bam_file_for_quant` -- the
+  FULL, un-normalized bam, not `bam_file_for_sg` -- unconditionally, regardless of
+  `--stream_reads`. `LRAA:5719`'s own comment says as much directly above that call: `# Now use
+  the original bam for quant (not depth normalized)`. That has been true since 2025-02-19 (`git
+  blame`), not a recent regression, and holds identically in both modes because
+  `run_transcript_assembly`'s draft filtering entirely precedes `run_quant_only`, where
+  `--stream_reads` first has any effect. The plan conflated this call with an earlier, separate
+  `build_multipath_graph` invocation used for ME/SE splice-graph assembly, which does read
+  `bam_file_for_sg`, but which the min-cells filter never consults. DISPROVEN empirically, not
+  just by re-reading: a purpose-built fixture (`testing/single_cells/
+  sc_monoexonic_cell_filter_deferral`, three 300bp monoexonic loci on a synthetic contig) wires a
+  splice-graph-bam stand-in in via `--bam_for_sg`/`--no_norm` with only 2 distinct cells at a
+  locus whose full bam carries 10 reads from 8 -- the exact false-negative shape the plan
+  targeted -- and MEASURED the current, unmodified code retaining it with all 10 reads/8 cells in
+  both `--stream_reads` and default mode (`--debug` log: no `FILTERING novel monoexonic
+  transcript` line for that locus), while a genuinely 2-distinct-cell control locus (identical
+  content in both bams) is correctly filtered in both modes (`supported by 2 cells, below
+  min_monoexonic_supporting_cells=5`), and an always-well-supported control locus is untouched.
+  No production code was changed -- there is no bug to fix at this call site. The fixture ships
+  as a `testing/single_cells` regression test (`make test`) guarding specifically against a
+  future change that would route this filter's evidence through the normalized bam instead of
+  the full one; `data/build_fixture.py` documents and reproduces the two committed bams
+  byte-for-byte. Full unit suite (`pylib/`, 956 tests) and `cd testing && make test` both pass
+  clean, including this new fixture in both modes.
+
 - `run_transcript_assembly`'s three draft-mode `Quantify.quantify()` calls against the
   same `mp_all_counter` (`LRAA:5742`, `5835`, `5867` -- once after ME/SE assembly, once
   after `filter_novel_isoforms_by_min_read_support`, once after
