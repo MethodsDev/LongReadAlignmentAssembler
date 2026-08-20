@@ -63,6 +63,28 @@ config = {
     "min_total_alignments_engage_frac_per_id_check": 1000,
     "read_aln_gap_merge_int": 10,
     "max_intron_length": 200000,
+    # rDNA-cassette masking (see pylib/RdnaMask.py). Reads whose alignment overlaps
+    # a hit of the mask fasta against --genome are excluded everywhere
+    # quant_discard_reason is consulted -- coverage normalization, splice-graph
+    # construction, and read-to-transcript assignment alike. On by default because
+    # a run that hits one of these loci pays the cost regardless of whether the
+    # investigator was looking for it; --no_rdna_mask opts out.
+    "rdna_mask_enabled": True,
+    # None -> RdnaMask.DEFAULT_RDNA_CASSETTE_FASTA (bundled human rDNA repeat unit,
+    # resources/human_rDNA_cassette.fa); set from --rdna_mask_fasta for a different
+    # organism's cassette.
+    "rdna_mask_fasta": None,
+    # Bases of clearance added on each side of a cassette-vs-genome alignment hit
+    # before it becomes an excluded region, absorbing alignment-boundary slop
+    # (indels, soft-clips) at the edge of a real rDNA-homologous span.
+    "rdna_mask_pad": 500,
+    # NOT a CLI setting. Populated once per LRAA invocation, immediately after
+    # --genome is resolved, from RdnaMask.build_rdna_mask_bed +
+    # RdnaMask.load_mask_bed: a {contig: IntervalTree} mask, or None when masking
+    # is disabled or found nothing for this genome. quant_discard_reason reads it
+    # here so every consumer converges on one built-once mask without threading it
+    # through every call site by hand.
+    "rdna_mask_intervals": None,
     #
     ####################################
     # splice graph construction criteria

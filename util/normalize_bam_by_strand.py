@@ -12,6 +12,7 @@ from statistics import median
 sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../pylib"]))
 from Pipeliner import Pipeliner, Command
 import LRAA_Globals
+import RdnaMask
 import Util_funcs
 
 # Named in every artifact this writes, so a cache from a different method cannot
@@ -66,6 +67,7 @@ def main():
     parser.add_argument("--max_intron_length", type=int, default=LRAA_Globals.config["max_intron_length"], help="alignments containing any intron longer than this are discarded during the strand split; set to 0 or a negative value to disable intron length filtering")
     parser.add_argument("--input_is_single_strand", action="store_true", help="the input is already orientation-pure (one strand only), as a per-chunk input from the partitioned pipeline is: normalize it directly, skipping the strand split and the merge that would otherwise write one populated bam plus one empty one and glue them back together")
     parser.add_argument("--window_origin", type=int, default=None, help="absolute reference coordinate (0-based) that position 0 of this input maps to: 0 for a whole-contig bam, the rebase offset for a rebased chunk. Aligns the depth-window grid to the absolute coordinate grid, so the same absolute locus lands in the same window whether it is normalized whole or as part of a chunk. Default (unset): the grid is anchored per contig on the first aligned base seen there, making window boundaries a function of which records happen to be in the input")
+    parser.add_argument("--rdna_mask_bed", type=str, default=None, help="BED of excluded regions (RdnaMask.build_rdna_mask_bed's output); reads whose alignment overlaps a region here are excluded from depth measurement and from the output, exactly like a record quant_discard_reason's other criteria reject. Unset means no masking, regardless of the caller's --no_rdna_mask/--rdna_mask_fasta -- the driver passes this explicitly when it built one")
 
     args = parser.parse_args()
 
@@ -88,6 +90,9 @@ def main():
     # neither its position in the file nor the order reads are visited in
     logger.info(f"Using random seed: {random_seed}")
 
+    rdna_mask_bed = args.rdna_mask_bed
+    rdna_mask = RdnaMask.load_mask_bed(rdna_mask_bed)
+
     split_token, run_token = compute_tokens(
         input_bam_filename,
         output_bam_filename,
@@ -99,6 +104,7 @@ def main():
         input_is_single_strand=input_is_single_strand,
         min_per_id=min_per_id,
         min_mapping_quality=min_mapping_quality,
+        rdna_mask_bed=rdna_mask_bed,
     )
 
     pipeliner = Pipeliner("__chckpts")
@@ -158,7 +164,7 @@ def main():
     for source_bam_file, norm_bam_filename, norm_bam_checkpoint in norm_jobs:
 
         if not os.path.exists(norm_bam_checkpoint):
-            sift_bam(source_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed, window_origin, min_per_id, min_mapping_quality)
+            sift_bam(source_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed, window_origin, min_per_id, min_mapping_quality, rdna_mask)
             subprocess.check_call("touch {}".format(norm_bam_checkpoint), shell=True)
 
         norm_bam_files.append(norm_bam_filename)
@@ -194,6 +200,7 @@ def compute_tokens(
     input_is_single_strand=False,
     min_per_id=0,
     min_mapping_quality=0,
+    rdna_mask_bed=None,
 ):
     """Checkpoint tokens for the two stages of this script.
 
@@ -232,6 +239,10 @@ def compute_tokens(
         sampling_fields.append("min_per_id={}".format(min_per_id))
     if min_mapping_quality:
         sampling_fields.append("min_mapping_quality={}".format(min_mapping_quality))
+    if rdna_mask_bed:
+        sampling_fields.append(
+            "rdna_mask={}".format(Util_funcs.file_identity_token(rdna_mask_bed))
+        )
 
     # The split also drops the records failing the intron length criterion, so
     # the threshold determines which records it emits and has to name the split's
@@ -307,7 +318,7 @@ def _window_span(lend, rend, depth_window, anchor):
     return range((lend - anchor) // depth_window, (rend - 1 - anchor) // depth_window + 1)
 
 
-def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0):
+def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0, rdna_mask=None):
     """Whether this record is part of the evidence the consumer will read.
 
     Delegates to the one retention policy so depth measurement cannot drift from what
@@ -316,7 +327,11 @@ def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0):
     LRAA_Globals holds defaults instead of the caller's settings, and the MAPQ the
     consumer enforces is not always LRAA's --min_mapping_quality -- run_quant_only swaps
     in --min_mapping_quality_for_final_quant for the whole quant stage, so a consumer
-    reading this bam there applies that value.
+    reading this bam there applies that value. rdna_mask follows suit for the same
+    first reason: this process never ran RdnaMask.build_rdna_mask_bed itself, so
+    config["rdna_mask_intervals"] here is whatever LRAA_Globals defaults to, not
+    whatever the driver built -- the caller passes the {contig: IntervalTree} it
+    loaded from --rdna_mask_bed explicitly, or None when no mask was built at all.
 
     A record the consumer discards but this counts inflates measured depth, which lowers
     acceptance probability, which inflates every surviving read's XW weight at that
@@ -335,6 +350,7 @@ def _record_is_evidence(read, min_per_id=0, min_mapping_quality=0):
             max_intron_length=0,
             min_mapping_quality=min_mapping_quality,
             min_per_id=min_per_id,
+            rdna_mask=rdna_mask,
         )
         is None
     )
@@ -399,6 +415,7 @@ def sift_bam(
     window_origin=None,
     min_per_id=0,
     min_mapping_quality=0,
+    rdna_mask=None,
 ):
     """Thin coverage toward a target depth, recording each read's sampling weight.
 
@@ -463,7 +480,7 @@ def sift_bam(
         max_overhang = 0
 
         for read in reader.fetch(until_eof=True):
-            if not _record_is_evidence(read, min_per_id, min_mapping_quality):
+            if not _record_is_evidence(read, min_per_id, min_mapping_quality, rdna_mask):
                 continue
 
             contig = read.reference_name
@@ -518,7 +535,7 @@ def sift_bam(
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
         with pysam.AlignmentFile(norm_bam_filename, "wb", template=reader) as writer:
             for read in reader.fetch(until_eof=True):
-                if not _record_is_evidence(read, min_per_id, min_mapping_quality):
+                if not _record_is_evidence(read, min_per_id, min_mapping_quality, rdna_mask):
                     continue
                 total += 1
 

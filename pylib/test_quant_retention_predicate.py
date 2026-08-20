@@ -195,3 +195,101 @@ def test_records_parsed_from_a_bam_are_judged_the_same_as_hand_built_ones(tmp_pa
             )
 
     assert seen == expected
+
+
+def test_rdna_masked_reads_are_rejected_when_their_blocks_overlap_the_mask(tmp_path):
+    """The mask is a real IntervalTree, exercised through a parsed record.
+
+    Positioned deliberately after the structural/mapq checks and before the
+    intron/per-id ones: a read failing only the mask (mapq 60, no mismatches, no
+    long intron) must be rejected as "rdna_masked" specifically, not fall through
+    to None or to some other reason.
+    """
+    import intervaltree
+
+    records = [
+        ("in_mask", 0, 60, 0),  # spans [1000, 2000)
+        ("outside_mask", 0, 60, 0),
+    ]
+    bam = tmp_path / "cases.bam"
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": "chr1", "LN": 100000}],
+    }
+    with pysam.AlignmentFile(str(bam), "wb", header=header) as fh:
+        for i, (name, flag, mapq, nm) in enumerate(records):
+            aln = pysam.AlignedSegment(fh.header)
+            aln.query_name = name
+            aln.flag = flag
+            aln.reference_id = 0
+            aln.reference_start = 1000 + i * 5000
+            aln.mapping_quality = mapq
+            aln.cigar = [(0, 1000)]
+            aln.query_sequence = "A" * 1000
+            aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+            aln.set_tag("NM", nm)
+            fh.write(aln)
+    pysam.index(str(bam))
+
+    mask = {"chr1": intervaltree.IntervalTree()}
+    mask["chr1"][1000:2000] = True  # exactly the "in_mask" read's span
+
+    seen = {}
+    with pysam.AlignmentFile(str(bam), "rb") as fh:
+        for read in fh.fetch(until_eof=True):
+            seen[read.query_name] = Util_funcs.quant_discard_reason(
+                read, rdna_mask=mask
+            )
+    assert seen == {"in_mask": "rdna_masked", "outside_mask": None}
+
+
+def test_rdna_mask_is_read_from_config_when_not_passed_explicitly(tmp_path):
+    """Same "None reads the config default" convention as every other threshold.
+
+    normalize_bam_by_strand.py runs as a separate process and threads its mask
+    through explicitly (see _record_is_evidence); every in-process caller --
+    Bam_alignment_extractor, Pretty_alignment_manager, StreamingQuant -- relies
+    on this fallback instead, so it is load-bearing for the masking feature as a
+    whole, not just a convenience.
+    """
+    import intervaltree
+
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": "chr1", "LN": 100000}],
+    }
+    bam = tmp_path / "one.bam"
+    with pysam.AlignmentFile(str(bam), "wb", header=header) as fh:
+        aln = pysam.AlignedSegment(fh.header)
+        aln.query_name = "r"
+        aln.flag = 0
+        aln.reference_id = 0
+        aln.reference_start = 1000
+        aln.mapping_quality = 60
+        aln.cigar = [(0, 1000)]
+        aln.query_sequence = "A" * 1000
+        aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+        aln.set_tag("NM", 0)
+        fh.write(aln)
+    pysam.index(str(bam))
+
+    mask = {"chr1": intervaltree.IntervalTree()}
+    mask["chr1"][1000:2000] = True
+
+    saved = LRAA_Globals.config.get("rdna_mask_intervals")
+    try:
+        with pysam.AlignmentFile(str(bam), "rb") as fh:
+            read = next(fh.fetch(until_eof=True))
+
+        LRAA_Globals.config["rdna_mask_intervals"] = None
+        assert Util_funcs.quant_discard_reason(read) is None
+
+        LRAA_Globals.config["rdna_mask_intervals"] = mask
+        assert Util_funcs.quant_discard_reason(read) == "rdna_masked"
+
+        # An explicit argument still wins over config, matching every other
+        # threshold in this predicate: config says masked, the explicit
+        # argument here says no mask at all, and the explicit one must win.
+        assert Util_funcs.quant_discard_reason(read, rdna_mask={}) is None
+    finally:
+        LRAA_Globals.config["rdna_mask_intervals"] = saved

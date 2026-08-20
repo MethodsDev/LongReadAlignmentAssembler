@@ -1,3 +1,41 @@
+v0.23.0, August 20, 2026
+- ADDED: rDNA-cassette read masking, on by default. Reads whose alignment overlaps a
+  minimap2 hit of a bundled human rDNA repeat unit (`resources/human_rDNA_cassette.fa`,
+  GenBank U13369.1) against `--genome` are excluded from coverage normalization,
+  splice-graph construction, and quantification -- everywhere `Util_funcs
+  .quant_discard_reason` (the single retention policy `Bam_alignment_extractor`,
+  `Pretty_alignment_manager`, `StreamingQuant` and `normalize_bam_by_strand.py` all
+  consume) is checked. Motivated by a measured, reproducible pathology: the GRCh38
+  acrocentric-arm rDNA loci and several unplaced/decoy scaffolds (`chrUn_GL000220v1`,
+  `chr22_KI270733v1_random`) carry collapsed, partial rDNA-repeat-unit copies that draw
+  MAPQ-0 read piles of hundreds of thousands to over a million reads at a single locus --
+  GENCODE annotates only the small mature `5.8S` fragment as a gene there, leaving the
+  much larger 18S/28S/spacer footprint where the actual reads land entirely unannotated,
+  so no GTF-biotype filter (rRNA or otherwise) can identify them; sequence homology to the
+  repeat unit is what actually does. CONFIRMED via direct read-vs-cassette alignment: of a
+  random sample across one chr21 chunk's dominant pathological component (1,637,000
+  reads), 99.6% mapped to the cassette at MAPQ ~60 (vs MAPQ 0 genome-wide), 72.8% landing
+  specifically on 18S rRNA; the two decoy scaffolds showed the identical signature
+  (99.2% mapped, predominantly 18S). MEASURED end to end via the unmodified `LRAA` CLI on
+  the real chr21 chunk this was diagnosed from: wall time 10,704.8s (baseline, unmasked)
+  -> 65.28s (masked, default), rc=0 both, with every real transcript outside the masked
+  span byte-for-byte recovered (only the isoforms inside the masked, zero-real-gene span
+  are dropped). CONFIRMED inert on an ordinary genome: the SIRV regression suite
+  (`testing/sirvs`) passes byte-identical against its existing golden output with masking
+  on by default, the mask log reporting zero hits. `--rdna_mask_fasta PATH` substitutes a
+  different organism's cassette; `--no_rdna_mask` disables the feature outright (mutually
+  exclusive with `--rdna_mask_fasta`). New module `pylib/RdnaMask.py`; the resulting BED
+  is checkpoint-cached per (mask method, genome identity, cassette identity, padding) so
+  a chunked run's per-chunk LRAA invocation and that chunk's own stage-4
+  `normalize_bam_by_strand.py` normalization -- which needs the mask as a BED, being a
+  separate process that cannot see the driver's in-process config -- share one minimap2
+  run rather than paying for it twice; concurrency-safe via `tempfile.mkstemp` for every
+  intermediate file, since a strandless chunk's two orientations build the SAME chunk's
+  mask from sibling threads. `Util_funcs.splice_graph_norm_cache_stem` and
+  `normalize_bam_by_strand.compute_tokens` both key on the mask's identity, so a
+  normalized bam cached before masking existed is never silently reused under it.
+
+
 v0.23.0, August 19, 2026
 - FIXED: `Quantify.quantify(prior=True)`'s carry-forward path deterministically
   `KeyError`ed on a ref-guided seed isoform with zero assigned reads sitting in a gene

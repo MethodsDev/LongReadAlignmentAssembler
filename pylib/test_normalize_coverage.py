@@ -370,12 +370,13 @@ def source_bam(tmp_path):
 
 def _stem(source, level=1000, max_intron_length=200000, min_per_id=0,
           min_mapping_quality=0, depth_window=100, random_seed=42, window_origin=0,
-          scope=None):
+          scope=None, rdna_mask_bed=None):
     import Util_funcs
 
     return Util_funcs.splice_graph_norm_cache_stem(
         "s.quant", level, str(source), max_intron_length, min_per_id,
         min_mapping_quality, depth_window, random_seed, window_origin, scope,
+        rdna_mask_bed,
     )
 
 
@@ -423,6 +424,29 @@ def test_cache_name_separates_the_absolute_grid_from_the_per_contig_anchor(sourc
     assert _stem(source_bam, window_origin=None) != _stem(source_bam, window_origin=0)
     assert ".o0." in _stem(source_bam, window_origin=0)
     assert ".onone." in _stem(source_bam, window_origin=None)
+
+
+def test_cache_name_distinguishes_the_rdna_mask(source_bam, tmp_path):
+    """A bam normalized without rDNA masking must not be reused once masking is on.
+
+    Pass_2 counts and writes a different read population under a mask than without
+    one -- exactly the same category of change min_per_id and min_mapping_quality
+    are already covered for above. window_origin's "none" convention is repeated
+    here for the same reason: a caller that forgot to pass a mask must not collide
+    with one that legitimately configured none.
+    """
+    mask_bed = tmp_path / "mask.bed"
+    mask_bed.write_text("chr1\t0\t100\n")
+    other_mask_bed = tmp_path / "other_mask.bed"
+    other_mask_bed.write_text("chr2\t0\t100\n")
+
+    assert ".rdnanone." in _stem(source_bam, rdna_mask_bed=None)
+    assert _stem(source_bam, rdna_mask_bed=str(mask_bed)) != _stem(
+        source_bam, rdna_mask_bed=None
+    )
+    assert _stem(source_bam, rdna_mask_bed=str(mask_bed)) != _stem(
+        source_bam, rdna_mask_bed=str(other_mask_bed)
+    )
 
 
 def test_cache_name_separates_a_restricted_scope_from_the_whole_source(source_bam):

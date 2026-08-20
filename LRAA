@@ -41,6 +41,7 @@ from ResourceMonitor import ResourceMonitor, summarize_resource_log
 import TranscriptFiltering
 import Util_funcs
 import CpuBudget
+import RdnaMask
 import LRAA_Globals
 import MultiProcessManager as mpm
 import logging
@@ -376,6 +377,12 @@ def main():
                 "rescue_unassigned_reads_via_transcriptome_alignment"
             ],
             help="disable transcriptome rescue for unassigned reads",
+        )
+        lite_quant.add_argument(
+            "--no_rdna_mask",
+            action="store_true",
+            default=False,
+            help="disable rDNA-cassette read masking (see --show_full_usage_info for --rdna_mask_fasta)",
         )
 
         lite_target = lite_parser.add_argument_group("region / single-cell")
@@ -811,6 +818,26 @@ def main():
         help="maximum allowable intron length. default: ({})".format(
             LRAA_Globals.config["max_intron_length"]
         ),
+    )
+    config_group.add_argument(
+        "--rdna_mask_fasta",
+        type=str,
+        default=None,
+        help="FASTA of ribosomal-DNA-repeat sequence to mask reads against, in place of "
+        "the bundled human rDNA cassette (resources/human_rDNA_cassette.fa). Reads whose "
+        "alignment overlaps a minimap2 hit of this sequence against --genome are excluded "
+        "from splice-graph construction, coverage normalization, and quantification, "
+        "wherever quant_discard_reason is consulted. Mutually exclusive with "
+        "--no_rdna_mask.",
+    )
+
+    config_group.add_argument(
+        "--no_rdna_mask",
+        action="store_true",
+        default=False,
+        help="disable rDNA-cassette read masking (on by default). See --rdna_mask_fasta "
+        "to substitute a different organism's cassette instead of disabling masking "
+        "outright.",
     )
 
     config_group.add_argument(
@@ -1295,6 +1322,12 @@ def main():
 
     if args.ME_only and args.SE_only:
         sys.exit("Error: Cannot specify both --ME_only and --SE_only")
+
+    if args.rdna_mask_fasta and args.no_rdna_mask:
+        sys.exit(
+            "Error: Cannot specify both --rdna_mask_fasta and --no_rdna_mask -- a "
+            "substitute cassette is pointless if masking itself is off."
+        )
 
     # BEFORE the chunked dispatch below, because a removed flag has to be removed for the
     # whole program. This check used to live at the top of the unchunked setup, several
@@ -1817,6 +1850,36 @@ def main():
     allow_spacers = False
     # allow_spacers = args.allow_spacers
 
+    # rDNA-cassette masking (pylib/RdnaMask.py). Built once per invocation, before
+    # anything reads a bam, so it is available two ways at once: in-process, via
+    # LRAA_Globals.config["rdna_mask_intervals"], which quant_discard_reason
+    # consults wherever it runs in THIS process (Bam_alignment_extractor,
+    # Pretty_alignment_manager, StreamingQuant -- none of them need to be told
+    # about it individually); and as a BED file, threaded into the separate
+    # normalize_bam_by_strand.py process below, which cannot see this process's
+    # config at all. A chunked run repeats this once per chunk, against that
+    # chunk's own mini-genome -- see pylib/RdnaMask.py's module docstring for why
+    # that is cheap enough not to matter.
+    rdna_mask_bed_path = None
+    if not args.no_rdna_mask:
+        rdna_fasta = RdnaMask.resolve_rdna_fasta(args.rdna_mask_fasta)
+        LRAA_Globals.config["rdna_mask_fasta"] = rdna_fasta
+        rdna_mask_cache_dir = os.path.join(
+            os.getcwd(), f"__{_safe_token(output_prefix)}.rdna_mask_cache"
+        )
+        rdna_mask_bed_path = RdnaMask.build_rdna_mask_bed(
+            genome_fasta_filename,
+            rdna_fasta,
+            cache_dir=rdna_mask_cache_dir,
+            threads=TOTAL_THREADS_FOR_SINGLETON_STAGE,
+        )
+        LRAA_Globals.config["rdna_mask_intervals"] = RdnaMask.load_mask_bed(
+            rdna_mask_bed_path
+        )
+    else:
+        LRAA_Globals.config["rdna_mask_enabled"] = False
+        LRAA_Globals.config["rdna_mask_intervals"] = None
+
     normalization_enabled = (not NO_NORM) and (
         runtime_config["normalize_max_cov_level"] > 0
     )
@@ -1856,6 +1919,7 @@ def main():
                 normalization_cache_dir,
                 QUANT_ONLY,
                 contig_scope=contig_restriction_scope,
+                rdna_mask_bed=rdna_mask_bed_path,
             )
             logger.info(
                 "splice-graph evidence will use normalized user-supplied BAM: %s",
@@ -1875,6 +1939,7 @@ def main():
                 normalization_cache_dir,
                 QUANT_ONLY,
                 contig_scope=contig_restriction_scope,
+                rdna_mask_bed=rdna_mask_bed_path,
             )
             logger.info(
                 "splice-graph evidence will use normalized BAM: %s", bam_file_for_sg
@@ -2512,6 +2577,7 @@ def _normalize_bam_for_splice_graph(
     quant_only,
     label=None,
     contig_scope=None,
+    rdna_mask_bed=None,
 ):
     if normalize_max_cov_level <= 0:
         return input_bam
@@ -2596,6 +2662,7 @@ def _normalize_bam_for_splice_graph(
         norm_random_seed,
         norm_window_origin,
         scope,
+        rdna_mask_bed,
     )
     normalized_path = cache_path / f"{cache_stem}.bam"
     checkpoint_path = normalized_path.parent / (normalized_path.name + ".ok")
@@ -3087,6 +3154,8 @@ def _run_chunked_mode(args):
         stream_reads_rescue_unassigned_to_targets=args.stream_reads_rescue_unassigned_to_targets,
         min_mapping_quality=args.min_mapping_quality,
         min_mapping_quality_for_final_quant=args.min_mapping_quality_for_final_quant,
+        no_rdna_mask=args.no_rdna_mask,
+        rdna_mask_fasta=args.rdna_mask_fasta,
         **sc_tag_overrides,
     )
 

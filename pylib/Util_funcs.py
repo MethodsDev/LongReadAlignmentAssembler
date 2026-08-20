@@ -8,6 +8,7 @@ import string
 import time
 import pysam
 import LRAA_Globals
+import RdnaMask
 from hashlib import blake2s
 
 from collections import defaultdict
@@ -176,6 +177,7 @@ def quant_discard_reason(
     max_intron_length=None,
     min_mapping_quality=None,
     min_per_id=None,
+    rdna_mask=None,
 ):
     """Why quantification would discard this alignment, or None if it keeps it.
 
@@ -195,6 +197,12 @@ def quant_discard_reason(
 
     Percent identity is cheap here -- CIGAR stats plus the NM/nM tag, no sequence
     -- so there is no cost argument for leaving it out.
+
+    ``rdna_mask`` follows the same "None reads the config default" convention as
+    every other threshold here: None looks up ``config["rdna_mask_intervals"]``,
+    the {contig: IntervalTree} RdnaMask.build_rdna_mask_bed populates at startup
+    (or None, when masking found nothing or was disabled), rather than requiring
+    every caller to thread it through explicitly. See RdnaMask.read_overlaps_mask.
     """
 
     if max_intron_length is None:
@@ -203,6 +211,8 @@ def quant_discard_reason(
         min_mapping_quality = int(LRAA_Globals.config["min_mapping_quality"])
     if min_per_id is None:
         min_per_id = LRAA_Globals.config["min_per_id"]
+    if rdna_mask is None:
+        rdna_mask = LRAA_Globals.config.get("rdna_mask_intervals")
 
     if read.is_unmapped:
         return "unmapped"
@@ -233,6 +243,8 @@ def quant_discard_reason(
         return "supplementary"
     if read.is_secondary:
         return "secondary"
+    if rdna_mask and RdnaMask.read_overlaps_mask(read, rdna_mask):
+        return "rdna_masked"
     if has_disqualifying_long_intron(read, max_intron_length):
         return "long_intron"
 
@@ -387,6 +399,7 @@ def splice_graph_norm_cache_stem(
     random_seed,
     window_origin,
     scope,
+    rdna_mask_bed,
 ):
     """Name for a normalized bam and its work directory.
 
@@ -438,6 +451,14 @@ def splice_graph_norm_cache_stem(
     function's own docstring says every other field must not be. Each name is trusted
     pre-sanitized, the same contract ``base_root`` already has; sorted here so the caller's
     argument order is not another axis the key would need to track separately.
+
+    ``rdna_mask_bed`` is the BED of excluded regions RdnaMask.build_rdna_mask_bed
+    wrote (or None, when masking is disabled or found nothing for this genome):
+    it decides which reads pass_2 counts as depth and which it writes, exactly as
+    min_per_id and min_mapping_quality do, so a bam normalized under one mask
+    state must not be reused under another. "none" rather than omitted, for the
+    same reason window_origin renders "none": a caller that forgot to pass a
+    real path must not collide with one that legitimately has no mask.
     """
     if scope is None:
         scope_token = "none"
@@ -460,7 +481,7 @@ def splice_graph_norm_cache_stem(
                 len(sorted_scope), get_hash_code(joined)[:12]
             )
         )
-    return "{}.norm_{}.maxintron_{}.{}.pid{}.mapq{}.w{}.s{}.o{}.scope{}.{}".format(
+    return "{}.norm_{}.maxintron_{}.{}.pid{}.mapq{}.w{}.s{}.o{}.scope{}.rdna{}.{}".format(
         base_root,
         normalize_max_cov_level,
         max_intron_length,
@@ -474,6 +495,7 @@ def splice_graph_norm_cache_stem(
         # at 0, and collapsing the two here would let them share one cached bam.
         ("none" if window_origin is None else int(window_origin)),
         scope_token,
+        ("none" if rdna_mask_bed is None else file_identity_token(rdna_mask_bed)),
         file_identity_token(source_bam),
     )
 

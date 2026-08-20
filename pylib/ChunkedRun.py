@@ -158,6 +158,7 @@ import pysam
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import CpuBudget  # noqa: E402  (path insert must precede the import)
+import RdnaMask  # noqa: E402
 import Util_funcs  # noqa: E402
 import LRAA_Globals  # noqa: E402
 
@@ -2285,6 +2286,10 @@ def lraa_cmd(
     ]
     if args.HiFi:
         cmd.append("--HiFi")
+    if getattr(args, "no_rdna_mask", False):
+        cmd.append("--no_rdna_mask")
+    elif getattr(args, "rdna_mask_fasta", None):
+        cmd += ["--rdna_mask_fasta", args.rdna_mask_fasta]
     if hasattr(args, "cell_barcode_tag"):
         cmd += ["--cell_barcode_tag", args.cell_barcode_tag]
     if hasattr(args, "read_umi_tag"):
@@ -2603,6 +2608,22 @@ def _process_unit(
     prefix = chunk["prefix"]
     steps = []
 
+    # Same genome LRAA itself will be handed below (genome="{}.fa".format(prefix)
+    # at the lraa_cmd call further down) -- built here too because stage 4's
+    # normalize_bam_by_strand.py subprocess needs a BED, not the in-process mask
+    # the per-chunk LRAA invocation builds for itself. RdnaMask.build_rdna_mask_bed
+    # caches on (genome, cassette, pad) identity, so calling it again for the
+    # chunk's OTHER orientation, or again inside that LRAA invocation's own
+    # main(), is a cache hit rather than a second minimap2 run.
+    rdna_mask_bed = None
+    if not getattr(args, "no_rdna_mask", False):
+        rdna_fasta = RdnaMask.resolve_rdna_fasta(getattr(args, "rdna_mask_fasta", None))
+        rdna_mask_bed = RdnaMask.build_rdna_mask_bed(
+            "{}.fa".format(prefix),
+            rdna_fasta,
+            cache_dir=os.path.join(cdir, "__rdna_mask_cache"),
+        )
+
     uid = unit["sentinel_id"]
     norm_bam = unit["norm_bam"]
     norm_token = chain_token(
@@ -2615,7 +2636,7 @@ def _process_unit(
         # from both this token and norm_cmd, so a non-default value from the
         # command line silently normalized as though it were 0.
         "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}"
-        ".minperid_{}_minmapq_{}".format(
+        ".minperid_{}_minmapq_{}_rdnamask_{}".format(
             uid,
             args.normalize_max_cov_level,
             args.depth_window,
@@ -2624,6 +2645,7 @@ def _process_unit(
             args.max_intron_length,
             resolve_min_per_id(args),
             resolve_min_mapping_quality(args),
+            Util_funcs.file_identity_token(rdna_mask_bed) if rdna_mask_bed else "none",
         ),
         upstream_token,
     )
@@ -2657,6 +2679,8 @@ def _process_unit(
         "--window_origin",
         str(chunk["window_origin"]),
     ]
+    if rdna_mask_bed:
+        norm_cmd += ["--rdna_mask_bed", rdna_mask_bed]
     if ckpt.done(norm_token):
         steps.append(
             {
@@ -3848,6 +3872,21 @@ def run_baseline(
         steps.append(prune_step)
 
     norm_bam = os.path.join(bdir, "whole.norm.bam")
+    # Built against the WHOLE genome, not per chunk -- this arm has no chunks --
+    # but from the same cassette and padding, so a locus masked in the chunked
+    # arm is masked here too. Anything else would make the two arms disagree for
+    # a reason that has nothing to do with partitioning, which is the one axis
+    # this control exists to isolate.
+    baseline_rdna_mask_bed = None
+    if not getattr(args, "no_rdna_mask", False):
+        baseline_rdna_fasta = RdnaMask.resolve_rdna_fasta(
+            getattr(args, "rdna_mask_fasta", None)
+        )
+        baseline_rdna_mask_bed = RdnaMask.build_rdna_mask_bed(
+            os.path.abspath(args.genome_fa),
+            baseline_rdna_fasta,
+            cache_dir=os.path.join(bdir, "__rdna_mask_cache"),
+        )
     norm_token = chain_token(
         # maxintron is passed to the normalizer below; it was missing here, which
         # is what let a new cap rerun the merge and then reuse this bam.
@@ -3855,12 +3894,16 @@ def run_baseline(
         # stage-4 token gained it for the identical reason (see chunk_worker),
         # and the baseline control has to name the same inputs or a non-default
         # value would make the two arms disagree without either being wrong.
-        "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0_maxintron_{}_minmapq_{}".format(
+        "baseline_norm.maxcov_{}_dw_{}_seed_{}_origin_0_maxintron_{}_minmapq_{}"
+        "_rdnamask_{}".format(
             args.normalize_max_cov_level,
             args.depth_window,
             args.random_seed,
             args.max_intron_length,
             resolve_min_mapping_quality(args),
+            Util_funcs.file_identity_token(baseline_rdna_mask_bed)
+            if baseline_rdna_mask_bed
+            else "none",
         ),
         input_token,
     )
@@ -3886,6 +3929,8 @@ def run_baseline(
         "--window_origin",
         "0",
     ]
+    if baseline_rdna_mask_bed:
+        norm_cmd += ["--rdna_mask_bed", baseline_rdna_mask_bed]
     if ckpt.done(norm_token):
         steps.append({"step": "baseline_normalize", "reused": True, "cmd": norm_cmd})
     else:
@@ -4026,6 +4071,18 @@ def build_parser():
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
+    parser.add_argument(
+        "--rdna_mask_fasta",
+        type=str,
+        default=LRAA_Globals.config["rdna_mask_fasta"],
+        help="passed identically to LRAA's own --rdna_mask_fasta for every chunk",
+    )
+    parser.add_argument(
+        "--no_rdna_mask",
+        action="store_true",
+        default=not LRAA_Globals.config["rdna_mask_enabled"],
+        help="passed identically to LRAA's own --no_rdna_mask for every chunk",
+    )
     # DEFAULT ON, and it must agree with LRAA's own default -- default_args() is
     # documented as the single place both routes get their defaults from, so a
     # disagreement here would make `LRAA --chunk` and this driver run different
