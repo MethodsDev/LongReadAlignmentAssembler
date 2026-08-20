@@ -58,7 +58,9 @@ workflow LRAA_wf {
         # with annot_gtf is quant-only, annot_gtf alone is ref-guided discovery,
         # neither is de novo. The one refusal left is --quant_only without a gtf,
         # which has nothing to quantify. See subwdls/LRAA_runner.wdl for the rest.
-        Boolean chunk = false
+        #
+        # ON by default since v0.25.0, matching LRAA's own default.
+        Boolean chunk = true
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         # Chunk each contig-STRAND separately, splitting the whole bam by orientation
@@ -77,6 +79,10 @@ workflow LRAA_wf {
         # task below, so the scattered and direct paths agree and neither depends on
         # the caller getting `samtools view -c` right.
         Boolean chunk_by_strand = false
+
+        # Two-pass streaming quantification; see subwdls/LRAA_runner.wdl's task input
+        # for detail. ON by default since v0.25.0, matching LRAA's own default.
+        Boolean stream_reads = true
 
         #  non-scattered runs
         # Cores for the LRAA task: its cpu request AND the --cpu_budget it divides across
@@ -204,6 +210,7 @@ workflow LRAA_wf {
                     approx_MB_per_cut = approx_MB_per_cut,
                     approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                     chunk_by_strand = chunk_by_strand,
+                    stream_reads = stream_reads,
                     cpu = select_first([cpuScattered, shard_cpu_computed]),  # explicit override, else per-shard estimate above
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
@@ -264,6 +271,7 @@ workflow LRAA_wf {
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                 chunk_by_strand = chunk_by_strand,
+                stream_reads = stream_reads,
                 cpu = cpu,
                 num_total_reads = num_total_reads,
                 cell_list = cell_list,

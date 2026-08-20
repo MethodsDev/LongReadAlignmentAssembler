@@ -40,6 +40,7 @@ This repo implements LRAA: isoform discovery and/or quantification from long-rea
 
 ## Dependencies and external tools
 - Python libs: `pysam`, `networkx`, `intervaltree`, `tqdm`, plus scientific stack for utilities/tests. See `Docker/Dockerfile` for an authoritative list.
+- `mappy` (minimap2's own Python binding, pin to your minimap2 release, e.g. `mappy==2.28`) is required on the default path since v0.24.x: `--chunk` and `--stream_reads` both default on, and `--stream_reads_rescue_unassigned` defaults on whenever transcriptome rescue is (also default-on), which needs `mappy` to run inside the streaming pass. Pass `--no_chunk --no_stream_reads` to run without it.
 - External tools used in workflows/tests: `samtools` (indexing), `gffcompare` (evaluation in `testing/sirvs`), and `miniwdl` for WDL-based smoke tests.
 - Utilities live in `util/` (Perl and Python helpers for BAM/GTF transformations) and are invoked by the main script.
 
@@ -53,7 +54,7 @@ source .venv/bin/activate  # On macOS/Linux
 # .venv\Scripts\activate   # On Windows
 
 # Install core Python dependencies
-pip install pysam networkx intervaltree tqdm
+pip install pysam networkx intervaltree tqdm mappy==2.28
 
 # For testing/development, you may also need:
 # pip install pytest miniwdl

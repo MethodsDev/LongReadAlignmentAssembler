@@ -2264,6 +2264,13 @@ def lraa_cmd(
         genome,
         "--bam",
         bam_for_quant,
+        # Explicit, not omitted: --chunk now defaults to True on this SAME LRAA
+        # script. A worker's job is to process exactly one already-extracted
+        # chunk plain, so it must never re-chunk -- and if it inherited a bare
+        # default of True, WORKER_ENV would immediately refuse it (see
+        # _run_chunked_mode's re-entry guard), killing every chunked run at its
+        # first worker. Omission stopped being safe the moment the default did.
+        "--no_chunk",
     ]
     if gtf:
         cmd += ["--gtf", gtf]
@@ -2296,12 +2303,28 @@ def lraa_cmd(
         cmd += ["--read_umi_tag", args.read_umi_tag]
     if args.cell_list:
         cmd += ["--cell_list", args.cell_list]
+    # Explicit either way, not merely omitted when False: --stream_reads and
+    # --stream_reads_rescue_unassigned now both default to True on LRAA's own
+    # parser (streaming on by default; rescue-inside-streaming on whenever
+    # transcriptome rescue itself is on). A chunk worker is a fresh LRAA
+    # invocation that resolves its OWN defaults when a flag is simply absent --
+    # omitting the flag here would let that worker re-derive True even after
+    # this run explicitly asked for False via ChunkedRun's own --no_stream_reads
+    # / --no_stream_reads_rescue_unassigned. args.stream_reads_rescue_unassigned
+    # is always a resolved bool by here: LRAA's main() resolves the sentinel
+    # before dispatching into this pipeline, and this parser's own
+    # parse_args()/default_args() resolve it too (see build_parser).
     if args.stream_reads:
         cmd.append("--stream_reads")
-        if args.stream_reads_rescue_unassigned:
-            cmd.append("--stream_reads_rescue_unassigned")
+        cmd.append(
+            "--stream_reads_rescue_unassigned"
+            if args.stream_reads_rescue_unassigned
+            else "--no_stream_reads_rescue_unassigned"
+        )
         if args.stream_reads_rescue_unassigned_to_targets:
             cmd.append("--stream_reads_rescue_unassigned_to_targets")
+    else:
+        cmd.append("--no_stream_reads")
     return cmd
 
 
@@ -4200,17 +4223,35 @@ def build_parser():
     )
     parser.add_argument(
         "--stream_reads",
+        dest="stream_reads",
         action="store_true",
         default=LRAA_Globals.config["stream_reads"],
         help="pass --stream_reads to every chunk worker, quant-only or discovery "
         "alike. Each worker is a full LRAA invocation and validates the combination "
         "itself (a thinner first-pass bam, rescue settings, --tag_bam), exactly as "
-        "the unchunked path would",
+        "the unchunked path would. ON BY DEFAULT, matching LRAA's own default; see "
+        "--no_stream_reads",
+    )
+    parser.add_argument(
+        "--no_stream_reads",
+        dest="stream_reads",
+        action="store_false",
+        help="pass --no_stream_reads to every chunk worker instead",
     )
     parser.add_argument(
         "--stream_reads_rescue_unassigned",
+        dest="stream_reads_rescue_unassigned",
         action="store_true",
-        default=LRAA_Globals.config["stream_reads_rescue_unassigned"],
+        default=None,
+        help="unset (the default) tracks --stream_reads: on whenever streaming is "
+        "on, since this parser has no independent transcriptome-rescue toggle of "
+        "its own -- see --no_stream_reads_rescue_unassigned",
+    )
+    parser.add_argument(
+        "--no_stream_reads_rescue_unassigned",
+        dest="stream_reads_rescue_unassigned",
+        action="store_false",
+        help="pass --no_stream_reads_rescue_unassigned to every chunk worker instead",
     )
     parser.add_argument(
         "--stream_reads_rescue_unassigned_to_targets",
@@ -4244,6 +4285,7 @@ def build_parser():
 def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    _resolve_stream_reads_rescue_unassigned(args)
 
     required = ["bam", "genome_fa", "output_dir"]
     if not args.discovery:
@@ -4262,6 +4304,20 @@ def parse_args(argv=None):
         args.cell_list = os.path.abspath(args.cell_list)
 
     return args
+
+
+def _resolve_stream_reads_rescue_unassigned(args):
+    """Resolve the ``None`` sentinel left by an unset ``--stream_reads_rescue_unassigned``.
+
+    This parser has no ``--rescue_unassigned_reads_via_transcriptome_alignment``
+    toggle of its own -- rescue is not forwarded into chunk workers at all today,
+    each worker's own LRAA invocation applies its own default there -- so unlike
+    LRAA's top-level parser, which tracks whichever way transcriptome rescue
+    resolved, this one has only ``--stream_reads`` to track.
+    """
+
+    if args.stream_reads_rescue_unassigned is None:
+        args.stream_reads_rescue_unassigned = bool(args.stream_reads)
 
 
 def default_args(**overrides):
@@ -4285,6 +4341,12 @@ def default_args(**overrides):
                 "no such chunked-pipeline setting: {}".format(key)
             )
         setattr(args, key, value)
+    # AFTER overrides, not before: an override of `stream_reads` with
+    # `stream_reads_rescue_unassigned` left unstated must resolve against the
+    # OVERRIDDEN stream_reads, not the pre-override default. An override that
+    # named `stream_reads_rescue_unassigned` explicitly (True or False) already
+    # left it non-None, so this is a no-op for that caller.
+    _resolve_stream_reads_rescue_unassigned(args)
     if getattr(args, "cell_list", None):
         args.cell_list = os.path.abspath(args.cell_list)
     return args

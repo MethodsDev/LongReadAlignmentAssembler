@@ -597,25 +597,33 @@ def _guard_run(tmp_path, *extra):
     cmd = [
         sys.executable, LRAA_SCRIPT, "--quant_only", "--bam", str(bam),
         "--gtf", str(gtf), "--genome", str(genome),
-        "--output_prefix", str(tmp_path / "out"), "--stream_reads",
+        "--output_prefix", str(tmp_path / "out"),
+        # Explicit on both counts: these guards are about --stream_reads's
+        # interaction with transcriptome rescue specifically, and --chunk now
+        # also defaults on, which would otherwise dispatch every one of these
+        # invocations into the chunked pipeline before it ever reaches the
+        # guards below -- a confound that did not exist when this harness was
+        # written.
+        "--stream_reads", "--no_chunk",
     ] + list(extra)
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
 
 
-def test_streaming_refuses_rescue_without_the_flag(tmp_path):
-    """The pre-existing refusal has to keep refusing, and now it is the DEFAULT case:
-    rescue is on unless turned off, rescue inside the stream is opt in, and a run that
-    silently skipped rescue would report the first pass's rescue summary as though it
-    covered the whole bam."""
+def test_streaming_rescues_unassigned_reads_by_default(tmp_path):
+    """The pre-existing refusal only fired when the flag was left unstated, and
+    --stream_reads_rescue_unassigned's default no longer leaves it unstated: unset, it
+    now resolves to whichever way transcriptome rescue itself resolved, on by default --
+    so this exact combination (streaming, rescue on, the flag not given) runs rescue
+    inside the stream instead of refusing. The refusal itself is still live; it now
+    takes an explicit --no_stream_reads_rescue_unassigned to reach it (see
+    test_streaming_rescue_needs_rescue_left_enabled and
+    test_the_fourth_category_flag_is_refused_on_its_own for the guards that still fire).
+    """
     r = _guard_run(tmp_path)
-    assert r.returncode != 0
-    out = r.stdout + r.stderr
-    assert "cannot reproduce transcriptome rescue" in out
-    assert "--stream_reads_rescue_unassigned" in out, "and must name the way in"
-    assert (
-        "--no_rescue_unassigned_reads_via_transcriptome_alignment" in out
-    ), "and the way out"
-    assert not list(tmp_path.glob("out*quant.expr")), "and must not emit results"
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, combined[-3000:]
+    assert "cannot reproduce transcriptome rescue" not in combined
+    assert list(tmp_path.glob("out*quant.expr")), "must emit results"
 
 
 def test_the_retired_assignment_mode_flag_is_rejected_rather_than_ignored(tmp_path):

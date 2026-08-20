@@ -1327,7 +1327,16 @@ def run_gate(
     os.makedirs(out_dir, exist_ok=True)
     report = {"out_dir": out_dir, "steps": [], "failures": []}
 
-    common = []
+    common = [
+        # Both arms go through ChunkedRun already (--arm both / --arm chunked), so
+        # chunking is not a variable this gate isolates -- but ChunkedRun's own
+        # --stream_reads now defaults on too, and streaming was never part of this
+        # gate's design: it reports one expectation step instead of re-estimating,
+        # which measurably moves row counts and TPM in ambiguous components (see
+        # LRAA's --stream_reads help), and would silently move the `--expect`
+        # figures this gate pins the strand-first control to.
+        "--no_stream_reads",
+    ]
     if contig:
         common += ["--contig", contig]
     if HiFi:

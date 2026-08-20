@@ -35,6 +35,7 @@ test_nonstreaming:
 	cd run_nonstreaming && $(LRAA) \
 	    --genome ../data/chrTest.genome.fa --bam ../data/chrTest.full.bam \
 	    --bam_for_sg ../data/chrTest.sg.bam --no_norm \
+	    --no_chunk --no_stream_reads \
 	    --debug --no_cleanup --no_parallelize_contigs \
 	    --output_prefix nonstreaming > run.log 2>&1
 	$(CHECK) --label non-streaming \
@@ -51,6 +52,7 @@ test_streaming:
 	    --genome ../data/chrTest.genome.fa --bam ../data/chrTest.full.bam \
 	    --bam_for_sg ../data/chrTest.sg.bam --no_norm --stream_reads \
 	    --no_rescue_unassigned_reads_via_transcriptome_alignment \
+	    --no_chunk \
 	    --debug --no_cleanup --no_parallelize_contigs \
 	    --output_prefix streaming > run.log 2>&1
 	$(CHECK) --label streaming \

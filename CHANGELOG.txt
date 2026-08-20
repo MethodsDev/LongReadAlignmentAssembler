@@ -1,3 +1,79 @@
+v0.25.0, August 20, 2026
+- BREAKING: `--chunk` and `--stream_reads` are now ON BY DEFAULT. `--no_chunk` and
+  `--no_stream_reads` restore the pre-v0.25.0 behaviour exactly (whole-contig-strand
+  in one worker, single-pass in-memory quantification). Chunking degrades correctly
+  for anything too small to cut: a contig-strand shorter than `--approx_MB_per_cut`
+  yields zero cut points and the "chunk" is the untouched whole contig -- and for the
+  common strandless case that whole-contig chunk isn't even copied
+  (`--reuse_source_bam`), so the new default's fixed cost on an ordinary run is stage
+  2's cut-selection scan, not a rerouted pipeline. One pre-existing chunked-mode
+  limitation this default flip now exposes to every caller rather than only the ones
+  who opted in: strandless extraction refuses an annotation carrying a gene_id on
+  both strands ("gene X appears on both strands (- and +)"), which the bundled SIRV
+  set's antisense SIRVs (SIRV3, SIRV6, ...) trigger against the full `SIRVs1-7`
+  annotation -- pass `--no_chunk` for that corpus, or any other annotation shaped the
+  same way, until strandless extraction handles it. `--stream_reads_rescue_unassigned`
+  no longer has a flat default: unset, it now tracks whichever way transcriptome
+  rescue itself resolved (`--rescue_unassigned_reads_via_transcriptome_alignment`,
+  itself on by default), so a plain `--stream_reads` invocation does not hit the
+  existing "needs --stream_reads_rescue_unassigned or rescue turned off" refusal --
+  the common case resolves to full rescue, exactly as the non-streaming default
+  already did. An explicit `--no_stream_reads_rescue_unassigned` (new flag) still
+  refuses that combination, unchanged. Streaming's own reports are NOT byte-identical
+  with the non-streaming path even so: it reports one expectation step at the first
+  pass's abundances rather than re-estimating, so default-run output can shift by a
+  small amount in components whose reads are largely ambiguous (measured previously
+  at up to several hundred reads on a real overlapping-annotation locus; see
+  `--stream_reads`'s own help for the figures) -- a caller whose pipeline diffs
+  against pinned historical output should expect this and pass `--no_stream_reads` if
+  exact reproduction matters more than the memory bound. `mappy` (minimap2's own
+  Python binding) becomes a default-path dependency as a result: `Docker/Dockerfile
+  .base` already pinned it to `mappy==2.28` (inherited by `Dockerfile.core`,
+  `Dockerfile.orf` and `Dockerfile.sc`, which all build `FROM` it), and the
+  standalone `Docker/Dockerfile` (`lraa-combined`, its own independent build) gains
+  the same pin here so every published image carries it; also added to the dev-setup
+  docs for a bare install.
+- `WDL/LRAA.wdl` and `WDL/subwdls/LRAA_runner.wdl` flip their own `chunk` input
+  default to `true` and add a `stream_reads` input (also `true`), threaded through
+  both the scattered and direct call sites. The `chunk` command-line fragment used
+  to omit `--chunk` entirely when the WDL input was `false`
+  (`~{true="--chunk" false='' chunk}`), relying on LRAA's own CLI default to mean
+  "off" -- exactly the landmine this release triggers, since that CLI default just
+  flipped. Both booleans now emit an explicit flag either way
+  (`~{true="--chunk" false="--no_chunk" chunk}` /
+  `~{true="--stream_reads" false="--no_stream_reads" stream_reads}`), so a WDL
+  caller's stated default no longer depends on which way the CLI's own default
+  happens to point.
+- `pylib/ChunkedRun.py`'s per-chunk worker launch (`lraa_cmd`) now states `--chunk`'s
+  negation and `--stream_reads`'s state explicitly on every worker invocation,
+  rather than only ever emitting the positive flag. A chunk worker is a full,
+  independent `LRAA` invocation that resolves its own defaults when a flag is
+  merely absent, so once those defaults flipped, an unstated `--chunk` would have
+  re-entered the chunked dispatch inside every worker (caught by the worker
+  re-entry guard, which would have failed every chunked run at its first worker),
+  and an unstated `--stream_reads`/`--stream_reads_rescue_unassigned` could
+  silently re-derive a different answer than the one the top-level invocation
+  resolved, after an explicit `--no_stream_reads` asked for the opposite.
+  `ChunkedRun.py`'s own standalone parser (used by
+  `util/misc/run_chunked_quant_pipeline.py`) gained matching `--no_chunk`-style
+  negations for `--stream_reads` and `--stream_reads_rescue_unassigned`, resolved
+  the same way.
+- Every existing `testing/` fixture and `pylib`/`util` end-to-end test that ran
+  plain `LRAA` without naming `--chunk`/`--stream_reads` now states
+  `--no_chunk`/`--no_stream_reads` explicitly, so historical golden output and
+  the invariants those tests check keep meaning what they meant before this
+  default flip; a fixture that already compared a chunked or streamed arm against
+  an omission-relying baseline states the negation only on the baseline, so the
+  comparison still isolates the same one variable it always did. Two guard tests
+  whose entire premise was "the combination is refused because a flag was left
+  unstated" (`pylib/test_streaming_rescue.py`,
+  `pylib/test_xw_weight_cli_guards.py`) are rewritten to assert the new, correct
+  contract instead: streaming with rescue left at its own default now succeeds,
+  and the refusal survives only when a caller explicitly declines
+  `--stream_reads_rescue_unassigned` while leaving rescue on elsewhere. Full
+  `pylib`/`util` suite (1102 tests) passes.
+
+
 v0.24.1, August 20, 2026
 - FIXED: rDNA-cassette masking (v0.24.0) had no quality floor on a cassette-vs-genome
   hit before it became an excluded region, and no minimum overlap before a read was

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.24.1"
+VERSION = "v0.25.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -334,8 +334,14 @@ def main():
         lite_parallel.add_argument(
             "--chunk",
             action="store_true",
-            default=False,
-            help="chunked mode: split each contig at positions no read spans, process the chunks independently and merge, bounding peak memory. Works for quant-only (--gtf required) and for discovery (--gtf optional)",
+            default=True,
+            help="chunked mode: split each contig at positions no read spans, process the chunks independently and merge, bounding peak memory. Works for quant-only (--gtf required) and for discovery (--gtf optional). ON BY DEFAULT since v0.25.0; see --no_chunk",
+        )
+        lite_parallel.add_argument(
+            "--no_chunk",
+            dest="chunk",
+            action="store_false",
+            help="disable chunked mode; run LRAA exactly as it did before chunking became the default",
         )
 
         lite_quant = lite_parser.add_argument_group("common quant/discovery settings")
@@ -544,6 +550,7 @@ def main():
     )
     primary.add_argument(
         "--stream_reads",
+        dest="stream_reads",
         action="store_true",
         default=LRAA_Globals.config["stream_reads"],
         help=(
@@ -556,7 +563,7 @@ def main():
             "them, and that step costs nothing: on ONT chr20, holding the splice graph and "
             "the first-pass bam identical and varying only this flag, every gene and every "
             "one of 5,822 transcripts agreed to 0.0000 reads. All divergence from the "
-            "default path comes from the first pass reading a THINNED bam, and it "
+            "non-streaming path comes from the first pass reading a THINNED bam, and it "
             "concentrates in components whose reads are largely ambiguous: at "
             "--normalize_max_cov_level 1000, two overlapping MKKS annotations sharing 1,624 "
             "of 2,522 reads differed by 394 reads, while the other 1,478 genes agreed to "
@@ -565,14 +572,23 @@ def main():
             "to the iterative selection loop, which uses a separate lighter scoring path. "
             "Requires a "
             "first-pass bam thinner than the streamed one, and either transcriptome "
-            "rescue turned off or --stream_reads_rescue_unassigned "
+            "rescue turned off or --stream_reads_rescue_unassigned. ON BY DEFAULT since "
+            "v0.25.0; see --no_stream_reads "
             f"(default: {LRAA_Globals.config['stream_reads']})"
         ),
     )
     primary.add_argument(
+        "--no_stream_reads",
+        dest="stream_reads",
+        action="store_false",
+        help="disable streaming quantification; run the single-pass, in-memory "
+        "path LRAA used before streaming became the default",
+    )
+    primary.add_argument(
         "--stream_reads_rescue_unassigned",
+        dest="stream_reads_rescue_unassigned",
         action="store_true",
-        default=LRAA_Globals.config["stream_reads_rescue_unassigned"],
+        default=None,
         help=(
             "let --stream_reads run with transcriptome rescue enabled "
             "by rescuing candidates against the local transcriptome from inside the "
@@ -585,9 +601,20 @@ def main():
             "mappy exposes no equivalent of minimap2's -f and no alignment score, so "
             "best-hit ranking falls back to matched-minus-NM -- though on that corpus "
             "both paths rescued the same 6 reads to the same transcripts. Unvalidated "
-            "beyond chr20 ONT; requires mappy "
-            f"(default: {LRAA_Globals.config['stream_reads_rescue_unassigned']})"
+            "beyond chr20 ONT; requires mappy. Unset (the default) tracks whether "
+            "transcriptome rescue is itself enabled: on when rescue is on, off when "
+            "--no_rescue_unassigned_reads_via_transcriptome_alignment is given. See "
+            "--no_stream_reads_rescue_unassigned to disable it explicitly while leaving "
+            "rescue on elsewhere"
         ),
+    )
+    primary.add_argument(
+        "--no_stream_reads_rescue_unassigned",
+        dest="stream_reads_rescue_unassigned",
+        action="store_false",
+        help="disable transcriptome rescue inside the streaming pass, even though "
+        "transcriptome rescue stays enabled elsewhere -- --stream_reads then reports "
+        "the first pass's rescue summary as though it covered the whole bam",
     )
     primary.add_argument(
         "--stream_reads_rescue_unassigned_to_targets",
@@ -1172,7 +1199,9 @@ def main():
     )
     contig_group_setting.add_argument(
         "--chunk",
+        dest="chunk",
         action="store_true",
+        default=True,
         help="chunked mode: split each contig-strand at low-coverage positions "
         "between annotated loci, process the chunks independently and merge. "
         "Bounds peak memory, because a chunk is extracted as a self-contained "
@@ -1182,9 +1211,20 @@ def main():
         "--gtf is given, ref-guided when one is. Cut placement is the same in "
         "both modes: the alignments a cut severs are a cost the selector "
         "minimises, weighted by --chunk_severed_multiexon_weight, and the reads "
-        "it does sever are dropped, counted and named. Without this flag LRAA "
-        "runs exactly as it always has, and --contig/--region are unaffected "
-        "either way",
+        "it does sever are dropped, counted and named. ON BY DEFAULT since "
+        "v0.25.0; the flag is accepted so a command can say so explicitly. A "
+        "contig-strand shorter than --approx_MB_per_cut gets no cut points and "
+        "degenerates to one chunk spanning the whole thing -- --contig/--region "
+        "are unaffected either way. See --no_chunk to run exactly as LRAA did "
+        "before chunking became the default",
+    )
+    contig_group_setting.add_argument(
+        "--no_chunk",
+        dest="chunk",
+        action="store_false",
+        help="disable chunked mode; run LRAA exactly as it did before chunking "
+        "became the default -- the whole contig-strand held in one worker, "
+        "with no cut selection or extraction phase",
     )
     contig_group_setting.add_argument(
         "--strandless_chunks",
@@ -1340,6 +1380,26 @@ def main():
             "Error: --LowFi has been removed. LowFi parameters are the default, so pass "
             "nothing for them; use --HiFi to opt into the more stringent HiFi settings."
         )
+
+    # Resolved BEFORE the chunked dispatch below, not only in the unchunked setup
+    # further down, because --chunk exits before ever reaching that setup: without
+    # this, a chunked run would forward the unresolved sentinel to every chunk
+    # worker, and each worker would re-derive its OWN answer from ITS OWN
+    # (unforwarded) rescue default -- which happens to be correct by accident
+    # today, but only because rescue itself is not forwarded into chunk workers
+    # either. Resolving once here, on the args every path shares, removes that
+    # coincidence rather than relying on it.
+    #
+    # --stream_reads_rescue_unassigned defaults to None (unset) so this can tell
+    # "the user did not mention it" apart from an explicit False, which a flat
+    # boolean default cannot. Unset tracks whichever way transcriptome rescue
+    # itself resolved: both on by default, so the common case does not hit the
+    # refusal below asking for one of them to change; an explicit
+    # --no_rescue_unassigned_reads_via_transcriptome_alignment or
+    # --no_stream_reads_rescue_unassigned still lands exactly where it always did.
+    rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
+    if args.stream_reads_rescue_unassigned is None:
+        args.stream_reads_rescue_unassigned = bool(args.stream_reads and rescue_enabled)
 
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
@@ -3076,9 +3136,11 @@ def _run_chunked_mode(args):
 
     if os.environ.get(ChunkedRun.WORKER_ENV):
         sys.exit(
-            "Error: --chunk was passed to a chunk worker. The pipeline runs "
-            "plain LRAA on each chunk; re-entering it here would fork without "
-            "bound."
+            "Error: chunked mode is enabled (explicitly or by its v0.25.0 "
+            "default) inside a chunk worker. The pipeline runs plain LRAA "
+            "(--no_chunk) on each chunk; re-entering it here would fork "
+            "without bound. lraa_cmd should have passed --no_chunk to every "
+            "worker -- if it did not, that is the bug to fix, not this guard."
         )
     if args.quant_only and not args.gtf:
         sys.exit(

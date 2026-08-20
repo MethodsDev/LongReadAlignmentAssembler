@@ -14,7 +14,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 
 test:
-	../../../LRAA --genome minig-ENSG00000066135.genome.fa --bam minig-ENSG00000066135.mm2.bam -d 2>&1 | tee run.log
+	../../../LRAA --genome minig-ENSG00000066135.genome.fa --bam minig-ENSG00000066135.mm2.bam -d --no_chunk --no_stream_reads 2>&1 | tee run.log
 	gffcompare -r minig-ENSG00000066135.annot.gtf LRAA.LRAA.ref-free.gtf
 	cat gffcmp.tracking | cut -f4 | sort > gffcmp.tracking.codes
 	diff gffcmp.tracking.codes data/gffcmp.tracking.codes.expected || \

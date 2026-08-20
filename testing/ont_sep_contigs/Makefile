@@ -18,7 +18,7 @@ test_subdirs:
 	done
 
 test_minigenome:
-	../../LRAA --genome minigenome.fa --bam ONT_sim_alignments.mm2.bam -d --verbose --no_cleanup 2>&1 | tee run.log
+	../../LRAA --genome minigenome.fa --bam ONT_sim_alignments.mm2.bam -d --verbose --no_cleanup --no_chunk --no_stream_reads 2>&1 | tee run.log
 	gffcompare -r minigenome.gtf LRAA.LRAA.ref-free.gtf
 	cat gffcmp.tracking | cut -f4 | sort > gffcmp.tracking.codes
 	diff gffcmp.tracking.codes data/gffcmp.tracking.codes.expected || \

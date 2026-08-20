@@ -232,7 +232,8 @@ def four_runs(tmp_path_factory):
     results = {}
 
     tracking_a = _run_lraa(tmp, true_bam, gtf, genome, "A", "--no_norm",
-                            "--library_type", "single_cell", no_rescue)
+                            "--library_type", "single_cell", no_rescue,
+                            "--no_chunk", "--no_stream_reads")
     prefix_a = _convert(tmp, tracking_a, "convA")
     results["A"] = {
         "gene": _feature_totals(prefix_a, "gene"),
@@ -242,7 +243,8 @@ def four_runs(tmp_path_factory):
     # Run B: see module docstring -- pre-thinned bam stands in for "today's default",
     # since plain --quant_only on the unmodified bam is confirmed identical to Run A.
     tracking_b = _run_lraa(tmp, thinned_bam, gtf, genome, "B", "--no_norm",
-                            "--library_type", "single_cell", no_rescue)
+                            "--library_type", "single_cell", no_rescue,
+                            "--no_chunk", "--no_stream_reads")
     prefix_b = _convert(tmp, tracking_b, "convB")
     results["B"] = {
         "gene": _feature_totals(prefix_b, "gene"),
@@ -250,7 +252,8 @@ def four_runs(tmp_path_factory):
     }
 
     tracking_d = _run_lraa(tmp, true_bam, gtf, genome, "D", "--stream_reads",
-                            "--library_type", "single_cell", no_rescue)
+                            "--library_type", "single_cell", no_rescue,
+                            "--no_chunk")
     prefix_d = _convert(tmp, tracking_d, "convD")
     results["D"] = {
         "gene": _feature_totals(prefix_d, "gene"),
@@ -259,7 +262,8 @@ def four_runs(tmp_path_factory):
 
     tracking_c = _run_lraa(tmp, true_bam, gtf, genome, "C", "--stream_reads",
                             "--use_XW_read_weights_for_quant",
-                            "--library_type", "single_cell", no_rescue)
+                            "--library_type", "single_cell", no_rescue,
+                            "--no_chunk")
     prefix_c = _convert(tmp, tracking_c, "convC")
     results["C"] = {
         "gene": _feature_totals(prefix_c, "gene"),

@@ -95,7 +95,8 @@ RUN pip install --no-cache-dir --break-system-packages \
     "pandas>=2.2" \
     "pyarrow>=15" \
     "scipy>=1.11" \
-    "matplotlib>=3.8"
+    "matplotlib>=3.8" \
+    mappy==2.28
 
 ## Samtools
 ENV SAMTOOLS_VERSION=1.13
@@ -115,6 +116,12 @@ RUN wget https://github.com/samtools/htslib/releases/download/${HTSLIB_VERSION}/
 
 ## minimap2 -- transcriptome read rescue realigns against local transcript
 ## sequences with it (pylib/IsoformReadRescue.py), and rescue is on by default.
+## mappy (installed above, pinned to the same 2.28 release) is minimap2's own
+## Python binding: --stream_reads_rescue_unassigned uses it for the resident
+## transcript index, and it is a default-path dependency since v0.25.0 --
+## --stream_reads and --stream_reads_rescue_unassigned both default on, and the
+## latter's unset default tracks whether transcriptome rescue itself is on
+## (also on by default), so a plain default run needs it.
 ENV MINIMAP2_VERSION=2.28
 RUN wget https://github.com/lh3/minimap2/releases/download/v${MINIMAP2_VERSION}/minimap2-${MINIMAP2_VERSION}_x64-linux.tar.bz2 && \
     tar xf minimap2-${MINIMAP2_VERSION}_x64-linux.tar.bz2 && \

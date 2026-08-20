@@ -152,17 +152,67 @@ def test_the_guard_is_off_by_default():
 
 
 def test_not_passing_chunk_leaves_the_normal_path_alone():
-    """--chunk is opt-in: without it LRAA must reach its usual argument handling.
+    """--chunk now defaults on, so reaching the normal path takes --no_chunk.
 
     Asserted through a failure that only the normal path produces -- the missing
     --bam check -- so that a stray dispatch into chunked mode would show up as a
     different error rather than the same one.
     """
 
-    result = _lraa("--genome", "genome.fa", "--output_prefix", "sample")
+    result = _lraa("--no_chunk", "--genome", "genome.fa", "--output_prefix", "sample")
     combined = result.stdout + result.stderr
     assert "Must specify --bam" in combined
     assert "chunk" not in combined.lower()
+
+
+def test_omitting_chunk_and_stream_reads_reaches_chunked_mode_by_default(tmp_path):
+    """The mirror image of the test above: naming NEITHER flag must dispatch into
+    chunked mode, streaming, by default -- not the pre-v0.25.0 unchunked path.
+
+    Asserted the same way test_chunked_discovery_is_reachable is: through the
+    chunked path's own first act (the library count taken before any
+    partitioning), on a bam that does not exist so the run dies immediately
+    rather than doing real work. The missing --bam check that
+    test_not_passing_chunk_leaves_the_normal_path_alone relies on never fires
+    here, because chunked mode's own --bam requirement is checked by
+    ``count_reads_from_bam`` inside ``_run_chunked_mode``, not by the unchunked
+    setup's earlier check -- so reaching "Must specify --bam" instead would
+    itself prove a default flip regression.
+    """
+
+    result = _lraa(
+        "--bam", "reads.bam",
+        "--genome", "genome.fa",
+        "--output_prefix", str(tmp_path / "sample"),
+        "--chunk_work_dir", str(tmp_path / "work"),
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Must specify --bam" not in combined
+    assert "counting genome-mapped reads" in combined
+
+
+def test_stream_reads_itself_defaults_on_even_without_chunk(tmp_path):
+    """Isolates --stream_reads's own default from --chunk's: --no_chunk takes the
+    unchunked path, and nothing else says anything about streaming.
+
+    Discriminated through the same-bam-twice guard (LRAA:"needs a first-pass bam
+    thinner than the one it streams"), which only exists to fire under
+    --stream_reads. --no_norm plus no distinct --bam_for_sg makes both passes read
+    the identical bam -- the one combination the guard refuses -- so seeing the
+    refusal proves streaming was on despite never being named, and its absence
+    would mean the default silently reverted to off.
+    """
+
+    result = _lraa(
+        "--no_chunk", "--quant_only",
+        "--bam", "reads.bam", "--gtf", "annot.gtf", "--genome", "genome.fa",
+        "--no_norm",
+        "--output_prefix", str(tmp_path / "sample"),
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "needs a first-pass bam thinner than the one it streams" in combined
 
 
 def test_chunk_appears_in_the_concise_help():
@@ -252,8 +302,21 @@ def test_default_args_rejects_an_unknown_setting():
 
 
 def test_default_args_carries_every_pipeline_default():
+    """Every plain-parser default is carried through, field for field.
+
+    Compared against ``ChunkedRun.parse_args(...)``, not the raw
+    ``build_parser().parse_args([])`` -- ``stream_reads_rescue_unassigned``
+    defaults to the sentinel ``None`` on the bare parser (unset: neither
+    ``--stream_reads_rescue_unassigned`` nor its negation was given) and only
+    ``parse_args``/``default_args`` resolve it, via the same
+    ``_resolve_stream_reads_rescue_unassigned`` helper, to track
+    ``--stream_reads``. The raw parser default would report a mismatch on
+    that one field even though both routes agree once resolved.
+    """
     built = ChunkedRun.default_args(bam="b", genome_fa="g", gtf="a", output_dir="/tmp/o")
-    parsed = ChunkedRun.build_parser().parse_args([])
+    parsed = ChunkedRun.parse_args(
+        ["--bam", "b", "--genome_fa", "g", "--gtf", "a", "--output_dir", "/tmp/o"]
+    )
     for key, value in vars(parsed).items():
         if key in ("bam", "genome_fa", "gtf", "output_dir"):
             continue

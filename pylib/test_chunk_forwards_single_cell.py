@@ -227,9 +227,14 @@ def test_plain_chunk_is_untouched(tmp_path, inputs):
     run in existence would otherwise carry ``--cell_barcode_tag CB
     --read_umi_tag XM`` whether asked for or not. Asserted directly: an
     unadorned run's worker argv must carry NEITHER tag flag.
+
+    ``--stream_reads`` now defaults on, so a plain run has to say
+    ``--no_stream_reads`` itself to mean what this test asks it to mean --
+    otherwise the worker argv would legitimately carry ``--stream_reads`` and
+    the assertion below would be testing the wrong thing.
     """
     bam, gtf, genome = inputs
-    r = _chunked(tmp_path, bam, gtf, genome)
+    r = _chunked(tmp_path, bam, gtf, genome, "--no_stream_reads")
     combined = r.stdout + r.stderr
     assert r.returncode == 0, combined[-3000:]
     argv = _worker_argv(tmp_path)
@@ -237,6 +242,7 @@ def test_plain_chunk_is_untouched(tmp_path, inputs):
     assert "--read_umi_tag" not in argv, argv
     assert "--cell_list" not in argv, argv
     assert "--stream_reads" not in argv, argv
+    assert "--no_stream_reads" in argv, argv
 
 
 def test_unchunked_single_cell_is_untouched(tmp_path, inputs):

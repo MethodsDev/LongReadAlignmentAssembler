@@ -62,7 +62,14 @@ def _run(bam, *extra, gtf=None, genome=None, tmp=None):
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp / "out"),
-           "--use_XW_read_weights_for_quant"] + list(extra)
+           "--use_XW_read_weights_for_quant",
+           # Every guard in this module lives in the UNCHUNKED setup path -- --chunk
+           # now defaults on and dispatches before any of them run. --no_stream_reads
+           # is likewise the base default; a caller that wants streaming passes
+           # --stream_reads in `extra`, which (sharing dest with --no_stream_reads)
+           # wins by argparse's last-flag-on-the-line rule since extra is appended
+           # after this base list.
+           "--no_chunk", "--no_stream_reads"] + list(extra)
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp))
 
 
@@ -216,27 +223,51 @@ def test_weighted_quant_refuses_discovery_mode(tmp_path, inputs):
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
     cmd = [sys.executable, LRAA, "--bam", str(bam), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--use_XW_read_weights_for_quant", "--library_type", "bulk"]
+           "--use_XW_read_weights_for_quant", "--library_type", "bulk",
+           "--no_chunk", "--no_stream_reads"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "supported only with --quant_only" in (r.stdout + r.stderr)
 
 
-def test_stream_reads_requires_rescue_turned_off(tmp_path, inputs):
-    """The streaming pass maps genomically and cannot reproduce transcriptome rescue.
+def test_stream_reads_rescues_by_default_when_rescue_is_enabled(tmp_path, inputs):
+    """--stream_reads alone, with rescue left at its own default (on), must SUCCEED.
 
-    Rescue is on by default, and its first pass rescues the reads that failed genomic
-    assignment in the NORMALIZED bam. Reads present only in the full bam reach the second
-    pass and are assigned genomically or resolved, never rescued -- so the run's
-    assignments would differ from the default path's while the rescue summary described
-    only the first pass.
+    Both --stream_reads and --stream_reads_rescue_unassigned now default to True, and
+    the latter's unset default tracks whether transcriptome rescue itself is enabled --
+    so passing --stream_reads alone, with rescue untouched, resolves the streaming pass
+    to rescue reads it cannot reproduce from a batch first pass automatically, rather
+    than refusing to run. This used to be the refusal case (rescue on, streaming on,
+    the streaming-rescue flag not given); it no longer is, because "not given" no
+    longer means "off".
     """
     gtf, genome = inputs
     bam = _bam(tmp_path / "bulk.bam", single_cell=False)
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--stream_reads"]
+           "--stream_reads", "--no_chunk"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cannot reproduce transcriptome rescue" not in (r.stdout + r.stderr)
+    assert list(tmp_path.glob("out*quant.expr")), "must emit results"
+
+
+def test_stream_reads_still_refuses_when_streaming_rescue_is_explicitly_declined(
+    tmp_path, inputs
+):
+    """The refusal survives for the one combination it still describes: a caller who
+    explicitly declines rescue INSIDE the stream while leaving transcriptome rescue
+    enabled everywhere else. Unlike the default (unstated) case above, an explicit
+    --no_stream_reads_rescue_unassigned is not overridden by rescue's own default --
+    it is a deliberate request the guard still has to honour.
+    """
+    gtf, genome = inputs
+    bam = _bam(tmp_path / "bulk.bam", single_cell=False)
+    cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
+           "--gtf", str(gtf), "--genome", str(genome),
+           "--output_prefix", str(tmp_path / "out"),
+           "--stream_reads", "--no_stream_reads_rescue_unassigned", "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "cannot reproduce transcriptome rescue" in (r.stdout + r.stderr)
@@ -252,7 +283,8 @@ def test_stream_reads_needs_a_thinner_first_pass_bam(tmp_path, inputs):
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
            "--no_rescue_unassigned_reads_via_transcriptome_alignment",
-           "--normalize_max_cov_level", "0"]
+           "--normalize_max_cov_level", "0",
+           "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
@@ -277,7 +309,8 @@ def test_stream_reads_accepts_an_externally_normalized_bam_for_sg(tmp_path, inpu
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--no_rescue_unassigned_reads_via_transcriptome_alignment"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+           "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert "needs a first-pass bam thinner than the one it streams" not in (
         r.stdout + r.stderr
@@ -293,7 +326,8 @@ def test_stream_reads_refuses_when_bam_for_sg_is_the_streamed_bam(tmp_path, inpu
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--no_rescue_unassigned_reads_via_transcriptome_alignment"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+           "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode != 0
     assert "needs a first-pass bam thinner than the one it streams" in (r.stdout + r.stderr)
@@ -311,7 +345,8 @@ def test_stream_reads_permits_tag_bam(tmp_path, inputs):
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--stream_reads",
-           "--no_rescue_unassigned_reads_via_transcriptome_alignment", "--tag_bam"]
+           "--no_rescue_unassigned_reads_via_transcriptome_alignment", "--tag_bam",
+           "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     tagged = tmp_path / "bulk.bam.tagged.bam"

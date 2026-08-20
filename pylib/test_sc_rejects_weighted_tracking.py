@@ -191,7 +191,12 @@ def _run_lraa_tracking(tmp_path, *extra):
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
-           "--use_XW_read_weights_for_quant", "--library_type", "bulk"] + list(extra)
+           "--use_XW_read_weights_for_quant", "--library_type", "bulk",
+           # chunk dispatch would reroute this small single-locus fixture through a
+           # separate merge path before it ever reaches the marker logic under test;
+           # stream_reads is left to each caller's own `extra`, since one test needs
+           # it on and the other explicitly needs it off (both now must say so).
+           "--no_chunk"] + list(extra)
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     tracking = list(tmp_path.glob("out*quant.tracking.gz"))
@@ -230,7 +235,7 @@ def test_lraa_still_emits_the_marker_without_stream_reads(tmp_path):
     the marker at all -- they test the converter's reaction to a marker that's already
     there, not whether LRAA still writes it for the case that still needs it.
     """
-    text = _run_lraa_tracking(tmp_path)
+    text = _run_lraa_tracking(tmp_path, "--no_stream_reads")
     comment_lines = [line for line in text.splitlines() if line.startswith("#")]
     assert any(
         line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line

@@ -110,6 +110,13 @@ def run_once(args, replicate, workroot):
         "--bam", os.path.abspath(args.bam),
         "--output_prefix", args.output_prefix,
         "--cpu_budget", str(args.cpu_budget),
+        # Chunking introduces its own concurrent scheduling order and streaming
+        # reports one expectation step instead of re-estimating -- either would be
+        # a second source of run-to-run variation this test is not designed to
+        # absorb, on top of (or instead of) the one it exists to catch. Held off
+        # explicitly rather than left to the CLI default, so a future default
+        # change cannot silently fold a new nondeterminism source into this gate.
+        "--no_chunk", "--no_stream_reads",
     ]
     if args.gtf:
         cmd += ["--gtf", os.path.abspath(args.gtf)]

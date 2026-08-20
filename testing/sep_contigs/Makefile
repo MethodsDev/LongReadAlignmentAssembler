@@ -4,12 +4,12 @@ test: test_serial test_parallel test_chunked_validation_recipe
 
 # Run serial across (contig,strand) using component-level multiprocessing only
 test_serial:
-	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 # Run with default contig/strand-level parallelization (1 core per worker)
 test_parallel:
-	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --output_prefix LRAA.par --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --output_prefix LRAA.par --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 # C1: `--chunk` with a cut geometry no contig can exceed is a VALIDATION RECIPE
@@ -38,10 +38,10 @@ test_parallel:
 test_chunked_validation_recipe:
 	rm -rf __unchunked_ref* __chunked_validation*
 	../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --gtf minig.gtf \
-	    --quant_only --cpu_budget 4 --HiFi --output_prefix __unchunked_ref
+	    --quant_only --cpu_budget 4 --HiFi --no_chunk --no_stream_reads --output_prefix __unchunked_ref
 	../../LRAA --chunk --strandless_chunks --approx_MB_per_cut 300 \
 	    --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --gtf minig.gtf \
-	    --quant_only --cpu_budget 4 --HiFi --output_prefix __chunked_validation
+	    --quant_only --cpu_budget 4 --HiFi --no_stream_reads --output_prefix __chunked_validation
 	python3 -c 'import json; d = json.load(open("__chunked_validation.chunked_work/timing.json")); cp = d["cut_placement"]; assert cp["cuts_placed"] == 0, "cuts were placed: %r" % (cp,); assert cp["alignments_severed"] == 0, "alignments were severed: %r" % (cp,); offsets = set(c["offset"] for c in d["chunk_manifests"]); assert offsets == {0}, "non-zero chunk offset(s): %r" % (offsets,); print("structural invariants hold: %d chunks, 0 cuts, 0 severed, all offsets 0" % cp["chunks"])'
 	python3 -c 'a = {(f[0], f[1]): f[2:] for f in (ln.rstrip("\n").split("\t") for ln in open("__unchunked_ref.LRAA.quant-only.quant.expr") if not ln.startswith("#")) if f[0] != "gene_id"}; b = {(f[0], f[1]): f[2:] for f in (ln.rstrip("\n").split("\t") for ln in open("__chunked_validation.LRAA.quant-only.quant.expr") if not ln.startswith("#")) if f[0] != "gene_id"}; only_a = set(a) - set(b); only_b = set(b) - set(a); diffs = [k for k in a if k in b and a[k] != b[k]]; assert not only_a and not only_b and not diffs, "rows differ: only_a=%r only_b=%r differing=%d" % (only_a, only_b, len(diffs)); print("quant.expr identical: %d rows, 0 unique keys, 0 differing values" % len(a))'
 
@@ -49,8 +49,8 @@ test_chunked_validation_recipe:
 # Quick timing harness to compare serial vs parallelized contig processing
 # Produces: bench.summary.tsv with real/user/sys times for both modes
 bench: bench_clean
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup ) 2> serial.time.txt
-	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup ) 2> parallel.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --no_parallelize_contigs --output_prefix LRAA.serial --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads ) 2> serial.time.txt
+	( time -p ../../LRAA --bam pacbioccsminimap.minig.PBLR.bam --genome minig.fa --no_norm --cpu_budget 15 --output_prefix LRAA.par --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads ) 2> parallel.time.txt
 	@echo -e "mode\tCPU\treal\tuser\tsys" > bench.summary.tsv
 	@SER_REAL=`grep '^real' serial.time.txt | awk '{print $$2}'`; \
 	 SER_USER=`grep '^user' serial.time.txt | awk '{print $$2}'`; \

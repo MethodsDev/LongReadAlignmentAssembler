@@ -73,7 +73,8 @@ def _run(tmp_path, prefix, extra):
     cmd = [sys.executable, LRAA, "--quant_only",
            "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / prefix),
-           "--no_cleanup", "--no_parallelize_contigs"]
+           "--no_cleanup", "--no_parallelize_contigs",
+           "--no_chunk", "--no_stream_reads"]
     cmd += extra
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     return r
@@ -158,7 +159,8 @@ def test_no_shard_tracking_of_either_encoding_survives_a_cleanup_run(tmp_path):
            "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
            "--output_prefix", str(tmp_path / "out"),
            "--no_parallelize_contigs",
-           "--clean_parallel_tmp", "--no_cleanup"]
+           "--clean_parallel_tmp", "--no_cleanup",
+           "--no_chunk", "--no_stream_reads"]
     # First pass with --no_cleanup so a shard tree exists, then plant a plain sibling beside
     # each .gz so the cleanup list's stale-suffix entry has something to remove. Without this
     # only .gz files exist and the test passes even if cleanup handles one encoding.
@@ -216,7 +218,8 @@ def test_legacy_uncompressed_shard_is_cleared_when_the_shard_is_rewritten(tmp_pa
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(tmp_path / "out"),
-            "--no_cleanup", "--no_parallelize_contigs"]
+            "--no_cleanup", "--no_parallelize_contigs",
+            "--no_chunk", "--no_stream_reads"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -266,7 +269,8 @@ def test_ambiguous_shard_with_both_encodings_is_not_reused(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_cleanup", "--no_parallelize_contigs"]
+            "--no_cleanup", "--no_parallelize_contigs",
+            "--no_chunk", "--no_stream_reads"]
     r1 = subprocess.run(base + [], capture_output=True, text=True,
                         cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -322,7 +326,8 @@ def test_legacy_uncompressed_output_is_removed_from_the_prefix(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_parallelize_contigs"]
+            "--no_parallelize_contigs",
+            "--no_chunk", "--no_stream_reads"]
 
     plain = tmp_path / "out.LRAA.quant-only.quant.tracking"
     plain.write_text("legacy\tuncompressed\tfinal\trow\n")
@@ -358,7 +363,8 @@ def test_ambiguous_new_root_is_not_overridden_by_complete_legacy_root(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(prefix),
-            "--no_cleanup", "--no_parallelize_contigs"]
+            "--no_cleanup", "--no_parallelize_contigs",
+            "--no_chunk", "--no_stream_reads"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]
@@ -448,7 +454,8 @@ def test_shard_without_ok_is_refused_even_when_tracking_matches(tmp_path):
     base = [sys.executable, LRAA, "--quant_only",
             "--bam", str(bam), "--gtf", str(gtf), "--genome", str(genome),
             "--output_prefix", str(tmp_path / "out"),
-            "--no_cleanup", "--no_parallelize_contigs"]
+            "--no_cleanup", "--no_parallelize_contigs",
+            "--no_chunk", "--no_stream_reads"]
 
     r1 = subprocess.run(base, capture_output=True, text=True, cwd=str(tmp_path))
     assert r1.returncode == 0, r1.stderr[-2000:]

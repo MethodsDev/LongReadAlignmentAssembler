@@ -73,7 +73,12 @@ task LRAA_runner_task {
         # own working directory, which is writable and is not delocalized. They can be
         # several times the input BAM, so a chunked run wants the same diskSizeGB
         # headroom an unchunked one gets, not less.
-        Boolean chunk = false
+        #
+        # ON by default, matching LRAA's own v0.25.0 default. Both true and false are
+        # emitted explicitly on the command line below (--chunk / --no_chunk) rather
+        # than omitting the flag when false: LRAA's own CLI default now means chunk,
+        # so a caller relying on omission-means-off would silently start chunking.
+        Boolean chunk = true
         # Approximate MEGABASES between cuts. Larger chunks, fewer of them, higher peak
         # memory per chunk. LRAA's default is 10; a contig shorter than this yields no
         # cuts at all and chunking degenerates to a single-chunk run of the whole thing.
@@ -97,6 +102,14 @@ task LRAA_runner_task {
         # library itself, before any chunking, with the -F 0x904 policy that matches
         # the unchunked path.
         Boolean chunk_by_strand = false
+
+        # Two-pass streaming quantification. ON by default, matching LRAA's own
+        # v0.25.0 default. Both true and false are emitted explicitly below
+        # (--stream_reads / --no_stream_reads), same reasoning as chunk above.
+        # Transcriptome-rescue-inside-streaming is left to LRAA's own dynamic
+        # default (tracks whether rescue_unassigned_reads_via_transcriptome_alignment
+        # is itself on) rather than surfaced as a separate WDL input.
+        Boolean stream_reads = true
 
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -279,10 +292,11 @@ task LRAA_runner_task {
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
-                                 ~{true="--chunk" false='' chunk} \
+                                 ~{true="--chunk" false="--no_chunk" chunk} \
                                  ~{if (chunk && chunk_by_strand) then "--chunk_by_strand" else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut)) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
                                  ~{if (chunk && defined(approx_MB_per_cut_wiggle_window)) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
+                                 ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
                                  ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
                   > command_output.log 2>&1
         )
@@ -413,13 +427,15 @@ workflow LRAA_runner {
         String read_umi_tag = "XM"
 
         # Chunked quantification and discovery; see the task's inputs for what each of
-        # these does. chunk itself is off by default, so a caller that ignores these
-        # gets the command this task built before they existed -- but when chunking IS
-        # on, strandless is the default ordering, as it is in LRAA.
-        Boolean chunk = false
+        # these does. ON by default since v0.25.0, matching LRAA's own default --
+        # strandless is the default chunk ordering, as it is in LRAA.
+        Boolean chunk = true
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         Boolean chunk_by_strand = false
+        # Two-pass streaming quantification; see the task's input for detail. ON by
+        # default since v0.25.0, matching LRAA's own default.
+        Boolean stream_reads = true
                     
         Int? shardno
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -465,6 +481,7 @@ workflow LRAA_runner {
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             chunk_by_strand = chunk_by_strand,
+            stream_reads = stream_reads,
             shardno=shardno,
             docker=docker,
             cpu=cpu,

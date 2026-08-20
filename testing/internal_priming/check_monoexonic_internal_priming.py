@@ -158,6 +158,7 @@ def main():
                "--min_mapping_quality", "0",
                "--min_mapping_quality_for_final_quant", "0",
                "--HiFi",
+               "--no_chunk", "--no_stream_reads",
                # --debug so the graph writes __PolyAsite_info.bed; the gate's own log
                # line is emitted from a worker process and never reaches this stdout
                "--debug", *extra]

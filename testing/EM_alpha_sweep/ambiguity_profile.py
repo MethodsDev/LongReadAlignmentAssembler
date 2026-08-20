@@ -59,6 +59,7 @@ def run_one(smp, cpu_budget):
         "--quant_only", "--min_mapping_quality", "0",
         "--min_mapping_quality_for_final_quant", "0",
         "--EM_alpha", "0.01", "--cpu_budget", str(cpu_budget), "--output_prefix", "prof",
+        "--no_chunk", "--no_stream_reads",
     ]
     if smp["hifi"]:
         cmd.append("--HiFi")

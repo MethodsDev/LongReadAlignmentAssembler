@@ -347,6 +347,9 @@ def test_contig_cli_flag_scopes_normalization_cache_end_to_end(tmp_path):
         "--contig", CONTIG_A,
         "--normalize_max_cov_level", "10",
         "--output_prefix", str(tmp_path / "out"),
+        # This test asserts on the UNCHUNKED normalization cache's own file naming;
+        # --chunk normalizes per chunk in its own separate cache location entirely.
+        "--no_chunk", "--no_stream_reads",
     ]
     result = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(tmp_path), timeout=300

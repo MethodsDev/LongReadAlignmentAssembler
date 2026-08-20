@@ -1,21 +1,21 @@
 
 test_quick:
-	../../LRAA --bam pacbio.PBLR.small.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA.small  --no_norm --tag_bam --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.small.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA.small  --no_norm --tag_bam --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 test: test_quick test_reads_only test_include_ref_annot_guide test_quant test_chunked test_observability test_oversimplify
 
 
 test_reads_only:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA  --no_norm --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA  --no_norm --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 test_include_ref_annot_guide:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA.guided  --no_norm --gtf ref_annot.gtf --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix LRAA.guided  --no_norm --gtf ref_annot.gtf --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 test_quant:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only --tag_bam --HiFi --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.ref --gtf ref_annot.gtf --quant_only --tag_bam --HiFi --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 # Chunked mode, on both routes into it.
@@ -33,6 +33,7 @@ test_chunked: test_chunked_entry_point test_chunked_route_parity test_chunked_st
 test_chunked_entry_point:
 	../../LRAA --chunk --quant_only --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
 	    --cpu_budget 4 --HiFi --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1 \
+	    --no_stream_reads \
 	    --output_prefix LRAA.chunked
 	test -s LRAA.chunked.LRAA.quant-only.quant.expr
 	test -s LRAA.chunked.LRAA.quant-only.quant.tracking.gz
@@ -52,7 +53,8 @@ test_chunked_route_parity: test_chunked_entry_point
 	    --bam pacbio.PBLR.bam --genome_fa ref_genome.fa --gtf ref_annot.gtf \
 	    --num_total_reads $$(samtools view -c -F 0x904 pacbio.PBLR.bam) \
 	    --output_dir __chunked_pipeline --arm chunked --cpu_budget 4 --HiFi \
-	    --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1
+	    --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1 \
+	    --no_stream_reads
 	diff __chunked_pipeline/merged/chunked.quant.expr LRAA.chunked.LRAA.quant-only.quant.expr
 	gunzip -c __chunked_pipeline/merged/chunked.quant.tracking.gz > __chunked_pipeline.tracking
 	gunzip -c LRAA.chunked.LRAA.quant-only.quant.tracking.gz > __chunked_lraa.tracking
@@ -90,6 +92,7 @@ test_chunked_strandless:
 	    --num_total_reads $$(samtools view -c -F 0x904 __strandless_input.bam) \
 	    --bam __strandless_input.bam --genome ref_genome.fa --gtf ref_annot.gtf \
 	    --cpu_budget 4 --HiFi --approx_MB_per_cut 0.5 --approx_MB_per_cut_wiggle_window 0.1 \
+	    --no_stream_reads \
 	    --output_prefix __strandless
 	test -f __strandless_input.bam.bai
 	test -s __strandless.LRAA.quant-only.quant.expr
@@ -131,6 +134,7 @@ test_observability:
 	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --gtf ref_annot.gtf \
 	    --quant_only --stream_reads \
 	    --stream_reads_rescue_unassigned --cpu_budget 4 --HiFi \
+	    --no_chunk \
 	    --output_prefix LRAA.observability
 	test -s LRAA.observability.LRAA.quant-only.rescue.summary.tsv
 	test $$(grep -vc '^contig' LRAA.observability.LRAA.quant-only.rescue.summary.tsv) -ge 2
@@ -148,13 +152,13 @@ test_oversimplify: test_oversimplify_quantifyonly test_oversimplify_denovo test_
 
 
 test_oversimplify_quantifyonly:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.quantonly.oversimplify --gtf ref_annot.gtf --quant_only --HiFi --oversimplify minigenome --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.quantonly.oversimplify --gtf ref_annot.gtf --quant_only --HiFi --oversimplify minigenome --verbose --no_cleanup --no_chunk --no_stream_reads
 
 test_oversimplify_denovo:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.denovo.oversimplify --HiFi --oversimplify minigenome --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.denovo.oversimplify --HiFi --oversimplify minigenome --verbose --no_cleanup --no_chunk --no_stream_reads
 
 test_oversimplify_refguided:
-	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.refguided.oversimplify  --gtf ref_annot.gtf  --HiFi --oversimplify minigenome --verbose --no_cleanup
+	../../LRAA --bam pacbio.PBLR.bam --genome ref_genome.fa --cpu_budget 4 --output_prefix  LRAA.refguided.oversimplify  --gtf ref_annot.gtf  --HiFi --oversimplify minigenome --verbose --no_cleanup --no_chunk --no_stream_reads
 
 
 

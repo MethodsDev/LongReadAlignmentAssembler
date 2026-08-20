@@ -54,6 +54,7 @@ def build_cmd(smp, armd, cpu_budget, bam=None, prefix=None, extra=()):
         "--EM_alpha", repr(armd["alpha"]),
         "--cpu_budget", str(cpu_budget),
         "--output_prefix", prefix or f'{smp["sample"]}.LRAA.{armd["arm"]}',
+        "--no_chunk", "--no_stream_reads",
     ]
     if smp["hifi"]:
         cmd.append("--HiFi")

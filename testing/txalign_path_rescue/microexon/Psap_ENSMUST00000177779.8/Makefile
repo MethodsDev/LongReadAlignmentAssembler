@@ -11,6 +11,7 @@ test: clean
 		--no_norm \
 		--no_parallelize_contigs \
 		--cpu_budget 1 \
+		--no_chunk --no_stream_reads \
 		--output_prefix $(PREFIX)
 	$(MAKE) validate
 

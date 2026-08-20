@@ -84,6 +84,14 @@ def _run(tmp_path, *extra, budget=None, quant_only=True):
         "--genome", fasta,
         "--bam", bam,
         "--output_prefix", "budget_test",
+        # This whole file exercises the UNCHUNKED CpuBudget allocator and its
+        # startup log line -- --chunk now defaults on and dispatches into an
+        # entirely different scheduler (ChunkedRun.py's own make-chunks/chunks
+        # phases) before that log line is ever written, so every assertion here
+        # would either find nothing or find chunked-mode's own unrelated log
+        # lines instead.
+        "--no_chunk",
+        "--no_stream_reads",
     ]
     if quant_only:
         cmd += ["--gtf", gtf, "--quant_only"]

@@ -431,17 +431,19 @@ config = {
     "dump_read_path_map": None,
     "dump_mp_fraction_table": None,
     "dump_rescue_candidates": None,
-    # Two-pass alternative to the default final quantification, off by default. The
-    # first pass quantifies normally against the coverage-normalized bam; the second
-    # streams the full bam, looks each read's path up in the table the first pass
-    # produced, writes its tracking row and forgets it. Nothing per-read is retained,
-    # which is what makes a billion-read library tractable -- the default path holds
-    # each shard's alignments and every read name it will report.
+    # Two-pass alternative to the default final quantification, ON by default since
+    # v0.25.0 (see --no_stream_reads). The first pass quantifies normally against
+    # the coverage-normalized bam; the second streams the full bam, looks each
+    # read's path up in the table the first pass produced, writes its tracking row
+    # and forgets it. Nothing per-read is retained, which is what makes a
+    # billion-read library tractable -- the non-streaming path holds each shard's
+    # alignments and every read name it will report.
     #
     # This reports one expectation step at the first pass's abundances, where the
-    # default path re-estimates them, so its counts are close to but not identical
-    # with the default's. Left off so the standard behaviour is untouched.
-    "stream_reads": False,
+    # non-streaming path re-estimates them, so its counts are close to but not
+    # identical with the non-streaming path's. --no_stream_reads reverts to the
+    # pre-v0.25.0 single-pass, in-memory behaviour.
+    "stream_reads": True,
     # No key here bounds how much of a streamed unit the first pass's table has to answer.
     # How much it DID answer -- the served fraction -- is reported per contig-strand by
     # StreamingQuant and gated on by nothing. A max-unseen-path-read-fraction tripwire used
@@ -454,11 +456,17 @@ config = {
     # in silence. A correctness gate belongs on pass 1, asking whether its abundance
     # estimates are usable, BEFORE pass 2 spends the work; not implemented here.
     # Rescue candidates against the local transcriptome from inside the streaming pass,
-    # using a resident mappy index instead of the batch path's minimap2 subprocess. Off
-    # by default, and refused unless --stream_reads_rescue_unassigned is given: without
-    # it --stream_reads requires transcriptome rescue turned off, because a streaming
-    # pass that silently skipped rescue would report the first pass's rescue summary as
-    # if it covered the whole bam.
+    # using a resident mappy index instead of the batch path's minimap2 subprocess. This
+    # bare key is only the FALLBACK baseline for callers that read it directly (e.g.
+    # ChunkedRun.py's own standalone parser); LRAA's own CLI does not read it as a static
+    # default any more. Since --stream_reads is on by default and transcriptome rescue is
+    # on by default, forcing this flat False would make every default invocation refuse
+    # itself (--stream_reads requires transcriptome rescue turned off, unless
+    # --stream_reads_rescue_unassigned is given -- see LRAA's guard). So the CLI resolves
+    # --stream_reads_rescue_unassigned's default dynamically, to whatever transcriptome
+    # rescue itself resolves to, unless the caller states either flag explicitly. See
+    # --no_stream_reads_rescue_unassigned to opt out even though rescue stays on
+    # elsewhere.
     #
     # The candidate population is exactly the one the batch path collects at its three
     # gated sites -- reads the extractor discarded for low_perID, reads whose graph path
