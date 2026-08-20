@@ -1,4 +1,41 @@
 v0.23.0, August 19, 2026
+- FIXED: `Quantify.quantify(prior=True)`'s carry-forward path deterministically
+  `KeyError`ed on a ref-guided seed isoform with zero assigned reads sitting in a gene
+  component the intervening filter pass otherwise left untouched. `Quantify.py:349-355`
+  looked up `prior_frac_read_assignment[transcript_id]` / `prior_theta[transcript_id]`
+  unconditionally for every transcript in a component judged unaffected, but
+  `_estimate_isoform_read_support` (`Quantify.py:1696`) only ever writes a key for a
+  transcript EM/equal-assignment actually touches -- true of every `quantify()` call
+  including the very first non-`prior` one -- so a transcript with zero compatible
+  multipaths never had an entry, `prior=True` or not. The gap itself is not new:
+  `filter_novel_isoforms_by_min_read_support` (`TranscriptFiltering.py:1391-1417`)
+  retains a "known" isoform (splice pattern matches the ref-guided seed,
+  `has_novel_splice_pattern()==False`) unconditionally regardless of read count, so a
+  reference-seeded isoform absent from the sample's reads routinely survives every
+  draft filter pass with zero multipaths, silently, in every LRAA version to date. What
+  is new in v0.23.0 is `prior=True` (the incremental-requant optimization, `d9638ab`'s
+  lineage) being the first code path to dereference that map by key assuming presence,
+  rather than only iterating whatever keys exist -- turning a long-dormant, harmless gap
+  into a hard crash that blocks the whole chunked or unchunked ref-guided run. CONFIRMED
+  via two independent whole-genome real-corpus reproductions (`CL_BT474_E0_human`
+  chr12+/comp-192/iso-11, `CL_HG002_E0_human` chr11-/comp-129/iso-11 -- full `--debug`-log
+  evidence trail in `LRAA_PAPER_Analyses/__LRAA_local_runs/
+  celllines_local_bmark_v0.23.0-4501941/v0.23.0_prior_true_keyerror_bug.md`), reproduced
+  identically with `--stream_reads` on and off, ruling out streaming as a factor. Scoped
+  to ref-guided: `has_novel_splice_pattern()` defaults `True` (`Transcript.py:116`) and is
+  only ever cleared by `differentiate_known_vs_novel_isoforms`, called only
+  `if input_transcripts is not None` (`LRAA:5804-5815`), so this exact trigger is
+  structurally unreachable in pure de novo mode -- not merely untested there. FIXED at
+  the two lookups themselves: `.get(transcript_id, {})` / `.get(transcript_id, 0.0)`,
+  matching the zero-support state `_estimate_isoform_read_support` already leaves for
+  such a transcript on every non-carry-forward call -- not new semantics, just publishing
+  what was already the correct answer instead of asserting a presence the prior call
+  never guaranteed. Added `test_never_quantified_transcript_survives_carry_forward`
+  (`pylib/test_quantify_incremental_requant.py`, case (c) alongside the two existing
+  `prior=True` correctness tests) -- a minimal fixture with a persistently zero-multipath
+  transcript sharing a component with a real one; verified to raise the original
+  `KeyError` against the pre-fix code and pass against the fix. Full unit suite
+  (`pylib/`, 967 tests) and `cd testing && make clean test` both pass clean.
 - INVESTIGATED, NOT A BUG: `single_cell_monoexonic_cell_filter_deferral_plan.md` proposed
   deferring `min_monoexonic_supporting_cells` (`filter_novel_monoexonic_isoforms_by_min_cells`,
   called from `run_transcript_assembly` at `LRAA:6008`) to run after final quant, on the theory

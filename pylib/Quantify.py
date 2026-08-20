@@ -346,13 +346,27 @@ class Quantify:
                 num_transcripts_carried_forward += len(transcripts_list)
                 for transcript in transcripts_list:
                     transcript_id = transcript.get_transcript_id()
+                    # A transcript that was never assigned any multipath in any prior
+                    # call (a "known" reference-seeded isoform with zero reads in this
+                    # sample, kept regardless by filter_novel_isoforms_by_min_read_support's
+                    # unconditional-retention branch for known isoforms) never received
+                    # an entry here either -- _estimate_isoform_read_support only ever
+                    # writes a key for a transcript EM/equal-assignment actually touches,
+                    # true of every call including the very first non-prior one. Absence
+                    # is therefore the correct, already-established state for such a
+                    # transcript, not a sign the carried-forward assumption failed: a full
+                    # rerun of this component would compute the same empty/zero result,
+                    # since nothing about its multipath evidence changed. `.get(...)` with
+                    # the same zero-support defaults the estimator itself would leave in
+                    # place publishes that state instead of asserting a presence the prior
+                    # call never guaranteed.
                     transcript_to_fractional_read_assignment[transcript_id] = (
-                        prior_frac_read_assignment[transcript_id]
+                        prior_frac_read_assignment.get(transcript_id, {})
                     )
                     if self._run_EM:
-                        self._transcript_id_to_theta[transcript_id] = prior_theta[
-                            transcript_id
-                        ]
+                        self._transcript_id_to_theta[transcript_id] = prior_theta.get(
+                            transcript_id, 0.0
+                        )
                 continue
 
             trans_coords = list()

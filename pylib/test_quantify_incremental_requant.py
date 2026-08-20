@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
-"""The two subtle correctness cases for Quantify.quantify(prior=True).
+"""The three subtle correctness cases for Quantify.quantify(prior=True).
 
 run_transcript_assembly (LRAA) calls one draft-mode Quantify object's quantify()
 three times against the same mp_counter, over a shrinking transcript set. Calls 2
 and 3 pass prior=True so that a read-sharing component untouched by the intervening
 filter step is carried forward from the prior call instead of being reassigned and
-re-EM'd from scratch. Two things have to hold for that to be correct, and both are
+re-EM'd from scratch. Three things have to hold for that to be correct, and all are
 easy to get wrong silently (see Quantify.quantify's prior-capture comments):
 
 (a) an isoform removed with ZERO assigned multipaths must not trigger its
@@ -20,6 +20,16 @@ easy to get wrong silently (see Quantify.quantify's prior-capture comments):
     fields on the transcript OBJECT ITSELF, unconditionally, if quantify() calls it
     without checking dirty_gene_ids first -- and a carried-forward component's
     multipaths are never reprocessed to repopulate them.
+
+(c) a transcript that keeps ZERO assigned multipaths across every call (never
+    removed, never touched -- the routine case of a reference-seeded "known"
+    isoform with no supporting reads in this sample, which
+    filter_novel_isoforms_by_min_read_support retains regardless of read count)
+    must not crash the carry-forward path. _estimate_isoform_read_support only
+    ever writes a dict entry for a transcript EM/equal-assignment actually
+    touches, true of every call including the first non-prior one, so such a
+    transcript's id is never a key in prior_frac_read_assignment/prior_theta --
+    and prior=True's carry-forward loop must not assume it is one.
 """
 
 import sys
@@ -205,3 +215,47 @@ def test_carried_forward_transcript_state_survives_a_sibling_components_rerun():
     # skipped too: t1a keeps its own real support.
     assert t1a.get_read_counts_assigned() > 0
     assert [mp.get_id() for mp in t1a.get_multipaths_evidence_assigned()]
+
+
+def test_never_quantified_transcript_survives_carry_forward():
+    """(c) a persistently zero-multipath transcript must not KeyError the carry-forward
+    path when its component is judged unaffected."""
+
+    sg, node_ids = _graph()
+    t1a = _transcript(sg, node_ids, [0, 1], "g1", "t1a")
+    # No read is ever compatible with t1_phantom's exons -- it never gets a single
+    # assigned multipath in any call, exactly like a ref-guided seed isoform whose
+    # structure has zero support in this sample.
+    t1_phantom = _transcript(sg, node_ids, [2, 3], "g1", "t1_phantom")
+    t2 = _transcript(sg, node_ids, [4, 5], "g2", "t2")
+
+    counter = _counter(sg, node_ids, [("readA", [0, 1]), ("readB", [4, 5])])
+
+    q = Quantify(run_EM=True, max_EM_iterations=10)
+    q.quantify(sg, [t1a, t1_phantom, t2], counter)
+
+    assert t1_phantom.get_read_counts_assigned() == 0, (
+        "fixture must give t1_phantom zero support"
+    )
+    assert t1_phantom.get_multipaths_evidence_assigned() == [], (
+        "fixture must give t1_phantom zero assigned multipaths"
+    )
+
+    # Nothing is removed between calls -- g1's component (t1a + t1_phantom) is
+    # exactly as untouched as g2's, so BOTH are eligible for carry-forward. Before
+    # the fix this raised KeyError on t1_phantom's id inside the shortcut loop.
+    frac_read_assignments = q.quantify(sg, [t1a, t1_phantom, t2], counter, prior=True)
+
+    assert frac_read_assignments["t1a"], "t1a's carried-forward assignment is empty"
+    assert frac_read_assignments["t2"], "t2's carried-forward assignment is empty"
+    assert frac_read_assignments.get(t1_phantom.get_transcript_id(), {}) == {}, (
+        "a never-quantified transcript's carried-forward assignment must publish as "
+        "empty/zero, not whatever stale or wrong value a bare KeyError-avoiding "
+        "fallback might have produced"
+    )
+    assert q._transcript_id_to_theta.get(t1_phantom.get_transcript_id(), 0.0) == 0.0, (
+        "a never-quantified transcript's carried-forward theta must publish as 0.0"
+    )
+    # Its own zero state must not have been corrupted into something else either.
+    assert t1_phantom.get_read_counts_assigned() == 0
+    assert t1_phantom.get_multipaths_evidence_assigned() == []
