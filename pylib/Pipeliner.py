@@ -41,8 +41,13 @@ class Pipeliner(object):
 
         checkpoint_dir = os.path.abspath(checkpoint_dir)
 
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir)
+        # exist_ok=True, not check-then-makedirs: two Pipeliner instances can
+        # share a checkpoint_dir under concurrent callers (e.g. a strandless
+        # chunk's two orientations now run as sibling threads spawning sibling
+        # subprocesses that both instantiate a Pipeliner rooted at the same
+        # chunk directory) -- both can observe "not exists" before either
+        # creates it, and the loser of that race got FileExistsError.
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
         self._checkpoint_dir = checkpoint_dir
 

@@ -368,7 +368,7 @@ def _run_pool(monkeypatch, chunks, budget, available_mib):
     releaser.start()
     try:
         records, _makespan, allocation, bound = ChunkedRun.run_chunks_concurrently(
-            SimpleNamespace(cpu_budget=budget),
+            SimpleNamespace(cpu_budget=budget, strandless_chunks=False),
             None,
             "/dev/null",
             chunks,
@@ -417,3 +417,83 @@ def test_the_pool_opens_at_full_width_when_the_box_has_room(monkeypatch):
     assert bound.cap is None
     assert allocation.unit_workers == 16
     assert observed == 16
+
+
+# --------------------------------------------- the strand-concurrency multiplier
+
+
+def test_strand_concurrency_multiplier_doubles_the_charge():
+    """The multiplier a chunk-worker that may run two orientations at once needs:
+    exactly double the single-orientation charge, nothing more elaborate. This is
+    what ``run_chunks_concurrently`` applies in its second pass before letting
+    ``chunk_worker`` actually run two quant units concurrently on one slot."""
+
+    spans = [10_000_000, 20_000_000, 5_000_000]
+    single = ChunkedRun.chunk_memory_cap(16, spans, available_mib=100 * GIB)
+    doubled = ChunkedRun.chunk_memory_cap(
+        16, spans, available_mib=100 * GIB, strand_concurrency_multiplier=2
+    )
+    assert doubled.largest_unit_mib == 2 * single.largest_unit_mib
+    assert doubled.charged_mib == 2 * single.charged_mib
+
+
+def test_strand_concurrency_multiplier_can_reduce_the_cap():
+    """A box with room for N single-orientation workers has room for fewer once
+    each may run two at once -- a real reduction, not a no-op parameter."""
+
+    spans = [10_000_000] * 5
+    per_unit = ChunkedRun.chunk_unit_peak_mib(spans[0])
+    # Room for exactly 4 of 5 at single charge (a real, numeric cap -- fitting
+    # all 5 would report cap=None, "unbounded", and prove nothing about a
+    # reduction), and for exactly 2 of 5 once each is charged double.
+    available = per_unit * 4
+    single = ChunkedRun.chunk_memory_cap(8, spans, available_mib=available)
+    doubled = ChunkedRun.chunk_memory_cap(
+        8, spans, available_mib=available, strand_concurrency_multiplier=2
+    )
+    assert single.cap == 4
+    assert doubled.cap == 2
+    assert doubled.cap < single.cap
+
+
+def test_multiplier_of_one_is_byte_for_byte_the_undoubled_call():
+    """Left at its default, the new parameter changes nothing -- a run without
+    strand concurrency computes exactly the bound it always did."""
+
+    bound_default = ChunkedRun.chunk_memory_cap(
+        16, PER_CONTIG_SPANS, available_mib=56 * GIB
+    )
+    bound_explicit = ChunkedRun.chunk_memory_cap(
+        16, PER_CONTIG_SPANS, available_mib=56 * GIB, strand_concurrency_multiplier=1
+    )
+    assert bound_default == bound_explicit
+
+
+# ------------------------------------------ the two-pass allocation, end to end
+
+
+def test_the_second_pass_reduces_workers_below_the_first_pass_alone():
+    """Few units, wide budget: the first pass's own tool_threads lands >= 2, so
+    the doubled-charge second pass has to run, and it can only ever reduce
+    unit_workers relative to the undoubled first pass -- never raise it."""
+
+    spans = [GRCH38[name] for name in list(GRCH38)[:2]]
+    per_unit = ChunkedRun.chunk_unit_peak_mib(max(spans))
+    # Room for 2 single-orientation workers, not for 2 doubled ones.
+    available = per_unit * 2 + 1
+
+    single_pass_bound = ChunkedRun.chunk_memory_cap(8, spans, available_mib=available)
+    single_pass_allocation = CpuBudget.allocate(
+        budget=8, num_units=2, max_unit_workers=single_pass_bound.cap
+    )
+    assert single_pass_allocation.tool_threads >= 2, (
+        "fixture must land in the regime where a second pass is triggered"
+    )
+
+    doubled_bound = ChunkedRun.chunk_memory_cap(
+        8, spans, available_mib=available, strand_concurrency_multiplier=2
+    )
+    doubled_allocation = CpuBudget.allocate(
+        budget=8, num_units=2, max_unit_workers=doubled_bound.cap
+    )
+    assert doubled_allocation.unit_workers <= single_pass_allocation.unit_workers

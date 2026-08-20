@@ -945,7 +945,9 @@ def chunk_unit_peak_mib(span_bp):
     return CHUNK_UNIT_FIXED_MIB + int(CHUNK_UNIT_MIB_PER_GENOMIC_MB * span_mb)
 
 
-def chunk_memory_cap(budget, unit_spans_bp, available_mib=None):
+def chunk_memory_cap(
+    budget, unit_spans_bp, available_mib=None, strand_concurrency_multiplier=1
+):
     """Concurrency this box can hold in the chunk-processing phase.
 
     Same mechanism as ``prep_memory_cap`` -- ``MemAvailable`` against a measured
@@ -978,10 +980,25 @@ def chunk_memory_cap(budget, unit_spans_bp, available_mib=None):
     ``charged_mib`` are returned whether or not the cap binds, so the run report
     carries the estimate that was compared against the box even on the runs where it
     changed nothing.
+
+    ``strand_concurrency_multiplier`` charges each unit's estimate as if that many
+    quant subprocesses could be resident inside ONE chunk-worker slot at once, not
+    just one. Pass 2 for a strandless run whose per-chunk cpu share is wide enough
+    for ``chunk_worker`` to run its two orientations concurrently instead of in
+    series (see ``run_chunks_concurrently``): a chunk-worker slot's real peak is
+    then bounded by two resident quant units, not one, and a cap sized on one would
+    admit twice the concurrent residency the box was checked to hold. Left at 1,
+    this is byte-for-byte the cap a run without that optimization would compute.
     """
 
     budget = max(1, int(budget))
-    estimates = sorted((chunk_unit_peak_mib(span) for span in unit_spans_bp), reverse=True)
+    estimates = sorted(
+        (
+            chunk_unit_peak_mib(span) * strand_concurrency_multiplier
+            for span in unit_spans_bp
+        ),
+        reverse=True,
+    )
     if not estimates:
         return ChunkMemoryBound(None, None, available_mib, 0, 0)
     largest = estimates[0]
@@ -2516,19 +2533,202 @@ def verify_chunk_split(chunk, split_prefix):
     }
 
 
+def _process_unit(
+    args,
+    ckpt,
+    chunk,
+    unit,
+    upstream_token,
+    log,
+    cdir,
+    num_total_reads,
+    rss_interval,
+    cpu_budget,
+):
+    """Stages 4 and 5 for ONE quant unit (one orientation of one chunk).
+
+    Split out of ``chunk_worker`` so a strandless chunk's two orientations can
+    run either in series on the chunk's own log (today's default, when the
+    chunk's cpu share is too thin to split) or concurrently on their own logs
+    and half that share (see ``chunk_worker`` and
+    ``run_chunks_concurrently``'s memory-aware two-pass allocation). Returns
+    this unit's own steps list; raises ``PipelineError`` naming THIS unit's log,
+    whichever one the caller gave it.
+    """
+    cid = chunk["chunk_id"]
+    prefix = chunk["prefix"]
+    steps = []
+
+    uid = unit["sentinel_id"]
+    norm_bam = unit["norm_bam"]
+    norm_token = chain_token(
+        # maxintron is passed to the normalizer below, so it decides these
+        # contents and has to name them. So does min_per_id: the normalizer
+        # discards alignments below it before measuring depth, so the same input
+        # at a different threshold yields a different normalized bam, and a
+        # cache written before it was forwarded must not be reused. Same for
+        # min_mapping_quality, added alongside it below -- previously absent
+        # from both this token and norm_cmd, so a non-default value from the
+        # command line silently normalized as though it were 0.
+        "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}"
+        ".minperid_{}_minmapq_{}".format(
+            uid,
+            args.normalize_max_cov_level,
+            args.depth_window,
+            args.random_seed,
+            chunk["window_origin"],
+            args.max_intron_length,
+            resolve_min_per_id(args),
+            resolve_min_mapping_quality(args),
+        ),
+        upstream_token,
+    )
+    norm_cmd = [
+        sys.executable,
+        NORMALIZE_BAM,
+        "--input_bam",
+        unit["bam"],
+        "--output_bam",
+        norm_bam,
+        "--normalize_max_cov_level",
+        str(args.normalize_max_cov_level),
+        "--depth_window",
+        str(args.depth_window),
+        "--random_seed",
+        str(args.random_seed),
+        # The normalizer discards alignments below this before measuring depth,
+        # so it has to be the same value the rest of the run filters on. Its own
+        # help says "must match the consumer's min_per_id"; it did not, and the
+        # chunked and unchunked arms disagreed on a TSS by 4 bp as a result.
+        "--min_per_id",
+        str(resolve_min_per_id(args)),
+        "--min_mapping_quality",
+        str(resolve_min_mapping_quality(args)),
+        "--max_intron_length",
+        str(args.max_intron_length),
+        # true of both modes' units: strand-first because the whole bam was
+        # split before extraction, strandless because stage 3b split this
+        # chunk above.
+        "--input_is_single_strand",
+        "--window_origin",
+        str(chunk["window_origin"]),
+    ]
+    if ckpt.done(norm_token):
+        steps.append(
+            {
+                "step": "stage4_normalize",
+                "unit": unit["unit_id"],
+                "reused": True,
+                "cmd": norm_cmd,
+            }
+        )
+    else:
+        steps.append(
+            run_step(
+                "stage4_normalize_{}".format(uid),
+                norm_cmd,
+                log,
+                cdir,
+                rss_interval,
+            )
+        )
+        ckpt.mark(norm_token)
+
+    # LRAA derives its scratch roots by string concatenation on
+    # --output_prefix ("__{prefix}.contigtmp", "__{prefix}.sgcache"), so an
+    # ABSOLUTE prefix would produce nonsense paths like
+    # "__/abs/path.contigtmp" rooted at the cwd. Give it a bare name and let
+    # cwd place the outputs.
+    quant_prefix = unit["quant_prefix"]
+    quant_cmd = lraa_cmd(
+        args,
+        bam_for_quant=unit["bam"],
+        bam_for_sg=norm_bam,
+        # ONE mini contig for the pair -- sequence has no orientation and
+        # the extraction wrote it once -- but each unit's OWN annotation,
+        # because stage 5 quantifies every model its GTF names.
+        genome="{}.fa".format(prefix),
+        gtf=unit["gtf"],
+        out_prefix=unit["quant_name"],
+        num_total_reads=num_total_reads,
+        cpu_budget=cpu_budget,
+    )
+    # Built BEFORE the sentinel because the sentinel is keyed on it. The old
+    # key named the unit, the read denominator and --HiFi, so quant-only
+    # versus discovery was absent from it and so was every flag a caller
+    # might later forward -- a resumed run could serve one mode's output for
+    # the other, which no downstream check can detect. args.discovery needs
+    # no field of its own: it IS the presence of --quant_only in this argv.
+    quant_token = chain_token(
+        "stage5_quant_{}.argv_{}".format(uid, quant_command_digest(quant_cmd)[:12]),
+        norm_token,
+    )
+    if ckpt.done(quant_token):
+        steps.append(
+            {
+                "step": "stage5_quant",
+                "unit": unit["unit_id"],
+                "reused": True,
+                "cmd": quant_cmd,
+            }
+        )
+    else:
+        steps.append(
+            run_step(
+                "stage5_quant_{}".format(uid), quant_cmd, log, cdir, rss_interval
+            )
+        )
+        ckpt.mark(quant_token)
+
+    expr_path = quant_prefix + ".quant.expr"
+    if not os.path.exists(expr_path):
+        raise PipelineError(
+            "chunk {} unit {} produced no {}; log: {}".format(
+                cid, unit["unit_id"], expr_path, log
+            )
+        )
+    if resolve_tracking(quant_prefix) is None:
+        raise PipelineError(
+            "chunk {} unit {} produced no {}{{{}}}; log: {}".format(
+                cid,
+                unit["unit_id"],
+                quant_prefix,
+                ",".join(QUANT_TRACKING_SUFFIXES),
+                log,
+            )
+        )
+    if args.discovery:
+        gtf_path = quant_prefix + ".gtf"
+        if not os.path.exists(gtf_path):
+            raise PipelineError(
+                "chunk {} unit {} produced no {}; discovery is what this run "
+                "is for, so a missing model set is a failure, not an empty "
+                "result. log: {}".format(cid, unit["unit_id"], gtf_path, log)
+            )
+
+    return steps
+
+
 def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_budget):
     """Stages 3b, 4 and 5 for one chunk. Everything goes to the chunk's own log.
 
     ``cpu_budget`` is this chunk's share of the total, handed down by the scheduler.
 
-    A strand-first chunk is one quant unit. A strandless chunk is TWO, and the
-    orientation split that produces them runs HERE -- inside the chunk, against
-    the chunk's own reads, concurrently with every other chunk -- instead of
-    once over the whole bam before any of this starts. The two units then run one
-    after the other on this chunk's share of the budget rather than competing
-    for it, and they share the mini FASTA and mini GTF the single extraction
-    wrote.
+    A strand-first chunk is one quant unit -- ``CpuBudget.allocate`` below gives
+    it ``unit_workers == 1`` regardless of ``cpu_budget``, so it always takes
+    the serial branch. A strandless chunk is TWO, and the orientation split
+    that produces them runs HERE -- inside the chunk, against the chunk's own
+    reads, concurrently with every other chunk -- instead of once over the
+    whole bam before any of this starts. The two units then run concurrently
+    on their own half of this chunk's share when that share is 2+ cores, or
+    one after the other on the whole share when it is 1 -- see
+    ``run_chunks_concurrently``'s docstring for why the memory bound has
+    already accounted for this before handing down a share wide enough to
+    trigger it. Either way they share the mini FASTA and mini GTF the single
+    extraction wrote.
     """
+
+    from concurrent.futures import ThreadPoolExecutor
 
     cid = chunk["chunk_id"]
     log = chunk["log"]
@@ -2545,159 +2745,87 @@ def chunk_worker(args, ckpt, outdir, chunk, num_total_reads, rss_interval, cpu_b
         steps.append(split_step)
         chunk["split_counts"] = split_counts
 
-    for unit in chunk["units"]:
-        uid = unit["sentinel_id"]
-        norm_bam = unit["norm_bam"]
-        norm_token = chain_token(
-            # maxintron is passed to the normalizer below, so it decides these
-            # contents and has to name them. So does min_per_id: the normalizer
-            # discards alignments below it before measuring depth, so the same input
-            # at a different threshold yields a different normalized bam, and a
-            # cache written before it was forwarded must not be reused. Same for
-            # min_mapping_quality, added alongside it below -- previously absent
-            # from both this token and norm_cmd, so a non-default value from the
-            # command line silently normalized as though it were 0.
-            "stage4_norm_{}.maxcov_{}_dw_{}_seed_{}_origin_{}_maxintron_{}"
-            ".minperid_{}_minmapq_{}".format(
-                uid,
-                args.normalize_max_cov_level,
-                args.depth_window,
-                args.random_seed,
-                chunk["window_origin"],
-                args.max_intron_length,
-                resolve_min_per_id(args),
-                resolve_min_mapping_quality(args),
-            ),
-            upstream_token,
-        )
-        norm_cmd = [
-            sys.executable,
-            NORMALIZE_BAM,
-            "--input_bam",
-            unit["bam"],
-            "--output_bam",
-            norm_bam,
-            "--normalize_max_cov_level",
-            str(args.normalize_max_cov_level),
-            "--depth_window",
-            str(args.depth_window),
-            "--random_seed",
-            str(args.random_seed),
-            # The normalizer discards alignments below this before measuring depth,
-            # so it has to be the same value the rest of the run filters on. Its own
-            # help says "must match the consumer's min_per_id"; it did not, and the
-            # chunked and unchunked arms disagreed on a TSS by 4 bp as a result.
-            "--min_per_id",
-            str(resolve_min_per_id(args)),
-            "--min_mapping_quality",
-            str(resolve_min_mapping_quality(args)),
-            "--max_intron_length",
-            str(args.max_intron_length),
-            # true of both modes' units: strand-first because the whole bam was
-            # split before extraction, strandless because stage 3b split this
-            # chunk above.
-            "--input_is_single_strand",
-            "--window_origin",
-            str(chunk["window_origin"]),
-        ]
-        if ckpt.done(norm_token):
-            steps.append(
-                {
-                    "step": "stage4_normalize",
-                    "unit": unit["unit_id"],
-                    "reused": True,
-                    "cmd": norm_cmd,
-                }
-            )
-        else:
-            steps.append(
-                run_step(
-                    "stage4_normalize_{}".format(uid),
-                    norm_cmd,
+    units = chunk["units"]
+    inner = CpuBudget.allocate(budget=cpu_budget, num_units=len(units))
+    unit_logs = [log]
+    if inner.unit_workers > 1:
+        # Enough of this chunk's own share is spare (fewer chunks than the
+        # box has cores -- see run_chunks_concurrently) to run both
+        # orientations at once instead of one after the other. Each gets its
+        # OWN log while it runs: run_step appends to a single file, and two
+        # subprocesses writing the same one at once would interleave into
+        # something unreadable. The two are merged back into the chunk's ONE
+        # log below, in declared unit order, so "everything goes to the
+        # chunk's own log" -- this function's own opening line -- still holds
+        # for any reader or test that looks at chunk["log"] alone; only the
+        # WRITE-time interleaving hazard is what the split log avoids.
+        unit_logs = ["{}.{}".format(log, unit["sentinel_id"]) for unit in units]
+        with ThreadPoolExecutor(max_workers=inner.unit_workers) as pool:
+            futures = [
+                pool.submit(
+                    _process_unit,
+                    args,
+                    ckpt,
+                    chunk,
+                    unit,
+                    upstream_token,
+                    ulog,
+                    cdir,
+                    num_total_reads,
+                    rss_interval,
+                    inner.tool_threads,
+                )
+                for unit, ulog in zip(units, unit_logs)
+            ]
+            # Collected before merging or raising: a failure in one unit must
+            # not orphan the OTHER unit's log content in a per-unit file
+            # nobody reads by default -- the merge below runs regardless.
+            unit_results = []
+            first_error = None
+            for future in futures:
+                try:
+                    unit_results.append(future.result())
+                except Exception as err:  # noqa: BLE001 - merged in below, re-raised after
+                    unit_results.append(None)
+                    if first_error is None:
+                        first_error = err
+        # The per-unit logs are RETAINED, not removed: run_step's own promise
+        # ("the log is never removed, on success or on failure") applies here
+        # too. The merge above gives chunk["log"] the complete picture for a
+        # reader who only looks at one file; these are the same content
+        # attributed to its own orientation, kept as an independent artifact
+        # in case the merge itself is what needs debugging.
+        with open(log, "at") as ofh:
+            for ulog in unit_logs:
+                if os.path.exists(ulog):
+                    with open(ulog, "rt") as ifh:
+                        ofh.write(ifh.read())
+        if first_error is not None:
+            raise first_error
+        for result in unit_results:
+            steps.extend(result)
+    else:
+        for unit in units:
+            steps.extend(
+                _process_unit(
+                    args,
+                    ckpt,
+                    chunk,
+                    unit,
+                    upstream_token,
                     log,
                     cdir,
+                    num_total_reads,
                     rss_interval,
+                    cpu_budget,
                 )
             )
-            ckpt.mark(norm_token)
-
-        # LRAA derives its scratch roots by string concatenation on
-        # --output_prefix ("__{prefix}.contigtmp", "__{prefix}.sgcache"), so an
-        # ABSOLUTE prefix would produce nonsense paths like
-        # "__/abs/path.contigtmp" rooted at the cwd. Give it a bare name and let
-        # cwd place the outputs.
-        quant_prefix = unit["quant_prefix"]
-        quant_cmd = lraa_cmd(
-            args,
-            bam_for_quant=unit["bam"],
-            bam_for_sg=norm_bam,
-            # ONE mini contig for the pair -- sequence has no orientation and
-            # the extraction wrote it once -- but each unit's OWN annotation,
-            # because stage 5 quantifies every model its GTF names.
-            genome="{}.fa".format(prefix),
-            gtf=unit["gtf"],
-            out_prefix=unit["quant_name"],
-            num_total_reads=num_total_reads,
-            cpu_budget=cpu_budget,
-        )
-        # Built BEFORE the sentinel because the sentinel is keyed on it. The old
-        # key named the unit, the read denominator and --HiFi, so quant-only
-        # versus discovery was absent from it and so was every flag a caller
-        # might later forward -- a resumed run could serve one mode's output for
-        # the other, which no downstream check can detect. args.discovery needs
-        # no field of its own: it IS the presence of --quant_only in this argv.
-        quant_token = chain_token(
-            "stage5_quant_{}.argv_{}".format(uid, quant_command_digest(quant_cmd)[:12]),
-            norm_token,
-        )
-        if ckpt.done(quant_token):
-            steps.append(
-                {
-                    "step": "stage5_quant",
-                    "unit": unit["unit_id"],
-                    "reused": True,
-                    "cmd": quant_cmd,
-                }
-            )
-        else:
-            steps.append(
-                run_step(
-                    "stage5_quant_{}".format(uid), quant_cmd, log, cdir, rss_interval
-                )
-            )
-            ckpt.mark(quant_token)
-
-        expr_path = quant_prefix + ".quant.expr"
-        if not os.path.exists(expr_path):
-            raise PipelineError(
-                "chunk {} unit {} produced no {}; log: {}".format(
-                    cid, unit["unit_id"], expr_path, log
-                )
-            )
-        if resolve_tracking(quant_prefix) is None:
-            raise PipelineError(
-                "chunk {} unit {} produced no {}{{{}}}; log: {}".format(
-                    cid,
-                    unit["unit_id"],
-                    quant_prefix,
-                    ",".join(QUANT_TRACKING_SUFFIXES),
-                    log,
-                )
-            )
-        if args.discovery:
-            gtf_path = quant_prefix + ".gtf"
-            if not os.path.exists(gtf_path):
-                raise PipelineError(
-                    "chunk {} unit {} produced no {}; discovery is what this run "
-                    "is for, so a missing model set is a failure, not an empty "
-                    "result. log: {}".format(cid, unit["unit_id"], gtf_path, log)
-                )
 
     return {
         "chunk_id": cid,
         "region": chunk["region"],
-        "units": [u["unit_id"] for u in chunk["units"]],
         "log": log,
+        "unit_logs": unit_logs,
         "wall_s": round(time.time() - started, 3),
         "peak_tree_rss_kb": max(
             [s.get("peak_tree_rss_kb", 0) for s in steps] or [0]
@@ -2716,15 +2844,15 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
     previously do to each other.
 
     The scheduled unit is the CHUNK, not the quant job. A strandless chunk holds
-    two quant jobs and runs them in series on its own share, so the queue is 25
-    intervals rather than 50 contig-strand chunks. That coarsens the granularity
-    the makespan heuristic has to work with, and it is the one place this mode
-    could lose what it gains: with a budget near the interval count, a long tail
-    interval now carries both orientations instead of one. It buys the shared
-    extraction and a split that is per-chunk rather than whole-bam. Splitting the
-    queue back into 50 quant units would need a barrier after every chunk's
-    split, or units that appear mid-run; both were rejected as more machinery
-    than the granularity is worth at 8-wide over 25 intervals.
+    two quant jobs. When this chunk's own cpu share (``tool_threads``) is only
+    1 core, they still run in series on it, exactly as before -- splitting a
+    single core between two invocations buys nothing. When the share is 2+
+    cores -- the common shape once chunk count drops below core count, e.g. one
+    Terra-scattered chromosome producing fewer chunks than the shard's cores --
+    ``chunk_worker`` runs both orientations concurrently on their own half of
+    that share (see ``CpuBudget.allocate`` applied a second, nested time
+    there). The per-chunk product still cannot exceed this chunk's own budget,
+    which is what keeps the whole-run product bounded by ``args.cpu_budget``.
 
     Launch order is longest-first on retained alignments per chunk, which the extractor
     already counted, so no extra pass is needed. Span would be the wrong proxy: it does
@@ -2757,14 +2885,34 @@ def run_chunks_concurrently(args, ckpt, outdir, chunks, num_total_reads, rss_int
     # Both bounds, not just the budget: a partition whose units are whole
     # chromosomes puts every worker's multi-GiB quant footprint resident at once,
     # which is what the kernel OOM killer ended a 195-chunk whole-genome run over.
-    bound = chunk_memory_cap(
-        args.cpu_budget, [unit.region[1] - unit.region[0] + 1 for unit in units]
-    )
+    #
+    # Two passes when strandless: the first pass's own allocation tells us whether
+    # a chunk-worker slot will run one orientation at a time or two concurrently
+    # (chunk_worker makes that same call from its OWN cpu share, so this has to
+    # predict it before knowing the final answer). Below tool_threads 2 nothing
+    # changes -- one resident quant unit per slot, same charge as always. At or
+    # above it, a slot's real peak is bounded by TWO resident units, so the memory
+    # bound is recomputed charging double before the concurrency it protects
+    # against is allowed to run. This can only ever REDUCE unit_workers relative to
+    # the first pass, which by construction cannot lower tool_threads back below 2
+    # for a fixed budget -- so the second pass is self-consistent with no further
+    # iteration needed.
+    spans = [unit.region[1] - unit.region[0] + 1 for unit in units]
+    bound = chunk_memory_cap(args.cpu_budget, spans)
     allocation = CpuBudget.allocate(
         budget=args.cpu_budget,
         num_units=len(units),
         max_unit_workers=bound.cap,
     )
+    if args.strandless_chunks and allocation.tool_threads >= 2:
+        bound = chunk_memory_cap(
+            args.cpu_budget, spans, strand_concurrency_multiplier=2
+        )
+        allocation = CpuBudget.allocate(
+            budget=args.cpu_budget,
+            num_units=len(units),
+            max_unit_workers=bound.cap,
+        )
     print(CpuBudget.format_allocation(allocation, phase="chunks"), flush=True)
     shortfall = CpuBudget.budget_shortfall_note(allocation)
     if shortfall:
