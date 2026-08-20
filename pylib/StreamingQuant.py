@@ -192,6 +192,17 @@ class AssignmentTable:
         return table
 
 
+class CrossComponentAmbiguousPath(RuntimeError):
+    """A resolved-in-stream path compatible with isoforms from more than one
+    independently-normalized read-sharing component.
+
+    Raised by `rows_for_multipath` and caught by its streaming caller, which treats it the
+    same way chunk boundaries treat a severed alignment: collateral of a lossy input,
+    dropped and counted rather than allowed to fail the run. See the raise site for why
+    pass 1 cannot produce this and pooling or per-component splitting are both wrong.
+    """
+
+
 def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weight_of,
                        component_of):
     """The tracking rows one multipath contributes: (gene, tx, hash, exons, mp, frac, w).
@@ -257,18 +268,23 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
     # numbers from two different normalizations, and splitting each separately sums the read's
     # fractions to the number of components.
     #
-    # Neither is an approximation worth making, so the run is refused. The normalized bam is
-    # not a sufficient foundation for this locus, and the unseen-path-rate guard cannot speak
-    # to it -- that bounds how much resolution happened, not whether a split was meaningful.
+    # Neither is an approximation worth making, so this one read is refused rather than
+    # guessed at. It does not follow the run should be: coverage normalization already
+    # concedes exactly this kind of loss at chunk boundaries, where a severed alignment is
+    # dropped, counted and named rather than vetoing the cut that severed it (ChunkedRun.py).
+    # A component-bridging read thinned away by the SAME normalization is the same shape of
+    # cost, so the caller (StreamingQuant.stream_assign) catches this exception, counts the
+    # read under reads_cross_component_ambiguous and moves on. Raising here rather than
+    # returning [] keeps that decision at the streaming layer, which knows it is in-stream
+    # resolution, rather than inside the one function both callers share.
     if len(by_component) > 1:
-        raise RuntimeError(
+        raise CrossComponentAmbiguousPath(
             "path {} is compatible with isoforms from {} separately quantified components "
             "({}). Their abundances were normalized independently, so this read cannot be "
             "split across them: pooling mixes two normalizations, and splitting per "
             "component assigns the read once per component. Coverage normalization removed "
-            "the read that would have joined these genes into one component, so the "
-            "normalized bam is an insufficient foundation here -- raise "
-            "--normalize_max_cov_level, or run without --stream_reads.".format(
+            "the read that would have joined these genes into one component; raise "
+            "--normalize_max_cov_level to make this rarer.".format(
                 mp.get_simple_path(),
                 len(by_component),
                 ",".join(sorted(str(c) for c in by_component)),
@@ -363,6 +379,11 @@ def make_path_resolver(splice_graph, quantify_obj, theta, em_was_run,
     Returns the same 7-tuple rows as the table holds, or [] for a path that anchors to no
     gene or matches no isoform. [] is a real answer and is cached as one: it is what stops
     a streaming pass from re-resolving an unmatchable path once per read.
+
+    Can also raise CrossComponentAmbiguousPath, uncaught here on purpose: the caller
+    (stream_assign's assign_path) is what knows this is in-stream resolution and treats the
+    read as collateral rather than a fatal error, exactly as a chunk boundary treats a
+    severed alignment.
     """
     if fraction_read_align_overlap is None:
         fraction_read_align_overlap = LRAA_Globals.config["fraction_read_align_overlap"]
@@ -454,6 +475,13 @@ class StreamingTotals:
         # normalization thins a rare isoform's evidence to nothing while the full bam still
         # carries reads that only it explains -- which is the regime this mode is for.
         self.reads_zero_fraction = 0
+        # Reads whose in-stream-resolved path was compatible with isoforms from more than
+        # one independently-normalized component (rows_for_multipath's
+        # CrossComponentAmbiguousPath). A strict subset of reads_unassignable, broken out
+        # for the same reason reads_zero_fraction is: without it, these reads are
+        # indistinguishable from any other unassignable read, and the actionable response
+        # (raise --normalize_max_cov_level) differs from the rest of that bucket.
+        self.reads_cross_component_ambiguous = 0
         # Streaming transcriptome rescue, all keyed by candidate category. Held apart
         # from the counters above rather than folded into them: a rescued read is not a
         # streamed read -- a low_perID candidate never passes the retention filter, so
@@ -617,6 +645,15 @@ def stream_assign(
     default would rescue against 43% more reads than the batch path targets, which is a
     different feature rather than a reproduction of this one.
 
+    A path resolved in-stream can also turn out to be compatible with isoforms from more
+    than one independently-normalized component -- coverage normalization thinned away the
+    one read that would have joined them in pass 1, so pass 1 never saw reason to quantify
+    them together. rows_for_multipath refuses to guess at a split for that read and raises
+    CrossComponentAmbiguousPath; assign_path catches it, counts the read under
+    totals.reads_cross_component_ambiguous, and treats it exactly like a path matching no
+    isoform: 0 rows, no tracking row written. Collateral of the same normalization that
+    already drops severed reads at chunk boundaries, not a new kind of loss.
+
     The discard test below BRANCHES rather than dropping outright, and what it branches
     on is deliberately narrow.  A read rejected only for low percent identity is offered
     to rescue; every other discard reason still discards, and the read is counted
@@ -639,13 +676,19 @@ def stream_assign(
     # rather than counted as table hits -- the served fraction divides by reads, so it has
     # to see every read that depended on in-stream resolution, not just the first.
     stream_resolved = set()
+    # Paths resolved in-stream that turned out to bridge more than one component. Held
+    # apart from `table`'s own cache (which only ever stores rows, i.e. "0 rows" or "some
+    # rows") so a later read on the same path is still counted here even though its lookup
+    # comes back as a plain cache hit indistinguishable from "matched no isoform".
+    cross_component_ambiguous_paths = set()
 
     def assign_path(read, path, count_fallback=True):
         """Table lookup, in-stream resolution and tracking write for one path.
 
         Shared by the genomic route and the rescue route, so a rescued read reaches its
         isoforms through exactly the machinery a genomically mapped read does. Returns
-        the number of tracking rows written; 0 means the path matched no isoform.
+        the number of tracking rows written; 0 means the path matched no isoform OR was
+        cross-component-ambiguous (totals distinguishes the two; the return value does not).
 
         `count_fallback` False keeps rescue out of the served/unseen accounting. That
         accounting's denominator is assigned plus unassignable reads, which by
@@ -659,6 +702,8 @@ def stream_assign(
         rows = table.lookup(canon)
         if count_fallback and canon in stream_resolved:
             totals.reads_on_stream_resolved_paths += 1
+        if count_fallback and canon in cross_component_ambiguous_paths:
+            totals.reads_cross_component_ambiguous += 1
         if rows is None:
             # Never seen. Resolve once with the ordinary compatibility cascade and
             # cache the verdict, positive or negative, so this read and every later
@@ -669,7 +714,17 @@ def stream_assign(
             else:
                 totals.rescue_paths_resolved_in_stream += 1
             stream_resolved.add(canon)
-            rows = resolver(path) if resolver is not None else None
+            try:
+                rows = resolver(path) if resolver is not None else None
+            except CrossComponentAmbiguousPath:
+                # Collateral, not a defect -- see rows_for_multipath's raise site. Recorded
+                # in cross_component_ambiguous_paths rather than folded into `table`'s own
+                # cached [] so the cache-hit branch above can still count a later read on
+                # this same path: `table` alone cannot tell "matched nothing" from this.
+                cross_component_ambiguous_paths.add(canon)
+                if count_fallback:
+                    totals.reads_cross_component_ambiguous += 1
+                rows = []
             if rows is None:
                 raise RuntimeError(
                     "no resolver supplied for a path absent from the assignment "
@@ -766,7 +821,19 @@ def stream_assign(
 
             if not assign_path(read, path):
                 totals.reads_unassignable += 1
-                if rescuer is not None and rescue_unassigned_to_targets:
+                # A cross-component-ambiguous path is deliberately dropped, not merely
+                # unresolved: offering it to rescue could hand the SAME read a second,
+                # different path whose isoforms sit in only one component, silently
+                # reassigning a read this pass just refused to attribute anywhere. That
+                # would be a second, uncoordinated determination for the identical read,
+                # exactly the outcome rows_for_multipath's raise exists to prevent -- so
+                # this category is excluded from rescue regardless of the flag.
+                canon = splice_graph.canonical_simple_path(path)
+                if (
+                    rescuer is not None
+                    and rescue_unassigned_to_targets
+                    and canon not in cross_component_ambiguous_paths
+                ):
                     offer_to_rescue(
                         read, IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS
                     )
@@ -934,6 +1001,17 @@ def _report(contig_acc, contig_strand, totals, table_size):
             "%s %d reads matched isoforms whose abundances were all zero, so they were "
             "assigned no mass; raise --normalize_max_cov_level if this is a large share",
             tag, totals.reads_zero_fraction,
+        )
+    if totals.reads_cross_component_ambiguous:
+        # Logged at WARNING for the same reason reads_zero_fraction is: these reads get no
+        # tracking row at all, so nothing else in the output shows they existed. Collateral
+        # of coverage normalization thinning away a component-bridging read, treated the
+        # same as a severed read at a chunk boundary -- dropped, counted, not fatal.
+        logger.warning(
+            "%s %d reads were compatible with isoforms from more than one independently "
+            "normalized component and were dropped rather than split; raise "
+            "--normalize_max_cov_level if this is a large share",
+            tag, totals.reads_cross_component_ambiguous,
         )
     frac_served = served_read_fraction(totals)
     if frac_served is None:
