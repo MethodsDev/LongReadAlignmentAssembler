@@ -78,6 +78,23 @@ config = {
     # before it becomes an excluded region, absorbing alignment-boundary slop
     # (indels, soft-clips) at the edge of a real rDNA-homologous span.
     "rdna_mask_pad": 500,
+    # A cassette-vs-genome hit must clear BOTH floors to become part of the mask,
+    # or a single short, coincidentally-homologous alignment -- unavoidable at
+    # genome scale -- would exclude a region indistinguishable from a real
+    # rDNA-repeat-unit copy. Real copies observed on the reference genomes tested
+    # span 1-44 kb at effectively full identity, so both floors sit far below any
+    # genuine hit and only ever reject noise. See RdnaMask._sam_hit_spans.
+    "rdna_mask_min_hit_length": 200,
+    "rdna_mask_min_per_id": 80,
+    # Minimum overlap, in bases, between a read's alignment and the mask before
+    # the read is discarded (see RdnaMask.read_overlaps_mask). Every excluded
+    # region already carries rdna_mask_pad bp of padding specifically to absorb
+    # boundary slop around a genuine hit, so a read that only grazes that padding
+    # is far more likely an ordinary read from adjacent unique sequence than one
+    # implicated in the locus's multi-mapping ambiguity; a read genuinely inside
+    # a masked repeat copy overlaps by its whole aligned length and clears this
+    # trivially, so the floor only ever spares boundary-adjacent reads.
+    "rdna_mask_min_overlap_bp": 50,
     # NOT a CLI setting. Populated once per LRAA invocation, immediately after
     # --genome is resolved, from RdnaMask.build_rdna_mask_bed +
     # RdnaMask.load_mask_bed: a {contig: IntervalTree} mask, or None when masking

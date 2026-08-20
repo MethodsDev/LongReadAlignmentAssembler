@@ -22,6 +22,7 @@ if str(REPO_ROOT / "pylib") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "pylib"))
 
 import RdnaMask
+import LRAA_Globals
 
 
 def _header(contigs):
@@ -75,6 +76,56 @@ def test_sam_hit_spans_uses_ref_consuming_cigar_ops_only(tmp_path):
     assert spans == [("chr1", 100, 143)]
 
 
+def test_sam_hit_identity_computes_percent_identity_from_nm_tag():
+    # 20 aligned (M) bases, 2 mismatches -> 90% identity
+    fields = ["q", "0", "chr1", "1", "60", "20M", "*", "0", "0", "A" * 20, "I" * 20, "NM:i:2"]
+    assert RdnaMask._sam_hit_identity(fields) == 90.0
+
+
+def test_sam_hit_identity_none_without_an_nm_tag():
+    fields = ["q", "0", "chr1", "1", "60", "20M", "*", "0", "0", "A" * 20, "I" * 20]
+    assert RdnaMask._sam_hit_identity(fields) is None
+
+
+def test_sam_hit_spans_min_length_rejects_a_short_hit():
+    fields = ["q", "0", "chr1", "101", "60", "50M", "*", "0", "0", "A" * 50, "I" * 50, "NM:i:0"]
+    sam = "\t".join(fields) + "\n"
+
+    def spans_for(min_length):
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".sam", delete=False) as f:
+            f.write(sam)
+            path = f.name
+        try:
+            return RdnaMask._sam_hit_spans(path, min_length=min_length)
+        finally:
+            os.remove(path)
+
+    assert spans_for(0) == [("chr1", 100, 150)]
+    assert spans_for(51) == []
+
+
+def test_sam_hit_spans_min_per_id_rejects_a_low_identity_hit():
+    # 100 aligned bases, 30 mismatches -> 70% identity
+    fields = ["q", "0", "chr1", "101", "60", "100M", "*", "0", "0", "A" * 100, "I" * 100, "NM:i:30"]
+    sam = "\t".join(fields) + "\n"
+
+    def spans_for(min_per_id):
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".sam", delete=False) as f:
+            f.write(sam)
+            path = f.name
+        try:
+            return RdnaMask._sam_hit_spans(path, min_per_id=min_per_id)
+        finally:
+            os.remove(path)
+
+    assert spans_for(0) == [("chr1", 100, 200)]
+    assert spans_for(80) == []
+    assert spans_for(70) == [("chr1", 100, 200)]  # exactly at the floor: kept
+
+
+
 def test_sam_hit_spans_skips_unmapped_placeholder_records(tmp_path):
     """minimap2 -a emits one record per query even with no acceptable alignment."""
 
@@ -123,14 +174,144 @@ def test_merge_spans_separates_contigs():
 
 
 # ---------------------------------------------------------------------------
-# read_overlaps_mask
+# read_overlaps_mask (fixtures for the quality-floor tests directly below need
+# _write_fasta/_random_seq, defined further down alongside the rest of the
+# build_rdna_mask_bed tests -- fine at module scope, since nothing here runs
+# until the whole module has finished importing)
+
+
+def _mutate(seq, frac, seed):
+    """``seq`` with a ``frac`` fraction of its bases substituted, deterministically."""
+    import random as _random
+
+    rng = _random.Random(seed)
+    seq = list(seq)
+    bases = "ACGT"
+    for pos in rng.sample(range(len(seq)), int(len(seq) * frac)):
+        seq[pos] = rng.choice([b for b in bases if b != seq[pos]])
+    return "".join(seq)
+
+
+def test_build_rdna_mask_bed_min_length_floor_is_applied_end_to_end(tmp_path):
+    """The public function, not _sam_hit_spans directly -- the floor must reach it.
+
+    A regression here is exactly the class of bug this test exists to catch: an
+    earlier revision resolved min_length/min_per_id from config and folded them
+    into the cache key, but never actually passed them to the call that builds
+    the spans, so the floors were provably inert while the cache key claimed
+    they were active. Only a test that drives the full build (not the private
+    helper alone) can catch that -- the helper's own unit tests passed
+    throughout.
+    """
+    cassette_seq = _random_seq(500, seed=500)
+    cassette_fa = tmp_path / "cassette.fa"
+    _write_fasta(cassette_fa, "cassette", cassette_seq)
+    genome_fa = tmp_path / "genome.fa"
+    _write_fasta(
+        genome_fa, "chr1", _random_seq(1000, seed=1) + cassette_seq + _random_seq(1000, seed=2)
+    )
+
+    # The embedded copy is ~500-520 bp once padded -- comfortably below 600.
+    rejected = RdnaMask.build_rdna_mask_bed(
+        str(genome_fa),
+        str(cassette_fa),
+        cache_dir=str(tmp_path / "cache_strict"),
+        pad=10,
+        min_length=600,
+        min_per_id=0,
+    )
+    assert rejected is None
+
+    kept = RdnaMask.build_rdna_mask_bed(
+        str(genome_fa),
+        str(cassette_fa),
+        cache_dir=str(tmp_path / "cache_loose"),
+        pad=10,
+        min_length=400,
+        min_per_id=0,
+    )
+    assert kept is not None
+
+
+def test_build_rdna_mask_bed_min_per_id_floor_is_applied_end_to_end(tmp_path):
+    """Same regression guard as the length test, for the identity floor."""
+
+    cassette_seq = _random_seq(500, seed=500)
+    cassette_fa = tmp_path / "cassette.fa"
+    _write_fasta(cassette_fa, "cassette", cassette_seq)
+    genome_fa = tmp_path / "genome.fa"
+    # 10% substitutions -> minimap2 still reports the hit, measured ~90% identity.
+    mutated = _mutate(cassette_seq, 0.10, seed=999)
+    _write_fasta(
+        genome_fa, "chr1", _random_seq(1000, seed=3) + mutated + _random_seq(1000, seed=4)
+    )
+
+    rejected = RdnaMask.build_rdna_mask_bed(
+        str(genome_fa),
+        str(cassette_fa),
+        cache_dir=str(tmp_path / "cache_strict"),
+        pad=10,
+        min_length=0,
+        min_per_id=95,
+    )
+    assert rejected is None
+
+    kept = RdnaMask.build_rdna_mask_bed(
+        str(genome_fa),
+        str(cassette_fa),
+        cache_dir=str(tmp_path / "cache_loose"),
+        pad=10,
+        min_length=0,
+        min_per_id=80,
+    )
+    assert kept is not None
+
+
+def test_build_rdna_mask_bed_reads_quality_floors_from_config_when_not_passed(tmp_path):
+    """The exact scenario the advisory caught: floors resolved from config must
+    actually reach the filter, not just the cache key.
+
+    Calls build_rdna_mask_bed with min_length/min_per_id entirely UNSET (the
+    real call shape every production caller uses -- LRAA's own main() never
+    passes them explicitly either), and proves the config value took effect by
+    getting a different verdict at a strict vs a loose config setting for the
+    SAME inputs.
+    """
+    cassette_seq = _random_seq(500, seed=500)
+    cassette_fa = tmp_path / "cassette.fa"
+    _write_fasta(cassette_fa, "cassette", cassette_seq)
+    genome_fa = tmp_path / "genome.fa"
+    _write_fasta(
+        genome_fa, "chr1", _random_seq(1000, seed=1) + cassette_seq + _random_seq(1000, seed=2)
+    )
+
+    saved = (
+        LRAA_Globals.config.get("rdna_mask_min_hit_length"),
+        LRAA_Globals.config.get("rdna_mask_min_per_id"),
+    )
+    try:
+        LRAA_Globals.config["rdna_mask_min_hit_length"] = 600
+        LRAA_Globals.config["rdna_mask_min_per_id"] = 0
+        rejected = RdnaMask.build_rdna_mask_bed(
+            str(genome_fa), str(cassette_fa), cache_dir=str(tmp_path / "cache_strict"), pad=10
+        )
+        assert rejected is None, "config's strict min_length was not applied"
+
+        LRAA_Globals.config["rdna_mask_min_hit_length"] = 0
+        kept = RdnaMask.build_rdna_mask_bed(
+            str(genome_fa), str(cassette_fa), cache_dir=str(tmp_path / "cache_loose"), pad=10
+        )
+        assert kept is not None, "config's loose min_length was not applied"
+    finally:
+        LRAA_Globals.config["rdna_mask_min_hit_length"] = saved[0]
+        LRAA_Globals.config["rdna_mask_min_per_id"] = saved[1]
 
 
 def test_read_overlaps_mask_true_for_an_overlapping_block():
     header = _header([("chr1", 10000)])
     read = _aligned(header, "chr1", 500, 100)  # covers [500, 600)
     mask = {"chr1": __import__("intervaltree").IntervalTree()}
-    mask["chr1"][550:560] = True
+    mask["chr1"][500:600] = True  # fully overlapping, well past the min_overlap_bp default
     assert RdnaMask.read_overlaps_mask(read, mask) is True
 
 
@@ -157,6 +338,67 @@ def test_read_overlaps_mask_false_when_no_mask_is_configured(mask):
     header = _header([("chr1", 10000)])
     read = _aligned(header, "chr1", 500, 100)
     assert RdnaMask.read_overlaps_mask(read, mask) is False
+
+
+def test_read_overlaps_mask_min_overlap_bp_keeps_a_grazing_read():
+    """A read that just clips the padding is kept, not discarded outright.
+
+    Every excluded region already carries padding to absorb alignment-boundary
+    slop around a genuine hit; a read whose alignment extends a handful of
+    bases into that padding is much more likely an ordinary read from
+    adjacent unique sequence than one implicated in the locus's ambiguity.
+    """
+    header = _header([("chr1", 10000)])
+    read = _aligned(header, "chr1", 500, 100)  # covers [500, 600)
+    mask = {"chr1": __import__("intervaltree").IntervalTree()}
+    mask["chr1"][590:700] = True  # only the last 10 bp of the read overlap
+    assert RdnaMask.read_overlaps_mask(read, mask, min_overlap_bp=50) is False
+    assert RdnaMask.read_overlaps_mask(read, mask, min_overlap_bp=5) is True
+
+
+def test_read_overlaps_mask_min_overlap_bp_discards_a_substantially_overlapping_read():
+    """A read genuinely inside a masked region clears any reasonable floor."""
+
+    header = _header([("chr1", 10000)])
+    read = _aligned(header, "chr1", 500, 1000)  # covers [500, 1500)
+    mask = {"chr1": __import__("intervaltree").IntervalTree()}
+    mask["chr1"][0:10000] = True
+    assert RdnaMask.read_overlaps_mask(read, mask, min_overlap_bp=50) is True
+
+
+def test_read_overlaps_mask_min_overlap_bp_sums_across_spliced_blocks():
+    """Two blocks each below the floor can still sum past it together."""
+
+    header = _header([("chr1", 10000)])
+    read = pysam.AlignedSegment(header)
+    read.query_name = "r"
+    read.reference_id = 0
+    read.reference_start = 500
+    read.mapping_quality = 60
+    # block1 [500,530) 30bp, intron [530,600), block2 [600,630) 30bp
+    read.cigar = [(0, 30), (3, 70), (0, 30)]
+    read.query_sequence = "A" * 60
+    read.query_qualities = pysam.qualitystring_to_array("I" * 60)
+    mask = {"chr1": __import__("intervaltree").IntervalTree()}
+    mask["chr1"][0:10000] = True
+    assert RdnaMask.read_overlaps_mask(read, mask, min_overlap_bp=50) is True
+    assert RdnaMask.read_overlaps_mask(read, mask, min_overlap_bp=61) is False
+
+
+def test_read_overlaps_mask_reads_min_overlap_bp_from_config_by_default():
+    header = _header([("chr1", 10000)])
+    read = _aligned(header, "chr1", 500, 100)  # covers [500, 600)
+    mask = {"chr1": __import__("intervaltree").IntervalTree()}
+    mask["chr1"][590:700] = True  # 10 bp overlap
+
+    saved = LRAA_Globals.config.get("rdna_mask_min_overlap_bp")
+    try:
+        LRAA_Globals.config["rdna_mask_min_overlap_bp"] = 50
+        assert RdnaMask.read_overlaps_mask(read, mask) is False
+        LRAA_Globals.config["rdna_mask_min_overlap_bp"] = 5
+        assert RdnaMask.read_overlaps_mask(read, mask) is True
+    finally:
+        LRAA_Globals.config["rdna_mask_min_overlap_bp"] = saved
 
 
 # ---------------------------------------------------------------------------

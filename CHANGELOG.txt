@@ -1,3 +1,44 @@
+v0.24.1, August 20, 2026
+- FIXED: rDNA-cassette masking (v0.24.0) had no quality floor on a cassette-vs-genome
+  hit before it became an excluded region, and no minimum overlap before a read was
+  discarded for touching one. A single short, coincidentally-homologous alignment --
+  unavoidable at genome scale -- could exclude a region indistinguishable from a real
+  rDNA-repeat-unit copy, and a read whose alignment grazed the excluded region's own
+  500bp padding by as little as 1bp was discarded outright, even though that padding
+  exists specifically to absorb alignment-boundary slop around a genuine hit and a read
+  that merely grazes it is far more likely an ordinary read from adjacent unique
+  sequence. `RdnaMask._sam_hit_spans` now requires a hit to clear both
+  `rdna_mask_min_hit_length` (default 200bp) and `rdna_mask_min_per_id` (default 80%,
+  computed from CIGAR + the SAM NM tag, same formula as `Util_funcs.alignment_per_id`)
+  before it can become part of the mask; `RdnaMask.read_overlaps_mask` now requires the
+  SUM of a read's per-block overlap with the mask to clear `rdna_mask_min_overlap_bp`
+  (default 50bp) before the read is discarded. All three floors reject only synthetic
+  noise on the reference genomes actually tested: real rDNA-repeat-unit copies there
+  span 1-44kb at effectively full identity, and reads genuinely inside one are aligned
+  well within it, not merely grazing an edge, so both floors sit far below any genuine
+  hit. `RdnaMask.MASK_METHOD_VERSION` bumped `v1`->`v2` and both new hit-quality
+  parameters folded into the mask's own cache key, so a mask built before this fix is
+  never silently reused under it. VERIFIED on the real chr21 chunk this feature was
+  diagnosed from: the same 3 mask regions at the same boundaries, `LRAA` wall time
+  unchanged (~65-77s against the same ~10,700s unmasked baseline) -- the floors change
+  nothing about the actual pathological locus, only about what a fabricated adversarial
+  input could do to it. The `min_overlap_bp` floor does recover some previously-fully-
+  suppressed content: on that same chunk two annotated GENCODE lncRNA genes
+  (`ENSG00000278996`, `ENSG00000280441`) whose reference span legitimately extends into
+  the masked locus (the `ncRNA_host` transcripts the rDNA cassette's small RNAs are
+  embedded in) regain modest read support (6-18 reads) for reference-guided isoforms
+  that were previously suppressed entirely because every one of their boundary-adjacent
+  supporting reads was discarded outright; not a regression, since these are real
+  annotated genes at this exact locus, not fabricated structure. 11 new unit tests,
+  including three that drive `RdnaMask.build_rdna_mask_bed` end to end (not only its
+  private `_sam_hit_spans` helper) with the floors resolved from config rather than
+  passed explicitly -- the shape every production caller actually uses, and the exact
+  shape an earlier draft of this fix got wrong (floors computed and folded into the
+  cache key, but never passed to the call that builds the spans, so they were inert
+  while the cache key claimed otherwise; caught in review before landing). Full
+  `pylib`/`util` suite (1099 tests) passes.
+
+
 v0.24.0, August 20, 2026
 - Version bump publishing the rDNA-cassette masking feature below.
 
