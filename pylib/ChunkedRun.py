@@ -711,6 +711,25 @@ def enumerate_prep_contigs(args):
     cost only. A reference holding nothing still gets its selection and its one
     empty chunk, exactly as the serial loop gave it one.
 
+    ONE exception, not a contradiction of the rule above: a reference ABSENT from
+    the bam header entirely cannot hold anything, by construction -- a bam cannot
+    carry a record against a reference its own header does not list. Filtering
+    those out is not the heuristic narrowing the rule above forbids (which risks
+    dropping a reference that DOES have reads); it can never drop reads, because
+    there is nothing there to drop. ``select_contig_cut_points.py`` already
+    filters exactly this set for its own no-``--contig`` enumeration
+    (``:1761-1791``, following ``00bf5b9``), but its ``--contig X`` branch --
+    which is what per-contig seeding below actually uses, for every chunked run
+    -- still raised ``SelectionError`` on such an X: by the time that branch
+    checks, X has already been filtered out of the very ``lengths`` dict it is
+    tested against. GRCh38_no_alt.fa's chrEBV (195 fasta sequences, 194 in a real
+    bam) reproduced this exactly: 26 cut selections seeded, 1 failed, the whole
+    make-chunks phase refused to extract or merge a partial result. Filtering
+    here -- before a subprocess is ever seeded for such a contig -- is symmetric
+    with what the no-``--contig`` path already does, and does not touch the
+    "exactly one selection per invocation" contract downstream in
+    ``run_cut_selection``.
+
     ``--contig`` reduces the enumeration to a single entry, which leaves today's
     behaviour as a degenerate case of the same pool rather than a second path.
     """
@@ -723,11 +742,36 @@ def enumerate_prep_contigs(args):
             "make-chunks phase enumerates the genome fasta because that is what "
             "cut selection enumerates.".format(args.genome_fa)
         )
+    with pysam.AlignmentFile(os.path.abspath(args.bam), "rb") as bam:
+        bam_contigs = set(bam.references)
+    absent = sorted(c for c in lengths if c not in bam_contigs)
+    if absent:
+        print(
+            "NOTE: {} of {} genome reference sequence(s) are absent from the bam "
+            "header and are skipped, having nothing to select cuts on: {}{}".format(
+                len(absent),
+                len(lengths),
+                ", ".join(absent[:5]),
+                "" if len(absent) <= 5 else ", ...",
+            ),
+            file=sys.stderr,
+        )
+        lengths = {c: n for c, n in lengths.items() if c in bam_contigs}
+        if not lengths:
+            raise PipelineError(
+                "every one of {}'s {} contig(s) is absent from {}'s header; "
+                "nothing to select cuts on.".format(
+                    args.genome_fa, len(absent), args.bam
+                )
+            )
     if args.contig:
         if args.contig not in lengths:
             raise PipelineError(
-                "--contig {} is absent from {}. Known contigs begin: {}".format(
-                    args.contig, args.genome_fa, ", ".join(sorted(lengths)[:10])
+                "--contig {} is absent from {}{}. Known contigs begin: {}".format(
+                    args.contig,
+                    args.genome_fa,
+                    " or from the bam" if args.contig in absent else "",
+                    ", ".join(sorted(lengths)[:10]),
                 )
             )
         return [args.contig], lengths

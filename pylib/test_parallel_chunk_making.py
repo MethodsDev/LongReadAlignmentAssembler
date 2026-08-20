@@ -269,6 +269,56 @@ def test_an_empty_genome_is_refused_rather_than_producing_an_empty_pool(tmp_path
     assert "no contigs" in str(err.value)
 
 
+def test_a_genome_contig_absent_from_the_bam_is_excluded_not_seeded(tmp_path):
+    """A genome-fasta contig the bam does not carry at all must be excluded from
+    the pool, not seeded and left to crash a per-contig subprocess.
+
+    GRCh38_no_alt.fa carries chrEBV; a bam aligned against the same assembly's 194
+    other sequences does not, because the aligner was never given an EBV decoy
+    reference to align against. ``select_contig_cut_points.py``'s own
+    no-``--contig`` enumeration already treats a bam-absent contig as skippable
+    (``00bf5b9``), but ChunkedRun always calls it with an explicit ``--contig
+    <name>`` per contig (``cut_selection_plan``), and THAT branch raised
+    ``SelectionError`` on exactly this input before this fix -- reproduced a whole
+    genome up, at the layer that decides which contigs get seeded at all, not the
+    selector's own internal check.
+    """
+
+    contigs = {"cA": 5000, "chrEBV": 3000}
+    genome = write_genome(tmp_path / "g.fa", contigs)
+    # bam header carries ONLY cA -- chrEBV is absent from the bam entirely, the
+    # GRCh38_no_alt.fa (195 seqs) vs. a real aligned bam (194 seqs) shape.
+    bam = write_reads(tmp_path / "r.bam", {"cA": 5000}, [("r1", "cA", 100, 50, 0)])
+    args = ChunkedRun.default_args(genome_fa=genome, bam=bam)
+
+    enumerated, lengths = ChunkedRun.enumerate_prep_contigs(args)
+    assert enumerated == ["cA"]
+    assert "chrEBV" not in lengths
+    assert lengths == {"cA": 5000}
+
+
+def test_an_explicit_contig_restriction_naming_a_bam_absent_contig_is_refused_by_reason(
+    tmp_path,
+):
+    """``--contig chrEBV`` must still be refused -- an explicit single-contig
+    restriction naming a contig with nothing to select on is a request that can
+    never produce output, so silently proceeding with zero chunks would be a
+    worse failure than a clear error. The refusal must name the reason (bam
+    absence) rather than reusing the generic "not in the genome fasta" message a
+    typo'd name gets, since the two causes need different fixes.
+    """
+
+    contigs = {"cA": 5000, "chrEBV": 3000}
+    genome = write_genome(tmp_path / "g.fa", contigs)
+    bam = write_reads(tmp_path / "r.bam", {"cA": 5000}, [("r1", "cA", 100, 50, 0)])
+    args = ChunkedRun.default_args(genome_fa=genome, bam=bam, contig="chrEBV")
+
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.enumerate_prep_contigs(args)
+    assert "chrEBV" in str(err.value)
+    assert "bam" in str(err.value)
+
+
 # ----------------------------------------------------------- order normalisation
 
 
