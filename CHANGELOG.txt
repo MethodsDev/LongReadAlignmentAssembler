@@ -1,3 +1,7 @@
+v0.24.0, August 20, 2026
+- Version bump publishing the rDNA-cassette masking feature below.
+
+
 v0.23.0, August 20, 2026
 - ADDED: rDNA-cassette read masking, on by default. Reads whose alignment overlaps a
   minimap2 hit of a bundled human rDNA repeat unit (`resources/human_rDNA_cassette.fa`,
