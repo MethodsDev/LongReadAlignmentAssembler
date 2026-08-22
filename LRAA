@@ -168,6 +168,144 @@ def _apply_hifi_splice_default(config, args):
         config["min_alt_splice_freq"] = 0.01
 
 
+# The threshold-bearing flags that are SUPPRESS-defaulted, so `hasattr` is the only
+# way to tell "user set this" from "user said nothing". Absence must stay absence:
+# assigning a default here would make an unstated flag indistinguishable from a real
+# one, which is what _apply_hifi_splice_default keys off.
+_SUPPRESS_DEFAULTED_CONFIG_FLAGS = (
+    "min_alt_splice_freq",
+    "min_alt_unspliced_freq",
+    "min_PolyA_iso_fraction",
+)
+
+# Threshold flags that DO carry an argparse default, so explicitness is decided by
+# comparing against a pristine default namespace rather than by attribute presence.
+_DEFAULTED_CONFIG_FLAGS = (
+    "min_isoform_fraction",
+    "min_path_score",
+    "min_per_id",
+    "max_intron_length",
+)
+
+
+def _apply_hifi_config_overrides(config, args):
+    """The HiFi preset, as a function so both run paths apply the identical set.
+
+    Chunked mode exits before main()'s inline copy of this ran, so the outer
+    driver's config stayed at library defaults while every worker re-derived the
+    preset from its own forwarded --HiFi. That worked only because the preset is
+    a pure function of args; the moment anything on the chunked path reads a
+    HiFi-derived value from config, the two disagree. One function, both callers.
+    """
+
+    if not args.HiFi:
+        return
+    config["HiFi"] = True
+    # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
+    config["infer_TSS"] = False if args.no_infer_TSS else True
+    config["infer_PolyA"] = False if args.no_infer_PolyA else True
+    config["min_per_id"] = 97.0
+    config["rescue_unassigned_max_indel_length"] = 10
+    config["max_exon_spur_length"] = 13
+    config["fracture_splice_graph_at_input_transcript_bounds"] = True
+    config["aggregate_adjacent_splice_boundaries"] = False
+    if getattr(args, "aggregate_adjacent_splice_boundaries", False):
+        config["aggregate_adjacent_splice_boundaries"] = True
+    _apply_hifi_splice_default(config, args)
+
+
+def _load_config_update_file(cfg_file):
+    """Read and validate a --config_update JSON file, or exit naming the fault."""
+
+    if not os.path.exists(cfg_file):
+        sys.exit(f"Error, --config_update file not found: {cfg_file}")
+    try:
+        with open(cfg_file, "rt") as fh:
+            user_cfg = json.load(fh)
+    except Exception as e:
+        sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
+
+    if not isinstance(user_cfg, dict):
+        sys.exit(
+            f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
+        )
+    return user_cfg
+
+
+def _apply_config_update_file(config, args):
+    """Apply --config_update last, so a user's explicit file beats every preset."""
+
+    if not args.config_update:
+        return
+    user_cfg = _load_config_update_file(args.config_update)
+    applied_keys, skipped_keys = _apply_config_overrides(config, user_cfg)
+    for k in skipped_keys:
+        logger.warning(f"--config_update ignoring unknown config key: {k}")
+    logger.info(
+        f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
+    )
+    if skipped_keys:
+        logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
+
+
+def _declared_parser_defaults(parser):
+    """Declared defaults keyed by dest, WITHOUT reparsing.
+
+    ``parser.parse_args([])`` cannot serve here: the main parser has required
+    flags (--genome among them), so a bare reparse exits the process instead of
+    handing back a baseline namespace -- which would turn every --chunk run into
+    an argparse error. The declared defaults are already on the actions.
+    """
+
+    return {
+        action.dest: action.default
+        for action in parser._actions
+        if action.dest != "help"
+    }
+
+
+def _collect_explicit_config_overrides(args, parser=None):
+    """The config the USER asked for, as a dict, for forwarding into chunk workers.
+
+    Deliberately the user's EXPLICIT intent rather than the whole resolved config.
+    Forwarding a resolved snapshot would pin values a worker legitimately derives
+    for itself (the HiFi preset, anything per-chunk) and would silently outrank a
+    future per-chunk decision. Forwarding only what was actually stated leaves
+    every default resolving exactly where it resolved before.
+
+    Precedence matches main()'s: explicit threshold flags first, then the
+    --config_update file, which wins on any key it names.
+    """
+
+    overrides = {}
+
+    for key in _SUPPRESS_DEFAULTED_CONFIG_FLAGS:
+        if hasattr(args, key):
+            overrides[key] = getattr(args, key)
+
+    if parser is not None:
+        declared = _declared_parser_defaults(parser)
+        _unset = object()
+        for key in _DEFAULTED_CONFIG_FLAGS:
+            if not hasattr(args, key):
+                continue
+            supplied = getattr(args, key)
+            if supplied != declared.get(key, _unset):
+                overrides[key] = supplied
+        # min_reads_novel sets two config keys rather than one of its own name, so
+        # it cannot be handled by the name-matching loop above.
+        if hasattr(args, "min_reads_novel") and args.min_reads_novel != declared.get(
+            "min_reads_novel", _unset
+        ):
+            overrides["min_reads_novel_isoform"] = args.min_reads_novel
+            overrides["min_unique_reads_novel_isoform"] = args.min_reads_novel
+
+    if args.config_update:
+        overrides.update(_load_config_update_file(args.config_update))
+
+    return overrides
+
+
 def _cast_config_value(orig_val, new_val):
     # attempt gentle casting to preserve expected primitive types
     try:
@@ -1404,7 +1542,18 @@ def main():
     # Chunked mode delegates the whole run and never reaches the setup below.
     # Dispatched here so that --chunk is validated against the same parsed args
     # everything else sees, and before any state is built that it would discard.
+    #
+    # Because it never reaches that setup, it never reached main()'s config
+    # resolution either: every threshold flag and every --config_update key was
+    # parsed, then discarded, and each worker re-derived defaults from its own
+    # forwarded argv. A run asking for --min_alt_splice_freq 0.005 silently got
+    # 0.01. So the user's explicit config intent is captured HERE -- the one place
+    # the parser is still in scope to tell a supplied value from a default -- and
+    # handed to the pipeline, which forwards it to every worker.
     if args.chunk:
+        args.explicit_config_overrides = _collect_explicit_config_overrides(
+            args, parser
+        )
         sys.exit(_run_chunked_mode(args))
 
     genome_fasta_filename = args.genome
@@ -1807,47 +1956,10 @@ def main():
 
     # low-memory behavior is always on (externalized read-name store; spans always tracked)
 
-    if args.HiFi:
-        # Override defaults with stringent HiFi settings
-        LRAA_Globals.config["HiFi"] = True
-        # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
-        LRAA_Globals.config["infer_TSS"] = False if args.no_infer_TSS else True
-        LRAA_Globals.config["infer_PolyA"] = False if args.no_infer_PolyA else True
-        LRAA_Globals.config["min_per_id"] = 97.0
-        LRAA_Globals.config["rescue_unassigned_max_indel_length"] = 10
-        LRAA_Globals.config["max_exon_spur_length"] = 13
-        LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = True
-        LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = False
-        if getattr(args, "aggregate_adjacent_splice_boundaries", False):
-            LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] = True
-        _apply_hifi_splice_default(LRAA_Globals.config, args)
+    _apply_hifi_config_overrides(LRAA_Globals.config, args)
 
     # apply generic config overrides last so they take precedence
-    if args.config_update:
-        cfg_file = args.config_update
-        if not os.path.exists(cfg_file):
-            sys.exit(f"Error, --config_update file not found: {cfg_file}")
-        try:
-            with open(cfg_file, "rt") as fh:
-                user_cfg = json.load(fh)
-        except Exception as e:
-            sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
-
-        if not isinstance(user_cfg, dict):
-            sys.exit(
-                f"Error, JSON in {cfg_file} must decode to an object with key:value pairs"
-            )
-
-        applied_keys, skipped_keys = _apply_config_overrides(
-            LRAA_Globals.config, user_cfg
-        )
-        for k in skipped_keys:
-            logger.warning(f"--config_update ignoring unknown config key: {k}")
-        logger.info(
-            f"--config_update applied to {len(applied_keys)} keys: {', '.join(applied_keys) if applied_keys else 'None'}"
-        )
-        if skipped_keys:
-            logger.info(f"--config_update skipped {len(skipped_keys)} unknown keys")
+    _apply_config_update_file(LRAA_Globals.config, args)
 
     runtime_config = _snapshot_runtime_config(LRAA_Globals.config)
 
@@ -3188,6 +3300,43 @@ def _run_chunked_mode(args):
         for _tag_key in ("cell_barcode_tag", "read_umi_tag")
         if hasattr(args, _tag_key)
     }
+    # Written into the work dir rather than a temp path: this file IS the record of
+    # which non-default settings the chunks actually ran under, and a chunked run's
+    # own log otherwise reports only library defaults.
+    #
+    # THE CONTENT DIGEST IS IN THE FILENAME, and that is load bearing. Every
+    # per-chunk quant sentinel is keyed on the worker's argv (see
+    # ChunkedRun.argv_digest), which sees this path as one opaque token. At a
+    # fixed name, resuming the same --chunk_work_dir with DIFFERENT thresholds
+    # leaves the argv -- and so the digest, and so the sentinel -- unchanged, and
+    # the resumed run serves chunks built under the old thresholds as the new
+    # run's output. Exactly the stale-sentinel failure argv_digest's own docstring
+    # exists to prevent, reintroduced by a filename. Naming the file after its
+    # contents puts the change back in the argv where the digest can see it.
+    explicit_overrides = getattr(args, "explicit_config_overrides", None) or {}
+    worker_config_json = None
+    if explicit_overrides:
+        os.makedirs(work_dir, exist_ok=True)
+        payload = json.dumps(explicit_overrides, indent=2, sort_keys=True)
+        content_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        worker_config_json = os.path.abspath(
+            os.path.join(
+                work_dir, "worker_config_overrides.{}.json".format(content_digest)
+            )
+        )
+        with open(worker_config_json, "wt") as ofh:
+            ofh.write(payload)
+        logger.info(
+            "chunked mode: forwarding %d explicit config override(s) to every "
+            "worker via %s -- %s",
+            len(explicit_overrides),
+            worker_config_json,
+            ", ".join(
+                "{}={}".format(k, explicit_overrides[k])
+                for k in sorted(explicit_overrides)
+            ),
+        )
+
     chunk_args = ChunkedRun.default_args(
         bam=args.bam,
         genome_fa=args.genome,
@@ -3218,6 +3367,7 @@ def _run_chunked_mode(args):
         min_mapping_quality_for_final_quant=args.min_mapping_quality_for_final_quant,
         no_rdna_mask=args.no_rdna_mask,
         rdna_mask_fasta=args.rdna_mask_fasta,
+        worker_config_json=worker_config_json,
         **sc_tag_overrides,
     )
 

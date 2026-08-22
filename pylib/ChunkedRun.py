@@ -2325,6 +2325,16 @@ def lraa_cmd(
             cmd.append("--stream_reads_rescue_unassigned_to_targets")
     else:
         cmd.append("--no_stream_reads")
+    # The threshold settings. Forwarded as one --config_update file rather than as
+    # per-flag arguments because the config keys a user can set outnumber the flags
+    # that name them (min_TSS_iso_fraction and the containment/PolyA thresholds
+    # have no flag at all), and because this list is exactly the allowlist that
+    # silently omitted every threshold before: a new tunable added upstream now
+    # arrives here without anyone remembering to extend this function.
+    worker_config_json = getattr(args, "worker_config_json", None)
+    if worker_config_json:
+        cmd += ["--config_update", worker_config_json]
+
     return cmd
 
 
@@ -4277,6 +4287,16 @@ def build_parser():
         default=0.5,
         help="seconds between /proc RSS samples; a spike shorter than this can "
         "be missed",
+    )
+    parser.add_argument(
+        "--worker_config_json",
+        default=None,
+        help="path to a JSON file of LRAA_Globals.config overrides to forward to "
+        "EVERY chunk worker as --config_update. This is how a threshold the user "
+        "set on `LRAA --chunk` reaches the workers that actually apply it: the "
+        "outer driver exits before its own config resolution runs, and lraa_cmd "
+        "forwards an explicit allowlist that no threshold flag was ever on, so "
+        "without this a chunked run silently used library defaults",
     )
 
     return parser
