@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.25.0"
+VERSION = "v0.26.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -165,7 +165,34 @@ def _require_minimap2_for_transcriptome_alignment(rescue_enabled):
 
 def _apply_hifi_splice_default(config, args):
     if args.HiFi and not hasattr(args, "min_alt_splice_freq"):
-        config["min_alt_splice_freq"] = 0.01
+        config["min_alt_splice_freq"] = 0.005
+
+
+def _apply_hifi_isoform_fraction_defaults(config, args):
+    """The other two thirds of the HiFi threshold set.
+
+    These three gates were measured jointly, not separately: each is close to
+    inert on its own, and only the combination recovers isoforms. On SIRVs, where
+    the truth set is complete within multi-exon chains and every false positive
+    is therefore visible, the set gains 4.6 points of sensitivity over 12 samples
+    (p=0.016) for a precision change of -0.2 points that does not reach
+    significance -- 6.6 true chains gained per false one. Evidence is PacBio HiFi
+    throughout, which is why this is a HiFi preset and the library defaults for
+    other platforms are left alone.
+
+    min_isoform_fraction carries an argparse default, so explicitness comes from
+    user_specified_dests (read from argv, set in main() before any derivation).
+    min_frac_gene_unique_reads has no CLI flag at all and is written
+    unconditionally; --config_update is applied after the preset, so a user file
+    still wins.
+    """
+
+    if not args.HiFi:
+        return
+    specified = getattr(args, "user_specified_dests", None) or set()
+    if "min_isoform_fraction" not in specified:
+        config["min_isoform_fraction"] = 0.005
+    config["min_frac_gene_unique_reads"] = 0.005
 
 
 # WHAT REACHES A CHUNK WORKER, and why this set is narrow on purpose.
@@ -182,10 +209,17 @@ def _apply_hifi_splice_default(config, args):
 #   its own HiFi block, then have config_update put 90 back -- the user's value
 #   winning in chunked mode and losing in unchunked mode, for the same command.
 #
-# So every key below is checked against _apply_hifi_config_overrides: none is
-# written there, EXCEPT min_alt_splice_freq, whose HiFi default is applied only
-# when the flag is absent (_apply_hifi_splice_default's `not hasattr` guard), so
-# an explicit value wins in both modes and parity holds.
+# So every key below is checked against _apply_hifi_config_overrides. Three are
+# written there, and each stays parity-safe for the same reason: the preset is a
+# pure function of args, so the driver and every worker derive the identical
+# value from their own --HiFi, and a run that changed nothing forwards nothing.
+#   - min_alt_splice_freq: HiFi default applied only when the flag is absent
+#     (_apply_hifi_splice_default's `not hasattr` guard).
+#   - min_isoform_fraction: HiFi default applied only when argv did not name it
+#     (_apply_hifi_isoform_fraction_defaults, via user_specified_dests).
+#   - min_frac_gene_unique_reads: written unconditionally, but it has no CLI flag
+#     and --config_update runs after the preset, so a user file still wins.
+# In all three an explicit value wins in both modes.
 #
 # Keys the HiFi preset owns unconditionally -- min_per_id,
 # rescue_unassigned_max_indel_length, max_exon_spur_length,
@@ -212,8 +246,9 @@ _SUPPRESS_DEFAULTED_CONFIG_FLAGS = (
 )
 
 # Carry an argparse default, so explicitness is decided by comparing against the
-# parser's declared default rather than by attribute presence. None is written by
-# the HiFi preset, so config-update-last matches unchunked semantics.
+# parser's declared default rather than by attribute presence. min_isoform_fraction
+# IS written by the HiFi preset, but only when argv did not name it, so
+# config-update-last still matches unchunked semantics.
 _DEFAULTED_CONFIG_FLAGS = (
     "min_isoform_fraction",
     "min_path_score",
@@ -245,6 +280,7 @@ def _apply_hifi_config_overrides(config, args):
     if getattr(args, "aggregate_adjacent_splice_boundaries", False):
         config["aggregate_adjacent_splice_boundaries"] = True
     _apply_hifi_splice_default(config, args)
+    _apply_hifi_isoform_fraction_defaults(config, args)
 
 
 def _load_config_update_file(cfg_file):
@@ -525,7 +561,9 @@ def main():
           infer_TSS                           disabled                  enabled (use --no_infer_TSS to disable)
           infer_PolyA                         disabled                  enabled (use --no_infer_PolyA to disable)
           max_exon_spur_length                14                        13
-          min_alt_splice_freq                 0.03                      0.01
+          min_alt_splice_freq                 0.03                      0.005
+          min_isoform_fraction                0.01                      0.005
+          min_frac_gene_unique_reads          0.01                      0.005
           aggregate_adjacent_splice_boundaries enabled                 disabled (or enabled with --aggregate_adjacent_splice_boundaries)
           single-exon filtering               standard rules            require TSS or PolyA annotation
         """

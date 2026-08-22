@@ -82,13 +82,45 @@ def test_ont_and_hifi_splice_defaults_preserve_explicit_hifi_value():
     hifi_args = _args(HiFi=True)
     LRAA_CLI._seed_authoritative_config_from_args(hifi_config, hifi_args)
     LRAA_CLI._apply_hifi_splice_default(hifi_config, hifi_args)
-    assert hifi_config["min_alt_splice_freq"] == 0.01
+    assert hifi_config["min_alt_splice_freq"] == 0.005
 
     explicit_config = _base_config()
     explicit_hifi_args = _args(HiFi=True, min_alt_splice_freq=0.03)
     LRAA_CLI._seed_authoritative_config_from_args(explicit_config, explicit_hifi_args)
     LRAA_CLI._apply_hifi_splice_default(explicit_config, explicit_hifi_args)
     assert explicit_config["min_alt_splice_freq"] == 0.03
+
+
+def test_hifi_isoform_fraction_defaults_apply_only_when_argv_is_silent():
+    """The other two thirds of the HiFi threshold set, and their escape hatches.
+
+    min_isoform_fraction carries an argparse default, so explicitness is read
+    from user_specified_dests rather than attribute presence;
+    min_frac_gene_unique_reads has no flag at all, so the preset always writes it
+    and --config_update (applied later) is the only way to override.
+    """
+
+    # seeded locally rather than in _base_config(), which other tests compare by
+    # exact dict equality
+    ont_config = dict(_base_config(), min_frac_gene_unique_reads=0.01)
+    ont_args = _args()
+    LRAA_CLI._apply_hifi_isoform_fraction_defaults(ont_config, ont_args)
+    assert ont_config["min_isoform_fraction"] == 0.01
+    assert ont_config["min_frac_gene_unique_reads"] == 0.01
+
+    hifi_config = dict(_base_config(), min_frac_gene_unique_reads=0.01)
+    hifi_args = _args(HiFi=True)
+    hifi_args.user_specified_dests = set()
+    LRAA_CLI._apply_hifi_isoform_fraction_defaults(hifi_config, hifi_args)
+    assert hifi_config["min_isoform_fraction"] == 0.005
+    assert hifi_config["min_frac_gene_unique_reads"] == 0.005
+
+    explicit_config = dict(_base_config(), min_frac_gene_unique_reads=0.01)
+    explicit_args = _args(HiFi=True, min_isoform_fraction=0.2)
+    explicit_args.user_specified_dests = {"min_isoform_fraction"}
+    LRAA_CLI._seed_authoritative_config_from_args(explicit_config, explicit_args)
+    LRAA_CLI._apply_hifi_isoform_fraction_defaults(explicit_config, explicit_args)
+    assert explicit_config["min_isoform_fraction"] == 0.2
 
 
 def test_named_values_seed_config_and_json_wins_for_all_consumers():
