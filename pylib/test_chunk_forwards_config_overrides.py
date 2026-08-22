@@ -349,3 +349,209 @@ def test_resuming_a_workdir_under_new_thresholds_does_not_reuse_old_chunks(
     assert os.path.basename(after_second[0]) in argv or os.path.basename(
         after_second[1]
     ) in argv, argv
+
+
+# --------------------------------------------------------------------------
+# PREP/WORKER PARITY.
+#
+# Some config keys are consumed by the chunking PREP phase -- cut selection,
+# extraction, stage-4 normalization -- before any worker exists. Prep reads them
+# from the driver's resolved config; workers read them from the forwarded
+# --config_update. If those two disagree, a run quantifies reads that its own
+# extraction filtered differently, and nothing in the output says so.
+#
+# So for a prep key the assertion is not "the worker got it" but "prep and the
+# worker got the SAME thing", which is why these tests read the normalization
+# cache identity (prep's own view, encoded in the filename it chooses) alongside
+# the worker's applied value.
+# --------------------------------------------------------------------------
+
+
+def _prep_norm_commands(tmp_path):
+    """Prep's own parameters, read from the normalization commands it issued.
+
+    Chunked prep names its per-chunk output plainly (chunk.plus.norm.bam), so the
+    filename carries no parameters -- the parameter-encoded norm_cache names
+    belong to the UNCHUNKED path. What chunked prep does expose is the
+    normalize_bam_by_strand command line it runs per chunk, logged by run_step,
+    and that names --min_per_id and --normalize_max_cov_level directly. That
+    command IS prep's view: if a config change does not move it, prep did not see
+    the change and is normalizing on the old value.
+    """
+    lines = []
+    for log in glob.glob(str(tmp_path / "work" / "logs" / "chunk_*.log")):
+        with open(log) as fh:
+            lines += [ln for ln in fh if "normalize_bam_by_strand" in ln]
+    return lines
+
+
+def _worker_applied_config(tmp_path):
+    """The override file the workers were actually handed, parsed."""
+    paths = _override_files(tmp_path)
+    if not paths:
+        return {}
+    with open(paths[-1]) as fh:
+        return json.load(fh)
+
+
+def test_prep_key_via_flag_reaches_prep_and_workers_together(tmp_path, inputs):
+    """--min_per_id is prep-consumed; a CLI change must move BOTH sides.
+
+    Before the driver resolved its own config, this was the divergence: prep
+    resolved the user's value while lraa_cmd never forwarded the flag, so every
+    worker quantified at its own default.
+    """
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, "--min_per_id", "90")
+    _assert_ok(r, tmp_path)
+
+    forwarded = _worker_applied_config(tmp_path)
+    assert forwarded.get("min_per_id") == 90.0, forwarded
+    _assert_worker_applied(tmp_path, "min_per_id")
+
+    # prep's own normalization command must name the same value
+    cmds = " ".join(_prep_norm_commands(tmp_path))
+    assert "--min_per_id 90" in cmds, cmds
+
+
+def test_hifi_preset_beats_an_explicit_prep_flag_in_both_modes(tmp_path, inputs):
+    """--HiFi --min_per_id 90 resolves to 97.0, unchunked AND chunked.
+
+    The preset overwrites the seeded value in main(), so 97.0 is what unchunked
+    mode runs. Forwarding the RESOLVED value rather than the raw argument is what
+    keeps chunked mode agreeing: forwarding the raw 90 would have let
+    --config_update's last-wins position hand the worker a value unchunked mode
+    would never use.
+    """
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, "--HiFi", "--min_per_id", "90")
+    _assert_ok(r, tmp_path)
+
+    forwarded = _worker_applied_config(tmp_path)
+    assert forwarded.get("min_per_id") == 97.0, forwarded
+
+    cmds = " ".join(_prep_norm_commands(tmp_path))
+    assert "--min_per_id 97" in cmds, cmds
+
+
+def test_prep_key_via_config_update_reaches_prep_too(tmp_path, inputs):
+    """A prep key set in the FILE must also move prep, not just the workers.
+
+    This is the case the driver's early resolution exists for: the file is read
+    before prep args are derived, so cut selection and normalization see it.
+    """
+    bam, gtf, genome = inputs
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"min_per_id": 80}))
+
+    r = _chunked(tmp_path, bam, gtf, genome, "--HiFi", "--config_update", str(cfg))
+    _assert_ok(r, tmp_path)
+
+    # file is applied last, so it outranks even the HiFi preset -- in both modes
+    forwarded = _worker_applied_config(tmp_path)
+    assert forwarded.get("min_per_id") == 80, forwarded
+
+    cmds = " ".join(_prep_norm_commands(tmp_path))
+    assert "--min_per_id 80" in cmds, cmds
+
+
+def test_normalize_max_cov_level_flag_is_seeded_not_stale(tmp_path, inputs):
+    """The key whose seeding path is easy to miss.
+
+    normalize_max_cov_level is seeded by _seed_authoritative_config_from_args
+    rather than by an explicit line in the driver's resolver, so a reader can
+    reasonably suspect it forwards a stale default. It does not, and this pins
+    that: prep's cache identity and the forwarded value must both name 500.
+    """
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, "--normalize_max_cov_level", "500")
+    _assert_ok(r, tmp_path)
+
+    forwarded = _worker_applied_config(tmp_path)
+    assert forwarded.get("normalize_max_cov_level") == 500, forwarded
+
+    cmds = " ".join(_prep_norm_commands(tmp_path))
+    assert "--normalize_max_cov_level 500" in cmds, cmds
+
+def _override_file_holding(tmp_path, key, value):
+    """The override file whose CONTENTS carry key==value, or None.
+
+    Selected by content, never by ordering. The filenames carry a content hash,
+    so sorting them is sorting hashes -- unrelated to which run wrote which, and
+    `paths[-1]` would name an arbitrary one once a workdir holds two.
+    """
+    for path in _override_files(tmp_path):
+        with open(path) as fh:
+            if json.load(fh).get(key) == value:
+                return path
+    return None
+
+
+def test_same_workdir_prep_key_change_moves_prep_identity_and_worker_config(
+    tmp_path, inputs
+):
+    """The end-to-end guard: one workdir, two runs, a prep key changed between them.
+
+    Unit checks on the override file cannot catch this class of bug. Both halves
+    of a chunked run have to move together, and both are cached:
+
+      * PREP caches its normalized bam under a filename naming the parameters
+        that produced it. If a change does not move that name, prep reused a bam
+        built under the old value and the run quantifies reads its own extraction
+        filtered differently.
+      * WORKERS are gated by argv-keyed sentinels. If the argv does not move, a
+        resumed run replays chunks built under the old value while reporting the
+        new one.
+
+    Asserted on the SAME --chunk_work_dir twice, because that is the only
+    arrangement where a stale-cache bug can surface: a fresh directory hides it
+    by having nothing to reuse. Every assertion identifies its run by CONTENT --
+    the override file carrying the value under test, and that file's basename
+    appearing in a worker's own command line -- so nothing depends on hash or
+    glob ordering.
+
+    min_per_id is the key under test because prep reads it through
+    ChunkedRun.resolve_min_per_id AND every worker applies it: the exact key whose
+    two readers used to disagree, prep resolving it while lraa_cmd never forwarded
+    it at all.
+    """
+    bam, gtf, genome = inputs
+
+    cfg_a = tmp_path / "a.json"
+    cfg_a.write_text(json.dumps({"min_per_id": 90}))
+    first = _chunked(tmp_path, bam, gtf, genome, "--config_update", str(cfg_a))
+    _assert_ok(first, tmp_path)
+
+    ovr_a = _override_file_holding(tmp_path, "min_per_id", 90)
+    assert ovr_a is not None, _override_files(tmp_path)
+    argv_a = _worker_argv(tmp_path)
+    assert os.path.basename(ovr_a) in argv_a, "run 1 workers never saw their override"
+    prep_a = set(_prep_norm_commands(tmp_path))
+    assert any("--min_per_id 90" in c for c in prep_a), sorted(prep_a)
+
+    # Same workdir, different value. Nothing cleaned between the two runs.
+    cfg_b = tmp_path / "b.json"
+    cfg_b.write_text(json.dumps({"min_per_id": 80}))
+    second = _chunked(tmp_path, bam, gtf, genome, "--config_update", str(cfg_b))
+    _assert_ok(second, tmp_path)
+
+    # 1. the second run got its OWN override file, identified by its contents
+    ovr_b = _override_file_holding(tmp_path, "min_per_id", 80)
+    assert ovr_b is not None, _override_files(tmp_path)
+    assert ovr_b != ovr_a, "both runs shared one override file"
+
+    # 2. a worker was actually launched with it -- the argv moved, so argv-keyed
+    #    chunk sentinels cannot match run 1's and replay its chunks
+    argv_b = _worker_argv(tmp_path)
+    assert os.path.basename(ovr_b) in argv_b, (
+        "run 2's override never reached a worker command line; sentinels would "
+        "still match run 1"
+    )
+
+    # 3. prep's own cache identity moved: a pid80 artifact exists that did not
+    #    before, so normalization was redone rather than reused
+    prep_b = set(_prep_norm_commands(tmp_path))
+    assert any("--min_per_id 80" in c for c in prep_b - prep_a), (
+        "prep never issued a min_per_id 80 normalization, so it reused the "
+        "90 one: before={} after={}".format(sorted(prep_a), sorted(prep_b))
+    )

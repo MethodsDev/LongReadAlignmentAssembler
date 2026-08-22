@@ -168,22 +168,55 @@ def _apply_hifi_splice_default(config, args):
         config["min_alt_splice_freq"] = 0.01
 
 
-# The threshold-bearing flags that are SUPPRESS-defaulted, so `hasattr` is the only
-# way to tell "user set this" from "user said nothing". Absence must stay absence:
-# assigning a default here would make an unstated flag indistinguishable from a real
-# one, which is what _apply_hifi_splice_default keys off.
+# WHAT REACHES A CHUNK WORKER, and why this set is narrow on purpose.
+#
+# Overrides are forwarded to workers as --config_update, which main() applies
+# LAST, after the HiFi preset. So a key is only safe to forward this way if its
+# UNCHUNKED semantics are also config-update-last. That is not true of every
+# config key, and getting it wrong would silently change precedence in chunked
+# mode only:
+#
+#   --HiFi --min_per_id 90, unchunked: _seed_authoritative_config_from_args
+#   writes 90, then the HiFi block overwrites it with 97.0, and 97.0 is what
+#   runs. Forwarded as config_update the worker would seed 90, take 97.0 from
+#   its own HiFi block, then have config_update put 90 back -- the user's value
+#   winning in chunked mode and losing in unchunked mode, for the same command.
+#
+# So every key below is checked against _apply_hifi_config_overrides: none is
+# written there, EXCEPT min_alt_splice_freq, whose HiFi default is applied only
+# when the flag is absent (_apply_hifi_splice_default's `not hasattr` guard), so
+# an explicit value wins in both modes and parity holds.
+#
+# Keys the HiFi preset owns unconditionally -- min_per_id,
+# rescue_unassigned_max_indel_length, max_exon_spur_length,
+# fracture_splice_graph_at_input_transcript_bounds,
+# aggregate_adjacent_splice_boundaries, infer_TSS, infer_PolyA -- are
+# deliberately NOT here. Forwarding those correctly means forwarding the FLAG,
+# so it lands in the worker's own args and is seeded before the worker's HiFi
+# block, reproducing unchunked ordering exactly. That is a larger change than
+# this commit, and is the natural next step rather than something to bodge in
+# through the wrong channel.
+#
+# --config_update itself is forwarded verbatim and is unaffected by any of this:
+# it is last-wins in both modes by construction, so every config key remains
+# reachable in chunked mode through it, including keys with no CLI flag at all.
+
+# SUPPRESS-defaulted, so `hasattr` is the only way to tell "user set this" from
+# "user said nothing". Absence must stay absence: assigning a default here would
+# make an unstated flag indistinguishable from a real one, which is exactly what
+# _apply_hifi_splice_default keys off.
 _SUPPRESS_DEFAULTED_CONFIG_FLAGS = (
     "min_alt_splice_freq",
     "min_alt_unspliced_freq",
     "min_PolyA_iso_fraction",
 )
 
-# Threshold flags that DO carry an argparse default, so explicitness is decided by
-# comparing against a pristine default namespace rather than by attribute presence.
+# Carry an argparse default, so explicitness is decided by comparing against the
+# parser's declared default rather than by attribute presence. None is written by
+# the HiFi preset, so config-update-last matches unchunked semantics.
 _DEFAULTED_CONFIG_FLAGS = (
     "min_isoform_fraction",
     "min_path_score",
-    "min_per_id",
     "max_intron_length",
 )
 
@@ -264,46 +297,144 @@ def _declared_parser_defaults(parser):
     }
 
 
-def _collect_explicit_config_overrides(args, parser=None):
-    """The config the USER asked for, as a dict, for forwarding into chunk workers.
 
-    Deliberately the user's EXPLICIT intent rather than the whole resolved config.
-    Forwarding a resolved snapshot would pin values a worker legitimately derives
-    for itself (the HiFi preset, anything per-chunk) and would silently outrank a
-    future per-chunk decision. Forwarding only what was actually stated leaves
-    every default resolving exactly where it resolved before.
 
-    Precedence matches main()'s: explicit threshold flags first, then the
-    --config_update file, which wins on any key it names.
+# Arguments whose dest does not match the config key(s) they set. Exhaustive
+# against main()'s own `config[...] = args....` assignments; anything unmapped is
+# simply not forwarded, so a gap is a missing override rather than a wrong one.
+_RENAMED_CONFIG_FLAGS = {
+    "min_reads_novel": ("min_reads_novel_isoform", "min_unique_reads_novel_isoform"),
+    "monitor_interval": ("resource_monitor_interval",),
+}
+
+# Arguments whose config key holds the NEGATION of the parsed value.
+_NEGATED_CONFIG_FLAGS = {
+    "no_EM": "run_EM",
+}
+
+# Keys ChunkedRun already puts on each worker's own command line (lraa_cmd), so a
+# worker resolves them from its argv exactly as an unchunked run would.
+# Forwarding them again as config would be redundant at best, and at worst would
+# outrank a per-worker decision from the config_update position, which is last.
+_CHUNK_WORKER_OWNED_CONFIG_KEYS = frozenset(
+    {
+        "num_total_reads",
+        "stream_reads",
+        "min_mapping_quality",
+        "min_mapping_quality_for_final_quant",
+    }
+)
+
+
+
+def _user_specified_dests(args, parser, argv=None):
+    """The dests the USER actually typed, read from argv rather than inferred.
+
+    Inference from the parsed namespace does not work here, and the failure is not
+    subtle. Comparing against declared defaults marks a None-sentinel dest as
+    "specified" the moment main() resolves it -- stream_reads_rescue_unassigned
+    and rescue_unassigned_reads_via_transcriptome_alignment both resolve that way
+    -- and a dest served by two actions (a --flag/--no_flag pair) keeps only one
+    of their defaults in any dict built from parser._actions. Either mistake
+    forwards a value the user never asked for into every chunk worker of a run
+    that requested nothing, which is how a plain --chunk run ended up carrying an
+    override file at all.
+
+    argv has none of those ambiguities: an option string is present or it is not.
     """
 
-    overrides = {}
+    argv = sys.argv[1:] if argv is None else argv
+    seen = set()
+    for token in argv:
+        if not token.startswith("-"):
+            continue
+        # --flag=value and -f=value both name the flag before the '='
+        seen.add(token.split("=", 1)[0])
 
+    specified = set()
+    for action in parser._actions:
+        if action.dest == "help":
+            continue
+        if any(opt in seen for opt in action.option_strings):
+            specified.add(action.dest)
+    return specified
+
+
+def _collect_explicit_config_overrides(args, parser, config):
+    """What to forward to every chunk worker: RESOLVED values, for changed keys.
+
+    Two decisions, and both matter for parity.
+
+    WHICH keys: only those the user actually changed -- a flag differing from its
+    declared default, a SUPPRESS-defaulted flag that exists at all, or a key the
+    --config_update file names. A run that changed nothing forwards nothing and
+    keeps a worker command line byte-identical to before this fix, so existing
+    chunk sentinels and splice-graph cache entries stay valid.
+
+    WHAT value: the value from the RESOLVED config, not the raw argument. This is
+    what makes the three views agree. Take non-HiFi ``--min_per_id 90``: prep
+    resolves 90, and forwarding the resolved 90 gives the worker 90 too, where
+    forwarding nothing would leave it on its own default and quantify reads the
+    extraction never filtered the same way. Take ``--HiFi --min_per_id 90``: the
+    preset overwrites it, resolved is 97.0, and forwarding 97.0 reproduces
+    unchunked semantics exactly rather than letting config_update's last-wins
+    position hand the worker a 90 that unchunked mode would never have used.
+
+    Ordering is preserved rather than assumed: the driver resolved in main()'s
+    order (seed, preset, file) and the worker applies this file in the same last
+    position, so a key's final value is the same on both sides.
+    """
+
+    file_keys = set()
+    if args.config_update:
+        file_keys = set(_load_config_update_file(args.config_update))
+
+    # The user's stated dests, captured before main() derived anything on args.
+    # Recomputing it here would read those derivations as user intent.
+    specified = getattr(args, "user_specified_dests", None)
+    if specified is None:
+        specified = _user_specified_dests(args, parser) if parser is not None else set()
+
+    def _flag_changed(dest):
+        return dest in specified
+
+    forward = set(file_keys)
+
+    # SUPPRESS-defaulted: existing at all IS the user having stated it.
     for key in _SUPPRESS_DEFAULTED_CONFIG_FLAGS:
         if hasattr(args, key):
-            overrides[key] = getattr(args, key)
+            forward.add(key)
 
-    if parser is not None:
-        declared = _declared_parser_defaults(parser)
-        _unset = object()
-        for key in _DEFAULTED_CONFIG_FLAGS:
-            if not hasattr(args, key):
-                continue
-            supplied = getattr(args, key)
-            if supplied != declared.get(key, _unset):
-                overrides[key] = supplied
-        # min_reads_novel sets two config keys rather than one of its own name, so
-        # it cannot be handled by the name-matching loop above.
-        if hasattr(args, "min_reads_novel") and args.min_reads_novel != declared.get(
-            "min_reads_novel", _unset
-        ):
-            overrides["min_reads_novel_isoform"] = args.min_reads_novel
-            overrides["min_unique_reads_novel_isoform"] = args.min_reads_novel
+    # GENERIC, not a hand-listed set. Any argument the user changed whose dest
+    # names a real config key is forwarded. A hand-maintained list here would
+    # reproduce the very defect this fix exists to remove -- lraa_cmd omitted
+    # every threshold because its forwarded set was maintained by hand -- and the
+    # omission would be just as silent. --EM_alpha is the case that proved the
+    # point: seeded into config by _seed_authoritative_config_from_args, resolved
+    # correctly by the driver, and dropped on the floor by an earlier revision of
+    # this function purely because nobody had added it to a tuple.
+    #
+    # Safe generically ONLY because the value emitted is the RESOLVED one. Raw
+    # arguments could not be forwarded this way: min_per_id is seeded from args
+    # and then overwritten by the HiFi preset, so forwarding the raw value would
+    # invert precedence for every preset-owned key.
+    for dest in sorted(vars(args)):
+        if not _flag_changed(dest):
+            continue
+        if dest in _RENAMED_CONFIG_FLAGS:
+            forward.update(_RENAMED_CONFIG_FLAGS[dest])
+        elif dest in _NEGATED_CONFIG_FLAGS:
+            forward.add(_NEGATED_CONFIG_FLAGS[dest])
+        elif dest in config:
+            forward.add(dest)
 
-    if args.config_update:
-        overrides.update(_load_config_update_file(args.config_update))
+    # Keys ChunkedRun decides per worker on its own command line. Forwarding them
+    # as config would duplicate that decision at best and fight it at worst.
+    forward -= _CHUNK_WORKER_OWNED_CONFIG_KEYS
 
-    return overrides
+    # Unknown keys are dropped here; _apply_config_update_file already warned
+    # about them against the same config, so a typo is reported once, not twice.
+    return {key: config[key] for key in sorted(forward) if key in config}
 
 
 def _cast_config_value(orig_val, new_val):
@@ -1491,6 +1622,9 @@ def main():
             sys.exit(0)
 
     args = parser.parse_args()
+    # Captured here, before main() derives or mutates anything on args --
+    # see _user_specified_dests for why this cannot be recomputed later.
+    args.user_specified_dests = _user_specified_dests(args, parser)
 
     # (deprecated flags removed; no back-compat mapping)
 
@@ -1538,23 +1672,6 @@ def main():
     rescue_enabled = args.rescue_unassigned_reads_via_transcriptome_alignment
     if args.stream_reads_rescue_unassigned is None:
         args.stream_reads_rescue_unassigned = bool(args.stream_reads and rescue_enabled)
-
-    # Chunked mode delegates the whole run and never reaches the setup below.
-    # Dispatched here so that --chunk is validated against the same parsed args
-    # everything else sees, and before any state is built that it would discard.
-    #
-    # Because it never reaches that setup, it never reached main()'s config
-    # resolution either: every threshold flag and every --config_update key was
-    # parsed, then discarded, and each worker re-derived defaults from its own
-    # forwarded argv. A run asking for --min_alt_splice_freq 0.005 silently got
-    # 0.01. So the user's explicit config intent is captured HERE -- the one place
-    # the parser is still in scope to tell a supplied value from a default -- and
-    # handed to the pipeline, which forwards it to every worker.
-    if args.chunk:
-        args.explicit_config_overrides = _collect_explicit_config_overrides(
-            args, parser
-        )
-        sys.exit(_run_chunked_mode(args))
 
     genome_fasta_filename = args.genome
     bam_filename = args.bam
@@ -1640,7 +1757,13 @@ def main():
     LRAA_Globals.config["no_cleanup"] = bool(NO_CLEANUP)
     MONITOR_RESOURCES = not args.no_monitor_resources
 
-    if args.quant_only and input_gtf is None:
+    # `not args.chunk` because the chunked driver refuses this itself, further
+    # down, with a message that names the chunked case and says what a missing
+    # --gtf means there (de novo vs ref-guided chunked discovery). Both checks
+    # existed before the chunk dispatch moved below this point; without the guard
+    # this generic message would now pre-empt the specific one and the chunked
+    # advice would be unreachable.
+    if args.quant_only and input_gtf is None and not args.chunk:
         sys.exit(
             "If running --quant_only, must specify --gtf corresponding to targets of quantification"
         )
@@ -1962,6 +2085,36 @@ def main():
     _apply_config_update_file(LRAA_Globals.config, args)
 
     runtime_config = _snapshot_runtime_config(LRAA_Globals.config)
+
+    # Chunked mode delegates the whole run, and it delegates HERE -- after the
+    # config resolution above, not before it.
+    #
+    # It used to dispatch immediately after parsing, which is why every threshold
+    # flag and every --config_update key was parsed and then discarded: the
+    # assignments that put them into LRAA_Globals.config all live above this
+    # point, and the old dispatch never reached them. Each worker then re-derived
+    # library defaults from its own argv, so `--chunk --min_alt_splice_freq 0.005`
+    # silently ran at 0.01.
+    #
+    # Dispatching after resolution fixes that at the source rather than by copying
+    # the mapping: there is exactly ONE args->config mapping, the one above, and
+    # the chunked driver inherits its result. A tunable added to that block reaches
+    # chunk workers on the day it is added, with no second list to keep in step --
+    # which is the failure mode that produced this bug in lraa_cmd's own
+    # hand-maintained forwarded set to begin with.
+    #
+    # Everything between the old dispatch point and here is argument validation
+    # (--cpu_budget, --component_workers, ME/SE exclusivity, polyA-signal
+    # geometry), global assignment, and a minimap2 availability check. All of it is
+    # cheap, none of it touches the bam or the genome, and all of it applies to a
+    # chunked run as much as an unchunked one -- a chunked run that was going to
+    # die on a bad --polyA_signal_window now dies before partitioning rather than
+    # inside a worker an hour later.
+    if args.chunk:
+        args.explicit_config_overrides = _collect_explicit_config_overrides(
+            args, parser, LRAA_Globals.config
+        )
+        sys.exit(_run_chunked_mode(args))
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -3357,14 +3510,14 @@ def _run_chunked_mode(args):
         severed_multiexon_weight=args.chunk_severed_multiexon_weight,
         depth_window=args.chunk_depth_window,
         margin=args.chunk_margin,
-        max_intron_length=args.max_intron_length,
-        normalize_max_cov_level=args.normalize_max_cov_level,
+        max_intron_length=LRAA_Globals.config["max_intron_length"],
+        normalize_max_cov_level=LRAA_Globals.config["normalize_max_cov_level"],
         cell_list=args.cell_list,
         stream_reads=args.stream_reads,
         stream_reads_rescue_unassigned=args.stream_reads_rescue_unassigned,
         stream_reads_rescue_unassigned_to_targets=args.stream_reads_rescue_unassigned_to_targets,
-        min_mapping_quality=args.min_mapping_quality,
-        min_mapping_quality_for_final_quant=args.min_mapping_quality_for_final_quant,
+        min_mapping_quality=LRAA_Globals.config["min_mapping_quality"],
+        min_mapping_quality_for_final_quant=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
         no_rdna_mask=args.no_rdna_mask,
         rdna_mask_fasta=args.rdna_mask_fasta,
         worker_config_json=worker_config_json,

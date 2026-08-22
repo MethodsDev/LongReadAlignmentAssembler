@@ -1198,7 +1198,12 @@ def resolve_min_per_id(args):
     chr21 -- reproducible with a control that placed no cuts at all, so it was the
     pipeline path rather than any boundary.
     """
-    return 97.0 if args.HiFi else LRAA_Globals.config["min_per_id"]
+    # The resolved config already encodes the HiFi preset AND any
+    # --config_update layered on top, because LRAA's chunked driver resolves
+    # before dispatching (_resolve_chunked_driver_config). Re-deriving the
+    # preset here would ignore that file and put prep back out of step with
+    # the workers -- the divergence that resolution exists to remove.
+    return LRAA_Globals.config["min_per_id"]
 
 
 def resolve_min_mapping_quality(args):
