@@ -251,10 +251,26 @@ genes, in 25 distinct multi-gene groupings**, the largest being
 `MKKS^ENSG00000125863.20 + MKKS^ENSG00000285508.1` with 1,624 reads. The read-to-gene map was
 identical in both arms.
 
-Synthetic 3.4 Mb contig, cuts forced to 0.5 Mb — 6 cuts per strand, 5 reads severed and
-excluded from the control, 555 transcripts: all columns equal, 541 tracking rows identical,
-408 distinct reads assigned in both arms. No multi-gene components exist in this corpus, so
+Synthetic 3.4 Mb contig, cuts forced to 0.5 Mb — 6 cuts per strand, 6 reads severed and
+excluded from the control, 555 transcripts: all columns equal, 544 tracking rows identical,
+409 distinct reads assigned in both arms. No multi-gene components exist in this corpus, so
 this run demonstrates the subtraction and the plumbing only.
+
+Two of those figures were re-measured after the 2026-08-15 run, and neither is a parity
+finding — both arms moved together each time, with rows identical in order, every numeric
+column delta 0.0, and severed symmetric difference 0:
+
+- **severed reads 5 → 6**, re-pinned in `669459f4`, which verified against an unmodified
+  `devel` worktree that the figure had been stale since before that branch existed.
+- **tracking rows 541 → 544, distinct reads 408 → 409**, bisected to `c940609b`, "Compute
+  percent identity over the columns the mismatch tag counts". That commit repaired an
+  identity calculation which counted gaps in the numerator but not the denominator, leaving
+  the value unbounded (it measured −13900%) and discarding alignments at true identities of
+  99.0–99.9%. This corpus is PacBio and the gate runs `--HiFi`, i.e. a high identity floor,
+  which is exactly where those reads were being discarded: one more read is now assigned,
+  carrying three more rows. The `+3` is this corpus's measured outcome rather than a general
+  rule — admitting a read changes EM and can change the survivor set, so row counts need not
+  move monotonically with retention.
 
 ## Why the arms agree, and the case neither run covers
 

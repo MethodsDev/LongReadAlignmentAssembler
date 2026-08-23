@@ -61,8 +61,24 @@ test_ordering_cost:
 #
 # The pins are on the STRAND-FIRST arm, and they are what makes a strandless
 # figure interpretable: without a control reproducing known values, "strandless
-# gives 553 rows" does not say which arm moved.  555/541/2266/5 is the healthy
+# gives 553 rows" does not say which arm moved.  555/544/2266/6 is the healthy
 # strand-first run recorded in docs/chunked_quant_parity_evaluation.md.
+#
+# tracking_rows was re-pinned 541 -> 544 (and the figure above 5 -> 6, which --expect
+# had already carried since 669459f4) after bisecting the move to c940609b, "Compute
+# percent identity over the columns the mismatch tag counts".  That commit repaired an
+# identity calculation which counted gaps in the numerator but not the denominator,
+# leaving the value unbounded -- it measured -13900% -- and so discarded alignments at
+# true identities of 99.0-99.9%.  This corpus is PacBio and this gate runs --HiFi, i.e.
+# a high identity floor, which is exactly where those reads were being thrown away: one
+# more read is now assigned (408 -> 409 distinct), carrying three more rows.  The +3 is
+# this corpus's measured outcome rather than a general rule -- admitting a read changes
+# EM and can change the survivor set, so row counts need not move monotonically.
+#
+# What did NOT move is the property this gate exists for: both arms shifted together,
+# rows identical in order, every numeric column delta 0.0, severed symmetric difference
+# 0.  Only the absolute control was stale, and it had been since c940609b, which is to
+# say since before `make test` was last run against this target.
 #
 # The two arms select their cuts from different evidence -- one strand's coverage
 # against both strands' union -- so their cut POSITIONS may differ and different
@@ -78,7 +94,7 @@ test_gate:
 	$(GATE) gate $(INPUTS) $(GEOMETRY) --contig minigenome --HiFi \
 	    --cpu_budget 4 --output_dir __gate --report __gate.json \
 	    --ordering_cost_region 'minigenome+:1014001-1502500' \
-	    --expect expr_rows=555,tracking_rows=541,num_total_reads=2266,baseline_excluded_severed_reads=6
+	    --expect expr_rows=555,tracking_rows=544,num_total_reads=2266,baseline_excluded_severed_reads=6
 
 
 clean:
