@@ -16,6 +16,92 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 
+def aligned_base_count(read):
+    """Read bases sitting in aligned columns: M + = + X.
+
+    A CIGAR conventionally uses either M or the =/X pair, but mixing them in one
+    record is legal and minimap2 emits it -- measured at 0.32% of alignments on
+    XP132160.ucsc.bam, e.g. `627=1M25=`. Taking M alone and falling back to =/X
+    only when M is exactly zero therefore under-counts those records to the M
+    portion, which is a silent error wherever the result is a denominator.
+
+    Summing all three is correct for every convention at once rather than
+    special-casing two of them, and needs no knowledge of whether the aligner ran
+    with --eqx -- which cannot be relied on regardless: XP132160.ucsc.bam is =/X
+    with a mixed tail while PBMCs_pbio.aligned.sorted.bam is 99.82% M.
+
+    Excludes I, D and N: inserted bases occupy no reference column, deleted and
+    skipped bases occupy no read base. Callers needing alignment columns rather
+    than read bases add I and D themselves.
+    """
+    stats = read.get_cigar_stats()[0]
+    return int(stats[0] + stats[7] + stats[8])
+
+
+def substitution_count(read):
+    """Substituted bases only, indels excluded, or None when unmeasurable.
+
+    Callers that want "how many read bases did this alignment get wrong" need
+    substitutions alone, and the two mismatch tags reach that differently:
+
+      NM  edit distance, so inserted and deleted bases are included and must be
+          subtracted out.
+      nM  STAR's tag, already mismatches only, so nothing is subtracted.
+
+    Subtracting indels from nM destroys real substitutions rather than correcting
+    anything: `10M5I10M` with nM:i:2 has two substituted bases, and NM-style
+    subtraction reports zero, scoring a wrong alignment as perfect. The tag read
+    therefore has to determine the arithmetic, which is why this is one function
+    rather than the same three lines at each call site.
+
+    FLOOR AT ZERO, deliberately, and it should be unreachable. NM counts every
+    inserted and deleted base, so NM >= I + D holds for any self-consistent
+    record, with equality when nothing is substituted. Reaching the floor means
+    the NM tag and the CIGAR disagree -- the record is internally inconsistent,
+    not merely low quality.
+
+    Resolving that to zero substitutions is the permissive reading, chosen to
+    match how the rest of this module treats an alignment it cannot assess: a
+    missing tag returns None and callers pass the read rather than fail it. A
+    malformed record is no more informative than an unmeasurable one, so it gets
+    the same benefit of the doubt instead of a fabricated substitution count.
+    Deliberately NOT logged: this runs per alignment over tens of millions of
+    records, and a warning there would either be dropped or would bury the log.
+    A caller needing to know should count the condition itself, which it can,
+    since NM, I and D are all still available to it.
+    """
+    stats = read.get_cigar_stats()[0]
+    if read.has_tag("NM"):
+        edits = int(read.get_tag("NM"))
+        return max(0, edits - int(stats[1]) - int(stats[2]))
+    if read.has_tag("nM"):
+        # nM needs no subtraction, so the floor here only guards a negative tag.
+        return max(0, int(read.get_tag("nM")))
+    return None
+
+
+def alignment_edit_count(read):
+    """Edit distance -- substitutions plus inserted and deleted bases -- or None.
+
+    The complement of substitution_count(): same tag disambiguation, opposite
+    adjustment. NM already IS an edit distance and is returned as-is. nM counts
+    mismatches only, so I and D are ADDED to reach the same quantity.
+
+    Without that addition a score built on nM charges nothing for indels, so two
+    candidate alignments of one read differing only in indel content tie -- which
+    defeats the comparison the score exists to make. `10M5I10M` scored 18 under
+    nM:i:2 and 13 under the equivalent NM:i:7, for the same alignment. Producer
+    agreement does not save it: both candidates carry nM, but each has its own I
+    and D, and neither is reflected.
+    """
+    stats = read.get_cigar_stats()[0]
+    if read.has_tag("NM"):
+        return max(0, int(read.get_tag("NM")))
+    if read.has_tag("nM"):
+        return max(0, int(read.get_tag("nM")) + int(stats[1]) + int(stats[2]))
+    return None
+
+
 def alignment_per_id(read):
     """Percent identity of an alignment, or None when it cannot be determined.
 
@@ -29,19 +115,90 @@ def alignment_per_id(read):
     None means no mismatch tag was present, which callers treat as passing rather than
     failing -- absence of evidence is not evidence of a bad alignment.
     """
-    stats = read.get_cigar_stats()
-    aligned_base_count = stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = stats[0][7] + stats[0][8]
-    if aligned_base_count == 0:
+    # The denominator must be the same set of alignment columns that NM counts
+    # edits over, or the ratio is not a fraction and the result is not bounded.
+    # NM is an edit distance: mismatched bases PLUS inserted bases PLUS deleted
+    # bases. So the denominator is M + = + X + I + D. N is excluded deliberately
+    # -- a reference skip is an intron, not an edit, and NM does not count it.
+    #
+    # Two distinct defects were measured here, both silent. Figures below are from
+    # the FINAL remeasurement with this definition in place, comparing all three
+    # candidate denominators on the same samples -- earlier drafts of this comment
+    # quoted intermediate numbers taken before defect 2 was found.
+    #
+    # 1. Aligned bases were taken as M alone, falling back to =/X only when M was
+    #    exactly zero. A CIGAR conventionally uses either M or the =/X pair, but
+    #    mixing them in one record is legal and minimap2 emits it. On
+    #    XP132160.ucsc.bam (46,123,848 records, 1-in-50 sample = 922,477) 0.3209%
+    #    of alignments carry a few M ops among many =/X ops, e.g. `627=1M25=`:
+    #    653 aligned bases and 99.85% identity, scored as 1 aligned base and
+    #    0.0%, so every consumer applying a floor discarded it. Values reached
+    #    -13900%.
+    #
+    # 2. Excluding I and D while NM counts them left the result unbounded even for
+    #    records with a single CIGAR convention. On PBMCs_pbio.aligned.sorted.bam,
+    #    99.82% M-op records with ZERO mixed CIGARs, 0.0320% of alignments still
+    #    came out negative from indel-heavy alignments whose NM exceeded their
+    #    aligned-base count. Fixing defect 1 alone did not touch these.
+    #
+    # Effect of the two fixes together, apparent-vs-genuine below an 80% floor on
+    # SBX and a 97% floor on PacBio:
+    #
+    #                   below floor    negatives    median      min
+    #   SBX   old         0.5280%       0.2866%     99.5305   -13900.00
+    #         M+=+X       0.2089%       0.0212%     99.5338     -308.38
+    #         final       0.1767%       0.0000%     99.5345       18.75
+    #   PB    old         1.7673%       0.0320%     99.8473     -514.42
+    #         M+=+X       1.7673%       0.0320%     99.8473     -514.42
+    #         final       1.7392%       0.0000%     99.8476       14.00
+    #
+    # So 0.3513% of all SBX alignments and 0.0281% of PacBio's were being wrongly
+    # discarded, and two thirds of everything appearing to fail SBX's floor was
+    # these defects rather than poor alignment. Medians move by ten-thousandths,
+    # so the tail is repaired without shifting the central distribution.
+    #
+    # The two corpora use OPPOSITE conventions -- SBX is =/X with a mixed tail,
+    # PacBio is M -- so neither can be assumed and the presence of --eqx on the
+    # aligner's @PG line does not settle it.
+    #
+    # This is GAP-AWARE percent identity: every edit, gaps included, over the
+    # alignment's full length, gaps included.
+    #
+    #   100 - (mismatches + inserted + deleted) / (M + = + X + I + D) * 100
+    #
+    # Both parts of that have to move together. The defect was a numerator that
+    # counted gaps over a denominator that did not, which is neither the gap-aware
+    # nor the gap-excluded definition and is why the result could leave [0, 100].
+    #
+    # NM and nM reach the numerator differently and alignment_edit_count() is what
+    # reconciles them: NM already IS mismatches + I + D, while nM counts
+    # MISMATCHES ONLY and has I + D added. Using nM raw over the aligned bases
+    # alone would compute a gap-EXCLUDED identity -- a different metric under the
+    # same name, silently selected by which aligner wrote the bam. Measured on
+    # `10M5I10M`: 90.0 gap-excluded against 72.0 gap-aware, for one alignment.
+    #
+    # The result is therefore tag-independent, and agrees exactly with
+    # IsoformReadRescue._gap_aware_identity(), which reaches the same quantity by
+    # the algebraically equivalent route of matched bases over span. That equality
+    # is asserted in test_alignment_per_id_mixed_cigar.py; it is the only thing
+    # keeping two modules' definitions from drifting apart again.
+    #
+    # Bounded by arithmetic rather than by input: mismatches <= M+=+X, insertions
+    # = I and deletions = D, so the numerator cannot exceed the denominator under
+    # either tag. One caveat belongs to nM's own definition -- STAR documents it
+    # as mismatches per PAIRED read, summed across both mates, while this CIGAR
+    # describes one mate, so for a proper pair the numerator can exceed this
+    # record's alignment length. Not guarded against, because one record cannot
+    # resolve it; quant_discard_reason() already rejects improper pairs, and this
+    # codebase's inputs are long single-end reads.
+    stats = read.get_cigar_stats()[0]
+    edit_count = alignment_edit_count(read)
+    if edit_count is None:
         return None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    else:
+    alignment_length = aligned_base_count(read) + int(stats[1]) + int(stats[2])
+    if alignment_length == 0:
         return None
-    return 100 - (mismatch_count / aligned_base_count) * 100
+    return 100 - (edit_count / alignment_length) * 100
 
 
 def alignment_passes_per_id(read, min_per_id):
@@ -250,19 +407,16 @@ def quant_discard_reason(
 
     # Absent NM and nM there is nothing to measure, and the extractor keeps the
     # read rather than guessing; identical behaviour here.
-    cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-    mismatch_count = None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    if mismatch_count is not None and aligned_base_count > 0:
-        per_id = 100 - (mismatch_count / aligned_base_count) * 100
-        if per_id < min_per_id:
-            return "low_perID"
+    #
+    # Delegated to alignment_per_id rather than recomputed. This was an inline
+    # copy of the formula, which is how the floor came to differ by code path:
+    # the copy kept the M-only aligned-base count after the shared definition
+    # was corrected, so the same read could be discarded here and kept by the
+    # extractor. If it must ever diverge again, it needs a different NAME, not a
+    # second implementation of this one.
+    per_id = alignment_per_id(read)
+    if per_id is not None and per_id < min_per_id:
+        return "low_perID"
 
     return None
 

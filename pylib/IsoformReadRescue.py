@@ -686,19 +686,31 @@ def _resolve_rescue_min_per_id():
 
 
 def _alignment_score(read):
+    """The aligner's AS, or a stand-in when it is absent.
+
+    Deliberately uses the RAW edit count, not Util_funcs.substitution_count():
+    this stands in for an alignment score, and a score should be charged for
+    indels as well as substitutions. That is the opposite of what
+    _explained_read_bases() and _gap_aware_identity() need, which is why they
+    delegate and this does not.
+
+    Charged via Util_funcs.alignment_edit_count(), which converts nM to an edit
+    distance by adding I and D. Reading the raw tag instead made this score blind
+    to indels whenever the producer wrote nM, so two candidates differing only in
+    indel content tied -- the exact comparison this exists to decide. Same
+    alignment, `10M5I10M`: 18 under nM:i:2 against 13 under the equivalent
+    NM:i:7. Both now score 13.
+    """
     if read.has_tag("AS"):
         return int(read.get_tag("AS"))
 
-    mismatch_count = 0
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-    return int(aligned_base_count) - int(mismatch_count)
+    edit_count = Util_funcs.alignment_edit_count(read)
+    if edit_count is None:
+        edit_count = 0
+    # Shared primitive: M + = + X. Computing it inline took M alone unless M was
+    # exactly zero, which under-counts the 0.32% of records mixing M with =/X.
+    aligned = Util_funcs.aligned_base_count(read)
+    return int(aligned) - int(edit_count)
 
 
 def _explained_read_bases(read):
@@ -710,27 +722,21 @@ def _explained_read_bases(read):
     alignment and for a transcriptome alignment of the same read, so the two compare.
     """
     cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
-    if aligned_base_count <= 0:
+    # Shared primitive: M + = + X. Computing it inline took M alone unless M was
+    # exactly zero, which under-counts the 0.32% of records mixing M with =/X.
+    aligned = Util_funcs.aligned_base_count(read)
+    if aligned <= 0:
         return None
 
-    mismatch_count = None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    if mismatch_count is None:
-        return int(aligned_base_count)
-
-    # NM counts inserted and deleted bases alongside substitutions. Only substitutions
-    # reduce the read bases an alignment explains: inserted bases are already outside
-    # the aligned count, and deleted bases are not read bases at all.
-    substitutions = max(
-        0, int(mismatch_count) - int(cigar_stats[0][1]) - int(cigar_stats[0][2])
-    )
-    return max(0, int(aligned_base_count) - substitutions)
+    # Only substitutions reduce the read bases an alignment explains: inserted
+    # bases are already outside the aligned count, and deleted bases are not read
+    # bases at all. Delegated because the indel subtraction is correct for NM and
+    # WRONG for nM, which already excludes indels -- doing it inline here treated
+    # `10M5I10M` with nM:i:2 as having zero substitutions.
+    substitutions = Util_funcs.substitution_count(read)
+    if substitutions is None:
+        return int(aligned)
+    return max(0, int(aligned) - substitutions)
 
 
 def _gap_aware_identity(read):
@@ -749,26 +755,21 @@ def _gap_aware_identity(read):
 
     Returns None when NM is unavailable, matching _explained_read_bases().
     """
-    mismatch_count = None
-    if read.has_tag("NM"):
-        mismatch_count = int(read.get_tag("NM"))
-    elif read.has_tag("nM"):
-        mismatch_count = int(read.get_tag("nM"))
-    if mismatch_count is None:
+    substitutions = Util_funcs.substitution_count(read)
+    if substitutions is None:
         return None
 
     cigar_stats = read.get_cigar_stats()
-    aligned_base_count = cigar_stats[0][0]
-    if aligned_base_count == 0:
-        aligned_base_count = cigar_stats[0][7] + cigar_stats[0][8]
+    # Shared primitive: M + = + X. Computing it inline took M alone unless M was
+    # exactly zero, which under-counts the 0.32% of records mixing M with =/X.
+    aligned = Util_funcs.aligned_base_count(read)
     insertions = int(cigar_stats[0][1])
     deletions = int(cigar_stats[0][2])
-    span = int(aligned_base_count) + insertions + deletions
+    span = int(aligned) + insertions + deletions
     if span <= 0:
         return None
 
-    substitutions = max(0, int(mismatch_count) - insertions - deletions)
-    return max(0.0, float(int(aligned_base_count) - substitutions) / float(span))
+    return max(0.0, float(int(aligned) - substitutions) / float(span))
 
 
 

@@ -105,23 +105,33 @@ _REF_CONSUMING_OPS = frozenset("MDN=X")
 def _sam_hit_identity(fields):
     """Percent identity of one SAM record, or None if unmeasurable (no NM tag).
 
-    Same computation as Util_funcs.alignment_per_id, reimplemented on raw SAM
-    fields rather than a pysam.AlignedSegment: this parses minimap2's SAM
-    output directly, before any bam/pysam object exists. NM is mismatches +
-    inserted + deleted bases (edit distance), so this is the same "aligned
-    bases minus edits, over aligned bases" identity every other consumer in
-    this codebase reads off NM.
+    MUST agree with Util_funcs.alignment_per_id. It is reimplemented rather than
+    called because this parses minimap2's SAM output directly, before any pysam
+    object exists, and Util_funcs imports this module -- so importing it back
+    would be circular. test_alignment_per_id_mixed_cigar.py asserts the two agree
+    on the same records; that test is the only thing keeping them honest.
+
+    NM is an edit distance: mismatched bases plus inserted bases plus deleted
+    bases. The denominator is therefore the columns NM can charge an edit
+    against, M + = + X + I + D.
+
+    This previously summed "MDN=X", which was wrong twice over and claimed in its
+    own docstring to match the shared definition. It counted N, so a spliced hit
+    had its intron length added to the denominator -- a read with a 100 kb intron
+    scores ~100% identity whatever its mismatches, and passes any floor. And it
+    omitted I, so inserted bases were charged in the numerator via NM without
+    appearing below it, which pushes identity down and can go negative.
     """
     cigar = fields[5]
-    aligned = sum(
-        int(n) for n, op in _CIGAR_OP_RE.findall(cigar) if op in "MDN=X"
+    aligned_columns = sum(
+        int(n) for n, op in _CIGAR_OP_RE.findall(cigar) if op in "MID=X"
     )
-    if aligned == 0:
+    if aligned_columns == 0:
         return None
     for tag in fields[11:]:
         if tag.startswith("NM:i:"):
             mismatches = int(tag[5:])
-            return 100.0 * (aligned - mismatches) / aligned
+            return 100.0 * (aligned_columns - mismatches) / aligned_columns
     return None
 
 
