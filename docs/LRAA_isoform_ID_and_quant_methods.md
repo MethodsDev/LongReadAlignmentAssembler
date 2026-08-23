@@ -84,14 +84,26 @@ a transcribed or biological strand. Acceptance follows local depth, so reads are
 full wherever coverage already sits below the target and thinned only where it does not. Because
 any depth-dependent acceptance rate varies along the genome, each retained read records the
 reciprocal of its acceptance probability, and the splice graph sums those weights rather than
-counting reads; support therefore remains on the scale of the original BAM, and the relative
-quantities that graph filtering compares are preserved. Reads carrying a junction supported by
-fewer reads than the target are retained in full, making support for scarce junctions exact
+counting reads — inverse-probability weighting, the Horvitz–Thompson estimator, whose expected
+value equals the unthinned count for any acceptance rate and any mixture of rates within one sum.
+Support therefore remains on the scale of the original BAM, and the relative quantities that
+graph filtering compares are preserved; the precision of any one such sum is set by the number of
+reads retained in it, approximately its inverse square root, which is what the following
+exemption addresses. Reads carrying a junction supported by fewer reads than the target are
+retained in full, making support for scarce junctions exact
 rather than estimated. That exemption is unconditional, and acceptance is a per-read random draw
 rather than a quota, so `--normalize_max_cov_level` is a target and not a ceiling: realised depth
-can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). The original unnormalized
-BAM is used for isoform abundance estimation, ensuring quantification accuracy is preserved. See
-`docs/coverage_normalization.md` for the procedure, the `XW` tag, and its parameters.
+can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). Reported abundances are
+counts on the scale of the full unnormalized BAM in either quantification mode, but they reach
+that scale by different routes. With `--no_stream_reads`, a single pass reads the unnormalized BAM
+and estimates abundances from it directly. Under the default two-pass streaming path, the
+abundance-estimating first pass reads the normalized BAM and the second pass streams the
+unnormalized BAM, assigning every read from the isoform proportions the first pass settled on
+(`LRAA:5702-5703`); library-scale counts are therefore taken over every read, while the isoform
+proportions within a read-sharing component are estimated from thinned support unless
+`--use_XW_read_weights_for_quant` divides the acceptance rates back out. See
+`docs/coverage_normalization.md` for the procedure, the `XW` tag, and its parameters, and
+`docs/streaming_quantification.md` for the two-pass path.
 
 Correction of alignments at soft-clipped termini: Long reads often contain soft-clipped bases
 at alignment boundaries when short segments fail to align across splice junctions to adjacent

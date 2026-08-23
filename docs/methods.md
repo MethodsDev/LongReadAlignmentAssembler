@@ -229,11 +229,23 @@ Notable keys include:
   evidence is thinned toward, per alignment orientation — the BAM is split on `read.is_forward`
   (`util/separate_bam_by_strand.py:239`), not on an inferred transcribed strand; `0` disables it.
   Coverage below the target is retained in full, and retained reads carry the reciprocal of their
-  acceptance probability in the `XW` tag so support stays on the scale of the original BAM. The
-  level is a target rather than a ceiling: reads carrying a junction supported by fewer reads than
-  the level are kept unconditionally and acceptance is a per-read random draw, so realised depth
-  can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). Quantification always
-  reads the unnormalized BAM. See `docs/coverage_normalization.md`.
+  acceptance probability in the `XW` tag so support stays on the scale of the original BAM
+  (inverse-probability weighting, i.e. the Horvitz–Thompson estimator; a weighted sum's precision
+  is set by how many reads it retained, roughly `1/sqrt(retained)`). The level is a target rather
+  than a ceiling: reads carrying a junction supported by fewer reads than the level are kept
+  unconditionally and acceptance is a per-read random draw, so realised depth
+  can exceed it (`util/normalize_bam_by_strand.py:275,316-319,332-335`). Quantification reports
+  counts derived from the unnormalized BAM; under the default two-pass streaming path the
+  abundance-estimating first pass reads the normalized BAM and the second pass streams the
+  unnormalized one to assign every read (`LRAA:5702-5703`), while with `--no_stream_reads` a
+  single pass reads the unnormalized BAM directly. See `docs/coverage_normalization.md`.
+- Streaming quantification: `stream_reads` (on by default since v0.25.0) quantifies in two passes
+  — abundances from the coverage-normalized BAM, then a streaming pass over the full BAM that
+  assigns each read from a precomputed path-to-isoform table without retaining it, so peak memory
+  is bounded by the annotation rather than the library. It requires a first-pass BAM thinner than
+  the streamed one and is refused with normalization disabled unless a distinct `--bam_for_sg` is
+  supplied (`LRAA:1874-1896`). Related: `stream_reads_rescue_unassigned`,
+  `stream_reads_rescue_unassigned_to_targets`. See `docs/streaming_quantification.md`.
 - Debug: `--debug` enables extensive intermediate artifacts.
 
 Splice-graph parameters are set via `Splice_graph.init_sg_params(...)` inside `LRAA` to keep
@@ -243,9 +255,10 @@ all graph-level thresholds centralized.
 
 LRAA partitions work by contig and by splice-graph components. Components exceeding
 `config['min_mpgn_component_size_for_spawn']` are processed in parallel using a lightweight
-multiprocessing manager and picklable objects. Memory use is mitigated by streaming reads,
-discarding low-identity or secondary alignments early, and lightening read objects unless they
-are candidates for soft-clip realignment.
+multiprocessing manager and picklable objects. Memory use is mitigated by reading alignments
+incrementally, discarding low-identity or secondary alignments early, and lightening read objects
+unless they are candidates for soft-clip realignment. Beyond that, the default two-pass streaming
+path removes per-read state from quantification altogether (`docs/streaming_quantification.md`).
 
 ## Outputs
 
