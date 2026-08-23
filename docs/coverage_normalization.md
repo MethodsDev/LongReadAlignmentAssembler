@@ -4,8 +4,10 @@
 
 Splice-graph construction scales with read depth, and a handful of loci in any sample carry
 depth far beyond what graph construction needs. LRAA thins those loci before building the
-graph, leaving the rest of the genome untouched. Quantification is unaffected: abundance
-estimation reads the original BAM, and the thinned BAM is used only as splice-graph evidence.
+graph, leaving the rest of the genome untouched. Reported counts stay on the scale of the original
+BAM: with `--no_stream_reads` abundance estimation reads that BAM directly, and under the default
+two-pass streaming path the thinned BAM carries the abundance estimate while the original BAM is
+streamed to assign every read (`docs/streaming_quantification.md`).
 
 Thinning is performed by `util/normalize_bam_by_strand.py`, invoked from
 `_normalize_bam_for_splice_graph` in `LRAA`. Reads are separated by strand, normalized
@@ -109,6 +111,87 @@ existed, are therefore read exactly as they were.
 Weighting is not optional bookkeeping. Any scheme whose acceptance rate varies along the genome
 distorts relative support, and every such scheme must either record its rates or restrict
 itself to a single rate per unit of comparison.
+
+**The estimator has a name.** Dividing each observation by the probability it was sampled with
+is inverse-probability weighting, the Horvitz–Thompson estimator from survey sampling. A kept
+read contributes `1/p` and a discarded one contributes 0, so its expected contribution is
+`p × 1/p = 1` — exactly what it contributed before thinning. This holds for any `p`, and for any
+mixture of different `p` within one sum, which is what lets scarce-junction reads at `p = 1` be
+added to thinned reads at `p ≪ 1` and still give a total on the scale of the original BAM.
+
+**Precision is set by the retained count, not the true one.** Unbiasedness is a statement about
+the average over draws; a single run's error is not small just because the expectation is right.
+For a group of `N` true reads sampled at rate `p`, the weighted estimate has relative standard
+deviation
+
+```
+sqrt((1 - p) / (N p))  ≈  1 / sqrt(K),    K = N p = reads actually retained
+```
+
+At the worked locus below — depth 15,113, target 1000, so `p ≈ 0.066`:
+
+| true reads in the group | retained | relative sd of the weighted estimate |
+|---|---|---|
+| 45 | 3 | 56% |
+| 156 | 10 | 30% |
+| 1,500 | 100 | 10% |
+| 15,000 | 990 | 3% |
+
+The 24-seed measurement below is consistent with this. Its second row is that locus's 156-read
+junction: the measured coefficient of variation on the frequency built from it is 25% (0.0026
+against 0.0106) where the rule predicts 30%, and with 24 seeds the sd estimate itself carries
+roughly 15% relative uncertainty. One point of agreement, not a validation of the formula across
+regimes.
+
+Two consequences worth holding onto. **The scarce-junction rule is variance control, not bias
+correction** — the weighted scheme without it is already unbiased, and what the rule removes is
+the `1/sqrt(K)` term, by making `K = N`. And **a group that ends up with a handful of retained
+reads cannot be rescued by weighting**, however correct the weight is: at ten retained reads the
+estimate is 30% noise whatever the target was.
+
+## XW weights during quantification
+
+Quantification consumes the weight through one expression: `EM.py:87` takes each multipath's
+support as `mp.get_read_weight()` rather than a read count, and the E-step apportions that
+quantity directly. The same call backs the count rollups in `Quantify.py:1824,1846,2212`.
+
+That expression is inert unless armed. `MultiPath.get_read_weight()` sums the per-read registry
+(`LRAA_Globals.read_weight_for_id`, default 1.0), and weights are registered only when
+`--use_XW_read_weights_for_quant` is set (`LRAA.py:1224,1374-1388,1456`;
+`LRAA_Globals.config["use_XW_read_weights_for_quant"]` defaults to `False`). Unregistered, the
+weight equals the read count and EM behaves exactly as before the tag existed.
+
+Off by default because it is normally a no-op that would only mislead: the single-pass path reads
+the unnormalized BAM, where every weight is 1. What it corrects is the case where the BAM being
+quantified IS thinned — the two-pass streaming path's first pass, or a quant-only stage handed an
+already-normalized BAM, as the chunked pipeline does. There the isoform proportions within a
+read-sharing component are estimated from thinned support, and the weights are what divide the
+acceptance rates back out.
+
+The flag is EXPERIMENTAL and guarded (`LRAA:842-857,1975-2056`):
+
+- **`--quant_only` only.** Discovery's absolute isoform filters (`min_reads_novel_isoform`,
+  `min_unique_reads_novel_isoform`, the FSM gates) deliberately still count retained reads, so
+  enabling weighted EM in discovery would select and filter isoforms on different scales.
+- **`--library_type` must be stated.** Single-cell-ness is a property of the data and cannot be
+  detected reliably enough to refuse on the caller's behalf.
+- **Single-cell and `--tag_bam` require `--stream_reads`.** Weighting fixes the aggregate
+  expression file, not a tracking file that has one row per *retained* read: the reads thinning
+  discarded have no row to carry a weight. Consumers that derive counts by summing tracking rows
+  — `util/sc/singlecell_tracking_to_sparse_matrix.py`, which sums `frac_assigned` and never reads
+  `XW`, and `util/annotate_bam_with_read_tracking_info.py`, which tags from tracking — would
+  undercount, worst at exactly the deep loci weighting exists to fix. Under `--stream_reads` the
+  merged tracking file instead covers the full BAM and each read's split already reflects
+  XW-corrected theta, so the premise does not hold and the combinations are permitted.
+
+A non-streaming weighted run therefore stamps its tracking file with a `# WARNING:` line naming
+the flag (`LRAA:4114-4126`, `util/lraa_merge_header.py:32-45`), and
+`singlecell_tracking_to_sparse_matrix.py` refuses any file carrying it. Detection is scoped to
+that line rather than a substring scan, because every tracking file also echoes its own command
+line, which contains the flag name whenever it was passed at all.
+
+Distinct from the other weight in EM: `weight_reads_by_3prime_agreement` (`EM.py:98`) is a
+per-(read, transcript) 3'-end agreement weight and is unrelated to `XW`.
 
 ## Parameters
 
@@ -273,7 +356,8 @@ On that locus, over 24 seeds, measuring the frequency the prune decision actuall
 | depth-targeted, weighted | 0.0106 | 0.0026 | 42% of seeds |
 | depth-targeted, weighted, scarce-junction rule | **0.0107** | **0.0003** | **0%** |
 
-The middle row is unbiased but noisy, which is what the scarce-junction rule removes.
+The middle row is unbiased but noisy, which is what the scarce-junction rule removes; the
+precision rule under "The XW tag" gives the quantity that sets that noise.
 
 Across fifteen high-expression loci: worst relative-support error 2.0%, against 30% previously;
 peak depth 1.78x target, against 3.79x; and full retention at every locus already under target.
@@ -282,10 +366,30 @@ runtime is unchanged — the second pass reads CIGARs only.
 
 ## Notes and limitations
 
-**Weighted counts run slightly high** on heavily thinned junctions — about 5% in the worked
-case above. Median window depth somewhat underestimates true depth for reads spanning a peak,
-which makes `1/p` overshoot. The effect moves ratios toward the threshold rather than away from
-it, so it is conservative, but it is uncorrected.
+**Weighted counts run slightly high** on heavily thinned junctions — about 5% in the worked case
+above. The effect is measured; its cause has not been independently established. The standing
+attribution is that median window depth underestimates true depth for reads spanning a peak,
+making `1/p` overshoot, and it is recorded here as the working hypothesis rather than a settled
+mechanism, for two reasons. Underestimating depth *raises* `p`, which *lowers* `1/p`. And
+inverse-probability weighting is unbiased for whichever `p` the draw actually used, so a
+systematic offset in a weighted sum requires retention to correlate with weight — which a
+per-read median could produce, since a read's own measured depth decides both its `p` and whether
+it survives, but that link has not been demonstrated. Settling it needs its own experiment:
+weighted junction support against unnormalized support, across many junctions and seeds at known
+depth, with the per-read median recorded alongside. The 24-seed table above does not answer it —
+that measures a junction-frequency ratio, not a weighted count against its true value. Treat the
+5% as real and its explanation as open. The direction is conservative either way: it moves ratios
+toward the filtering threshold rather than away from it, and it is uncorrected.
+
+**The scarce-evidence exemption is junction-based only.** `_acceptance_probability` inspects
+`_read_junctions` and nothing else (`util/normalize_bam_by_strand.py:630-633`), so evidence that
+is scarce without being a scarce junction gets no protection: an isoform distinguished from its
+neighbours only by TSS position, only by PolyA position, or a monoexonic model has no junction to
+claim an exemption with, and its support at a deep locus is estimated from whatever survived at
+that locus's own rate — the `1/sqrt(K)` regime above, with `K` in the tens. Extending the
+exemption to those features would need a first-pass tally of TSS and PolyA positions, which pass
+1 does not keep: it accumulates window depth and junction support only
+(`util/normalize_bam_by_strand.py:541-551`).
 
 **Absolute thresholds on support changed meaning.** Support is now on the scale of the original
 BAM everywhere. `min_intron_cov_for_filtering`, the one absolute threshold applied to junction
