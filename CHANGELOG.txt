@@ -1,4 +1,4 @@
-v0.26.0
+v0.27.0
 - FIXED: coverage normalization OVERWROTE any XW weight its input already carried
   instead of compounding with it, so thinning an already-thinned bam silently discarded
   the first pass. XW means "how many reads of the original library this record stands
@@ -105,6 +105,22 @@ v0.26.0
   the scarce isoform: weighted 48.64, unweighted 58.02 -- the unweighted split ran ~19%
   high on the isoform distinguished by a junction that thinning kept whole while thinning
   its neighbour's.
+
+v0.26.0
+- Adopt the measured HiFi threshold set as defaults. Under `--HiFi`,
+  `min_alt_splice_freq` drops 0.01 -> 0.005 and `min_isoform_fraction` /
+  `min_frac_gene_unique_reads` drop 0.01 -> 0.005. Base (non-HiFi) library defaults are
+  untouched at 0.03 / 0.01 / 0.01. The three were measured jointly rather than
+  separately: each is close to inert alone and only the combination recovers isoforms, so
+  shipping any one would buy the precision cost with none of the recall. On a 12-sample
+  SIRV panel the set gains 4.6 points of sensitivity (paired Wilcoxon p=0.016) for a
+  precision change of -0.2 points that does not reach significance (p=0.44) -- 6.6 true
+  chains gained per false one, concentrated in the hardest mix (E2 sensitivity 0.742 ->
+  0.863); on the CellLines 8-contig sweep, +2.4 points of known-isoform recall on both
+  BT474 and UHRR. HiFi-only because every one of those measurements is PacBio HiFi:
+  nothing there measures ONT, for which `min_alt_splice_freq` at 0.005 would be a 6x
+  loosening. (Released as e03cd88d; this entry was written retroactively, the release
+  having bumped the version without recording it here.)
 
 v0.25.0, August 20, 2026
 - BREAKING: `--chunk` and `--stream_reads` are now ON BY DEFAULT. `--no_chunk` and
