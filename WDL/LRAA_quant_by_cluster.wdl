@@ -211,11 +211,131 @@ task merge_bams {
     command <<<
         set -euo pipefail
 
-        samtools merge \
+        # --no-PG: samtools appends one @PG record PER EXISTING CHAIN TIP, so
+        # merging N inputs concatenates all N @PG chains and then adds a record
+        # for every resulting tip. This is the largest of the three merge
+        # generations in the cluster-guided path -- measured on 13 cluster BAMs
+        # each carrying 81,600 records, it produced 1,212,224 (1,060,800
+        # inherited + 151,424 added). The chain originates upstream of LRAA:
+        # XP132160.ucsc.bam arrives with 34,976 @PG records across 5,824
+        # parallel chains, one per minimap2 alignment shard, never collapsed.
+        #
+        # Left unchecked the final merged BAM's header reached 2,727,296 records
+        # = 1,188,154,439 bytes of UNCOMPRESSED SAM header text, in a BAM of
+        # 3.68 GiB on disk (the header's own on-disk footprint is smaller, being
+        # BGZF-compressed -- not a like-for-like ratio). Because resolving a region
+        # name to a tid forces a full header parse, each per-chromosome region
+        # query in Partition_data_by_chromosome cost ~5 min of pure header parsing
+        # (~2h07m per cluster, invariant of alignment count: chr1 at 1.67M and
+        # chrY at 27K alignments measured within 2.2% of each other).
+        #
+        # This suppresses only the records THIS merge would add; inherited chains
+        # still concatenate, so --no-PG alone merely caps growth -- measured on
+        # the dirty-input path it would still leave 1,818,752 records / ~792 MB.
+        #
+        # When inputs come from normalize_cluster_bam they are already collapsed
+        # by util/misc/collapse_bam_pg_header.py, and --no-PG alone then holds the
+        # result at zero (verified: 13 collapsed BAMs merge to 0 @PG records).
+        # But callers may supply `pre_normalized_cluster_bams`, which SKIPS that
+        # normalizer entirely -- those chains arrive uncollapsed and concatenate
+        # here (84 records in the same 13-way merge with dirty inputs). So this
+        # task must be able to collapse too.
+        #
+        # Done with samtools alone, deliberately: this task runs in a SEPARATELY
+        # PINNED container image while this .wdl is read from the local checkout,
+        # so invoking a newly added helper script from here would break whenever
+        # the two are out of step. `reheader -c` + `-d` verified present in the
+        # pinned samtools 1.13.
+        samtools merge --no-PG \
             -@ ~{cpu} \
             -o ~{output_basename}.bam \
             ~{sep=' ' normalized_bams}
 
+        # Is there anything to collapse? Counted exactly from the BGZF header,
+        # streaming, in bounded memory. Three approaches were rejected, each
+        # measured on an 85 MB / 200,000-record header:
+        #   samtools view -H  -- appends one record per chain tip, so it cannot
+        #                        report its own input (1 for an empty chain, 85
+        #                        for an 84-record one, measured in this image),
+        #                        and has been seen to hang at this size
+        #   read+decode+split -- 191 MB peak RSS (2.2x the header)
+        #   pysam to_dict()   -- 481 MB peak RSS (5.6x the header)
+        #   streaming (below)  -- 17 MB peak, flat in header size
+        # Scaled to the 1,188,154,439-byte header this step exists to remove,
+        # the two materializing forms would need roughly 2.7 GB and 6.7 GB --
+        # i.e. the check would OOM on exactly the input it is meant to detect.
+        #
+        # The gate is on the MEASURED header, not on which input route was
+        # taken. Provenance would be the wrong discriminator: inputs coming
+        # through normalize_cluster_bam are only pre-collapsed if that image
+        # contains the collapse, so a newer .wdl running against an older image
+        # would skip a chain that is genuinely present. Measuring cannot drift.
+        n_pg=$(python3 -c '
+import gzip, struct, sys
+CHUNK = 1 << 20
+with gzip.open(sys.argv[1], "rb") as fh:
+    assert fh.read(4) == b"BAM\1", "not a BAM file"
+    remaining = struct.unpack("<i", fh.read(4))[0]
+    total = 0
+    prev = b"\n"
+    while remaining > 0:
+        chunk = fh.read(min(CHUNK, remaining))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+        window = prev + chunk
+        total += window.count(b"\n@PG")
+        prev = window[-3:]
+print(total)
+' ~{output_basename}.bam)
+
+        if [ "$n_pg" -eq 0 ]; then
+            # The normal route: inputs were already collapsed upstream, and
+            # --no-PG held the merge at zero. Skip both the full-file tag scan
+            # and the rewrite -- there is nothing to remove, and this BAM is the
+            # largest artifact the workflow produces.
+            echo "@PG chain already empty in ~{output_basename}.bam; no collapse needed"
+        else
+            # Dropping @PG definitions is only sound if no alignment references
+            # one via a PG:Z: tag. Externally supplied BAMs are exactly where
+            # such tags are plausible, so this is checked, never assumed.
+            #
+            # On a hit this FAILS rather than continuing uncollapsed. That is a
+            # deliberate choice against precedent from this very defect: the
+            # header cost was a log-visible warning nobody read for months,
+            # burning ~27.5 h of a single whole-genome run. A warning is the
+            # mechanism already known to fail here. Failing is also not a dead
+            # end -- the remedy is named in the message, and
+            # util/misc/collapse_bam_pg_header.py --force exists for a caller
+            # who has decided the tags are expendable.
+            n_pg_tagged=$(samtools view -@ ~{cpu} -c -d PG ~{output_basename}.bam)
+            if [ "$n_pg_tagged" -ne 0 ]; then
+                echo "ERROR: $n_pg_tagged alignment records in ~{output_basename}.bam" \
+                     "carry a PG:Z: tag, so the accumulated @PG header chain ($n_pg" \
+                     "records) cannot be collapsed without leaving those" \
+                     "references dangling." >&2
+                echo "Refusing to emit this BAM: left uncollapsed, per-chromosome" \
+                     "region queries against it are dominated by header parsing" \
+                     "(~5 min each once the header reached 2.7M records, ~2h07m" \
+                     "per cluster), which is the defect this step exists to prevent." >&2
+                echo "Remedies: (a) strip the PG:Z: tags upstream, or (b) collapse" \
+                     "the inputs yourself with util/misc/collapse_bam_pg_header.py" \
+                     "(--force accepts dangling references), then pass them as" \
+                     "pre_normalized_cluster_bams." >&2
+                exit 2
+            fi
+
+            # -P so reheader adds no @PG of its own; -c filters the existing
+            # header in-stream, so no full header dump is needed.
+            samtools reheader -P -c 'grep -v "^@PG"' ~{output_basename}.bam \
+                > ~{output_basename}.pgcollapsed.bam
+            mv ~{output_basename}.pgcollapsed.bam ~{output_basename}.bam
+            echo "collapsed $n_pg @PG records in ~{output_basename}.bam"
+        fi
+
+        # Index AFTER any collapse: rewriting the header shifts every BGZF
+        # virtual offset, so an index built before it is invalid against the
+        # result and region queries fail with "Invalid BGZF header at offset N".
         samtools index -@ ~{cpu} ~{output_basename}.bam
 
         echo "Merged ~{length(normalized_bams)} BAMs into ~{output_basename}.bam"

@@ -174,10 +174,46 @@ def main():
         # a checkpoint named for a merge that never ran would misdescribe it
         index_checkpoint = f"index_single_strand_norm.{run_token}.ok"
     else:
-        # merge the norm SS bam filenames into the final output file
-        cmd = f"samtools merge -f {output_bam_filename} " + " ".join(norm_bam_files)
+        # merge the norm SS bam filenames into the final output file.
+        #
+        # --no-PG: samtools appends one @PG record PER EXISTING CHAIN TIP, so a
+        # merge of N inputs concatenates all N chains and then adds a record for
+        # every resulting tip. Measured on XP132160.ucsc.bam, whose header already
+        # carries 34,976 @PG records across 5,824 parallel chains (5,824 minimap2
+        # alignment shards from upstream, never collapsed): this merge alone added
+        # 11,648 records (= 5,824 tips x 2 inputs) on top of the 69,952 inherited.
+        # Across the three merge generations in the cluster-guided path the header
+        # reached 2,727,296 records = 1,188,154,439 bytes of UNCOMPRESSED SAM
+        # header text, in a merged BAM measuring 3.68 GiB on disk (the header's own
+        # on-disk footprint is smaller, being BGZF-compressed -- do not read those
+        # two figures as a like-for-like ratio). Because resolving a region name to
+        # a tid forces a full header parse, each per-chromosome region query
+        # against it cost ~5 min of pure parsing, invariant of alignment count.
+        #
+        # This flag suppresses only the records THIS merge would add; inherited
+        # chains still concatenate, so on its own it merely caps growth: measured
+        # on the cluster-guided path it would still leave 1,818,752 records /
+        # ~792 MB. The collapse below is what removes the accumulated chain.
+        cmd = f"samtools merge --no-PG -f {output_bam_filename} " + " ".join(norm_bam_files)
         pipeliner.add_commands([Command(cmd, f"SS_merge.{run_token}.ok")])
         index_checkpoint = f"index_merged.{run_token}.ok"
+
+    # Collapse the inherited @PG chain. This runs BEFORE the index, and must:
+    # rewriting the header shifts every BGZF virtual offset, so a .bai built
+    # beforehand is invalid against the result -- a region query then fails with
+    # "Invalid BGZF header at offset N" (loudly, not silently, but it fails).
+    # The helper removes any stale .bai itself and refuses to collapse if any
+    # alignment carries a PG:Z: tag that would be left dangling.
+    #
+    # Placed at the FIRST merge in the pipeline deliberately: collapsing here
+    # means every downstream artifact inherits a clean header for free, and the
+    # file being rewritten is a per-cluster BAM rather than the much larger
+    # final merged BAM.
+    collapse_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "misc", "collapse_bam_pg_header.py"
+    )
+    cmd = f"{sys.executable} {collapse_script} --input_bam {output_bam_filename} --no-index"
+    pipeliner.add_commands([Command(cmd, f"collapse_pg.{run_token}.ok")])
 
     cmd = f"samtools index {output_bam_filename}"
     pipeliner.add_commands([Command(cmd, index_checkpoint)])

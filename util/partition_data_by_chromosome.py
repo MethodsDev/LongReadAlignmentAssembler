@@ -181,7 +181,18 @@ def _partition_bam(
         )
         start_time = time.time()
         try:
+            # --no-PG: this writes one output BAM per chromosome, and samtools
+            # appends one @PG record per existing chain tip on every write. With
+            # the shared bam_for_sg's 2,727,296-record header that added ~302,848
+            # records here. `samtools view -b` also copies the source header into
+            # every output, so each per-chromosome BAM inherited that whole chain
+            # -- ~1.1 GiB as uncompressed SAM header TEXT, far smaller on disk
+            # once BGZF-compressed, but replicated 25 times per cluster: a chrY.bam
+            # holding only 26,725 alignments measured 87.9 MB on disk, and across
+            # the 325 per-chromosome SG outputs roughly 27 GB of the 44 GB total
+            # was duplicated header rather than alignment data.
             pysam.view(
+                "--no-PG",
                 "-@",
                 str(threads),
                 "-h",
