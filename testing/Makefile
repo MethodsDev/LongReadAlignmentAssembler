@@ -11,8 +11,12 @@ test: test_pytest
     echo "Running example in $$i..."; \
     (cd $$i; $(MAKE) test) || exit $$?; done
 
+# python3 -m pytest, not bare pytest: several modules import through the package path
+# (e.g. test_alignment_per_id_mixed_cigar.py's `from pylib.Util_funcs import ...`), which
+# needs the repo root on sys.path. `python -m` puts cwd there; the bare console script
+# does not, so bare pytest fails at COLLECTION and takes the whole suite with it.
 test_pytest:
-	cd .. && pytest -q pylib
+	cd .. && python3 -m pytest -q pylib
 
 
 all: test test_QC test_wdls test_DTU 
