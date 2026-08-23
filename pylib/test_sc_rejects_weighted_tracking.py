@@ -3,16 +3,28 @@
 """An incomplete tracking file must stay recognizable, and be refused where it is unsafe.
 
 Per-cell counts are sums of `frac_assigned`, one row per read, and `XW` is never
-consulted. A tracking file produced with XW weighting has rows only for the reads
-coverage normalization retained, so every cell comes out short -- unevenly, and worst at
-the high-coverage loci weighting exists to correct.
+consulted. A tracking file produced with XW weighting applied to a pre-thinned bam has
+rows only for the reads coverage normalization retained, so every cell comes out short
+-- unevenly, and worst at the high-coverage loci weighting exists to correct.
 
-Two things therefore have to hold. The single-cell converter must refuse such a file:
-it configures pandas with `comment="#"`, so the warning LRAA writes is invisible to
-exactly the consumer that is unsafe, and has to be read before pandas sees the file. And
-the marker has to survive merging: `lraa_merge_header.py` rebuilds the comment block
-rather than copying it, so a marker that is not recognized explicitly is dropped and the
-merged file understates counts with nothing about it to say so.
+LRAA no longer produces such a file. `--use_XW_read_weights_for_quant` and its negation
+are gone, weighting is unconditional, and the input that made a tracking file incomplete
+-- an already-thinned `--bam` -- is now refused at startup by
+`LRAA._require_no_thinning_weights`. The marker is therefore no longer emitted by
+anything in this tree.
+
+The two READERS keep recognizing it anyway, deliberately, because tracking files written
+by earlier versions carry it legitimately and are still safe to hand to these tools. So
+two things have to hold. The single-cell converter must refuse such a file: it configures
+pandas with `comment="#"`, so the marker is invisible to exactly the consumer that is
+unsafe, and has to be read before pandas sees the file. And the marker has to survive
+merging: `lraa_merge_header.py` rebuilds the comment block rather than copying it, so a
+marker that is not recognized explicitly is dropped and the merged file understates
+counts with nothing about it to say so.
+
+Everything below the merge section therefore works on HAND-BUILT tracking files, since
+no LRAA invocation can produce one any more. The single live-LRAA test at the bottom
+pins the other half: that a stock run writes no marker.
 """
 
 import gzip
@@ -150,7 +162,7 @@ def test_a_merged_marked_file_is_still_refused_by_the_converter(tmp_path):
     assert "use_XW_read_weights_for_quant" in (r.stdout + r.stderr)
 
 
-# ------------------------------------------------------ real LRAA emission, end to end
+# ---------------------------------------------------- LRAA no longer writes the marker
 
 
 def _lraa_bam(path):
@@ -175,11 +187,24 @@ def _lraa_bam(path):
     return path
 
 
-def _run_lraa_tracking(tmp_path, *extra):
-    """A normalizable bulk bam, quantified for real with --use_XW_read_weights_for_quant.
+def test_a_stock_lraa_run_writes_no_incompleteness_marker(tmp_path):
+    """The removal is pinned, not merely untested.
 
-    Returns the merged tracking file's text, so a test can inspect exactly what LRAA
-    emitted rather than a hand-built stand-in for it.
+    This used to be a pair of tests asserting LRAA emitted the marker on a non-streaming
+    run and omitted it on a streaming one, both driven through
+    `--use_XW_read_weights_for_quant --library_type bulk`. Neither the flag nor the
+    emission exists now: weighting is unconditional and the input that made a tracking
+    file incomplete, an already-thinned `--bam`, is refused at startup. What remains
+    worth holding is that no code path writes the marker back, because re-introducing it
+    would make every fresh tracking file unreadable to
+    `singlecell_tracking_to_sparse_matrix.py` -- which still refuses it, on purpose, for
+    the sake of files written by earlier versions.
+
+    The absence is asserted against a file that demonstrably exists and has both a
+    comment block and data rows, so "no marker" cannot pass by the tracking file being
+    empty, unwritten, or all comment. Note the tracking file also carries a
+    "# LRAA CMD: ..." echo of its own command line, which is why the check is scoped to
+    the dedicated "# WARNING:" prefix -- the same scoping both readers use.
     """
     gtf = tmp_path / "a.gtf"
     gtf.write_text(
@@ -188,56 +213,25 @@ def _run_lraa_tracking(tmp_path, *extra):
     genome = tmp_path / "g.fa"
     genome.write_text(">chr1\n" + "A" * 10000 + "\n")
     bam = _lraa_bam(tmp_path / "bulk.bam")
+    # --no_chunk because chunk dispatch would reroute this small single-locus fixture
+    # through a separate merge path; everything else is left at its default, which is
+    # the point -- this is what an ordinary user's run emits.
     cmd = [sys.executable, LRAA, "--quant_only", "--bam", str(bam),
            "--gtf", str(gtf), "--genome", str(genome),
-           "--output_prefix", str(tmp_path / "out"),
-           "--use_XW_read_weights_for_quant", "--library_type", "bulk",
-           # chunk dispatch would reroute this small single-locus fixture through a
-           # separate merge path before it ever reaches the marker logic under test;
-           # stream_reads is left to each caller's own `extra`, since one test needs
-           # it on and the other explicitly needs it off (both now must say so).
-           "--no_chunk"] + list(extra)
+           "--output_prefix", str(tmp_path / "out"), "--no_chunk"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
+
     tracking = list(tmp_path.glob("out*quant.tracking.gz"))
     assert tracking, "expected a tracking file to be produced"
     with gzip.open(tracking[0], "rt") as fh:
-        return fh.read()
+        text = fh.read()
 
-
-def test_lraa_omits_the_marker_under_stream_reads(tmp_path):
-    """Closes the loop between LRAA's emission logic and the converter's consumption
-    logic -- the gap that would otherwise have made the fix silently fail end-to-end.
-
-    Every tracking file, streamed or not, also carries a "# LRAA CMD: ..." echo of its
-    own command line, which contains the substring "use_XW_read_weights_for_quant"
-    whenever that flag was passed at all. So the marker itself is checked as the
-    dedicated "# WARNING:"-prefixed line -- exactly what
-    singlecell_tracking_to_sparse_matrix.py's _reject_if_weighted_tracking and
-    lraa_merge_header.py's _marks_incomplete_tracking now scope their own detection to,
-    after both were found to blind-match that CMD echo too.
-    """
-    text = _run_lraa_tracking(
-        tmp_path, "--stream_reads",
-        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
-    )
-    comment_lines = [line for line in text.splitlines() if line.startswith("#")]
-    assert not any(
-        line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line
-        for line in comment_lines
-    )
-
-
-def test_lraa_still_emits_the_marker_without_stream_reads(tmp_path):
-    """The mirror-image regression test: change 5 narrows an existing condition, and
-    nothing in the hand-built-fixture tests above would catch a botched narrowing
-    (inverted logic, wrong config key) that silently stopped LRAA from ever emitting
-    the marker at all -- they test the converter's reaction to a marker that's already
-    there, not whether LRAA still writes it for the case that still needs it.
-    """
-    text = _run_lraa_tracking(tmp_path, "--no_stream_reads")
-    comment_lines = [line for line in text.splitlines() if line.startswith("#")]
-    assert any(
-        line.startswith("# WARNING:") and "use_XW_read_weights_for_quant" in line
-        for line in comment_lines
-    )
+    lines = text.splitlines()
+    comment_lines = [line for line in lines if line.startswith("#")]
+    data_lines = [line for line in lines if line and not line.startswith("#")]
+    assert comment_lines, "the tracking file must still carry its comment header block"
+    assert data_lines, "the tracking file must still carry read rows"
+    assert not [
+        line for line in comment_lines if line.startswith("# WARNING:")
+    ], f"LRAA emitted an incompleteness marker: {comment_lines}"

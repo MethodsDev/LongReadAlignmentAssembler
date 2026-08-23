@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-"""End-to-end proof: --stream_reads restores completeness, --use_XW_read_weights_for_quant
-restores the split, for single-cell quant-only -- measured through the real, unmodified
+"""End-to-end proof that single-cell quant-only accounts for every read and lands on the
+right within-gene isoform split -- measured through the real, unmodified
 util/sc/singlecell_tracking_to_sparse_matrix.py, not a hand-built stand-in for it.
 
 Fixture: one gene (GENE_DEEP) with two isoforms sharing a first exon and diverging at a
@@ -11,48 +11,59 @@ T1's second exon is deep (2000 reads); T2's is unique to it and stays below the
 normalization target (40 reads), so normalize_bam_by_strand.py's per-window acceptance
 probability provably thins them at different rates -- a scarce junction is kept whole
 unconditionally (see normalize_bam_by_strand._acceptance_probability), while T1's deep
-junction is thinned toward the target. A separate GENE_CTRL locus, well below the target,
-is included as a regression guard that normalization must not touch. Reads carry CB/XM
-tags across four barcodes.
+junction is thinned toward the target. Measured: sift_bam at the stock target of 1000
+retains 1297 of the 2480 records, i.e. roughly half the library disappears from thinned
+evidence, and it disappears asymmetrically between the two isoforms. A separate
+GENE_CTRL locus, well below the target, is included as a regression guard that
+normalization must not touch. Reads carry CB/XM tags across four barcodes.
 
-Four runs, not three, so completeness (Run D) and split-correction (Run C) are
-demonstrated separately rather than conflated -- see
-XW_read_weight_stream_reads_plan.md, "Track 0" / "Track 1".
+Three runs, each one a distinct supported way of feeding thinned evidence into quant:
 
-DEVIATION FROM THE PLAN'S LITERAL RUN B COMMAND -- confirmed empirically, not assumed:
-Plain `--quant_only` (without --stream_reads) never reads the coverage-normalized bam for
-quantification at all. `bam_file_for_quant = bam_filename` unconditionally (LRAA, near
-"bam_file_for_quant = bam_filename"), and the auto-normalized `bam_file_for_sg` only feeds
-the read-population pass when streaming is on: `bam_file_for_pass1 = bam_file_for_sg if
-LRAA_Globals.config["stream_reads"] else bam_file_for_quant` (LRAA, inside
-run_quant_only). Concretely: `LRAA --quant_only --library_type single_cell
---no_rescue_unassigned_reads_via_transcriptome_alignment --bam <bam>` on the SAME bam as
-Run A was run and is BYTE-IDENTICAL to Run A -- no undercounting, because normalization's
-only output (bam_file_for_sg) is never consulted. That contradicts this plan's own
-description of Run B ("normalization on ... expect undercounting vs. Run A"), and is
-exactly the class of finding the task instructions ask to report rather than silently
-paper over.
+  Run A -- --no_norm --no_stream_reads on the untagged full bam. Nothing is thinned
+           anywhere, so this is ground truth: it must account for every read, and its
+           isoform split is the number the other two runs are judged against.
 
-The realistic topology where --use_XW_read_weights_for_quant has ever had an effect
-without --stream_reads is the one implied by the flag's own existence: `--bam` is ITSELF
-already a coverage-thinned bam (e.g. produced by an upstream normalize_bam_by_strand.py
-pass, exactly what the chunked pipeline does per chunk before invoking a quant-only
-stage) -- XW weighting reads the XW tag off whichever bam it is handed, and a bam LRAA
-has not normalized carries no such tag. Run B below therefore supplies a bam pre-thinned
-by util.normalize_bam_by_strand.sift_bam directly, using the SAME tool and the SAME
-default parameters LRAA's own --normalize_max_cov_level uses internally (target 1000,
-window 100, seed 42, origin 0, min_per_id 80 -- LRAA_Globals.config's
-normalize_max_cov_level / chunk_depth_window / chunk_random_seed / chunk_grid_origin /
-min_per_id defaults), rather than the plan's literal flag list on the unmodified bam,
-which measurably makes no difference at all.
+  Run B -- the full untagged bam as --bam, the pre-thinned bam as --bam_for_sg, with
+           --no_norm --no_stream_reads. This is "quantification against thinned
+           evidence" expressed the way the inputs are now defined: --bam is the library
+           everything is reported against and must NOT be thinned, while --bam_for_sg is
+           the input that exists for coverage-normalized evidence and must BE thinned
+           (LRAA:_require_no_thinning_weights / LRAA:_require_thinning_weights).
+           _build_thinned_bam produces it through norm.sift_bam, which writes the XW tag,
+           so the --bam_for_sg precondition is satisfied by construction. The splice
+           graph is built from that thinned bam (LRAA, Splice_graph call inside
+           run_quant_only, fed bam_file_for_sg) and divides each read's acceptance
+           probability back out through XW; quantification reads bam_file_for_quant,
+           which is the full bam. Nothing is re-normalized: --bam_for_sg is taken
+           verbatim, whatever --normalize_max_cov_level says.
 
-NOT COVERED, stated explicitly rather than silently treated as verified (per the plan's
-own "Still open" item): this fixture's GENE_DEEP component contains exactly one gene (two
-isoforms), so it covers the isoform-level split *within* a gene, not the gene-level split
-within a multi-gene component sharing ambiguous reads (paralogs, overlapping loci). The
-narrower claim this plan actually makes -- XW corrects the split within a shared
-multi-gene component -- has no fixture coverage here and remains traced from code, not
-tested.
+  Run C -- --stream_reads on the untagged full bam, with normalization left on, so LRAA
+           thins the bam itself and hands the result to pass 1
+           (bam_file_for_pass1 = bam_file_for_sg when streaming, LRAA inside
+           run_quant_only) while the streaming second pass covers the full bam. This is a
+           stock invocation: there is no weighting flag to pass. XW coverage-normalization
+           weighting is unconditional -- _populate_read_multi_paths resolves
+           use_XW_weights to True unless a caller passes weight_reads=False, which only
+           discovery's pre-filter quant does.
+
+Why the tight bands matter rather than a weighted-vs-unweighted contrast: weighting is no
+longer something a run can decline, so there is no unweighted arm to diff against. The
+claims are stated against Run A instead, and the bands are set tight enough to fail if
+weighting regressed. Historically measured with weighting declined, T2 came out at 58.02
+against a truth of 48.59 -- a +19% overshoot on the absolute count and T2's gene share at
+0.0238 against 0.0199. Both are well outside the 5% bands asserted below, so a regression
+that silently stopped dividing out XW would break these tests rather than slip through.
+
+Run B needs the thinning to be real for its "matches Run A" claim to mean anything, so
+the retained-record count is asserted directly rather than assumed: if sift_bam ever
+stopped thinning this fixture, B would agree with A trivially and prove nothing.
+
+NOT COVERED, stated explicitly rather than silently treated as verified: this fixture's
+GENE_DEEP component contains exactly one gene (two isoforms), so it covers the isoform-
+level split *within* a gene, not the gene-level split within a multi-gene component
+sharing ambiguous reads (paralogs, overlapping loci). That narrower claim -- that XW
+weighting corrects the split within a shared multi-gene component -- has no fixture
+coverage here and remains traced from code, not tested.
 """
 
 import csv
@@ -165,8 +176,13 @@ def _build_genome(path):
 
 def _build_thinned_bam(true_bam, thinned_bam):
     """The bam LRAA's OWN --normalize_max_cov_level would produce internally, built with
-    the same tool and the same defaults, for use directly as Run B's --bam (see module
-    docstring for why plain --quant_only never reads such a bam on its own).
+    the same tool and the same defaults, for use as Run B's --bam_for_sg.
+
+    sift_bam writes the XW acceptance weight on every record it keeps, which is exactly
+    what --bam_for_sg requires (LRAA:_require_thinning_weights): the splice graph divides
+    that weight back out, so an untagged thinned bam would be read as genuinely shallow
+    evidence. Returns the retained-record count so the caller can assert the thinning was
+    real rather than assume it.
     """
     norm.sift_bam(
         str(true_bam),
@@ -179,6 +195,8 @@ def _build_thinned_bam(true_bam, thinned_bam):
         min_mapping_quality=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
     )
     pysam.index(str(thinned_bam))
+    with pysam.AlignmentFile(str(thinned_bam)) as fh:
+        return fh.count()
 
 
 def _run_lraa(tmp_path, bam, gtf, genome, prefix, *extra):
@@ -212,11 +230,12 @@ def _feature_totals(out_prefix, level):
 
 
 @pytest.fixture(scope="module")
-def four_runs(tmp_path_factory):
-    """Builds the fixture once and runs A/B/C/D + their conversions once each.
+def three_runs(tmp_path_factory):
+    """Builds the fixture once and runs A/B/C + their conversions once each.
 
-    Returns {run_label: {"gene": {...}, "isoform": {...}}}, every value a real number
-    read back from singlecell_tracking_to_sparse_matrix.py's own output files.
+    Returns {run_label: {"gene": {...}, "isoform": {...}}} plus a "records" entry holding
+    the full and thinned record counts. Every quant value is a real number read back from
+    singlecell_tracking_to_sparse_matrix.py's own output files.
     """
     tmp = tmp_path_factory.mktemp("xw_stream_matrix")
     true_bam = tmp / "true.bam"
@@ -226,11 +245,13 @@ def four_runs(tmp_path_factory):
     genome = tmp / "g.fa"
     _build_genome(genome)
     thinned_bam = tmp / "thinned.bam"
-    _build_thinned_bam(true_bam, thinned_bam)
+    n_thinned = _build_thinned_bam(true_bam, thinned_bam)
 
     no_rescue = "--no_rescue_unassigned_reads_via_transcriptome_alignment"
-    results = {}
+    results = {"records": {"full": N_T1 + N_T2 + N_AMBIG + N_CTRL,
+                           "thinned": n_thinned}}
 
+    # Run A: nothing thinned anywhere. Ground truth for both claims below.
     tracking_a = _run_lraa(tmp, true_bam, gtf, genome, "A", "--no_norm",
                             "--library_type", "single_cell", no_rescue,
                             "--no_chunk", "--no_stream_reads")
@@ -240,28 +261,26 @@ def four_runs(tmp_path_factory):
         "isoform": _feature_totals(prefix_a, "isoform"),
     }
 
-    # Run B: see module docstring -- pre-thinned bam stands in for "today's default",
-    # since plain --quant_only on the unmodified bam is confirmed identical to Run A.
-    tracking_b = _run_lraa(tmp, thinned_bam, gtf, genome, "B", "--no_norm",
+    # Run B: thinned evidence supplied the supported way -- full library as --bam, the
+    # XW-tagged thinned bam as --bam_for_sg. Handing the thinned bam to --bam is now
+    # rejected outright (LRAA:_require_no_thinning_weights), because reported counts are
+    # scaled by --bam and a thinned --bam silently reports against a fraction of the
+    # library. --no_norm here proves --bam_for_sg is taken verbatim and never re-thinned.
+    tracking_b = _run_lraa(tmp, true_bam, gtf, genome, "B", "--no_norm",
                             "--library_type", "single_cell", no_rescue,
-                            "--no_chunk", "--no_stream_reads")
+                            "--no_chunk", "--no_stream_reads",
+                            "--bam_for_sg", str(thinned_bam))
     prefix_b = _convert(tmp, tracking_b, "convB")
     results["B"] = {
         "gene": _feature_totals(prefix_b, "gene"),
         "isoform": _feature_totals(prefix_b, "isoform"),
     }
 
-    tracking_d = _run_lraa(tmp, true_bam, gtf, genome, "D", "--stream_reads",
-                            "--library_type", "single_cell", no_rescue,
-                            "--no_chunk")
-    prefix_d = _convert(tmp, tracking_d, "convD")
-    results["D"] = {
-        "gene": _feature_totals(prefix_d, "gene"),
-        "isoform": _feature_totals(prefix_d, "isoform"),
-    }
-
+    # Run C: a stock streaming invocation. Normalization stays on, so LRAA thins the bam
+    # itself for pass 1 and streams the full bam for pass 2. There is no weighting flag
+    # to pass either way -- XW weighting is unconditional now -- so this run measures the
+    # default rather than a configuration.
     tracking_c = _run_lraa(tmp, true_bam, gtf, genome, "C", "--stream_reads",
-                            "--use_XW_read_weights_for_quant",
                             "--library_type", "single_cell", no_rescue,
                             "--no_chunk")
     prefix_c = _convert(tmp, tracking_c, "convC")
@@ -273,80 +292,115 @@ def four_runs(tmp_path_factory):
     return results
 
 
-def test_run_a_reference_accounts_for_every_read(four_runs):
+def test_run_a_reference_accounts_for_every_read(three_runs):
     """Ground truth: --no_norm drops nothing, so the deep locus totals N_T1+N_T2+N_AMBIG
     and the control locus totals N_CTRL, exactly.
     """
-    gene = four_runs["A"]["gene"]
+    gene = three_runs["A"]["gene"]
     assert gene["GENE_DEEP"] == pytest.approx(N_T1 + N_T2 + N_AMBIG, abs=0.5)
     assert gene["GENE_CTRL"] == pytest.approx(N_CTRL, abs=0.01)
 
 
-def test_gene_level_total_today_undercounts_stream_reads_restores_it(four_runs):
-    """Deep-locus gene total: B (today's default) undercounts vs. A; D and C, both
-    --stream_reads, track A closely -- completeness does not depend on theta or XW.
+def test_the_thinned_splice_graph_evidence_really_is_thinner(three_runs):
+    """Run B's whole claim is that thinned evidence costs it nothing, which is only worth
+    asserting if the evidence was actually thinned. If sift_bam's defaults ever stopped
+    thinning this fixture -- a raised normalize_max_cov_level default, a changed window,
+    a different acceptance rule -- Run B would agree with Run A for the uninteresting
+    reason that the two bams are the same reads, and every B assertion below would go
+    quietly vacuous. Measured: 1297 of 2480 records retained at the stock target of 1000.
     """
-    a = four_runs["A"]["gene"]["GENE_DEEP"]
-    b = four_runs["B"]["gene"]["GENE_DEEP"]
-    d = four_runs["D"]["gene"]["GENE_DEEP"]
-    c = four_runs["C"]["gene"]["GENE_DEEP"]
+    records = three_runs["records"]
+    assert records["full"] == 2480
+    assert records["thinned"] == pytest.approx(1297, abs=60), (
+        f"expected the stock target to drop roughly half the library, "
+        f"retained {records['thinned']} of {records['full']}"
+    )
+
+
+def test_gene_level_totals_account_for_every_read_in_every_run(three_runs):
+    """Deep-locus gene total: both supported ways of feeding thinned evidence still report
+    against the whole library, so B and C match A.
+
+    B matches because --bam_for_sg only replaces splice-graph evidence: quantification
+    reads bam_file_for_quant, which is --bam. C matches because the streaming second pass
+    covers the full bam even though pass 1 saw only the thinned one. The failure this
+    guards is thinned evidence leaking into the reported denominator -- the pre-thinned
+    --bam that is now rejected measured 1257 of A's 2440, a 48.5% shortfall.
+    """
+    a = three_runs["A"]["gene"]["GENE_DEEP"]
+    b = three_runs["B"]["gene"]["GENE_DEEP"]
+    c = three_runs["C"]["gene"]["GENE_DEEP"]
 
     assert a == pytest.approx(2440.0, abs=1.0)
-    # Measured: B totals 1257 of A's 2440, a 48.5% shortfall.
-    assert b < 0.7 * a, f"expected a real undercount, got B={b} vs A={a}"
-    assert d == pytest.approx(a, rel=0.01), f"D={d} should match A={a} (full accounting)"
+    assert b == pytest.approx(a, rel=0.01), f"B={b} should match A={a} (full accounting)"
     assert c == pytest.approx(a, rel=0.01), f"C={c} should match A={a} (full accounting)"
 
 
-def test_isoform_level_split_today_and_stream_only_diverge_xw_restores_it(four_runs):
-    """Deep-locus isoform split, measured as T2's share of the gene total (robust to the
-    gene-level completeness differences already covered by the previous test): B and D
-    both diverge from A's split; C, the only run with XW correction, tracks it closely.
+def test_isoform_level_split_tracks_run_a_in_every_run(three_runs):
+    """Deep-locus isoform split, measured as T2's share of the gene total (robust to any
+    gene-level difference, which the previous test covers separately).
+
+    T2's junction is scarce and survives thinning whole while T1's deep junction is thinned
+    toward the target, so thinned evidence over-represents T2 unless the acceptance weight
+    is divided back out. Both runs track A's split closely, which is the observable form of
+    "XW weighting is applied unconditionally".
+
+    Measured: A ~= 0.019916, B ~= 0.019916 (identical), C ~= 0.019934 (+0.09%). The 5%
+    band is what makes this fail on a regression: with weighting declined the same
+    fixture put T2's share at 0.0238, +19% over A.
     """
 
     def t2_share(run):
-        gene = four_runs[run]["gene"]["GENE_DEEP"]
-        t2 = four_runs[run]["isoform"]["T2"]
+        gene = three_runs[run]["gene"]["GENE_DEEP"]
+        t2 = three_runs[run]["isoform"]["T2"]
         return t2 / gene
 
     share_a = t2_share("A")
     share_b = t2_share("B")
-    share_d = t2_share("D")
     share_c = t2_share("C")
 
-    # Measured: A ~= 0.0199, B ~= 0.0428 (+115%), D ~= 0.0238 (+19%), C ~= 0.0199 (+0.09%).
     assert share_a == pytest.approx(0.0199, abs=0.002)
-    assert share_b > 1.5 * share_a, (
-        f"B's split should diverge sharply from A's (no completeness, no correction): "
-        f"B={share_b} A={share_a}"
-    )
-    assert share_d > 1.1 * share_a, (
-        f"D's split should diverge from A's (complete, but theta uncorrected): "
-        f"D={share_d} A={share_a}"
+    assert share_b == pytest.approx(share_a, rel=0.05), (
+        f"B's split should track A's: thinned splice-graph evidence divides its own "
+        f"acceptance weight back out. B={share_b} A={share_a}"
     )
     assert share_c == pytest.approx(share_a, rel=0.05), (
-        f"C's split should track A's closely (complete AND theta-corrected): "
+        f"C's split should track A's: complete AND theta-corrected. "
         f"C={share_c} A={share_a}"
     )
 
 
-def test_isoform_level_absolute_counts_xw_restores_them(four_runs):
-    """The same claim in absolute terms: C's T1 and T2 totals track A's; D's do not."""
-    a = four_runs["A"]["isoform"]
-    c = four_runs["C"]["isoform"]
-    d = four_runs["D"]["isoform"]
+def test_isoform_level_absolute_counts_track_run_a(three_runs):
+    """The same claim in absolute terms rather than as a share, so a proportional drift in
+    both isoforms at once cannot hide inside the ratio.
+
+    Measured against A's T1 2391.41 / T2 48.59: B is identical to the digit (its
+    quantification bam is A's bam), C lands at T1 2391.36 / T2 48.64. The T2 band is the
+    loose one because T2 is the scarce isoform the ambiguous reads get apportioned to;
+    weighting declined put it at 58.02, outside this band.
+    """
+    a = three_runs["A"]["isoform"]
+    b = three_runs["B"]["isoform"]
+    c = three_runs["C"]["isoform"]
+
+    assert a["T1"] == pytest.approx(2391.41, abs=1.0)
+    assert a["T2"] == pytest.approx(48.59, abs=0.5)
+
+    assert b["T1"] == pytest.approx(a["T1"], rel=0.01)
+    assert b["T2"] == pytest.approx(a["T2"], rel=0.05)
 
     assert c["T1"] == pytest.approx(a["T1"], rel=0.01)
     assert c["T2"] == pytest.approx(a["T2"], rel=0.05)
 
-    # Measured: D's T2 (58.0) overshoots A's (48.6) by ~19%, well outside C's 5% band.
-    assert d["T2"] > 1.1 * a["T2"]
 
-
-def test_control_locus_is_a_regression_guard_across_all_four_runs(four_runs):
-    """A locus normalization never touches must agree across every run, streamed,
-    weighted, or neither -- otherwise a change here would be masking a real regression.
+def test_control_locus_is_a_regression_guard_across_every_run(three_runs):
+    """A locus normalization never touches must agree across every run, streamed or not,
+    with thinned splice-graph evidence or without -- otherwise a change here would be
+    masking a real regression.
     """
-    ctrl = {run: four_runs[run]["gene"]["GENE_CTRL"] for run in ("A", "B", "C", "D")}
+    ctrl = {
+        run: three_runs[run]["gene"]["GENE_CTRL"]
+        for run in ("A", "B", "C")
+    }
     for run, total in ctrl.items():
         assert total == pytest.approx(N_CTRL, abs=0.01), f"{run}: {total}"

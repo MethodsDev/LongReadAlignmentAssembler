@@ -113,20 +113,25 @@ test_unsupported_ref_model:
 # is exercised on every run below, and the final assertion refuses a corpus that
 # stopped exercising it.
 #
-# --bam_for_sg points at a distinct copy of the same bam under --no_norm, satisfying
-# "pass 1 reads a thinner bam than pass 2" with a MATCHED control instead of an actual
-# thinning: both passes then read the identical read set, which is the configuration
-# CHANGELOG v0.20.0 measured the streaming E-step to reproduce exactly ("every gene and
-# all 5,822 transcripts agree to 0.0000 reads"). Rescue is off on both arms: mappy vs
-# minimap2 divergence is rescue's own, separately measured property (v0.20.1), not
-# something this target exists to check.
+# --bam_for_sg points at a MATCHED control under --no_norm -- the same reads as --bam,
+# stamped XW:f:1.0 -- satisfying "pass 1 reads a thinner bam than pass 2" without an
+# actual thinning: both passes then read the identical read set, which is the
+# configuration CHANGELOG v0.20.0 measured the streaming E-step to reproduce exactly
+# ("every gene and all 5,822 transcripts agree to 0.0000 reads"). The stamp is required
+# because LRAA refuses a supplied --bam_for_sg that carries no XW, that flag naming
+# already-normalized evidence; 1.0 is what normalization writes for a read it kept whole,
+# so it declares "nothing thinned" and changes nothing numerically. A plain cp fails the
+# check, and running the real normalizer instead would drop the strand-undeterminable
+# records and so build a different splice graph -- see util/misc/stamp_unit_xw.py. Rescue is
+# off on both arms: mappy vs minimap2 divergence is rescue's own, separately measured
+# property (v0.20.1), not something this target exists to check.
 #
 # Row order legitimately differs -- report_quant_results sorts by (read count,
 # transcript_id) descending, write_expr by transcript_id alone -- so both outputs are
 # sorted before diffing, matching neither path's own on-disk order.
 test_stream_discovery_parity:
 	rm -rf ./__streamparity*
-	cp data/sim.fasta.mm2.bam __streamparity_bam_for_sg.bam
+	../../util/misc/stamp_unit_xw.py data/sim.fasta.mm2.bam __streamparity_bam_for_sg.bam
 	../../LRAA --genome data/SIRVs1-7.genome.fa --bam data/sim.fasta.mm2.bam --HiFi \
 	    --no_norm --no_rescue_unassigned_reads_via_transcriptome_alignment \
 	    --no_chunk --no_stream_reads \

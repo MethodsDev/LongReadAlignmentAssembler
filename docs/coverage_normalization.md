@@ -108,6 +108,39 @@ construction because `lighten()` discards the pysam record long before support i
 **A read with no tag weighs 1.** Unnormalized BAMs, and alignment pickles written before the tag
 existed, are therefore read exactly as they were.
 
+**Weights compose across passes.** Thinning an already-thinned BAM multiplies: a record kept at
+`p1` and then at `p2` stands for `1/(p1*p2)`, and the normalizer reads whatever weight its input
+carried and multiplies rather than replacing it (`util/normalize_bam_by_strand.py:592-601`). This
+is what keeps the tag's meaning — reads of the ORIGINAL library this record stands for —
+independent of how many passes produced it, and it matters whenever `--bam` was thinned upstream
+while normalization is left at its default. Replacing the weight instead dropped the earlier
+factor outright: on the bundled corpus, chaining a loose pass into a tight one drove a record's
+weight from 10.0 down to 3.87 and collapsed the weighted total to 615 against 4,970 input records.
+
+**The two BAMs have roles, and each is checked against its own.** Weighting is not a mode with a
+setting; it is a property of the data, and what makes that safe is that each input's role fixes
+whether a weight can be there (`LRAA:145-222,2393-2428`):
+
+| input | role | requirement |
+|---|---|---|
+| `--bam` | the full library — reported counts are scaled by it | must **not** carry `XW` |
+| `--bam_for_sg` | the splice-graph evidence, taken as given | must carry `XW` |
+
+`--bam` is what `num_total_reads` counts and what the streaming pass sums assignments over, so a
+thinned BAM there would report per-retained-read quantities indistinguishable from full-library
+ones and emit a tracking file covering part of the library while looking complete. `--bam_for_sg`
+is the input that exists for thinned data, and an untagged one would be read as though its
+survivors were the whole library. Both are fatal, because neither is detectable downstream.
+
+One record decides each: normalization tags **every** record it retains, including those kept
+whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
+BAM it never touched has it on none. An empty BAM passes either check — it yields an empty splice
+graph, and the chunked pipeline produces empty per-orientation BAMs routinely.
+
+**`--bam_for_sg` is never re-normalized.** Supplying it *is* the decision about what the splice
+graph reads, so `--normalize_max_cov_level` does not apply to it. Re-thinning it would compose
+acceptance rates for no gain and produce only artifacts the caller could have produced directly.
+
 Weighting is not optional bookkeeping. Any scheme whose acceptance rate varies along the genome
 distorts relative support, and every such scheme must either record its rates or restrict
 itself to a single rate per unit of comparison.
@@ -155,40 +188,65 @@ Quantification consumes the weight through one expression: `EM.py:87` takes each
 support as `mp.get_read_weight()` rather than a read count, and the E-step apportions that
 quantity directly. The same call backs the count rollups in `Quantify.py:1824,1846,2212`.
 
-That expression is inert unless armed. `MultiPath.get_read_weight()` sums the per-read registry
-(`LRAA_Globals.read_weight_for_id`, default 1.0), and weights are registered only when
-`--use_XW_read_weights_for_quant` is set (`LRAA.py:1224,1374-1388,1456`;
-`LRAA_Globals.config["use_XW_read_weights_for_quant"]` defaults to `False`). Unregistered, the
-weight equals the read count and EM behaves exactly as before the tag existed.
+**There is no setting.** `MultiPath.get_read_weight()` sums a per-read registry that
+`_populate_read_multi_paths` fills from whichever BAM the pass is reading
+(`pylib/LRAA.py:1227-1238`), and an untagged read weighs 1 (`Pretty_alignment.py:61-65`). So
+honouring the tag is a no-op on a BAM nobody thinned, and there is nothing for a caller to turn
+on. `--use_XW_read_weights_for_quant` and its negation are gone; they were a mode standing in for
+the role invariants above, and the invariants are what actually decide whether a weight is there.
 
-Off by default because it is normally a no-op that would only mislead: the single-pass path reads
-the unnormalized BAM, where every weight is 1. What it corrects is the case where the BAM being
-quantified IS thinned — the two-pass streaming path's first pass, or a quant-only stage handed an
-already-normalized BAM, as the chunked pipeline does. There the isoform proportions within a
-read-sharing component are estimated from thinned support, and the weights are what divide the
-acceptance rates back out.
+The one deliberate exception is a pass, not a flag: `weight_reads=False` tells a single
+`_populate_read_multi_paths` call to ignore whatever weights it was handed. Nothing uses it today
+— discovery's draft quantification used to, and no longer does. What replaced it is a cleaner
+split, because the two families of gate want genuinely different quantities:
 
-The flag is EXPERIMENTAL and guarded (`LRAA:842-857,1975-2056`):
+- **Proportional / abundance → weighted.** `min_reads_novel_isoform` (via
+  `Transcript.get_read_counts_assigned()`), `min_isoform_fraction`, the TPM gates, and
+  `min_frac_gene_unique_reads`. These are estimates about the library, so they read weighted
+  support and are on the library's scale.
+- **Counts of observations → literal reads.** `min_unique_reads_novel_isoform`, the FSM counts,
+  and `min_monoexonic_supporting_cells`. "Two unique reads" is a confidence statement about having
+  seen a structure twice; a read retained at `p = 1/15` stands for fifteen but was still seen
+  once, and re-weighting one observation cannot make it two.
 
-- **`--quant_only` only.** Discovery's absolute isoform filters (`min_reads_novel_isoform`,
-  `min_unique_reads_novel_isoform`, the FSM gates) deliberately still count retained reads, so
-  enabling weighted EM in discovery would select and filter isoforms on different scales.
-- **`--library_type` must be stated.** Single-cell-ness is a property of the data and cannot be
-  detected reliably enough to refuse on the caller's behalf.
-- **Single-cell and `--tag_bam` require `--stream_reads`.** Weighting fixes the aggregate
-  expression file, not a tracking file that has one row per *retained* read: the reads thinning
-  discarded have no row to carry a weight. Consumers that derive counts by summing tracking rows
-  — `util/sc/singlecell_tracking_to_sparse_matrix.py`, which sums `frac_assigned` and never reads
-  `XW`, and `util/annotate_bam_with_read_tracking_info.py`, which tags from tracking — would
-  undercount, worst at exactly the deep loci weighting exists to fix. Under `--stream_reads` the
-  merged tracking file instead covers the full BAM and each read's split already reflects
-  XW-corrected theta, so the premise does not hold and the combinations are permitted.
+`get_isoform_unique_assigned_read_count` returns both — the literal tally and the weighted support
+— and hands each consumer the one it needs. That also fixes a ratio that used to mix them:
+`min_frac_gene_unique_reads` divided a literal numerator by a weighted gene total, deflating it by
+roughly the acceptance rate at exactly the deep loci thinning touches.
 
-A non-streaming weighted run therefore stamps its tracking file with a `# WARNING:` line naming
-the flag (`LRAA:4114-4126`, `util/lraa_merge_header.py:32-45`), and
-`singlecell_tracking_to_sparse_matrix.py` refuses any file carrying it. Detection is scoped to
-that line rather than a substring scan, because every tracking file also echoes its own command
-line, which contains the flag name whenever it was passed at all.
+**The draft quantification reads whatever the final quant's estimating pass will read**, by the
+same expression (`bam_file_for_sg if stream_reads else bam_file_for_quant`), weighted, at the same
+`max_EM_iterations_quant_only` budget. What that shares is the **estimator configuration** — same
+BAM, same `XW` treatment, same iteration budget — not the resulting numbers: the draft runs over
+the full candidate set while the final pass re-estimates theta over the survivors only, and
+dropping a candidate redistributes the reads it held. A filtered isoform's reported abundance will
+not equal the value it was filtered on. The point is that both estimates sit on the same scale,
+which is what makes a threshold mean the same thing in both places.
+
+Measured on a locus of 3,002 reads thinned to 1,033: the draft EM runs on 1,033 reads,
+`min_reads_novel_isoform` is handed **3095.0** — the weighted estimate of the library, 3.1% high,
+which is the $1/\sqrt{1033}$ sampling error inverse-probability weighting carries — while the
+unique gate is handed **1033**, the literal reads it actually saw.
+
+Two consequences worth stating plainly. Discovery's peak memory drops, because the draft no longer
+materializes the full BAM; under streaming the full BAM is now read exactly once, in pass 2. And
+novel isoforms get **harder** to call at deep loci: the unique-read requirement now counts retained
+reads, so a structure witnessed a handful of times in the library may retain too few to clear it.
+That is the intended reading of a confidence threshold, but it is a real sensitivity change.
+
+Everything downstream of that pass weights. What that changes is the isoform **split** within a
+read-sharing component; it does not change the scale of the reported counts, because those are
+sums over `--bam`, which the role invariant guarantees is the full library. Measured on the
+two-isoform fixture in `pylib/test_stream_reads_xw_single_cell_matrix.py`, against a truth of
+48.59 reads on the scarce isoform: weighted 48.64, unweighted 58.02 — the unweighted split ran
+~19% high on the isoform distinguished by a scarce junction.
+
+**No incompleteness marker is emitted.** LRAA used to stamp a `# WARNING:` line on a tracking file
+whose rows covered only retained reads. That could only happen when the quantified BAM was itself
+thinned, which the `--bam` role invariant now rejects, so the rows always enumerate the full
+library. `util/lraa_merge_header.py` and `util/sc/singlecell_tracking_to_sparse_matrix.py` still
+recognize and refuse the marker, deliberately: files written by earlier versions carry it
+legitimately and are just as incomplete as they ever were.
 
 Distinct from the other weight in EM: `weight_reads_by_3prime_agreement` (`EM.py:98`) is a
 per-(read, transcript) 3'-end agreement weight and is unrelated to `XW`.

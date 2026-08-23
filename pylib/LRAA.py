@@ -169,6 +169,7 @@ class LRAA:
         rescue_target_transcripts=None,
         restrict_splice_type=None,
         SE_read_encapsulation_mask=None,
+        weight_reads=None,
     ):
 
         if SE_read_encapsulation_mask is not None and restrict_splice_type != "SE":
@@ -211,6 +212,7 @@ class LRAA:
             allow_spacers,
             restrict_splice_type,
             SE_read_encapsulation_mask,
+            weight_reads=weight_reads,
         )
         self._mp_counter = mp_counter
 
@@ -1195,6 +1197,7 @@ class LRAA:
         allow_spacers,
         restrict_splice_type,
         SE_read_encapsulation_mask=None,
+        weight_reads=None,
     ):
         """
         Reads the alignments from the BAM and for each read traces it
@@ -1221,9 +1224,18 @@ class LRAA:
         # multipaths later in this same pass, so it still finds what is registered below.
         LRAA_Globals.reset_read_weight_registry()
 
-        use_XW_weights = bool(
-            LRAA_Globals.config.get("use_XW_read_weights_for_quant", False)
-        )
+        # Weights always apply. A weight is present exactly where thinning happened --
+        # LRAA's own normalized bam, or a pre-normalized --bam_for_sg -- and an untagged
+        # read weighs 1 (Pretty_alignment.get_normalization_weight), so this is a no-op on
+        # a bam nobody thinned. That makes weighting a property of the DATA rather than a
+        # mode: there is nothing for a caller to turn on, and no configuration in which
+        # the splice graph honours the tag (it always has) while EM ignores it.
+        #
+        # weight_reads=False is the one deliberate exception: a caller says THIS pass must
+        # not weight whatever bam it was handed. Discovery's pre-filter quantification
+        # uses it, because its isoform gates are a mix of EM-derived quantities that would
+        # follow a weight and integer tallies that cannot, and they have to agree.
+        use_XW_weights = True if weight_reads is None else bool(weight_reads)
         # No primary-only guard here any more: alignment intake discards secondary and
         # supplementary records unconditionally, so the precondition XW weighting needs --
         # one acceptance probability per read, not per placement -- holds by construction

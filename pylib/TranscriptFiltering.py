@@ -560,15 +560,35 @@ def filter_isoforms_by_min_isoform_fraction(
     )
 
     def get_isoform_unique_assigned_read_count(transcript_id, frac_read_assignments):
+        """(literal reads, weighted support) among this isoform's near-unique multipaths.
+
+        Two quantities, because the consumers want different things and conflating them is
+        what put this filter on two scales.
+
+        The WEIGHTED figure estimates how much of the original library is uniquely
+        explained by this isoform, and belongs in any ratio: frac_gene_unique_reads
+        divides it by a gene total that Quantify.get_gene_read_counts also builds from
+        get_read_weight(), so numerator and denominator agree. A literal numerator over
+        that weighted denominator depressed the fraction by roughly the acceptance rate,
+        worst at exactly the deep loci thinning touches.
+
+        The LITERAL figure counts observations, and belongs in
+        min_unique_reads_novel_isoform. "Two unique reads" is a confidence statement about
+        having seen a structure twice; a single read retained at p = 1/15 stands for
+        fifteen but was still seen once, and re-weighting one observation cannot make it
+        two.
+        """
         num_unique_reads = 0
+        weighted_unique_support = 0.0
         for mp in frac_read_assignments[transcript_id]:
             if (
                 frac_read_assignments[transcript_id][mp]
                 >= LRAA_Globals.config["unique_read_filter_min_frac"]
             ):
                 num_unique_reads += mp.get_read_count()
+                weighted_unique_support += mp.get_read_weight()
 
-        return num_unique_reads
+        return num_unique_reads, weighted_unique_support
 
 
 
@@ -652,12 +672,19 @@ def filter_isoforms_by_min_isoform_fraction(
                 num_total_isoforms += 1
                 transcript_id = transcript.get_transcript_id()
 
-                transcript_unique_read_count = get_isoform_unique_assigned_read_count(
+                (
+                    transcript_unique_read_count,
+                    transcript_unique_weighted_support,
+                ) = get_isoform_unique_assigned_read_count(
                     transcript_id, frac_read_assignments
                 )
 
+                # Weighted over weighted: gene_read_count is itself built from
+                # get_read_weight() (Quantify.get_gene_read_counts), so the literal count
+                # must not be the numerator here or the ratio is deflated by the
+                # acceptance rate. The literal count is what the absolute gate below uses.
                 frac_gene_unique_reads = (
-                    transcript_unique_read_count / gene_read_count
+                    transcript_unique_weighted_support / gene_read_count
                     if gene_read_count > 0
                     else 0
                 )

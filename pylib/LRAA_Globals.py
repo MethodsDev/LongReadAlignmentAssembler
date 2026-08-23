@@ -39,7 +39,15 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 #              when set, since multimapping reads carry MAPQ 0 at exactly the paralogous
 #              loci where thinning decisions matter most. Neither cov2 nor cov4 describes
 #              this, so reusing either token would be a stale hit rather than a miss.
-SPLICE_GRAPH_NORMALIZATION_METHOD = "cov5"
+#   cov6       both of the above, and the XW weight now COMPOUNDS with any weight the
+#              input record already carried instead of overwriting it. Thinning an
+#              already-thinned bam composes two acceptance rates, so a record kept at p1
+#              and then at p2 stands for 1/(p1*p2); cov5 wrote 1/p2 and discarded the
+#              first factor, under-weighting every such record in the splice graph, which
+#              honours the tag unconditionally. A cov5 artifact of an untagged input is
+#              byte-identical under cov6 -- absent tag means weight 1 -- but its name
+#              cannot say whether its input was tagged, so the token has to change.
+SPLICE_GRAPH_NORMALIZATION_METHOD = "cov6"
 
 config = {
     #########################
@@ -405,15 +413,21 @@ config = {
     # When True, weight ambiguous read assignments by agreement of read 3' ends with transcript 3' ends
     # (previously "use_weighted_read_assignments" which weighted by both 5' and 3' ends)
     "weight_reads_by_3prime_agreement": True,
-    # Honor the XW coverage-normalization weight during quantification, so a
-    # multipath's support is the weight its reads stand for rather than a count of
-    # the reads that survived thinning. Off by default: quantification normally
-    # reads the unnormalized bam, where every weight is 1 and this changes nothing,
-    # and the paths that reconstruct multipaths from more than one alignment record
-    # per read have not been validated under weighting. Requires primary-only
-    # alignments; multi-record groups raise rather than produce a weighted number
-    # from a configuration that was never checked.
-    "use_XW_read_weights_for_quant": False,
+    # XW coverage-normalization weights are honoured unconditionally and have no setting.
+    # A weight is present exactly where thinning happened, and an untagged read weighs 1
+    # (Pretty_alignment.get_normalization_weight), so honouring the tag is a no-op on a bam
+    # nobody thinned -- which makes weighting a property of the DATA rather than a mode.
+    # The input roles are what guarantee that: --bam must be the full library and
+    # --bam_for_sg must already be normalized, both checked in LRAA's setup.
+    #
+    # A single pass may still opt out, via _populate_read_multi_paths(weight_reads=False).
+    # Discovery's pre-filter quantification does, because its isoform gates mix EM-derived
+    # quantities that follow a weight with integer tallies that cannot.
+    #
+    # One acceptance probability per read is a precondition, and it holds by
+    # construction rather than by a check: alignment intake discards secondary and
+    # supplementary records unconditionally, so a read reaches weighting as at most
+    # one record.
     # Diagnostic dumps for evaluating a streaming assignment pass, all off unless set to
     # an output prefix via --config_update. They must exist here with defaults or
     # --config_update rejects them as unknown keys.

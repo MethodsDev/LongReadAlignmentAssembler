@@ -589,7 +589,16 @@ def sift_bam(
                 if probability < 1.0 and _read_variate(read.query_name, random_seed) >= probability:
                     continue
 
-                read.set_tag("XW", 1.0 / probability, value_type="f")
+                # Compound, never overwrite. XW means "how many reads of the ORIGINAL
+                # library this record stands for", and thinning an already-thinned bam
+                # composes two acceptance rates: a record kept at p1 and then at p2
+                # stands for 1/(p1*p2). Overwriting with 1/p2 silently discarded the
+                # first pass entirely, so the splice graph -- which honours this tag
+                # unconditionally -- under-weighted such a record by the whole first
+                # factor. Absent tag means 1, which makes the ordinary single-pass case
+                # identical to what it was.
+                prior_weight = float(read.get_tag("XW")) if read.has_tag("XW") else 1.0
+                read.set_tag("XW", prior_weight / probability, value_type="f")
                 writer.write(read)
                 kept += 1
 

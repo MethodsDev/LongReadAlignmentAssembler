@@ -142,6 +142,85 @@ def _bam_looks_single_cell(bam_filename, barcode_tag, umi_tag, max_records=2000)
     return False
 
 
+def _first_aligned_record(bam_filename, flag_name):
+    """The first aligned record, or None if the bam has none.
+
+    One record is all the callers below need. Coverage normalization tags EVERY record it
+    retains -- including the ones it kept whole, which carry XW:f:1.0 -- so a bam it
+    produced has the tag on its first aligned record and a bam it did not touch has it on
+    none. That makes a single record decisive rather than a sample, which is why these are
+    preconditions on files the caller explicitly nominated rather than the bounded-peek
+    inference _bam_looks_single_cell has to live with.
+    """
+    try:
+        with pysam.AlignmentFile(bam_filename, "rb") as fh:
+            return next((r for r in fh.fetch(until_eof=True) if not r.is_unmapped), None)
+    except Exception as err:
+        sys.exit(
+            "Error, could not read {} {} to check its coverage-normalization weights: "
+            "{}".format(flag_name, bam_filename, err)
+        )
+
+
+def _require_thinning_weights(bam_filename):
+    """--bam_for_sg names the splice-graph evidence, so it must already be thinned.
+
+    The splice graph divides each read's acceptance probability back out through XW, and
+    an untagged read weighs 1, so a thinned bam that arrived without weights is read as
+    though its survivors were the entire library. Fatal rather than a warning because
+    nothing downstream can detect it.
+
+    An empty bam is accepted: it yields an empty splice graph, so there is no support for
+    a missing weight to understate, and the chunked pipeline produces empty
+    per-orientation bams routinely.
+    """
+    first = _first_aligned_record(bam_filename, "--bam_for_sg")
+    if first is None or first.has_tag("XW"):
+        return
+
+    sys.exit(
+        "Error, --bam_for_sg {} carries no XW coverage-normalization weight on its first "
+        "aligned record, so it has not been coverage-normalized.\n"
+        "That flag names the bam to use AS splice-graph evidence: it is taken as given "
+        "and is expected to be pre-normalized. The splice graph divides each read's "
+        "acceptance probability back out through the XW tag, and an untagged read weighs "
+        "1, so a thinned bam without weights is read as though its surviving reads were "
+        "the whole library -- understating support by the thinning factor at precisely "
+        "the deep loci thinning touched, with nothing downstream able to detect it.\n"
+        "Produce it with util/normalize_bam_by_strand.py, which writes the tag, or drop "
+        "--bam_for_sg and let this run normalize --bam itself.".format(bam_filename)
+    )
+
+
+def _require_no_thinning_weights(bam_filename):
+    """--bam is the library everything is reported against, so it must NOT be thinned.
+
+    Reported counts are scaled by --bam: num_total_reads counts its records, and the
+    streaming pass sums fractional assignments over them. A thinned bam there makes every
+    absolute number a per-retained-read quantity while looking exactly like a full one,
+    and makes the tracking file cover a subset of the library while claiming to be
+    complete. Weights cannot rescue that -- they correct the splice graph and the isoform
+    split, not the population being counted.
+
+    Thinned input belongs in --bam_for_sg, which exists for it and is checked above.
+    """
+    first = _first_aligned_record(bam_filename, "--bam")
+    if first is None or not first.has_tag("XW"):
+        return
+
+    sys.exit(
+        "Error, --bam {} carries an XW coverage-normalization weight on its first "
+        "aligned record, so it has already been thinned.\n"
+        "--bam must be the full library: it is what reported counts are scaled by "
+        "(--num_total_reads counts its records) and what the streaming pass sums "
+        "assignments over, so a thinned bam there reports per-retained-read quantities "
+        "that are indistinguishable from full-library ones, and emits a tracking file "
+        "covering only part of the library.\n"
+        "Pass the full bam as --bam and the thinned one as --bam_for_sg, which is the "
+        "input that exists for coverage-normalized evidence.".format(bam_filename)
+    )
+
+
 def _require_minimap2_for_transcriptome_alignment(rescue_enabled):
     """Refuse to run a configuration that silently degrades without minimap2.
 
@@ -840,22 +919,6 @@ def main():
         help="restrict to single-exon isoforms only",
     )
     primary.add_argument(
-        "--use_XW_read_weights_for_quant",
-        action="store_true",
-        default=LRAA_Globals.config["use_XW_read_weights_for_quant"],
-        help=(
-            "EXPERIMENTAL. Quantify using each read's XW coverage-normalization weight "
-            "rather than counting the reads that survived thinning, so support is on "
-            "the scale of the original bam. This is a weight consumer, not a "
-            "normalized-only mode: it only does anything if you pass an already "
-            "normalized bam as --bam, and doing so makes --num_total_reads count that "
-            "bam instead of the original, so RPM_total_reads is scaled wrong unless you "
-            "supply -N yourself. Per-read tracking and uniq_reads still describe the "
-            "reads that survived thinning, not the population the weights estimate. "
-            f"(default: {LRAA_Globals.config['use_XW_read_weights_for_quant']})"
-        ),
-    )
-    primary.add_argument(
         "--stream_reads",
         dest="stream_reads",
         action="store_true",
@@ -946,11 +1009,12 @@ def main():
         choices=["bulk", "single_cell"],
         default=None,
         help=(
-            "declare whether the input is bulk or single-cell. Required with "
-            "--use_XW_read_weights_for_quant, which cannot produce correct per-cell "
-            "output and cannot detect single-cell input reliably enough to refuse it "
-            "on your behalf. Otherwise unused; single-cell handling is driven by the "
-            "BAM's barcode and UMI tags"
+            "declare whether the input is bulk or single-cell. Required only when "
+            "weighted quantification runs WITHOUT --stream_reads, where per-read "
+            "outputs cover just the retained reads and so cannot be made correct "
+            "per cell; under streaming they cover the full bam and no declaration is "
+            "needed. Otherwise unused; single-cell handling is driven by the BAM's "
+            "barcode and UMI tags"
         ),
     )
     primary.add_argument(
@@ -1868,9 +1932,6 @@ def main():
     LRAA_Globals.config["weight_reads_by_3prime_agreement"] = (
         not args.no_weight_reads_by_3prime_agreement
     )
-    LRAA_Globals.config["use_XW_read_weights_for_quant"] = (
-        args.use_XW_read_weights_for_quant
-    )
     if args.stream_reads:
         # The invariant is that pass 1 reads a THINNER bam than pass 2, not that this process
         # is the one that thinned it. Two ways to satisfy it: normalize here, or be handed an
@@ -1972,89 +2033,18 @@ def main():
                 "(pip install 'mappy==2.28'), or drop the flag and run "
                 "--no_rescue_unassigned_reads_via_transcriptome_alignment."
             )
-    if args.use_XW_read_weights_for_quant:
-        # Discovery is out of scope on purpose. Its absolute support gates --
-        # min_reads_novel_isoform, min_unique_reads_novel_isoform, and the FSM gates --
-        # deliberately still read raw retained-read counts, so enabling weighted EM
-        # alongside them builds isoform sets under one notion of support and filters
-        # them under another. That hybrid has not been evaluated and nobody asked for
-        # it; re-deriving those thresholds onto weighted support is its own change.
-        if not args.quant_only:
-            sys.exit(
-                "Error, --use_XW_read_weights_for_quant is supported only with "
-                "--quant_only. In discovery mode the absolute isoform filters still "
-                "count retained reads while EM would use weighted support, so isoforms "
-                "would be selected and filtered on different scales."
-            )
-        # Weighting corrects the aggregate expression file, whose counts become
-        # estimates on the scale of the original bam. It cannot correct the tracking
-        # file: that has one row per *retained* read, and the reads normalization
-        # discarded have no row to carry a weight. Any consumer that derives counts by
-        # summing tracking rows therefore sees roughly the retained fraction of the
-        # library, unevenly -- worst exactly at the deep loci weighting exists to fix.
-        #
-        # Refuse the two consumers that would do that silently rather than emit output
-        # that looks finished and is wrong. Both need the full-bam post-pass that would
-        # reconstitute per-read rows for every read; until that exists, they are out of
-        # scope for this mode.
-        if args.tag_bam and not args.stream_reads:
-            sys.exit(
-                "Error, --tag_bam is not supported with --use_XW_read_weights_for_quant "
-                "unless --stream_reads is also given. Without streaming, tagging "
-                "annotates reads from the tracking file, which covers only the reads "
-                "that survived coverage normalization, so the reads thinned away would "
-                "be written untagged and indistinguishable from unassigned ones. Add "
-                "--stream_reads, whose merged tracking file covers the full bam instead "
-                "of only the retained reads, to lift this."
-            )
-        # Single-cell-ness cannot be inferred safely. It is a property of the data --
-        # identifiers become barcode^UMI^name only when Util_funcs.get_read_name finds
-        # both tags -- and the settings naming those tags have defaults, so they answer
-        # nothing. Scanning for the tags can only ever prove presence: any bounded peek
-        # may miss a bam whose early records are untagged, and a false negative here
-        # emits a silently undercounted matrix, which is the outcome this guard exists
-        # to prevent. So require the declaration instead of guessing, and use detection
-        # only to contradict it.
-        if args.library_type is None:
-            sys.exit(
-                "Error, --use_XW_read_weights_for_quant requires an explicit "
-                "--library_type (bulk|single_cell). Weighted quantification cannot "
-                "produce correct per-cell output, and single-cell input cannot be "
-                "detected reliably enough to refuse it on your behalf."
-            )
-        # --stream_reads changes the premise below: its merged tracking file has one row
-        # per read of the full bam, not one per normalization-retained read, and the
-        # frac_assigned split among a read's compatible isoforms already reflects
-        # XW-corrected theta (EM.py:87 feeds mp.get_read_weight() into EM unconditionally,
-        # which is XW-corrected when this flag is on). So the per-cell undercounting this
-        # refusal exists to prevent does not occur under streaming; only the non-streaming
-        # path is refused.
-        if (args.library_type == "single_cell" or args.cell_list) and not args.stream_reads:
-            sys.exit(
-                "Error, single-cell quantification is not supported with "
-                "--use_XW_read_weights_for_quant unless --stream_reads is also given. "
-                "Without streaming, per-cell matrices are built by summing frac_assigned "
-                "over tracking rows (util/sc/singlecell_tracking_to_sparse_matrix.py), "
-                "which ignores XW and counts only retained reads, so every cell would be "
-                "undercounted -- most at the deep loci this mode is meant to fix. Add "
-                "--stream_reads, whose merged tracking file covers the full bam, to lift "
-                "this."
-            )
-        if not args.stream_reads and _bam_looks_single_cell(
-            args.bam,
-            LRAA_Globals.config.get("cell_barcode_tag"),
-            LRAA_Globals.config.get("read_umi_tag"),
-        ):
-            sys.exit(
-                "Error, --library_type bulk was declared but reads in {} carry both the "
-                "cell-barcode ({}) and UMI ({}) tags, so read identifiers will be "
-                "single-cell. Weighted quantification cannot produce correct per-cell "
-                "output unless --stream_reads is also given.".format(
-                    args.bam,
-                    LRAA_Globals.config.get("cell_barcode_tag"),
-                    LRAA_Globals.config.get("read_umi_tag"),
-                )
-            )
+    # No weighting guards here any more, and the reason is worth recording: every one of
+    # them -- --tag_bam, an explicit --library_type, single-cell input, and a bulk
+    # declaration contradicted by the bam's own tags -- existed because the tracking file
+    # could have one row per RETAINED read while reporting weighted aggregates, so any
+    # consumer summing frac_assigned undercounted the library, worst at the deep loci
+    # weighting exists to fix.
+    #
+    # That could only happen when the bam being quantified was itself thinned, i.e. when a
+    # pre-thinned bam was passed as --bam. That input is now rejected outright: --bam must
+    # be the full library and --bam_for_sg is the input that exists for thinned data
+    # (_require_no_thinning_weights / _require_thinning_weights). With the population the
+    # tracking file enumerates guaranteed complete, there is nothing left to refuse.
     LRAA_Globals.config["terminal_boundary_method"] = args.terminal_boundary_method
     LRAA_Globals.config["terminal_boundary_percentile"] = (
         args.terminal_boundary_percentile
@@ -2261,6 +2251,17 @@ def main():
         )
         subprocess.check_call("samtools index " + bam_filename, shell=True)
 
+    # The two bams have distinct ROLES, and each is checked against its own.
+    #
+    #   --bam         the full library. Reported counts are scaled by it, so it must not
+    #                 already be thinned.
+    #   --bam_for_sg  the splice-graph evidence, taken as given. It is the input that
+    #                 exists for thinned data, so it must already BE thinned.
+    #
+    # Stated as invariants on the inputs rather than inferred from flags, which is what
+    # lets weighting simply always apply: a weight is present exactly where thinning
+    # happened, and each bam's role fixes whether that is the case.
+    _require_no_thinning_weights(bam_filename)
     bam_file_for_quant = bam_filename
     bam_file_for_sg = None
 
@@ -2275,25 +2276,17 @@ def main():
             )
             subprocess.check_call("samtools index " + bam_for_sg_cli, shell=True)
 
-        if normalization_enabled:
-            bam_file_for_sg = _normalize_bam_for_splice_graph(
-                bam_for_sg_cli,
-                runtime_config["normalize_max_cov_level"],
-                normalization_cache_dir,
-                QUANT_ONLY,
-                contig_scope=contig_restriction_scope,
-                rdna_mask_bed=rdna_mask_bed_path,
-            )
-            logger.info(
-                "splice-graph evidence will use normalized user-supplied BAM: %s",
-                bam_file_for_sg,
-            )
-        else:
-            bam_file_for_sg = bam_for_sg_cli
-            logger.info(
-                "splice-graph evidence will use user-supplied BAM: %s",
-                bam_file_for_sg,
-            )
+        # Never re-normalized, whatever --normalize_max_cov_level says. Thinning an
+        # already-thinned bam is not what this flag is for: it composes acceptance rates
+        # for no gain, and every artifact it could produce is one the caller could have
+        # produced directly. Supplying this flag IS the decision about what the splice
+        # graph reads.
+        _require_thinning_weights(bam_for_sg_cli)
+        bam_file_for_sg = bam_for_sg_cli
+        logger.info(
+            "splice-graph evidence will use pre-normalized user-supplied BAM: %s",
+            bam_file_for_sg,
+        )
     else:
         if normalization_enabled:
             bam_file_for_sg = _normalize_bam_for_splice_graph(
@@ -4111,31 +4104,16 @@ def _run_jobs_schedule_and_merge(
         "frac_assigned",
         "read_weight",
     ]
-    if LRAA_Globals.config.get(
-        "use_XW_read_weights_for_quant", False
-    ) and not LRAA_Globals.config.get("stream_reads", False):
-        # Without --stream_reads, this file has one row per read retained by coverage
-        # normalization, and frac_assigned is NOT weighted by XW, so it understates the
-        # library. Under --stream_reads, the merged tracking file instead has one row
-        # per read of the FULL bam (StreamingQuant.stream_assign iterates
-        # bam_file_for_quant, the original un-normalized bam) and each read's
-        # frac_assigned split already reflects XW-corrected theta (EM.py:87), so the
-        # file this warns about is not what streaming produces. Recorded in the file
-        # because the file outlives the command line that made it, and a consumer
-        # summing frac_assigned has no other way to learn that these rows describe the
-        # retained reads rather than the library.
-        #
-        # lraa_merge_header.py rebuilds the comment block rather than copying it, so it
-        # does not carry arbitrary comments through; it recognizes this marker
-        # specifically and re-emits it whenever any input bears it.
-        print(
-            "# WARNING: produced with --use_XW_read_weights_for_quant. Rows cover only "
-            "reads retained by coverage normalization, and frac_assigned is NOT weighted "
-            "by XW. Counts derived by summing frac_assigned understate the library, "
-            "unevenly, and most at high-coverage loci. The weighted estimates are the "
-            "counts in .quant.expr; do not derive counts from this file.",
-            file=merged_track_fh,
-        )
+    # No incompleteness marker is emitted any more. It warned that rows covered only the
+    # reads coverage normalization retained, which could only happen when the bam being
+    # quantified was itself thinned -- a pre-thinned --bam, now rejected outright, since
+    # --bam must be the full library and --bam_for_sg is the input for thinned data. The
+    # rows this file enumerates are therefore always the full library.
+    #
+    # The readers stay: util/lraa_merge_header.py and
+    # util/sc/singlecell_tracking_to_sparse_matrix.py still recognize the marker and still
+    # refuse a file bearing it, because files written by earlier versions carry it
+    # legitimately and are just as incomplete as they ever were.
     print("\t".join(tracking_header_final), file=merged_track_fh)
 
     quant_expr_tmp_paths = list()
@@ -6203,19 +6181,53 @@ def run_transcript_assembly(
         )
 
     ###########################################################
-    # Do an initial quant
-    # Now use the original bam for quant (not depth normalized)
-    LRAA_Globals.LRAA_MODE = "ID-full_reads"
+    # Do an initial quant, on the same footing as the final one
+    LRAA_Globals.LRAA_MODE = "ID-init_quant"
 
     logger.info(
-        "\n//SECTION QUANT using all reads for assembled isoforms: Assigning reads to paths in graph."
+        "\n//SECTION QUANT for assembled isoforms: Assigning reads to paths in graph."
     )
 
+    # The draft quantifies whatever the final quant's ESTIMATING pass will quantify, by
+    # the same expression run_quant_only uses to pick it:
+    #
+    #     bam_file_for_sg if stream_reads else bam_file_for_quant
+    #
+    # so the draft and the final estimating pass share their ESTIMATOR CONFIGURATION: the
+    # same bam, the same XW treatment, the same EM iteration budget. With streaming that
+    # bam is the coverage-normalized one (or a pre-normalized --bam_for_sg, or the full
+    # --bam when normalization is off -- bam_file_for_sg is whatever the splice graph was
+    # built from); without streaming the final quant reads the full bam directly and so
+    # does this. Letting those diverge would filter on one estimator and report another.
+    #
+    # NOT the same numbers, and the difference is structural rather than incidental: this
+    # runs on the FULL candidate set, while the final pass re-estimates theta over only
+    # the survivors, and dropping a candidate redistributes the reads it held. So a
+    # filtered isoform's reported abundance will not equal the value it was filtered on.
+    # What is shared is how the estimate is formed, which is what stops the two from
+    # sitting on different scales.
+    #
+    # Weighting is ON either way, with no override, and needs no mode test: a weight
+    # exists exactly where the bam was thinned, and an untagged read weighs 1, so this is
+    # weighted on the normalized bam and a no-op on the full one.
+    #
+    # That puts every PROPORTIONAL quantity the filters use -- isoform fraction, the
+    # unique-read fraction of the gene, TPM, and min_reads_novel_isoform's assigned total
+    # -- on the scale of the original library, which is what those thresholds are about.
+    # Quantities that count OBSERVATIONS rather than estimate abundance stay literal reads
+    # of that bam: min_unique_reads_novel_isoform, the FSM counts, and the supporting-cell
+    # gate. See TranscriptFiltering.get_isoform_unique_assigned_read_count, which returns
+    # both and hands each consumer the one it needs.
+    bam_file_for_draft_quant = (
+        bam_file_for_sg
+        if LRAA_Globals.config["stream_reads"]
+        else bam_file_for_quant
+    )
     mp_all_counter = lraa_all_obj.build_multipath_graph(
         contig_acc,
         contig_strand,
         contig_seq_str,
-        bam_file_for_quant,
+        bam_file_for_draft_quant,
         allow_spacers,
         input_transcripts=None,
         rescue_target_transcripts=all_transcripts,
@@ -6224,7 +6236,7 @@ def run_transcript_assembly(
 
     q = Quantify(
         run_EM,
-        LRAA_Globals.config["max_EM_iterations_during_asm"],
+        LRAA_Globals.config["max_EM_iterations_quant_only"],
         quant_mode="draft",
     )
     frac_read_assignments = q.quantify(sg_all, all_transcripts, mp_all_counter)
@@ -6368,7 +6380,7 @@ def run_transcript_assembly(
                 transcripts,
                 min_isoform_fraction,
                 run_EM,
-                LRAA_Globals.config["max_EM_iterations_during_asm"],
+                LRAA_Globals.config["max_EM_iterations_quant_only"],
             )
             logger.info(
                 f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts"

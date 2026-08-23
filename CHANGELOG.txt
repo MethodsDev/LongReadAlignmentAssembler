@@ -1,3 +1,111 @@
+v0.26.0
+- FIXED: coverage normalization OVERWROTE any XW weight its input already carried
+  instead of compounding with it, so thinning an already-thinned bam silently discarded
+  the first pass. XW means "how many reads of the original library this record stands
+  for", and two chained passes compose: a record kept at p1 and then at p2 stands for
+  1/(p1*p2). Writing 1/p2 dropped the first factor, and the splice graph honours the tag
+  unconditionally, so every such record under-weighted the evidence by exactly what the
+  first pass had recorded. Measured on the bundled corpus, chaining a loose pass into a
+  tight one: a record's weight FELL from 10.0 to 3.87, and the weighted total came to
+  615 against the 4,970 input records it is supposed to estimate -- an 8x
+  understatement, now 4,970 within sampling noise. Reachable without any unusual flag:
+  `--bam` may be an externally thinned bam while normalization stays at its default
+  (on). `SPLICE_GRAPH_NORMALIZATION_METHOD` bumped cov5 -> cov6, since a cached
+  artifact's name cannot say whether its input was tagged.
+- CHANGED: discovery's draft quantification -- the one every isoform filter reads -- now
+  quantifies whatever the FINAL quant's estimating pass will quantify, by the same
+  expression (`bam_file_for_sg if stream_reads else bam_file_for_quant`), with XW
+  weighting on, at the same `max_EM_iterations_quant_only` budget. It previously read the
+  full bam unweighted at the assembly budget of 1000 iterations. What the two now share is
+  the ESTIMATOR CONFIGURATION -- same bam, same XW treatment, same iteration budget -- and
+  therefore the same scale, so a threshold means the same thing in both places. Not the
+  same numbers: the draft runs over the full candidate set while the final pass
+  re-estimates theta over the survivors only, so a filtered isoform's reported abundance
+  will not equal the value it was filtered on.
+- CHANGED, as the corollary: the isoform gates now split by what they MEAN rather than by
+  which accessor they happened to use. Proportional and abundance quantities read
+  weighted support and so sit on the original library's scale --
+  `min_reads_novel_isoform`, `min_isoform_fraction`, the TPM gates, and
+  `min_frac_gene_unique_reads`. Quantities that count OBSERVATIONS stay literal reads of
+  the bam the draft read: `min_unique_reads_novel_isoform`, the FSM counts, and
+  `min_monoexonic_supporting_cells`. "Two unique reads" is a confidence statement about
+  having seen a structure twice, and a read retained at p=1/15 stands for fifteen but was
+  still seen once.
+- FIXED: `min_frac_gene_unique_reads` mixed scales. Its numerator was a literal read
+  tally while `Quantify.get_gene_read_counts` builds its denominator from
+  `get_read_weight()`, so the fraction was deflated by roughly the acceptance rate --
+  worst at exactly the deep loci thinning touches.
+  `get_isoform_unique_assigned_read_count` now returns both the literal tally and the
+  weighted support, and each consumer takes the one it needs.
+- Measured on a locus of 3,002 reads thinned to 1,033: the draft EM now runs on 1,033
+  reads, `min_reads_novel_isoform` is handed 3095.0 (the weighted estimate of the library,
+  3.1% high, which is the 1/sqrt(1033) sampling error inverse-probability weighting
+  carries), and the unique gate is handed 1033 (the literal reads it saw). Both halves are
+  pinned together across streaming, unnormalized-single-pass and chunk-worker
+  compositions by `pylib/test_xw_discovery_filter_scale.py`.
+- NOTE, two consequences: discovery's peak memory drops, since the draft no longer
+  materializes the full bam and under streaming the full bam is read exactly once, in
+  pass 2. And novel isoforms are HARDER to call at deep loci, because the unique-read
+  requirement now counts retained reads rather than full-bam reads. That is the intended
+  reading of a confidence threshold, but it is a real sensitivity change.
+- BREAKING: `--use_XW_read_weights_for_quant` and `--no_use_XW_read_weights_for_quant`
+  are REMOVED, along with the `use_XW_read_weights_for_quant` config key. XW
+  coverage-normalization weights are now honoured unconditionally during quantification,
+  as the splice graph has always honoured them. The flag was a mode standing in for a
+  property of the data: a weight is present exactly where thinning happened, and an
+  untagged read weighs 1, so honouring the tag is a no-op on a bam nobody thinned. There
+  was never a coherent configuration in which the splice graph divided acceptance rates
+  back out while EM did not.
+- BREAKING: the two input bams now have enforced ROLES, which is what makes unconditional
+  weighting safe. `--bam` must be the FULL library and is refused if its first aligned
+  record carries an `XW` tag; a supplied `--bam_for_sg` must ALREADY be coverage-normalized
+  and is refused if its first aligned record does not. Reported counts are scaled by
+  `--bam` -- `--num_total_reads` counts its records and the streaming pass sums
+  assignments over them -- so a thinned bam there reports per-retained-read quantities
+  indistinguishable from full-library ones and emits a tracking file covering part of the
+  library while looking complete. Conversely an untagged `--bam_for_sg` is read as though
+  its survivors were the whole library. Both are fatal because neither is detectable
+  downstream. One record decides each: normalization tags every record it retains,
+  including those kept whole at p=1 (`XW:f:1.0`). An EMPTY bam passes either check -- it
+  yields an empty splice graph, and the chunked pipeline produces empty per-orientation
+  bams routinely.
+- BREAKING: `--bam_for_sg` is never re-normalized. Supplying it IS the decision about what
+  the splice graph reads, so `--normalize_max_cov_level` no longer applies to it.
+  Re-thinning composed acceptance rates for no gain and could only produce artifacts the
+  caller could have produced directly.
+- REMOVED: the weighting guard block, i.e. the `--tag_bam` refusal, the `--library_type`
+  requirement, the single-cell and `--cell_list` refusals, and the bulk-declaration check
+  against the bam's own barcode/UMI tags. Every one existed because the tracking file
+  could have one row per RETAINED read while the expression file reported weighted
+  aggregates, so a consumer summing `frac_assigned` undercounted the library. That needed
+  a thinned bam passed as `--bam`, which is now rejected outright, so the population the
+  tracking file enumerates is always complete and there is nothing left to refuse.
+- REMOVED: the tracking-file incompleteness marker is no longer emitted, for the same
+  reason. `util/lraa_merge_header.py` and
+  `util/sc/singlecell_tracking_to_sparse_matrix.py` still recognize and refuse it,
+  deliberately: files written by earlier versions carry it legitimately and are just as
+  incomplete as they ever were.
+- FIXED: discovery's pre-filter quantification is pinned `weight_reads=False`
+  (`_populate_read_multi_paths`'s one deliberate opt-out), because its isoform gates mix
+  quantities that would stop agreeing under weighting: `min_reads_novel_isoform`, the TPM
+  gates and `min_isoform_fraction` are EM-derived and follow a weight, while
+  `min_unique_reads_novel_isoform`, the FSM gates, `min_monoexonic_supporting_cells` and
+  the trellis `min_path_score` are integer tallies that cannot. Selecting isoforms on one
+  scale and filtering them on another is the collision the old discovery-mode refusal was
+  reaching for; pinning the one pass involved is the fix, and it is measured -- with the
+  pin removed, discovery against thinned evidence DROPS the isoform whose junction
+  thinning kept whole, because its neighbour's survivors each stand for several and
+  inflate the gene total its share is measured against
+  (`pylib/test_xw_discovery_filter_scale.py`).
+- Everything downstream of that pass weights, which corrects the isoform SPLIT within a
+  read-sharing component. Reported counts stay on the full-library scale because they are
+  sums over `--bam`, which the role invariant guarantees is the whole library. Measured on
+  the two-isoform single-cell fixture in
+  `pylib/test_stream_reads_xw_single_cell_matrix.py`, against a truth of 48.59 reads on
+  the scarce isoform: weighted 48.64, unweighted 58.02 -- the unweighted split ran ~19%
+  high on the isoform distinguished by a junction that thinning kept whole while thinning
+  its neighbour's.
+
 v0.25.0, August 20, 2026
 - BREAKING: `--chunk` and `--stream_reads` are now ON BY DEFAULT. `--no_chunk` and
   `--no_stream_reads` restore the pre-v0.25.0 behaviour exactly (whole-contig-strand

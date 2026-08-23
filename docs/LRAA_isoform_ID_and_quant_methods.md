@@ -100,8 +100,11 @@ and estimates abundances from it directly. Under the default two-pass streaming 
 abundance-estimating first pass reads the normalized BAM and the second pass streams the
 unnormalized BAM, assigning every read from the isoform proportions the first pass settled on
 (`LRAA:5702-5703`); library-scale counts are therefore taken over every read, while the isoform
-proportions within a read-sharing component are estimated from thinned support unless
-`--use_XW_read_weights_for_quant` divides the acceptance rates back out. See
+proportions within a read-sharing component are estimated from XW-weighted support, which divides
+the acceptance rates back out. That weighting is unconditional and has no setting: `--bam` must be
+the full library and carry no `XW` tag, while a coverage-normalized BAM supplied as `--bam_for_sg`
+must carry one, so a weight is present exactly where thinning happened and an untagged read weighs
+1. See
 `docs/coverage_normalization.md` for the procedure, the `XW` tag, and its parameters, and
 `docs/streaming_quantification.md` for the two-pass path.
 

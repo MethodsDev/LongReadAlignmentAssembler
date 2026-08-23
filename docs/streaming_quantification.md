@@ -187,17 +187,49 @@ would move depth measurement and `XW` sampling weights with it
 Pass 2 runs whenever streaming is on, independent of whether the call reports quantities: it is
 the accounting pass that writes the tracking file, not a reporting step.
 
+**Discovery quantifies twice, and streaming is the SECOND time.** This ordering is the thing most
+worth getting straight, because the natural reading of "streaming quantification" — abundances
+first, then everything downstream uses them — is backwards for discovery:
+
+| # | stage | BAM | EM | weighted? | feeds |
+|---|---|---|---|---|---|
+| 1 | reconstruction (ME/SE multipath graphs) | normalized | no | n/a | trellis path selection |
+| 2 | **draft quant** (`LRAA:6203-6220`) | **full** | yes | **no** — pinned `weight_reads=False` | every isoform filter |
+| 3 | filters + requants (`LRAA:6293-6415`) | — | yes, repeatedly | no | each other |
+| 4 | **final quant** = `run_quant_only` (`LRAA:6561`) | pass 1 normalized, pass 2 full | pass 1 only | **yes** | the reported numbers |
+
+So the streamed totals never reach a filter: by the time pass 1 runs, filtering has finished. Every
+requant at stage 3 re-runs against the SAME `mp_all_counter` built at stage 2 — that reuse is what
+makes it impossible for streaming output to be involved, since a streamed pass keeps no per-read
+state to re-quantify from.
+
+Visible in one run's log, in order: draft quant at line 544, all filtering at 717-831, final quant
+at 969, streaming assignment table at 1080. And in the EM banners, which name their read
+populations outright — `Running EM for 1 transcripts with 4040 mapped reads` twice for stages 2 and
+3, then `... with 1051 mapped reads` for stage 4's pass 1 on the normalized BAM.
+
+One consequence for memory: stage 2 materializes the full BAM (`reads kept: 4,040`) and holds its
+multipaths for the duration of filtering. Streaming bounds the FINAL quant, not discovery as a
+whole, so `--stream_reads` does not make discovery's peak independent of library size the way it
+does for `--quant_only`.
+
 ## Interaction with XW read weights
 
-By default pass 1's theta is estimated from *retained* read counts. `EM.py:87` feeds
-`mp.get_read_weight()` into EM unconditionally, but that equals the read count unless
-`--use_XW_read_weights_for_quant` populated the weight registry, so thinning's depth-dependent
-acceptance is not divided back out of the abundance estimate. Final counts are still on the scale
-of the full library, because they are streamed sums over every read; what the thinning affects is
-the *split* within a read-sharing component, which comes from pass 1's theta.
+Pass 1's theta is XW-weighted, always, and there is no setting for it. `EM.py:87` feeds
+`mp.get_read_weight()` into EM, and that quantity is the weight the reads stand for wherever the
+BAM being read was thinned — which for pass 1 under streaming it is, by the invariant above.
 
-`--use_XW_read_weights_for_quant` corrects that split, and streaming is what makes the flag safe
-for per-read consumers: the merged tracking file covers the full BAM rather than only retained
-reads, so the incompleteness marker is not emitted and single-cell matrices and `--tag_bam` are
-permitted (`LRAA:1975-2056`, `LRAA:4114-4126`). See `docs/coverage_normalization.md`, "XW weights
-during quantification".
+What makes that safe without a flag is that each input has a role LRAA checks: `--bam` must be the
+full library and carry no `XW`, while a supplied `--bam_for_sg` must already be normalized and
+carry it (`LRAA:145-222`). A weight is therefore present exactly where thinning happened, and an
+untagged read weighs 1, so honouring the tag is a no-op everywhere else. `--bam` being guaranteed
+full is also what makes the merged tracking file complete, which is why nothing here has to refuse
+single-cell matrices or `--tag_bam` any more.
+
+What weighting corrects is the isoform *split* within a read-sharing component. Final counts are
+on the full-library scale regardless, because they are streamed sums over every read of `--bam`.
+Measured on `pylib/test_stream_reads_xw_single_cell_matrix.py`'s fixture, an unweighted split
+overshoots the scarce isoform by ~19% (58.02 against a truth of 48.59, where weighted gives 48.64).
+
+See `docs/coverage_normalization.md`, "XW weights during quantification", for the estimator, the
+role invariants, and the one pass that deliberately does not weight.

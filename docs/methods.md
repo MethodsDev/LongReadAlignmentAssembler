@@ -245,7 +245,10 @@ Notable keys include:
   is bounded by the annotation rather than the library. It requires a first-pass BAM thinner than
   the streamed one and is refused with normalization disabled unless a distinct `--bam_for_sg` is
   supplied (`LRAA:1874-1896`). Related: `stream_reads_rescue_unassigned`,
-  `stream_reads_rescue_unassigned_to_targets`. See `docs/streaming_quantification.md`.
+  `stream_reads_rescue_unassigned_to_targets`. XW coverage-normalization weights are
+  honoured unconditionally and have no setting: `--bam` must be the full library and a
+  supplied `--bam_for_sg` must already be normalized, so a weight is present exactly
+  where thinning happened. See `docs/streaming_quantification.md`.
 - Debug: `--debug` enables extensive intermediate artifacts.
 
 Splice-graph parameters are set via `Splice_graph.init_sg_params(...)` inside `LRAA` to keep

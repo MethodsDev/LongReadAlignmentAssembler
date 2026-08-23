@@ -574,3 +574,74 @@ def test_every_retained_read_is_tagged(tmp_path):
     with pysam.AlignmentFile(str(out), "rb") as fh:
         untagged = [a.query_name for a in fh.fetch(until_eof=True) if not a.has_tag("XW")]
     assert untagged == []
+
+
+
+def test_an_existing_weight_is_compounded_not_overwritten(tmp_path):
+    """Thinning an already-thinned bam composes two acceptance rates.
+
+    XW means "how many reads of the ORIGINAL library this record stands for". A record
+    kept at p1 and then at p2 stands for 1/(p1*p2), so the second pass must multiply the
+    weight it finds rather than replace it. Replacing it discarded the first factor
+    entirely, and the splice graph honours this tag unconditionally, so every such record
+    was under-weighted by exactly the amount the first pass had recorded.
+
+    Reachable without any unusual flag: --bam may be an externally thinned bam while
+    coverage normalization stays at its default (on), and then LRAA normalizes an already
+    tagged input.
+    """
+    header = _header()
+    src = tmp_path / "in.bam"
+    _write_bam(src, _corpus(header))
+
+    # Pass 1 at a loose target, pass 2 at a tighter one, so both actually thin.
+    once = tmp_path / "once.bam"
+    norm.sift_bam(str(src), str(once), 400, 100, 42)
+    pysam.index(str(once))
+    twice = tmp_path / "twice.bam"
+    norm.sift_bam(str(once), str(twice), 100, 100, 7)
+
+    first = _load(once)
+    second = _load(twice)
+    assert second, "the second pass must retain something to compare"
+
+    survivors = [n for n in second if n in first]
+    assert survivors, "records surviving both passes are the whole point"
+
+    # Every survivor's final weight must be at least what the first pass gave it: the
+    # second pass can only ever multiply by 1/p2 >= 1.
+    for name in survivors:
+        assert second[name][0] >= first[name][0] - 1e-6, (
+            f"{name}: weight fell from {first[name][0]} to {second[name][0]}, so the "
+            "second pass overwrote the first instead of compounding"
+        )
+
+    # And at least one must have STRICTLY grown, or the fixture never exercised a
+    # second thinning and the assertion above would hold vacuously.
+    assert any(second[n][0] > first[n][0] + 1e-6 for n in survivors), (
+        "the second pass must actually thin something for this test to mean anything"
+    )
+
+
+def test_compounded_weights_estimate_the_original_library(tmp_path):
+    """The reason compounding matters: the weighted total still estimates the input.
+
+    Summing 1/p over survivors of two chained passes must recover the original record
+    count, within sampling noise. Under the overwriting behaviour this sum collapsed
+    toward the second pass's total alone.
+    """
+    header = _header()
+    src = tmp_path / "in.bam"
+    _write_bam(src, _corpus(header))
+    truth = len(_load(src))
+
+    once = tmp_path / "once.bam"
+    norm.sift_bam(str(src), str(once), 400, 100, 42)
+    pysam.index(str(once))
+    twice = tmp_path / "twice.bam"
+    norm.sift_bam(str(once), str(twice), 100, 100, 7)
+
+    weighted = sum(w for w, _ in _load(twice).values())
+    assert weighted == pytest.approx(truth, rel=0.15), (
+        f"weighted total {weighted} should estimate the {truth} input records"
+    )
