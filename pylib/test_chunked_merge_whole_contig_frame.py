@@ -224,8 +224,9 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
     col = {name: i for i, name in enumerate(header)}
     by_id = {row[col["transcript_id"]]: row for row in rows}
 
-    c0 = by_id["c0|t.c0.multi"]
-    c1 = by_id["c1|t.c1.multi"]
+    sep = ChunkedRun.NAMESPACE_SEP
+    c0 = by_id["c0{}t.c0.multi".format(sep)]
+    c1 = by_id["c1{}t.c1.multi".format(sep)]
 
     # offset 0: unmoved
     assert c0[col["exons"]] == "chrT:(+)[[100, 200], [300, 400]]"
@@ -240,9 +241,10 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
     assert shifted_hash != MULTI_HASH
 
     # the monoexonic row has no introns to shift and keeps its id as its hash
-    assert by_id["c1|t.c1.mono"][col["introns"]] == ""
-    assert by_id["c1|t.c1.mono"][col["splice_hash_code"]] == "t.c1.mono"
-    assert by_id["c1|t.c1.mono"][col["exons"]] == "chrT:(+)[[5600, 5700]]"
+    mono = by_id["c1{}t.c1.mono".format(sep)]
+    assert mono[col["introns"]] == ""
+    assert mono[col["splice_hash_code"]] == "t.c1.mono"
+    assert mono[col["exons"]] == "chrT:(+)[[5600, 5700]]"
 
     # tracking follows the expr recompute, per unit
     with gzip.open(result["quant_tracking"], "rt") as fh:
@@ -252,8 +254,8 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
         row[tcol["transcript_id"]]: row[tcol["transcript_splice_hash_code"]]
         for row in track[1:]
     }
-    assert hashes["c0|t.c0.multi"] == MULTI_HASH
-    assert hashes["c1|t.c1.multi"] == shifted_hash
+    assert hashes["c0{}t.c0.multi".format(sep)] == MULTI_HASH
+    assert hashes["c1{}t.c1.multi".format(sep)] == shifted_hash
 
     # gtf columns 4 and 5, both, every row
     with open(result["gtf"], "rt") as fh:

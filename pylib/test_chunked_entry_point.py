@@ -710,10 +710,17 @@ def test_the_merged_gtf_is_rebased_and_its_model_ids_cannot_collide(tmp_path):
     assert result["gtf_transcripts"] == 2
     assert result["gtf_lines"] == 4
 
+    sep = ChunkedRun.NAMESPACE_SEP
     ids = {re.search(r'transcript_id "([^"]*)"', row[8]).group(1) for row in rows}
-    assert ids == {"c0|t:chrT:+:comp-1:iso-1", "c1|t:chrT:+:comp-1:iso-1"}
+    assert ids == {
+        "c0{}t:chrT:+:comp-1:iso-1".format(sep),
+        "c1{}t:chrT:+:comp-1:iso-1".format(sep),
+    }
     genes = {re.search(r'gene_id "([^"]*)"', row[8]).group(1) for row in rows}
-    assert genes == {"c0|g:chrT:+:comp-1", "c1|g:chrT:+:comp-1"}
+    assert genes == {
+        "c0{}g:chrT:+:comp-1".format(sep),
+        "c1{}g:chrT:+:comp-1".format(sep),
+    }
 
     # coordinates land in the whole-contig frame, both columns, every row
     assert [(row[3], row[4]) for row in rows] == [
@@ -1079,3 +1086,42 @@ def test_only_chunk_refuses_a_reuse_extracted_chunk(tmp_path):
             )
         )
     assert "--no_reuse_source_bam" in str(err.value)
+
+
+def test_a_namespaced_model_id_survives_gffcompare_tracking(tmp_path):
+    """The namespace separator must not be a character gffcompare delimits with.
+
+    gffcompare writes its query column as
+    ``qJ:gene_id|transcript_id|num_exons|FPKM|TPM|cov|len`` and does not escape
+    the pipe, and `gene_symbol_utils.parse_gffcompare_mappings` therefore reads
+    those subfields POSITIONALLY. While chunked discovery namespaced ids with a
+    pipe, every tracking row shattered: on the single-cell fixture 182 rows
+    parsed to keys like "chr19_00_plus" (the unit id alone) and
+    "g:chr19:+:comp-44" (the model id stripped of its namespace), so no id
+    anything downstream held was ever matched and every gene symbol went
+    unassigned -- the single-cell pipeline refused the run with "no gene names
+    were assigned to feature ids".
+
+    Asserted through the REAL parser on a real tracking record, not by
+    inspecting the separator: the contract is that the id round-trips, and only
+    the consumer that broke can attest to that.
+    """
+
+    from gene_symbol_utils import parse_gffcompare_mappings
+
+    gene = ChunkedRun._namespace_id("chr19_00_plus", "g:chr19:+:comp-1")
+    tx = ChunkedRun._namespace_id("chr19_00_plus", "t:chr19:+:comp-1:iso-1")
+
+    tracking = tmp_path / "gffcmp.tracking"
+    tracking.write_text(
+        "TCONS_00000001\tXLOC_000001\tENSG00000141933.8|ENST00000359315.5\tj\t"
+        "q1:{}|{}|1|0.000000|0.000000|0.000000|965\n".format(gene, tx)
+    )
+
+    mappings = parse_gffcompare_mappings(str(tracking))
+
+    # the ids the merge actually emits are the ids the parser recovers
+    assert gene in mappings, sorted(mappings)
+    assert tx in mappings, sorted(mappings)
+    assert mappings[gene] == ("ENSG00000141933.8", "ENST00000359315.5")
+    assert mappings[tx] == ("ENSG00000141933.8", "ENST00000359315.5")

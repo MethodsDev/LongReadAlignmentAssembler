@@ -405,8 +405,9 @@ class TestCliMatchesDirectCall:
         bulk_expr = _read_text(str(bulk / "merged" / "chunked.quant.expr"))
         denovo_expr = _read_text(str(denovo / "merged" / "chunked.quant.expr"))
 
-        assert "\tt1\t" in bulk_expr and "|t1\t" not in bulk_expr
-        assert "chrA_00_plus|t1\t" in denovo_expr
+        sep = ChunkedRun.NAMESPACE_SEP
+        assert "\tt1\t" in bulk_expr and "{}t1\t".format(sep) not in bulk_expr
+        assert "chrA_00_plus{}t1\t".format(sep) in denovo_expr
 
     def test_result_json_is_written_and_matches_the_direct_dict(
         self, two_group_units, tmp_path

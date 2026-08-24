@@ -3267,10 +3267,29 @@ def iter_tsv(path):
 _GTF_ID_ATTR = re.compile(r'(gene_id|transcript_id)\s+"([^"]*)"')
 
 
+# Separates a chunk's unit id from the chunk-local model id it qualifies. NOT "|":
+# gffcompare's .tracking file delimits the subfields of its query column with an
+# unescaped pipe -- `qJ:gene_id|transcript_id|num_exons|FPKM|TPM|cov|len` -- so a
+# model id containing one shatters that record positionally. MEASURED on the
+# single-cell fixture: 182 tracking rows parsed to keys like "chr19_00_plus" (the
+# unit id alone) and "g:chr19:+:comp-44" (the model id stripped of its namespace),
+# neither of which is an id anything downstream holds, so every gene symbol went
+# unassigned and incorporate_gene_symbols_in_sc_features.py refused the run. The
+# pipe was invisible until then because chunked discovery's own merge round-trips
+# it fine; only a THIRD-party parser exposed it.
+#
+# "@" because it is unclaimed everywhere these ids travel: GTF attribute values
+# are quoted, TSV needs only tab-freedom, gffcompare treats it as ordinary, and it
+# is not regex-special the way "^" is for the R/Seurat feature-name patterns these
+# same ids reach. Deliberately not "." "-" or "_", all of which already occur
+# inside both unit ids and model ids and so could not be split back out.
+NAMESPACE_SEP = "@"
+
+
 def _namespace_id(unit_id, value):
     """A chunk-local model id made unique across the run."""
 
-    return "{}|{}".format(unit_id, value)
+    return "{}{}{}".format(unit_id, NAMESPACE_SEP, value)
 
 
 def merge_discovery_gtf(merged_dir, units):
