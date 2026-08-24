@@ -1,3 +1,65 @@
+v0.28.0
+- BREAKING/FIXED: chunked discovery namespaced its model ids as `<unit_id>|<id>`, and
+  gffcompare delimits the subfields of its .tracking query column with an UNESCAPED
+  pipe -- `qJ:gene_id|transcript_id|num_exons|FPKM|TPM|cov|len` -- which
+  `gene_symbol_utils.parse_gffcompare_mappings` reads positionally. Every namespaced id
+  therefore shattered that record. MEASURED on testing/single_cells/sc_full_pipe: 182
+  tracking rows parsed to keys like "chr19_00_plus" (the unit id alone) and
+  "g:chr19:+:comp-44" (the model id stripped of its namespace), neither of which is an
+  id anything downstream holds, so not one gene symbol was assigned and
+  incorporate_gene_symbols_in_sc_features.py refused the run with "no gene names were
+  assigned to feature ids". The separator is now `ChunkedRun.NAMESPACE_SEP` = "@",
+  chosen because it is unclaimed in GTF attribute values, TSV, gffcompare, and the
+  R/Seurat feature-name patterns these same ids reach -- and unlike "." "-" or "_" it
+  does not already occur inside unit ids or model ids. BREAKING: every chunked
+  discovery id changes shape, and chunking is unconditional, so this is every discovery
+  run's GTF, quant.expr and quant.tracking. Invisible until now because chunked
+  discovery round-trips its own ids fine; only a third-party parser exposed it.
+  Regression test asserts the round trip through the real parser, not the separator.
+- FIXED: a gzipped --gtf killed every chunked run at cut selection.
+  `extract_contig_region_inputs.load_gtf` and `_build_gtf_index` both opened with a
+  plain `open()`, so a .gtf.gz died on the first byte of the gzip header -- surfacing as
+  a failed tabix index build followed by a "fallback" full scan that could only fail the
+  same way. Reference annotations ship compressed (GENCODE distributes .gtf.gz, and this
+  repo's own tabix index IS a .gtf.gz), and chunking is unconditional, so cut selection
+  is the first thing such a run reaches. Both readers now go through one gzip-aware
+  helper, by suffix. This is what had been holding down the single-cell WDL suite:
+  testing/single_cells/{sc_cluster_guided_pipe,sc_full_pipe} pass a .gtf.gz fixture and
+  could not get past stage 2.
+- FIXED, testing: `make test_wdls` could not pass. testing/single_contig's two chunked
+  WDL inputs still bound `LRAA_wf.chunk`, removed when chunking became unconditional, so
+  miniwdl refused both runs outright ("unknown input/output"). testing/sep_contigs
+  declared `test_wdls` twice, the second without the check_test_image_revision
+  prerequisite the first had. Added coverage for the new chunk-scatter workflow
+  (testing/single_contig/wdl.chunk_scatter_mode.json + test_wdl_chunk_scatter), which
+  asserts the FAN-OUT -- more than one chunk planned, one chunk task per planned chunk --
+  rather than exit 0, since a single-chunk run would produce every output and prove none
+  of the per-chunk scatter.
+- ADDED: three seams in pylib/ChunkedRun.py that let the chunked pipeline's phases run
+  as separately scheduled tasks. `--stop_after_make_chunks` runs cut selection plus
+  chunk extraction and stops, writing <output_dir>/chunk_plan.json -- the minimum a
+  separately-scheduled chunk task needs that is not in its own mini inputs (TPM
+  denominator, mode, suffix, per-chunk identity); everything derivable is re-derived at
+  load time from each chunk's own chunk.partition.json so the plan cannot disagree with
+  the directory it describes. `--only_chunk CHUNK_ID` processes ONE already-extracted
+  chunk (stages 3b-5) against that plan and writes chunks/<id>/units.json; it needs
+  neither --bam nor --genome_fa, takes discovery mode from the plan rather than the CLI,
+  and always runs its stages fresh -- checkpoint sentinels key on path+size+mtime and
+  never reproduce across machines. `--no_reuse_source_bam` suppresses the whole-contig
+  source-bam reuse optimization, whose manifest names a bam a chunk processed on another
+  machine cannot open; a reuse-extracted chunk handed to --only_chunk is refused with
+  instructions rather than half-served.
+- ADDED: WDL/LRAA-chunk-scatter.wdl (LRAA_chunk_scatter_wf), a three-phase workflow on
+  those seams: one genome-wide make-chunks task (16 cpu / 32 GiB, non-preemptible), a
+  scatter of one task per CHUNK (2 cpu / 16 GiB, preemptible), and one global stage-6
+  merge (32 GiB -- the merge is where a whole-genome run's peak RSS lives). Strandless
+  only, no chunk_by_strand knob: strand-first needs a whole-bam orientation split that
+  cannot be scattered. The merge task reproduces ordered_units order exactly and refuses
+  duplicate unit_ids, which a retried preemptible shard gathered twice would otherwise
+  turn into silent double-counting. LRAA.wdl (per-chromosome scatter) is unchanged and
+  remains the supported path. Verified equivalent on the ref-guided fixture: scattered
+  three-phase output diffs empty against `LRAA --chunk` for both the GTF and quant.expr.
+
 v0.27.0
 - FIXED: coverage normalization OVERWROTE any XW weight its input already carried
   instead of compounding with it, so thinning an already-thinned bam silently discarded
