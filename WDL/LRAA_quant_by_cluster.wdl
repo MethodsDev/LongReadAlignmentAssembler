@@ -27,6 +27,10 @@ workflow LRAA_quant_by_cluster {
         Array[File]? pre_normalized_cluster_bais
         
         Boolean HiFi = false
+        # Chunk geometry, forwarded to the per-cluster quantification runs. Unset
+        # means LRAA's own defaults (10 Mb spacing, 1 Mb window).
+        Float? approx_MB_per_cut
+        Float? approx_MB_per_cut_wiggle_window
         String? oversimplify
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
@@ -141,6 +145,8 @@ workflow LRAA_quant_by_cluster {
                 main_chromosomes = main_chromosomes,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                 cpu = cpu,
                 cpuScattered = cpu_scattered,
                 memoryGB = memoryGB_quant,

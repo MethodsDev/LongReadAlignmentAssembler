@@ -18,6 +18,11 @@ workflow LRAA_cell_cluster_guided {
         File? annot_gtf
         
         Boolean HiFi = false
+        # Chunk geometry, forwarded to every per-cluster LRAA run. Unset means
+        # LRAA's own defaults (10 Mb spacing, 1 Mb window), under which a contig
+        # shorter than 10 Mb is never cut.
+        Float? approx_MB_per_cut
+        Float? approx_MB_per_cut_wiggle_window
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
@@ -100,6 +105,8 @@ workflow LRAA_cell_cluster_guided {
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
+                    approx_MB_per_cut = approx_MB_per_cut,
+                    approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                     cpu = cpu,
                     cpuScattered = cpuScattered,
                     memoryGB = memoryGB,
@@ -148,6 +155,8 @@ workflow LRAA_cell_cluster_guided {
         input:
             sample_id = sample_id,
             referenceGenome = referenceGenome,
+            approx_MB_per_cut = approx_MB_per_cut,
+            approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
             bam_files = partition_bam_by_cell_cluster.partitioned_bams,
             pre_normalized_cluster_bams = pre_normalized_cluster_bams,

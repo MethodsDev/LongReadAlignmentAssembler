@@ -130,6 +130,28 @@ workflow LRAA_singlecell_wf {
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
+    # Chunk geometry. Approximate MEGABASES between cut points, and the TOTAL width
+    # of the search window centred on each target cut. LRAA's defaults are 10 and 1,
+    # so a contig shorter than 10 Mb is never cut and chunking degenerates to one
+    # chunk holding the whole thing -- which is what a small test fixture does,
+    # leaving each run only its two strand units to parallelise over.
+    #
+    # The init and the per-cluster runs want DIFFERENT geometry, so they get separate
+    # knobs. The init is ONE task over every read, so cutting it is the only way to
+    # parallelise it: on the 2 Mb test fixture, 10 chunks took its slowest unit from
+    # 366 s to 36 s. The per-cluster runs are many small tasks that already run side
+    # by side, and cutting them multiplies the per-unit fixed cost instead -- measured
+    # on the same fixture, cutting the clusters into 10 took their stage-5 work from
+    # 27.2 to 43.7 min (discovery) and 14.1 to 24.8 min (final quant) for no gain,
+    # because that phase was already saturating every core.
+    #
+    # So: set the *_init pair to cut the initial pass, and leave the plain pair unset
+    # unless the per-cluster contigs genuinely exceed the default spacing.
+    Float? approx_MB_per_cut
+    Float? approx_MB_per_cut_wiggle_window
+    Float? approx_MB_per_cut_init
+    Float? approx_MB_per_cut_wiggle_window_init
+
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
     File? precomputed_init_gtf
@@ -148,6 +170,15 @@ workflow LRAA_singlecell_wf {
     Int cpu = 5
     # Used only when main_chromosomes is non-empty and LRAA runs are chromosome-sharded.
     Int cpuScattered = 5
+    # The initial whole-library LRAA run, separately from the per-cluster runs. It
+    # is ONE task over every read, so its parallelism is bounded by how many chunks
+    # it was cut into, while the per-cluster runs are many small tasks whose
+    # parallelism comes from running side by side. Those want opposite settings: the
+    # init wants a wide budget it can spend across chunks, the cluster tasks want to
+    # be narrow enough that many fit at once. Unset means "same as cpu/memoryGB",
+    # so nothing changes unless asked.
+    Int? cpuInit
+    Int? memoryGBInit
     # Optional override for direct LRAA runs. When unset, LRAA.wdl uses max(64 GiB, ceil(1.5 x input BAM GiB)).
     Int? memoryGB
     # Optional override for chromosome-sharded LRAA workers only. Has no effect when main_chromosomes is empty.
@@ -206,9 +237,11 @@ workflow LRAA_singlecell_wf {
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
-        cpu = cpu,
+        approx_MB_per_cut = if defined(approx_MB_per_cut_init) then approx_MB_per_cut_init else approx_MB_per_cut,
+        approx_MB_per_cut_wiggle_window = if defined(approx_MB_per_cut_wiggle_window_init) then approx_MB_per_cut_wiggle_window_init else approx_MB_per_cut_wiggle_window,
+        cpu = select_first([cpuInit, cpu]),
         cpuScattered = cpuScattered,
-        memoryGB = memoryGB,
+        memoryGB = if defined(memoryGBInit) then memoryGBInit else memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
         diskSizeGB = diskSizeGB,
         docker = docker,
@@ -287,6 +320,8 @@ workflow LRAA_singlecell_wf {
         main_chromosomes = main_chromosomes,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
+        approx_MB_per_cut = approx_MB_per_cut,
+        approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
         cpu = cpu,
         cpuScattered = cpuScattered,
         memoryGB = memoryGB,

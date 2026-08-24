@@ -1,4 +1,8 @@
 {
+    "LRAA_singlecell_wf.approx_MB_per_cut_init" : 0.2,
+    "LRAA_singlecell_wf.approx_MB_per_cut_wiggle_window_init" : 0.05,
+    "LRAA_singlecell_wf.memoryGBInit" : 20,
+    "LRAA_singlecell_wf.cpuInit" : 16,
     "LRAA_singlecell_wf.cpu" : 2,
     "LRAA_singlecell_wf.cpuScattered" : 2,
     "LRAA_singlecell_wf.memoryGBbuildSparseMatrices" : 4,
