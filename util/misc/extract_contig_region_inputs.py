@@ -159,6 +159,7 @@ import argparse
 import bisect
 import collections
 import contextlib
+import gzip
 import json
 import logging
 import os
@@ -419,6 +420,28 @@ class _GtfIngest:
         return Annotation(self.transcripts, self.genes)
 
 
+def _open_gtf_text(gtf_filename):
+    """A GTF as text lines, whether or not it is gzipped.
+
+    Reference annotations ship compressed -- GENCODE distributes .gtf.gz, and
+    this repo's own tabix index IS a .gtf.gz -- and both readers below used a
+    plain ``open()``, so a compressed annotation died on the first byte of the
+    gzip header rather than being read. Chunked mode is unconditional in every
+    workflow, so cut selection is the first thing a run reaches: a gzipped
+    --gtf took the whole run down there, with the UnicodeDecodeError surfacing
+    as a failed index build followed by a failed "fallback" full scan that
+    could only fail the same way.
+
+    Suffix, not content sniffing: the callers already address these files by
+    extension (see _gtf_index_basename), and a .gz that is not gzip is a
+    mislabelled input rather than something to guess at.
+    """
+
+    if gtf_filename.endswith(".gz"):
+        return gzip.open(gtf_filename, "rt")
+    return open(gtf_filename, "rt")
+
+
 def load_gtf(gtf_filename, chrom, strand=""):
     """Index a GTF for one contig-strand, grouping every line under its gene.
 
@@ -429,7 +452,7 @@ def load_gtf(gtf_filename, chrom, strand=""):
     """
 
     ingest = _GtfIngest(chrom, strand)
-    with open(gtf_filename, "rt") as fh:
+    with _open_gtf_text(gtf_filename) as fh:
         for lineno, line in enumerate(fh, start=1):
             ingest.ingest(line, "{}:{}".format(gtf_filename, lineno))
     return ingest.finish()
@@ -511,7 +534,7 @@ def _build_gtf_index(gtf_filename, gz_path):
                 env=env,
                 text=True,
             )
-            with open(gtf_filename, "rt") as fh:
+            with _open_gtf_text(gtf_filename) as fh:
                 for line in fh:
                     # Comments and blanks are dropped rather than sorted: the
                     # readers ignore them, and a blank line is not a record
