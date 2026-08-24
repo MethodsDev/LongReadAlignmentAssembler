@@ -1,4 +1,12 @@
 {
+    "LRAA_singlecell_wf.cpu" : 2,
+    "LRAA_singlecell_wf.cpuScattered" : 2,
+    "LRAA_singlecell_wf.memoryGBbuildSparseMatrices" : 4,
+    "LRAA_singlecell_wf.memoryGBFilterCells" : 4,
+    "LRAA_singlecell_wf.memoryGBSeurat" : 4,
+    "LRAA_singlecell_wf.memoryGBmergeGTFs" : 2,
+    "LRAA_singlecell_wf.memoryGBquantFinal" : 2,
+    "LRAA_singlecell_wf.memoryGBscSparseMatrices" : 4,
     "LRAA_singlecell_wf.sample_id": "test_sc_wdl_cluster_guided_Qonly",
     "LRAA_singlecell_wf.single_cell_pipe_mode" : "cluster-guided",
 
@@ -12,8 +20,8 @@
 
     "LRAA_singlecell_wf.HiFi": true,
 
-    "LRAA_singlecell_wf.memoryGB" : 8,
-    "LRAA_singlecell_wf.memoryGBPerWorkerScattered" : 8,
+    "LRAA_singlecell_wf.memoryGB" : 2,
+    "LRAA_singlecell_wf.memoryGBPerWorkerScattered" : 2,
 
     "LRAA_singlecell_wf.enable_filter_good_cells" : false,
     "LRAA_singlecell_wf.min_cells": 1,
