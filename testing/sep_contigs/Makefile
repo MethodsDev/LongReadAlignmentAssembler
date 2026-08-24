@@ -63,8 +63,6 @@ bench: bench_clean
 	@echo "Wrote bench.summary.tsv" && cat bench.summary.tsv
 
 
-test_wdls: check_test_image_revision test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
-
 
 ##########
 # wdls
@@ -73,7 +71,9 @@ include ../lraa_test_docker.mk
 
 # MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
-test_wdls: test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
+# check_test_image_revision FIRST: make runs prerequisites in declaration order, so
+# the worktree-vs-image skew check has to precede the runs it exists to stop.
+test_wdls: check_test_image_revision test_wdl_quant_only test_wdl_ref_guided test_wdl_ref_free
 
 
 test_wdl_quant_only:
