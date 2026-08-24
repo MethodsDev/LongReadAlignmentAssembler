@@ -169,7 +169,7 @@ include ../lraa_test_docker.mk
 
 # MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
-test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_chunked_strandless test_wdl_ORF_prediction
+test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_chunked_strandless test_wdl_chunk_scatter test_wdl_ORF_prediction
 
 test_wdl_ID_ref_free:
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
@@ -231,6 +231,25 @@ test_wdl_chunked_strandless:
 	rm -rf __wdl_chunked_strandless
 	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.Quant_only_chunked_strandless_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunked_strandless/. --verbose
 	python3 -c 'import json,collections; r=json.load(open("__wdl_chunked_strandless/outputs.json"))["LRAA_wf.chunkReports"]; assert len(r)==1, "expected one shard chunk report, got %r" % (r,); d=json.load(open(r[0])); assert "cuts_strandless" in d["stages"] and "cuts_plus" not in d["stages"], "cut selection was not strandless: %r" % (sorted(d["stages"]),); assert "skipped" in d["stages"]["strand_split"], "the whole-bam strand split still ran: %r" % (d["stages"]["strand_split"],); m=d["chunk_manifests"]; per=collections.Counter(c["region"].split(":")[0] for c in m); print("strandless intervals: %r, quant units: %d, -N from: %s" % (dict(per), d["arms"]["chunked"]["quant_units"], d["num_total_reads_source"])); assert max(per.values()) > 1, "no contig was cut: %r" % ([c["region"] for c in m],); assert all(c["split_counts"] for c in m), "intervals carry no per-chunk split accounting, so the split did not run inside them"'
+
+# The chunk-scatter workflow: one make-chunks task, one task PER CHUNK, one merge.
+#
+# Asserts the FAN-OUT, not exit 0. This workflow's whole reason to exist is that the
+# unit of parallelism is the chunk rather than the chromosome, and a run that placed
+# one chunk over the whole contig would produce every output, merge cleanly and prove
+# none of that -- it is the same green-but-vacuous shape the two chunked targets above
+# reject. So: more than one chunk in the plan (the contig was really cut), and one
+# chunk log per planned chunk (each chunk really got its own task).
+#
+# 0.5 Mb cuts over this 3.4 Mb contig, matching the targets above; at the 10 Mb
+# default the corpus is shorter than a single chunk and no cut is placed.
+#
+# UNCACHED and with a pinned --dir, same reasoning as test_wdl_chunked: a replayed
+# task would satisfy the assertion while proving nothing about this build.
+test_wdl_chunk_scatter:
+	rm -rf __wdl_chunk_scatter
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA-chunk-scatter.wdl -i wdl.chunk_scatter_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunk_scatter/. --verbose
+	python3 -c 'import json,os; o=json.load(open("__wdl_chunk_scatter/outputs.json")); plan=json.load(open(o["LRAA_chunk_scatter_wf.chunkPlan"])); logs=o["LRAA_chunk_scatter_wf.chunkLogs"]; ids=[c["chunk_id"] for c in plan["chunks"]]; print("chunks: %r, chunk tasks: %d" % (ids, len(logs))); assert len(ids) > 1, "the contig was not cut, so per-chunk scatter never happened: %r" % (ids,); assert len(logs) == len(ids), "expected one task per chunk, got %d task(s) for %d chunk(s)" % (len(logs), len(ids)); assert os.path.getsize(o["LRAA_chunk_scatter_wf.mergedQuantExpr"]) > 0, "merged quant.expr is empty"'
 
 test_wdl_ORF_prediction:
 	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json $(LRAA_WDL_DOCKER_ORF) --verbose

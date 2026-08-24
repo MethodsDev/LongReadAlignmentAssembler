@@ -822,3 +822,260 @@ def test_the_removed_LowFi_flag_is_rejected_on_every_path(tmp_path, extra):
     # rejected BEFORE any work: reaching the pipeline would mean the check moved back
     # behind the dispatch again
     assert "counting genome-mapped reads" not in combined
+
+
+
+# -- the scatter seams: --stop_after_make_chunks / --no_reuse_source_bam / --only_chunk
+
+
+def _write_two_contig_inputs(root):
+    """A deterministic two-contig genome and a sorted, indexed bam over it.
+
+    Two contigs because the scatter exists to fan out ACROSS contigs; each carries
+    spliced forward reads (a canonical GT..AG intron) and unspliced reverse reads,
+    so a strandless chunk yields a non-empty unit in BOTH orientations.
+    """
+
+    import random
+
+    import pysam
+
+    rng = random.Random(42)
+    genome = {}
+    for chrom in ("chrA", "chrB"):
+        seq = [rng.choice("ACGT") for _ in range(10000)]
+        seq[1500:1502] = ["G", "T"]  # donor of the intron [1500, 2000)
+        seq[1998:2000] = ["A", "G"]  # acceptor
+        genome[chrom] = "".join(seq)
+
+    fasta = root / "genome.fa"
+    with open(fasta, "wt") as fh:
+        for chrom, seq in genome.items():
+            print(">" + chrom, file=fh)
+            print(seq, file=fh)
+    pysam.faidx(str(fasta))
+
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": chrom, "LN": len(seq)} for chrom, seq in genome.items()],
+    }
+    bam = root / "reads.bam"
+    total = 0
+    with pysam.AlignmentFile(str(bam), "wb", header=header) as out:
+        for tid, (chrom, seq) in enumerate(genome.items()):
+            for i in range(20):
+                aln = pysam.AlignedSegment()
+                aln.query_name = "{}_plus_{}".format(chrom, i)
+                aln.flag = 0
+                aln.reference_id = tid
+                aln.reference_start = 1000
+                aln.mapping_quality = 60
+                aln.cigarstring = "500M500N500M"
+                aln.query_sequence = seq[1000:1500] + seq[2000:2500]
+                aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+                out.write(aln)
+                total += 1
+            for i in range(20):
+                aln = pysam.AlignedSegment()
+                aln.query_name = "{}_minus_{}".format(chrom, i)
+                aln.flag = 16
+                aln.reference_id = tid
+                aln.reference_start = 5000
+                aln.mapping_quality = 60
+                aln.cigarstring = "1000M"
+                aln.query_sequence = seq[5000:6000]
+                aln.query_qualities = pysam.qualitystring_to_array("I" * 1000)
+                out.write(aln)
+                total += 1
+    pysam.index(str(bam))
+    return str(fasta), str(bam), total
+
+
+@pytest.fixture(scope="module")
+def make_chunks_run(tmp_path_factory):
+    """One --stop_after_make_chunks run, shared by the tests that consume it."""
+
+    root = tmp_path_factory.mktemp("scatter")
+    fasta, bam, total = _write_two_contig_inputs(root)
+    outdir = root / "work"
+    outputs = ChunkedRun.run(
+        ChunkedRun.default_args(
+            bam=bam,
+            genome_fa=fasta,
+            output_dir=str(outdir),
+            discovery=True,
+            num_total_reads=total,
+            no_reuse_source_bam=True,
+            stop_after_make_chunks=True,
+            cpu_budget=2,
+        )
+    )
+    return {
+        "root": root,
+        "fasta": fasta,
+        "bam": bam,
+        "total": total,
+        "outdir": outdir,
+        "outputs": outputs,
+    }
+
+
+def test_stop_after_make_chunks_writes_the_plan_and_runs_nothing_downstream(
+    make_chunks_run,
+):
+    """The prep task's contract: a chunk_plan.json naming exactly the chunk
+    directories on disk, and NO merged output -- stages 3b-6 must not have run.
+    """
+
+    import json
+
+    outdir = make_chunks_run["outdir"]
+    plan_path = outdir / "chunk_plan.json"
+    assert plan_path.exists()
+    with open(plan_path) as fh:
+        plan = json.load(fh)
+
+    assert plan["version"] == ChunkedRun.CHUNK_PLAN_VERSION
+    assert plan["num_total_reads"] == make_chunks_run["total"]
+    assert plan["discovery"] is True
+
+    planned_ids = {c["chunk_id"] for c in plan["chunks"]}
+    on_disk = {p.name for p in (outdir / "chunks").iterdir() if p.is_dir()}
+    assert planned_ids == on_disk
+    # both contigs are in the fan-out, not one chunk covering everything
+    assert {c["chrom"] for c in plan["chunks"]} == {"chrA", "chrB"}
+
+    assert not (outdir / "merged").exists()
+    assert make_chunks_run["outputs"]["stopped_after_make_chunks"] is True
+
+
+def test_no_reuse_source_bam_makes_every_chunk_self_contained(
+    make_chunks_run, tmp_path
+):
+    """WITH the flag every chunk holds a real mini bam; WITHOUT it, on the same
+    inputs, at least one chunk manifest names the source instead. The second half
+    is what pins the flag as load-bearing rather than cosmetic: these contigs are
+    shorter than the segment span, so reuse fires unless suppressed.
+    """
+
+    import json
+
+    for cdir in (make_chunks_run["outdir"] / "chunks").iterdir():
+        assert (cdir / "chunk.bam").exists(), cdir
+        with open(cdir / "chunk.partition.json") as fh:
+            manifest = json.load(fh)
+        assert manifest["bam_reused_from_source"] is False, cdir
+
+    reuse_outdir = tmp_path / "work_reuse"
+    ChunkedRun.run(
+        ChunkedRun.default_args(
+            bam=make_chunks_run["bam"],
+            genome_fa=make_chunks_run["fasta"],
+            output_dir=str(reuse_outdir),
+            discovery=True,
+            num_total_reads=make_chunks_run["total"],
+            stop_after_make_chunks=True,
+            cpu_budget=2,
+        )
+    )
+    reused = []
+    for cdir in (reuse_outdir / "chunks").iterdir():
+        with open(cdir / "chunk.partition.json") as fh:
+            reused.append(json.load(fh)["bam_reused_from_source"])
+    assert any(reused)
+
+
+def test_only_chunk_processes_one_chunk_and_writes_its_units(make_chunks_run):
+    """The leaf task's contract: --only_chunk on a make-chunks directory runs
+    stages 3b-5 for that chunk alone and writes units.json whose quant prefixes
+    all resolve to real quant.expr files, one unit per orientation.
+    """
+
+    import json
+
+    outdir = make_chunks_run["outdir"]
+    with open(outdir / "chunk_plan.json") as fh:
+        plan = json.load(fh)
+    chunk_id = plan["chunks"][0]["chunk_id"]
+
+    result = ChunkedRun.run(
+        ChunkedRun.default_args(
+            output_dir=str(outdir),
+            only_chunk=chunk_id,
+            cpu_budget=2,
+        )
+    )
+    assert result["only_chunk"] == chunk_id
+
+    units_path = outdir / "chunks" / chunk_id / "units.json"
+    assert units_path.exists()
+    with open(units_path) as fh:
+        doc = json.load(fh)
+    assert doc["chunk_id"] == chunk_id
+
+    # strandless mode: exactly one unit per orientation, ids derived from the chunk's
+    assert [u["unit_id"] for u in doc["units"]] == [
+        chunk_id + "_plus",
+        chunk_id + "_minus",
+    ]
+    for unit in doc["units"]:
+        expr = unit["quant_prefix"] + ".quant.expr"
+        assert os.path.exists(expr), expr
+
+
+def test_only_chunk_refuses_an_id_the_plan_does_not_name(make_chunks_run):
+    """No fallback: a leaf that cannot identify its own chunk must fail, not
+    quantify something else."""
+
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.run(
+            ChunkedRun.default_args(
+                output_dir=str(make_chunks_run["outdir"]),
+                only_chunk="chrZ_99",
+                cpu_budget=1,
+            )
+        )
+    assert "not in the plan" in str(err.value)
+
+
+def test_only_chunk_refuses_a_reuse_extracted_chunk(tmp_path):
+    """A manifest naming the SOURCE bam cannot be processed on another machine;
+    the refusal must say how to re-extract."""
+
+    import json
+
+    outdir = tmp_path / "work"
+    cdir = outdir / "chunks" / "chrA_00"
+    cdir.mkdir(parents=True)
+    with open(outdir / "chunk_plan.json", "wt") as fh:
+        json.dump(
+            {
+                "version": ChunkedRun.CHUNK_PLAN_VERSION,
+                "num_total_reads": 1,
+                "discovery": True,
+                "lraa_suffix": "LRAA.ref-free",
+                "chunks": [
+                    {
+                        "chunk_id": "chrA_00",
+                        "chrom": "chrA",
+                        "strand": None,
+                        "strandless": True,
+                        "region": "chrA:1-10000",
+                        "index": 0,
+                        "order": 0,
+                        "has_gtf": False,
+                    }
+                ],
+            },
+            fh,
+        )
+    with open(cdir / "chunk.partition.json", "wt") as fh:
+        json.dump({"bam_reused_from_source": True, "offset": 0}, fh)
+
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.run(
+            ChunkedRun.default_args(
+                output_dir=str(outdir), only_chunk="chrA_00", cpu_budget=1
+            )
+        )
+    assert "--no_reuse_source_bam" in str(err.value)

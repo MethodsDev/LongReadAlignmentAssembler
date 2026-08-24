@@ -1635,7 +1635,11 @@ def extraction_plan(args, outdir, chunk_root, planned, parent_token):
     strandless = not key
     chunk_id = planned["chunk_id"]
     region = planned["region"]
-    reuse_source = strandless and planned["spans_whole_contig"]
+    reuse_source = (
+        strandless
+        and planned["spans_whole_contig"]
+        and not getattr(args, "no_reuse_source_bam", False)
+    )
     local = "stage3_extract_{}{}.margin_{}_maxintron_{}{}".format(
         "strandless_" if strandless else "",
         chunk_id,
@@ -2227,6 +2231,125 @@ def ordered_units(chunks):
         (unit for chunk in chunks for unit in chunk["units"]),
         key=lambda u: (rank[u["strand"]], u["order"]),
     )
+
+
+CHUNK_PLAN_VERSION = 1
+
+
+def write_chunk_plan(path, args, chunks, num_total_reads):
+    """The minimum a separately-scheduled chunk task needs that is NOT in its own
+    mini inputs. Everything derivable is DERIVED at load time rather than copied
+    here: offsets, window origins and counts come from each chunk's own
+    ``chunk.partition.json``, and the unit list from ``chunk_quant_units``, so
+    this file cannot disagree with the chunk directory it describes.
+    """
+
+    plan = {
+        "version": CHUNK_PLAN_VERSION,
+        "num_total_reads": int(num_total_reads),
+        "discovery": bool(args.discovery),
+        "lraa_suffix": lraa_output_suffix(args.discovery, args.gtf),
+        "chunks": [
+            {
+                "chunk_id": c["chunk_id"],
+                "chrom": c["chrom"],
+                "strand": c["strand"],
+                "strandless": bool(c["strandless"]),
+                "region": c["region"],
+                "index": c["index"],
+                "order": c["order"],
+                "has_gtf": bool(c["has_gtf"]),
+            }
+            for c in chunks
+        ],
+    }
+    with open(path, "wt") as fh:
+        json.dump(plan, fh, indent=2, sort_keys=True)
+    return plan
+
+
+def load_chunk_plan(path):
+    with open(path, "rt") as fh:
+        plan = json.load(fh)
+    if plan.get("version") != CHUNK_PLAN_VERSION:
+        raise PipelineError(
+            "chunk plan {} is version {!r}, this build writes {}".format(
+                path, plan.get("version"), CHUNK_PLAN_VERSION
+            )
+        )
+    return plan
+
+
+def rebuild_chunk_record(plan, chunk_id, outdir):
+    """One chunk record for ``chunk_worker``, rebuilt from the plan entry plus the
+    chunk's OWN ``chunk.partition.json``.
+
+    Paths are re-derived from this machine's ``outdir``; the manifest's own
+    ``files`` entries are absolute paths from the machine that extracted and are
+    deliberately overwritten. ``upstream_token`` is a fresh constant because
+    checkpoint sentinels key on resolved path plus size plus mtime
+    (``Util_funcs.file_identity_token``) and so never reproduce across machines --
+    a scattered chunk always runs its stages rather than resuming them.
+    """
+
+    entries = [c for c in plan["chunks"] if c["chunk_id"] == chunk_id]
+    if not entries:
+        raise PipelineError(
+            "chunk {} is not in the plan; it names: {}".format(
+                chunk_id, ", ".join(c["chunk_id"] for c in plan["chunks"])
+            )
+        )
+    entry = entries[0]
+
+    cdir = os.path.join(outdir, "chunks", chunk_id)
+    prefix = os.path.join(cdir, "chunk")
+    manifest_path = "{}.partition.json".format(prefix)
+    if not os.path.exists(manifest_path):
+        raise PipelineError("chunk {} has no {}".format(chunk_id, manifest_path))
+    with open(manifest_path, "rt") as fh:
+        manifest = json.load(fh)
+    if manifest.get("bam_reused_from_source"):
+        raise PipelineError(
+            "chunk {} was extracted with source-bam reuse, so its manifest names "
+            "the whole input bam rather than a mini bam. Re-run make-chunks with "
+            "--no_reuse_source_bam".format(chunk_id)
+        )
+    manifest["files"] = {
+        "fasta": "{}.fa".format(prefix),
+        "bam": "{}.bam".format(prefix),
+        "gtf": "{}.gtf".format(prefix) if entry["has_gtf"] else None,
+        "dropped_reads": "{}.dropped_reads.txt".format(prefix),
+    }
+
+    units = chunk_quant_units(
+        chunk_id,
+        cdir,
+        prefix,
+        entry["strand"],
+        manifest["offset"],
+        entry["order"],
+        lraa_suffix=plan["lraa_suffix"],
+        has_gtf=entry["has_gtf"],
+    )
+    return {
+        "chunk_id": chunk_id,
+        "chrom": entry["chrom"],
+        "strand": entry["strand"],
+        "strandless": entry["strandless"],
+        "region": entry["region"],
+        "index": entry["index"],
+        "order": entry["order"],
+        "dir": cdir,
+        "prefix": prefix,
+        "log": os.path.join(outdir, "logs", "chunk_{}.log".format(chunk_id)),
+        "manifest": manifest,
+        "extract": {"reused": True, "cmd": [], "log": None, "chunk_id": chunk_id},
+        "offset": manifest["offset"],
+        "window_origin": manifest["window_origin"],
+        "upstream_token": "scattered_{}".format(chunk_id),
+        "has_gtf": entry["has_gtf"],
+        "units": units,
+    }
 
 
 # ---------------------------------------------------------------- stages 4 + 5
@@ -4159,6 +4282,31 @@ def build_parser():
         "because its cut selection reads the split bams -- which is itself the "
         "difference the strandless mode exists to remove",
     )
+    parser.add_argument(
+        "--no_reuse_source_bam",
+        action="store_true",
+        help="always extract a mini bam, even for a strandless chunk spanning its "
+        "whole contig. The reuse optimization names the SOURCE bam in the chunk "
+        "manifest, which a chunk processed on another machine cannot open; this "
+        "makes every chunk directory self-contained at the cost of the copy "
+        "reuse exists to avoid",
+    )
+    parser.add_argument(
+        "--stop_after_make_chunks",
+        action="store_true",
+        help="run cut selection and chunk extraction, write <output_dir>/chunk_plan.json, "
+        "and stop before stages 3b-6. For a scattered workflow that processes each "
+        "chunk as its own task; see --only_chunk",
+    )
+    parser.add_argument(
+        "--only_chunk",
+        default=None,
+        metavar="CHUNK_ID",
+        help="process ONE already-extracted chunk (stages 3b-5) and stop, writing "
+        "<output_dir>/chunks/<CHUNK_ID>/units.json. Requires --output_dir holding "
+        "chunk_plan.json and chunks/<CHUNK_ID>/ from a --stop_after_make_chunks run. "
+        "Skips stages 1-3 entirely, so --bam, --genome_fa and --gtf are not needed",
+    )
     # Defaults come from the canonical definition rather than a second copy. These
     # were hardcoded here and happened to agree with LRAA_Globals; a change to
     # either would have diverged silently, and worse than silently, because the
@@ -4312,10 +4460,12 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     _resolve_stream_reads_rescue_unassigned(args)
 
-    required = ["bam", "genome_fa", "output_dir"]
-    if not args.discovery:
+    required = ["output_dir"] if args.only_chunk else ["bam", "genome_fa", "output_dir"]
+    if not args.discovery and not args.only_chunk:
         # Quant-only has nothing to quantify without it. Discovery does: no gtf
-        # is de novo, which is the mode this option exists to reach.
+        # is de novo, which is the mode this option exists to reach. An
+        # --only_chunk leaf needs neither: its inputs are the chunk's own mini
+        # files and its mode comes from chunk_plan.json.
         required.append("gtf")
     for name in required:
         if not getattr(args, name, None):
@@ -4751,9 +4901,14 @@ def _run_inner(args):
             "severed_multiexon_weight must be >= 1: 0 would make severing a "
             "spliced alignment free"
         )
+    if args.only_chunk and args.stop_after_make_chunks:
+        raise PipelineError(
+            "--only_chunk processes an already-extracted chunk and "
+            "--stop_after_make_chunks produces them; pick one"
+        )
 
-    required = ["bam", "genome_fa", "output_dir"]
-    if not args.discovery:
+    required = ["output_dir"] if args.only_chunk else ["bam", "genome_fa", "output_dir"]
+    if not args.discovery and not args.only_chunk:
         required.append("gtf")
     for name in required:
         if not getattr(args, name, None):
@@ -4801,6 +4956,42 @@ def _run_inner(args):
         raise PipelineError("samtools is not on PATH")
 
     rss = args.rss_sample_interval
+
+    if args.only_chunk:
+        plan = load_chunk_plan(os.path.join(outdir, "chunk_plan.json"))
+        args.discovery = bool(plan["discovery"])
+        chunk = rebuild_chunk_record(plan, args.only_chunk, outdir)
+        record = chunk_worker(
+            args,
+            ckpt,
+            outdir,
+            chunk,
+            plan["num_total_reads"],
+            rss,
+            cpu_budget=args.cpu_budget,
+        )
+        units_path = os.path.join(chunk["dir"], "units.json")
+        with open(units_path, "wt") as fh:
+            json.dump(
+                {
+                    "chunk_id": chunk["chunk_id"],
+                    "units": [
+                        {
+                            "unit_id": u["unit_id"],
+                            "strand": u["strand"],
+                            "offset": u["offset"],
+                            "order": u["order"],
+                            "quant_prefix": u["quant_prefix"],
+                        }
+                        for u in chunk["units"]
+                    ],
+                },
+                fh,
+                indent=2,
+                sort_keys=True,
+            )
+        print("chunk {} complete: {}".format(chunk["chunk_id"], units_path), flush=True)
+        return {"only_chunk": chunk["chunk_id"], "units": units_path, "chunk": record}
 
     # The chain root. Every artifact below derives from these three files and the
     # contig restriction, and none of the per-stage sentinels named any of them:
@@ -4942,6 +5133,25 @@ def _run_inner(args):
             ),
             flush=True,
         )
+
+        if args.stop_after_make_chunks:
+            plan_path = os.path.join(outdir, "chunk_plan.json")
+            write_chunk_plan(plan_path, args, chunks, num_total_reads)
+            print(
+                "make-chunks complete: {} chunk(s), plan at {}".format(
+                    len(chunks), plan_path
+                ),
+                flush=True,
+            )
+            timing["stopped_after_make_chunks"] = True
+            outputs["stopped_after_make_chunks"] = True
+            outputs["chunk_plan"] = plan_path
+            outputs["cut_dir"] = cut_dir
+            flush()
+            with open(os.path.join(outdir, "outputs.json"), "wt") as fh:
+                json.dump(outputs, fh, indent=2, sort_keys=True)
+                print("", file=fh)
+            return outputs
 
         load_before = loadavg()
         # Spans chunk processing AND the stage-6 merge that follows, not just the

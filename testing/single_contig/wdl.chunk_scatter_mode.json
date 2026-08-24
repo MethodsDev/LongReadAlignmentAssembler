@@ -1,0 +1,14 @@
+{
+    "LRAA_chunk_scatter_wf.sample_id" : "test.chunk_scatter_mode",
+    "LRAA_chunk_scatter_wf.inputBAM" : "pacbio.PBLR.bam",
+    "LRAA_chunk_scatter_wf.referenceGenome" : "ref_genome.fa",
+    "LRAA_chunk_scatter_wf.annot_gtf" : "ref_annot.gtf",
+    "LRAA_chunk_scatter_wf.quant_only" : true,
+    "LRAA_chunk_scatter_wf.HiFi" : true,
+    "LRAA_chunk_scatter_wf.makeChunksCpu" : 4,
+    "LRAA_chunk_scatter_wf.chunkCpu" : 1,
+    "LRAA_chunk_scatter_wf.chunkPreemptible" : 0,
+    "LRAA_chunk_scatter_wf.mergeCpu" : 1,
+    "LRAA_chunk_scatter_wf.approx_MB_per_cut" : 0.5,
+    "LRAA_chunk_scatter_wf.approx_MB_per_cut_wiggle_window" : 0.1
+}

@@ -1,0 +1,18 @@
+{
+  "LRAA_chunk_scatter_wf.annot_gtf":"gs://mdl-refs/GRCh38/GRCh38.gencode.v39.annotation.gtf",
+  "LRAA_chunk_scatter_wf.chunkCpu":"${2}",
+  "LRAA_chunk_scatter_wf.chunkMemoryGB":"${16}",
+  "LRAA_chunk_scatter_wf.chunkPreemptible":"${3}",
+  "LRAA_chunk_scatter_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest",
+  "LRAA_chunk_scatter_wf.inputBAM":"${this.inputBAM}",
+  "LRAA_chunk_scatter_wf.makeChunksCpu":"${16}",
+  "LRAA_chunk_scatter_wf.makeChunksMemoryGB":"${32}",
+  "LRAA_chunk_scatter_wf.mergeCpu":"${2}",
+  "LRAA_chunk_scatter_wf.mergeMemoryGB":"${32}",
+  "LRAA_chunk_scatter_wf.min_mapping_quality":"${0}",
+  "LRAA_chunk_scatter_wf.min_mapping_quality_for_final_quant":"${1}",
+  "LRAA_chunk_scatter_wf.quant_only":"${false}",
+  "LRAA_chunk_scatter_wf.referenceGenome":"gs://mdl-refs/GRCh38/GRCh38_no_alt.fa",
+  "LRAA_chunk_scatter_wf.rescue_unassigned_reads_via_transcriptome_alignment":"${true}",
+  "LRAA_chunk_scatter_wf.sample_id":"${this.sample_id}"
+}
