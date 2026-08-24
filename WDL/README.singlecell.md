@@ -25,8 +25,9 @@ Optional:
 
 Resources:
 - `cpu` and `cpuScattered` are the core counts for direct and chromosome-sharded LRAA tasks. Each is the task's `cpu` runtime request and the `--cpu_budget` LRAA divides across its work units, so the cores requested and the cores LRAA spends are the same number. They replace `numThreadsPerWorker`, `numThreadsPerWorkerScattered` and `num_parallel_contigs`, which were multiplied rather than divided: `numThreadsPerWorker 5` alongside `num_parallel_contigs 3` let LRAA start three workers of five threads on a five-core task
-- `memoryGB` is an optional override for direct LRAA runs; when unset, `LRAA.wdl` computes memory as `max(64 GiB, ceil(1.5 x input BAM size in GiB))`
-- `memoryGBPerWorkerScattered` is an optional override for chromosome-sharded LRAA workers only; when unset, each shard self-sizes in `subwdls/LRAA_runner.wdl` with a `32 GiB` floor and larger allocations for mid-size and large shard BAMs
+- `memoryGB` overrides `memoryGB_whole_genome` (`32` GiB), the box a whole-genome (non-scattered) LRAA run gets. Fixed rather than derived from the input BAM: every run chunks, so peak RSS follows chunk concurrency and chunk width, not library size
+- `memoryGBPerWorkerScattered` overrides `memoryGB_per_chromosome_shard` (`16` GiB), the box every chromosome shard gets. Uniform across shards on purpose -- a chunked shard's peak follows its chunk concurrency, which `max_cpu_per_chunked_shard` caps, not the length of its contig
+- There is no `chunk` input: every LRAA run in these workflows chunks. That is what makes the two numbers above fixed rather than functions of input size, and it is why a workspace still binding `chunk` will fail on an unknown input
 - `main_chromosomes` determines whether LRAA runs direct or chromosome-sharded; if empty, `memoryGBPerWorkerScattered` has no effect because the run stays in direct mode
 - In cluster-guided single-cell mode, the outer per-cluster scatter does not by itself activate `memoryGBPerWorkerScattered`; that setting only applies if each per-cluster `LRAA.wdl` call is also chromosome-sharded via `main_chromosomes`
 - `diskSizeGB` defaults to `256`
