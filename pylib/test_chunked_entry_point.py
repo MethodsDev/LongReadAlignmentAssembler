@@ -1198,3 +1198,96 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
                 if row["row_type"] == "worker":
                     per_unit_total += int(row["reads_total"])
     assert int(totals[0]["reads_total"]) == per_unit_total
+
+
+@pytest.mark.parametrize(
+    "spec,chrom,expected",
+    [
+        ("chrM,chr1", "chrM", "chrM_00_mini"),
+        ("chrM,chr1", "chr7", None),
+        (" chrM , chr1 ", "chrM", "chrM_00_mini"),
+        ("chrM", "chrM", "chrM_00_mini"),
+        (None, "chrM", None),
+        ("", "chrM", None),
+    ],
+    ids=["named", "unnamed", "whitespace", "single", "unset", "empty"],
+)
+def test_resolve_oversimplify_for_chunk(spec, chrom, expected):
+    """--oversimplify names ORIGINAL contigs; a chunk's fasta uses a renamed one.
+
+    The extractor writes each chunk its own mini contig, so the name a caller
+    wrote never appears in the fasta stage 5 runs against. Forwarding the list
+    verbatim would match nothing and leave the mode silently off -- accepted,
+    plumbed, inert, which is the failure the chunked tests exist to catch. The
+    resolution is therefore per chunk: decide on the chunk's OWN contig, return
+    the mini name it became.
+
+    Whitespace is exercised because a workflow builds this list by joining a
+    user's field, and the unnamed case is exercised because asserting only the
+    positive one would pass on an implementation that forwarded the flag to every
+    chunk regardless of the list.
+    """
+
+    args = ChunkedRun.default_args(
+        bam="b", genome_fa="g", output_dir="o", oversimplify=spec
+    )
+    chunk = {
+        "chrom": chrom,
+        "manifest": {"mini_contig_name": "{}_00_mini".format(chrom)},
+    }
+
+    assert ChunkedRun.resolve_oversimplify_for_chunk(args, chunk) == expected
+
+
+def test_resolve_oversimplify_falls_back_when_no_mini_name():
+    """A manifest without a mini name means the two spellings are the same."""
+
+    args = ChunkedRun.default_args(
+        bam="b", genome_fa="g", output_dir="o", oversimplify="chrM"
+    )
+    assert (
+        ChunkedRun.resolve_oversimplify_for_chunk(args, {"chrom": "chrM", "manifest": {}})
+        == "chrM"
+    )
+
+
+def test_lraa_cmd_emits_the_oversimplify_name_it_is_given():
+    """lraa_cmd's only job here is to pass through what the resolver decided."""
+
+    args = ChunkedRun.default_args(bam="b", genome_fa="g", output_dir="o")
+    base = dict(
+        bam_for_quant="q.bam",
+        bam_for_sg="s.bam",
+        genome="chunk.fa",
+        gtf=None,
+        out_prefix="p",
+        num_total_reads=10,
+        cpu_budget=1,
+    )
+
+    with_flag = ChunkedRun.lraa_cmd(args, oversimplify="chrM_00_mini", **base)
+    assert with_flag[with_flag.index("--oversimplify") + 1] == "chrM_00_mini"
+
+    without = ChunkedRun.lraa_cmd(args, oversimplify=None, **base)
+    assert "--oversimplify" not in without
+
+
+def test_the_oversimplify_default_survives_chunking():
+    """The DEFAULT must reach a chunk too, not just an explicit list.
+
+    LRAA's own --oversimplify defaults to "chrM,M". A chunk worker handed no flag
+    falls back to that default and applies it to its MINI contig, whose name is
+    not chrM -- so a driver that forwarded nothing would turn the default off in
+    chunked mode only, for the same command. ChunkedRun therefore carries the same
+    default and translates it per chunk.
+    """
+
+    assert ChunkedRun.default_args().oversimplify == "chrM,M"
+
+    args = ChunkedRun.default_args(bam="b", genome_fa="g", output_dir="o")
+    chunk = {"chrom": "chrM", "manifest": {"mini_contig_name": "chrM_00_mini"}}
+    assert ChunkedRun.resolve_oversimplify_for_chunk(args, chunk) == "chrM_00_mini"
+
+    # and a contig the default does not name still gets nothing
+    other = {"chrom": "chr7", "manifest": {"mini_contig_name": "chr7_00_mini"}}
+    assert ChunkedRun.resolve_oversimplify_for_chunk(args, other) is None

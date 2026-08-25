@@ -2393,8 +2393,42 @@ def rebuild_chunk_record(plan, chunk_id, outdir):
 # ---------------------------------------------------------------- stages 4 + 5
 
 
+def resolve_oversimplify_for_chunk(args, chunk):
+    """The ``--oversimplify`` value THIS chunk's stage-5 run should get, or None.
+
+    ``--oversimplify`` names contigs as the genome fasta spells them, but each
+    chunk is extracted onto a mini contig the extractor RENAMED, so the name a
+    caller wrote never appears in the fasta stage 5 runs against. Forwarding the
+    caller's list verbatim would match nothing and leave the mode silently off --
+    accepted, plumbed, inert, which is the failure the chunked tests exist to
+    catch.
+
+    So the decision is made per chunk against the chunk's OWN contig, and the
+    value returned is the mini name that contig became. Whitespace around a name
+    is tolerated because a workflow builds this list by joining a user's field.
+    """
+
+    wanted = getattr(args, "oversimplify", None)
+    if not wanted:
+        return None
+    names = {n.strip() for n in str(wanted).split(",") if n.strip()}
+    if chunk.get("chrom") not in names:
+        return None
+    # Falls back to the original name only when the manifest does not carry a
+    # mini name, which is the case where the two are the same thing.
+    return (chunk.get("manifest") or {}).get("mini_contig_name") or chunk["chrom"]
+
+
 def lraa_cmd(
-    args, bam_for_quant, bam_for_sg, genome, gtf, out_prefix, num_total_reads, cpu_budget
+    args,
+    bam_for_quant,
+    bam_for_sg,
+    genome,
+    gtf,
+    out_prefix,
+    num_total_reads,
+    cpu_budget,
+    oversimplify=None,
 ):
     """One LRAA invocation. ``cpu_budget`` is this invocation's SHARE of the total.
 
@@ -2500,6 +2534,12 @@ def lraa_cmd(
     worker_config_json = getattr(args, "worker_config_json", None)
     if worker_config_json:
         cmd += ["--config_update", worker_config_json]
+
+    # Already resolved to THIS chunk's mini contig name by
+    # resolve_oversimplify_for_chunk, or None when the caller's list does not name
+    # this chunk's contig.
+    if oversimplify:
+        cmd += ["--oversimplify", oversimplify]
 
     return cmd
 
@@ -2919,6 +2959,7 @@ def _process_unit(
         out_prefix=unit["quant_name"],
         num_total_reads=num_total_reads,
         cpu_budget=cpu_budget,
+        oversimplify=resolve_oversimplify_for_chunk(args, chunk),
     )
     # Built BEFORE the sentinel because the sentinel is keyed on it. The old
     # key named the unit, the read denominator and --HiFi, so quant-only
@@ -4534,6 +4575,23 @@ def build_parser():
         "has no count to default to",
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
+    parser.add_argument(
+        "--oversimplify",
+        # MUST match LRAA's own --oversimplify default ("chrM,M"). A chunk worker
+        # that receives no flag falls back to that default and applies it to its
+        # MINI contig, whose name is not chrM -- so leaving this None would turn
+        # the default off in chunked mode only, for the same command. Carrying the
+        # same value here lets resolve_oversimplify_for_chunk translate it into the
+        # mini name the worker will actually match.
+        default="chrM,M",
+        metavar="CHR1,CHR2,...",
+        help="run these contigs in LRAA's oversimplify mode, named as the genome "
+        "fasta spells them. Resolved PER CHUNK by "
+        "resolve_oversimplify_for_chunk: a chunk whose contig is named here passes "
+        "--oversimplify to its stage-5 LRAA run, spelled as the mini contig the "
+        "extractor renamed it to, because the name written here never appears in a "
+        "chunk's own fasta",
+    )
     parser.add_argument(
         "--contigs",
         default=None,
