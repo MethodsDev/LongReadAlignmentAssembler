@@ -321,10 +321,17 @@ for u in doc["units"]:
         raise SystemExit("unit {} produced no quant.tracking".format(uid))
     if os.path.exists(pfx + ".gtf"):
         shutil.copy(pfx + ".gtf", os.path.join("staged", uid + ".gtf"))
-    # Stage 6 requires one of these PER UNIT and refuses a partial set, since a
-    # partial merge undercounts silently. Every unit's LRAA run writes one.
-    shutil.copy(pfx + ".read_assignment.summary.tsv",
-                os.path.join("staged", uid + ".read_assignment.summary.tsv"))
+    # CONDITIONAL, unlike quant.expr. A unit with nothing to quantify takes one of
+    # run_quant_only's early returns (no input transcripts, empty splice graph, or
+    # none mapped after filtering) and never reaches the summary writer, so the
+    # file legitimately does not exist. Copying it unconditionally would fail the
+    # whole leaf on such a unit. Stage 6 decides what a missing one means -- it
+    # tolerates a unit whose quant.expr has no rows and refuses one that
+    # quantified something -- and both files are staged side by side here so it
+    # can see that evidence.
+    if os.path.exists(pfx + ".read_assignment.summary.tsv"):
+        shutil.copy(pfx + ".read_assignment.summary.tsv",
+                    os.path.join("staged", uid + ".read_assignment.summary.tsv"))
 shutil.copy(os.path.join("work", "chunks", "~{chunkId}", "units.json"),
             os.path.join("staged", "~{chunkId}.units.json"))
 PY
