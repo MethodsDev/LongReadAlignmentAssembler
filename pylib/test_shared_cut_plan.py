@@ -1152,3 +1152,47 @@ def test_lraa_chunk_forwards_chunk_plan_instead_of_ignoring_it(tmp_path, inputs)
     combined = result.stdout + result.stderr
     assert result.returncode != 0, combined[-8000:]
     assert "chunk plan {} does not exist".format(missing) in combined
+
+
+def test_a_bam_header_longer_than_the_fasta_still_takes_the_plan(
+    tmp_path, inputs, shared_plan
+):
+    """Align against the whole assembly, analyse against a slice of it.
+
+    A supported configuration, and the shape the single-cell fixture actually
+    has: reads aligned to GRCh38 chr19 carry a 58,617,616 bp header line, while
+    the run's genome fasta holds a 2,000,000 bp slice of that contig. Chunk
+    geometry is decided by the FASTA -- the last segment runs to the length the
+    extractor fetches sequence for, and that fetch is a fasta fetch -- so the
+    header's disagreement is not a geometry disagreement.
+
+    Checking the plan against the header instead refused every shard of the
+    cluster-guided run for a mismatch that predates the plan and that the
+    unchunked path tolerates. The presence check stays: a bam whose header
+    omits the contig entirely holds nothing to extract.
+    """
+
+    genome, gtf, superset, reads, _lengths = inputs
+    plan, _plan_doc, _cuts = shared_plan
+
+    # Same reads, same coordinates, same fasta -- only the header's LN is the
+    # full-assembly value, which is what an aligner against GRCh38 writes.
+    oversized = _write_bam(
+        tmp_path / "full_header.bam",
+        reads,
+        lengths=((CONTIG, CONTIG_LEN * 2929), (OTHER_CONTIG, OTHER_LEN * 2929)),
+    )
+
+    result = _apply(tmp_path, genome, gtf, oversized, plan, "oversized")
+    _ok(result)
+    # The geometry is the PLAN's, and its last boundary sits at the FASTA length.
+    # A run that had re-derived bounds from the header would end its final chunk
+    # 2929x further out, and a run that had reselected locally would not match a
+    # sibling applying the same plan to the superset bam.
+    got = _geometry(tmp_path / "work_oversized")
+    control = _apply(tmp_path, genome, gtf, superset, plan, "control")
+    _ok(control)
+    assert got == _geometry(tmp_path / "work_control")
+
+    ends = [rend for _cid, chrom, _lend, rend, *_ in got if chrom == CONTIG]
+    assert max(ends) == CONTIG_LEN, (ends, CONTIG_LEN)

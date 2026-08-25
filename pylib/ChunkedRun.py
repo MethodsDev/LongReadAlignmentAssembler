@@ -2890,19 +2890,25 @@ def selections_from_chunk_plan(plan, path, args, contigs):
                     chrom, path, args.bam
                 )
             )
-        for label, length in (
-            (args.genome_fa, fasta_lengths[chrom]),
-            (args.bam, bam_lengths[chrom]),
-        ):
-            if planned_length != length:
-                raise PipelineError(
-                    "chunk plan {} places contig {}'s cuts on a {} bp contig and "
-                    "{} says it is {} bp. The last segment of every contig runs "
-                    "to its end, so applying this plan would put the final "
-                    "boundary where this run's reads are not.".format(
-                        path, chrom, planned_length, label, length
-                    )
+        # LENGTH is compared against the FASTA only, though presence is required in
+        # both. The fasta is what decides geometry -- the last segment of a contig
+        # runs to the length the extractor will fetch sequence for, and that fetch
+        # is a fasta fetch. A bam header may legitimately state a different length
+        # for the same name: aligning against a full assembly and then analysing
+        # against a subsetted fasta is a supported configuration, and the
+        # single-cell fixture is exactly it -- reads aligned to GRCh38 chr19
+        # (58,617,616 bp) analysed against a 2,000,000 bp slice. Comparing the plan
+        # to the header refused every shard of that run for a disagreement that
+        # predates the plan and that the unchunked path tolerates.
+        if planned_length != fasta_lengths[chrom]:
+            raise PipelineError(
+                "chunk plan {} places contig {}'s cuts on a {} bp contig and "
+                "{} says it is {} bp. The last segment of every contig runs "
+                "to its end, so applying this plan would put the final "
+                "boundary where this run's reads are not.".format(
+                    path, chrom, planned_length, args.genome_fa, fasta_lengths[chrom]
                 )
+            )
 
     if args.gtf:
         planned_annotation = geometry.get("annotation")
