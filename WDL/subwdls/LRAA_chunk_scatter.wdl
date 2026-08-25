@@ -14,7 +14,7 @@ version 1.0
 #
 # LRAA.wdl stays as-is and remains the supported chromosome-scatter path.
 
-workflow LRAA_chunk_scatter_wf {
+workflow LRAA_chunk_scatter {
     input {
         String sample_id
         File referenceGenome
@@ -25,6 +25,15 @@ workflow LRAA_chunk_scatter_wf {
         Boolean HiFi = false
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
+        # Restrict the partition to these contigs, space-separated as
+        # LRAA.wdl's main_chromosomes is. Empty means every reference the genome
+        # fasta and the bam header agree on. Passed to ChunkedRun as --contigs,
+        # which refuses a name absent from both rather than silently dropping it.
+        String main_chromosomes = ""
+        # Contigs to run in LRAA oversimplify mode, named as in the genome
+        # fasta. ChunkedRun resolves it per chunk and rewrites the name to the
+        # mini contig, so a caller writes the ORIGINAL name here.
+        String? oversimplify
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         File? cell_list
@@ -66,6 +75,7 @@ workflow LRAA_chunk_scatter_wf {
             inputBAM = inputBAM,
             inputBAMindex = inputBAMindex,
             annot_gtf = annot_gtf,
+            main_chromosomes = main_chromosomes,
             discovery = discovery,
             HiFi = HiFi,
             min_mapping_quality = min_mapping_quality,
@@ -97,6 +107,7 @@ workflow LRAA_chunk_scatter_wf {
                 read_umi_tag = read_umi_tag,
                 stream_reads = stream_reads,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+                oversimplify = oversimplify,
                 chunkCpu = chunkCpu,
                 chunkMemoryGB = chunkMemoryGB,
                 chunkPreemptible = chunkPreemptible,
@@ -122,6 +133,7 @@ workflow LRAA_chunk_scatter_wf {
         File mergedQuantExpr = merge_chunks.mergedQuantExpr
         File mergedQuantTracking = merge_chunks.mergedQuantTracking
         File mergedTpmAudit = merge_chunks.mergedTpmAudit
+        File mergedReadAssignmentSummary = merge_chunks.mergedReadAssignmentSummary
         File? mergedGTF = merge_chunks.mergedGTF
         File mergeResult = merge_chunks.mergeResult
         File chunkPlan = make_chunks.chunkPlan
@@ -149,6 +161,7 @@ task make_chunks {
         Boolean stream_reads
         Boolean rescue_unassigned_reads_via_transcriptome_alignment
         Int? num_total_reads
+        String main_chromosomes
         Int makeChunksCpu
         Int makeChunksMemoryGB
         String docker
@@ -197,6 +210,7 @@ task make_chunks {
         --num_total_reads "${N}" \
         --no_reuse_source_bam \
         --stop_after_make_chunks \
+        ~{if main_chromosomes != "" then "--contigs " + sub(main_chromosomes, " +", ",") else ""} \
         ~{true="--HiFi" false="" HiFi} \
         --min_mapping_quality ~{min_mapping_quality} \
         --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \
@@ -266,6 +280,7 @@ task process_chunk {
         String read_umi_tag
         Boolean stream_reads
         Boolean rescue_unassigned_reads_via_transcriptome_alignment
+        String? oversimplify
         Int chunkCpu
         Int chunkMemoryGB
         Int chunkPreemptible

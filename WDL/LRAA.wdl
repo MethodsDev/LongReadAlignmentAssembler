@@ -2,6 +2,7 @@ version 1.0
 
 import "subwdls/Partition_data_by_chromosome.wdl" as PartByChr
 import "subwdls/LRAA_runner.wdl" as LRAA_runner
+import "subwdls/LRAA_chunk_scatter.wdl" as ChunkScatter
 
 
 workflow LRAA_wf {
@@ -15,6 +16,27 @@ workflow LRAA_wf {
         Boolean HiFi = false
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
+
+        # HOW the work is divided across tasks. Chunking itself is unconditional in
+        # all three; what differs is where the chunks run.
+        #
+        #   off             one LRAA task for the whole (optionally filtered)
+        #                   genome, chunked internally under its own cpu_budget.
+        #   by_chromosome   one task per contig, each chunked internally. The
+        #                   makespan floor is the longest contig.
+        #   by_chunk        one make-chunks task, a scatter of one task per CHUNK,
+        #                   then one merge. The floor is one chunk, and the leaves
+        #                   are small enough to run preemptible.
+        #
+        # main_chromosomes is a CONTIG FILTER in every mode, not the mode switch it
+        # used to be: by_chromosome partitions those contigs, by_chunk restricts the
+        # partition to them, and off passes a single name through as --contig.
+        String scattering = "by_chunk"
+        # Preemptibility of the per-chunk leaf tasks in by_chunk mode. The only
+        # preemptible knob surfaced here: a chunk leaf is short, independent and
+        # cheap to redo, whereas a chromosome shard or a merge is long-running and
+        # loses substantial work to a preemption.
+        Int chunkPreemptible = 3
         String? region # example: "chr1:100000-200000"; when set, workflow will not split by chromosome and will pass --region to LRAA
         String? oversimplify # comma-separated contig names to run in oversimplify mode
         
@@ -142,11 +164,51 @@ workflow LRAA_wf {
     Int direct_memoryGB = select_first([memoryGB, memoryGB_whole_genome])
     Int scattered_memoryGB = select_first([memoryGBPerWorkerScattered, memoryGB_per_chromosome_shard])
 
-    Boolean run_without_splitting = (main_chromosomes == "" || defined(region))
+    # region forces `off`: a region restriction and a genome-wide partition are two
+    # ways of saying the same thing, and only the unscattered path passes --region
+    # through to LRAA. Validated in validate_scattering rather than silently
+    # overridden here, so a caller who asked for both is told.
+    Boolean scatter_by_chromosome = (scattering == "by_chromosome")
+    Boolean scatter_by_chunk = (scattering == "by_chunk")
+    Boolean run_without_splitting = (scattering == "off")
     String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
     String LRAA_output_prefix = sample_id + "." + LRAA_output_suffix
-    
-    if (!run_without_splitting) {
+
+    call validate_scattering {
+        input:
+            scattering = scattering,
+            main_chromosomes = main_chromosomes,
+            region_given = defined(region),
+            docker = docker
+    }
+
+    if (scatter_by_chunk) {
+        call ChunkScatter.LRAA_chunk_scatter as chunk_scatter {
+            input:
+                sample_id = sample_id,
+                referenceGenome = referenceGenome,
+                inputBAM = inputBAM,
+                annot_gtf = annot_gtf,
+                main_chromosomes = main_chromosomes,
+                oversimplify = oversimplify,
+                quant_only = quant_only,
+                HiFi = HiFi,
+                min_mapping_quality = min_mapping_quality,
+                min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                cell_list = cell_list,
+                cell_barcode_tag = cell_barcode_tag,
+                read_umi_tag = read_umi_tag,
+                stream_reads = stream_reads,
+                rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+                num_total_reads = num_total_reads,
+                chunkPreemptible = chunkPreemptible,
+                docker = docker
+        }
+    }
+
+    if (scatter_by_chromosome) {
 
         if (!defined(num_total_reads)) {
             call count_bam {
@@ -156,6 +218,21 @@ workflow LRAA_wf {
                     docker = docker
             }
         }
+
+        # Unset main_chromosomes means "every contig the fasta and the bam agree
+        # on", derived rather than left empty -- an empty list would partition
+        # nothing.
+        if (main_chromosomes == "") {
+            call derive_contigs {
+                input:
+                    referenceGenome = referenceGenome,
+                    inputBAM = inputBAM,
+                    docker = docker
+            }
+        }
+        String chromosomes_to_partition = if (main_chromosomes != "")
+            then main_chromosomes
+            else select_first([derive_contigs.contigs])
 
         Int scatter_num_total_reads = select_first([num_total_reads, count_bam.count])
 
@@ -168,7 +245,7 @@ workflow LRAA_wf {
                 bam_for_sg = bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
-                chromosomes_want_partitioned = main_chromosomes,
+                chromosomes_want_partitioned = chromosomes_to_partition,
                 docker = docker,
             }
      
@@ -298,20 +375,32 @@ workflow LRAA_wf {
     }
     
     output {
-    File mergedQuantExpr = select_first([mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]) 
-    File mergedQuantTracking = select_first([mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
-    File? mergedGTF = if (!quant_only) then select_first([merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf 
+    # Three producers now, so each output names all of them. by_chunk merges
+    # inside its subworkflow, by_chromosome merges here, off produces directly.
+    File mergedQuantExpr = select_first([chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr])
+    File mergedQuantTracking = select_first([chunk_scatter.mergedQuantTracking, mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
+    File? mergedGTF = if (!quant_only) then select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf
+    # by_chunk has no per-SHARD summaries to surface: its units are chunks, and
+    # stage 6 merges them inside the subworkflow. The merged table is the one
+    # below, and it is the artifact single-cell consumes.
     Array[File] shardReadAssignmentSummaries = if (run_without_splitting) then select_all([LRAA_direct.LRAA_read_assignment_summary]) else select_all(select_first([LRAA_scatter.LRAA_read_assignment_summary, []]))
-    File? mergedReadAssignmentSummary = if (run_without_splitting) then LRAA_direct.LRAA_read_assignment_summary else mergeReadAssignmentSummaries.mergedSummaryFile
+    File? mergedReadAssignmentSummary = if (scatter_by_chunk) then chunk_scatter.mergedReadAssignmentSummary else if (run_without_splitting) then LRAA_direct.LRAA_read_assignment_summary else mergeReadAssignmentSummaries.mergedSummaryFile
     # The depth-normalized BAM(s) the splice graph -- and therefore isoform identification --
     # was built from. Quantification does not use these; it runs against the unnormalized quant
     # BAM. Empty when no_norm is set. Scattered runs normalize each chromosome shard separately,
-    # so this is one BAM per shard rather than one whole-genome BAM.
+    # so this is one BAM per shard rather than one whole-genome BAM. EMPTY in by_chunk: the
+    # normalization there is per UNIT inside a chunk, and surfacing those is a separate change.
     Array[File] normalizedSpliceGraphBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bam]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bam, []]))
     Array[File] normalizedSpliceGraphBais = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bai]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bai, []]))
-    # One per shard: the chunk manifests and per-chunk timings. Always populated, since
-    # every run chunks.
+    # One per shard: the chunk manifests and per-chunk timings. Populated by the
+    # two modes that run a chunked LRAA per task; by_chunk reports its partition
+    # through chunkPlan and chunkLogs instead.
     Array[File] chunkReports = if (run_without_splitting) then select_all([LRAA_direct.LRAA_chunk_report]) else select_all(select_first([LRAA_scatter.LRAA_chunk_report, []]))
+    # by_chunk only, empty otherwise.
+    File? chunkPlan = chunk_scatter.chunkPlan
+    Array[File] chunkLogs = select_first([chunk_scatter.chunkLogs, []])
+    File? mergedTpmAudit = chunk_scatter.mergedTpmAudit
+    File? mergeResult = chunk_scatter.mergeResult
     }
 }
 
@@ -583,6 +672,63 @@ with out_path.open("wt", newline="") as ofh:
     }
 }
 
+task validate_scattering {
+    # WDL 1.0 has neither an enum nor a fail(), so the refusals live in a task
+    # whose command exits non-zero. One place, named values in the message, and it
+    # runs before anything expensive.
+    input {
+        String scattering
+        String main_chromosomes
+        Boolean region_given
+        String docker
+    }
+
+    command <<<
+    set -euo pipefail
+
+    case "~{scattering}" in
+        off|by_chromosome|by_chunk) ;;
+        *)
+            echo "Error: scattering must be off, by_chromosome or by_chunk; got '~{scattering}'" >&2
+            exit 1
+            ;;
+    esac
+
+    n=$(echo "~{main_chromosomes}" | wc -w)
+
+    # region restricts to one interval, which only the unscattered path forwards
+    # to LRAA. Scattering a partition across a region is two ways of saying the
+    # same thing, and the combination would silently ignore one of them.
+    if [[ "~{region_given}" == "true" && "~{scattering}" != "off" ]]; then
+        echo "Error: region requires scattering=off; got scattering=~{scattering}" >&2
+        exit 1
+    fi
+
+    # off runs ONE LRAA invocation, whose own restriction is a single --contig or
+    # a --region. A list of contigs has no representation there, so it is refused
+    # rather than partly honoured.
+    if [[ "~{scattering}" == "off" && "${n}" -gt 1 ]]; then
+        echo "Error: scattering=off accepts at most one contig in main_chromosomes, got ${n}: ~{main_chromosomes}" >&2
+        exit 1
+    fi
+
+
+    echo "scattering=~{scattering} contigs=${n} region=~{region_given}"
+    >>>
+
+    output {
+        String checked = read_string(stdout())
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "1 GiB"
+        disks: "local-disk 10 HDD"
+    }
+}
+
+
 task count_bam {
   input {
     File bam
@@ -615,3 +761,57 @@ task count_bam {
   }
 }
 
+
+
+task derive_contigs {
+    # The contig list by_chromosome scatters over when the caller named none:
+    # every reference the genome fasta and the bam header AGREE on, in fasta
+    # order. Same rule ChunkedRun.enumerate_prep_contigs applies for chunking,
+    # and for the same reason -- a reference absent from the bam header cannot
+    # hold a record, so scattering a task for it produces an empty shard, while
+    # a whole-genome fasta carries enough unplaced scaffolds to turn that into
+    # hundreds of them.
+    input {
+        File referenceGenome
+        File inputBAM
+        String docker
+    }
+
+    command <<<
+    set -euo pipefail
+
+    # faidx writes beside its argument, and the input mount may be read-only
+    mkdir -p work
+    ln -s ~{referenceGenome} work/genome.fa
+    if [[ -f "~{referenceGenome}.fai" ]]; then
+        ln -s ~{referenceGenome}.fai work/genome.fa.fai
+    else
+        samtools faidx work/genome.fa
+    fi
+
+    cut -f1 work/genome.fa.fai > fasta_contigs.txt
+    samtools view -H ~{inputBAM} | awk '$1=="@SQ"{for(i=2;i<=NF;i++) if ($i ~ /^SN:/) {sub(/^SN:/,"",$i); print $i}}' > bam_contigs.txt
+
+    # fasta ORDER preserved, so the shard order matches what an unfiltered run
+    # would have produced
+    awk 'NR==FNR{seen[$0]=1; next} ($0 in seen)' bam_contigs.txt fasta_contigs.txt > kept.txt
+
+    if [[ ! -s kept.txt ]]; then
+        echo "Error: no reference in ~{referenceGenome} appears in the bam header, so there is nothing to scatter over" >&2
+        exit 1
+    fi
+    paste -sd' ' kept.txt
+    >>>
+
+    output {
+        String contigs = read_string(stdout())
+        Int num_contigs = length(read_lines("kept.txt"))
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
+        disks: "local-disk 20 HDD"
+    }
+}

@@ -1,15 +1,15 @@
 {
-  "LRAA_wf.HiFi":"${this.LRAA_HiFi}",
-  "LRAA_wf.annot_gtf":"${this.referenceAnnotation_full}",
-  "LRAA_wf.docker":"us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest",
-  "LRAA_wf.inputBAM":"${this.inputBAM}",
-  "LRAA_wf.main_chromosomes":"${this.LRAA_main_chromosomes}",
-  
-  "LRAA_wf.rescue_unassigned_reads_via_transcriptome_alignment":"${true}",
-  "LRAA_wf.min_mapping_quality":"${0}",
-  "LRAA_wf.min_mapping_quality_for_final_quant":"${0}",
-  "LRAA_wf.min_per_id":"${}",
-  "LRAA_wf.quant_only":"${true}",
-  "LRAA_wf.referenceGenome":"${this.referenceGenome}",
-  "LRAA_wf.sample_id":"${this.sample_id}"
+  "LRAA_wf.HiFi": "${this.LRAA_HiFi}",
+  "LRAA_wf.annot_gtf": "${this.referenceAnnotation_full}",
+  "LRAA_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest",
+  "LRAA_wf.inputBAM": "${this.inputBAM}",
+  "LRAA_wf.main_chromosomes": "${this.LRAA_main_chromosomes}",
+  "LRAA_wf.min_mapping_quality": "${0}",
+  "LRAA_wf.min_mapping_quality_for_final_quant": "${0}",
+  "LRAA_wf.min_per_id": "${}",
+  "LRAA_wf.quant_only": "${true}",
+  "LRAA_wf.referenceGenome": "${this.referenceGenome}",
+  "LRAA_wf.rescue_unassigned_reads_via_transcriptome_alignment": "${true}",
+  "LRAA_wf.sample_id": "${this.sample_id}",
+  "LRAA_wf.scattering": "by_chromosome"
 }

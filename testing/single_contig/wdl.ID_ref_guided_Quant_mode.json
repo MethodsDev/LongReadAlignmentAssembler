@@ -1,4 +1,5 @@
 {
+    "LRAA_wf.scattering" : "off",
     "LRAA_wf.sample_id" : "test.ID_ref_guided_mode",
     "LRAA_wf.inputBAM" : "pacbio.PBLR.small.bam",
     "LRAA_wf.referenceGenome" : "ref_genome.fa",

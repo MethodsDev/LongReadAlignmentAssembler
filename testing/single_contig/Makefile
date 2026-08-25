@@ -248,8 +248,8 @@ test_wdl_chunked_strandless:
 # task would satisfy the assertion while proving nothing about this build.
 test_wdl_chunk_scatter:
 	rm -rf __wdl_chunk_scatter
-	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA-chunk-scatter.wdl -i wdl.chunk_scatter_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunk_scatter/. --verbose
-	python3 -c 'import json,os; o=json.load(open("__wdl_chunk_scatter/outputs.json")); plan=json.load(open(o["LRAA_chunk_scatter_wf.chunkPlan"])); logs=o["LRAA_chunk_scatter_wf.chunkLogs"]; ids=[c["chunk_id"] for c in plan["chunks"]]; print("chunks: %r, chunk tasks: %d" % (ids, len(logs))); assert len(ids) > 1, "the contig was not cut, so per-chunk scatter never happened: %r" % (ids,); assert len(logs) == len(ids), "expected one task per chunk, got %d task(s) for %d chunk(s)" % (len(logs), len(ids)); assert os.path.getsize(o["LRAA_chunk_scatter_wf.mergedQuantExpr"]) > 0, "merged quant.expr is empty"'
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.chunk_scatter_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_chunk_scatter/. --verbose
+	python3 -c 'import json,os; o=json.load(open("__wdl_chunk_scatter/outputs.json")); plan=json.load(open(o["LRAA_wf.chunkPlan"])); logs=o["LRAA_wf.chunkLogs"]; ids=[c["chunk_id"] for c in plan["chunks"]]; print("chunks: %r, chunk tasks: %d" % (ids, len(logs))); assert len(ids) > 1, "the contig was not cut, so per-chunk scatter never happened: %r" % (ids,); assert len(logs) == len(ids), "expected one task per chunk, got %d task(s) for %d chunk(s)" % (len(logs), len(ids)); assert os.path.getsize(o["LRAA_wf.mergedQuantExpr"]) > 0, "merged quant.expr is empty"; assert os.path.getsize(o["LRAA_wf.mergedReadAssignmentSummary"]) > 0, "merged read-assignment summary is empty"'
 
 test_wdl_ORF_prediction:
 	$(MINIWDL_RUN) ../../WDL/LRAA-ORF-prediction.wdl -i wdl.ORF_prediction.json $(LRAA_WDL_DOCKER_ORF) --verbose
