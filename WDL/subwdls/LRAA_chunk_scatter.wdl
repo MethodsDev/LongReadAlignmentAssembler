@@ -71,13 +71,21 @@ workflow LRAA_chunk_scatter {
         # Its concurrency comes from --cpu_budget, so cpu IS that budget, and its
         # peak is therefore concurrency x per-unit rather than a constant.
         #
-        # MEASURED on the PBMC whole-genome library (81.5M reads, 7.8 GB bam, 305
-        # chunks over 25 contigs, from this task's own makeChunksResources and
-        # timing.json): per-unit peak 80 MiB for a cut selection and 90 MiB for an
-        # extraction. At 16 workers that is ~1.4 GiB plus the driver, so 32 GiB was
-        # ~20x the need. 8 GiB keeps ~5x headroom over the measurement and still
-        # covers this task's stated worst case, a cut selection against a
-        # whole-genome GTF.
+        # 8 GiB is PROVISIONAL, inferred rather than measured, and the distinction
+        # matters here. On the PBMC whole-genome library (81.5M reads, 7.8 GB bam,
+        # 305 chunks over 25 contigs) this task's timing.json reports PER-SUBPROCESS
+        # peaks of 80 MiB for a cut selection and 90 MiB for an extraction, which at
+        # 16 workers implies ~1.4 GiB. But that is the same interval-sampled,
+        # one-subprocess-at-a-time metric that understated a LEAF's true container
+        # peak by 4x (789 MB sampled against 3,003 MiB from the kernel), so the same
+        # understatement is likely here and the implied 1.4 GiB is a floor, not a
+        # peak. No task-level number exists for this task yet: the cgroup telemetry
+        # that would give one (makeChunksResources) was added after that run.
+        #
+        # So this is a reduction from 32 GiB with ~5x margin over an inferred floor,
+        # not a measured fit. Confirm it against a whole-genome makeChunksResources
+        # row before trusting it, and raise it rather than debug a queue if this
+        # task is ever OOM-killed.
         # Optional so a CALLER can forward its own knobs without restating these
         # numbers. LRAA.wdl passes Int? straight through; the values live here
         # once, resolved below.
