@@ -121,10 +121,16 @@ workflow LRAA_chunk_scatter {
         # That is the property the external sort was built for, and it is why a
         # constant is the right shape here where it was the wrong shape for a leaf.
         #
-        # 4 GiB is ~11x the measurement, kept generous because this is the terminal
-        # gather: under-provisioning it discards the entire run's work, and the task
-        # is non-preemptible for the same reason. Raise the run cap and this number
-        # must move with it.
+        # 8 GiB, not the ~4 the measurement alone would justify. This project's
+        # rule for a memory reservation is a SAFE MINIMUM of 8 GiB wherever a
+        # measurement suggests 4 or less: the asymmetry is not close. Over-asking
+        # costs scheduling latency on a shared box and a little money on Terra;
+        # under-asking a non-preemptible terminal gather discards every leaf's work
+        # and the whole run's wall time. ~22x the measured 371 MiB, and still 4x
+        # below the 32 GiB this replaced.
+        #
+        # Raise the external sort's run cap and this must move with it, since the
+        # cap is what bounds the peak.
         Int? mergeCpu
         Int? mergeMemoryGB
 
@@ -140,7 +146,7 @@ workflow LRAA_chunk_scatter {
     Int chunkCpu_use = select_first([chunkCpu, 2])
     Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
     Int mergeCpu_use = select_first([mergeCpu, 2])
-    Int mergeMemoryGB_use = select_first([mergeMemoryGB, 4])
+    Int mergeMemoryGB_use = select_first([mergeMemoryGB, 8])
 
     Boolean discovery = !quant_only
     String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
