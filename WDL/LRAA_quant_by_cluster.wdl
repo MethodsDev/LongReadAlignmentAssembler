@@ -53,7 +53,10 @@ workflow LRAA_quant_by_cluster {
         # This applies only when main_chromosomes is non-empty for the per-cluster quantification calls below.
         Int? memoryGB_quant_scattered
         # Used only for chromosome-sharded per-cluster quantification runs.
-        Int cpu_scattered = 2
+        # OPTIONAL: forwarded to LRAA.wdl's cpuScattered, which resolves
+        # select_first([cpuScattered, shard_cpu_computed]). A concrete value here
+        # disables that per-shard estimate for every per-cluster quant.
+        Int? cpu_scattered
         # The one-off shared-chunk-plan task below. Cut selection runs one concurrent
         # unit per contig under --cpu_budget, so cpu IS that budget.
         Int cpu_chunk_plan = 16

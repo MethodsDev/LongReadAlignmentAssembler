@@ -68,30 +68,77 @@ workflow LRAA_chunk_scatter {
         Int? num_total_reads
 
         # make-chunks: one task running the genome-wide selection/extraction pool.
-        # Its concurrency comes from --cpu_budget, so cpu IS that budget.
-        Int makeChunksCpu = 16
-        Int makeChunksMemoryGB = 32
+        # Its concurrency comes from --cpu_budget, so cpu IS that budget, and its
+        # peak is therefore concurrency x per-unit rather than a constant.
+        #
+        # MEASURED on the PBMC whole-genome library (81.5M reads, 7.8 GB bam, 305
+        # chunks over 25 contigs, from this task's own makeChunksResources and
+        # timing.json): per-unit peak 80 MiB for a cut selection and 90 MiB for an
+        # extraction. At 16 workers that is ~1.4 GiB plus the driver, so 32 GiB was
+        # ~20x the need. 8 GiB keeps ~5x headroom over the measurement and still
+        # covers this task's stated worst case, a cut selection against a
+        # whole-genome GTF.
+        # Optional so a CALLER can forward its own knobs without restating these
+        # numbers. LRAA.wdl passes Int? straight through; the values live here
+        # once, resolved below.
+        Int? makeChunksCpu
+        Int? makeChunksMemoryGB
 
-        # one task per chunk. 16 GiB is the requested box, not a measured peak:
-        # ChunkedRun's own scheduler ESTIMATES a chunk at
-        # CHUNK_UNIT_FIXED_MIB + 22 MiB per genomic Mb (pylib/ChunkedRun.py),
-        # which is a deliberate upper envelope, so treat 16 as provisioned headroom
-        # and raise it if a leaf is OOM-killed.
-        Int chunkCpu = 2
-        Int chunkMemoryGB = 16
+        # one task per chunk. See the note above the make_chunks call for why this
+        # is a constant rather than derived from chunk width, and what the measured
+        # peaks actually are.
+        Int? chunkCpu
+        Int? chunkMemoryGB
         Int chunkPreemptible = 3
 
-        # stage 6. Sized above the leaves because the merge is where a whole-genome
-        # run's peak RSS lives -- an external merge sort over every unit's tracking rows.
-        Int mergeCpu = 2
-        Int mergeMemoryGB = 32
+        # stage 6, and the one number here that is still NOT measured at scale.
+        # It is an external merge sort over every unit's tracking rows, and its
+        # ceiling is set by tracking_merge_peak_resident_rows, now reported in
+        # mergeResources. The fixture measures 22 MiB at 300 resident rows, which
+        # does not extrapolate -- almost all of it is interpreter baseline. Left at
+        # 32 GiB deliberately: a whole-genome merge is the terminal gather over
+        # every shard, so under-provisioning it discards the entire run's work.
+        # Lower it when a genome-scale mergeResources row exists, not before.
+        Int? mergeCpu
+        Int? mergeMemoryGB
 
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
 
+    # The defaults, in one place. Every number here is justified in the input
+    # comments above from the PBMC whole-genome measurement.
+    Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
+    Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 8])
+    Int chunkCpu_use = select_first([chunkCpu, 2])
+    Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
+    Int mergeCpu_use = select_first([mergeCpu, 2])
+    Int mergeMemoryGB_use = select_first([mergeMemoryGB, 32])
+
     Boolean discovery = !quant_only
     String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
     String LRAA_output_prefix = sample_id + "." + LRAA_output_suffix
+
+    # NOTE on leaf memory, deliberately NOT derived from approx_MB_per_cut.
+    #
+    # MEASURED on the PBMC whole-genome library (81.5M reads, 305 chunks, 150
+    # leaves sampled via cgroup memory.peak): median 1,037 MiB, p95 2,026, max
+    # 3,003. So the 16 GiB below is ~5x the worst leaf of a real library at the
+    # 10 Mb default, and on a ~300-leaf scatter that over-request is the
+    # difference between a scatter that schedules and one that queues.
+    #
+    # A width-derived value (4 x (1 + 0.022 x span) GiB, mirroring
+    # pylib/ChunkedRun.py's chunk_unit_peak_mib doubled for the two orientations)
+    # lands at 5 GiB and fits the measurement -- but approx_MB_per_cut is a TARGET,
+    # not a bound. The last segment of a contig absorbs the remainder, and a contig
+    # whose every candidate position is blocked by annotation is not cut at all, so
+    # an actual chunk can be far wider than the target: a whole chr1 unit measures
+    # 5,594.7 MiB, 11.2 GiB for its pair, which a target-derived 5 GiB would
+    # under-request precisely on the pathological chunk it has to cover.
+    #
+    # The correct fix is for make_chunks to emit a per-chunk memory value from each
+    # chunk's ACTUAL span -- it already computes the spans, and chunk_unit_peak_mib
+    # already exists -- as a file per chunk globbed in the same order as chunkTars,
+    # so the scatter can zip them. Until that lands, the constant stays.
 
     call make_chunks {
         input:
@@ -115,8 +162,8 @@ workflow LRAA_chunk_scatter {
             stream_reads = stream_reads,
             rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
             num_total_reads = num_total_reads,
-            makeChunksCpu = makeChunksCpu,
-            makeChunksMemoryGB = makeChunksMemoryGB,
+            makeChunksCpu = makeChunksCpu_use,
+            makeChunksMemoryGB = makeChunksMemoryGB_use,
             docker = docker
     }
 
@@ -135,8 +182,8 @@ workflow LRAA_chunk_scatter {
                 stream_reads = stream_reads,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 oversimplify = oversimplify,
-                chunkCpu = chunkCpu,
-                chunkMemoryGB = chunkMemoryGB,
+                chunkCpu = chunkCpu_use,
+                chunkMemoryGB = chunkMemoryGB_use,
                 chunkPreemptible = chunkPreemptible,
                 docker = docker
         }
@@ -151,8 +198,8 @@ workflow LRAA_chunk_scatter {
             readAssignmentSummaries = flatten(process_chunk.unitReadAssignmentSummary),
             discovery = discovery,
             outputFilePrefix = LRAA_output_prefix,
-            mergeCpu = mergeCpu,
-            mergeMemoryGB = mergeMemoryGB,
+            mergeCpu = mergeCpu_use,
+            mergeMemoryGB = mergeMemoryGB_use,
             docker = docker
     }
 

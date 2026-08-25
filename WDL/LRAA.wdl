@@ -70,6 +70,18 @@ workflow LRAA_wf {
         # cheap to redo, whereas a chromosome shard or a merge is long-running and
         # loses substantial work to a preemption.
         Int chunkPreemptible = 3
+
+        # by_chunk resource knobs, forwarded to subwdls/LRAA_chunk_scatter.wdl.
+        # Optional on purpose: unset takes that subworkflow's defaults, which are
+        # measured from a whole-genome PBMC run and documented there. Named with a
+        # chunk prefix where they would otherwise collide with this workflow's own
+        # cpu/memoryGB, which size a chromosome shard rather than a 10 Mb chunk.
+        Int? chunkMakeChunksCpu
+        Int? chunkMakeChunksMemoryGB
+        Int? chunkCpu
+        Int? chunkMemoryGB
+        Int? chunkMergeCpu
+        Int? chunkMergeMemoryGB
         String? region # example: "chr1:100000-200000"; when set, workflow will not split by chromosome and will pass --region to LRAA
         String? oversimplify # comma-separated contig names to run in oversimplify mode
         
@@ -247,6 +259,21 @@ workflow LRAA_wf {
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 num_total_reads = num_total_reads,
                 chunkPreemptible = chunkPreemptible,
+                # Without these six the by_chunk path was UNREACHABLE for sizing:
+                # cpu/memoryGB stopped at this workflow, so every caller got the
+                # subworkflow's defaults whatever it passed. On a 16-core box that
+                # meant make_chunks asking 16 cpu and each of ~300 leaves 16 GiB,
+                # and a run sitting in "no suitable node" until something else
+                # finished. Deliberately NOT wired to this workflow's own
+                # cpu/memoryGB: those size a whole-chromosome shard, which is the
+                # wrong shape for a 10 Mb chunk. Unset means the measured defaults
+                # in subwdls/LRAA_chunk_scatter.wdl.
+                makeChunksCpu = chunkMakeChunksCpu,
+                makeChunksMemoryGB = chunkMakeChunksMemoryGB,
+                chunkCpu = chunkCpu,
+                chunkMemoryGB = chunkMemoryGB,
+                mergeCpu = chunkMergeCpu,
+                mergeMemoryGB = chunkMergeMemoryGB,
                 docker = docker
         }
     }

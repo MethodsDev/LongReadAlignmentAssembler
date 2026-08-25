@@ -37,7 +37,9 @@ workflow LRAA_cell_cluster_guided {
         # across work units. There is no second knob to multiply it by.
         Int cpu = 2
         # Used only when main_chromosomes is non-empty and inner LRAA.wdl calls are chromosome-sharded.
-        Int cpuScattered = 9
+        # OPTIONAL: LRAA.wdl resolves select_first([cpuScattered, shard_cpu_computed]),
+        # so a concrete value here silently disables its per-shard estimate.
+        Int? cpuScattered
         # Optional override for direct inner LRAA.wdl runs.
         Int? memoryGB
         # Optional override for chromosome-sharded inner LRAA.wdl workers only.

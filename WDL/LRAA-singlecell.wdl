@@ -180,7 +180,12 @@ workflow LRAA_singlecell_wf {
     # second knob to multiply it by.
     Int cpu = 5
     # Used only when main_chromosomes is non-empty and LRAA runs are chromosome-sharded.
-    Int cpuScattered = 5
+    # OPTIONAL, deliberately. LRAA.wdl resolves this as
+    # select_first([cpuScattered, shard_cpu_computed]), so any concrete value here
+    # wins unconditionally and its contig-length-derived per-shard sizing never
+    # runs -- which is what a default of 5 did on every scattered single-cell run.
+    # Unset lets that estimate apply; set it to pin a value.
+    Int? cpuScattered
     # The initial whole-library LRAA run, separately from the per-cluster runs. It
     # is ONE task over every read, so its parallelism is bounded by how many chunks
     # it was cut into, while the per-cluster runs are many small tasks whose
