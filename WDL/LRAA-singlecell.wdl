@@ -199,6 +199,14 @@ workflow LRAA_singlecell_wf {
     Int? memoryGB
     # Optional override for chromosome-sharded LRAA workers only. Has no effect when main_chromosomes is empty.
     Int? memoryGBPerWorkerScattered
+    # Optional by_chunk overrides: make-chunks, chunk leaves, and merge need
+    # independently sized resources. Unset preserves LRAA.wdl's defaults.
+    Int? chunkMakeChunksCpu
+    Int? chunkMakeChunksMemoryGB
+    Int? chunkCpu
+    Int? chunkMemoryGB
+    Int? chunkMergeCpu
+    Int? chunkMergeMemoryGB
     Int memoryGBbuildSparseMatrices = 32
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
@@ -260,6 +268,12 @@ workflow LRAA_singlecell_wf {
         cpuScattered = cpuScattered,
         memoryGB = if defined(memoryGBInit) then memoryGBInit else memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+        chunkMakeChunksCpu = chunkMakeChunksCpu,
+        chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+        chunkCpu = chunkCpu,
+        chunkMemoryGB = chunkMemoryGB,
+        chunkMergeCpu = chunkMergeCpu,
+        chunkMergeMemoryGB = chunkMergeMemoryGB,
         diskSizeGB = diskSizeGB,
         docker = docker,
         quant_only = quant_only
@@ -345,6 +359,12 @@ workflow LRAA_singlecell_wf {
         cpuScattered = cpuScattered,
         memoryGB = memoryGB,
         memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+        chunkMakeChunksCpu = chunkMakeChunksCpu,
+        chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+        chunkCpu = chunkCpu,
+        chunkMemoryGB = chunkMemoryGB,
+        chunkMergeCpu = chunkMergeCpu,
+        chunkMergeMemoryGB = chunkMergeMemoryGB,
         memoryGBmergeGTFs = memoryGBmergeGTFs,
         memoryGBquantFinal = memoryGBquantFinal,
         memoryGBscSparseMatrices = memoryGBscSparseMatrices,

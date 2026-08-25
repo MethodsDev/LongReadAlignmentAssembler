@@ -52,6 +52,14 @@ workflow LRAA_quant_by_cluster {
         # Optional override for chromosome-sharded quant-only LRAA.wdl workers only.
         # This applies only when main_chromosomes is non-empty for the per-cluster quantification calls below.
         Int? memoryGB_quant_scattered
+        # Optional by_chunk overrides: make-chunks, chunk leaves, and merge need
+        # independently sized resources. Unset preserves LRAA.wdl's defaults.
+        Int? chunkMakeChunksCpu
+        Int? chunkMakeChunksMemoryGB
+        Int? chunkCpu
+        Int? chunkMemoryGB
+        Int? chunkMergeCpu
+        Int? chunkMergeMemoryGB
         # Used only for chromosome-sharded per-cluster quantification runs.
         # OPTIONAL: forwarded to LRAA.wdl's cpuScattered, which resolves
         # select_first([cpuScattered, shard_cpu_computed]). A concrete value here
@@ -237,6 +245,12 @@ workflow LRAA_quant_by_cluster {
                 cpuScattered = cpu_scattered,
                 memoryGB = memoryGB_quant,
                 memoryGBPerWorkerScattered = memoryGB_quant_scattered,
+                chunkMakeChunksCpu = chunkMakeChunksCpu,
+                chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+                chunkCpu = chunkCpu,
+                chunkMemoryGB = chunkMemoryGB,
+                chunkMergeCpu = chunkMergeCpu,
+                chunkMergeMemoryGB = chunkMergeMemoryGB,
                 docker = docker
         }
     }

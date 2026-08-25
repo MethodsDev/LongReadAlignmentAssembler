@@ -45,6 +45,14 @@ workflow LRAA_cell_cluster_guided {
         # Optional override for chromosome-sharded inner LRAA.wdl workers only.
         # The outer per-cluster scatter does not use this unless main_chromosomes triggers chromosome sharding inside each cluster run.
         Int? memoryGBPerWorkerScattered
+        # Optional by_chunk overrides: make-chunks, chunk leaves, and merge need
+        # independently sized resources. Unset preserves LRAA.wdl's defaults.
+        Int? chunkMakeChunksCpu
+        Int? chunkMakeChunksMemoryGB
+        Int? chunkCpu
+        Int? chunkMemoryGB
+        Int? chunkMergeCpu
+        Int? chunkMergeMemoryGB
         Int memoryGBmergeGTFs = 32
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16
@@ -116,6 +124,12 @@ workflow LRAA_cell_cluster_guided {
                     cpuScattered = cpuScattered,
                     memoryGB = memoryGB,
                     memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+                    chunkMakeChunksCpu = chunkMakeChunksCpu,
+                    chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+                    chunkCpu = chunkCpu,
+                    chunkMemoryGB = chunkMemoryGB,
+                    chunkMergeCpu = chunkMergeCpu,
+                    chunkMergeMemoryGB = chunkMergeMemoryGB,
                     docker = docker
             }
         }
@@ -188,6 +202,12 @@ workflow LRAA_cell_cluster_guided {
             memoryGB_merge = memoryGBquantMerge,
             memoryGB_quant = memoryGBquantFinal,
             memoryGB_quant_scattered = memoryGBPerWorkerScattered,
+            chunkMakeChunksCpu = chunkMakeChunksCpu,
+            chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+            chunkCpu = chunkCpu,
+            chunkMemoryGB = chunkMemoryGB,
+            chunkMergeCpu = chunkMergeCpu,
+            chunkMergeMemoryGB = chunkMergeMemoryGB,
             docker = docker
     }
 
