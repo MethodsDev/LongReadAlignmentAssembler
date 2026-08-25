@@ -1160,18 +1160,24 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     with open(outdir / "chunks" / chunk_id / "units.json") as fh:
         units = json.load(fh)["units"]
 
-    merged_dir = tmp = outdir / "summary_merge"
+    merged_dir = outdir / "summary_merge"
     os.makedirs(merged_dir, exist_ok=True)
     out = ChunkedRun.merge_read_assignment_summaries(str(merged_dir), units)
     assert out is not None, "a real chunked run must produce a merged summary"
 
-    with open(out, newline="") as fh:
+    # coverage rides alongside the path, so a consumer can tell whether the table
+    # describes every unit rather than having to assume it does
+    assert out["units_merged"] >= 1
+    assert out["units_merged"] + out["units_absent"] == out["units_total"]
+    assert out["complete"] is (out["units_absent"] == 0)
+
+    with open(out["path"], newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     workers = [r for r in rows if r["row_type"] == "worker"]
     totals = [r for r in rows if r["row_type"] == "TOTAL"]
 
-    # one worker row per unit, exactly one recomputed TOTAL
-    assert len(workers) == len(units), (len(workers), len(units))
+    # one worker row per CONTRIBUTING unit, exactly one recomputed TOTAL
+    assert len(workers) == out["units_merged"], (len(workers), out["units_merged"])
     assert len(totals) == 1
 
     # the number, not merely the file: TOTAL is the sum of the units, and nonzero
@@ -1179,10 +1185,15 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     assert int(totals[0]["reads_total"]) == expected
     assert expected > 0, "the fixture's reads should be counted, not zero"
 
-    # and the per-unit TOTAL rows were NOT folded in a second time
+    # and the per-unit TOTAL rows were NOT folded in a second time. Only units
+    # that actually wrote a summary are counted here: one that quantified nothing
+    # has no file, which is the case `units_absent` reports.
     per_unit_total = 0
     for unit in units:
-        with open(unit["quant_prefix"] + ".read_assignment.summary.tsv", newline="") as fh:
+        path = unit["quant_prefix"] + ".read_assignment.summary.tsv"
+        if not os.path.exists(path):
+            continue
+        with open(path, newline="") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 if row["row_type"] == "worker":
                     per_unit_total += int(row["reads_total"])

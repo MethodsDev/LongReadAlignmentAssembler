@@ -3891,7 +3891,19 @@ def merge_read_assignment_summaries(merged_dir, units):
         for row in rows:
             writer.writerow({f: row.get(f, "") for f in fieldnames})
         writer.writerow(total_row)
-    return out_path
+    # Path AND coverage. A consumer cannot otherwise tell whether this table
+    # describes every unit of the run: the units skipped above quantified nothing,
+    # but a shard can take one of run_quant_only's early returns while still
+    # HOLDING reads, and those reads are absent from these totals rather than
+    # counted as zero. Reporting the denominator's completeness is the difference
+    # between an incomplete number and a wrong one.
+    return {
+        "path": out_path,
+        "units_merged": len(present),
+        "units_absent": len(empty),
+        "units_total": len(summaries),
+        "complete": not empty,
+    }
 
 
 def merge_and_translate(outdir, units, discovery=False):
@@ -4064,7 +4076,24 @@ def merge_and_translate(outdir, units, discovery=False):
         # table is what set the run's memory ceiling, and a number that can be
         # read off a run is the only way to notice if it starts climbing again.
         "tracking_merge_peak_resident_rows": track_peak_rows,
-        "read_assignment_summary": merged_summary,
+        # Stays a PATH (or None), because that is what LRAA's publication step and
+        # the workflow merge both consume. Coverage rides alongside rather than
+        # inside it.
+        "read_assignment_summary": (
+            merged_summary["path"] if merged_summary else None
+        ),
+        # Whether that table covers every quant unit. False means some unit
+        # quantified nothing and wrote no summary; such a shard can still HOLD
+        # reads, so for those units the totals are incomplete rather than zero.
+        "read_assignment_summary_units_merged": (
+            merged_summary["units_merged"] if merged_summary else 0
+        ),
+        "read_assignment_summary_units_absent": (
+            merged_summary["units_absent"] if merged_summary else 0
+        ),
+        "read_assignment_summary_complete": (
+            bool(merged_summary["complete"]) if merged_summary else False
+        ),
     }
     if discovery:
         merged.update(merge_discovery_gtf(merged_dir, units))
