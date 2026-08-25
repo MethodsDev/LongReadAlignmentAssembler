@@ -184,7 +184,6 @@ workflow LRAA_quant_by_cluster {
                 # discovery exists to find. Do not hoist this task earlier in the graph
                 # to where only the reference annotation is available.
                 annot_gtf = annot_gtf,
-                main_chromosomes = main_chromosomes,
                 HiFi = HiFi,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
@@ -458,7 +457,8 @@ task emit_shared_chunk_plan {
         # The consolidated GTF the per-cluster quants target; see the call site for why
         # it must be that one and not the reference annotation.
         File annot_gtf
-        String main_chromosomes
+        # No main_chromosomes: the plan is emitted unrestricted on purpose. See the
+        # command block for why that is the safe superset for every consumer.
         Boolean HiFi
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
@@ -499,25 +499,40 @@ task emit_shared_chunk_plan {
     ln -s ~{referenceGenome} inputs/genome.fa
     samtools faidx inputs/genome.fa
 
-    # No --num_total_reads: cut selection has no use for the TPM denominator, and the
-    # denominator is per-cluster regardless -- each consuming run counts its own reads
-    # and never reads one out of the plan. No --discovery either: every per-cluster
-    # call in this workflow is quant_only, and that flag changes the effective
-    # mapping-quality floor cut selection uses, so the emitting run has to match the
-    # consuming ones.
+    # Emitted through the LRAA DRIVER, not by calling ChunkedRun.py directly.
+    # Cut placement filters on the RESOLVED min_per_id, and the --HiFi preset that
+    # raises it to 97.0 lives in the driver (LRAA:355) -- the standalone module's
+    # resolve_min_per_id just reads LRAA_Globals.config, which nothing has
+    # presetted when it runs on its own. Calling the module directly therefore
+    # selected at min_per_id 80 under --HiFi while every per-cluster consumer
+    # resolved 97.0, and the consumers correctly refused the plan as a different
+    # partition. Observed end to end on this fixture. Going through the driver
+    # makes the emitting and consuming resolution the SAME CODE, so they cannot
+    # drift again -- including for --config_update, which the module would also
+    # have ignored.
     #
-    # --output_dir is still required (cuts/, logs/ and the checkpoint dir live there);
-    # the plan is written at exactly the path given, deliberately OUTSIDE work/ so it
-    # cannot be confused with the per-chunk plan a --stop_after_make_chunks run writes
-    # at <output_dir>/chunk_plan.json.
-    /usr/local/src/LRAA/pylib/ChunkedRun.py \
+    # --quant_only with the merged GTF, matching every per-cluster call in this
+    # workflow: the mode changes the effective mapping-quality floor cut selection
+    # filters on, so the emitting run has to be in the same mode as the consuming
+    # ones. No --num_total_reads: selection has no use for the TPM denominator,
+    # and it is per-cluster regardless.
+    #
+    # NO contig restriction, deliberately. The driver takes a single --contig, not
+    # a list, and a plan is validated per contig the CONSUMING run processes --
+    # extra contigs in the plan are ignored, a missing one is refused. So the
+    # unrestricted plan is the safe superset for every consumer, whether it holds
+    # one chromosome (by_chromosome) or main_chromosomes (by_chunk). The cost is
+    # selection over scaffolds nothing quantifies, once per run.
+    /usr/local/src/LRAA/LRAA \
         --bam inputs/input.bam \
-        --genome_fa inputs/genome.fa \
+        --genome inputs/genome.fa \
         --gtf ~{annot_gtf} \
-        --output_dir work \
+        --quant_only \
+        --output_prefix shared_plan \
+        --chunk \
+        --chunk_work_dir work \
         --cpu_budget ~{cpu} \
         --emit_cut_plan shared_cut_plan.json \
-        ~{if main_chromosomes != "" then "--contigs " + sub(main_chromosomes, " +", ",") else ""} \
         ~{true="--HiFi" false="" HiFi} \
         --min_mapping_quality ~{min_mapping_quality} \
         --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \

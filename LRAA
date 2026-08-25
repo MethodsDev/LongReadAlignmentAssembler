@@ -1678,6 +1678,20 @@ def main():
         "disagree with this run's",
     )
     contig_group_setting.add_argument(
+        "--emit_cut_plan",
+        type=str,
+        default=None,
+        help="--chunk: select cuts and write the plan to this path, then stop "
+        "WITHOUT extracting anything. The counterpart to --chunk_plan: pay "
+        "selection once, apply the geometry in every caller. Emitted through THIS "
+        "driver rather than by calling ChunkedRun.py directly, because cut "
+        "placement filters on the resolved min_per_id and min_mapping_quality, "
+        "and only this driver applies the --HiFi preset and --config_update to "
+        "them. A plan emitted by the standalone module under --HiFi selects at "
+        "the unpresetted min_per_id, which every LRAA-driven consumer then "
+        "refuses as a different partition",
+    )
+    contig_group_setting.add_argument(
         "--chunk_work_dir",
         type=str,
         default=None,
@@ -3552,6 +3566,15 @@ def _run_chunked_mode(args):
         # back to choosing its own geometry -- silently, since a plan that never
         # arrives cannot mismatch.
         chunk_plan=args.chunk_plan,
+        # The producer side of the same pair. It has to travel through this driver
+        # for the reason its help text gives: the geometry a plan records is
+        # computed from the RESOLVED min_per_id and min_mapping_quality, and the
+        # preset plus --config_update that resolve them live here. Emitting from
+        # the standalone module instead selected at min_per_id 80 under --HiFi
+        # while every consumer resolved 97.0, and the consumers correctly refused
+        # the plan -- observed end to end on the single-cell cluster-guided
+        # fixture before this flag existed.
+        emit_cut_plan=args.emit_cut_plan,
         genome_fa=args.genome,
         gtf=args.gtf,
         # Quant-only is the pipeline's default; discovery is this flag's absence,
@@ -3604,6 +3627,23 @@ def _run_chunked_mode(args):
             placement.get("alignments_severed_monoexonic", 0),
             placement.get("alignments_severed_multiexon", 0),
         )
+
+    if args.emit_cut_plan:
+        # An emit-only run's DELIVERABLE is the geometry. It stops at cut selection
+        # by design, so there is no quant.expr and no model set to publish, and the
+        # publication block below would exit on their absence -- which it did,
+        # reporting "the chunked pipeline reported no quant_expr" on a run that had
+        # done exactly what it was asked. Returning here rather than teaching that
+        # block a third set of optional artifacts: the two are different runs, not
+        # one run with a sparser output.
+        emitted = outputs.get("cut_plan")
+        if not emitted or not os.path.exists(emitted):
+            sys.exit(
+                "Error: --emit_cut_plan {} produced no plan file; its work "
+                "directory is {}".format(args.emit_cut_plan, work_dir)
+            )
+        logger.info("chunked mode: cut plan written to %s; nothing extracted", emitted)
+        return 0
 
     output_prefix = _append_lraa_output_mode_suffix(
         args.output_prefix, bool(args.quant_only), args.gtf
