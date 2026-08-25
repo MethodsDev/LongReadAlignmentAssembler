@@ -82,10 +82,16 @@ workflow LRAA_chunk_scatter {
         # peak. No task-level number exists for this task yet: the cgroup telemetry
         # that would give one (makeChunksResources) was added after that run.
         #
-        # So this is a reduction from 32 GiB with ~5x margin over an inferred floor,
-        # not a measured fit. Confirm it against a whole-genome makeChunksResources
-        # row before trusting it, and raise it rather than debug a queue if this
-        # task is ever OOM-killed.
+        # So 8 GiB would be a reduction resting on an inferred floor, not a
+        # measured fit -- and this task is the wrong one to guess on: it is
+        # non-preemptible, it holds the whole input, and every leaf and the merge
+        # depend on it, so an under-request costs the entire run rather than one
+        # retry. STAYS AT 32 GiB for the same reason the leaf default stays at 16:
+        # both are reductions I can argue for and cannot yet verify, and this file
+        # should not lower a production default on a number it documents as a lower
+        # bound. 8 GiB is the candidate to apply once a whole-genome
+        # makeChunksResources row exists -- the telemetry that produces it is now
+        # wired, so this is one run away from being decidable.
         # Optional so a CALLER can forward its own knobs without restating these
         # numbers. LRAA.wdl passes Int? straight through; the values live here
         # once, resolved below.
@@ -114,9 +120,11 @@ workflow LRAA_chunk_scatter {
     }
 
     # The defaults, in one place. Every number here is justified in the input
-    # comments above from the PBMC whole-genome measurement.
+    # comments above. Both memory values are the PRE-EXISTING defaults, deliberately
+    # unchanged: each is a reduction I can argue for from a lower-bound measurement
+    # and cannot yet verify. The telemetry to settle them is wired.
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
-    Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 8])
+    Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 32])
     Int chunkCpu_use = select_first([chunkCpu, 2])
     Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
     Int mergeCpu_use = select_first([mergeCpu, 2])
