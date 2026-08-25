@@ -31,6 +31,7 @@ workflow LRAA_quant_by_cluster {
         # means LRAA's own defaults (10 Mb spacing, 1 Mb window).
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
+        String scattering = "by_chromosome"
         String? oversimplify
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
@@ -145,6 +146,7 @@ workflow LRAA_quant_by_cluster {
                 main_chromosomes = main_chromosomes,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
+                scattering = scattering,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                 cpu = cpu,

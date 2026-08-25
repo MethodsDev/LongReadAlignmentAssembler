@@ -152,6 +152,17 @@ workflow LRAA_singlecell_wf {
     Float? approx_MB_per_cut_init
     Float? approx_MB_per_cut_wiggle_window_init
 
+    # How each LRAA phase divides its work; see LRAA.wdl's `scattering`. The three
+    # phases want different shapes. The initial pass is ONE task over every read,
+    # so by_chunk is the only way to parallelise it. The per-cluster runs are many
+    # small tasks that already run side by side, and cutting them further only
+    # multiplies per-unit fixed cost -- measured on the test fixture, giving them
+    # 10 chunks took their stage-5 work from 27.2 to 43.7 min for no gain, because
+    # that phase already saturated every core.
+    String scattering_init = "by_chunk"
+    String scattering_per_cluster = "by_chromosome"
+    String scattering_final_quant = "by_chromosome"
+
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
     File? precomputed_init_gtf
@@ -237,6 +248,7 @@ workflow LRAA_singlecell_wf {
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
+        scattering = scattering_init,
         approx_MB_per_cut = if defined(approx_MB_per_cut_init) then approx_MB_per_cut_init else approx_MB_per_cut,
         approx_MB_per_cut_wiggle_window = if defined(approx_MB_per_cut_wiggle_window_init) then approx_MB_per_cut_wiggle_window_init else approx_MB_per_cut_wiggle_window,
         cpu = select_first([cpuInit, cpu]),
@@ -320,6 +332,8 @@ workflow LRAA_singlecell_wf {
         main_chromosomes = main_chromosomes,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
+        scattering = scattering_per_cluster,
+        scattering_final_quant = scattering_final_quant,
         approx_MB_per_cut = approx_MB_per_cut,
         approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
         cpu = cpu,
