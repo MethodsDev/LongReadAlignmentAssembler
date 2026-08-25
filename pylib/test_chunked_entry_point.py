@@ -1125,3 +1125,65 @@ def test_a_namespaced_model_id_survives_gffcompare_tracking(tmp_path):
     assert tx in mappings, sorted(mappings)
     assert mappings[gene] == ("ENSG00000141933.8", "ENST00000359315.5")
     assert mappings[tx] == ("ENSG00000141933.8", "ENST00000359315.5")
+
+
+def test_stage_six_merges_read_assignment_summaries_with_real_counts(
+    make_chunks_run,
+):
+    """A chunked run must publish a read-assignment summary that COUNTS reads.
+
+    The failure this defends against shipped and was invisible: nothing merged
+    the per-unit summaries, so the task-level file was never written, the
+    workflow's own merge was handed an empty list, and it published a
+    correctly-schema'd table whose TOTAL row read 0 reads -- against per-unit
+    files reporting 11,768. Asserting the file exists is therefore not enough;
+    the assertion has to be on the NUMBER, and on it agreeing with the units it
+    came from.
+
+    Also pins the skip: stage 6 returns None when NO unit has a summary, so that
+    a chunk directory predating these files still merges. That escape hatch is
+    only safe while a real run demonstrably takes the other branch.
+    """
+
+    import csv
+    import json
+
+    outdir = make_chunks_run["outdir"]
+    with open(outdir / "chunk_plan.json") as fh:
+        chunk_id = json.load(fh)["chunks"][0]["chunk_id"]
+
+    ChunkedRun.run(
+        ChunkedRun.default_args(
+            output_dir=str(outdir), only_chunk=chunk_id, cpu_budget=2
+        )
+    )
+    with open(outdir / "chunks" / chunk_id / "units.json") as fh:
+        units = json.load(fh)["units"]
+
+    merged_dir = tmp = outdir / "summary_merge"
+    os.makedirs(merged_dir, exist_ok=True)
+    out = ChunkedRun.merge_read_assignment_summaries(str(merged_dir), units)
+    assert out is not None, "a real chunked run must produce a merged summary"
+
+    with open(out, newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    workers = [r for r in rows if r["row_type"] == "worker"]
+    totals = [r for r in rows if r["row_type"] == "TOTAL"]
+
+    # one worker row per unit, exactly one recomputed TOTAL
+    assert len(workers) == len(units), (len(workers), len(units))
+    assert len(totals) == 1
+
+    # the number, not merely the file: TOTAL is the sum of the units, and nonzero
+    expected = sum(int(r["reads_total"]) for r in workers)
+    assert int(totals[0]["reads_total"]) == expected
+    assert expected > 0, "the fixture's reads should be counted, not zero"
+
+    # and the per-unit TOTAL rows were NOT folded in a second time
+    per_unit_total = 0
+    for unit in units:
+        with open(unit["quant_prefix"] + ".read_assignment.summary.tsv", newline="") as fh:
+            for row in csv.DictReader(fh, delimiter="\t"):
+                if row["row_type"] == "worker":
+                    per_unit_total += int(row["reads_total"])
+    assert int(totals[0]["reads_total"]) == per_unit_total

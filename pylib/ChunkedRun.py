@@ -139,6 +139,7 @@ Sampling can miss a spike shorter than the interval.
 
 import argparse
 import collections
+import csv
 import glob
 import gzip
 import heapq
@@ -733,6 +734,10 @@ def enumerate_prep_contigs(args):
 
     ``--contig`` reduces the enumeration to a single entry, which leaves today's
     behaviour as a degenerate case of the same pool rather than a second path.
+    ``--contigs`` reduces it to a NAMED SET, which is how a workflow's
+    "main chromosomes" reaches a chunk partition. Both are applied AFTER the
+    header filter above, so a name present in the fasta but absent from the bam
+    is reported by that filter rather than mistaken for a typo here.
     """
 
     with pysam.FastaFile(os.path.abspath(args.genome_fa)) as fasta:
@@ -765,6 +770,39 @@ def enumerate_prep_contigs(args):
                     args.genome_fa, len(absent), args.bam
                 )
             )
+    if args.contig and getattr(args, "contigs", None):
+        raise PipelineError(
+            "--contig names one contig and --contigs names a set; pick one"
+        )
+    if getattr(args, "contigs", None):
+        wanted = [c for c in (n.strip() for n in args.contigs.split(",")) if c]
+        if not wanted:
+            raise PipelineError("--contigs is empty")
+        # A name that is in NEITHER the fasta nor the bam is a typo, and a typo
+        # must fail rather than silently shrink the run: the partition, the reads
+        # and the TPM denominator would all quietly lose whatever it meant to
+        # name. A name filtered out by the header check above is reported there
+        # and is not an error here -- it holds nothing by construction.
+        unknown = [c for c in wanted if c not in lengths and c not in absent]
+        if unknown:
+            raise PipelineError(
+                "--contigs names {} contig(s) absent from both {} and {}'s "
+                "header: {}. Known contigs begin: {}".format(
+                    len(unknown),
+                    args.genome_fa,
+                    args.bam,
+                    ", ".join(unknown),
+                    ", ".join(sorted(lengths)[:10]),
+                )
+            )
+        kept = [c for c in wanted if c in lengths]
+        if not kept:
+            raise PipelineError(
+                "every contig --contigs names is absent from the bam header, so "
+                "there is nothing to select cuts on: {}".format(", ".join(wanted))
+            )
+        lengths = {c: n for c, n in lengths.items() if c in kept}
+        return sorted(kept), lengths
     if args.contig:
         if args.contig not in lengths:
             raise PipelineError(
@@ -3642,6 +3680,220 @@ def combine_grouped_expr(result_paths, out_path):
     }
 
 
+# The counters a merged TOTAL row sums. Names match what LRAA's own
+# read_assignment.summary.tsv writer emits.
+_SUMMARY_TOTAL_KEYS = (
+    "reads_total",
+    "reads_kept_genome",
+    "reads_selected_tx_total",
+    "reads_selected_tx_missing_genome",
+    "reads_selected_tx_failed_genome",
+    "reads_rescue_requested",
+    "reads_rescue_rescued",
+    "reads_rescue_unrescued",
+    "reads_rescue_requested_failed_genome",
+    "reads_rescue_requested_unassigned_quant",
+    "reads_rescue_declined_locality",
+    "reads_rescue_displaced_locality",
+    "alignments_rescue_rejected_locality",
+)
+
+
+def merge_read_assignment_summaries(merged_dir, units):
+    """Every unit's read-assignment summary, as ONE table for the whole run.
+
+    Nothing did this before. Chunking is unconditional, so the task-level
+    ``<output_prefix>.read_assignment.summary.tsv`` that ``LRAA_runner.wdl``
+    declares was never written by a chunked run: the per-unit files sat in the
+    chunk directories and the declared output resolved to nothing. MEASURED on
+    the single-cell fixtures: 931 per-unit summaries on disk, zero delocalized,
+    and the workflow's own merge -- handed an empty list by ``select_all`` --
+    emitted a correctly-schema'd table whose TOTAL row read 0 reads against a
+    per-unit file reporting 11,768. Present, plausible and wrong, which is worse
+    than absent.
+
+    Input rows of ``row_type == "TOTAL"`` are SKIPPED when aggregating. Each
+    unit's file is itself the output of a complete LRAA run and therefore already
+    carries both a ``worker`` row and its own ``TOTAL``; summing every row would
+    count each unit twice. The TOTAL here is recomputed from the worker rows.
+
+    ``rescue_alignment_rejections`` is a comma-separated ``key=count`` list, so
+    it is summed BY KEY rather than concatenated -- concatenation would repeat
+    the same reason once per unit and make the field unreadable.
+    """
+
+    summaries = [
+        (u, "{}.read_assignment.summary.tsv".format(u["quant_prefix"])) for u in units
+    ]
+    present = [(u, p) for u, p in summaries if os.path.exists(p)]
+    if not present:
+        # Nothing to merge. Not an error: this function is also reached with
+        # manifests that predate per-unit summaries, and by the standalone merge
+        # over a hand-written manifest. Returning None means the caller publishes
+        # NOTHING, which is honest -- the failure this replaces published a
+        # correctly-schema'd table of zeros instead.
+        if units:
+            print(
+                "NOTE: none of {} quant unit(s) has a read-assignment summary; "
+                "no merged summary written".format(len(units)),
+                file=sys.stderr,
+            )
+        return None
+
+    # A unit may legitimately have no summary: LRAA writes one only when it had
+    # read assignments to report, so a unit that quantified NOTHING has none.
+    # MEASURED on the chunked fixtures -- the plus units carry expr, tracking and
+    # a summary, while the minus units carry expr and tracking whose expr holds
+    # ZERO data rows: nothing quantified, therefore nothing assigned.
+    #
+    # Absence is accepted only on that evidence, never on absence alone. Two ways
+    # to fail that test, both refused: a unit whose expr HAS rows (its reads would
+    # vanish from the total), and a unit with no readable expr at all (that is an
+    # incomplete unit, not an empty one -- absence of proof is not proof of
+    # absence).
+    unexplained = []
+    empty = []
+    for unit, path in summaries:
+        if os.path.exists(path):
+            continue
+        expr = "{}.quant.expr".format(unit["quant_prefix"])
+        if not os.path.exists(expr):
+            unexplained.append((unit["unit_id"], "no quant.expr"))
+            continue
+        rows = 0
+        try:
+            with open(expr, "rt") as fh:
+                for line in fh:
+                    if line.startswith("#") or line.startswith("gene_id"):
+                        continue
+                    if line.strip():
+                        rows += 1
+        except OSError as err:
+            unexplained.append((unit["unit_id"], "unreadable quant.expr: {}".format(err)))
+            continue
+        if rows:
+            unexplained.append(
+                (unit["unit_id"], "{} quantified row(s)".format(rows))
+            )
+        else:
+            empty.append(unit["unit_id"])
+    if unexplained:
+        raise PipelineError(
+            "{} of {} quant unit(s) have no read-assignment summary and no "
+            "evidence of being empty, so a merged total would undercount by "
+            "their reads: {}{}. Expected "
+            "<quant_prefix>.read_assignment.summary.tsv".format(
+                len(unexplained),
+                len(summaries),
+                "; ".join("{} ({})".format(u, why) for u, why in unexplained[:5]),
+                "" if len(unexplained) <= 5 else "; ...",
+            )
+        )
+    if empty:
+        print(
+            "NOTE: {} of {} quant unit(s) quantified nothing and so have no "
+            "read-assignment summary to merge: {}{}".format(
+                len(empty),
+                len(summaries),
+                ", ".join(empty[:5]),
+                "" if len(empty) <= 5 else ", ...",
+            ),
+            file=sys.stderr,
+        )
+
+    rows = []
+    fieldnames = None
+    totals = {k: 0 for k in _SUMMARY_TOTAL_KEYS}
+    rejections = collections.OrderedDict()
+    for unit, path in present:
+        unit_id = unit["unit_id"]
+        with open(path, "rt", newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            if fieldnames is None:
+                fieldnames = list(reader.fieldnames or [])
+            elif list(reader.fieldnames or []) != fieldnames:
+                # Columns are summed by NAME, so a differing schema would drop or
+                # misplace counters rather than fail. Refuse instead.
+                raise PipelineError(
+                    "read-assignment summaries disagree on their columns: {} has "
+                    "{} field(s) against {} in the first unit merged".format(
+                        unit_id, len(reader.fieldnames or []), len(fieldnames)
+                    )
+                )
+            for row in reader:
+                if (row.get("row_type") or "").strip() == "TOTAL":
+                    continue
+                rows.append(row)
+                for key in _SUMMARY_TOTAL_KEYS:
+                    totals[key] += int(row.get(key) or 0)
+                for item in (row.get("rescue_alignment_rejections") or "").split(","):
+                    item = item.strip()
+                    if not item or "=" not in item:
+                        continue
+                    reason, _, count = item.partition("=")
+                    try:
+                        rejections[reason] = rejections.get(reason, 0) + int(count)
+                    except ValueError:
+                        continue
+
+    if not fieldnames:
+        raise PipelineError(
+            "every read-assignment summary stage 6 found was empty of rows: {}".format(
+                ", ".join(p for _, p in present[:5])
+            )
+        )
+
+    total_reads = totals["reads_total"]
+
+    def frac(key):
+        if total_reads <= 0:
+            return "0.000000"
+        return "{:.6f}".format(float(totals[key]) / float(total_reads))
+
+    total_row = {f: "" for f in fieldnames}
+    total_row.update(
+        {"row_type": "TOTAL", "contig_acc": "TOTAL", "contig_strand": "."}
+    )
+    for key in _SUMMARY_TOTAL_KEYS:
+        if key in total_row:
+            total_row[key] = str(totals[key])
+    # Fractions are recomputed against the merged denominator, never carried
+    # over: a chunk-local fraction means nothing once the rows are pooled.
+    for field in fieldnames:
+        if not field.startswith("frac_"):
+            continue
+        counter = "reads_" + field[len("frac_") :]
+        if counter in totals:
+            total_row[field] = frac(counter)
+        elif field == "frac_rescue_rescued_of_requested":
+            req = totals["reads_rescue_requested"]
+            total_row[field] = (
+                "{:.6f}".format(float(totals["reads_rescue_rescued"]) / float(req))
+                if req > 0
+                else "0.000000"
+            )
+        elif field == "frac_rescue_unrescued_of_requested":
+            req = totals["reads_rescue_requested"]
+            total_row[field] = (
+                "{:.6f}".format(float(totals["reads_rescue_unrescued"]) / float(req))
+                if req > 0
+                else "0.000000"
+            )
+    if "rescue_alignment_rejections" in total_row:
+        total_row["rescue_alignment_rejections"] = ",".join(
+            "{}={}".format(k, v) for k, v in sorted(rejections.items())
+        )
+
+    out_path = os.path.join(merged_dir, "chunked.read_assignment.summary.tsv")
+    with open(out_path, "wt", newline="") as ofh:
+        writer = csv.DictWriter(ofh, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({f: row.get(f, "") for f in fieldnames})
+        writer.writerow(total_row)
+    return out_path
+
+
 def merge_and_translate(outdir, units, discovery=False):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
@@ -3796,6 +4048,8 @@ def merge_and_translate(outdir, units, discovery=False):
         units, hash_remap, discovery, track_out
     )
 
+    merged_summary = merge_read_assignment_summaries(merged_dir, units)
+
     merged = {
         "quant_expr": expr_out,
         "quant_tracking": track_out,
@@ -3810,6 +4064,7 @@ def merge_and_translate(outdir, units, discovery=False):
         # table is what set the run's memory ceiling, and a number that can be
         # read off a run is the only way to notice if it starts climbing again.
         "tracking_merge_peak_resident_rows": track_peak_rows,
+        "read_assignment_summary": merged_summary,
     }
     if discovery:
         merged.update(merge_discovery_gtf(merged_dir, units))
@@ -4250,6 +4505,17 @@ def build_parser():
         "has no count to default to",
     )
     parser.add_argument("--contig", default=None, help="restrict to one contig")
+    parser.add_argument(
+        "--contigs",
+        default=None,
+        metavar="CHR1,CHR2,...",
+        help="restrict the run to these contigs, comma-separated. The partition "
+        "is otherwise every reference the genome fasta and the bam header agree "
+        "on; this filters that set, which is how a workflow's main-chromosomes "
+        "list reaches a chunk partition. A name absent from both the fasta and "
+        "the bam header is a typo and is refused rather than silently dropped. "
+        "Mutually exclusive with --contig, which restricts to exactly one",
+    )
     parser.add_argument("--HiFi", action="store_true", help="pass --HiFi to LRAA")
     parser.add_argument(
         "--rdna_mask_fasta",

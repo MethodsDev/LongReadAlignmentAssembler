@@ -110,6 +110,7 @@ workflow LRAA_chunk_scatter_wf {
             quantExprFiles = flatten(process_chunk.unitQuantExpr),
             quantTrackingFiles = flatten(process_chunk.unitQuantTracking),
             gtfFiles = flatten(process_chunk.unitGtf),
+            readAssignmentSummaries = flatten(process_chunk.unitReadAssignmentSummary),
             discovery = discovery,
             outputFilePrefix = LRAA_output_prefix,
             mergeCpu = mergeCpu,
@@ -320,6 +321,10 @@ for u in doc["units"]:
         raise SystemExit("unit {} produced no quant.tracking".format(uid))
     if os.path.exists(pfx + ".gtf"):
         shutil.copy(pfx + ".gtf", os.path.join("staged", uid + ".gtf"))
+    # Stage 6 requires one of these PER UNIT and refuses a partial set, since a
+    # partial merge undercounts silently. Every unit's LRAA run writes one.
+    shutil.copy(pfx + ".read_assignment.summary.tsv",
+                os.path.join("staged", uid + ".read_assignment.summary.tsv"))
 shutil.copy(os.path.join("work", "chunks", "~{chunkId}", "units.json"),
             os.path.join("staged", "~{chunkId}.units.json"))
 PY
@@ -330,6 +335,7 @@ PY
         Array[File] unitQuantExpr = glob("staged/*.quant.expr")
         Array[File] unitQuantTracking = glob("staged/*.quant.tracking*")
         Array[File] unitGtf = glob("staged/*.gtf")
+        Array[File] unitReadAssignmentSummary = glob("staged/*.read_assignment.summary.tsv")
         File chunkLog = "work/logs/chunk_~{chunkId}.log"
     }
 
@@ -349,6 +355,7 @@ task merge_chunks {
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
         Array[File] gtfFiles
+        Array[File] readAssignmentSummaries
         Boolean discovery
         String outputFilePrefix
         Int mergeCpu
@@ -364,7 +371,7 @@ task merge_chunks {
     set -euo pipefail
 
     mkdir -p staged work
-    for f in ~{sep=' ' quantExprFiles} ~{sep=' ' quantTrackingFiles} ~{sep=' ' gtfFiles}; do
+    for f in ~{sep=' ' quantExprFiles} ~{sep=' ' quantTrackingFiles} ~{sep=' ' gtfFiles} ~{sep=' ' readAssignmentSummaries}; do
         cp "$f" "staged/$(basename "$f")"
     done
 
@@ -411,6 +418,7 @@ PY
     mv work/merged/chunked.quant.expr "~{outputFilePrefix}.quant.expr"
     mv work/merged/chunked.quant.tracking.gz "~{outputFilePrefix}.quant.tracking.gz"
     mv work/merged/chunked.quant.expr.tpm_chunk_local.tsv "~{outputFilePrefix}.quant.expr.tpm_chunk_local.tsv"
+    mv work/merged/chunked.read_assignment.summary.tsv "~{outputFilePrefix}.read_assignment.summary.tsv"
     if [[ "~{discovery}" == "true" ]]; then
         mv work/merged/chunked.gtf "~{outputFilePrefix}.gtf"
     fi
@@ -420,6 +428,7 @@ PY
         File mergedQuantExpr = "~{outputFilePrefix}.quant.expr"
         File mergedQuantTracking = "~{outputFilePrefix}.quant.tracking.gz"
         File mergedTpmAudit = "~{outputFilePrefix}.quant.expr.tpm_chunk_local.tsv"
+        File mergedReadAssignmentSummary = "~{outputFilePrefix}.read_assignment.summary.tsv"
         File? mergedGTF = "~{outputFilePrefix}.gtf"
         File mergeResult = "~{outputFilePrefix}.merge_result.json"
     }

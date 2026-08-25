@@ -3613,6 +3613,18 @@ def _run_chunked_mode(args):
         shutil.copyfile(src, dest)
         logger.info("wrote %s", dest)
 
+    # OPTIONAL, unlike the three above. Stage 6 merges the per-unit
+    # read-assignment summaries when every unit wrote one and returns None when
+    # none did, so a chunk directory predating those files still merges. Before
+    # this existed the task-level file was never written at all, and the
+    # workflow-level merge -- handed nothing by select_all -- published a table
+    # of zeros in its place.
+    summary_src = merged.get("read_assignment_summary")
+    if summary_src and os.path.exists(summary_src):
+        summary_dest = "{}.read_assignment.summary.tsv".format(output_prefix)
+        shutil.copyfile(summary_src, summary_dest)
+        logger.info("wrote %s", summary_dest)
+
     return 0
 
 
