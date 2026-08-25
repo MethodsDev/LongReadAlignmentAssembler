@@ -1,0 +1,41 @@
+{
+    "LRAA_singlecell_wf.sample_id": "test_sc_wdl_denovo",
+    "LRAA_singlecell_wf.single_cell_pipe_mode": "cluster-guided",
+
+    "LRAA_singlecell_wf.quant_only": false,
+    "LRAA_singlecell_wf.HiFi": true,
+
+    "LRAA_singlecell_wf.referenceGenome": "data/chr19.genome.2M.fa",
+    "LRAA_singlecell_wf.inputBAM": "data/chr19.2M.bam",
+
+    "LRAA_singlecell_wf.scattering_init": "by_chunk",
+    "LRAA_singlecell_wf.scattering_per_cluster": "by_chunk",
+    "LRAA_singlecell_wf.scattering_final_quant": "by_chunk",
+
+    "LRAA_singlecell_wf.approx_MB_per_cut_init": 0.2,
+    "LRAA_singlecell_wf.approx_MB_per_cut_wiggle_window_init": 0.05,
+    "LRAA_singlecell_wf.approx_MB_per_cut": 0.2,
+    "LRAA_singlecell_wf.approx_MB_per_cut_wiggle_window": 0.05,
+
+    "LRAA_singlecell_wf.memoryGBInit": 20,
+    "LRAA_singlecell_wf.cpuInit": 16,
+    "LRAA_singlecell_wf.cpu": 2,
+    "LRAA_singlecell_wf.cpuScattered": 2,
+    "LRAA_singlecell_wf.memoryGB": 2,
+    "LRAA_singlecell_wf.memoryGBPerWorkerScattered": 2,
+    "LRAA_singlecell_wf.memoryGBbuildSparseMatrices": 4,
+    "LRAA_singlecell_wf.memoryGBFilterCells": 4,
+    "LRAA_singlecell_wf.memoryGBSeurat": 4,
+    "LRAA_singlecell_wf.memoryGBmergeGTFs": 2,
+    "LRAA_singlecell_wf.memoryGBquantFinal": 2,
+    "LRAA_singlecell_wf.memoryGBscSparseMatrices": 4,
+
+    "LRAA_singlecell_wf.enable_filter_good_cells": false,
+    "LRAA_singlecell_wf.min_cells": 1,
+    "LRAA_singlecell_wf.min_features": 1,
+    "LRAA_singlecell_wf.percent_mt_max": 20.0,
+    "LRAA_singlecell_wf.mt_pattern": "^MT-",
+    "LRAA_singlecell_wf.npcs": 12,
+    "LRAA_singlecell_wf.resolution": 0.6,
+    "LRAA_singlecell_wf.n_variable_features": 2000
+}

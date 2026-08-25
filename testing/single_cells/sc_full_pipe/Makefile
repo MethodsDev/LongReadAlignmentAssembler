@@ -28,13 +28,13 @@ test_full_sc_pipe_cluster_guided_wdl_QOnly:
 clean: reclaim_root_owned
 	rm -rf ./sc_pipe_outdir* ./__miniwdl_call_cache ./__miniwdl_download_cache
 
-# Whole-genome PBMC single-cell run, quant-only, ALL THREE phases by_chunk --
-# including scattering_final_quant, the phase that consumes the shared cut plan
-# and the shared splice-graph BAM. Not part of test_wdls: it is a measurement
-# against a 7.8 GB library, not a fixture.
-test_pbmc_wholegenome_by_chunk_qonly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i pbmc-wholegenome-by_chunk.QUANTONLY.inputs.json -d pbmc_wg_outdir-by_chunk-qonly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
-
+# NOTE: the whole-genome PBMC measurement target that lived here has been
+# removed. Its inputs JSON names absolute paths on one workstation
+# (/home/unix/bhaas/projects/LRAA_PAPER_Analyses/...), so a tracked target
+# pointing at it is dead in any other clone -- which is the same defect as a
+# target referencing an ignored file. The measurement it produced is recorded in
+# the chunk resource defaults and their comments; to repeat it, write a local
+# inputs JSON against your own library and invoke miniwdl directly.
 
 # Cluster-guided fixture run, REF-GUIDED discovery (quant_only=false with an
 # initial_annot_gtf), with all three scatter knobs set to by_chunk -- init,
