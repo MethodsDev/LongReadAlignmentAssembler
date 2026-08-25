@@ -27,3 +27,55 @@ test_full_sc_pipe_cluster_guided_wdl_QOnly:
 
 clean: reclaim_root_owned
 	rm -rf ./sc_pipe_outdir* ./__miniwdl_call_cache ./__miniwdl_download_cache
+
+# Whole-genome PBMC single-cell run, quant-only, ALL THREE phases by_chunk --
+# including scattering_final_quant, the phase that consumes the shared cut plan
+# and the shared splice-graph BAM. Not part of test_wdls: it is a measurement
+# against a 7.8 GB library, not a fixture.
+test_pbmc_wholegenome_by_chunk_qonly:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i pbmc-wholegenome-by_chunk.QUANTONLY.inputs.json -d pbmc_wg_outdir-by_chunk-qonly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+
+
+# Cluster-guided fixture run, REF-GUIDED discovery (quant_only=false with an
+# initial_annot_gtf), with all three scatter knobs set to by_chunk -- init,
+# per-cluster discovery, and final quant.  The fixture contig is 2 Mb, so the
+# general approx_MB_per_cut must also be dropped to 0.2 (not just the _init
+# variant): the per-cluster and final-quant phases read the general one, and at
+# the 10 Mb default every phase would produce exactly one chunk and exercise
+# the scatter plumbing trivially.
+test_sc_cg_by_chunk_refguided:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.REFGUIDED.inputs.json -d sc_cg_outdir-by_chunk-refguided $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+
+# Cluster-guided fixture run with ALL THREE scatter phases set to by_chunk,
+# QUANT-ONLY.  The fixture contig is 2 Mb and the default cut spacing is 10 Mb,
+# so approx_MB_per_cut{,_init} are dropped to 0.2 -- at defaults every phase
+# would produce exactly one chunk and the fan-out would be untested.
+test_sc_cg_by_chunk_qonly:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.QUANTONLY.inputs.json -d sc_cg_outdir-by_chunk-qonly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+
+# Cluster-guided fixture run, DE NOVO discovery, with all three scatter knobs
+# set to by_chunk -- init, per-cluster discovery, and final quant.
+#
+# De novo means NO annotation anywhere: initial_annot_gtf is omitted entirely,
+# so the init phase runs annotation-free (ChunkedRun gets no --gtf, the chunk
+# extractor writes no mini GTF, and has_gtf is false in every chunk manifest).
+# ref_annot_gtf_source_gene_symbols is omitted too -- it is File? and gated on
+# defined() in LRAA-singlecell.wdl, so nothing requires it; supplying the
+# reference GTF there would put a reference annotation into a run whose point
+# is not having one.  The consequence is that the gene-symbol incorporation
+# step does not run, which is correct for this test and is covered by the
+# ref-guided target above.
+#
+# The final-quant phase still selects its shared cut plan against an
+# annotation: LRAA_quant_by_cluster.emit_shared_chunk_plan takes a REQUIRED
+# annot_gtf, and in cluster-guided mode that is lraa_merge_gtf_task's
+# consolidated GTF -- here a purely de novo one.  So annotation_present is true
+# on both the plan and its consumers, which is what keeps ChunkedRun's
+# annotation-identity refusal from firing.
+#
+# The fixture contig is 2 Mb, so the general approx_MB_per_cut is dropped to
+# 0.2 alongside the _init variant: the per-cluster and final-quant phases read
+# the general one, and at the 10 Mb default every phase would produce exactly
+# one chunk and exercise the scatter plumbing trivially.
+test_sc_cg_by_chunk_denovo:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.DENOVO.inputs.json -d sc_cg_outdir-by_chunk-denovo $(LRAA_WDL_DOCKER_CORE_SC) --verbose

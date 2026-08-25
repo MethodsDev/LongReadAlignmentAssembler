@@ -49,10 +49,21 @@ LRAA_MODE = "unset"  # options ("ID", "QUANT-ONLY", "MERGE")
 #              cannot say whether its input was tagged, so the token has to change.
 SPLICE_GRAPH_NORMALIZATION_METHOD = "cov6"
 
+# The identity floor --HiFi imposes, as ONE definition. Two processes resolve it:
+# LRAA's own preset (_apply_hifi_config_overrides), and pylib/ChunkedRun.py when
+# it is invoked directly rather than through the driver -- which is what a
+# by_chunk WDL task does. Those two disagreeing is not a smaller answer: prep
+# selected cuts, priced severed reads and normalized at 80 while every stage-5
+# worker filtered at 97, and a shared-cut-plan consumer refused the plan its
+# LRAA-driven emitter had selected. So the value lives here rather than as a
+# literal in either caller.
+HIFI_MIN_PER_ID = 97.0
+
 config = {
     #########################
     # read alignment criteria
     "HiFi": False,  # set to True when --HiFi is used; enables HiFi-specific filtering
+    # The non-HiFi floor. --HiFi raises it to HIFI_MIN_PER_ID above.
     "min_per_id": 80,
     "min_mapping_quality": 0,  # used during isoform discovery; lets multi-mapping reads (mapq=0) inform splice-graph and isoform structure (e.g., paralog-cluster genes)
     "min_mapping_quality_for_final_quant": 0,  # default to retaining MAPQ 0 alignments during final quant; callers can raise this threshold if desired

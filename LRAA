@@ -352,7 +352,7 @@ def _apply_hifi_config_overrides(config, args):
     # Enable TSS/PolyA by default in HiFi, but respect user-specified disabling flags
     config["infer_TSS"] = False if args.no_infer_TSS else True
     config["infer_PolyA"] = False if args.no_infer_PolyA else True
-    config["min_per_id"] = 97.0
+    config["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID
     config["rescue_unassigned_max_indel_length"] = 10
     config["max_exon_spur_length"] = 13
     config["fracture_splice_graph_at_input_transcript_bounds"] = True

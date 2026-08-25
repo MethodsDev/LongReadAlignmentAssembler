@@ -1364,6 +1364,38 @@ def resolve_min_per_id(args):
     return LRAA_Globals.config["min_per_id"]
 
 
+def apply_standalone_hifi_preset(args):
+    """Seed the HiFi identity floor when THIS MODULE is the entry point.
+
+    ``resolve_min_per_id`` above reads the resolved config rather than
+    re-deriving the preset, which is right on the driver route: ``LRAA --chunk``
+    applies the preset and any ``--config_update`` and only then calls ``run``.
+    Invoked directly, nothing has applied anything, so the config still held the
+    library default of 80 while ``--HiFi`` was on the command line.
+
+    The result was two floors in one run rather than a coarser one. Prep selected
+    cuts, priced severed reads and normalized at 80; every stage-5 worker gets
+    ``--HiFi`` forwarded (see ``lraa_cmd``) and filtered at 97. Nothing reported
+    it until a by_chunk single-cell final quant -- whose make_chunks task runs
+    this module directly -- refused a shared cut plan its LRAA-driven emitter had
+    selected at 97, which is ``validate_cut_plan_geometry`` working.
+
+    Called from ``main`` ONLY. The driver route must keep the config it already
+    resolved: re-deriving there would put a ``--config_update`` min_per_id back
+    under the preset and flip that precedence in chunked mode alone.
+
+    Only ``min_per_id`` is seeded, because it is the only HiFi-owned key this
+    module RESOLVES. Every other preset key is consumed by the LRAA workers,
+    which derive it from their own forwarded ``--HiFi``, and several of LRAA's
+    depend on flags this parser does not have.
+    """
+
+    if not getattr(args, "HiFi", False):
+        return
+    LRAA_Globals.config["HiFi"] = True
+    LRAA_Globals.config["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID
+
+
 def resolve_min_mapping_quality(args):
     """The min_mapping_quality this run's cut selection and normalization filter on.
 
@@ -5837,7 +5869,12 @@ def default_args(**overrides):
 
 def main(argv=None):
 
-    return run(parse_args(argv))
+    args = parse_args(argv)
+    # This is the ONE path the driver never takes -- LRAA --chunk calls run()
+    # with a config it already resolved -- so it is where a directly-invoked
+    # run's own --HiFi has to reach the config.
+    apply_standalone_hifi_preset(args)
+    return run(args)
 
 
 def claim_pipeline_mode(ckpt, mode):

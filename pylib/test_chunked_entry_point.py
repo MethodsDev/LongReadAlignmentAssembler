@@ -1088,6 +1088,88 @@ def test_only_chunk_refuses_a_reuse_extracted_chunk(tmp_path):
     assert "--no_reuse_source_bam" in str(err.value)
 
 
+def test_a_directly_invoked_run_applies_the_hifi_identity_floor(tmp_path):
+    """``--HiFi`` on THIS MODULE's own command line has to reach the config.
+
+    The preset that raises min_per_id to 97 lives in the LRAA driver, and
+    ``resolve_min_per_id`` reads the resolved config rather than re-deriving it.
+    Invoked directly -- which is what every by_chunk WDL task does -- nothing had
+    applied the preset, so prep selected cuts, priced severed reads and
+    normalized at 80 while every stage-5 worker, handed ``--HiFi``, filtered at
+    97. The symptom was a single-cell by_chunk final quant refusing a shared cut
+    plan its LRAA-driven emitter had selected at 97.0, one cluster deep, with
+    nothing anywhere naming --HiFi.
+
+    Asserted on the plan's own geometry block because that is the value the
+    sharing check compares (``validate_cut_plan_geometry``), so this is the
+    contract that failed rather than a proxy for it.
+    """
+
+    import json
+
+    fasta, bam, total = _write_two_contig_inputs(tmp_path)
+    outdir = tmp_path / "work"
+    snapshot = dict(LRAA_Globals.config)
+    try:
+        ChunkedRun.main(
+            [
+                "--bam", bam,
+                "--genome_fa", fasta,
+                "--output_dir", str(outdir),
+                "--discovery",
+                "--num_total_reads", str(total),
+                "--no_reuse_source_bam",
+                "--stop_after_make_chunks",
+                "--cpu_budget", "2",
+                "--HiFi",
+            ]
+        )
+        with open(outdir / "chunk_plan.json") as fh:
+            plan = json.load(fh)
+    finally:
+        LRAA_Globals.config.clear()
+        LRAA_Globals.config.update(snapshot)
+
+    assert plan["geometry"]["params"]["min_per_id"] == LRAA_Globals.HIFI_MIN_PER_ID
+
+
+def test_the_driver_route_keeps_the_min_per_id_it_resolved():
+    """Two halves of one precedence rule.
+
+    ``LRAA --chunk`` resolves the preset AND any ``--config_update`` layered over
+    it before calling ``run``, so resolution here must read that config and not
+    re-derive 97 from ``--HiFi`` -- re-deriving would put a user's explicit
+    min_per_id back under the preset in chunked mode alone. The standalone seed
+    is the other half, and applies to the same namespace.
+    """
+
+    snapshot = dict(LRAA_Globals.config)
+    try:
+        LRAA_Globals.config["min_per_id"] = 90
+        args = ChunkedRun.default_args(HiFi=True)
+        assert ChunkedRun.resolve_min_per_id(args) == 90
+        ChunkedRun.apply_standalone_hifi_preset(args)
+        assert ChunkedRun.resolve_min_per_id(args) == LRAA_Globals.HIFI_MIN_PER_ID
+    finally:
+        LRAA_Globals.config.clear()
+        LRAA_Globals.config.update(snapshot)
+
+
+def test_the_hifi_identity_floor_has_exactly_one_definition():
+    """The driver's preset and this module's standalone seed must read the same
+    constant. Two literals is how the two floors came to differ in the first
+    place, and the divergence is invisible in either file alone.
+    """
+
+    assert LRAA_Globals.HIFI_MIN_PER_ID == 97.0
+    hits = re.findall(r"min_per_id\"\]\s*=\s*97", (REPO / "LRAA").read_text())
+    assert hits == [], hits
+    assert (
+        'config["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID'
+        in (REPO / "LRAA").read_text()
+    )
+
+
 def test_a_namespaced_model_id_survives_gffcompare_tracking(tmp_path):
     """The namespace separator must not be a character gffcompare delimits with.
 
