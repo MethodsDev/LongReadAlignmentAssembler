@@ -105,14 +105,26 @@ workflow LRAA_chunk_scatter {
         Int? chunkMemoryGB
         Int chunkPreemptible = 3
 
-        # stage 6, and the one number here that is still NOT measured at scale.
-        # It is an external merge sort over every unit's tracking rows, and its
-        # ceiling is set by tracking_merge_peak_resident_rows, now reported in
-        # mergeResources. The fixture measures 22 MiB at 300 resident rows, which
-        # does not extrapolate -- almost all of it is interpreter baseline. Left at
-        # 32 GiB deliberately: a whole-genome merge is the terminal gather over
-        # every shard, so under-provisioning it discards the entire run's work.
-        # Lower it when a genome-scale mergeResources row exists, not before.
+        # stage 6, and now MEASURED at genome scale -- the one number here that
+        # previously was not.
+        #
+        # Measured by running the merge directly over the 556 surviving units of a
+        # whole-genome PBMC by_chunk run (278 chunks x 2 strands, 9,801,365 tracking
+        # rows, 57,849 expr rows, coordinates translated): max RSS 371 MiB, wall
+        # 2m53s.
+        #
+        # The number that makes this GENERALIZE rather than being one data point:
+        # tracking_merge_peak_resident_rows came back at exactly 500,000, which is
+        # the external sort's own run cap. The merge held AT the cap rather than
+        # below it, so its peak is bounded by that cap and not by unit count or row
+        # count -- a larger library spills more runs, it does not hold more rows.
+        # That is the property the external sort was built for, and it is why a
+        # constant is the right shape here where it was the wrong shape for a leaf.
+        #
+        # 4 GiB is ~11x the measurement, kept generous because this is the terminal
+        # gather: under-provisioning it discards the entire run's work, and the task
+        # is non-preemptible for the same reason. Raise the run cap and this number
+        # must move with it.
         Int? mergeCpu
         Int? mergeMemoryGB
 
@@ -120,7 +132,7 @@ workflow LRAA_chunk_scatter {
     }
 
     # The defaults, in one place. Every number here is justified in the input
-    # comments above. Both memory values are the PRE-EXISTING defaults, deliberately
+    # comments above. Prep and leaf memory are the PRE-EXISTING defaults, deliberately
     # unchanged: each is a reduction I can argue for from a lower-bound measurement
     # and cannot yet verify. The telemetry to settle them is wired.
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
@@ -128,7 +140,7 @@ workflow LRAA_chunk_scatter {
     Int chunkCpu_use = select_first([chunkCpu, 2])
     Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
     Int mergeCpu_use = select_first([mergeCpu, 2])
-    Int mergeMemoryGB_use = select_first([mergeMemoryGB, 32])
+    Int mergeMemoryGB_use = select_first([mergeMemoryGB, 4])
 
     Boolean discovery = !quant_only
     String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
