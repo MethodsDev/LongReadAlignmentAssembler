@@ -166,6 +166,15 @@ workflow LRAA_chunk_scatter {
         File chunkPlan = make_chunks.chunkPlan
         Array[File] chunkLogs = process_chunk.chunkLog
         Int numTotalReads = make_chunks.numTotalReads
+        # What the run cost, as data rather than as something to reconstruct from
+        # a log. One row per leaf plus the two singleton tasks, so a whole-genome
+        # run answers "what should chunkMemoryGB be" directly. These are the
+        # inputs to any future re-sizing; keep them delocalized.
+        Array[File] chunkResources = process_chunk.chunkResources
+        Array[File] unitResourceSummaries = flatten(process_chunk.unitResourceSummaries)
+        File makeChunksResources = make_chunks.makeChunksResources
+        File makeChunksTiming = make_chunks.makeChunksTiming
+        File mergeResources = merge_chunks.mergeResources
     }
 }
 
@@ -299,12 +308,32 @@ for entry in plan["chunks"]:
                     "-C", cdir] + members, check=True)
 print("tarred {} chunk(s)".format(len(plan["chunks"])))
 PY
+
+    # Same telemetry as the leaves, for the task whose peak is a FORMULA rather
+    # than a constant: make_chunks runs its cut selections and extractions
+    # concurrently under --cpu_budget, so its peak is roughly the per-unit peak
+    # times the concurrency, and sizing it needs both numbers. Measured on the
+    # PBMC whole-genome library (81.5M reads, 7.8 GB bam, 305 chunks over 25
+    # contigs): per-unit peak 80 MiB for a cut selection and 90 MiB for an
+    # extraction, so even at 16 workers this task's own high-water mark is far
+    # below what it reserves.
+    {
+        printf 'task\tcontainer_peak_rss_bytes\tcpu\tmemory_gb_requested\tchunks\n'
+        printf 'make_chunks\t%s\t%s\t%s\t%s\n' \
+            "$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo NA)" \
+            "~{makeChunksCpu}" "~{makeChunksMemoryGB}" \
+            "$(python3 -c 'import json;print(len(json.load(open("work/chunk_plan.json"))["chunks"]))' 2>/dev/null || echo NA)"
+    } > make_chunks_resources.tsv
     >>>
 
     output {
         File chunkPlan = "work/chunk_plan.json"
         Array[File] chunkTars = glob("staged/*.tar")
         Int numTotalReads = read_int("work/num_total_reads.txt")
+        # Its own timing.json carries the per-unit RSS and wall series this
+        # summary's peak is the envelope of; both are wanted when re-sizing.
+        File makeChunksResources = "make_chunks_resources.tsv"
+        File makeChunksTiming = "work/timing.json"
     }
 
     runtime {
@@ -402,6 +431,31 @@ for u in doc["units"]:
 shutil.copy(os.path.join("work", "chunks", "~{chunkId}", "units.json"),
             os.path.join("staged", "~{chunkId}.units.json"))
 PY
+
+    # What this task ACTUALLY cost, emitted as a delocalized output so it is
+    # measurable on Terra rather than only in a local run tree. /sys/fs/cgroup/
+    # memory.peak is the KERNEL's high-water mark for this container, so unlike
+    # LRAA's own interval sampler it cannot miss a spike between samples --
+    # measured on the PBMC whole-genome run, interval sampling reported 789 MB
+    # where the cgroup peak for the same shape of task was 3,003 MiB, a 4x
+    # understatement, because the sampler sees one unit at a time and the task
+    # runs both orientations plus the driver. Sizing chunkMemoryGB off the
+    # sampler would therefore have under-provisioned it.
+    {
+        printf 'chunk_id\tcontainer_peak_rss_bytes\tchunk_cpu\tchunk_memory_gb_requested\n'
+        printf '%s\t%s\t%s\t%s\n' "~{chunkId}" \
+            "$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo NA)" \
+            "~{chunkCpu}" "~{chunkMemoryGB}"
+    } > "staged/~{chunkId}.chunk_resources.tsv"
+
+    # The per-unit interval series LRAA writes for itself lives in the chunk work
+    # directory, which is not delocalized. Copied out beside the cgroup peak: the
+    # two answer different questions -- the peak sizes the request, the series
+    # says which stage inside the unit spent it.
+    for f in work/chunks/~{chunkId}/*.resources.summary.tsv; do
+        [ -e "$f" ] || continue
+        cp "$f" "staged/~{chunkId}.$(basename "$f")"
+    done
     >>>
 
     output {
@@ -411,6 +465,11 @@ PY
         Array[File] unitGtf = glob("staged/*.gtf")
         Array[File] unitReadAssignmentSummary = glob("staged/*.read_assignment.summary.tsv")
         File chunkLog = "work/logs/chunk_~{chunkId}.log"
+        # Resource telemetry, one row per chunk plus LRAA's own per-unit series.
+        # Gathered by the caller so a whole-genome run yields a table of what its
+        # ~300 leaves cost, which is what chunkMemoryGB should be set from.
+        File chunkResources = "staged/~{chunkId}.chunk_resources.tsv"
+        Array[File] unitResourceSummaries = glob("staged/*.resources.summary.tsv")
     }
 
     runtime {
@@ -496,6 +555,21 @@ PY
     if [[ "~{discovery}" == "true" ]]; then
         mv work/merged/chunked.gtf "~{outputFilePrefix}.gtf"
     fi
+
+    # The merge is where a whole-genome run's peak lives: it pools every unit's
+    # tracking rows through an external sort, and the number that decides its
+    # ceiling is tracking_merge_peak_resident_rows in the merge result. Emitting
+    # the container's own high-water mark beside the row count gives both halves
+    # of the sizing -- bytes per resident row is what makes mergeMemoryGB
+    # predictable for a library of any size, rather than a constant chosen once.
+    {
+        printf 'task\tcontainer_peak_rss_bytes\tcpu\tmemory_gb_requested\tunits\tpeak_resident_rows\n'
+        printf 'merge_chunks\t%s\t%s\t%s\t%s\t%s\n' \
+            "$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo NA)" \
+            "~{mergeCpu}" "~{mergeMemoryGB}" \
+            "$(python3 -c 'import json;print(len(json.load(open("manifest.json"))["units"]))' 2>/dev/null || echo NA)" \
+            "$(python3 -c 'import json,sys;d=json.load(open("~{outputFilePrefix}.merge_result.json"));print(d.get("tracking_merge_peak_resident_rows","NA"))' 2>/dev/null || echo NA)"
+    } > merge_chunks_resources.tsv
     >>>
 
     output {
@@ -505,6 +579,7 @@ PY
         File mergedReadAssignmentSummary = "~{outputFilePrefix}.read_assignment.summary.tsv"
         File? mergedGTF = "~{outputFilePrefix}.gtf"
         File mergeResult = "~{outputFilePrefix}.merge_result.json"
+        File mergeResources = "merge_chunks_resources.tsv"
     }
 
     runtime {
