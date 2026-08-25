@@ -20,6 +20,30 @@ workflow LRAA_chunk_scatter {
         File referenceGenome
         File inputBAM
         File? inputBAMindex
+        # Caller-supplied splice-graph evidence, already depth-normalized by the
+        # caller. make_chunks partitions it per chunk EXACTLY as it partitions
+        # inputBAM -- same region bounds, same mini contig, same offset, same
+        # overhang rule -- so each leaf sees a splice-graph slice and a read slice
+        # in one coordinate system. The slices land in the chunk directories and
+        # ride to the leaves inside the per-chunk tars below.
+        File? bam_for_sg
+        File? bam_for_sg_index
+        # ONE cut plan shared by SIBLING runs. Geometry only: which contig is cut
+        # where. When supplied, make_chunks SKIPS cut selection and extracts on
+        # this geometry, so every run handed the same plan produces identical
+        # chunk bounds and therefore slices bam_for_sg identically.
+        # num_total_reads and discovery are NEVER read from it -- both come from
+        # THIS run, since the TPM denominator is per-caller.
+        #
+        # This is what makes bam_for_sg safe across callers. Cut POSITIONS are
+        # otherwise per-caller: each run selects on its own --bam, gets its own
+        # bounds, and slices the shared splice-graph evidence at those bounds, so
+        # the runs are no longer comparable and their boundary overhang drops
+        # differ. Selecting on bam_for_sg itself would be worse -- it is
+        # depth-normalized, so a position that looks unspanned there can be
+        # spanned by a raw read, which extraction then silently DROPS. ChunkedRun
+        # refuses --bam_for_sg unless one of the shared-geometry inputs is given.
+        File? chunk_plan
         File? annot_gtf
         Boolean quant_only = false
         Boolean HiFi = false
@@ -82,6 +106,9 @@ workflow LRAA_chunk_scatter {
             min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+            bam_for_sg = bam_for_sg,
+            bam_for_sg_index = bam_for_sg_index,
+            chunk_plan = chunk_plan,
             cell_list = cell_list,
             cell_barcode_tag = cell_barcode_tag,
             read_umi_tag = read_umi_tag,
@@ -148,6 +175,9 @@ task make_chunks {
         File referenceGenome
         File inputBAM
         File? inputBAMindex
+        File? bam_for_sg
+        File? bam_for_sg_index
+        File? chunk_plan
         File? annot_gtf
         Boolean discovery
         Boolean HiFi
@@ -168,8 +198,9 @@ task make_chunks {
     }
 
     # 3x because the chunk directories hold a partition of the BAM plus its
-    # indices alongside the localized input.
-    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0)
+    # indices alongside the localized input. The splice-graph bam is partitioned
+    # the same way, so it counts on both sides of the multiplier.
+    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0) + (if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0)
     Float diskRawGB = 3.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 200.0 then ceil(diskRawGB) else 200
     String numTotalReadsStr = if defined(num_total_reads) then "~{select_first([num_total_reads])}" else ""
@@ -187,6 +218,15 @@ task make_chunks {
     fi
     ln -s ~{referenceGenome} inputs/genome.fa
     samtools faidx inputs/genome.fa
+    ~{if defined(bam_for_sg) then "ln -s " + select_first([bam_for_sg]) + " inputs/sg.bam" else ""}
+    ~{if defined(bam_for_sg_index) then "ln -s " + select_first([bam_for_sg_index]) + " inputs/sg.bam.bai" else ""}
+    if [[ -e inputs/sg.bam && ! -e inputs/sg.bam.bai && ! -e inputs/sg.bam.csi ]]; then
+        samtools index -@ ~{makeChunksCpu} inputs/sg.bam
+    fi
+    # Localized OUTSIDE work/: --stop_after_make_chunks writes this run's OWN
+    # leaf plan at work/chunk_plan.json, which would clobber the shared plan
+    # every sibling run reads.
+    ~{if defined(chunk_plan) then "ln -s " + select_first([chunk_plan]) + " inputs/shared_cut_plan.json" else ""}
 
     # Same -F 0x904 policy as LRAA's own count_reads_from_bam, so a scattered
     # run's TPM denominator matches an unscattered one's. Computed here rather
@@ -202,6 +242,8 @@ task make_chunks {
 
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --bam inputs/input.bam \
+        ~{if defined(bam_for_sg) then "--bam_for_sg inputs/sg.bam" else ""} \
+        ~{if defined(chunk_plan) then "--chunk_plan inputs/shared_cut_plan.json" else ""} \
         --genome_fa inputs/genome.fa \
         ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
         ~{true="--discovery" false="" discovery} \
@@ -240,6 +282,15 @@ for entry in plan["chunks"]:
                "chunk.partition.json"]
     if entry["has_gtf"]:
         members.append("chunk.gtf")
+    # The chunk's own manifest is the single source of truth for whether a
+    # splice-graph slice exists as a LOCAL file: files.sg_bam is absent when no
+    # --bam_for_sg was given, and under source-bam reuse it names the SOURCE bam
+    # instead of a slice. --no_reuse_source_bam above means reuse cannot fire in
+    # this shape, but keying on the manifest rather than on that flag keeps this
+    # from being a second place that can disagree with the extractor.
+    manifest = json.load(open(os.path.join(cdir, "chunk.partition.json")))
+    if manifest["files"].get("sg_bam") and not manifest.get("sg_bam_reused_from_source"):
+        members += ["chunk.sg.bam", "chunk.sg.bam.bai"]
     for m in members:
         p = os.path.join(cdir, m)
         if not os.path.exists(p):
@@ -336,17 +387,18 @@ for u in doc["units"]:
         raise SystemExit("unit {} produced no quant.tracking".format(uid))
     if os.path.exists(pfx + ".gtf"):
         shutil.copy(pfx + ".gtf", os.path.join("staged", uid + ".gtf"))
-    # CONDITIONAL, unlike quant.expr. A unit with nothing to quantify takes one of
-    # run_quant_only's early returns (no input transcripts, empty splice graph, or
-    # none mapped after filtering) and never reaches the summary writer, so the
-    # file legitimately does not exist. Copying it unconditionally would fail the
-    # whole leaf on such a unit. Stage 6 decides what a missing one means -- it
-    # tolerates a unit whose quant.expr has no rows and refuses one that
-    # quantified something -- and both files are staged side by side here so it
-    # can see that evidence.
-    if os.path.exists(pfx + ".read_assignment.summary.tsv"):
-        shutil.copy(pfx + ".read_assignment.summary.tsv",
-                    os.path.join("staged", uid + ".read_assignment.summary.tsv"))
+    # UNCONDITIONAL, like quant.expr. Every work unit writes a read-assignment
+    # summary now, including one with nothing to quantify -- run_quant_only's early
+    # returns write an all-zero summary rather than returning before the writer. So
+    # an absent file is a DEFECT, not a legitimate state, and stage 6 requires a
+    # summary from every unit it merges. The `if os.path.exists` guard this replaces
+    # was written against the old tolerance and is now dead code that would mask
+    # exactly the missing input the merge refuses on purpose: the leaf would stage
+    # nothing, the merge would report a unit with no summary, and the chunk that
+    # actually failed to write one would be indistinguishable from a chunk that had
+    # nothing to write.
+    shutil.copy(pfx + ".read_assignment.summary.tsv",
+                os.path.join("staged", uid + ".read_assignment.summary.tsv"))
 shutil.copy(os.path.join("work", "chunks", "~{chunkId}", "units.json"),
             os.path.join("staged", "~{chunkId}.units.json"))
 PY

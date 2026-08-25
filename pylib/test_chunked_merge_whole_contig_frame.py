@@ -25,9 +25,11 @@ The three properties, in the order they matter:
 
 import contextlib
 import gzip
+import importlib.util
 import os
 import re
 import sys
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,47 @@ sys.path.insert(0, str(REPO / "pylib"))
 
 import ChunkedRun  # noqa: E402
 import Util_funcs  # noqa: E402
+
+
+def _load_lraa():
+    """LRAA's own read-assignment summary writers.
+
+    Loaded rather than reimplemented because stage 6 now REQUIRES a summary from
+    every unit (``ChunkedRun.merge_read_assignment_summaries``), so these fixtures
+    have to produce one -- and a hand-copied 28-column schema would be free to
+    drift from the one LRAA writes, which is exactly the disagreement the merge's
+    field-name check exists to catch.
+    """
+
+    loader = SourceFileLoader("lraa_driver_summary_fixture", str(REPO / "LRAA"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+lraa = _load_lraa()
+
+
+def _write_read_assignment_summary(prefix, reads_total):
+    """The per-unit summary a real quant unit leaves beside its quant.expr.
+
+    Written through LRAA's worker writer and then its own merger, because that is
+    how a unit's file comes to hold a ``worker`` row AND its own ``TOTAL``: stage 6
+    has to skip the latter or it counts every unit twice.
+    """
+
+    worker = prefix + ".read_assignment.summary.worker.tsv"
+    lraa._write_read_assignment_summary(
+        worker,
+        "chrT",
+        "+",
+        {"reads_total": reads_total, "reads_kept_genome": reads_total},
+    )
+    lraa._merge_read_assignment_summary_files(
+        [worker], prefix + ".read_assignment.summary.tsv"
+    )
+    os.remove(worker)
 
 
 EXPR_HEADER = [
@@ -74,7 +117,8 @@ MULTI_HASH = Util_funcs.get_hash_code(MULTI_INTRONS)
 
 
 def _write_unit(root, unit_id, offset):
-    """One quant unit's chunk-local artifacts: expr, tracking, model gtf."""
+    """One quant unit's chunk-local artifacts: expr, tracking, model gtf, and the
+    read-assignment summary stage 6 requires of every unit."""
 
     prefix = str(root / unit_id)
     multi = "t.{}.multi".format(unit_id)
@@ -130,6 +174,10 @@ def _write_unit(root, unit_id, offset):
                 ),
                 file=fh,
             )
+
+    # Two tracking rows above, so two reads: the merged TOTAL is then predictable
+    # rather than an opaque constant.
+    _write_read_assignment_summary(prefix, 2)
 
     return {"unit_id": unit_id, "offset": offset, "quant_prefix": prefix}
 

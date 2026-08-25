@@ -55,6 +55,36 @@ def _load(name, relative):
 
 mco = _load("merge_chunk_outputs_under_test", "util/misc/merge_chunk_outputs.py")
 
+# LRAA's own read-assignment summary writers. Stage 6 now REQUIRES a summary from
+# every unit (``ChunkedRun.merge_read_assignment_summaries``), because every LRAA
+# path writes one -- including the ``run_quant_only`` early returns that quantify
+# nothing and report the reads they saw with zero assigned. Loaded rather than
+# reimplemented: a hand-copied 28-column schema would be free to drift from the
+# one LRAA writes, which is the disagreement the merge's field-name check exists
+# to catch.
+lraa = _load("lraa_driver_summary_fixture", "LRAA")
+
+
+def _write_read_assignment_summary(prefix, reads_total):
+    """The per-unit summary a real quant unit leaves beside its quant.expr.
+
+    Written through LRAA's worker writer and then its own merger, because that is
+    how a unit's file comes to hold a ``worker`` row AND its own ``TOTAL``: stage 6
+    has to skip the latter or it counts every unit twice.
+    """
+
+    worker = prefix + ".read_assignment.summary.worker.tsv"
+    lraa._write_read_assignment_summary(
+        worker,
+        "chrT",
+        "+",
+        {"reads_total": reads_total, "reads_kept_genome": reads_total},
+    )
+    lraa._merge_read_assignment_summary_files(
+        [worker], prefix + ".read_assignment.summary.tsv"
+    )
+    os.remove(worker)
+
 
 EXPR_HEADER = [
     "gene_id",
@@ -92,7 +122,8 @@ MODELS = [
 
 def _write_unit(root, unit_id, offset, all_reads_by_model, read_tokens):
     """One quant unit's chunk-local ``quant.expr``, gzipped ``quant.tracking``,
-    and ``.gtf`` (``merge_discovery_gtf`` needs the last one).
+    ``.gtf`` (``merge_discovery_gtf`` needs it) and ``read_assignment.summary.tsv``
+    (stage 6 requires one from every unit).
 
     ``all_reads_by_model`` varies the counts per unit, deliberately, so the
     unrebased TPM differs from the correctly-rebased one -- a bug that used
@@ -156,6 +187,10 @@ def _write_unit(root, unit_id, offset, all_reads_by_model, read_tokens):
                 "\t".join(("chrT", "LRAA", "exon", "1", "10", ".", "+", ".", attrs)),
                 file=fh,
             )
+
+    # One read per tracking row, which is what a unit's summary reports and what
+    # stage 6 now requires of every unit.
+    _write_read_assignment_summary(prefix, len(read_tokens))
 
     return {"unit_id": unit_id, "offset": offset, "quant_prefix": prefix}
 

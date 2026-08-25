@@ -163,6 +163,14 @@ workflow LRAA_cell_cluster_guided {
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
             bam_files = partition_bam_by_cell_cluster.partitioned_bams,
+            # The pre-partition BAM the cluster BAMs above were split out of. It does
+            # NOT trigger partitioning there -- bam_files is supplied, so that branch is
+            # skipped -- it is the unthinned SUPERSET the ONE shared chunk plan is
+            # selected on, so every cluster cuts at identical positions and slices the
+            # shared splice-graph BAM identically. Without it LRAA_quant_by_cluster has
+            # no superset file, and a by_chunk final quant is refused rather than each
+            # cluster quietly choosing its own chunk boundaries.
+            inputBAM = inputBAM,
             pre_normalized_cluster_bams = pre_normalized_cluster_bams,
             pre_normalized_cluster_bais = pre_normalized_cluster_bais,
             HiFi = HiFi,

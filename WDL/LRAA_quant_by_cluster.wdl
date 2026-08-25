@@ -54,6 +54,15 @@ workflow LRAA_quant_by_cluster {
         Int? memoryGB_quant_scattered
         # Used only for chromosome-sharded per-cluster quantification runs.
         Int cpu_scattered = 2
+        # The one-off shared-chunk-plan task below. Cut selection runs one concurrent
+        # unit per contig under --cpu_budget, so cpu IS that budget.
+        Int cpu_chunk_plan = 16
+        # ChunkedRun charges a make-chunks unit 300 MiB in its own concurrency guard
+        # (PREP_UNIT_PEAK_MIB, pylib/ChunkedRun.py:922), so 16 concurrent contig
+        # selections are estimated at 4.7 GiB and 8 GiB is that plus headroom. The
+        # guard reads MemAvailable and REDUCES concurrency rather than letting the box
+        # OOM, so undersizing this costs wall time, not the run.
+        Int memoryGB_chunk_plan = 8
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
@@ -123,6 +132,68 @@ workflow LRAA_quant_by_cluster {
             memoryGB = memoryGB_normalize
     }
 
+    # Step 3b: ONE chunk plan, shared by every cluster.
+    #
+    # Two properties make the clusters comparable. All are quantified against one
+    # consolidated GTF, and all build their splice graph from the one normalized BAM
+    # produced above -- but cut POSITIONS are otherwise chosen per run. Left alone,
+    # each cluster selects cuts on its OWN BAM, gets its own chunk boundaries, and
+    # slices that shared normalized BAM at those boundaries, so the splice graph each
+    # cluster actually saw differs and their boundary overhang drops differ with it.
+    # The second property is then not achieved at all.
+    #
+    # Selected on the WHOLE pre-partition BAM, which is an unthinned SUPERSET of every
+    # cluster BAM: a position no read spans in the superset is spanned in no subset, so
+    # one plan is safe for all of them. Selecting on normalize_merged_bam's output
+    # instead would be worse than per-cluster selection -- normalization thins reads,
+    # so a position that looks free there can still be spanned by a raw cluster read,
+    # which extraction then DROPS with nothing reporting the loss, breaking
+    # chunked-vs-unchunked quant parity.
+    #
+    # Produced for by_chunk AND by_chromosome, which is why the gate below tests only
+    # for "off". by_chromosome is not an unchunked path: subwdls/LRAA_runner.wdl passes
+    # --chunk unconditionally, so each chromosome shard chunks its contig inside itself
+    # and, unplanned, picks those cuts from that cluster's own reads. Since
+    # by_chromosome is this workflow's DEFAULT scattering, leaving it out would mean the
+    # default single-cell final quant still had per-cluster geometry. off is the one
+    # mode with nothing to share -- one whole-genome invocation per cluster, chunked
+    # internally, and LRAA.wdl's validate_scattering refuses a plan there.
+    #
+    # And a plan is only possible when this workflow was handed the pre-partition BAM.
+    # With bam_files supplied directly and no inputBAM there is no single superset
+    # FILE -- the union of the cluster BAMs is not a file that exists, and merging them
+    # here to manufacture one would be inventing an input. Nothing is passed in that
+    # case, so ChunkedRun's own refusal (--bam_for_sg without shared cut geometry)
+    # fails the run with the remedy named, rather than quietly giving every cluster its
+    # own boundaries. The remedy for a caller is to pass inputBAM alongside bam_files,
+    # which is what LRAA-cell_cluster_guided.wdl now does.
+    if (scattering != "off" && defined(inputBAM)) {
+        call emit_shared_chunk_plan {
+            input:
+                inputBAM = select_first([inputBAM]),
+                referenceGenome = referenceGenome,
+                # THIS workflow's annot_gtf, which is the SAME gtf the per-cluster calls
+                # below quantify against -- for the cluster-guided path that is
+                # lraa_merge_gtf_task's consolidated output, not the reference
+                # annotation. Load-bearing, not incidental: cut selection treats an
+                # annotated transcript model as indivisible and will not cut inside one,
+                # so a plan selected against the reference GTF can place a boundary
+                # through a NOVEL model that phase-1 discovery found and the merge kept.
+                # Every cluster would then quantify a severed model -- a wrong answer
+                # rather than a smaller one, and precisely on the novel isoforms
+                # discovery exists to find. Do not hoist this task earlier in the graph
+                # to where only the reference annotation is available.
+                annot_gtf = annot_gtf,
+                main_chromosomes = main_chromosomes,
+                HiFi = HiFi,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                cpu = cpu_chunk_plan,
+                memoryGB = memoryGB_chunk_plan,
+                docker = docker
+        }
+    }
+
     # Step 4: Quantify each original BAM in parallel using normalized merged BAM for splice graph
     scatter (i in range(length(cluster_bams))) {
         String cluster_sample_id = basename(cluster_bams[i], ".bam")
@@ -132,11 +203,22 @@ workflow LRAA_quant_by_cluster {
                 sample_id = cluster_sample_id,
                 referenceGenome = referenceGenome,
                 inputBAM = cluster_bams[i],
-                bam_for_sg = normalize_merged_bam.normalized_bam,
+                # The ONE splice graph every cluster is quantified against: cluster bams
+                # normalized, merged, then normalized again above. inputBAM stays this
+                # cluster's own ORIGINAL bam, so the structure set is global and the reads
+                # counted are cluster-local. Supplying it also means LRAA does not
+                # normalize again -- LRAA.wdl derives no_norm from it being defined, which
+                # is why there is no no_norm argument here any more.
+                internal_bam_for_sg = normalize_merged_bam.normalized_bam,
+                internal_bam_for_sg_index = normalize_merged_bam.normalized_bai,
+                # The ONE chunk geometry every cluster cuts on, selected above from the
+                # unthinned pre-partition BAM. Without it each cluster would slice the
+                # shared splice-graph BAM at its own boundaries.
+                internal_chunk_plan = emit_shared_chunk_plan.chunk_plan,
                 annot_gtf = annot_gtf,
                 quant_only = true,
-                no_norm = true,
-                # single-cell: no_norm above already means there is nothing to export, and this
+                # single-cell: there is nothing to export, since the pre-normalized
+                # splice-graph bam above means no normalization runs inside LRAA, and this
                 # workflow surfaces its normalized BAMs from Normalize_bam.wdl instead
                 retain_normalized_splice_graph_bam = false,
                 no_EM = false,
@@ -172,6 +254,9 @@ workflow LRAA_quant_by_cluster {
         File merged_bai = merge_bams.merged_bai
         File normalized_merged_bam = normalize_merged_bam.normalized_bam
         File normalized_merged_bai = normalize_merged_bam.normalized_bai
+        # The geometry every cluster above was cut on. Absent when scattering is off, or
+        # when no pre-partition BAM was available to select it from.
+        File? shared_chunk_plan = emit_shared_chunk_plan.chunk_plan
     }
 }
 
@@ -359,5 +444,102 @@ print(total)
         cpu: "~{cpu}"
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} SSD"
+    }
+}
+
+
+task emit_shared_chunk_plan {
+    # Cut selection ONLY -- no extraction, no chunk directories, no mini BAMs. The
+    # single output is the geometry every per-cluster quant run then applies with
+    # --chunk_plan, so all of them cut at identical positions.
+    input {
+        File inputBAM
+        File referenceGenome
+        # The consolidated GTF the per-cluster quants target; see the call site for why
+        # it must be that one and not the reference annotation.
+        File annot_gtf
+        String main_chromosomes
+        Boolean HiFi
+        Float? approx_MB_per_cut
+        Float? approx_MB_per_cut_wiggle_window
+        # This workflow does not expose the mapping-quality floors, so the per-cluster
+        # LRAA.wdl calls run at ITS defaults and make_chunks forwards those to
+        # ChunkedRun explicitly. Cut selection filters on the same resolved floor
+        # (ChunkedRun.resolve_min_mapping_quality), and ChunkedRun's own argparse
+        # default comes from LRAA_Globals.config rather than from LRAA.wdl -- so
+        # omitting these would select cuts at one floor while every consumer extracts
+        # at another, and the consuming run refuses that mismatch. Mirrored here; if
+        # LRAA.wdl's defaults change or this workflow starts exposing them, they have
+        # to be threaded to this task too.
+        Int min_mapping_quality = 0
+        Int min_mapping_quality_for_final_quant = 0
+        Int cpu
+        Int memoryGB
+        String docker
+    }
+
+    # 2x the localized inputs, against make_chunks' 3x: nothing here holds a partition
+    # of the BAM. The outputs are the plan plus the per-contig cut artifacts, including
+    # a severed-reads BAM carrying only reads that span a candidate cut.
+    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + size(annot_gtf, "GB")
+    Float diskRawGB = 2.0 * inputsGB + 50.0
+    Int diskGB = if diskRawGB > 100.0 then ceil(diskRawGB) else 100
+
+    command <<<
+    set -euo pipefail
+
+    # Symlinked into a writable dir for the same reason make_chunks does it: the input
+    # mounts can be read-only, and both `samtools index` and faidx write beside their
+    # argument.
+    mkdir -p inputs work
+    ln -s ~{inputBAM} inputs/input.bam
+    if [[ ! -e inputs/input.bam.bai && ! -e inputs/input.bam.csi ]]; then
+        samtools index -@ ~{cpu} inputs/input.bam
+    fi
+    ln -s ~{referenceGenome} inputs/genome.fa
+    samtools faidx inputs/genome.fa
+
+    # No --num_total_reads: cut selection has no use for the TPM denominator, and the
+    # denominator is per-cluster regardless -- each consuming run counts its own reads
+    # and never reads one out of the plan. No --discovery either: every per-cluster
+    # call in this workflow is quant_only, and that flag changes the effective
+    # mapping-quality floor cut selection uses, so the emitting run has to match the
+    # consuming ones.
+    #
+    # --output_dir is still required (cuts/, logs/ and the checkpoint dir live there);
+    # the plan is written at exactly the path given, deliberately OUTSIDE work/ so it
+    # cannot be confused with the per-chunk plan a --stop_after_make_chunks run writes
+    # at <output_dir>/chunk_plan.json.
+    /usr/local/src/LRAA/pylib/ChunkedRun.py \
+        --bam inputs/input.bam \
+        --genome_fa inputs/genome.fa \
+        --gtf ~{annot_gtf} \
+        --output_dir work \
+        --cpu_budget ~{cpu} \
+        --emit_cut_plan shared_cut_plan.json \
+        ~{if main_chromosomes != "" then "--contigs " + sub(main_chromosomes, " +", ",") else ""} \
+        ~{true="--HiFi" false="" HiFi} \
+        --min_mapping_quality ~{min_mapping_quality} \
+        --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \
+        ~{if defined(approx_MB_per_cut) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
+        ~{if defined(approx_MB_per_cut_wiggle_window) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""}
+
+    test -s shared_cut_plan.json
+    >>>
+
+    output {
+        File chunk_plan = "shared_cut_plan.json"
+    }
+
+    runtime {
+        docker: docker
+        cpu: cpu
+        memory: "~{memoryGB} GiB"
+        # Non-preemptible unlike the per-chunk leaves: this is the one task every
+        # cluster job waits on, and a preemption restarts cut selection over the whole
+        # pre-partition BAM. Same reasoning as make_chunks in
+        # subwdls/LRAA_chunk_scatter.wdl.
+        preemptible: 0
+        disks: "local-disk ~{diskGB} SSD"
     }
 }

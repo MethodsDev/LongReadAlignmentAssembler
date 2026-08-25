@@ -1140,9 +1140,14 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     the assertion has to be on the NUMBER, and on it agreeing with the units it
     came from.
 
-    Also pins the skip: stage 6 returns None when NO unit has a summary, so that
-    a chunk directory predating these files still merges. That escape hatch is
-    only safe while a real run demonstrably takes the other branch.
+    Both of the old tolerances are gone and are asserted gone. Stage 6 used to
+    return None when NO unit had a summary, and to accept a missing one from a unit
+    whose quant.expr held no data rows; that existed because a unit taking one of
+    run_quant_only's early returns wrote nothing. Those returns now count the reads
+    they saw and report them with zero assigned, so EVERY unit contributes and a
+    missing file means a unit that did not complete. See
+    pylib/test_read_assignment_summary_completeness.py for the refusal itself and
+    for the chunked-vs-unchunked parity this coverage makes possible.
     """
 
     import csv
@@ -1166,18 +1171,23 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     assert out is not None, "a real chunked run must produce a merged summary"
 
     # coverage rides alongside the path, so a consumer can tell whether the table
-    # describes every unit rather than having to assume it does
-    assert out["units_merged"] >= 1
-    assert out["units_merged"] + out["units_absent"] == out["units_total"]
-    assert out["complete"] is (out["units_absent"] == 0)
+    # describes every unit rather than having to assume it does. On a completed run
+    # it always describes all of them: a unit without a summary is refused, not
+    # skipped, so units_absent is 0 rather than merely reported.
+    assert out["units_absent"] == 0
+    assert out["units_merged"] == out["units_total"] == len(units)
+    assert out["complete"] is True
 
     with open(out["path"], newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     workers = [r for r in rows if r["row_type"] == "worker"]
     totals = [r for r in rows if r["row_type"] == "TOTAL"]
 
-    # one worker row per CONTRIBUTING unit, exactly one recomputed TOTAL
-    assert len(workers) == out["units_merged"], (len(workers), out["units_merged"])
+    # At least one worker row per contributing unit, and exactly one recomputed
+    # TOTAL. Not one row PER unit: a quant unit is its own complete LRAA run, which
+    # has a work unit per strand of its mini contig, and every work unit reports now
+    # -- the strand the unit holds plus the empty opposite one.
+    assert len(workers) >= out["units_merged"], (len(workers), out["units_merged"])
     assert len(totals) == 1
 
     # the number, not merely the file: TOTAL is the sum of the units, and nonzero
@@ -1185,14 +1195,12 @@ def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     assert int(totals[0]["reads_total"]) == expected
     assert expected > 0, "the fixture's reads should be counted, not zero"
 
-    # and the per-unit TOTAL rows were NOT folded in a second time. Only units
-    # that actually wrote a summary are counted here: one that quantified nothing
-    # has no file, which is the case `units_absent` reports.
+    # and the per-unit TOTAL rows were NOT folded in a second time. Every unit is
+    # read, with no existence check: a unit without a summary would have been
+    # refused above, so a KeyError-shaped failure here is the honest outcome.
     per_unit_total = 0
     for unit in units:
         path = unit["quant_prefix"] + ".read_assignment.summary.tsv"
-        if not os.path.exists(path):
-            continue
         with open(path, newline="") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 if row["row_type"] == "worker":

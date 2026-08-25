@@ -47,6 +47,7 @@ import MultiProcessManager as mpm
 import logging
 import shutil
 from Pretty_alignment_manager import Pretty_alignment_manager
+from Bam_alignment_extractor import Bam_alignment_extractor
 
 
 # FORMAT = "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s at %(lineno)d :\n\t%(message)s\n"
@@ -1662,6 +1663,19 @@ def main():
         default=LRAA_Globals.config["chunk_margin"],
         help="--chunk: bases of clearance a cut must leave on both sides of every "
         "annotated locus (default: {})".format(LRAA_Globals.config["chunk_margin"]),
+    )
+    contig_group_setting.add_argument(
+        "--chunk_plan",
+        type=str,
+        default=None,
+        help="--chunk: apply the cut geometry in a plan written by "
+        "'ChunkedRun.py --emit_cut_plan' instead of selecting cuts from this "
+        "run's own bam. That is what makes --bam_for_sg safe across callers: cut "
+        "placement READS a bam, so per-caller selection slices the shared "
+        "splice-graph evidence at different boundaries in every caller. Geometry "
+        "only -- the TPM denominator and the run mode come from this run. "
+        "ChunkedRun refuses a plan whose parameters, annotation or contig lengths "
+        "disagree with this run's",
     )
     contig_group_setting.add_argument(
         "--chunk_work_dir",
@@ -3523,6 +3537,21 @@ def _run_chunked_mode(args):
 
     chunk_args = ChunkedRun.default_args(
         bam=args.bam,
+        # Forwarded rather than dropped. This enumeration is an allowlist, so an
+        # unlisted flag is parsed and silently ignored -- and `--bam_for_sg`
+        # ignored means every chunk manufactures its OWN splice-graph evidence,
+        # which is precisely the guarantee this input exists to keep. ChunkedRun
+        # refuses it without a cut-selection source rather than choosing a
+        # geometry for the caller, so the failure is a message and not a run.
+        bam_for_sg=args.bam_for_sg,
+        # Same allowlist, same failure mode, and this one is what makes the
+        # previous line usable: without a shared plan ChunkedRun refuses
+        # --bam_for_sg outright, because per-caller cut selection would slice that
+        # shared evidence at per-caller boundaries. Unlisted here, the flag would
+        # be parsed off this command line and dropped, and every caller would go
+        # back to choosing its own geometry -- silently, since a plan that never
+        # arrives cannot mismatch.
+        chunk_plan=args.chunk_plan,
         genome_fa=args.genome,
         gtf=args.gtf,
         # Quant-only is the pipeline's default; discovery is this flag's absence,
@@ -4660,6 +4689,35 @@ def _contig_job_runner(job):
                     rescue_summary_path=rescue_summary_tmp,
                 )
 
+        # Count-then-report backstop: no work unit may finish without saying how
+        # many reads it saw.
+        #
+        # run_quant_only's three early returns write their own summary, naming
+        # which condition fired. Nothing else does. run_transcript_assembly has
+        # NINE more early returns of its own -- nothing assembled, no draft mapped
+        # into the final graph, and one per isoform filter that emptied the set --
+        # and the two oversimplify paths take no summary argument at all. MEASURED:
+        # a two-read discovery chunk and an oversimplified chrM chunk each wrote a
+        # quant.expr and no summary, so their reads were absent from the run's
+        # accounting entirely.
+        #
+        # Held here, once, rather than at each of those returns: this is the only
+        # place that knows a work unit is finishing, so it is the only place that
+        # cannot be bypassed by the next early return someone adds. It is a no-op
+        # whenever the unit already reported.
+        if not os.path.exists(read_assignment_summary_tmp):
+            _write_unquantified_read_assignment_summary(
+                read_assignment_summary_tmp,
+                contig_acc,
+                contig_strand,
+                _first_pass_assignment_bam(
+                    job["bam_file_for_sg"], job["bam_file_for_quant"]
+                ),
+                job["restrict_region_lend"],
+                job["restrict_region_rend"],
+                "this work unit reported no read assignments",
+            )
+
         ofh_quant.close()
         ofh_track.close()
         if ofh_gtf_local is not None:
@@ -5440,6 +5498,117 @@ def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stat
         writer.writerow(row)
 
 
+def _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant):
+    """The bam the first read-assignment pass reads.
+
+    Under --stream_reads that pass exists only to estimate abundances and so reads
+    the coverage-normalized bam; otherwise it reads the bam being quantified. It is
+    resolved here rather than at each use because the read-assignment summary's
+    reads_total is a count over THIS bam, and a count taken from the other one
+    would report a population the run never assigned.
+    """
+
+    return (
+        bam_file_for_sg if LRAA_Globals.config["stream_reads"] else bam_file_for_quant
+    )
+
+
+def _write_unquantified_read_assignment_summary(
+    summary_path,
+    contig_acc,
+    contig_strand,
+    bam_file,
+    region_lend,
+    region_rend,
+    reason,
+):
+    """Count-then-report: a work unit that assigned nothing still says what it SAW.
+
+    Two groups of callers. run_quant_only's three early returns call it directly --
+    no input transcripts for this contig/strand, an empty splice graph, and no input
+    transcript left after mapping into the graph -- because those name WHICH
+    condition fired. Everything else reaches it through the backstop in
+    _contig_job_runner, which covers run_transcript_assembly's nine early returns
+    and the two oversimplify paths that take no summary argument at all.
+
+    A whole-genome chunked run has ~600 work units, and these shards still HOLD
+    reads: an intergenic chunk, one whose every annotated transcript was filtered
+    out, one whose coverage was too thin to assemble a model, or chrM, which is
+    oversimplified by default. Those reads existed and were simply missing from the
+    merged reads_total, so the run-wide accounting undercounted with nothing saying
+    so. MEASURED: a two-read discovery chunk and an oversimplified chrM chunk each
+    wrote quant output and no summary at all.
+
+    reads_total is therefore MEASURED, over the bam the first assignment pass would
+    have read, the same region it would have fetched, and the same retention policy
+    it applies -- Bam_alignment_extractor.retained_read_names asks
+    Util_funcs.quant_discard_reason, exactly as get_read_alignments does, so this is
+    the same population and not a second approximation of it.
+
+    Every other counter is zero because nothing was assigned, not because nothing
+    was looked at. A fabricated zero reads_total would be worse than the absent row
+    it replaces: the merged total would then claim completeness while still
+    undercounting.
+    """
+
+    # Under the FINAL-QUANT mapping-quality threshold, which is what the first
+    # assignment pass runs under: run_quant_only swaps it in for the whole of
+    # quantification, so a count taken at the discovery threshold would include
+    # reads that pass would never have seen. Owned here rather than left to each
+    # call site, because the sites in run_transcript_assembly are OUTSIDE that
+    # swap's scope and the two groups have to agree.
+    saved_min_mapq = LRAA_Globals.config["min_mapping_quality"]
+    LRAA_Globals.config["min_mapping_quality"] = LRAA_Globals.config[
+        "min_mapping_quality_for_final_quant"
+    ]
+    read_names = set()
+    try:
+        if bam_file is None:
+            logger.warning(
+                "[%s%s] no bam to count reads from; reporting a zero "
+                "read-assignment summary (%s)",
+                contig_acc,
+                contig_strand,
+                reason,
+            )
+        else:
+            extractor = Bam_alignment_extractor(bam_file)
+            read_names = extractor.retained_read_names(
+                contig_acc, contig_strand, region_lend, region_rend
+            )
+            if LRAA_Globals.config[
+                "rescue_unassigned_reads_via_transcriptome_alignment"
+            ]:
+                # The assigning path folds the extractor's low-identity discards
+                # into reads_total by way of the rescue candidate set
+                # (LRAA.py:1259-1267), and only when rescue is on. Same condition
+                # here, so both paths count one population rather than two that
+                # differ by those reads.
+                discarded = extractor.get_last_discarded_read_names_by_reason()
+                read_names = read_names | discarded.get("low_perID", set())
+    finally:
+        LRAA_Globals.config["min_mapping_quality"] = saved_min_mapq
+
+    # Distinct read NAMES, which is the cardinality reads_total reports: the
+    # assigning path counts distinct _normalize_read_identifier values, and that
+    # normalization is a renaming of these same names. It is deliberately not
+    # applied here -- it writes through LRAA_Globals.READ_NAME_STORE, which these
+    # early returns run before, so asking it would either populate a store this
+    # unit never uses or, on a store left closed by a previous unit, silently drop
+    # reads from the count this function exists to make honest.
+    stats = {"reads_total": len(read_names)}
+
+    logger.info(
+        "[%s%s] %s: reporting %d read(s) with zero assigned",
+        contig_acc,
+        contig_strand,
+        reason,
+        stats["reads_total"],
+    )
+
+    _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stats)
+
+
 def _merge_read_assignment_summary_files(summary_paths, output_path):
     """Concatenate the per-work-unit rows and append a TOTAL row over every counter."""
 
@@ -5573,6 +5742,18 @@ def run_quant_only(
     # if no transcripts for this contig/strand, nothing to quant on
     if input_transcripts is None:
         logger.info(f"-no isoforms to quant on {contig_acc} [{contig_strand}]")
+        if read_assignment_summary_path is not None:
+            # The writer applies the final-quant threshold itself, so this is
+            # unaffected by the restore below.
+            _write_unquantified_read_assignment_summary(
+                read_assignment_summary_path,
+                contig_acc,
+                contig_strand,
+                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                restrict_region_lend,
+                restrict_region_rend,
+                "no input transcripts to quantify",
+            )
         LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         # continue
         return None, None
@@ -5622,6 +5803,25 @@ def run_quant_only(
 
     if sg.is_empty():
         logger.info(f"-no splice graph created for contig: {contig_acc}.... skipping.")
+        if read_assignment_summary_path is not None:
+            _write_unquantified_read_assignment_summary(
+                read_assignment_summary_path,
+                contig_acc,
+                contig_strand,
+                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                restrict_region_lend,
+                restrict_region_rend,
+                "no splice graph created",
+            )
+        # Restored on EVERY exit, not just the normal one and the
+        # input_transcripts-is-None one at :5736. This key is process-global and
+        # a contig worker handles many shards in sequence, so leaking the
+        # final-quant threshold here left every LATER shard in the same process
+        # filtering discovery at the final-quant value. Invisible while both
+        # default to 0, which is why it survived; a caller raising
+        # --min_mapping_quality_for_final_quant made shard order decide which
+        # reads discovery saw.
+        LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         # continue
         return None, None
 
@@ -5648,6 +5848,20 @@ def run_quant_only(
             contig_acc,
             contig_strand,
         )
+        if read_assignment_summary_path is not None:
+            # The early return most likely to be hiding reads: the graph was built,
+            # so this shard's bam held enough coverage to build one, and every
+            # annotated transcript over it was still filtered out.
+            _write_unquantified_read_assignment_summary(
+                read_assignment_summary_path,
+                contig_acc,
+                contig_strand,
+                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                restrict_region_lend,
+                restrict_region_rend,
+                "no input transcripts mapped into the splice graph",
+            )
+        LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         return None, None
 
     if LRAA_Globals.DEBUG:
@@ -5689,8 +5903,12 @@ def run_quant_only(
     # the coverage-normalized bam: that is the whole saving, since the default path
     # materializes every retained read of whichever bam it is given. The second pass
     # below streams bam_file_for_quant and is what makes the tracking file complete.
-    bam_file_for_pass1 = (
-        bam_file_for_sg if LRAA_Globals.config["stream_reads"] else bam_file_for_quant
+    #
+    # Resolved through the shared helper because the early returns above count their
+    # reads over this same bam, and a count taken over the other one would report a
+    # population this pass never assigned.
+    bam_file_for_pass1 = _first_pass_assignment_bam(
+        bam_file_for_sg, bam_file_for_quant
     )
     mp_counter = lraa_obj._populate_read_multi_paths(
         contig_acc,

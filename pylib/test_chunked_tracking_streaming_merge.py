@@ -42,6 +42,55 @@ sys.path.insert(0, str(REPO / "pylib"))
 import ChunkedRun  # noqa: E402
 import Util_funcs  # noqa: E402
 
+# Stage 6 REQUIRES a read-assignment summary from every quant unit
+# (``ChunkedRun.merge_read_assignment_summaries``), because every LRAA path now
+# writes one -- including the ``run_quant_only`` early returns that quantify
+# nothing and report the reads they saw with zero assigned. These tests are about
+# the TRACKING merge and care nothing for that table, but a unit directory without
+# it is no longer a shape a real run produces, so the fixture would be testing the
+# merge against an input it can never receive. Loaded from LRAA and driven through
+# its own writer rather than hand-writing the 28-column schema, which would be
+# free to drift from what LRAA emits -- the exact disagreement the merge's
+# field-name check exists to catch. Same approach as
+# ``test_merge_chunk_outputs.py``.
+import importlib.machinery  # noqa: E402
+import importlib.util  # noqa: E402
+
+
+def _load_lraa_driver():
+    spec = importlib.util.spec_from_loader(
+        "lraa_driver_tracking_fixture",
+        importlib.machinery.SourceFileLoader(
+            "lraa_driver_tracking_fixture", str(REPO / "LRAA")
+        ),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+lraa = _load_lraa_driver()
+
+
+def _write_read_assignment_summary(prefix, reads_total):
+    """The per-unit summary a real quant unit leaves beside its quant.expr.
+
+    Written through LRAA's worker writer and then its own merger, because that is
+    how a unit's file comes to hold a ``worker`` row AND its own ``TOTAL``: stage
+    6 skips the latter or it counts every unit twice.
+    """
+
+    worker = prefix + ".read_assignment.summary.worker.tsv"
+    lraa._write_read_assignment_summary(
+        worker,
+        "chrT",
+        "+",
+        {"reads_total": reads_total, "reads_kept_genome": reads_total},
+    )
+    lraa._merge_read_assignment_summary_files(
+        [worker], prefix + ".read_assignment.summary.tsv"
+    )
+    os.remove(worker)
+
 
 EXPR_HEADER = [
     "gene_id",
@@ -114,6 +163,11 @@ def _write_unit(root, unit_id, offset, tracking_rows):
                 ),
                 file=fh,
             )
+
+    # Distinct per unit and derived from this unit's own rows, so a merged TOTAL
+    # that dropped or double-counted a unit shows up as a wrong number rather
+    # than as a coincidence of equal values.
+    _write_read_assignment_summary(prefix, len(tracking_rows))
 
     return {"unit_id": unit_id, "offset": offset, "quant_prefix": prefix}
 

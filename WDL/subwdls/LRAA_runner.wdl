@@ -6,6 +6,17 @@ task LRAA_runner_task {
         File genome_fasta
         File inputBAM
         File? bam_for_sg
+        # ONE shared cut plan, geometry only. Needed here for the same reason
+        # bam_for_sg is: this task ALWAYS passes --chunk (see the LRAA invocation
+        # below, and the note on chunk_by_strand further down), so a per-chromosome
+        # shard is NOT an unchunked run: it chunks its contig internally and, without
+        # a plan, selects those cut positions from ITS OWN bam. In the single-cell
+        # final quant that means every cluster gets different chunk boundaries and
+        # slices the shared bam_for_sg differently, so the clusters stop being
+        # comparable. The plan is genome-wide and per-contig, so a shard restricted to
+        # one contig with --contig simply uses that contig's entry; no per-contig
+        # splitting is required.
+        File? chunk_plan
 
         File? annot_gtf
         Boolean quant_only
@@ -267,6 +278,7 @@ task LRAA_runner_task {
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
                                  --chunk \
+                                 ~{if defined(chunk_plan) then "--chunk_plan " + chunk_plan else ""} \
                                  ~{true="--chunk_by_strand" false='' chunk_by_strand} \
                                  ~{if defined(approx_MB_per_cut) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
                                  ~{if defined(approx_MB_per_cut_wiggle_window) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
@@ -370,6 +382,9 @@ workflow LRAA_runner {
         File genome_fasta
         File inputBAM
         File? bam_for_sg
+        # See the task's input above: a shard chunks internally, so it needs the
+        # shared cut geometry or it picks its own.
+        File? chunk_plan
 
         File? annot_gtf
         Boolean quant_only
@@ -425,6 +440,7 @@ workflow LRAA_runner {
             genome_fasta=genome_fasta,
             inputBAM=inputBAM,
             bam_for_sg=bam_for_sg,
+            chunk_plan=chunk_plan,
             annot_gtf=annot_gtf,
             quant_only=quant_only,
             HiFi = HiFi,

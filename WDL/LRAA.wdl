@@ -11,7 +11,40 @@ workflow LRAA_wf {
                  
         File referenceGenome 
         File inputBAM
-        File? bam_for_sg
+        # INTERNAL PLUMBING, not a user knob. Splice-graph evidence supplied by the
+        # CALLING workflow: the single-cell final quant normalizes every cluster bam,
+        # merges them, normalizes the merge once more, and hands that ONE bam to all
+        # per-cluster quant jobs (LRAA_quant_by_cluster.wdl), so every cluster is
+        # quantified against the same splice graph while counting only its own reads.
+        # Supplying it IS the statement "already normalized, do not normalize again":
+        # no_norm is derived from it below rather than offered separately, since
+        # no_norm alone means "build the splice graph from uncapped depth", which is
+        # not a thing to offer. Prefixed `internal_` so a workspace still binding the
+        # old top-level `bam_for_sg` / `no_norm` fails on an unknown input rather than
+        # quietly changing what the splice graph is built from.
+        File? internal_bam_for_sg
+        File? internal_bam_for_sg_index
+        # INTERNAL PLUMBING, same shape and same reason as internal_bam_for_sg above:
+        # ONE chunk plan, produced once by the calling workflow from the WHOLE
+        # pre-partition bam and handed to every sibling run, so all of them cut at
+        # identical positions. Without it each per-cluster run selects cuts on its own
+        # bam, so the shared internal_bam_for_sg gets sliced at a different geometry per
+        # cluster and the clusters stop being comparable -- exactly what supplying one
+        # splice-graph bam was for. GEOMETRY ONLY: num_total_reads and discovery come
+        # from each consuming run, never from the plan.
+        #
+        # Consumed by by_chunk AND by by_chromosome. by_chromosome is NOT an unchunked
+        # path: subwdls/LRAA_runner.wdl passes --chunk unconditionally, so each
+        # chromosome shard chunks its contig INSIDE itself and, without a plan, picks
+        # those cut positions from that shard's own bam. The plan is genome-wide and
+        # per-contig, so a shard restricted with --contig just uses its contig's entry.
+        # Do not "simplify" this back to by_chunk-only: doing so silently restores
+        # per-cluster chunk boundaries in the mode the single-cell pipeline defaults to.
+        #
+        # off is the one mode that does not take a plan -- it is a single whole-genome
+        # invocation, so there is no sibling run for its geometry to have to match --
+        # and supplying one there is refused in validate_scattering rather than dropped.
+        File? internal_chunk_plan
         File? annot_gtf
         Boolean HiFi = false
          
@@ -43,7 +76,6 @@ workflow LRAA_wf {
         Float? min_per_id
         Boolean no_EM = false
         Boolean quant_only = false
-        Boolean no_norm = false
         # Return the depth-normalized BAM(s) the splice graph was built from. Single-cell
         # workflows that call this one set this false; they never surface the file, and
         # delocalizing it would cost them storage for nothing.
@@ -164,6 +196,13 @@ workflow LRAA_wf {
     Int direct_memoryGB = select_first([memoryGB, memoryGB_whole_genome])
     Int scattered_memoryGB = select_first([memoryGBPerWorkerScattered, memoryGB_per_chromosome_shard])
 
+    # DERIVED, never asked for. The only caller-supplied splice-graph evidence this
+    # workflow accepts is internal_bam_for_sg, which is already depth-normalized by
+    # the caller (LRAA_quant_by_cluster.wdl normalizes, merges, normalizes again), so
+    # normalizing it a second time would cap already-capped depth. The two were only
+    # ever meaningful as a pair.
+    Boolean no_norm = defined(internal_bam_for_sg)
+
     # region forces `off`: a region restriction and a genome-wide partition are two
     # ways of saying the same thing, and only the unscattered path passes --region
     # through to LRAA. Validated in validate_scattering rather than silently
@@ -179,6 +218,7 @@ workflow LRAA_wf {
             scattering = scattering,
             main_chromosomes = main_chromosomes,
             region_given = defined(region),
+            chunk_plan_given = defined(internal_chunk_plan),
             docker = docker
     }
 
@@ -189,6 +229,9 @@ workflow LRAA_wf {
                 referenceGenome = referenceGenome,
                 inputBAM = inputBAM,
                 annot_gtf = annot_gtf,
+                bam_for_sg = internal_bam_for_sg,
+                bam_for_sg_index = internal_bam_for_sg_index,
+                chunk_plan = internal_chunk_plan,
                 main_chromosomes = main_chromosomes,
                 oversimplify = oversimplify,
                 quant_only = quant_only,
@@ -242,7 +285,7 @@ workflow LRAA_wf {
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
                 inputBAM = inputBAM,
-                bam_for_sg = bam_for_sg,
+                bam_for_sg = internal_bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = chromosomes_to_partition,
@@ -282,7 +325,13 @@ workflow LRAA_wf {
                     sample_id = sample_id,
                     shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
-                    bam_for_sg = if defined(bam_for_sg) then select_first([splitByChr.chromosomeBAMsForSG])[contig_index] else bam_for_sg,
+                    bam_for_sg = if defined(internal_bam_for_sg) then select_first([splitByChr.chromosomeBAMsForSG])[contig_index] else internal_bam_for_sg,
+                    # Same shared geometry the by_chunk branch gets. This shard chunks
+                    # its contig internally, so without the plan it would select cuts
+                    # from THIS cluster's reads and slice bam_for_sg above at its own
+                    # boundaries -- per-cluster geometry, which is the defect the plan
+                    # removes.
+                    chunk_plan = internal_chunk_plan,
                     genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
                     annot_gtf = splitByChr.chromosomeGTFs[contig_index],
                     oversimplify = oversimplify,
@@ -344,7 +393,7 @@ workflow LRAA_wf {
             input:
                 sample_id = sample_id,
                 inputBAM = inputBAM,
-                bam_for_sg = bam_for_sg,
+                bam_for_sg = internal_bam_for_sg,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 region = region,
@@ -387,7 +436,8 @@ workflow LRAA_wf {
     File? mergedReadAssignmentSummary = if (scatter_by_chunk) then chunk_scatter.mergedReadAssignmentSummary else if (run_without_splitting) then LRAA_direct.LRAA_read_assignment_summary else mergeReadAssignmentSummaries.mergedSummaryFile
     # The depth-normalized BAM(s) the splice graph -- and therefore isoform identification --
     # was built from. Quantification does not use these; it runs against the unnormalized quant
-    # BAM. Empty when no_norm is set. Scattered runs normalize each chromosome shard separately,
+    # BAM. Empty when internal_bam_for_sg was supplied, since that is already normalized
+    # and no second normalization runs. Scattered runs normalize each chromosome shard separately,
     # so this is one BAM per shard rather than one whole-genome BAM. EMPTY in by_chunk: the
     # normalization there is per UNIT inside a chunk, and surfacing those is a separate change.
     Array[File] normalizedSpliceGraphBams = if (run_without_splitting) then select_all([LRAA_direct.LRAA_normalized_splice_graph_bam]) else select_all(select_first([LRAA_scatter.LRAA_normalized_splice_graph_bam, []]))
@@ -680,6 +730,7 @@ task validate_scattering {
         String scattering
         String main_chromosomes
         Boolean region_given
+        Boolean chunk_plan_given
         String docker
     }
 
@@ -712,8 +763,22 @@ task validate_scattering {
         exit 1
     fi
 
+    # A chunk plan is geometry shared between SIBLING runs, and off has no siblings:
+    # it is one whole-genome invocation, so there is nothing for its cut positions to
+    # have to agree with. by_chunk and by_chromosome both consume it -- by_chromosome
+    # because LRAA_runner passes --chunk unconditionally, so every chromosome shard
+    # chunks internally and would otherwise choose its own cuts.
+    #
+    # Refused rather than dropped: a caller passing a plan is asserting that every
+    # sibling run cuts at the SAME positions, and silently ignoring it would give each
+    # run its own geometry again -- the defect the plan exists to remove, and invisible
+    # in the outputs.
+    if [[ "~{chunk_plan_given}" == "true" && "~{scattering}" == "off" ]]; then
+        echo "Error: internal_chunk_plan requires scattering=by_chunk or by_chromosome; got scattering=off" >&2
+        exit 1
+    fi
 
-    echo "scattering=~{scattering} contigs=${n} region=~{region_given}"
+    echo "scattering=~{scattering} contigs=${n} region=~{region_given} chunk_plan=~{chunk_plan_given}"
     >>>
 
     output {

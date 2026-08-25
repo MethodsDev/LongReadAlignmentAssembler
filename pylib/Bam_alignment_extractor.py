@@ -38,6 +38,47 @@ class Bam_alignment_extractor:
 
         return
 
+    def _fetch_region(
+        self, contig_acc, contig_strand=None, region_lend=None, region_rend=None
+    ):
+        """The pysam iterator every intake in this class reads from.
+
+        region_lend/region_rend arrive 1-based inclusive, straight from
+        --region contig:lend-rend.  pysam.fetch takes 0-based half-open
+        [start, stop), so passing region_lend unconverted started the window one
+        base late and silently dropped any alignment whose only overlap with the
+        region was its first base.  The right edge needs no adjustment: 1-based
+        region_rend is 0-based region_rend - 1, which is below the exclusive stop
+        and therefore included.
+
+        Shared rather than inlined per caller because that conversion is the one
+        place a second intake could disagree with get_read_alignments about WHICH
+        reads a region holds, and a shard read-count that disagreed would report a
+        different denominator than the run it is accounting for.
+        """
+
+        if region_lend is not None and region_rend is not None:
+            if contig_strand is not None:
+                logger.debug(
+                    "Fetching alignments for {}{}:{}-{}".format(
+                        contig_acc, contig_strand, region_lend, region_rend
+                    )
+                )
+            else:
+                logger.debug(
+                    "Fetching alignments for {}:{}-{}".format(
+                        contig_acc, region_lend, region_rend
+                    )
+                )
+            return self._pysam_reader.fetch(contig_acc, region_lend - 1, region_rend)
+
+        logger.debug(
+            "Fetching all alignments for contig: {} strand {}".format(
+                contig_acc, contig_strand
+            )
+        )
+        return self._pysam_reader.fetch(contig_acc)
+
     def get_read_alignments(
         self,
         contig_acc,
@@ -60,39 +101,9 @@ class Bam_alignment_extractor:
         MIN_MAPPING_QUALITY = int(LRAA_Globals.config["min_mapping_quality"])
         MAX_INTRON_LENGTH = int(LRAA_Globals.config["max_intron_length"])
 
-        # parse read alignments, capture introns and genome coverage info.
-        read_fetcher = None
-        if region_lend is not None and region_rend is not None:
-            if contig_strand is not None:
-                logger.debug(
-                    "Fetching alignments for {}{}:{}-{}".format(
-                        contig_acc, contig_strand, region_lend, region_rend
-                    )
-                )
-            else:
-                logger.debug(
-                    "Fetching alignments for {}:{}-{}".format(
-                        contig_acc, region_lend, region_rend
-                    )
-                )
-
-            # region_lend/region_rend arrive 1-based inclusive, straight from
-            # --region contig:lend-rend.  pysam.fetch takes 0-based half-open
-            # [start, stop), so passing region_lend unconverted started the
-            # window one base late and silently dropped any alignment whose only
-            # overlap with the region was its first base.  The right edge needs no
-            # adjustment: 1-based region_rend is 0-based region_rend - 1, which is
-            # below the exclusive stop and therefore included.
-            read_fetcher = self._pysam_reader.fetch(
-                contig_acc, region_lend - 1, region_rend
-            )
-        else:
-            logger.debug(
-                "Fetching all alignments for contig: {} strand {}".format(
-                    contig_acc, contig_strand
-                )
-            )
-            read_fetcher = self._pysam_reader.fetch(contig_acc)
+        read_fetcher = self._fetch_region(
+            contig_acc, contig_strand, region_lend, region_rend
+        )
 
         num_alignments_per_id_ok = 0
         num_alignments_per_id_fail = 0
@@ -248,6 +259,59 @@ class Bam_alignment_extractor:
             return pretty_alignments
         else:
             return read_alignments
+
+    def retained_read_names(
+        self, contig_acc, contig_strand=None, region_lend=None, region_rend=None
+    ):
+        """The read NAMES get_read_alignments would keep over the same window.
+
+        Same fetch window, same Util_funcs.quant_discard_reason policy, same
+        Util_funcs.get_read_name_include_sc_encoding naming, and the same
+        low_perID discard provenance -- it differs from get_read_alignments only
+        in building no Pretty_alignment and retaining no pysam record, so a caller
+        that wants the size of a region's read population does not pay for the
+        alignments it will not use.
+
+        Exists for LRAA's count-then-report early returns: a work unit that
+        quantifies nothing still has to say how many reads it SAW, and the only
+        honest number is the one the population that unit would have quantified.
+        Reimplementing the retention rule to get it is what produced divergent
+        approximations before quant_discard_reason was factored out, which is why
+        this asks that predicate rather than repeating it.
+        """
+
+        self._last_discarded_read_names_by_reason = defaultdict(set)
+
+        min_mapping_quality = int(LRAA_Globals.config["min_mapping_quality"])
+        max_intron_length = int(LRAA_Globals.config["max_intron_length"])
+
+        retained = set()
+        for read in self._fetch_region(
+            contig_acc, contig_strand, region_lend, region_rend
+        ):
+            reason = Util_funcs.quant_discard_reason(
+                read,
+                contig_strand,
+                max_intron_length=max_intron_length,
+                min_mapping_quality=min_mapping_quality,
+                min_per_id=LRAA_Globals.config["min_per_id"],
+            )
+            if reason is None:
+                retained.add(Util_funcs.get_read_name_include_sc_encoding(read))
+            elif reason == "low_perID":
+                self._last_discarded_read_names_by_reason["low_perID"].add(
+                    Util_funcs.get_read_name_include_sc_encoding(read)
+                )
+
+        logger.info(
+            "[%s%s] retained_read_names: %d read(s) kept, %d discarded for low_perID",
+            contig_acc,
+            contig_strand,
+            len(retained),
+            len(self._last_discarded_read_names_by_reason["low_perID"]),
+        )
+
+        return retained
 
     def get_last_discarded_read_names_by_reason(self):
         return {
