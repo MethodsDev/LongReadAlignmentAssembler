@@ -1911,6 +1911,13 @@ def main():
     LRAA_Globals.config["chunk_severed_multiexon_weight"] = (
         args.chunk_severed_multiexon_weight
     )
+    # Seeded like their three siblings above, and for the same reason: this is the
+    # SEED step of main()'s documented seed -> preset -> --config_update ordering,
+    # so a key absent here can never be overridden by the file, because the file
+    # writes config and nothing reads config back for it. These two were config
+    # keys that only ever existed on argparse.
+    LRAA_Globals.config["chunk_depth_window"] = args.chunk_depth_window
+    LRAA_Globals.config["chunk_margin"] = args.chunk_margin
     LRAA_Globals.config["min_mapping_quality"] = args.min_mapping_quality
     LRAA_Globals.config["min_mapping_quality_for_final_quant"] = (
         args.min_mapping_quality_for_final_quant
@@ -3588,11 +3595,26 @@ def _run_chunked_mode(args):
         arm="chunked",
         num_total_reads=args.num_total_reads,
         strandless_chunks=args.strandless_chunks,
-        approx_MB_per_cut=args.approx_MB_per_cut,
-        approx_MB_per_cut_wiggle_window=args.approx_MB_per_cut_wiggle_window,
-        severed_multiexon_weight=args.chunk_severed_multiexon_weight,
-        depth_window=args.chunk_depth_window,
-        margin=args.chunk_margin,
+        # RESOLVED CONFIG, not args, exactly like max_intron_length and the two
+        # mapping-quality keys below. These five decide CHUNK GEOMETRY, and they are
+        # consumed by the stage-2 cut-selection SUBPROCESS, so reading args here
+        # made --config_update unreachable for the only thing it could not
+        # otherwise express: main() seeds config from args, the HiFi preset runs,
+        # then --config_update is applied LAST and wins -- and then this call read
+        # args and threw that resolution away. MEASURED: --config_update setting
+        # approx_MB_per_cut to 1 was reported applied, was forwarded to every chunk
+        # worker (where these keys are inert, since geometry is already fixed by
+        # then), and the cut-selection command still received 10, leaving chr1 split
+        # in 3 at the default spacing. The keys that read config were always
+        # honoured; these five were not, which is why it looked like a
+        # --config_update bug rather than five wrong right-hand sides.
+        approx_MB_per_cut=LRAA_Globals.config["approx_MB_per_cut"],
+        approx_MB_per_cut_wiggle_window=LRAA_Globals.config[
+            "approx_MB_per_cut_wiggle_window"
+        ],
+        severed_multiexon_weight=LRAA_Globals.config["chunk_severed_multiexon_weight"],
+        depth_window=LRAA_Globals.config["chunk_depth_window"],
+        margin=LRAA_Globals.config["chunk_margin"],
         max_intron_length=LRAA_Globals.config["max_intron_length"],
         normalize_max_cov_level=LRAA_Globals.config["normalize_max_cov_level"],
         cell_list=args.cell_list,

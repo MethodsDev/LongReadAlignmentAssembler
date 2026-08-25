@@ -555,3 +555,81 @@ def test_same_workdir_prep_key_change_moves_prep_identity_and_worker_config(
         "prep never issued a min_per_id 80 normalization, so it reused the "
         "90 one: before={} after={}".format(sorted(prep_a), sorted(prep_b))
     )
+
+
+def _cut_selection_argv(tmp_path):
+    """The stage-2 cut-selection argv LISTS, from the run's own timing.json.
+
+    Cut selection is a SUBPROCESS and it is the only consumer of the geometry
+    keys, so its argv is the only place that says what geometry the run actually
+    used. The chunk manifests cannot substitute: a fixture small enough to run
+    fast yields one chunk at any spacing, so the boundaries look identical while
+    the parameters differ.
+
+    Returned as LISTS, not joined text, because the values under test collide as
+    substrings: "--approx_MB_per_cut 1" occurs inside "--approx_MB_per_cut 10",
+    so a joined-text assertion for 1 PASSES against a run that used the default
+    10. That is not hypothetical -- it is what this file's first version did, and
+    it is why one of the five parametrisations passed against the known-broken
+    driver while the other four failed.
+    """
+
+    timing = json.loads((tmp_path / "work" / "timing.json").read_text())
+    argvs = []
+    for key, entries in (timing.get("stages") or {}).items():
+        if not key.startswith("cuts"):
+            continue
+        for entry in entries:
+            argvs.append([str(x) for x in entry.get("cmd", [])])
+    assert argvs, "run issued no cut-selection command: {}".format(timing.keys())
+    return argvs
+
+
+def _argv_value(argv, flag):
+    """The token following ``flag``, or None. Exact token, never a prefix."""
+
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+@pytest.mark.parametrize(
+    "key,flag,value",
+    (
+        # Every value differs from BOTH the parser default and the HiFi preset, and
+        # none is a decimal prefix of the default it replaces, so a passing
+        # assertion cannot be a coincidence of formatting.
+        ("approx_MB_per_cut", "--approx_MB_per_cut", 3),
+        ("approx_MB_per_cut_wiggle_window", "--approx_MB_per_cut_wiggle_window", 0.4),
+        ("chunk_severed_multiexon_weight", "--severed_multiexon_weight", 3),
+        ("chunk_depth_window", "--depth_window", 50),
+        ("chunk_margin", "--margin", 400),
+    ),
+)
+def test_config_update_moves_chunk_geometry(tmp_path, inputs, key, flag, value):
+    """--config_update must reach CUT SELECTION, not only the chunk workers.
+
+    These five keys decide chunk geometry and are consumed by the stage-2
+    subprocess. The driver used to build its chunked args from ``args.*`` for
+    exactly these five while their neighbours (max_intron_length, the two
+    mapping-quality keys) read the RESOLVED config, so --config_update was
+    reported applied, was forwarded to every chunk worker -- where geometry is
+    already fixed and these keys are inert -- and never reached the stage that
+    places the cuts. Measured on a 30.4 Mb contig: a file asking for 1 Mb spacing
+    still cut at 10 Mb, three chunks, indistinguishable from defaults.
+
+    Asserted on the SUBPROCESS ARGV rather than on the resulting chunk count,
+    because a fixture small enough for a unit test yields one chunk at every
+    spacing under test -- the count would pass while the geometry was wrong.
+    """
+
+    bam, gtf, genome = inputs
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({key: value}))
+
+    r = _chunked(tmp_path, bam, gtf, genome, "--config_update", str(cfg))
+    _assert_ok(r, tmp_path)
+
+    seen = [_argv_value(argv, flag) for argv in _cut_selection_argv(tmp_path)]
+    assert seen and all(v is not None and float(v) == float(value) for v in seen), (
+        "cut selection did not receive {}={} from --config_update; it received "
+        "{}".format(key, value, seen)
+    )
