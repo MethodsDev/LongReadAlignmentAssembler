@@ -1,8 +1,17 @@
 # Handoff: single-cell `by_chunk` benchmarking on a 28-core / 187 GB host
 
-Written for an agent picking this up on a larger machine. Everything below is
-current as of `devel` @ `51d37647`, with `lraa-core`/`lraa-sc`/`lraa-orf` pushed
-at that same SHA.
+Written for an agent picking this up on a larger machine.
+
+Provenance, stated exactly, because the two differ:
+
+    devel HEAD    1ce5303f   <- the tree this document lives in
+    LRAA code     51d37647   <- what the images contain; HEAD is docs-only on top
+    images        us-central1-docker.pkg.dev/methods-dev-lab/lraa/{lraa-core,lraa-sc,lraa-orf}:0.28.0-51d3764
+
+So `git checkout 51d37647` reproduces the code the images run but NOT this file.
+Work from `1ce5303f`; the only difference is documentation. Confirm with
+`docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+on any of the three images -- it should print `51d37647`.
 
 ## What you are benchmarking, and why it is new
 
@@ -126,9 +135,33 @@ Current defaults and their basis, from `subwdls/LRAA_chunk_scatter.wdl`:
 
 | task | default | basis |
 |---|---|---|
-| `make_chunks` | 16 cpu, 32 GiB | **guess.** Only per-subprocess numbers exist (80 MiB for a cut selection, 90 MiB for an extraction, implying ~1.4 GiB at 16 workers) and that metric is a LOWER BOUND -- the same interval sampler understated a leaf's true peak by 4x. 8 GiB is the documented candidate; do not apply it without a task-level number. |
+| `make_chunks` | 16 cpu, 32 GiB | **partly measured, and the default is likely 4x too high.** The default rests on a per-subprocess LOWER BOUND (80 MiB for a cut selection, 90 MiB for an extraction, implying ~1.4 GiB at 16 workers), and that metric understated a leaf's true peak by 4x elsewhere. A real run since then requested **8 GiB** explicitly and peaked at **3,357.8 MiB** across 30 tasks (median 1,678.8, p95 2,869.4), no OOM -- see the PBMC run below. That is a task-level cgroup number, not a sampled one. It settles 8 GiB for a 3-contig run; it does NOT settle whole-genome, where this task selects cuts over every contig and the peak plausibly scales with contig count. Confirm at 475 chunks before lowering the default. |
 | `process_chunk` (leaf) | 2 cpu, 16 GiB, preemptible 3 | measured max 3,003 MiB over 150 sampled leaves of a whole-genome run (median 1,037, p95 2,026). NOT lowered, because a width-derived value would under-request the pathological chunk: `approx_MB_per_cut` is a TARGET, not a bound, and an uncut contig can be far wider. A whole chr1 unit measures 5,594.7 MiB. |
-| `merge_chunks` | 2 cpu, 8 GiB | **measured.** 371 MiB over 556 real units (9.8M tracking rows). Generalizes because `tracking_merge_peak_resident_rows` landed exactly on the external sort's 500,000 cap, so the peak is bounded by the cap rather than by input size. 8 rather than the implied 4 per a project rule: safe minimum 8 GiB wherever a measurement suggests 4 or less. |
+| `merge_chunks` | 2 cpu, 8 GiB | **measured twice.** 371 MiB over 556 units (9.8M tracking rows), and independently 447.7 MiB max over 30 real merges on the PBMC run below (median 165.0). Generalizes because `tracking_merge_peak_resident_rows` landed exactly on the external sort's 500,000 cap, so the peak is bounded by the cap rather than by input size -- the second measurement at a different scale agreeing is what that predicts. 8 rather than the implied 4 per a project rule: safe minimum 8 GiB wherever a measurement suggests 4 or less. |
+
+### The PBMC run these numbers come from
+
+`chr21 chr22 chrM`, quant-only, all three phases `by_chunk`, 14 clusters, against
+the real 7.8 GB library. Completed exit 0, **zero OOM kills and zero task
+errors**. Cgroup peaks (`container_peak_rss_bytes`, a kernel high-water mark, not
+sampled):
+
+| task | n | max MiB | median | p95 | requested |
+|---|---|---|---|---|---|
+| `process_chunk` (leaf) | 165 | 3,354.7 | 693.5 | 1,154.2 | 16 GiB |
+| `make_chunks` | 30 | 3,357.8 | 1,678.8 | 2,869.4 | 8 GiB |
+| `merge_chunks` | 30 | 447.7 | 165.0 | 317.0 | 8 GiB |
+
+The leaf max here (3,354.7) closely tracks the independent whole-genome figure
+(3,003 MiB over 150 leaves), which is mild evidence that leaf peak is driven by
+chunk span rather than by library depth -- both runs used the same 10 Mb target.
+That is the assumption behind deriving leaf memory from actual span, so it is
+worth testing rather than trusting: a run at a much larger `approx_MB_per_cut`
+should move the max proportionally. If it does not, the span model is wrong.
+
+The run is under `testing/single_cells/sc_full_pipe/pbmc_outdir-chr21_22_M/`
+on the dev host. Reproduce the aggregation by globbing `**/out/chunkResources/*.tsv`
+and friends, excluding `/work/` paths or every row is counted twice.
 
 **The leaf number is the open one and your host is well suited to settling it.**
 The correct fix is for `make_chunks` to emit a per-chunk memory value from each
@@ -199,8 +232,12 @@ wrong hypotheses.
 
 1. **Leaf memory from actual span**, per above. Needs the per-chunk emission plus
    a run wide enough to include a pathological chunk.
-2. **`make_chunks` task-level peak** on a whole-genome run, to settle 32 vs 8 GiB.
-   `makeChunksResources` now reports it; nobody has collected one.
+2. **`make_chunks` at whole-genome scale.** 8 GiB is now measured sufficient for a
+   3-contig run (3,357.8 MiB peak, no OOM). The default is still 32. What is
+   missing is the same number at ~475 chunks, where cut selection touches every
+   contig: if the peak is flat in contig count, lower the default to 8; if it
+   scales, the default is right and the 3-contig number was misleadingly
+   comfortable.
 3. **`by_chunk` versus `by_chromosome` per phase** on a real library: wall time,
    peak memory, and whether the two non-preemptible tasks `by_chunk` adds per
    `LRAA_wf` invocation cost more than the leaf parallelism buys for a small
@@ -216,9 +253,10 @@ wrong hypotheses.
 
 ## Reproducing the state you are starting from
 
-    devel @ 51d37647
-    pytest pylib                     1245 passed
-    make test_wdls                   passed at 254b3d91 (before later WDL-only commits)
-    miniwdl + womtool                clean on all seven workflows at 51d37647
+    devel HEAD                       1ce5303f  (docs); LRAA code 51d37647
     images                           lraa-core/sc/orf at 0.28.0-51d3764, pushed
-    smoke tests                      test_sc_cg_by_chunk_{qonly,refguided,denovo} all green
+    pytest pylib                     1245 passed at 51d37647
+    miniwdl + womtool                clean on all seven workflows at 51d37647
+    make test_wdls                   passed at 254b3d91; later commits are WDL/docs only
+    smoke tests                      test_sc_cg_by_chunk_{qonly,refguided,denovo} green
+    PBMC chr21/chr22/chrM by_chunk   exit 0, 0 OOM, 0 task errors, telemetry above
