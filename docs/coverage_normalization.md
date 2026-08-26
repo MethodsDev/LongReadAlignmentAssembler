@@ -131,9 +131,15 @@ whether a weight can be there (`LRAA:145-222,2393-2428`):
 thinned BAM there would report per-retained-read quantities indistinguishable from full-library
 ones and emit a tracking file covering part of the library while looking complete. `--bam_for_sg`
 and `--bam_for_priors` are the inputs that exist for thinned data, and an untagged one would be
-read as though its survivors were the whole library — for the priors BAM that means theta
-estimated with every read weighing 1, which is a silently different prior rather than an error
-(`LRAA:2387-2395`). All three are fatal, because none is detectable downstream.
+read as though its survivors were the whole library. All three are refused at startup, because
+none of these is detectable downstream — that is what makes each a validation error rather than a
+result to be interpreted.
+
+The priors BAM makes the reason explicit. Were it not checked, an untagged one would leave theta
+estimated with every read weighing 1: not a crash and not a visible anomaly, but a different prior
+driving pass-2 apportionment, reported as though it were the intended one. That hazard is the
+justification for the check, not a behaviour of the current code — `--bam_for_priors` without `XW`
+exits with its own flag name and role named (`LRAA:2387-2395`).
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
