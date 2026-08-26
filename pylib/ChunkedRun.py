@@ -1233,62 +1233,147 @@ def write_bam_excluding(source_bam, names, dest_bam):
 SELECTOR_GRID_ORIGIN = 0
 
 
-def annotation_digests(gtf_path, contigs):
-    """PER-CONTIG identity of the annotation cut selection was constrained by.
+def straddling_annotation_models(gtf_path, cuts_by_contig):
+    """Models in ``gtf_path`` that a plan's cut positions would SEVER.
 
-    Why an identity at all: the annotation decides which positions are ADMISSIBLE.
-    ``find_islands``/``cut_zones`` make a cut inside an annotated model
-    inadmissible, so a plan is only valid for the annotation it was selected
-    against. In the single-cell shape the correct one is the CONSOLIDATED gtf,
-    carrying the novel models phase-1 discovery found; a plan selected against the
-    raw reference can place a cut straight through one of those, and every cluster
-    then quantifies a severed model and reports success -- wrong exactly at the
-    novel isoforms discovery exists to find.
+    THE DIRECT FORM of the property a shared plan must satisfy, and what replaced
+    a per-contig sha256 of the annotation the plan was selected against.
 
-    Why PER CONTIG rather than one hash of the file. Cut selection is per contig
-    (``cut_selection_plan`` restricts the selector with ``--contig``), so contig
-    N's cut positions depend on contig N's records and on nothing else. And the
-    callers do not all hold the same file: by_chromosome hands each shard a
-    per-contig SLICE (``WDL/LRAA.wdl`` passes ``splitByChr.chromosomeGTFs[i]``),
-    so a whole-file digest refused every by_chromosome shard of a correct plan.
-    Scoped this way, the whole gtf and any slice of it agree on every contig they
-    share.
+    A cut at 1-based ``p`` splits a contig into ``[lend, p]`` and
+    ``[p + 1, rend]``, and the extractor emits an annotated LOCUS whole or not at
+    all (``extract_contig_region_inputs.Annotation.genes_contained``). So a locus
+    survives the partition exactly when no cut ``p`` satisfies
+    ``locus.lend <= p < locus.rend``. One that does is contained by neither
+    neighbour, BOTH omit it, and the model is quantified by nobody while every
+    chunk reports success. That is the whole failure this guards.
 
-    Why WHOLE LINES in file order: ``util/partition_data_by_chromosome.py:292-303``
-    copies each record verbatim into its contig's file, skipping comments and
-    preserving order, so this is exactly the form that survives the partitioner.
-    Comments are skipped here for the same reason -- the partitioner writes
-    "# no gtf records" into an empty slice, which is not a record.
+    WHY THE DIGEST WENT. It was a proxy for this, and it could not tell a
+    legitimately evolved annotation from an incompatible one -- it refused both.
+    ONE plan is now emitted for an entire run, before phase 1, so:
 
-    ``Util_funcs.file_identity_token`` cannot serve here at all: it is resolved
-    path + size + mtime_ns, and Cromwell localizes the same annotation to a new
-    path with a fresh mtime in every task, so it would refuse every correctly
-    wired plan and accept none. One streaming pass, hashing only the contigs
-    asked for; on a 1.49 GB GENCODE gtf that is the same order of cost as the
-    tabix index build this pipeline already pays once per run.
+      * de novo single-cell emits with NO annotation while every consumer has
+        one (per-cluster discovery reads the init GTF, final quant the
+        consolidated GTF). Presence equality refused that outright;
+      * ref-guided emits against the REFERENCE while phase 2 quantifies the
+        CONSOLIDATED GTF, which contains phase-1's novel models. A digest can
+        never match, yet the geometry is fine: discovery ran INSIDE those chunks,
+        so a novel model cannot span a cut by construction. MEASURED on the
+        existing smoke runs -- 0 of 994 consolidated ref-guided models and 0 of
+        865 de novo models straddle any of the 9 cut positions.
+
+    Both are accepted here, and a plan whose cut really does land inside a model
+    this run quantifies is refused by name -- which the digest could not
+    distinguish from either of the above.
+
+    THE GENE LOCUS decides, the TRANSCRIPT is named. Containment is tested per
+    gene because the gene is the unit the extractor emits: a gene whose two
+    transcripts sit either side of a cut straddles it even though neither
+    transcript does, and both transcripts are then lost. Naming the transcript is
+    what makes the refusal actionable, so a straddling transcript is named when
+    there is one and the gene's first transcript otherwise, with the distinction
+    stated.
+
+    ONE streaming pass over the gtf, restricted to the contigs asked for --
+    ``Util_funcs.file_identity_token`` could not serve the digest it replaces for
+    the same reason it cannot serve here: Cromwell localizes the same annotation
+    to a new path with a fresh mtime in every task.
+
+    Returns one record per (locus, cut) collision, in coordinate order.
     """
 
-    wanted = list(dict.fromkeys(contigs))
-    hashers = {chrom: hashlib.sha256() for chrom in wanted}
-    counts = {chrom: 0 for chrom in wanted}
-    open_fn = gzip.open if str(gtf_path).endswith(".gz") else open
-    with open_fn(gtf_path, "rt") as fh:
+    wanted = {
+        chrom: sorted({int(position) for position in positions})
+        for chrom, positions in cuts_by_contig.items()
+        if positions
+    }
+    if not wanted:
+        return []
+
+    extractor = _extractor_module()
+    attribute = extractor._attribute
+    genes = {chrom: {} for chrom in wanted}
+    transcripts = {chrom: {} for chrom in wanted}
+    with extractor._open_gtf_text(str(gtf_path)) as fh:
         for line in fh:
             if not line or line.startswith("#"):
                 continue
-            chrom = line.split("\t", 1)[0].strip()
-            hasher = hashers.get(chrom)
-            if hasher is None:
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) < 9:
                 continue
-            hasher.update(line.rstrip("\r\n").encode())
-            hasher.update(b"\n")
-            counts[chrom] += 1
-    return {
-        chrom: "sha256:{}:{}".format(
-            counts[chrom], hashers[chrom].hexdigest()[:16]
-        )
-        for chrom in wanted
-    }
+            chrom = fields[0].strip()
+            if chrom not in wanted:
+                continue
+            try:
+                lend = int(fields[3])
+                rend = int(fields[4])
+            except ValueError:
+                continue
+            if rend < lend:
+                lend, rend = rend, lend
+            gene_id = attribute(fields[8], "gene_id")
+            if gene_id is None:
+                # Not placeable in a locus, so not emitted by gene containment
+                # and not a model this partition can lose.
+                continue
+            span = genes[chrom].setdefault(gene_id, [lend, rend])
+            span[0] = min(span[0], lend)
+            span[1] = max(span[1], rend)
+            transcript_id = attribute(fields[8], "transcript_id")
+            if transcript_id is None:
+                continue
+            tspan = transcripts[chrom].setdefault(
+                transcript_id, [gene_id, lend, rend]
+            )
+            tspan[1] = min(tspan[1], lend)
+            tspan[2] = max(tspan[2], rend)
+
+    by_gene = {chrom: {} for chrom in wanted}
+    for chrom, table in transcripts.items():
+        for transcript_id, (gene_id, lend, rend) in table.items():
+            by_gene[chrom].setdefault(gene_id, []).append((lend, rend, transcript_id))
+    for table in by_gene.values():
+        for members in table.values():
+            members.sort()
+
+    offences = []
+    for chrom in sorted(wanted):
+        for position in wanted[chrom]:
+            for gene_id, (gene_lend, gene_rend) in genes[chrom].items():
+                if not (gene_lend <= position < gene_rend):
+                    continue
+                members = by_gene[chrom].get(gene_id) or []
+                straddling = [m for m in members if m[0] <= position < m[1]]
+                chosen = (straddling or members or [None])[0]
+                if chosen is None:
+                    model = "gene {} (whose records name no transcript_id)".format(
+                        gene_id
+                    )
+                    lend, rend = gene_lend, gene_rend
+                else:
+                    lend, rend, transcript_id = chosen
+                    model = "transcript {} of gene {}".format(
+                        transcript_id, gene_id
+                    )
+                    if not straddling:
+                        model += (
+                            " (no single transcript of that gene spans the cut, "
+                            "but the gene LOCUS does, and the locus is what is "
+                            "emitted whole or not at all)"
+                        )
+                offences.append(
+                    {
+                        "chrom": chrom,
+                        "position": position,
+                        "gene_id": gene_id,
+                        "gene_lend": gene_lend,
+                        "gene_rend": gene_rend,
+                        "model": model,
+                        "lend": lend,
+                        "rend": rend,
+                    }
+                )
+    offences.sort(key=lambda o: (o["chrom"], o["position"], o["gene_id"]))
+    return offences
 
 
 def cut_sources(args, strand_bams, inputs_token, split_token):
@@ -1660,6 +1745,7 @@ def chunk_quant_units(
     lraa_suffix=LRAA_QUANT_ONLY_SUFFIX,
     has_gtf=True,
     has_sg_bam=False,
+    has_priors_bam=False,
 ):
     """The LRAA units one extracted chunk feeds, and where each one's files go.
 
@@ -1680,24 +1766,39 @@ def chunk_quant_units(
     ref-guided discovery against nothing, which is a different run.
     ``lraa_suffix`` is what LRAA will append to --output_prefix, which differs by
     mode, so the paths named here are the paths that mode actually writes.
-    ``has_sg_bam`` says the chunk carries caller-supplied splice-graph evidence,
+    ``has_sg_bam`` says the chunk carries caller-supplied splice-graph evidence
+    and ``has_priors_bam`` that it carries caller-supplied theta priors, each
     sliced to it by the extractor and split by its own stage 3b. Each unit then
-    names the orientation of that slice matching its own reads, and stage 4 is
-    skipped for it -- the evidence arrived pre-normalized, so normalizing again
-    would compose two acceptance rates.
+    names the orientation of the slice matching its own reads. ``has_sg_bam``
+    additionally means stage 4 is skipped for the unit -- that evidence arrived
+    pre-normalized, so normalizing again would compose two acceptance rates. The
+    priors slice arrives pre-normalized too but decides nothing about stage 4: a
+    unit with priors and no sg evidence still normalizes its own reads, because
+    it still needs a splice graph and its priors are not one.
     """
 
     if strand:
-        if has_sg_bam:
+        if has_sg_bam or has_priors_bam:
             raise PipelineError(
-                "chunk {} is a strand-FIRST chunk carrying splice-graph "
-                "evidence, and there is no orientation-pure sg slice for it: "
-                "stage 3b, which splits the sg bam, runs only for a strandless "
-                "chunk. Reachable only by a caller bypassing the CLI, which "
-                "refuses --bam_for_sg with --chunk_by_strand. Raised rather than "
-                "returning sg_bam None, because None here means 'normalize your "
-                "own' and the unit would silently be quantified against a graph "
-                "built from its own reads.".format(chunk_id)
+                "chunk {} is a strand-FIRST chunk carrying caller-supplied "
+                "{}, and there is no orientation-pure slice of it: stage 3b, "
+                "which splits those bams, runs only for a strandless chunk. "
+                "Reachable only by a caller bypassing the CLI, which refuses "
+                "--bam_for_sg and --bam_for_priors with --chunk_by_strand. "
+                "Raised rather than returning None, because None here means "
+                "'normalize your own' and 'estimate from the sg slice', and the "
+                "unit would silently be quantified against a graph built from "
+                "its own reads or apportioned by a pooled theta.".format(
+                    chunk_id,
+                    " and ".join(
+                        label
+                        for label, present in (
+                            ("splice-graph evidence", has_sg_bam),
+                            ("theta priors", has_priors_bam),
+                        )
+                        if present
+                    ),
+                )
             )
         units = [
             (
@@ -1707,6 +1808,7 @@ def chunk_quant_units(
                 "chunk_quant",
                 "{}.bam".format(prefix),
                 "{}.gtf".format(prefix) if has_gtf else None,
+                None,
                 None,
             )
         ]
@@ -1720,10 +1822,13 @@ def chunk_quant_units(
                 # both written by stage 3b, inside this chunk's own work
                 "{}.strand.{}.bam".format(prefix, s),
                 "{}.strand.{}.gtf".format(prefix, s) if has_gtf else None,
-                # and so is this, by the same tool at the same
-                # --max_intron_length, so a unit's reads and its evidence are
-                # the same orientation of the same chunk.
+                # and so are these two, by the same tool at the same
+                # --max_intron_length, so a unit's reads, its evidence and its
+                # priors are the same orientation of the same chunk.
                 "{}.sg.strand.{}.bam".format(prefix, s) if has_sg_bam else None,
+                "{}.priors.strand.{}.bam".format(prefix, s)
+                if has_priors_bam
+                else None,
             )
             for s in ("+", "-")
         ]
@@ -1746,10 +1851,14 @@ def chunk_quant_units(
             # or None when the run supplied none. Set means stage 4 is SKIPPED
             # for this unit; see _process_unit.
             "sg_bam": sg_bam,
+            # The pre-normalized reads stage 5 estimates its FIRST-PASS theta
+            # from, or None. Set means this unit's priors are its own rather
+            # than the sg bam's, which under a shared sg bam is the pool's.
+            "priors_bam": priors_bam,
             "quant_name": quant_name,
             "quant_prefix": os.path.join(cdir, quant_name + "." + lraa_suffix),
         }
-        for s, unit_id, norm_name, quant_name, bam, gtf, sg_bam in units
+        for s, unit_id, norm_name, quant_name, bam, gtf, sg_bam, priors_bam in units
     ]
 
 
@@ -1882,7 +1991,8 @@ def extraction_plan(args, outdir, chunk_root, planned, parent_token):
     )
     chunk_plan_path = getattr(args, "chunk_plan", None)
     sg_bam = getattr(args, "bam_for_sg", None)
-    local = "stage3_extract_{}{}.margin_{}_maxintron_{}{}{}{}".format(
+    priors_bam = getattr(args, "bam_for_priors", None)
+    local = "stage3_extract_{}{}.margin_{}_maxintron_{}{}{}{}{}".format(
         "strandless_" if strandless else "",
         chunk_id,
         args.margin,
@@ -1895,6 +2005,12 @@ def extraction_plan(args, outdir, chunk_root, planned, parent_token):
         # a run wanting splice-graph evidence must not be served a directory
         # extracted without it, nor one extracted against a different sg bam.
         ".sg_" + Util_funcs.file_identity_token(sg_bam) if sg_bam else "",
+        # And for the priors slice, which is a third file in the same directory
+        # and decides this chunk's theta. Empty when no priors bam was given, so
+        # a directory extracted before this input existed still resumes.
+        ".priors_" + Util_funcs.file_identity_token(priors_bam)
+        if priors_bam
+        else "",
         # And the PLAN, when the geometry came from one. Cut positions are then not
         # a function of anything else in this token: two plans over the same bam at
         # the same --margin place different boundaries, so without this a resumed
@@ -1953,6 +2069,8 @@ def extraction_plan(args, outdir, chunk_root, planned, parent_token):
         cmd.append("--reuse_source_bam")
     if sg_bam:
         cmd += ["--sg_bam", os.path.abspath(sg_bam)]
+    if priors_bam:
+        cmd += ["--priors_bam", os.path.abspath(priors_bam)]
     return {
         "kind": "extract",
         "planned": planned,
@@ -2136,6 +2254,7 @@ def assemble_chunks(args, timing, sources, selections, extractions):
                     lraa_output_suffix(args.discovery, args.gtf),
                     bool(args.gtf),
                     bool(manifest["files"].get("sg_bam")),
+                    bool(manifest["files"].get("priors_bam")),
                 ),
             }
         )
@@ -2602,22 +2721,26 @@ def cut_geometry_params(args):
     value rather than resolved, because nothing downstream can detect it.
 
     Membership is the same list ``cut_selection_plan``'s sentinel token carries,
-    for the same reason -- these decide the coordinates -- plus two the token
+    for the same reason -- these decide the coordinates -- plus one the token
     cannot express because it only ever compared a directory to itself:
 
       ``strandless``           strand-first selects over the stage-1 split bams,
                                which are per-run files; its geometry is not
                                shareable and the mode has to be part of the match.
-      ``annotation_present``   whether an annotation constrained placement at all.
-                              WHICH annotation is not here, deliberately: it is
-                              checked PER CONTIG, in
-                              ``selections_from_chunk_plan``, because by_chromosome
-                              hands each shard a per-contig slice of the same gtf
-                              and a whole-file identity refused every one of them.
-                              See ``annotation_digests``. The boolean stays here so
-                              that a de novo run and a plan selected around an
-                              annotation refuse each other outright, without
-                              needing a contig in common to compare.
+
+    THE ANNOTATION IS DELIBERATELY NOT A MEMBER, in any form. It was, as
+    ``annotation_present`` here plus a per-contig digest in
+    ``selections_from_chunk_plan``, and both were PROXIES for the property that
+    actually matters -- that no cut falls inside a model the consuming run
+    quantifies -- and both refused correct runs in order to enforce it. ONE plan
+    is emitted for a whole run, before phase 1, so in the de novo single-cell
+    shape it carries no annotation at all while every consumer has one:
+    per-cluster discovery reads the init GTF and final quant the consolidated
+    one. Ref-guided is the same story one step later, since phase 2's
+    consolidated GTF never equals phase 1's reference. Strict presence refused
+    the first and the digest refused the second, both for geometry that is
+    perfectly fine. The property is now checked DIRECTLY, against whatever gtf
+    each consumer actually holds; see ``straddling_annotation_models``.
 
     ``discovery`` is deliberately not a member and is still enforced: it is what
     ``resolve_min_mapping_quality`` resolves the effective floor through, so a mode
@@ -2642,7 +2765,6 @@ def cut_geometry_params(args):
         "severed_multiexon_weight": float(args.severed_multiexon_weight),
         "min_per_id": resolve_min_per_id(args),
         "min_mapping_quality": resolve_min_mapping_quality(args),
-        "annotation_present": bool(args.gtf),
     }
 
 
@@ -2705,22 +2827,6 @@ def write_chunk_plan(
         "geometry": {
             "mode": STRANDLESS_MODE if args.strandless_chunks else STRAND_FIRST_MODE,
             "params": cut_geometry_params(args),
-            # WHICH annotation constrained each contig's cuts, per contig, so a
-            # by_chromosome shard holding one contig's slice of the same gtf can
-            # check its own contig and nothing else. Empty when there is no
-            # annotation, which ``params["annotation_present"]`` already says.
-            "annotation": (
-                annotation_digests(
-                    args.gtf,
-                    [
-                        selection["chrom"]
-                        for source in sources
-                        for selection in selections[source[0]]
-                    ],
-                )
-                if args.gtf
-                else {}
-            ),
             # One entry per selection SOURCE, in ``sources`` order, each holding
             # that source's per-contig selections in ``contigs`` order. Strandless
             # has exactly one, keyed "" ; strand-first has two, and its geometry is
@@ -2810,25 +2916,15 @@ def validate_cut_plan_geometry(plan, path, args):
                 )
             )
         if have[name] != want[name]:
-            detail = ""
-            if name == "annotation_present":
-                detail = (
-                    " The annotation decides which positions are admissible at "
-                    "all -- a cut inside an annotated model is refused -- so one "
-                    "side of this pair had no annotation constraining placement "
-                    "and the other did. 'No annotation' is a state of its own, "
-                    "not a wildcard that matches any gtf."
-                )
             raise PipelineError(
                 "chunk plan {} was selected with {} = {} and this run has {}."
                 " A plan applied at different geometry is not a smaller answer, "
                 "it is a different partition: the chunk bounds no longer sit "
-                "where the reads were selected against.{}".format(
+                "where the reads were selected against.".format(
                     path,
                     name,
                     _format_geometry_value(have[name]),
                     _format_geometry_value(want[name]),
-                    detail,
                 )
             )
     by_source = geometry.get("by_source") or []
@@ -2870,12 +2966,10 @@ def selections_from_chunk_plan(plan, path, args, contigs):
     caller chunk bounds its siblings do not have, which is the whole thing sharing
     a plan prevents.
 
-    The ANNOTATION is checked here too, and per contig, for the same reason: a
-    by_chromosome shard's ``--gtf`` is a per-contig SLICE of the gtf the plan was
-    selected against (``WDL/LRAA.wdl`` passes ``splitByChr.chromosomeGTFs[i]``),
-    so a whole-file identity refused every one of them. Contig N's cuts depend on
-    contig N's records, so contig N's digest is what has to match. See
-    ``annotation_digests``.
+    THE ANNOTATION IS CHECKED DIRECTLY rather than by identity: no model in THIS
+    run's ``--gtf`` may span a cut the plan places on a contig this run
+    processes. See ``straddling_annotation_models`` for what that catches which a
+    digest of the annotation could not, and which correct runs the digest refused.
     """
 
     geometry = validate_cut_plan_geometry(plan, path, args)
@@ -2943,41 +3037,49 @@ def selections_from_chunk_plan(plan, path, args, contigs):
             )
 
     if args.gtf:
-        planned_annotation = geometry.get("annotation")
-        if planned_annotation is None:
+        # THE DIRECT CHECK. Cut positions come from the PLAN, models from THIS
+        # run's --gtf, scoped to the contigs this run processes -- for a
+        # by_chromosome shard, the single contig its slice holds. A plan contig
+        # this run never reaches is not checked, for the same reason its length
+        # is not: the run cannot sever a model it does not quantify.
+        offences = straddling_annotation_models(
+            args.gtf,
+            {
+                chrom: [
+                    int(cut["position"])
+                    for cut in (by_chrom[chrom].get("cuts") or [])
+                ]
+                for chrom in contigs
+            },
+        )
+        if offences:
+            first = offences[0]
             raise PipelineError(
-                "chunk plan {} records no per-contig annotation identity, so "
-                "there is nothing to check this run's --gtf against. A plan "
-                "selected around a different annotation can have a cut inside a "
-                "model this run quantifies.".format(path)
+                "chunk plan {} places a cut at {}:{} and {} in this run's --gtf "
+                "{} spans it: the model lies at {}:{}-{} and its gene locus at "
+                "{}:{}-{}, so the locus is contained by neither the chunk ending "
+                "at {} nor the one starting at {}. The extractor emits an "
+                "annotated locus whole or not at all, so BOTH neighbours omit it "
+                "and the model is quantified by nobody while every chunk reports "
+                "success. {} model(s) of this annotation straddle a cut; select "
+                "the plan against an annotation that contains them, or quantify "
+                "with the one it was selected against.".format(
+                    path,
+                    first["chrom"],
+                    first["position"],
+                    first["model"],
+                    args.gtf,
+                    first["chrom"],
+                    first["lend"],
+                    first["rend"],
+                    first["chrom"],
+                    first["gene_lend"],
+                    first["gene_rend"],
+                    first["position"],
+                    first["position"] + 1,
+                    len(offences),
+                )
             )
-        # ONE pass over this run's gtf, restricted to the contigs it processes --
-        # which for a by_chromosome shard is the single contig its slice holds.
-        mine = annotation_digests(args.gtf, contigs)
-        for chrom in contigs:
-            if chrom not in planned_annotation:
-                raise PipelineError(
-                    "chunk plan {} states no annotation identity for contig {}, "
-                    "which this run processes with --gtf {}. A plan that does not "
-                    "record what constrained a contig's cuts cannot be applied to "
-                    "it.".format(path, chrom, args.gtf)
-                )
-            if planned_annotation[chrom] != mine[chrom]:
-                raise PipelineError(
-                    "chunk plan {} selected contig {}'s cuts against annotation "
-                    "records digesting to {} and this run's --gtf {} digests to "
-                    "{}. The annotation decides which positions are admissible -- "
-                    "a cut inside an annotated model is refused -- so a plan cut "
-                    "around different models can place a boundary straight "
-                    "through one this run quantifies, and every caller then "
-                    "quantifies a severed model and reports success.".format(
-                        path,
-                        chrom,
-                        planned_annotation[chrom],
-                        args.gtf,
-                        mine[chrom],
-                    )
-                )
 
     rebuilt = []
     for chrom in contigs:
@@ -3055,16 +3157,28 @@ def rebuild_chunk_record(plan, chunk_id, outdir):
             "the whole splice-graph bam rather than this chunk's slice of it. "
             "Re-run make-chunks with --no_reuse_source_bam".format(chunk_id)
         )
+    if manifest.get("priors_bam_reused_from_source"):
+        raise PipelineError(
+            "chunk {} was extracted with priors-source reuse, so its manifest "
+            "names the whole priors bam rather than this chunk's slice of it. "
+            "Re-run make-chunks with --no_reuse_source_bam".format(chunk_id)
+        )
     # Read BEFORE files is rebuilt below, which is the point: whether this chunk
-    # carries splice-graph evidence is a fact about what was extracted, while the
-    # rebuilt dict is only about where those files live on THIS machine.
+    # carries caller-supplied evidence or caller-supplied priors is a fact about
+    # what was extracted, while the rebuilt dict is only about where those files
+    # live on THIS machine. A rebuild that omitted either key would not fail --
+    # the leaf would build the graph from its own reads, or estimate theta from
+    # the pool, which is the very defect these inputs exist to close, visible
+    # nowhere on the driver's machine.
     had_sg_bam = bool(manifest["files"].get("sg_bam"))
+    had_priors_bam = bool(manifest["files"].get("priors_bam"))
     manifest["files"] = {
         "fasta": "{}.fa".format(prefix),
         "bam": "{}.bam".format(prefix),
         "gtf": "{}.gtf".format(prefix) if entry["has_gtf"] else None,
         "dropped_reads": "{}.dropped_reads.txt".format(prefix),
         "sg_bam": "{}.sg.bam".format(prefix) if had_sg_bam else None,
+        "priors_bam": "{}.priors.bam".format(prefix) if had_priors_bam else None,
     }
 
     units = chunk_quant_units(
@@ -3077,6 +3191,7 @@ def rebuild_chunk_record(plan, chunk_id, outdir):
         lraa_suffix=plan["lraa_suffix"],
         has_gtf=entry["has_gtf"],
         has_sg_bam=had_sg_bam,
+        has_priors_bam=had_priors_bam,
     )
     return {
         "chunk_id": chunk_id,
@@ -3137,6 +3252,7 @@ def lraa_cmd(
     out_prefix,
     num_total_reads,
     cpu_budget,
+    bam_for_priors=None,
     oversimplify=None,
 ):
     """One LRAA invocation. ``cpu_budget`` is this invocation's SHARE of the total.
@@ -3152,6 +3268,13 @@ def lraa_cmd(
     counted against the full one, which is what ``--bam_for_sg`` with ``--no_norm``
     says. That is the same composition LRAA performs internally when it normalizes
     for itself, moved out to stage 4 so it runs per chunk and in parallel.
+
+    ``bam_for_priors`` is the third bam and the third ROLE: the slice this unit
+    estimates its first-pass theta from. Forwarded only when the caller supplied
+    one, so a run without it produces the identical argv it always did. With a
+    SHARED ``--bam_for_sg`` and no priors slice, that estimate is taken over
+    pooled evidence and every caller's ambiguous-read apportionment depends on
+    every other caller's expression -- see LRAA's ``_first_pass_assignment_bam``.
 
     ``--min_mapping_quality``/``--min_mapping_quality_for_final_quant`` are forwarded
     RAW, not through ``resolve_min_mapping_quality`` -- that resolver is for THIS
@@ -3200,6 +3323,11 @@ def lraa_cmd(
         "--min_mapping_quality_for_final_quant",
         str(args.min_mapping_quality_for_final_quant),
     ]
+    # ONLY when the caller supplied one: absent, LRAA's own pass-1 resolution is
+    # unchanged and this argv is byte-identical to the one every chunked run has
+    # always produced.
+    if bam_for_priors:
+        cmd += ["--bam_for_priors", bam_for_priors]
     if args.HiFi:
         cmd.append("--HiFi")
     if getattr(args, "no_rdna_mask", False):
@@ -3322,10 +3450,12 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     only ever applies to a whole contig, and a name cannot carry the
     1-based/0-based boundary error a region can.
 
-    THE SG SLICE IS SPLIT HERE TOO, by the same tool at the same cap and under
-    the same reuse rule. A unit's evidence and a unit's reads have to be the same
-    orientation of the same chunk; any divergence in how the two files are split
-    is a splice graph built from the other strand's reads.
+    THE AUXILIARY SLICES ARE SPLIT HERE TOO -- the splice-graph evidence and the
+    priors -- by the same tool at the same cap and under the same reuse rule, in
+    ONE loop rather than a copy per role. A unit's reads, its evidence and its
+    priors have to be the same orientation of the same chunk; any divergence in
+    how the files are split is a splice graph built from the other strand's
+    reads, or a theta estimated from them.
 
     Returns ``(step record, token stages 4-5 chain onto, counts)``.
     """
@@ -3338,14 +3468,23 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     split_prefix = "{}.strand".format(prefix)
     reused = bool(manifest.get("bam_reused_from_source"))
     source_bam = manifest["files"]["bam"] if reused else "{}.bam".format(prefix)
-    # ``.get`` on a possibly-absent ``files`` for the same reason line 3302 only
+    # ``.get`` on a possibly-absent ``files`` for the same reason line 3340 only
     # indexes it under ``reused``: a manifest that never named files is a legal
-    # shape here (hand-built fixtures, and any chunk extracted before sg slices
-    # existed), and an unconditional index turned that into a KeyError three
-    # stages after the manifest was read.
-    sg_source = (manifest.get("files") or {}).get("sg_bam")
-    sg_reused = bool(manifest.get("sg_bam_reused_from_source"))
-    sg_split_prefix = "{}.sg.strand".format(prefix)
+    # shape here (hand-built fixtures, and any chunk extracted before the
+    # auxiliary slices existed), and an unconditional index turned that into a
+    # KeyError three stages after the manifest was read.
+    files = manifest.get("files") or {}
+    aux = [
+        {
+            "role": role,
+            "source": files.get(role + "_bam"),
+            "reused": bool(manifest.get(role + "_bam_reused_from_source")),
+            "split_prefix": "{}.{}.strand".format(prefix, role),
+            "what": what,
+        }
+        for role, what in (("sg", "sg slice"), ("priors", "priors slice"))
+    ]
+    aux = [entry for entry in aux if entry["source"]]
     token = chain_token(
         "stage3b_split_{}.maxintron_{}{}{}".format(
             cid,
@@ -3353,11 +3492,18 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
             # In the sentinel because it decides WHICH FILE was read: a resumed
             # run must not report a split of a mini bam as a split of the source.
             ".srcbam_" + chunk["chrom"] if reused else "",
-            # The sg slice is split by this same stage, so its identity decides
-            # this stage's output too. Named here rather than merely inherited
-            # from the extraction token, because on the ``--only_chunk`` path the
-            # upstream token is a constant naming the chunk and nothing else.
-            ".sg_" + Util_funcs.file_identity_token(sg_source) if sg_source else "",
+            # Each auxiliary slice is split by this same stage, so its identity
+            # decides this stage's output too. Named here rather than merely
+            # inherited from the extraction token, because on the ``--only_chunk``
+            # path the upstream token is a constant naming the chunk and nothing
+            # else. An sg-only chunk still gets exactly ".sg_<token>", so a
+            # directory split before the priors slice existed still resumes.
+            "".join(
+                ".{}_{}".format(
+                    entry["role"], Util_funcs.file_identity_token(entry["source"])
+                )
+                for entry in aux
+            ),
         ),
         chunk["upstream_token"],
     )
@@ -3373,24 +3519,23 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     ]
     if reused:
         cmd += ["--contig", chunk["chrom"]]
-    sg_cmd = None
-    if sg_source:
-        sg_cmd = [
+    for entry in aux:
+        entry["cmd"] = [
             sys.executable,
             SEPARATE_BAM,
             "--bam",
-            sg_source,
+            entry["source"],
             "--output_prefix",
-            sg_split_prefix,
+            entry["split_prefix"],
             "--max_intron_length",
             str(args.max_intron_length),
         ]
-        if sg_reused:
-            sg_cmd += ["--contig", chunk["chrom"]]
+        if entry["reused"]:
+            entry["cmd"] += ["--contig", chunk["chrom"]]
     if ckpt.done(token):
         step = {"step": "stage3b_strand_split", "reused": True, "cmd": cmd}
-        if sg_cmd:
-            step["sg_split"] = {"reused": True, "cmd": sg_cmd}
+        for entry in aux:
+            step[entry["role"] + "_split"] = {"reused": True, "cmd": entry["cmd"]}
     else:
         step = run_step(
             "stage3b_strand_split_{}".format(cid),
@@ -3399,10 +3544,10 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
             chunk["dir"],
             rss_interval,
         )
-        if sg_cmd:
-            step["sg_split"] = run_step(
-                "stage3b_strand_split_sg_{}".format(cid),
-                sg_cmd,
+        for entry in aux:
+            step[entry["role"] + "_split"] = run_step(
+                "stage3b_strand_split_{}_{}".format(entry["role"], cid),
+                entry["cmd"],
                 chunk["log"],
                 chunk["dir"],
                 rss_interval,
@@ -3410,16 +3555,19 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
         ckpt.mark(token)
 
     counts = verify_chunk_split(chunk, split_prefix)
-    if sg_source:
-        # Against the extractor's OWN sg counts, never the read counts: the sg
-        # bam is normalized and the reads are not, so the two accountings are
-        # different numbers by design and a check that mixed them would fail on
-        # correct output. A partition that does not add up here has lost evidence
-        # records, and lost evidence is a quietly sparser splice graph -- fewer
-        # junctions, no error.
+    for entry in aux:
+        # Against the extractor's OWN counts for that role, never the read
+        # counts: an auxiliary bam is normalized and the reads are not, so the
+        # two accountings are different numbers by design and a check that mixed
+        # them would fail on correct output. A partition that does not add up
+        # here has lost records, and lost records are a quietly sparser splice
+        # graph or a quietly different theta -- no error either way.
         counts.update(
             verify_chunk_split(
-                chunk, sg_split_prefix, counts_prefix="sg_", what="sg slice"
+                chunk,
+                entry["split_prefix"],
+                counts_prefix=entry["role"] + "_",
+                what=entry["what"],
             )
         )
     # Rewritten on every pass, sentinel or not: it is a few hundred kB of text
@@ -3528,9 +3676,10 @@ def verify_chunk_split(chunk, split_prefix, counts_prefix="", what="mini bam"):
        check would have to become the sum alone.
 
     ``counts_prefix`` selects WHICH of the extractor's accountings to check
-    against: ``""`` for the read bam, ``"sg_"`` for the splice-graph slice. The
-    two are separate keys in the manifest precisely so that this check can be
-    run twice without either set of numbers being able to excuse the other.
+    against: ``""`` for the read bam, ``"sg_"`` for the splice-graph slice,
+    ``"priors_"`` for the theta-priors slice. They are separate keys in the
+    manifest precisely so that this check can be run once per role without any
+    set of numbers being able to excuse another.
     """
 
     counts = chunk["manifest"]["counts"]
@@ -3621,15 +3770,24 @@ def _process_unit(
 
     uid = unit["sentinel_id"]
     sg_bam = unit.get("sg_bam")
+    priors_bam = unit.get("priors_bam")
     if sg_bam:
-        # STAGE 4 IS SKIPPED, only here and deliberately. ``--bam_for_sg`` names
-        # evidence the caller already normalized, and thinning it a second time
-        # COMPOSES two acceptance rates: the splice graph divides each read's
-        # acceptance probability back out through XW (LRAA:165-192), so a second
-        # pass leaves the graph's weights disagreeing with the reads that built
-        # it. LRAA refuses to re-normalize a --bam_for_sg for exactly this reason
-        # (LRAA:2279-2285); this is that same decision taken one stage earlier,
-        # where the subprocess would otherwise have run.
+        # STAGE 4 IS SKIPPED, only here and deliberately, and what it skips is
+        # normalizing THIS UNIT'S OWN READS to build the splice graph from --
+        # which is precisely what ``--bam_for_sg`` says not to do, because the
+        # caller already supplied that evidence normalized. Thinning it a second
+        # time COMPOSES two acceptance rates: the splice graph divides each
+        # read's acceptance probability back out through XW (LRAA:165-192), so a
+        # second pass leaves the graph's weights disagreeing with the reads that
+        # built it. LRAA refuses to re-normalize a --bam_for_sg for exactly this
+        # reason (LRAA:2329-2340); this is that same decision taken one stage
+        # earlier, where the subprocess would otherwise have run.
+        #
+        # The priors slice does not enter this decision and never did: it too
+        # arrives pre-normalized, so there is nothing for stage 4 to do for it
+        # either, and a unit carrying priors but no sg evidence still normalizes
+        # its own reads below -- it needs a splice graph, and its priors are not
+        # one.
         norm_bam = None
         # Stage 5 chains onto whatever this branch produces, so the skip still
         # has to name the evidence's identity. Without it a resumed unit could be
@@ -3754,6 +3912,20 @@ def _process_unit(
             )
             ckpt.mark(quant_upstream_token)
 
+    if priors_bam:
+        # The priors slice decides stage 5's THETA, so a resumed unit must not be
+        # served a quant estimated from different priors. The stage-5 sentinel
+        # keys on argv, and argv cannot say so: the slice path is stable across
+        # runs while its contents are not. Chained here rather than inside either
+        # branch above, because a unit can carry priors with or without
+        # caller-supplied evidence.
+        quant_upstream_token = chain_token(
+            "stage5_priors_{}.priors_{}".format(
+                uid, Util_funcs.file_identity_token(priors_bam)
+            ),
+            quant_upstream_token,
+        )
+
     # LRAA derives its scratch roots by string concatenation on
     # --output_prefix ("__{prefix}.contigtmp", "__{prefix}.sgcache"), so an
     # ABSOLUTE prefix would produce nonsense paths like
@@ -3764,6 +3936,10 @@ def _process_unit(
         args,
         bam_for_quant=unit["bam"],
         bam_for_sg=sg_bam or norm_bam,
+        # None unless the caller supplied one. Set, it is the ONLY thing pass 1
+        # reads, and the unit's theta is then estimated from its own normalized
+        # reads rather than from the evidence it shares with every sibling.
+        bam_for_priors=priors_bam,
         # ONE mini contig for the pair -- sequence has no orientation and
         # the extraction wrote it once -- but each unit's OWN annotation,
         # because stage 5 quantifies every model its GTF names.
@@ -5456,6 +5632,22 @@ def build_parser():
         "so every caller slices the shared evidence at its own boundaries",
     )
     parser.add_argument(
+        "--bam_for_priors",
+        default=None,
+        help="OPTIONAL pre-normalized bam the per-chunk LRAA estimates its "
+        "FIRST-PASS theta from, supplied by the caller and partitioned per chunk "
+        "on this run's own geometry exactly as --bam_for_sg is. Three roles, "
+        "three files: --bam_for_sg is ONE splice graph shared across cell "
+        "clusters, this is THIS cluster's own normalized reads, and --bam is the "
+        "full cluster bam the second pass assigns. Without it a cluster's theta "
+        "is estimated over the SHARED sg slice, so every cluster's ambiguous-read "
+        "apportionment depends on every other cluster's expression -- pooled "
+        "priors reported as cluster-local quant. Stage 4 is skipped for a unit "
+        "that has one (it arrived normalized) and stage 5 gets "
+        "--bam_for_priors <slice>. Strandless chunking only, because stage 3b, "
+        "which splits it, runs only for a strandless chunk",
+    )
+    parser.add_argument(
         "--bam_for_cut_selection",
         default=None,
         help="the bam CUT POSITIONS are chosen from. Default --bam, which is "
@@ -6252,6 +6444,7 @@ def _run_inner(args):
             "--stop_after_make_chunks produces them; pick one"
         )
     sg_bam = getattr(args, "bam_for_sg", None)
+    priors_bam = getattr(args, "bam_for_priors", None)
     cut_bam = getattr(args, "bam_for_cut_selection", None)
     emit_plan = getattr(args, "emit_cut_plan", None)
     chunk_plan_path = getattr(args, "chunk_plan", None)
@@ -6336,15 +6529,17 @@ def _run_inner(args):
             "--emit_cut_plan run over that same superset, then every caller "
             "applies the plan instead of re-selecting on it."
         )
-    if sg_bam and args.arm in ("baseline", "both"):
+    if (sg_bam or priors_bam) and args.arm in ("baseline", "both"):
         raise PipelineError(
-            "--bam_for_sg has no baseline arm: the control normalizes the whole "
-            "contig for itself, so it would build its splice graph from evidence "
-            "the chunked arm never saw and the two arms would not be comparable. "
-            "Run --arm chunked."
+            "--bam_for_sg and --bam_for_priors have no baseline arm: the control "
+            "normalizes the whole contig for itself, so it would build its splice "
+            "graph from evidence the chunked arm never saw and estimate theta "
+            "from reads the chunked arm never used, and the two arms would not be "
+            "comparable. Run --arm chunked."
         )
     for name, value in (
         ("--bam_for_sg", sg_bam),
+        ("--bam_for_priors", priors_bam),
         ("--bam_for_cut_selection", cut_bam),
     ):
         if not value:
@@ -6352,8 +6547,11 @@ def _run_inner(args):
         if not args.strandless_chunks:
             raise PipelineError(
                 "{} is strandless-chunking only. Strand-first splits the whole "
-                "bam by orientation before cutting, and there is no such split "
-                "of the shared evidence to cut against.".format(name)
+                "bam by orientation before cutting, so there is no such split of "
+                "a caller-supplied bam: the shared evidence has none to cut "
+                "against, and the priors slice has no orientation-pure form for a "
+                "unit to read. Stage 3b, which produces both, runs only for a "
+                "strandless chunk.".format(name)
             )
         if not os.path.exists(value):
             raise PipelineError("{} {} does not exist".format(name, value))
@@ -6366,6 +6564,16 @@ def _run_inner(args):
                     "composition (LRAA:1945-1957). Drop the flag and let each "
                     "chunk normalize its own reads."
                 )
+            if name == "--bam_for_priors":
+                raise PipelineError(
+                    "--bam_for_priors and --bam resolve to the same file, so pass "
+                    "1 would estimate theta over the very population pass 2 "
+                    "assigns -- the no-priors configuration, spelled with an "
+                    "extra slice extracted per chunk. LRAA refuses it downstream "
+                    "too: --bam must carry no XW weight and --bam_for_priors "
+                    "must. Drop the flag, or name this caller's own NORMALIZED "
+                    "reads."
+                )
     if sg_bam and cut_bam and os.path.realpath(sg_bam) == os.path.realpath(cut_bam):
         raise PipelineError(
             "--bam_for_cut_selection and --bam_for_sg resolve to the same file. "
@@ -6374,6 +6582,21 @@ def _run_inner(args):
             "by a raw read, which extraction then drops with no selector having "
             "named it -- read loss the chunked arm reports as success. The "
             "selection source must be an unthinned superset."
+        )
+    if (
+        sg_bam
+        and priors_bam
+        and os.path.realpath(sg_bam) == os.path.realpath(priors_bam)
+    ):
+        raise PipelineError(
+            "--bam_for_sg and --bam_for_priors resolve to the same file. That is "
+            "the POOLED configuration --bam_for_priors exists to eliminate: the "
+            "sg bam is ONE splice graph shared by every cell cluster, so a theta "
+            "estimated over it apportions this caller's ambiguous reads by every "
+            "other caller's expression -- and it looks like it worked, because "
+            "each caller still reports its own read totals. Name this caller's "
+            "OWN normalized reads, or pass no --bam_for_priors and get today's "
+            "behaviour."
         )
 
     required = ["output_dir"] if args.only_chunk else ["bam", "genome_fa", "output_dir"]
@@ -6594,6 +6817,7 @@ def _run_inner(args):
             for extra in (
                 getattr(args, "bam_for_cut_selection", None),
                 getattr(args, "bam_for_sg", None),
+                getattr(args, "bam_for_priors", None),
             ):
                 if extra:
                     ensure_bam_index(extra)
@@ -6697,6 +6921,14 @@ def _run_inner(args):
                         "label": "splice_graph_evidence",
                         "bam": os.path.abspath(args.bam_for_sg),
                         "names_key": "sg_dropped_read_names",
+                    }
+                )
+            if getattr(args, "bam_for_priors", None):
+                severed_inputs.append(
+                    {
+                        "label": "theta_priors",
+                        "bam": os.path.abspath(args.bam_for_priors),
+                        "names_key": "priors_dropped_read_names",
                     }
                 )
         timing["severed_read_accounting"] = verify_severed_accounting(

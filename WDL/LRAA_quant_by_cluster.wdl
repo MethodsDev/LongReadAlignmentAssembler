@@ -25,6 +25,14 @@ workflow LRAA_quant_by_cluster {
         File? cell_clusters_info
         Array[File]? pre_normalized_cluster_bams
         Array[File]? pre_normalized_cluster_bais
+
+        # INTERNAL PLUMBING, not a user knob: the ONE cut plan for the WHOLE RUN,
+        # emitted by the calling workflow BEFORE its phase-1 discovery so that the
+        # caller's initial pass, its per-cluster discovery and this final quant all
+        # cut at identical positions. When supplied, the emit_shared_chunk_plan call
+        # below does not run; see it for why one plan per RUN rather than one per
+        # phase, and for what a standalone call to this workflow still gets.
+        File? internal_chunk_plan
         
         Boolean HiFi = false
         # Chunk geometry, forwarded to the per-cluster quantification runs. Unset
@@ -143,7 +151,8 @@ workflow LRAA_quant_by_cluster {
             memoryGB = memoryGB_normalize
     }
 
-    # Step 3b: ONE chunk plan, shared by every cluster.
+    # Step 3b: ONE chunk plan, shared by every cluster -- the FALLBACK for a
+    # standalone call to this workflow.
     #
     # Two properties make the clusters comparable. All are quantified against one
     # consolidated GTF, and all build their splice graph from the one normalized BAM
@@ -152,6 +161,15 @@ workflow LRAA_quant_by_cluster {
     # slices that shared normalized BAM at those boundaries, so the splice graph each
     # cluster actually saw differs and their boundary overhang drops differ with it.
     # The second property is then not achieved at all.
+    #
+    # Runs ONLY when the caller did not already emit one. Emitting here serves this
+    # final quant and nothing earlier, so per-cluster DISCOVERY still selected its own
+    # cuts -- measured at 76 distinct geometries over 270 extractions on the
+    # ref-guided smoke run. LRAA-cell_cluster_guided.wdl now emits the plan before its
+    # phase-1 discovery and passes it in as internal_chunk_plan, so a cluster-guided
+    # run has ONE geometry end to end and this call is skipped. It stays for the
+    # workflow's own entry point: a standalone LRAA_quant_by_cluster must not fall back
+    # to per-cluster geometry.
     #
     # Selected on the WHOLE pre-partition BAM, which is an unthinned SUPERSET of every
     # cluster BAM: a position no read spans in the superset is spanned in no subset, so
@@ -178,22 +196,24 @@ workflow LRAA_quant_by_cluster {
     # fails the run with the remedy named, rather than quietly giving every cluster its
     # own boundaries. The remedy for a caller is to pass inputBAM alongside bam_files,
     # which is what LRAA-cell_cluster_guided.wdl now does.
-    if (scattering != "off" && defined(inputBAM)) {
+    if (scattering != "off" && defined(inputBAM) && !defined(internal_chunk_plan)) {
         call emit_shared_chunk_plan {
             input:
                 inputBAM = select_first([inputBAM]),
                 referenceGenome = referenceGenome,
-                # THIS workflow's annot_gtf, which is the SAME gtf the per-cluster calls
-                # below quantify against -- for the cluster-guided path that is
-                # lraa_merge_gtf_task's consolidated output, not the reference
-                # annotation. Load-bearing, not incidental: cut selection treats an
-                # annotated transcript model as indivisible and will not cut inside one,
-                # so a plan selected against the reference GTF can place a boundary
-                # through a NOVEL model that phase-1 discovery found and the merge kept.
-                # Every cluster would then quantify a severed model -- a wrong answer
-                # rather than a smaller one, and precisely on the novel isoforms
-                # discovery exists to find. Do not hoist this task earlier in the graph
-                # to where only the reference annotation is available.
+                # THIS workflow's annot_gtf, which is the SAME gtf the per-cluster
+                # calls below quantify against. That equality is what makes emitting
+                # HERE safe; it is also why emitting here cannot serve an earlier
+                # phase, since a plan selected on the consolidated GTF does not exist
+                # until discovery has finished. The run-wide plan the caller emits
+                # instead is selected on the REFERENCE annotation, before any novel
+                # model exists, and that is safe for a different reason: discovery
+                # then runs INSIDE those chunks, so no novel isoform can be built
+                # spanning a cut -- no chunk ever held the reads that would support
+                # one. Measured on the smoke runs, 0 of 994 consolidated ref-guided
+                # models and 0 of 865 de novo models straddle any of the 9 cut
+                # positions, and those were discovered under separate per-phase
+                # geometries, which is the harsher test.
                 annot_gtf = annot_gtf,
                 HiFi = HiFi,
                 approx_MB_per_cut = approx_MB_per_cut,
@@ -204,6 +224,11 @@ workflow LRAA_quant_by_cluster {
         }
     }
 
+    # The geometry every cluster below cuts on: the caller's run-wide plan when it
+    # emitted one, else the fallback above. Absent when scattering is off, or when no
+    # pre-partition BAM was available to select from.
+    File? shared_chunk_plan_use = if defined(internal_chunk_plan) then internal_chunk_plan else emit_shared_chunk_plan.chunk_plan
+
     # Step 4: Quantify each original BAM in parallel using normalized merged BAM for splice graph
     scatter (i in range(length(cluster_bams))) {
         String cluster_sample_id = basename(cluster_bams[i], ".bam")
@@ -213,18 +238,35 @@ workflow LRAA_quant_by_cluster {
                 sample_id = cluster_sample_id,
                 referenceGenome = referenceGenome,
                 inputBAM = cluster_bams[i],
-                # The ONE splice graph every cluster is quantified against: cluster bams
-                # normalized, merged, then normalized again above. inputBAM stays this
-                # cluster's own ORIGINAL bam, so the structure set is global and the reads
-                # counted are cluster-local. Supplying it also means LRAA does not
-                # normalize again -- LRAA.wdl derives no_norm from it being defined, which
-                # is why there is no no_norm argument here any more.
+                # THREE bams, three roles, and they must be three different files:
+                #
+                #   inputBAM                 = this cluster's FULL reads. Pass 2
+                #                              assigns these, so the counts reported
+                #                              are cluster-local.
+                #   internal_bam_for_sg      = the shared merged normalized bam. The
+                #                              splice graph ONLY, taken as given and
+                #                              never reconstructed, so every cluster is
+                #                              quantified against one structure set.
+                #   internal_bam_for_priors  = THIS cluster's own normalized reads.
+                #                              Pass-1 theta.
+                #
+                # The third one is what keeps the first two honest. Unset, pass 1 falls
+                # back to the splice-graph bam under stream_reads, which is ONE file
+                # shared by every cluster: theta comes from POOLED evidence, so each
+                # cluster's ambiguous reads are apportioned by every other cluster's
+                # expression while its totals still look cluster-local (observed: 32
+                # clusters all reporting reads_total 94,908). The normalized per-cluster
+                # bams already exist -- step 1 above produced them for the merge -- so
+                # this costs no new normalization. Supplying the sg bam also means LRAA
+                # does not normalize again: LRAA.wdl derives no_norm from it being
+                # defined, which is why there is no no_norm argument here any more.
                 internal_bam_for_sg = normalize_merged_bam.normalized_bam,
                 internal_bam_for_sg_index = normalize_merged_bam.normalized_bai,
-                # The ONE chunk geometry every cluster cuts on, selected above from the
-                # unthinned pre-partition BAM. Without it each cluster would slice the
-                # shared splice-graph BAM at its own boundaries.
-                internal_chunk_plan = emit_shared_chunk_plan.chunk_plan,
+                internal_bam_for_priors = normalized_cluster_bams_use[i],
+                internal_bam_for_priors_index = normalized_cluster_bais_use[i],
+                # The ONE chunk geometry every cluster cuts on. Without it each cluster
+                # would slice the shared splice-graph BAM at its own boundaries.
+                internal_chunk_plan = shared_chunk_plan_use,
                 annot_gtf = annot_gtf,
                 quant_only = true,
                 # single-cell: there is nothing to export, since the pre-normalized
@@ -270,9 +312,10 @@ workflow LRAA_quant_by_cluster {
         File merged_bai = merge_bams.merged_bai
         File normalized_merged_bam = normalize_merged_bam.normalized_bam
         File normalized_merged_bai = normalize_merged_bam.normalized_bai
-        # The geometry every cluster above was cut on. Absent when scattering is off, or
-        # when no pre-partition BAM was available to select it from.
-        File? shared_chunk_plan = emit_shared_chunk_plan.chunk_plan
+        # The geometry every cluster above was cut on, whether this workflow emitted it
+        # or the caller did. Absent when scattering is off, or when no pre-partition BAM
+        # was available to select it from.
+        File? shared_chunk_plan = shared_chunk_plan_use
     }
 }
 
@@ -466,14 +509,25 @@ print(total)
 
 task emit_shared_chunk_plan {
     # Cut selection ONLY -- no extraction, no chunk directories, no mini BAMs. The
-    # single output is the geometry every per-cluster quant run then applies with
-    # --chunk_plan, so all of them cut at identical positions.
+    # single output is the geometry every consumer then applies with --chunk_plan, so
+    # all of them cut at identical positions.
+    #
+    # Called from THREE places, at most once per run: here as the fallback for a
+    # standalone final quant, and -- for a whole cluster-guided run -- once before
+    # phase 1 from LRAA-cell_cluster_guided.wdl or LRAA-singlecell.wdl, which then
+    # thread the file down so the initial pass, per-cluster discovery and the final
+    # quant share ONE geometry. Defined here rather than in a subworkflow of its own
+    # because those two already import this file, and the task belongs beside the
+    # workflow whose comparability argument it exists to serve.
     input {
         File inputBAM
         File referenceGenome
-        # The consolidated GTF the per-cluster quants target; see the call site for why
-        # it must be that one and not the reference annotation.
-        File annot_gtf
+        # The gtf whose models placement must not cut through. OPTIONAL: de novo
+        # single-cell has no reference annotation to select against, and the selector
+        # treats the annotation constraint as optional -- with none supplied every
+        # grid-aligned position in the window is admissible on that axis. See the call
+        # site for which annotation belongs here.
+        File? annot_gtf
         # No main_chromosomes: the plan is emitted unrestricted on purpose. See the
         # command block for why that is the safe superset for every consumer.
         Boolean HiFi
@@ -498,7 +552,7 @@ task emit_shared_chunk_plan {
     # 2x the localized inputs, against make_chunks' 3x: nothing here holds a partition
     # of the BAM. The outputs are the plan plus the per-contig cut artifacts, including
     # a severed-reads BAM carrying only reads that span a candidate cut.
-    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + size(annot_gtf, "GB")
+    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0)
     Float diskRawGB = 2.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 100.0 then ceil(diskRawGB) else 100
 
@@ -528,11 +582,17 @@ task emit_shared_chunk_plan {
     # drift again -- including for --config_update, which the module would also
     # have ignored.
     #
-    # --quant_only with the merged GTF, matching every per-cluster call in this
-    # workflow: the mode changes the effective mapping-quality floor cut selection
-    # filters on, so the emitting run has to be in the same mode as the consuming
-    # ones. No --num_total_reads: selection has no use for the TPM denominator,
-    # and it is per-cluster regardless.
+    # --quant_only WITH an annotation, discovery WITHOUT one. De novo single-cell has
+    # no reference annotation to select against, and --quant_only with no --gtf has
+    # nothing to quantify and is refused by LRAA. The mode reaches cut selection only
+    # through resolve_min_mapping_quality (pylib/ChunkedRun.py:1399-1421) -- quant-only
+    # resolves the final-quant floor, discovery the MIN of the two -- and this workflow
+    # exposes neither floor, so both are 0 and the two modes resolve to the same
+    # effective filter. If it ever does expose them the modes stop agreeing, and the
+    # emitting run then has to be in the same mode as its consumers.
+    #
+    # No --num_total_reads: selection has no use for the TPM denominator, and it is
+    # per-cluster regardless.
     #
     # NO contig restriction, deliberately. The driver takes a single --contig, not
     # a list, and a plan is validated per contig the CONSUMING run processes --
@@ -543,8 +603,8 @@ task emit_shared_chunk_plan {
     /usr/local/src/LRAA/LRAA \
         --bam inputs/input.bam \
         --genome inputs/genome.fa \
-        --gtf ~{annot_gtf} \
-        --quant_only \
+        ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
+        ~{if defined(annot_gtf) then "--quant_only" else ""} \
         --output_prefix shared_plan \
         --chunk \
         --chunk_work_dir work \

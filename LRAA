@@ -163,33 +163,45 @@ def _first_aligned_record(bam_filename, flag_name):
         )
 
 
-def _require_thinning_weights(bam_filename):
-    """--bam_for_sg names the splice-graph evidence, so it must already be thinned.
+def _require_thinning_weights(bam_filename, flag_name="--bam_for_sg", role=None):
+    """A caller-nominated pre-normalized bam must actually BE normalized.
 
-    The splice graph divides each read's acceptance probability back out through XW, and
-    an untagged read weighs 1, so a thinned bam that arrived without weights is read as
-    though its survivors were the entire library. Fatal rather than a warning because
-    nothing downstream can detect it.
+    TWO INPUTS, one rule. ``--bam_for_sg`` names the splice-graph evidence and
+    ``--bam_for_priors`` the reads the first pass estimates theta from; both are
+    taken as given, neither is ever re-normalized here, and each divides a read's
+    acceptance probability back out through XW. An untagged read weighs 1, so a
+    thinned bam that arrived without weights is read as though its survivors were
+    the entire library. Fatal rather than a warning because nothing downstream can
+    detect it.
 
-    An empty bam is accepted: it yields an empty splice graph, so there is no support for
-    a missing weight to understate, and the chunked pipeline produces empty
-    per-orientation bams routinely.
+    ``flag_name`` is in the MESSAGE because the two inputs fail identically and an
+    operator handed the wrong flag name goes looking at the wrong file: this
+    refusal used to name --bam_for_sg unconditionally, including when it was the
+    priors bam that was untagged.
+
+    An empty bam is accepted: it yields an empty splice graph and an empty
+    estimate, so there is no support for a missing weight to understate, and the
+    chunked pipeline produces empty per-orientation bams routinely.
     """
-    first = _first_aligned_record(bam_filename, "--bam_for_sg")
+    role = role or "splice-graph evidence"
+    first = _first_aligned_record(bam_filename, flag_name)
     if first is None or first.has_tag("XW"):
         return
 
     sys.exit(
-        "Error, --bam_for_sg {} carries no XW coverage-normalization weight on its first "
+        "Error, {0} {1} carries no XW coverage-normalization weight on its first "
         "aligned record, so it has not been coverage-normalized.\n"
-        "That flag names the bam to use AS splice-graph evidence: it is taken as given "
-        "and is expected to be pre-normalized. The splice graph divides each read's "
-        "acceptance probability back out through the XW tag, and an untagged read weighs "
-        "1, so a thinned bam without weights is read as though its surviving reads were "
-        "the whole library -- understating support by the thinning factor at precisely "
-        "the deep loci thinning touched, with nothing downstream able to detect it.\n"
-        "Produce it with util/normalize_bam_by_strand.py, which writes the tag, or drop "
-        "--bam_for_sg and let this run normalize --bam itself.".format(bam_filename)
+        "That flag names the bam to use AS {2}: it is taken as given and is "
+        "expected to be pre-normalized. Each read's acceptance probability is "
+        "divided back out through the XW tag, and an untagged read weighs 1, so a "
+        "thinned bam without weights is read as though its surviving reads were "
+        "the whole library -- understating support by the thinning factor at "
+        "precisely the deep loci thinning touched, with nothing downstream able to "
+        "detect it.\n"
+        "Produce it with util/normalize_bam_by_strand.py, which writes the tag, or "
+        "drop {0} and let this run resolve that role for itself.".format(
+            flag_name, bam_filename, role
+        )
     )
 
 
@@ -849,6 +861,21 @@ def main():
         type=str,
         default=None,
         help="use this BAM file for splice-graph evidence instead of constructing/merging one (optional)",
+    )
+    primary.add_argument(
+        "--bam_for_priors",
+        type=str,
+        default=None,
+        help="OPTIONAL pre-normalized BAM used ONLY to estimate the first-pass "
+        "theta the final read assignment is apportioned by. For the single-cell "
+        "cluster-guided shape: --bam_for_sg is ONE splice graph shared by every "
+        "cluster, so pass 1 taken over it estimates abundances from POOLED "
+        "evidence and couples every cluster's ambiguous-read apportionment to "
+        "every other cluster's expression. This names the cluster's OWN "
+        "normalized reads, so the priors are cluster-local while the graph stays "
+        "shared. Must carry XW (it is normalized by definition); refused when it "
+        "resolves to --bam_for_sg, which is the pooled configuration it exists "
+        "to eliminate",
     )
     primary.add_argument(
         "--genome", type=str, required=True, help="reference genome FASTA"
@@ -2279,6 +2306,8 @@ def main():
         Path(normalization_cache_dir).mkdir(parents=True, exist_ok=True)
     # allow user to explicitly provide a BAM to use for splice-graph evidence
     bam_for_sg_cli = getattr(args, "bam_for_sg", None)
+    # and, separately, one to estimate the first-pass theta from
+    bam_for_priors_cli = getattr(args, "bam_for_priors", None)
 
     if not os.path.exists(bam_filename + ".bai"):
         logger.info(
@@ -2286,12 +2315,16 @@ def main():
         )
         subprocess.check_call("samtools index " + bam_filename, shell=True)
 
-    # The two bams have distinct ROLES, and each is checked against its own.
+    # The three bams have distinct ROLES, and each is checked against its own.
     #
-    #   --bam         the full library. Reported counts are scaled by it, so it must not
-    #                 already be thinned.
-    #   --bam_for_sg  the splice-graph evidence, taken as given. It is the input that
-    #                 exists for thinned data, so it must already BE thinned.
+    #   --bam            the full library. Reported counts are scaled by it, so it must
+    #                    not already be thinned.
+    #   --bam_for_sg     the splice-graph evidence, taken as given. It is the input that
+    #                    exists for thinned data, so it must already BE thinned.
+    #   --bam_for_priors the reads pass 1 estimates theta from, taken as given and
+    #                    likewise already thinned -- it is a normalized bam by
+    #                    definition, and an unweighted one means a raw bam was passed
+    #                    and the estimator would silently weigh every read 1.
     #
     # Stated as invariants on the inputs rather than inferred from flags, which is what
     # lets weighting simply always apply: a weight is present exactly where thinning
@@ -2299,6 +2332,7 @@ def main():
     _require_no_thinning_weights(bam_filename)
     bam_file_for_quant = bam_filename
     bam_file_for_sg = None
+    bam_file_for_priors = None
 
     if bam_for_sg_cli:
         if not os.path.exists(bam_for_sg_cli):
@@ -2337,6 +2371,51 @@ def main():
             )
         else:
             bam_file_for_sg = bam_filename
+
+    if bam_for_priors_cli:
+        if not os.path.exists(bam_for_priors_cli):
+            sys.exit(f"Error: --bam_for_priors file not found: {bam_for_priors_cli}")
+        if not os.path.exists(bam_for_priors_cli + ".bai"):
+            logger.info(
+                "-missing index for bam {}, will try to make it...".format(
+                    bam_for_priors_cli
+                )
+            )
+            subprocess.check_call("samtools index " + bam_for_priors_cli, shell=True)
+
+        # Same rule as --bam_for_sg and for the same reason: this bam is taken as
+        # given, never re-normalized, and pass 1 divides each read's acceptance
+        # probability back out through XW. An unweighted one is a raw bam someone
+        # passed by mistake, and theta would then be estimated with every read
+        # weighing 1 -- a silently different prior, not an error.
+        _require_thinning_weights(
+            bam_for_priors_cli,
+            flag_name="--bam_for_priors",
+            role="the reads the first assignment pass estimates theta from",
+        )
+        if bam_file_for_sg is not None and os.path.realpath(
+            bam_for_priors_cli
+        ) == os.path.realpath(bam_file_for_sg):
+            sys.exit(
+                "Error, --bam_for_priors {} and --bam_for_sg {} resolve to the same "
+                "file.\n"
+                "That is the POOLED configuration this input exists to eliminate: the "
+                "sg bam is ONE splice graph shared across cell clusters, so a theta "
+                "estimated over it apportions every cluster's ambiguous reads by every "
+                "other cluster's expression -- and it would look like it worked, since "
+                "each cluster still reports its own read totals.\n"
+                "Pass this cluster's OWN normalized reads here (the per-cluster "
+                "normalized bam), or drop the flag and get today's behaviour: pass 1 "
+                "reads the splice-graph bam.".format(
+                    bam_for_priors_cli, bam_file_for_sg
+                )
+            )
+        bam_file_for_priors = bam_for_priors_cli
+        logger.info(
+            "first-pass theta will be estimated from user-supplied pre-normalized "
+            "BAM: %s",
+            bam_file_for_priors,
+        )
 
     if args.num_total_reads is None:
         LRAA_Globals.config["num_total_reads"] = count_reads_from_bam(bam_filename)
@@ -2474,6 +2553,9 @@ def main():
                     genome_fasta_filename=genome_fasta_filename,
                     bam_file_for_sg=bam_file_for_sg,
                     bam_file_for_quant=bam_file_for_quant,
+                    # None unless --bam_for_priors was given, in which case it is
+                    # the ONLY thing pass 1 reads; see _first_pass_assignment_bam.
+                    bam_file_for_priors=bam_file_for_priors,
                     restrict_region_lend=restrict_region_lend,
                     restrict_region_rend=restrict_region_rend,
                     input_gtf=input_gtf,
@@ -3565,6 +3647,13 @@ def _run_chunked_mode(args):
         # refuses it without a cut-selection source rather than choosing a
         # geometry for the caller, so the failure is a message and not a run.
         bam_for_sg=args.bam_for_sg,
+        # Same allowlist, and the omission this one guards against is the exact
+        # defect this input exists to repair: unlisted, --bam_for_priors is parsed
+        # off this command line and silently dropped, every chunk's pass 1 falls
+        # back to the SHARED sg slice, and each cluster's theta is estimated from
+        # pooled evidence again -- with no message and plausible output. Pinned by
+        # pylib/test_chunk_priors_bam.py.
+        bam_for_priors=args.bam_for_priors,
         # Same allowlist, same failure mode, and this one is what makes the
         # previous line usable: without a shared plan ChunkedRun refuses
         # --bam_for_sg outright, because per-caller cut selection would slice that
@@ -4723,6 +4812,9 @@ def _contig_job_runner(job):
                     # QUANT_ONLY is only reachable with --gtf, so here
                     # input_transcripts really is the user's annotation.
                     reference_transcripts=input_transcripts,
+                    # None unless the caller named one; pass 1 then resolves as
+                    # it always has.
+                    bam_file_for_priors=job.get("bam_file_for_priors"),
                 )
             else:
                 run_transcript_assembly(
@@ -4749,6 +4841,7 @@ def _contig_job_runner(job):
                     splice_graph_cache_dir=splice_graph_cache_dir,
                     read_assignment_summary_path=read_assignment_summary_tmp,
                     rescue_summary_path=rescue_summary_tmp,
+                    bam_file_for_priors=job.get("bam_file_for_priors"),
                 )
 
         # Count-then-report backstop: no work unit may finish without saying how
@@ -4773,7 +4866,9 @@ def _contig_job_runner(job):
                 contig_acc,
                 contig_strand,
                 _first_pass_assignment_bam(
-                    job["bam_file_for_sg"], job["bam_file_for_quant"]
+                    job["bam_file_for_sg"],
+                    job["bam_file_for_quant"],
+                    job.get("bam_file_for_priors"),
                 ),
                 job["restrict_region_lend"],
                 job["restrict_region_rend"],
@@ -5560,16 +5655,44 @@ def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stat
         writer.writerow(row)
 
 
-def _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant):
+def _first_pass_assignment_bam(
+    bam_file_for_sg, bam_file_for_quant, bam_file_for_priors=None
+):
     """The bam the first read-assignment pass reads.
 
-    Under --stream_reads that pass exists only to estimate abundances and so reads
-    the coverage-normalized bam; otherwise it reads the bam being quantified. It is
-    resolved here rather than at each use because the read-assignment summary's
-    reads_total is a count over THIS bam, and a count taken from the other one
-    would report a population the run never assigned.
+    THREE ROLES, and since the cluster-guided single-cell shape they are three
+    FILES rather than one:
+
+      splice graph        --bam_for_sg. Under WDL/LRAA_quant_by_cluster.wdl this is
+                          ONE merged normalized bam shared by every cell cluster,
+                          so that all clusters are quantified against the same
+                          graph. Never reconstructed per cluster.
+      pass-1 theta        --bam_for_priors, THIS caller's own normalized reads.
+      pass-2 assignment   --bam, the full cluster bam, which is what the second
+                          streaming pass reads and what the tracking file
+                          enumerates.
+
+    They were one file until the sg bam became shared. Pass 1 then estimated theta
+    over POOLED evidence, so each cluster's ambiguous-read apportionment was a
+    function of every other cluster's expression -- cluster-local quant computed
+    from a pooled prior, reported as though it were local. MEASURED before the
+    priors input existed: all 32 clusters reported an identical reads_total of
+    94,908 while assigning 24,083 / 27,616 / 17,414 / ... of them.
+
+    Precedence is priors first, then today's behaviour verbatim: under
+    --stream_reads the pass exists only to estimate abundances and so reads the
+    coverage-normalized bam, otherwise it reads the bam being quantified. A caller
+    that passes no priors bam therefore gets exactly what it got before.
+
+    Resolved here rather than at each use because the read-assignment summary's
+    reads_total is a count over THIS bam, and a count taken from one of the other
+    two would report a population the run never assigned. That invariant is what
+    the priors input makes true again: the count is now over the cluster's own
+    normalized reads rather than over the pool.
     """
 
+    if bam_file_for_priors:
+        return bam_file_for_priors
     return (
         bam_file_for_sg if LRAA_Globals.config["stream_reads"] else bam_file_for_quant
     )
@@ -5786,6 +5909,10 @@ def run_quant_only(
     read_assignment_summary_path=None,
     rescue_summary_path=None,
     reference_transcripts=None,
+    # Keyword with a None default rather than positional beside bam_file_for_sg:
+    # every caller passes the first thirteen positionally, and pass 1 falls back
+    # to today's resolution when this is absent.
+    bam_file_for_priors=None,
 ):
 
     # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
@@ -5811,7 +5938,9 @@ def run_quant_only(
                 read_assignment_summary_path,
                 contig_acc,
                 contig_strand,
-                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                _first_pass_assignment_bam(
+                    bam_file_for_sg, bam_file_for_quant, bam_file_for_priors
+                ),
                 restrict_region_lend,
                 restrict_region_rend,
                 "no input transcripts to quantify",
@@ -5870,7 +5999,9 @@ def run_quant_only(
                 read_assignment_summary_path,
                 contig_acc,
                 contig_strand,
-                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                _first_pass_assignment_bam(
+                    bam_file_for_sg, bam_file_for_quant, bam_file_for_priors
+                ),
                 restrict_region_lend,
                 restrict_region_rend,
                 "no splice graph created",
@@ -5918,7 +6049,9 @@ def run_quant_only(
                 read_assignment_summary_path,
                 contig_acc,
                 contig_strand,
-                _first_pass_assignment_bam(bam_file_for_sg, bam_file_for_quant),
+                _first_pass_assignment_bam(
+                    bam_file_for_sg, bam_file_for_quant, bam_file_for_priors
+                ),
                 restrict_region_lend,
                 restrict_region_rend,
                 "no input transcripts mapped into the splice graph",
@@ -5962,15 +6095,20 @@ def run_quant_only(
             pass
     read_assignment_stats = None
     # In streaming mode this first pass exists only to estimate abundances, so it reads
-    # the coverage-normalized bam: that is the whole saving, since the default path
+    # a coverage-normalized bam: that is the whole saving, since the default path
     # materializes every retained read of whichever bam it is given. The second pass
     # below streams bam_file_for_quant and is what makes the tracking file complete.
     #
+    # WHICH normalized bam is the point of --bam_for_priors. With a shared
+    # --bam_for_sg the normalized bam is POOLED across cell clusters, so a theta
+    # estimated from it is not this caller's; with --bam_for_priors it is this
+    # caller's own normalized reads and the graph stays shared.
+    #
     # Resolved through the shared helper because the early returns above count their
-    # reads over this same bam, and a count taken over the other one would report a
-    # population this pass never assigned.
+    # reads over this same bam, and a count taken over either of the other two would
+    # report a population this pass never assigned.
     bam_file_for_pass1 = _first_pass_assignment_bam(
-        bam_file_for_sg, bam_file_for_quant
+        bam_file_for_sg, bam_file_for_quant, bam_file_for_priors
     )
     mp_counter = lraa_obj._populate_read_multi_paths(
         contig_acc,
@@ -6297,6 +6435,9 @@ def run_transcript_assembly(
     splice_graph_cache_dir=None,
     read_assignment_summary_path=None,
     rescue_summary_path=None,
+    # Forwarded to the final quant below, and to the draft quant, which by
+    # construction estimates on the same footing as the final one.
+    bam_file_for_priors=None,
 ):
 
     ##---------------------
@@ -6481,16 +6622,17 @@ def run_transcript_assembly(
     )
 
     # The draft quantifies whatever the final quant's ESTIMATING pass will quantify, by
-    # the same expression run_quant_only uses to pick it:
+    # calling the same resolver run_quant_only uses to pick it,
+    # _first_pass_assignment_bam, rather than restating its expression here -- a second
+    # copy is what let the two diverge the moment a third bam role appeared.
     #
-    #     bam_file_for_sg if stream_reads else bam_file_for_quant
-    #
-    # so the draft and the final estimating pass share their ESTIMATOR CONFIGURATION: the
+    # So the draft and the final estimating pass share their ESTIMATOR CONFIGURATION: the
     # same bam, the same XW treatment, the same EM iteration budget. With streaming that
-    # bam is the coverage-normalized one (or a pre-normalized --bam_for_sg, or the full
-    # --bam when normalization is off -- bam_file_for_sg is whatever the splice graph was
-    # built from); without streaming the final quant reads the full bam directly and so
-    # does this. Letting those diverge would filter on one estimator and report another.
+    # bam is the caller's --bam_for_priors when it gave one, else the coverage-normalized
+    # one (a pre-normalized --bam_for_sg, or the full --bam when normalization is off --
+    # bam_file_for_sg is whatever the splice graph was built from); without streaming and
+    # without priors the final quant reads the full bam directly and so does this.
+    # Letting those diverge would filter on one estimator and report another.
     #
     # NOT the same numbers, and the difference is structural rather than incidental: this
     # runs on the FULL candidate set, while the final pass re-estimates theta over only
@@ -6510,10 +6652,8 @@ def run_transcript_assembly(
     # of that bam: min_unique_reads_novel_isoform, the FSM counts, and the supporting-cell
     # gate. See TranscriptFiltering.get_isoform_unique_assigned_read_count, which returns
     # both and hands each consumer the one it needs.
-    bam_file_for_draft_quant = (
-        bam_file_for_sg
-        if LRAA_Globals.config["stream_reads"]
-        else bam_file_for_quant
+    bam_file_for_draft_quant = _first_pass_assignment_bam(
+        bam_file_for_sg, bam_file_for_quant, bam_file_for_priors
     )
     mp_all_counter = lraa_all_obj.build_multipath_graph(
         contig_acc,
@@ -6893,6 +7033,7 @@ def run_transcript_assembly(
         # `transcripts` above are the models LRAA just assembled; the genuine annotation
         # is the reference subset, and only it may waive the internal-priming veto.
         reference_transcripts=reference_transcripts_incl_in_graph,
+        bam_file_for_priors=bam_file_for_priors,
     )
 
     # reset

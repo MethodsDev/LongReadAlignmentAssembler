@@ -16,6 +16,14 @@ workflow LRAA_cell_cluster_guided {
         File cell_clusters_info
         
         File? annot_gtf
+
+        # INTERNAL PLUMBING, not a user knob: the ONE cut plan for the WHOLE run,
+        # emitted by a caller that starts even earlier than this workflow does.
+        # LRAA-singlecell.wdl emits it before ITS initial pass and passes it here, so
+        # the initial pass, the per-cluster discovery below and the final quant all cut
+        # at identical positions. Unset -- this workflow driven directly -- and the
+        # emission below produces it instead.
+        File? internal_chunk_plan
         
         Boolean HiFi = false
         # Chunk geometry, forwarded to every per-cluster LRAA run. Unset means
@@ -57,6 +65,13 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16
         Int memoryGBquantMerge = 16
+        # The one-off shared-chunk-plan task below. Cut selection runs one concurrent
+        # unit per contig under --cpu_budget, so cpu IS that budget; the memory number
+        # is justified where these same two inputs are declared in
+        # LRAA_quant_by_cluster.wdl. Forwarded there as well, so ONE pair of numbers
+        # covers the task whichever level of the run emits it.
+        Int cpu_chunk_plan = 16
+        Int memoryGB_chunk_plan = 8
         Int normalize_max_cov_level = 1000
         Int memoryGBscSparseMatrices = 16
         String sparseMatrixCsvEngine = "python"
@@ -97,6 +112,65 @@ workflow LRAA_cell_cluster_guided {
         }
     }
 
+    # ONE cut plan for the WHOLE run, selected BEFORE the phase-1 discovery below.
+    #
+    # Emitted here rather than inside the final quant, because a plan emitted there
+    # serves that phase and nothing earlier: per-cluster discovery then still selects
+    # its own cuts, measured at 76 distinct geometries over 270 extractions on the
+    # ref-guided smoke run. Cut positions are read off a bam, so per-phase selection
+    # means per-phase boundaries, and the shared splice-graph bam the final quant is
+    # handed then gets sliced at boundaries no earlier phase used.
+    #
+    # Selected against the REFERENCE annotation, the only one that exists this early,
+    # and that is correct rather than a compromise. Cut selection will not place a
+    # boundary inside an annotated model, so reference genes stay intact; and discovery
+    # below runs INSIDE these chunks, so no novel isoform can be constructed spanning a
+    # cut -- no chunk ever held the reads that would support one. The models phase 1
+    # finds are therefore confined to chunk interiors by construction, and the
+    # consolidated gtf the final quant targets cannot be severed by this geometry.
+    # Measured on the two smoke runs: 0 of 994 consolidated ref-guided models and 0 of
+    # 865 de novo models straddle any of the 9 cut positions -- and those models were
+    # discovered under SEPARATE per-phase geometries, which is the harsher test.
+    #
+    # Do NOT move this back after discovery to select against the consolidated gtf
+    # instead. That is what it used to do, and it is exactly what leaves phase 1
+    # unplanned: the consolidated gtf does not exist until phase 1 has already chosen
+    # its own cuts.
+    #
+    # Selected on the WHOLE pre-partition bam, the unthinned superset of every cluster
+    # bam: a position no read spans in the superset is spanned in no subset, so one
+    # plan is safe for all of them.
+    Boolean want_chunk_plan = (scattering != "off" || scattering_final_quant != "off")
+
+    if (want_chunk_plan && !defined(internal_chunk_plan)) {
+        call LRAA_quant_by_cluster.emit_shared_chunk_plan as emit_run_chunk_plan {
+            input:
+                inputBAM = inputBAM,
+                referenceGenome = referenceGenome,
+                annot_gtf = annot_gtf,
+                HiFi = HiFi,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                cpu = cpu_chunk_plan,
+                memoryGB = memoryGB_chunk_plan,
+                docker = docker
+        }
+    }
+
+    # The run's geometry: the caller's when it emitted one, else the emission above.
+    File? shared_chunk_plan_resolved = if defined(internal_chunk_plan) then internal_chunk_plan else emit_run_chunk_plan.chunk_plan
+
+    # Gated PER PHASE, because a phase running scattering=off takes no plan at all: it
+    # is one whole-genome invocation with no sibling run for its geometry to match, and
+    # LRAA.wdl's validate_scattering refuses a plan there rather than dropping it. Both
+    # branches imply want_chunk_plan, so the plan is defined wherever these are.
+    if (scattering != "off") {
+        File discovery_chunk_plan = select_first([shared_chunk_plan_resolved])
+    }
+    if (scattering_final_quant != "off") {
+        File final_quant_chunk_plan = select_first([shared_chunk_plan_resolved])
+    }
+
 
     if (quant_only_cluster_guided == false) {
 
@@ -107,6 +181,10 @@ workflow LRAA_cell_cluster_guided {
                     sample_id = cluster_sample_id,
                     referenceGenome = referenceGenome,
                     annot_gtf = annot_gtf,
+                    # The run's ONE geometry, selected above BEFORE this discovery ran,
+                    # so every model it finds sits inside these chunks and the final
+                    # quant can reuse the same cuts without severing one.
+                    internal_chunk_plan = discovery_chunk_plan,
                     inputBAM = partition_bam_by_cell_cluster.partitioned_bams[i],
                     cell_list = partition_bam_by_cell_cluster.partitioned_cell_lists[i],
                     HiFi = HiFi,
@@ -188,6 +266,13 @@ workflow LRAA_cell_cluster_guided {
             # no superset file, and a by_chunk final quant is refused rather than each
             # cluster quietly choosing its own chunk boundaries.
             inputBAM = inputBAM,
+            # The SAME geometry phase-1 discovery above ran under. Threading it in
+            # rather than letting the final quant select its own is what makes the
+            # run's chunk bounds uniform end to end; unset, that workflow emits its own
+            # plan from the consolidated gtf and only its own phase is planned.
+            internal_chunk_plan = final_quant_chunk_plan,
+            cpu_chunk_plan = cpu_chunk_plan,
+            memoryGB_chunk_plan = memoryGB_chunk_plan,
             pre_normalized_cluster_bams = pre_normalized_cluster_bams,
             pre_normalized_cluster_bais = pre_normalized_cluster_bais,
             HiFi = HiFi,
@@ -295,6 +380,9 @@ workflow LRAA_cell_cluster_guided {
          File merged_normalized_bai = LRAA_quant_final_bamlist.merged_bai
          File final_normalized_merged_bam = LRAA_quant_final_bamlist.normalized_merged_bam
          File final_normalized_merged_bai = LRAA_quant_final_bamlist.normalized_merged_bai
+         # The ONE geometry every phase of this run cut on. Absent only when both
+         # scattering knobs are off, the mode with nothing to share.
+         File? shared_chunk_plan = shared_chunk_plan_resolved
     
      }
      

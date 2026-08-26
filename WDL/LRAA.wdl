@@ -24,6 +24,29 @@ workflow LRAA_wf {
         # quietly changing what the splice graph is built from.
         File? internal_bam_for_sg
         File? internal_bam_for_sg_index
+        # INTERNAL PLUMBING, the same shape and the same reason as
+        # internal_bam_for_sg above, and a DIFFERENT ROLE. Three bams, three roles,
+        # per run:
+        #
+        #   inputBAM                 the full library. Pass 2 assigns THESE reads.
+        #   internal_bam_for_sg      the splice graph. Shared across sibling runs and
+        #                            never reconstructed here.
+        #   internal_bam_for_priors  pass-1 theta. THIS run's own normalized reads.
+        #
+        # Unset, pass 1 falls back to the splice-graph bam whenever stream_reads is on
+        # (LRAA:_first_pass_assignment_bam), which is the default -- and in the
+        # cluster-guided shape that bam is ONE file shared by every cluster, so theta
+        # comes from POOLED evidence and each cluster's ambiguous reads are apportioned
+        # by every OTHER cluster's expression. It looks like it worked, because each
+        # cluster still reports its own totals: observed 32 clusters all reporting
+        # reads_total 94,908 while assigning 24,083 / 27,616 / 17,414 / ...
+        #
+        # Prefixed `internal_` for the reason internal_bam_for_sg is: which reads
+        # estimate theta is a role the CALLING workflow fills from files it produced,
+        # not a knob a workspace binds. Wanted in ALL THREE scattering modes -- `off`
+        # is a single whole-genome invocation, and it still runs a pass 1.
+        File? internal_bam_for_priors
+        File? internal_bam_for_priors_index
         # INTERNAL PLUMBING, same shape and same reason as internal_bam_for_sg above:
         # ONE chunk plan, produced once by the calling workflow from the WHOLE
         # pre-partition bam and handed to every sibling run, so all of them cut at
@@ -243,6 +266,8 @@ workflow LRAA_wf {
                 annot_gtf = annot_gtf,
                 bam_for_sg = internal_bam_for_sg,
                 bam_for_sg_index = internal_bam_for_sg_index,
+                bam_for_priors = internal_bam_for_priors,
+                bam_for_priors_index = internal_bam_for_priors_index,
                 chunk_plan = internal_chunk_plan,
                 main_chromosomes = main_chromosomes,
                 oversimplify = oversimplify,
@@ -353,6 +378,15 @@ workflow LRAA_wf {
                     shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
                     bam_for_sg = if defined(internal_bam_for_sg) then select_first([splitByChr.chromosomeBAMsForSG])[contig_index] else internal_bam_for_sg,
+                    # NOT partitioned per contig, unlike bam_for_sg above:
+                    # subwdls/Partition_data_by_chromosome.wdl slices --bam and the sg
+                    # bam, and this shard is a full LRAA invocation restricted with
+                    # --contig, so it reads only this contig's reads out of the
+                    # whole-genome priors bam and its own chunking slices the rest. The
+                    # cost is localizing one per-cluster NORMALIZED bam per shard --
+                    # small next to the library, and paying it here keeps the partition
+                    # subworkflow's surface unchanged.
+                    bam_for_priors = internal_bam_for_priors,
                     # Same shared geometry the by_chunk branch gets. This shard chunks
                     # its contig internally, so without the plan it would select cuts
                     # from THIS cluster's reads and slice bam_for_sg above at its own
@@ -421,6 +455,7 @@ workflow LRAA_wf {
                 sample_id = sample_id,
                 inputBAM = inputBAM,
                 bam_for_sg = internal_bam_for_sg,
+                bam_for_priors = internal_bam_for_priors,
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 region = region,

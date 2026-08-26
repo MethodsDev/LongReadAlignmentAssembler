@@ -29,9 +29,15 @@ What these tests hold:
   no authoritative denominator, so two callers of one plan get their own TPM
   scale;
 * every mismatch between a plan and the run applying it is REFUSED with both
-  values named -- geometry parameters, annotation identity, contig length, contig
-  coverage, and the contradictory flag combinations. A mismatched plan does not
-  fail downstream; it produces plausible output at bounds nobody chose;
+  values named -- geometry parameters, contig length, contig coverage, and the
+  contradictory flag combinations. A mismatched plan does not fail downstream;
+  it produces plausible output at bounds nobody chose;
+* the ANNOTATION is checked DIRECTLY rather than by identity: a model in the
+  consuming gtf that spans a plan cut is refused BY NAME, while an annotation
+  that merely differs is accepted. One plan is emitted per run, before phase 1,
+  so the consuming gtf is never the emitting one -- de novo emits with none at
+  all, and ref-guided phase 2 quantifies the consolidated gtf. A digest refused
+  both of those and could not tell either from a genuinely severed model;
 * a genome-wide plan applied by a run restricted to one contig is ACCEPTED.
   `subwdls/LRAA_runner.wdl` passes `--chunk` unconditionally, so a by_chromosome
   shard is itself a chunked run holding one chromosome, and refusing it would
@@ -468,11 +474,17 @@ def test_the_plan_records_the_geometry_that_chose_the_cuts(shared_plan):
     assert params["approx_MB_per_cut"] == MB_PER_CUT
     assert params["approx_MB_per_cut_wiggle_window"] == WIGGLE
     assert params["strandless"] is True
-    assert params["annotation_present"] is True
-    # WHICH annotation is per contig, not a whole-file hash: by_chromosome hands
-    # each shard a slice of the same gtf.
+    # The ANNOTATION is absent from the geometry in every form -- neither a
+    # presence boolean nor a per-contig digest. Both were proxies for "no cut
+    # falls inside a model this run quantifies", and both refused correct runs:
+    # one plan is emitted for a whole run, so de novo single-cell emits with no
+    # annotation while every consumer has one, and ref-guided emits against the
+    # reference while phase 2 quantifies the consolidated gtf. The property is
+    # checked directly instead; see ChunkedRun.straddling_annotation_models and
+    # the straddle tests below.
+    assert "annotation_present" not in params
     assert "annotation_identity" not in params
-    assert set(plan["geometry"]["annotation"]) == {CONTIG, OTHER_CONTIG}
+    assert "annotation" not in plan["geometry"]
     for key in (
         "depth_window",
         "grid_origin",
@@ -825,21 +837,24 @@ def test_a_geometry_parameter_disagreement_is_refused(tmp_path, inputs, shared_p
     assert "different partition" in combined
 
 
-def test_a_different_annotation_on_a_processed_contig_is_refused(
-    tmp_path, inputs, shared_plan
-):
-    """A cut inside an annotated model is inadmissible, so the gtf is geometry.
+def test_a_model_straddling_a_plan_cut_is_refused(tmp_path, inputs, shared_plan):
+    """The property the digest was a proxy for, asked directly.
 
-    The single-cell pipeline selects against the CONSOLIDATED gtf, which carries
-    the novel models phase-1 discovery found. A plan selected against the raw
-    reference can place a cut straight through one of those, and every cluster
-    then quantifies a severed model and reports success -- wrong exactly at the
-    novel isoforms discovery exists to find. The novel model below sits across the
-    6000 cut this fixture's plan chose.
+    A cut at 1-based p splits the contig into [lend, p] and [p+1, rend], and the
+    extractor emits an annotated locus whole or not at all, so a locus spanning p
+    is contained by neither neighbour and BOTH omit it: quantified by nobody,
+    with every chunk reporting success. The novel model below sits across the
+    6000 cut this fixture's plan chose, which is the single-cell hazard -- phase
+    2 quantifies the CONSOLIDATED gtf, carrying models phase-1 discovery found.
+
+    The refusal must NAME it: the transcript, the cut, and both coordinate pairs.
+    A message that says only "the annotation differs" leaves the operator with a
+    1.5 GB gtf and no idea which model.
     """
 
     genome, gtf, superset, _reads, _lengths = inputs
-    plan_path, _plan, _cuts = shared_plan
+    plan_path, _plan, cuts = shared_plan
+    assert 6000 in cuts[CONTIG], cuts
     consolidated = tmp_path / "consolidated.gtf"
     consolidated.write_text(
         gtf.read_text()
@@ -848,10 +863,57 @@ def test_a_different_annotation_on_a_processed_contig_is_refused(
     )
 
     combined = _refused(
-        _apply(tmp_path, genome, consolidated, superset, plan_path, "other_gtf")
+        _apply(tmp_path, genome, consolidated, superset, plan_path, "straddle")
     )
-    assert "selected contig {}'s cuts against annotation".format(CONTIG) in combined
-    assert "severed model" in combined
+    assert "transcript novel.t1 of gene novel" in combined
+    assert "places a cut at {}:6000".format(CONTIG) in combined
+    assert "{}:5800-6200".format(CONTIG) in combined
+    assert "quantified by nobody" in combined
+
+
+def test_a_different_but_non_straddling_annotation_is_accepted(
+    tmp_path, inputs, shared_plan
+):
+    """THE REASON THE DIGEST WENT, stated as the case it got wrong.
+
+    Same shape as the refusal above -- a plan selected against the reference,
+    applied by a run holding a consolidated gtf that the plan has never seen --
+    but the added model sits INSIDE a chunk instead of across its boundary. That
+    is what phase 2 of the single-cell pipeline always looks like, because phase
+    1 discovered its models inside these very chunks and so cannot have produced
+    one spanning a cut. A sha256 of the annotation refuses this and the run that
+    straddles alike; the straddle check separates them.
+    """
+
+    genome, gtf, superset, _reads, _lengths = inputs
+    plan_path, plan, cuts = shared_plan
+    interior = tmp_path / "consolidated_interior.gtf"
+    interior.write_text(
+        gtf.read_text()
+        + '{}\ttest\texon\t7000\t7400\t.\t+\t.\tgene_id "novel_interior"; '
+        'transcript_id "novel_interior.t1";\n'.format(CONTIG)
+    )
+    assert interior.read_text() != gtf.read_text()
+    # Genuinely between two cuts, so acceptance is about the straddle rule rather
+    # than about the fixture happening to have one chunk.
+    assert 6000 in cuts[CONTIG] and 12000 in cuts[CONTIG], cuts
+
+    _ok(
+        _apply(
+            tmp_path,
+            genome,
+            interior,
+            superset,
+            plan_path,
+            "interior_gtf",
+            "--stop_after_make_chunks",
+        )
+    )
+    geometry = _geometry(tmp_path / "work_interior_gtf")
+    planned = [(c["chunk_id"], c["region"]) for c in plan["chunks"]]
+    assert [
+        (row[0], "{}:{}-{}".format(row[1], row[2], row[3])) for row in geometry
+    ] == planned
 
 
 def test_a_per_contig_slice_of_the_plans_annotation_is_accepted(
@@ -861,8 +923,10 @@ def test_a_per_contig_slice_of_the_plans_annotation_is_accepted(
 
     `WDL/LRAA.wdl` hands each by_chromosome shard `splitByChr.chromosomeGTFs[i]`,
     written by `util/partition_data_by_chromosome.py` as that contig's records
-    verbatim. A whole-file identity refused every such shard of a correct plan,
-    which is why the annotation identity is per contig.
+    verbatim. A whole-file digest of the annotation refused every such shard of a
+    correct plan. The straddle check never asks what the file is, only whether a
+    model in it spans a cut on a contig this run processes, so a slice and the
+    whole gtf give the same answer for the contig they share.
     """
 
     genome, gtf, superset, _reads, _lengths = inputs
@@ -906,8 +970,9 @@ def test_an_annotation_differing_off_this_runs_contigs_is_accepted(
     """Contig N's cuts depend on contig N's records and nothing else.
 
     The distinction that makes the per-contig scope honest rather than merely
-    permissive: a difference ON a processed contig is refused (above), a
-    difference on one this run never touches is not.
+    permissive: a model straddling a cut ON a processed contig is refused
+    (above), a difference on one this run never touches is not looked at -- a run
+    cannot sever a model it does not quantify.
     """
 
     genome, gtf, superset, _reads, _lengths = inputs
@@ -934,19 +999,22 @@ def test_an_annotation_differing_off_this_runs_contigs_is_accepted(
     )
 
 
-def test_no_annotation_does_not_match_a_gtf_bearing_plan(
+def test_a_de_novo_run_may_apply_a_plan_selected_around_an_annotation(
     tmp_path, inputs, shared_plan
 ):
-    """Absent is a DISTINCT state from "some gtf", not a wildcard.
+    """Formerly refused on presence alone; now accepted, and correctly.
 
-    Refused on presence alone, before any contig is compared, so a de novo run and
-    a plan selected around an annotation reject each other even with no contig in
-    common.
+    `annotation_present` made "no gtf" a state that matched only itself, so this
+    pair rejected each other before any contig was compared. Nothing is severed
+    here: the plan's cuts avoided the reference's loci, and a run with no
+    annotation has no model to lose. The only real hazard is a model spanning a
+    cut, and there are no models.
     """
 
     genome, _gtf, superset, _reads, _lengths = inputs
     plan_path, _plan, _cuts = shared_plan
-    combined = _refused(
+
+    _ok(
         _apply(
             tmp_path,
             genome,
@@ -955,10 +1023,96 @@ def test_no_annotation_does_not_match_a_gtf_bearing_plan(
             plan_path,
             "no_gtf",
             "--discovery",
+            "--stop_after_make_chunks",
         )
     )
-    assert "annotation_present" in combined
-    assert "state of its own" in combined
+
+
+@pytest.fixture
+def denovo_plan(tmp_path, inputs):
+    """ONE plan for a whole de novo run, emitted with NO annotation.
+
+    The shape `WDL/TerraWorkflowConfigs/LRAA_singlecell.cluster_guided.by_chunk.
+    de_novo.config.json` runs: geometry is fixed before phase 1, when there is no
+    reference to fix it around, while every consumer downstream has a gtf -- the
+    init GTF for per-cluster discovery, the consolidated one for final quant.
+    """
+
+    genome, _gtf, superset, _reads, _lengths = inputs
+    plan_path = tmp_path / "denovo_cut_plan.json"
+    _ok(
+        _emit(
+            tmp_path, genome, None, superset, plan_path, "denovo_emit", "--discovery"
+        )
+    )
+    plan = json.loads(plan_path.read_text())
+    cuts = _cut_positions(plan)
+    assert cuts[CONTIG], "the de novo fixture placed no cut, so nothing is tested"
+    return plan_path, plan, cuts
+
+
+def test_an_unannotated_plan_is_accepted_by_a_consumer_holding_an_annotation(
+    tmp_path, inputs, denovo_plan
+):
+    """THE DE NOVO SINGLE-CELL SHAPE, which presence equality failed outright.
+
+    The plan carries no annotation because none existed when geometry was fixed;
+    the consumer has one because discovery produced it. Accepted, because no
+    model in the consumer's gtf spans a cut -- which is the only question that
+    matters, and the one a presence boolean could not ask.
+    """
+
+    genome, gtf, superset, _reads, _lengths = inputs
+    plan_path, plan, _cuts = denovo_plan
+
+    _ok(
+        _apply(
+            tmp_path,
+            genome,
+            gtf,
+            superset,
+            plan_path,
+            "denovo_consumer",
+            "--stop_after_make_chunks",
+        )
+    )
+    geometry = _geometry(tmp_path / "work_denovo_consumer")
+    planned = [(c["chunk_id"], c["region"]) for c in plan["chunks"]]
+    assert [
+        (row[0], "{}:{}-{}".format(row[1], row[2], row[3])) for row in geometry
+    ] == planned
+
+
+def test_an_unannotated_plan_is_refused_when_the_consumers_gtf_straddles_a_cut(
+    tmp_path, inputs, denovo_plan
+):
+    """A guard that cannot fail is worse than no guard.
+
+    Same shape as the acceptance above, one model moved. Selecting without an
+    annotation protects nothing from severing, so a consumer's model CAN land
+    across a cut -- and this is the case that proves the de novo path is checked
+    rather than waved through. Built from the plan's own chosen position so the
+    test cannot degrade into one where nothing straddles.
+    """
+
+    genome, gtf, superset, _reads, _lengths = inputs
+    plan_path, _plan, cuts = denovo_plan
+    position = cuts[CONTIG][0]
+    straddling = tmp_path / "denovo_consumer_straddle.gtf"
+    straddling.write_text(
+        gtf.read_text()
+        + '{}\ttest\texon\t{}\t{}\t.\t+\t.\tgene_id "spans"; '
+        'transcript_id "spans.t1";\n'.format(CONTIG, position - 200, position + 200)
+    )
+
+    combined = _refused(
+        _apply(
+            tmp_path, genome, straddling, superset, plan_path, "denovo_straddle"
+        )
+    )
+    assert "transcript spans.t1 of gene spans" in combined
+    assert "places a cut at {}:{}".format(CONTIG, position) in combined
+    assert "{}:{}-{}".format(CONTIG, position - 200, position + 200) in combined
 
 
 def test_chunk_plan_refuses_a_cut_selection_source(tmp_path, inputs, shared_plan):

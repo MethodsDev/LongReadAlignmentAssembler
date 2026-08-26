@@ -6,6 +6,16 @@ task LRAA_runner_task {
         File genome_fasta
         File inputBAM
         File? bam_for_sg
+        # The reads PASS 1 estimates theta from, and nothing else. Distinct from
+        # bam_for_sg on purpose: in the cluster-guided shape bam_for_sg is ONE
+        # splice graph shared by every cluster, so a theta estimated over it
+        # apportions each cluster's ambiguous reads by every OTHER cluster's
+        # expression -- and it looks like it worked, because each cluster still
+        # reports its own read totals (observed: 32 clusters all reporting
+        # reads_total 94,908 while assigning 24,083 / 27,616 / 17,414 / ...).
+        # This is THIS caller's own normalized reads; LRAA refuses the two
+        # resolving to the same file rather than silently pooling (LRAA:2380-2396).
+        File? bam_for_priors
         # ONE shared cut plan, geometry only. Needed here for the same reason
         # bam_for_sg is: this task ALWAYS passes --chunk (see the LRAA invocation
         # below, and the note on chunk_by_strand further down), so a per-chromosome
@@ -255,6 +265,7 @@ task LRAA_runner_task {
         LRAA --genome ~{genome_fasta} \
                                  --bam ~{inputBAM} \
                                  ~{if defined(bam_for_sg) then "--bam_for_sg " + bam_for_sg else ""} \
+                                 ~{if defined(bam_for_priors) then "--bam_for_priors " + bam_for_priors else ""} \
                                  --output_prefix ~{output_prefix_use}.~{output_suffix} \
                                  ~{if defined(contig) then "--contig " + contig else ""} \
                                  ~{if defined(region) then "--region " + region else ""} \
@@ -382,6 +393,9 @@ workflow LRAA_runner {
         File genome_fasta
         File inputBAM
         File? bam_for_sg
+        # See the task's input above: pass-1 theta comes from THIS caller's own
+        # normalized reads, not from the shared splice-graph bam.
+        File? bam_for_priors
         # See the task's input above: a shard chunks internally, so it needs the
         # shared cut geometry or it picks its own.
         File? chunk_plan
@@ -440,6 +454,7 @@ workflow LRAA_runner {
             genome_fasta=genome_fasta,
             inputBAM=inputBAM,
             bam_for_sg=bam_for_sg,
+            bam_for_priors=bam_for_priors,
             chunk_plan=chunk_plan,
             annot_gtf=annot_gtf,
             quant_only=quant_only,

@@ -106,6 +106,10 @@ import "subwdls/LRAA-filter_good_cells.wdl" as FilterCells
 import "subwdls/LRAA-gene_sparseM_to_seurat_clusters.wdl" as Seurat
 import "subwdls/Incorporate_gene_symbols.wdl" as GeneSymbols
 import "LRAA-cell_cluster_guided.wdl" as ClusterGuided
+# Imported for ONE task, emit_shared_chunk_plan: the run-wide cut plan is selected
+# here, before the initial pass, and threaded into every phase. The task lives beside
+# LRAA_quant_by_cluster's comparability argument rather than being duplicated here.
+import "LRAA_quant_by_cluster.wdl" as QuantByCluster
 
 workflow LRAA_singlecell_wf {
   input {
@@ -136,17 +140,25 @@ workflow LRAA_singlecell_wf {
     # chunk holding the whole thing -- which is what a small test fixture does,
     # leaving each run only its two strand units to parallelise over.
     #
-    # The init and the per-cluster runs want DIFFERENT geometry, so they get separate
-    # knobs. The init is ONE task over every read, so cutting it is the only way to
-    # parallelise it: on the 2 Mb test fixture, 10 chunks took its slowest unit from
-    # 366 s to 36 s. The per-cluster runs are many small tasks that already run side
-    # by side, and cutting them multiplies the per-unit fixed cost instead -- measured
-    # on the same fixture, cutting the clusters into 10 took their stage-5 work from
-    # 27.2 to 43.7 min (discovery) and 14.1 to 24.8 min (final quant) for no gain,
-    # because that phase was already saturating every core.
+    # The init and the per-cluster runs would each want their own geometry, and no
+    # longer CAN have one: ONE cut plan is emitted below, before any phase runs, and
+    # every phase applies it, so a run has exactly one set of cut positions. Two
+    # geometries would mean a phase whose chunk bounds differ from the plan's, which
+    # ChunkedRun refuses by name and value rather than quietly cutting elsewhere.
     #
-    # So: set the *_init pair to cut the initial pass, and leave the plain pair unset
-    # unless the per-cluster contigs genuinely exceed the default spacing.
+    # So the *_init pair sets the geometry for the WHOLE run when given, and the plain
+    # pair is the fallback -- the same precedence the init call used to apply to itself.
+    # The init wins because it is the phase that cannot be parallelised any other way:
+    # it is ONE task over every read, and on the 2 Mb test fixture 10 chunks took its
+    # slowest unit from 366 s to 36 s. The per-cluster phases already run side by side,
+    # so finer cuts cost them wall time and nothing else -- measured on the same
+    # fixture, cutting the clusters into 10 took their stage-5 work from 27.2 to 43.7
+    # min (discovery) and 14.1 to 24.8 min (final quant), because that phase was
+    # already saturating every core. An under-cut init is a serial floor under the
+    # whole run; over-cut clusters are a slower run that is still correct.
+    #
+    # Both pairs unset is the production case and is unchanged: LRAA's own 10 Mb / 1 Mb
+    # defaults then apply to every phase, as they did before one plan governed the run.
     Float? approx_MB_per_cut
     Float? approx_MB_per_cut_wiggle_window
     Float? approx_MB_per_cut_init
@@ -207,6 +219,13 @@ workflow LRAA_singlecell_wf {
     Int? chunkMemoryGB
     Int? chunkMergeCpu
     Int? chunkMergeMemoryGB
+    # The one-off run-wide chunk-plan task. Cut selection runs one concurrent unit per
+    # contig under --cpu_budget, so cpu IS that budget; the memory number is justified
+    # where these two inputs are declared in LRAA_quant_by_cluster.wdl. Forwarded to
+    # the cluster-guided phase as well, so ONE pair of numbers covers the task
+    # wherever a run ends up emitting it.
+    Int cpu_chunk_plan = 16
+    Int memoryGB_chunk_plan = 8
     Int memoryGBbuildSparseMatrices = 32
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
@@ -244,6 +263,74 @@ workflow LRAA_singlecell_wf {
   Boolean run_clustering_phase = !has_precomputed_clusters
   Boolean run_cluster_guided = single_cell_pipe_mode == "cluster-guided"
 
+  # ONE geometry for the whole run; see the input comments above for the precedence and
+  # for why there cannot be two.
+  Float? approx_MB_per_cut_run = if defined(approx_MB_per_cut_init) then approx_MB_per_cut_init else approx_MB_per_cut
+  Float? approx_MB_per_cut_wiggle_window_run = if defined(approx_MB_per_cut_wiggle_window_init) then approx_MB_per_cut_wiggle_window_init else approx_MB_per_cut_wiggle_window
+
+  # ONE cut plan for the WHOLE cluster-guided run, emitted BEFORE the initial pass.
+  #
+  # Emitted HERE because this is the earliest point in the pipeline: a plan has to
+  # precede phase 1 to be of any use to it, and all three phases -- initial pass,
+  # per-cluster discovery, final quant -- have to apply the same one. Emitted inside
+  # the final quant instead, which is where it used to live, it served that phase alone
+  # and per-cluster discovery still selected its own cuts: 76 distinct geometries over
+  # 270 extractions on the ref-guided smoke run.
+  #
+  # Selected against the REFERENCE annotation, the only one that exists before any
+  # phase has run, and safe BECAUSE it is that early rather than in spite of it: cut
+  # selection will not place a boundary inside an annotated model, and discovery then
+  # runs INSIDE these chunks, so no novel isoform spanning a cut can be constructed --
+  # no chunk ever held the reads that would support one. Measured on the two smoke
+  # runs: 0 of 994 consolidated ref-guided models and 0 of 865 de novo models straddle
+  # any of the 9 cut positions. De novo has no reference annotation at all and gets an
+  # unannotated plan: nothing was protected from severing at selection time, and each
+  # consumer checks its own models against the plan's cuts where it applies it.
+  #
+  # Emitted only when the CLUSTER-GUIDED phases run. Those are the many-sibling phases
+  # -- one job per cluster -- and shared geometry is what makes their results
+  # comparable. In basic mode the initial pass is the only LRAA run in the pipeline, so
+  # there is nothing for its cuts to agree with, and a plan would cost rather than buy:
+  # selection would move out of that run's own make_chunks, which OVERLAPS it with
+  # extraction (pylib/ChunkedRun.py's prep pool submits a contig's extractions as soon
+  # as that contig's selection finishes), into a separate task the run then waits on.
+  Boolean want_chunk_plan = run_cluster_guided
+      && (scattering_per_cluster != "off" || scattering_final_quant != "off")
+
+  if (want_chunk_plan) {
+    call QuantByCluster.emit_shared_chunk_plan as emit_run_chunk_plan {
+      input:
+        inputBAM = inputBAM,
+        referenceGenome = referenceGenome,
+        # The most complete annotation that exists BEFORE any phase runs. With the
+        # initial pass skipped, that is the precomputed init GTF -- the models the
+        # cluster phases then quantify -- rather than the reference, so placement
+        # protects those too.
+        annot_gtf = if run_initial_phase then initial_annot_gtf else precomputed_init_gtf,
+        HiFi = HiFi,
+        approx_MB_per_cut = approx_MB_per_cut_run,
+        approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_run,
+        cpu = cpu_chunk_plan,
+        memoryGB = memoryGB_chunk_plan,
+        docker = docker
+    }
+  }
+
+  # The run's geometry, threaded to every phase below.
+  File? run_chunk_plan = emit_run_chunk_plan.chunk_plan
+
+  # The initial pass JOINS that geometry when it runs and is scattered, and it has to:
+  # the models it discovers become the annotation the cluster phases quantify, so a
+  # model found across one of the plan's cuts would be severed by every phase that
+  # applies the plan. With scattering_init=off it cannot -- LRAA.wdl's
+  # validate_scattering refuses a plan for a single whole-genome invocation -- so that
+  # configuration holds the property only empirically, and a model that does straddle a
+  # cut is refused by the consumer that would have severed it rather than quantified
+  # quietly.
+  if (want_chunk_plan && run_initial_phase && scattering_init != "off") {
+    File init_chunk_plan = select_first([run_chunk_plan])
+  }
+
   # 1) Initial transcript discovery + quantification on the full BAM (skipped when precomputed inputs are provided)
   if (run_initial_phase) {
     call LRAA.LRAA_wf as LRAA_init {
@@ -262,8 +349,12 @@ workflow LRAA_singlecell_wf {
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         scattering = scattering_init,
-        approx_MB_per_cut = if defined(approx_MB_per_cut_init) then approx_MB_per_cut_init else approx_MB_per_cut,
-        approx_MB_per_cut_wiggle_window = if defined(approx_MB_per_cut_wiggle_window_init) then approx_MB_per_cut_wiggle_window_init else approx_MB_per_cut_wiggle_window,
+        # The run's ONE geometry, selected above. The initial pass discovers inside
+        # these chunks, which is what makes the same cuts safe for the cluster phases
+        # that quantify what it found.
+        internal_chunk_plan = init_chunk_plan,
+        approx_MB_per_cut = approx_MB_per_cut_run,
+        approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_run,
         cpu = select_first([cpuInit, cpu]),
         cpuScattered = cpuScattered,
         memoryGB = if defined(memoryGBInit) then memoryGBInit else memoryGB,
@@ -353,8 +444,14 @@ workflow LRAA_singlecell_wf {
         read_umi_tag = read_umi_tag,
         scattering = scattering_per_cluster,
         scattering_final_quant = scattering_final_quant,
-        approx_MB_per_cut = approx_MB_per_cut,
-        approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+        # The run's ONE geometry, emitted above before the initial pass. Passed
+        # whenever it exists; that workflow gates it per phase, since a phase running
+        # scattering=off takes no plan.
+        internal_chunk_plan = run_chunk_plan,
+        cpu_chunk_plan = cpu_chunk_plan,
+        memoryGB_chunk_plan = memoryGB_chunk_plan,
+        approx_MB_per_cut = approx_MB_per_cut_run,
+        approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_run,
         cpu = cpu,
         cpuScattered = cpuScattered,
         memoryGB = memoryGB,
@@ -404,6 +501,10 @@ workflow LRAA_singlecell_wf {
     File? init_quant_expr = init_quant_expr_file
     File? init_quant_tracking = init_quant_tracking_generated
     File? init_gtf = init_gtf_generated
+    # The ONE cut geometry every phase of a cluster-guided run applied. Absent in basic
+    # mode, which has a single LRAA run and so nothing to be consistent with, and when
+    # every cluster-guided phase is scattering=off.
+    File? shared_chunk_plan = run_chunk_plan
 
     # Initial single-cell matrices and clustering inputs/outputs
     File? init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz

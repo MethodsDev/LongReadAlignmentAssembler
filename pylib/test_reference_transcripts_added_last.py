@@ -50,17 +50,66 @@ def test_a_positional_quant_mode_still_reaches_quant_mode():
     assert bound.arguments["reference_transcripts"] is None
 
 
-def test_reference_transcripts_is_the_last_parameter_everywhere_it_was_added():
-    assert (
-        _last_parameter(Splice_graph.Splice_graph.build_splice_graph_for_contig)
-        == "reference_transcripts"
-    )
-    assert (
-        _last_parameter(lraa._compute_splice_graph_cache_entry)
-        == "reference_transcripts"
-    )
-    assert _last_parameter(lraa.run_quant_only) == "reference_transcripts"
+# The ORDERED tail of each public signature, ending at the last parameter.
+# Pinned as a sequence, not a set: order is the thing a positional caller depends
+# on, and only an ordered assertion catches BOTH failure directions --
+# a parameter INSERTED before reference_transcripts (which shifts every
+# positional argument onto the wrong name) and one APPENDED after it without a
+# deliberate edit here.
+_EXPECTED_TAIL = {
+    "build_splice_graph_for_contig": (
+        "restrict_splice_type",
+        "SE_read_encapsulation_mask",
+        "reference_transcripts",
+    ),
+    "_compute_splice_graph_cache_entry": (
+        "transcripts",
+        "quant_mode",
+        "reference_transcripts",
+    ),
+    # bam_file_for_priors is the pass-1 theta bam: in cluster-guided single-cell
+    # the splice graph comes from the shared sg bam while priors must come from
+    # this cluster's own reads. Appended, never inserted.
+    "run_quant_only": (
+        "rescue_summary_path",
+        "reference_transcripts",
+        "bam_file_for_priors",
+    ),
+}
 
+
+def test_the_parameter_tail_is_exactly_as_declared():
+    """Pins the ordered tail of every signature reference_transcripts was added to.
+
+    Two earlier forms of this test were weaker and both are worth recording,
+    because each looked adequate:
+
+    "is the last parameter" -- right property, but it forbids ever adding an
+    argument, so the only way to add one and stay green is to insert BEFORE
+    reference_transcripts, which is the exact mistake being guarded.
+
+    "everything after it has a default" -- VACUOUS. Python forbids a required
+    parameter after a defaulted one, so it can never fail; three negative
+    controls, including the real hazard, all passed against it.
+
+    An ordered tail fails on both an insertion and an undeclared append, and
+    names what it expected.
+    """
+
+    for func in (
+        Splice_graph.Splice_graph.build_splice_graph_for_contig,
+        lraa._compute_splice_graph_cache_entry,
+        lraa.run_quant_only,
+    ):
+        key = func.__name__
+        expected = _EXPECTED_TAIL[key]
+        names = list(inspect.signature(func).parameters)
+        assert tuple(names[-len(expected) :]) == expected, (
+            "{}: parameter tail is {} but {} was declared. Appending is safe -- "
+            "update _EXPECTED_TAIL. Inserting before reference_transcripts is "
+            "not, and shifts positional callers onto the reference "
+            "set.".format(key, tuple(names[-len(expected) :]), expected)
+        )
 
 def test_reference_transcripts_defaults_to_no_reference():
     """Ref-free is the default at every entry point, so a caller cannot acquire a

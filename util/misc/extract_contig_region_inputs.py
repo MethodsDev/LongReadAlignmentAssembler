@@ -1042,8 +1042,10 @@ def _require_source_index(bam_filename):
     )
 
 
-def _extract_sg_slice(
-    sg_bam,
+def _extract_aux_slice(
+    aux_bam,
+    role,
+    flag,
     region,
     output_prefix,
     offset,
@@ -1052,29 +1054,39 @@ def _extract_sg_slice(
     max_intron_length,
     write,
 ):
-    """Cut the splice-graph evidence bam to the SAME chunk the main bam is cut to.
+    """Cut an AUXILIARY bam to the SAME chunk the main bam is cut to.
+
+    Two callers, two roles, ONE function -- ``role`` is ``"sg"`` for the shared
+    splice-graph evidence (``{output_prefix}.sg.bam``, ``sg_`` counts) and
+    ``"priors"`` for the caller's own normalized reads that pass 1 estimates theta
+    from (``{output_prefix}.priors.bam``, ``priors_`` counts). A second copy of
+    this loop per role is exactly how the two slices would come to disagree with
+    each other and with the main one; ``flag`` is only the CLI spelling to name in
+    a refusal.
 
     Every coordinate decision is the caller's and is passed in: ``region``,
     ``offset``, ``mini_contig_name`` and ``mini_length`` are the ones the main
     pass already computed, and the records go through the same ``_mini_header``
     and ``_rebase_alignment``. There is deliberately no second geometry path
-    here. A chunk whose sg slice sat on a differently-named or differently-offset
-    mini contig would not fail: it would build a splice graph out of coordinates
-    its reads are not at, and every unit of the chunk would be quantified
-    against it.
+    here. A chunk whose auxiliary slice sat on a differently-named or
+    differently-offset mini contig would not fail: the splice graph would be built
+    out of coordinates its reads are not at, or theta estimated over a region the
+    chunk does not hold, and every unit of the chunk would be quantified against
+    it.
 
     The record predicates are the main loop's, for the same reason -- retention
     asked ORIENTATION-BLIND and the orientation tested separately, an alignment
-    escaping either boundary DROPPED rather than truncated -- so the two slices
+    escaping either boundary DROPPED rather than truncated -- so the slices
     cannot disagree about which records the chunk contains.
 
     TAGS ARE THE POINT, not an implementation detail. LRAA divides each read's
-    acceptance probability back out through XW and REFUSES a --bam_for_sg whose
-    first aligned record has no XW (LRAA:165-192), so an sg slice that lost its
-    tags stops the run. ``_rebase_alignment`` rewrites three fields of the full
-    record string and hands it to ``AlignedSegment.fromstring``, which carries
-    every remaining column and every tag across; pinned by
-    pylib/test_chunk_sg_bam.py rather than argued for here.
+    acceptance probability back out through XW and REFUSES a --bam_for_sg or a
+    --bam_for_priors whose first aligned record has no XW (LRAA:165-192), so a
+    slice that lost its tags stops the run. ``_rebase_alignment`` rewrites three
+    fields of the full record string and hands it to
+    ``AlignedSegment.fromstring``, which carries every remaining column and every
+    tag across; pinned by pylib/test_chunk_sg_bam.py and
+    pylib/test_chunk_priors_bam.py rather than argued for here.
 
     ``write`` False is the ``--reuse_source_bam`` path: the region is still read
     and still counted, so the manifest reports this tool's own measurement either
@@ -1083,27 +1095,26 @@ def _extract_sg_slice(
     """
 
     for suffix in (".bai", ".csi"):
-        if os.path.exists(sg_bam + suffix):
+        if os.path.exists(aux_bam + suffix):
             break
     else:
         raise ExtractionError(
-            "--sg_bam {0} has no .bai or .csi beside it, and the chunk's sg slice "
+            "{1} {0} has no .bai or .csi beside it, and the chunk's {2} slice "
             "is fetched by region like the main one. Index it "
-            "(samtools index {0}).".format(sg_bam)
+            "(samtools index {0}).".format(aux_bam, flag, role)
         )
 
     counts = collections.Counter()
     dropped = []
-    sg_filename = "{}.sg.bam".format(output_prefix) if write else None
-    with pysam.AlignmentFile(sg_bam, "rb") as reader:
+    aux_filename = "{}.{}.bam".format(output_prefix, role) if write else None
+    with pysam.AlignmentFile(aux_bam, "rb") as reader:
         if region.chrom not in reader.references:
             raise ExtractionError(
-                "--sg_bam {} does not name {} in its header, so this chunk would "
-                "get an EMPTY splice graph while its main bam carries reads -- "
-                "quantification against nothing, reported as zeros. The sg bam "
-                "must be aligned against the same reference as --bam.".format(
-                    sg_bam, region.chrom
-                )
+                "{} {} does not name {} in its header, so this chunk would get an "
+                "EMPTY {} slice while its main bam carries reads -- an empty "
+                "splice graph or a theta estimated from nothing, reported as "
+                "zeros. It must be aligned against the same reference as "
+                "--bam.".format(flag, aux_bam, region.chrom, role)
             )
         mini_header = (
             _mini_header(reader.header, mini_contig_name, mini_length)
@@ -1113,30 +1124,30 @@ def _extract_sg_slice(
         with (
             contextlib.nullcontext(None)
             if not write
-            else pysam.AlignmentFile(sg_filename, "wb", header=mini_header)
+            else pysam.AlignmentFile(aux_filename, "wb", header=mini_header)
         ) as writer:
             for aln in reader.fetch(region.chrom, region.lend - 1, region.rend):
                 if aln.is_unmapped:
                     continue
                 if _is_nonprimary(aln) and _strand_matches(aln, region.strand):
-                    counts["sg_nonprimary_seen"] += 1
+                    counts[role + "_nonprimary_seen"] += 1
                 if not retained_for_extraction(aln, "", max_intron_length):
                     continue
                 if not _strand_matches(aln, region.strand):
-                    counts["sg_opposite_orientation_seen"] += 1
+                    counts[role + "_opposite_orientation_seen"] += 1
                     continue
                 if (
                     aln.reference_start + 1 < region.lend
                     or aln.reference_end > region.rend
                 ):
-                    counts["sg_alignments_dropped_overhang"] += 1
+                    counts[role + "_alignments_dropped_overhang"] += 1
                     dropped.append(aln.query_name)
                     continue
-                counts["sg_alignments_emitted"] += 1
+                counts[role + "_alignments_emitted"] += 1
                 if aln.is_forward:
-                    counts["sg_alignments_emitted_forward"] += 1
+                    counts[role + "_alignments_emitted_forward"] += 1
                 else:
-                    counts["sg_alignments_emitted_reverse"] += 1
+                    counts[role + "_alignments_emitted_reverse"] += 1
                 if writer is not None:
                     writer.write(
                         _rebase_alignment(
@@ -1144,13 +1155,13 @@ def _extract_sg_slice(
                         )
                     )
 
-    if sg_filename is not None:
+    if aux_filename is not None:
         # Indexed here rather than left to the consumer, for the same reason the
         # main chunk bam is: a resumed run finds the chunk directory complete or
-        # it does not, and an sg bam whose index is missing surfaces inside stage
+        # it does not, and a slice whose index is missing surfaces inside stage
         # 3b as pysam's contextless "fetch called on bamfile without index".
-        pysam.index(sg_filename)
-    return sg_filename, counts, sorted(set(dropped))
+        pysam.index(aux_filename)
+    return aux_filename, counts, sorted(set(dropped))
 
 
 def extract_partition(
@@ -1167,6 +1178,7 @@ def extract_partition(
     max_intron_length=None,
     reuse_source_bam=False,
     sg_bam=None,
+    priors_bam=None,
 ):
     """Extract one chunk. Returns the manifest, also written as JSON.
 
@@ -1234,18 +1246,28 @@ def extract_partition(
     merged ``quant.expr`` and ``quant.tracking`` come out identical across the two
     paths, which is the check that establishes it rather than the argument.
 
-    ``sg_bam`` is OPTIONAL splice-graph evidence, pre-normalized by the caller,
-    sliced to THIS chunk beside the main bam and written to
-    ``{output_prefix}.sg.bam``. It exists for the single-cell shape where every
-    cell cluster must be quantified against ONE shared splice graph
-    (WDL/LRAA_quant_by_cluster.wdl): the merged normalized bam is the evidence,
-    each cluster's own raw bam is the reads. Chunking used to manufacture its own
-    sg bam per unit, which silently destroyed that guarantee. The slice is cut
-    with the SAME geometry and the SAME predicates as the main bam -- see
-    ``_extract_sg_slice``, which is HANDED the geometry rather than recomputing
-    it -- and counted under its own ``sg_`` keys so the two accountings can never
-    be conflated. ``files.sg_bam`` is None when no sg bam was given, and every
-    ``sg_`` count is absent then: a measurement never taken is not a zero.
+    ``sg_bam`` and ``priors_bam`` are the TWO OPTIONAL auxiliary inputs, sliced
+    to THIS chunk beside the main bam and written to ``{output_prefix}.sg.bam``
+    and ``{output_prefix}.priors.bam``. Both exist for the cluster-guided
+    single-cell shape (WDL/LRAA_quant_by_cluster.wdl), where the three bams have
+    three distinct roles that used to be one file:
+
+      ``bam``         this cluster's own reads, the population being assigned.
+      ``sg_bam``      the merged normalized bam, ONE splice graph shared by every
+                      cluster. Chunking used to manufacture its own sg bam per
+                      unit, which silently destroyed that guarantee.
+      ``priors_bam``  this cluster's OWN normalized reads, which pass 1 estimates
+                      theta from. Taken over the SHARED sg slice instead, theta
+                      is a pooled prior and every cluster's ambiguous-read
+                      apportionment depends on every other cluster's expression.
+
+    Both slices are cut with the SAME geometry and the SAME predicates as the
+    main bam -- see ``_extract_aux_slice``, which serves both roles and is HANDED
+    the geometry rather than recomputing it -- and each is counted under its own
+    ``sg_`` / ``priors_`` keys so the accountings can never be conflated.
+    ``files.sg_bam`` and ``files.priors_bam`` are None when that bam was not
+    given, and its counts are absent then: a measurement never taken is not a
+    zero.
     """
 
     if secondary_alignments not in ("exclude", "reject"):
@@ -1293,6 +1315,31 @@ def extract_partition(
                 "file for both is a composition with no meaning, and LRAA itself "
                 "refuses it downstream (LRAA:1945-1957) once the chunk has "
                 "already been extracted twice.".format(os.path.realpath(bam))
+            )
+    if priors_bam:
+        if not os.path.exists(priors_bam):
+            raise ExtractionError(
+                "--priors_bam {} does not exist".format(priors_bam)
+            )
+        if os.path.realpath(priors_bam) == os.path.realpath(bam):
+            raise ExtractionError(
+                "--priors_bam and --bam both resolve to {}. The priors slice is "
+                "the NORMALIZED reads pass 1 estimates theta from, and --bam is "
+                "the full population pass 2 assigns; one file for both is the "
+                "no-priors configuration spelled with an extra extraction, and "
+                "LRAA refuses it downstream anyway because --bam must carry no "
+                "XW while --bam_for_priors must.".format(os.path.realpath(bam))
+            )
+        if sg_bam and os.path.realpath(priors_bam) == os.path.realpath(sg_bam):
+            raise ExtractionError(
+                "--priors_bam and --sg_bam both resolve to {}. That is the POOLED "
+                "configuration the priors slice exists to eliminate: the sg bam "
+                "is ONE splice graph shared by every cell cluster, so a theta "
+                "estimated over it apportions this cluster's ambiguous reads by "
+                "every other cluster's expression -- and it looks like it worked, "
+                "because each cluster still reports its own totals. Pass this "
+                "caller's own normalized reads, or pass no --priors_bam at "
+                "all.".format(os.path.realpath(sg_bam))
             )
 
     with pysam.FastaFile(genome_fa) as fasta:
@@ -1494,8 +1541,26 @@ def extract_partition(
     sg_counts = collections.Counter()
     sg_dropped_names = []
     if sg_bam:
-        sg_filename, sg_counts, sg_dropped_names = _extract_sg_slice(
+        sg_filename, sg_counts, sg_dropped_names = _extract_aux_slice(
             sg_bam,
+            "sg",
+            "--sg_bam",
+            region,
+            output_prefix,
+            offset,
+            mini_contig_name,
+            mini_length,
+            max_intron_length,
+            write=not reuse_source_bam,
+        )
+    priors_filename = None
+    priors_counts = collections.Counter()
+    priors_dropped_names = []
+    if priors_bam:
+        priors_filename, priors_counts, priors_dropped_names = _extract_aux_slice(
+            priors_bam,
+            "priors",
+            "--priors_bam",
             region,
             output_prefix,
             offset,
@@ -1510,6 +1575,11 @@ def extract_partition(
     sg_bam_filename = None
     if sg_bam:
         sg_bam_filename = os.path.abspath(sg_bam) if reuse_source_bam else sg_filename
+    priors_bam_filename = None
+    if priors_bam:
+        priors_bam_filename = (
+            os.path.abspath(priors_bam) if reuse_source_bam else priors_filename
+        )
 
     if counts["opposite_orientation_seen"]:
         print(
@@ -1600,25 +1670,29 @@ def extract_partition(
     # refused deliberately elsewhere in this file. The record set is right. Only
     # the decision to skip materialising it was wrong.
     #
-    # The sg pass drops for overhang on exactly the same rule, so the reuse
-    # premise fails for it identically -- and it fails LOUDER, because
-    # ChunkedRun.verify_chunk_split checks the sg strand split against these sg
-    # counts. A reused sg source holding records this chunk dropped would feed
-    # the splice graph reads the chunk says it does not contain.
+    # Both auxiliary passes drop for overhang on exactly the same rule, so the
+    # reuse premise fails for them identically -- and it fails LOUDER, because
+    # ChunkedRun.verify_chunk_split checks each strand split against these same
+    # counts. A reused sg source holding records this chunk dropped would feed the
+    # splice graph reads the chunk says it does not contain; a reused priors
+    # source would estimate theta from them.
     sg_dropped = sg_counts["sg_alignments_dropped_overhang"]
-    if reuse_source_bam and (dropped or sg_dropped):
+    priors_dropped = priors_counts["priors_alignments_dropped_overhang"]
+    if reuse_source_bam and (dropped or sg_dropped or priors_dropped):
         print(
             "NOTE: not reusing the source bam for {}:{}-{} after all: {} read "
-            "alignment(s) and {} sg-evidence alignment(s) end past the contig's "
-            "{} bp, so the source holds records this chunk drops and every stage "
-            "reading it would see them. Writing the mini bam instead, which "
-            "costs this chunk the extraction that reuse exists to skip and "
-            "changes nothing about its contents.".format(
+            "alignment(s), {} sg-evidence alignment(s) and {} priors "
+            "alignment(s) end past the contig's {} bp, so the source holds "
+            "records this chunk drops and every stage reading it would see them. "
+            "Writing the mini bam instead, which costs this chunk the extraction "
+            "that reuse exists to skip and changes nothing about its "
+            "contents.".format(
                 region.chrom,
                 region.lend,
                 region.rend,
                 len(dropped),
                 sg_dropped,
+                priors_dropped,
                 contig_length,
             ),
             file=sys.stderr,
@@ -1672,6 +1746,7 @@ def extract_partition(
             max_intron_length=max_intron_length,
             reuse_source_bam=False,
             sg_bam=sg_bam,
+            priors_bam=priors_bam,
         )
 
     if dropped:
@@ -1800,6 +1875,10 @@ def extract_partition(
         # only in that a run with no --sg_bam has no sg slice at all, and a
         # consumer must not read this flag as covering both files.
         "sg_bam_reused_from_source": bool(sg_bam and reuse_source_bam),
+        # And again for the priors slice, stated separately for the same reason:
+        # a run can carry either auxiliary bam, both, or neither, and a consumer
+        # must not read one flag as covering another file.
+        "priors_bam_reused_from_source": bool(priors_bam and reuse_source_bam),
         # True only when the chunk covers the whole contig, which is what makes
         # the reuse legal in the first place, and stated separately so the
         # condition can be checked rather than inferred from the flag.
@@ -1833,6 +1912,8 @@ def extract_partition(
             # shape and a consumer asking whether this chunk carries splice-graph
             # evidence gets a falsy answer rather than a KeyError.
             "sg_bam": sg_bam_filename,
+            # Same contract: None, not absent, when no --priors_bam was given.
+            "priors_bam": priors_bam_filename,
         },
     }
     if sg_bam:
@@ -1864,6 +1945,37 @@ def extract_partition(
         # input. ChunkedRun checks these against the cut selector's own named
         # set, which for a shared sg bam is exact by construction.
         manifest["sg_dropped_read_names"] = sg_dropped_names
+    if priors_bam:
+        # Same rule as the sg block above, under its own prefix: a run that took
+        # no priors measurement reports no priors counts, because a zero here
+        # would read as "theta was estimated from nothing".
+        manifest["counts"].update(
+            {
+                "priors_alignments_emitted": priors_counts[
+                    "priors_alignments_emitted"
+                ],
+                "priors_alignments_emitted_forward": priors_counts[
+                    "priors_alignments_emitted_forward"
+                ],
+                "priors_alignments_emitted_reverse": priors_counts[
+                    "priors_alignments_emitted_reverse"
+                ],
+                "priors_alignments_dropped_overhang": priors_counts[
+                    "priors_alignments_dropped_overhang"
+                ],
+                "priors_opposite_orientation_excluded": priors_counts[
+                    "priors_opposite_orientation_seen"
+                ],
+                "priors_nonprimary_excluded": priors_counts[
+                    "priors_nonprimary_seen"
+                ],
+            }
+        )
+        # Kept apart from both other name sets for the reason the sg one is: these
+        # are normalized records this chunk refused, not reads being counted, and
+        # unioning them into dropped_read_names would prune the baseline arm by
+        # names that were never in its input.
+        manifest["priors_dropped_read_names"] = priors_dropped_names
 
     manifest_filename = "{}.partition.json".format(output_prefix)
     with open(manifest_filename, "wt") as ofh:
@@ -1992,6 +2104,21 @@ def main(argv=None):
         "Refused when it resolves to --bam.",
     )
 
+    parser.add_argument(
+        "--priors_bam",
+        type=str,
+        default=None,
+        help="OPTIONAL pre-normalized bam whose reads the consumer estimates its "
+        "first-pass theta from, sliced to this chunk beside --bam and written to "
+        "${output_prefix}.priors.bam with the SAME geometry and the SAME record "
+        "predicates as --bam and --sg_bam. For the cluster-guided single-cell "
+        "shape: --sg_bam is ONE splice graph shared by every cluster, and this is "
+        "THIS cluster's own normalized reads, so the priors stay cluster-local "
+        "while the graph stays shared. Counted under its own priors_ keys and "
+        "never conflated with the others. Refused when it resolves to --bam or to "
+        "--sg_bam.",
+    )
+
     args = parser.parse_args(argv)
     region = parse_region(args.region)
     output_prefix = args.output_prefix
@@ -2012,6 +2139,7 @@ def main(argv=None):
         max_intron_length=args.max_intron_length,
         reuse_source_bam=args.reuse_source_bam,
         sg_bam=args.sg_bam,
+        priors_bam=args.priors_bam,
     )
 
     print(

@@ -28,6 +28,18 @@ workflow LRAA_chunk_scatter {
         # ride to the leaves inside the per-chunk tars below.
         File? bam_for_sg
         File? bam_for_sg_index
+        # Caller-supplied PASS-1 THETA evidence: a THIRD bam beside inputBAM and
+        # bam_for_sg, already depth-normalized by the caller, holding THIS caller's
+        # own reads rather than the shared graph's. make_chunks partitions it per
+        # chunk on exactly the geometry it partitions the other two on -- same region
+        # bounds, same mini contig, same offset, same overhang rule -- because a
+        # leaf's pass 1 runs on the MINI CONTIG: sliced at any other geometry, pass 1
+        # and pass 2 would disagree about coordinates. The slices land in the chunk
+        # directories and ride to the leaves inside the per-chunk tars below;
+        # process_chunk passes no flag for it, since the leaf re-derives it from its
+        # own chunk.partition.json exactly as it does the sg slice.
+        File? bam_for_priors
+        File? bam_for_priors_index
         # ONE cut plan shared by SIBLING runs. Geometry only: which contig is cut
         # where. When supplied, make_chunks SKIPS cut selection and extracts on
         # this geometry, so every run handed the same plan produces identical
@@ -189,6 +201,8 @@ workflow LRAA_chunk_scatter {
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             bam_for_sg = bam_for_sg,
             bam_for_sg_index = bam_for_sg_index,
+            bam_for_priors = bam_for_priors,
+            bam_for_priors_index = bam_for_priors_index,
             chunk_plan = chunk_plan,
             cell_list = cell_list,
             cell_barcode_tag = cell_barcode_tag,
@@ -267,6 +281,8 @@ task make_chunks {
         File? inputBAMindex
         File? bam_for_sg
         File? bam_for_sg_index
+        File? bam_for_priors
+        File? bam_for_priors_index
         File? chunk_plan
         File? annot_gtf
         Boolean discovery
@@ -288,9 +304,10 @@ task make_chunks {
     }
 
     # 3x because the chunk directories hold a partition of the BAM plus its
-    # indices alongside the localized input. The splice-graph bam is partitioned
-    # the same way, so it counts on both sides of the multiplier.
-    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0) + (if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0)
+    # indices alongside the localized input. The splice-graph and pass-1 priors
+    # bams are partitioned the same way, so each counts on both sides of the
+    # multiplier.
+    Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0) + (if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0) + (if defined(bam_for_priors) then size(bam_for_priors, "GB") else 0.0)
     Float diskRawGB = 3.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 200.0 then ceil(diskRawGB) else 200
     String numTotalReadsStr = if defined(num_total_reads) then "~{select_first([num_total_reads])}" else ""
@@ -313,6 +330,11 @@ task make_chunks {
     if [[ -e inputs/sg.bam && ! -e inputs/sg.bam.bai && ! -e inputs/sg.bam.csi ]]; then
         samtools index -@ ~{makeChunksCpu} inputs/sg.bam
     fi
+    ~{if defined(bam_for_priors) then "ln -s " + select_first([bam_for_priors]) + " inputs/priors.bam" else ""}
+    ~{if defined(bam_for_priors_index) then "ln -s " + select_first([bam_for_priors_index]) + " inputs/priors.bam.bai" else ""}
+    if [[ -e inputs/priors.bam && ! -e inputs/priors.bam.bai && ! -e inputs/priors.bam.csi ]]; then
+        samtools index -@ ~{makeChunksCpu} inputs/priors.bam
+    fi
     # Localized OUTSIDE work/: --stop_after_make_chunks writes this run's OWN
     # leaf plan at work/chunk_plan.json, which would clobber the shared plan
     # every sibling run reads.
@@ -333,6 +355,7 @@ task make_chunks {
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --bam inputs/input.bam \
         ~{if defined(bam_for_sg) then "--bam_for_sg inputs/sg.bam" else ""} \
+        ~{if defined(bam_for_priors) then "--bam_for_priors inputs/priors.bam" else ""} \
         ~{if defined(chunk_plan) then "--chunk_plan inputs/shared_cut_plan.json" else ""} \
         --genome_fa inputs/genome.fa \
         ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
@@ -381,6 +404,13 @@ for entry in plan["chunks"]:
     manifest = json.load(open(os.path.join(cdir, "chunk.partition.json")))
     if manifest["files"].get("sg_bam") and not manifest.get("sg_bam_reused_from_source"):
         members += ["chunk.sg.bam", "chunk.sg.bam.bai"]
+    # The third bam, gated the same way and for the same reasons: the chunk's own
+    # manifest is the only thing that knows whether a priors slice exists as a
+    # LOCAL file.
+    if manifest["files"].get("priors_bam") and not manifest.get(
+        "priors_bam_reused_from_source"
+    ):
+        members += ["chunk.priors.bam", "chunk.priors.bam.bai"]
     for m in members:
         p = os.path.join(cdir, m)
         if not os.path.exists(p):
