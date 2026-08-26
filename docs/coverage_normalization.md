@@ -117,7 +117,7 @@ while normalization is left at its default. Replacing the weight instead dropped
 factor outright: on the bundled corpus, chaining a loose pass into a tight one drove a record's
 weight from 10.0 down to 3.87 and collapsed the weighted total to 615 against 4,970 input records.
 
-**The two BAMs have roles, and each is checked against its own.** Weighting is not a mode with a
+**The three BAMs have roles, and each is checked against its own.** Weighting is not a mode with a
 setting; it is a property of the data, and what makes that safe is that each input's role fixes
 whether a weight can be there (`LRAA:145-222,2393-2428`):
 
@@ -125,12 +125,15 @@ whether a weight can be there (`LRAA:145-222,2393-2428`):
 |---|---|---|
 | `--bam` | the full library — reported counts are scaled by it | must **not** carry `XW` |
 | `--bam_for_sg` | the splice-graph evidence, taken as given | must carry `XW` |
+| `--bam_for_priors` | the pass-1 abundance evidence, taken as given | must carry `XW` |
 
 `--bam` is what `num_total_reads` counts and what the streaming pass sums assignments over, so a
 thinned BAM there would report per-retained-read quantities indistinguishable from full-library
 ones and emit a tracking file covering part of the library while looking complete. `--bam_for_sg`
-is the input that exists for thinned data, and an untagged one would be read as though its
-survivors were the whole library. Both are fatal, because neither is detectable downstream.
+and `--bam_for_priors` are the inputs that exist for thinned data, and an untagged one would be
+read as though its survivors were the whole library — for the priors BAM that means theta
+estimated with every read weighing 1, which is a silently different prior rather than an error
+(`LRAA:2387-2395`). All three are fatal, because none is detectable downstream.
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a

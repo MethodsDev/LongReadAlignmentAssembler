@@ -148,8 +148,18 @@ per chunk and then running with `--bam_for_sg <normalized> --no_norm`
 2 streams, which is the cost the mode exists to avoid.
 
 Under stock defaults the invariant holds by normalization: `normalize_max_cov_level` is 1000
-(`pylib/LRAA_Globals.py:278`) and `--no_norm` is off, so pass 1 reads the normalized BAM
-(`bam_file_for_pass1 = bam_file_for_sg`, `LRAA:5702-5703`).
+(`pylib/LRAA_Globals.py:278`) and `--no_norm` is off, so pass 1 reads the normalized BAM.
+
+**Since `--bam_for_priors`, the splice graph and pass 1 are separate inputs.** Pass 1 previously
+read whichever BAM supplied the graph, which is correct when they are the same library but not
+when the graph is deliberately shared across callers — in the cluster-guided single-cell path
+`--bam_for_sg` is one pooled BAM common to every cell cluster, so pass 1 estimated each cluster's
+abundances from the pooled population. `--bam_for_priors` names the file pass 1 reads, leaving
+`--bam_for_sg` to the graph alone. Precedence is resolved in one place,
+`_first_pass_assignment_bam` (`LRAA`): the priors BAM if supplied, else the prior behaviour
+unchanged — the coverage-normalized BAM under streaming, otherwise the BAM being quantified. A
+caller supplying no priors BAM is therefore unaffected. Note that `reads_total` in the
+read-assignment summary is a count over the pass-1 BAM, so it follows this resolution.
 
 **Transcriptome rescue.** The streaming loop maps every record genomically only. Left to itself it
 would rescue nothing, while pass 1 rescues only the reads it saw, so a rescue-enabled run would
