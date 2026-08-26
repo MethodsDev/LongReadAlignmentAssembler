@@ -2,16 +2,34 @@
 
 Written for an agent picking this up on a larger machine.
 
-Provenance, stated exactly, because the two differ:
+Provenance. Only ONE commit is named below, deliberately:
 
-    devel HEAD    1ce5303f   <- the tree this document lives in
-    LRAA code     51d37647   <- what the images contain; HEAD is docs-only on top
+    LRAA code     51d37647
     images        us-central1-docker.pkg.dev/methods-dev-lab/lraa/{lraa-core,lraa-sc,lraa-orf}:0.28.0-51d3764
 
-So `git checkout 51d37647` reproduces the code the images run but NOT this file.
-Work from `1ce5303f`; the only difference is documentation. Confirm with
-`docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
-on any of the three images -- it should print `51d37647`.
+`51d37647` is the last commit that changed LRAA code or WDL, and it is what the
+three images contain. Verify rather than trust:
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:0.28.0-51d3764
+# -> 51d37647...
+```
+
+This FILE sits on `devel` somewhere at or after that commit -- documentation-only
+changes have landed on top, and more may. Its own commit is deliberately not named
+here, because a commit cannot state its own hash: every attempt to pin it is stale
+the instant it is written, which happened twice before this phrasing. Get it from
+the repo instead:
+
+```bash
+git log -1 --format=%h -- docs/benchmarking_handoff_single_cell_by_chunk.md
+git log --oneline 51d37647..HEAD --stat | grep -v '^ ' | head   # confirm docs-only
+```
+
+So: work from `devel` tip for the documentation, and expect the images to run
+`51d37647`. If that second command ever shows a non-docs file, the images are
+behind the tree and this document's measurements may not describe what you run.
 
 ## What you are benchmarking, and why it is new
 
@@ -253,8 +271,7 @@ wrong hypotheses.
 
 ## Reproducing the state you are starting from
 
-    devel HEAD                       1ce5303f  (docs); LRAA code 51d37647
-    images                           lraa-core/sc/orf at 0.28.0-51d3764, pushed
+    LRAA code / images               51d37647  (see Provenance at the top)
     pytest pylib                     1245 passed at 51d37647
     miniwdl + womtool                clean on all seven workflows at 51d37647
     make test_wdls                   passed at 254b3d91; later commits are WDL/docs only
