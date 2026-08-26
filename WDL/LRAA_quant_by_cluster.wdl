@@ -215,6 +215,8 @@ workflow LRAA_quant_by_cluster {
                 # positions, and those were discovered under separate per-phase
                 # geometries, which is the harsher test.
                 annot_gtf = annot_gtf,
+                # Restrict selection to what this run processes; see the task input.
+                main_chromosomes = main_chromosomes,
                 HiFi = HiFi,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
@@ -528,8 +530,16 @@ task emit_shared_chunk_plan {
         # grid-aligned position in the window is admissible on that axis. See the call
         # site for which annotation belongs here.
         File? annot_gtf
-        # No main_chromosomes: the plan is emitted unrestricted on purpose. See the
-        # command block for why that is the safe superset for every consumer.
+        # Restricts cut selection to the contigs the run will actually process.
+        # Empty means every reference the fasta and the bam header agree on.
+        #
+        # This was omitted at first, on the reasoning that a plan covering extra
+        # contigs is harmless because validation is per-PROCESSED-contig -- true
+        # for correctness, wrong for cost. MEASURED on a PBMC run restricted to
+        # chr21/chr22/chrM: the unrestricted plan selected 475 chunks across every
+        # contig in GRCh38 including the _random scaffolds, for a run that
+        # processed 11.
+        String main_chromosomes = ""
         Boolean HiFi
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
@@ -594,12 +604,21 @@ task emit_shared_chunk_plan {
     # No --num_total_reads: selection has no use for the TPM denominator, and it is
     # per-cluster regardless.
     #
-    # NO contig restriction, deliberately. The driver takes a single --contig, not
-    # a list, and a plan is validated per contig the CONSUMING run processes --
-    # extra contigs in the plan are ignored, a missing one is refused. So the
-    # unrestricted plan is the safe superset for every consumer, whether it holds
-    # one chromosome (by_chromosome) or main_chromosomes (by_chunk). The cost is
-    # selection over scaffolds nothing quantifies, once per run.
+    # CONTIG-RESTRICTED via --restrict_to_chromosomes when main_chromosomes is set.
+    #
+    # This block previously said "NO contig restriction, deliberately", on the
+    # grounds that the driver takes a single --contig rather than a list and that
+    # a plan covering extra contigs is harmless because validation is per
+    # PROCESSED contig. The harmlessness is real -- a consumer ignores contigs it
+    # does not touch -- but the conclusion was wrong: it paid whole-genome cut
+    # selection for a run that needed three contigs. MEASURED on PBMC restricted
+    # to chr21/chr22/chrM, the unrestricted plan held 475 chunks over every
+    # contig in GRCh38 including _random scaffolds, against 11 processed.
+    #
+    # The driver DOES accept a list: --restrict_to_chromosomes (space or comma
+    # separated) has always existed and is now forwarded to ChunkedRun's own
+    # --contigs. So restriction and driver-resolved settings are no longer a
+    # choice -- which they were, and why this ran unrestricted.
     /usr/local/src/LRAA/LRAA \
         --bam inputs/input.bam \
         --genome inputs/genome.fa \
@@ -610,6 +629,7 @@ task emit_shared_chunk_plan {
         --chunk_work_dir work \
         --cpu_budget ~{cpu} \
         --emit_cut_plan shared_cut_plan.json \
+        ~{if main_chromosomes != "" then "--restrict_to_chromosomes '" + main_chromosomes + "'" else ""} \
         ~{true="--HiFi" false="" HiFi} \
         --min_mapping_quality ~{min_mapping_quality} \
         --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \

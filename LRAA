@@ -3680,6 +3680,31 @@ def _run_chunked_mode(args):
         output_dir=work_dir,
         cpu_budget=args.cpu_budget,
         contig=args.contig,
+        # The EXISTING list flag, forwarded to the chunked pipeline's own --contigs
+        # rather than duplicated by a second driver flag. --restrict_to_chromosomes
+        # already accepts a space- or comma-separated list and resolves into
+        # genome_contigs_list (:2270, :3026-3034); ChunkedRun has accepted a list
+        # since --contigs was added there. The two were simply never connected, so
+        # a chunked run could be restricted only by calling the module directly --
+        # which forfeits the driver-resolved --HiFi preset and --config_update.
+        # --emit_cut_plan is exactly that caller: unconnected, it selected cuts
+        # over every contig in the fasta, 475 chunks, for a run processing 11.
+        # Normalized to ChunkedRun's comma form; None stays None so an
+        # unrestricted run is byte-identical to before.
+        #
+        # SUPPRESSED when --contig is set, mirroring this driver's own precedence:
+        # _resolve_contig_restriction takes --contig and replaces the list with it
+        # (:3022, genome_contigs_list = [restricted_contig]), so --contig already
+        # wins here. ChunkedRun instead REFUSES the pair outright
+        # (ChunkedRun.py:774, "--contig names one contig and --contigs names a
+        # set; pick one"). Forwarding both would therefore make a combination the
+        # driver accepts fail inside the module -- so the driver's answer is
+        # applied before the call rather than restated as a conflict.
+        contigs=(
+            None
+            if args.contig or not args.restrict_to_chromosomes
+            else ",".join(re.split(r"[\s,]+", args.restrict_to_chromosomes.strip()))
+        ),
         HiFi=args.HiFi,
         arm="chunked",
         num_total_reads=args.num_total_reads,

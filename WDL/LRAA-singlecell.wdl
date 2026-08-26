@@ -307,6 +307,8 @@ workflow LRAA_singlecell_wf {
         # cluster phases then quantify -- rather than the reference, so placement
         # protects those too.
         annot_gtf = if run_initial_phase then initial_annot_gtf else precomputed_init_gtf,
+        # Restrict selection to what this run processes; see the task input.
+        main_chromosomes = main_chromosomes,
         HiFi = HiFi,
         approx_MB_per_cut = approx_MB_per_cut_run,
         approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_run,

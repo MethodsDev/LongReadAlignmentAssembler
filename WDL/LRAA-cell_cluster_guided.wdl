@@ -148,6 +148,8 @@ workflow LRAA_cell_cluster_guided {
                 inputBAM = inputBAM,
                 referenceGenome = referenceGenome,
                 annot_gtf = annot_gtf,
+                # Restrict selection to what this run processes; see the task input.
+                main_chromosomes = main_chromosomes,
                 HiFi = HiFi,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
