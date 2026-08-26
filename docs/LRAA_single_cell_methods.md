@@ -195,5 +195,8 @@ quantification against a shared graph is the historical intent (tag `LRAA_v0.17.
 whose `--bam_for_sg` help text reads "use this BAM file for splice-graph evidence").
 That tag has no theta pass, so it cannot speak to theta's source.
 
-Chunked and unchunked agree exactly on this fixture once severed reads are matched
-across all three inputs -- see `docs/chunked_quant_parity_evaluation.md`.
+Chunked and unchunked agree exactly -- 0 of 654 transcripts differ -- on ONE cluster
+of a chr19 2 Mb fixture at 10 chunks, once the reads cut selection severs are matched
+across all three inputs. That is the whole tested scope; broader parity is UNMEASURED
+and it does not replace a whole-genome correctness check. Method and the ways this
+comparison goes wrong: `docs/chunked_quant_parity_evaluation.md`.
