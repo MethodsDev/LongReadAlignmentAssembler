@@ -303,3 +303,62 @@ re-check if a future run diverges.
   every chunk's mini bam". On the synthetic corpus that was 2,266 records against the chunked
   arm's 2,261. Symptom to watch for: baseline record count exceeding the chunk sum by exactly
   the number of distinct names in `cuts/*.dropped_reads.txt`.
+
+## The single-cell three-input shape (2026-08-26)
+
+Everything above concerns the bulk shape, where one BAM serves every role. The
+cluster-guided single-cell path splits that into THREE inputs, and the parity
+comparison has to match all three or it measures the wrong thing.
+
+    --bam              this cluster's full reads        pass-2 assignment
+    --bam_for_sg       shared merged normalized BAM     splice graph only
+    --bam_for_priors   this cluster's normalized reads  pass-1 theta
+
+### What chunking removes from each
+
+Cut selection severs reads that straddle a chunk boundary, and each input loses its
+own set. MEASURED on the by_chunk qonly fixture, cluster 00, chr19 2 Mb, plan of 10
+chunks emitted over the pre-partition superset -- comparing each per-chunk slice
+union against the whole input:
+
+    --bam              5 of 27,142
+    priors slice       5 of 13,320   (the same 5 ids)
+    sg slice         156 of 95,064
+
+### Result
+
+Chunked merged output against an unchunked run, three matchings of increasing
+strictness:
+
+    unchunked, only --bam pruned          0/654 rows differ    INVALID
+    unchunked, --bam + priors pruned      0/654 rows differ
+    unchunked, all three matched          0/654 rows differ    sum 24,083.3 both
+
+Exact on reads AND TPM, 654 transcripts, no set difference.
+
+SCOPE, and it is narrow: ONE cluster, ONE 2 Mb contig, 10 chunks, quant-only. This
+does NOT establish that by_chunk is generally quantification-neutral, and it does
+NOT substitute for a whole-genome correctness check. Broader parity is UNMEASURED.
+
+### The trap, because it cost four attempts
+
+Pruning only `--bam` reports exact parity while being invalid: the unchunked arm's
+graph still sees 156 records and its theta 5 records the chunked arm never had. It
+gave the right answer for the wrong reason. The code tracks
+`sg_dropped_read_names` separately from `dropped_read_names` for exactly this
+shared-cuts case -- see `verify_severed_accounting` in `pylib/ChunkedRun.py`. The
+reliable construction is to restrict `--bam_for_sg` and `--bam_for_priors` to the
+UNION of read names present across the per-chunk `chunk.sg.bam` / `chunk.priors.bam`
+slices, which is by definition what the chunked arm saw.
+
+`--arm both` cannot produce this comparison. Its baseline self-normalizes the whole
+contig, so with `--bam_for_sg`/`--bam_for_priors` supplied it would build the graph
+and estimate theta from evidence the chunked arm never saw; the pipeline refuses the
+combination rather than reporting an incomparable pair. The subtraction must be
+applied to the externally supplied files instead.
+
+Three other constructions that failed and what each looked like when wrong: every
+arm passing `--no_chunk` (varies priors, never compares modes); a control that drops
+the shared BAM AND switches `--no_norm` to self-normalization (two variables, so its
+larger delta establishes nothing); and a verdict discriminating on ROW COUNT when
+counts were within one and magnitudes differed 2x.

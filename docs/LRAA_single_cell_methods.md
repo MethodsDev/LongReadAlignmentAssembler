@@ -153,3 +153,47 @@ Jamboree, Marioni JC. (2019). EmptyDrops: distinguishing cells from empty drople
 droplet-based single-cell RNA sequencing data. *Genome Biology*, 20(1), 63.
 
 Pertea G, Pertea M. (2020). GFF Utilities: GffRead and GffCompare. *F1000Research*, 9, 304.
+
+## Pass-1 priors: where theta comes from (v0.28.0)
+
+Two-pass quantification estimates isoform abundances first, then uses them to
+apportion reads compatible with more than one isoform. In the cluster-guided path
+those two passes read DIFFERENT files, and a third file supplies the splice graph:
+
+    --bam_for_sg       shared merged normalized BAM   -> splice graph
+    --bam_for_priors   this cluster's normalized reads -> pass-1 theta
+    --bam              this cluster's full reads       -> pass-2 assignment
+
+The graph is shared so every cluster is scored against an identical isoform set;
+without that, clusters discover different isoforms and their output tables cannot be
+placed side by side. Normalization here means coverage thinning to
+`normalize_max_cov_level` with an `XW` tag recording how many reads each survivor
+stands for, so a thinned BAM is a weighted sample rather than a subset -- which is
+why pass 1 can use it (ratios survive thinning) while pass 2 uses the full BAM
+(counts do not).
+
+`--bam_for_priors` exists because pass 1 previously read whichever file supplied the
+graph. Under the cluster-guided shape that is the POOLED BAM, so each cluster's
+ambiguous reads were apportioned using population-average abundances. The visible
+symptom was every cluster reporting an identical `reads_total`, since that figure is
+a count over the pass-1 BAM.
+
+Precedence is in `_first_pass_assignment_bam` (`LRAA`): priors BAM if given, else
+today's behaviour unchanged -- under `--stream_reads` the coverage-normalized BAM,
+otherwise the BAM being quantified. A caller passing no priors BAM is unaffected, so
+bulk and pseudobulk are untouched.
+
+MEASURED: varying only the priors file, holding `--bam` and `--bam_for_sg` fixed on
+one cluster of a chr19 fixture, moves 152 of 654 transcripts in read assignment and
+215 in TPM while total reads barely change (24,084.3 -> 24,084.7) -- reads are
+redistributed among isoforms, which is what a different apportionment looks like.
+
+Whether cluster-local or pooled theta is more ACCURATE is not established; it would
+need ground truth, such as a simulation with known per-cluster isoform usage. What
+is established is that the choice changes results, and that cluster-specific
+quantification against a shared graph is the historical intent (tag `LRAA_v0.17.5`,
+whose `--bam_for_sg` help text reads "use this BAM file for splice-graph evidence").
+That tag has no theta pass, so it cannot speak to theta's source.
+
+Chunked and unchunked agree exactly on this fixture once severed reads are matched
+across all three inputs -- see `docs/chunked_quant_parity_evaluation.md`.
