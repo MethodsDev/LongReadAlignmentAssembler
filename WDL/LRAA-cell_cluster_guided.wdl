@@ -92,7 +92,8 @@ workflow LRAA_cell_cluster_guided {
     if (quant_only_cluster_guided) {
         call require_annot_gtf {
             input:
-                annot_gtf = select_first([annot_gtf])
+                annot_gtf = select_first([annot_gtf]),
+                docker = docker
         }
     }
 
@@ -589,6 +590,15 @@ task sc_build_sparse_matrices {
 task require_annot_gtf {
     input {
         File annot_gtf
+        # REQUIRED, and the omission of this input was a real Terra failure:
+        # GCP Batch rejects any task with no image ("No container image found in
+        # either 'container' or 'docker' runtime attributes"), while miniwdl
+        # substitutes a default image and runs the task happily. So this task
+        # passed every local test -- including three full by_chunk single-cell
+        # smoke runs -- and failed only on Terra, in quant_only mode, which is
+        # the one configuration that reaches it. Declared without a default so a
+        # future call site cannot omit it silently.
+        String docker
     }
 
     command <<<
@@ -601,6 +611,7 @@ task require_annot_gtf {
     }
 
     runtime {
+        docker: docker
         cpu: 1
         memory: "1 GiB"
         disks: "local-disk 10 HDD"
