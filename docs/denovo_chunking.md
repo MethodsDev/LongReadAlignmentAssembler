@@ -69,8 +69,13 @@ retained primary alignments:
 
 The hard rule gave up 5 of 16 cuts -- and 5 chunks of parallelism -- to avoid
 severing 44 alignments out of 2,266, or 1.94%. Reproduced by running the selector
-from `483aaa4` (the last commit carrying the hard rule) beside the current one on the
-identical bam.
+from the last commit carrying the hard rule beside the current one on the identical
+bam. That commit was cited here as `483aaa4`, which is no longer reachable in this
+repository -- rebased away -- so the comparison is not re-runnable from the SHA
+alone. What it did is stated exactly enough to reconstruct: the rejected contract
+refused any cut whose window contained no zero-severing position, rather than
+pricing severing and choosing the cheapest position, which is what
+`--require_zero_severed` named.
 
 ## The theory, and what it does and does not license
 
