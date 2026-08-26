@@ -80,7 +80,10 @@ pip install pysam networkx intervaltree tqdm mappy==2.28
 
 ## WDL workflow development guidelines
 When modifying or creating WDL files in `WDL/` or `WDL/subwdls/`:
-- **ALWAYS run `miniwdl check <file.wdl>`** after making changes to validate syntax and catch errors early.
+- **ALWAYS run BOTH validators**, on every file you touched and every file that imports it (imports are relative):
+  - `miniwdl check <file.wdl>` — what the local `testing/**` harness accepts.
+  - `java -jar ~/BIN/womtool-91.jar validate <file.wdl>` — what Terra/Cromwell accepts. Constructs miniwdl allows are not always engine-portable, and Terra is the only place that failure shows up.
+- **ALWAYS run `pytest pylib/test_wdl_runtime_completeness.py`** after touching a runtime block. Neither validator objects to a task with no `docker`/`container` (an absent runtime attribute is legal WDL), but GCP Batch refuses the job with "No container image found". `require_annot_gtf` shipped that way, passed `miniwdl check` plus a full `make test_wdls` plus three by_chunk single-cell smoke runs, and failed only on Terra. See `WDL/README.validation.md`.
 - **WDL does NOT support `None` as a value**. Do not use `None` in conditionals or assignments (e.g., `else None` is invalid).
 - **Optional outputs (`File?`) don't require existence checks**: If a file path is declared as optional (`File?`) in the output section, it's valid for the file not to exist. The WDL runtime handles this gracefully without needing conditional logic.
 - **Avoid glob() for simple optional outputs**: For straightforward optional file outputs, use `File?` directly rather than arrays with glob patterns.
