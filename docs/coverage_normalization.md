@@ -135,15 +135,14 @@ read as though its survivors were the whole library. All three are refused at st
 none of these is detectable downstream — that is what makes each a validation error rather than a
 result to be interpreted.
 
-The priors BAM makes the reason explicit. Were it not checked, an untagged one would leave theta
-estimated with every read weighing 1: not a crash and not a visible anomaly, but a different prior
-driving pass-2 apportionment, reported as though it were the intended one. That hazard is the
-justification for the check, not a behaviour of the current code — `--bam_for_priors` without `XW`
-exits with its own flag name and role named (`LRAA:2387-2395`).
+An unweighted priors BAM is the least visible of the three: theta would be estimated
+with every read weighing 1, giving a different prior for pass-2 apportionment with no
+crash and no anomaly in the output. Hence the startup refusal, which names the flag and
+its role (`LRAA:2387-2395`).
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
-BAM it never touched has it on none. An empty BAM passes either check — it yields an empty splice
+BAM it never touched has it on none. An empty BAM passes any of these checks — it yields an empty
 graph, and the chunked pipeline produces empty per-orientation BAMs routinely.
 
 **`--bam_for_sg` is never re-normalized.** Supplying it *is* the decision about what the splice

@@ -71,12 +71,10 @@ The hard rule gave up 5 of 16 cuts -- and 5 chunks of parallelism -- to avoid
 severing 44 alignments out of 2,266, or 1.94%. Reproduced by running the selector
 from the last commit carrying the hard rule beside the current one on the identical
 bam. That commit was cited here as `483aaa4`, which is not reachable in this
-repository clone, so the comparison is not re-runnable from the SHA alone. Why it is
-absent was not established -- it may exist in another clone, another remote, or a
-worktree. What it did is stated exactly enough to reconstruct: the rejected contract
-struck every severing position from the candidate set and DECLINED a target whose
-window held none, rather than pricing severing and choosing the cheapest position.
-That is what `--require_zero_severed` named, per this file's own account above.
+repository clone, so the comparison is not re-runnable from the SHA alone. What it
+did is stated exactly enough to reconstruct: the rejected contract struck every
+severing position from the candidate set and DECLINED a target whose window held
+none, rather than pricing severing and taking the cheapest position.
 
 ## The theory, and what it does and does not license
 

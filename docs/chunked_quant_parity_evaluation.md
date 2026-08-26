@@ -340,7 +340,7 @@ SCOPE, and it is narrow: ONE cluster, ONE 2 Mb contig, 10 chunks, quant-only. Th
 does NOT establish that by_chunk is generally quantification-neutral, and it does
 NOT substitute for a whole-genome correctness check. Broader parity is UNMEASURED.
 
-### The trap, because it cost four attempts
+### Why matching only `--bam` is invalid
 
 Pruning only `--bam` reports exact parity while being invalid: the unchunked arm's
 graph still sees 156 records and its theta 5 records the chunked arm never had. It
@@ -356,9 +356,3 @@ contig, so with `--bam_for_sg`/`--bam_for_priors` supplied it would build the gr
 and estimate theta from evidence the chunked arm never saw; the pipeline refuses the
 combination rather than reporting an incomparable pair. The subtraction must be
 applied to the externally supplied files instead.
-
-Three other constructions that failed and what each looked like when wrong: every
-arm passing `--no_chunk` (varies priors, never compares modes); a control that drops
-the shared BAM AND switches `--no_norm` to self-normalization (two variables, so its
-larger delta establishes nothing); and a verdict discriminating on ROW COUNT when
-counts were within one and magnitudes differed 2x.
