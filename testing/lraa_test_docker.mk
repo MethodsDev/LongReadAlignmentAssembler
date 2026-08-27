@@ -42,6 +42,19 @@ LRAA_WDL_DOCKER_SC = docker_sc=$(LRAA_TEST_DOCKER_SC)
 LRAA_WDL_DOCKER_CORE_SC = $(LRAA_WDL_DOCKER) $(LRAA_WDL_DOCKER_SC)
 LRAA_WDL_DOCKER_ORF = docker=$(LRAA_TEST_DOCKER_ORF)
 
+# Extra `name=value` workflow inputs appended to a wdl test invocation, for
+# A/B-ing one knob without editing a tracked inputs JSON.  miniwdl applies
+# command-line inputs after -i, so these WIN over the JSON.
+#
+#   make test_full_sc_pipe_cluster_guided_wdl_QOnly \
+#       LRAA_WDL_EXTRA="chunkMemoryGB=4 chunkMakeChunksMemoryGB=4"
+#
+# UNQUALIFIED names, exactly like the docker= override beside them: miniwdl's
+# command line takes the bare input name and REJECTS a workflow-qualified one
+# ("No such input to LRAA_singlecell_wf: LRAA_singlecell_wf.chunkCpu").  The
+# `Workflow.input` form is a JSON-file convention only.
+LRAA_WDL_EXTRA ?=
+
 
 # Repo root, derived from this file's own location rather than assumed, so it
 # survives the directory being moved.  Every path built from it is absolute,

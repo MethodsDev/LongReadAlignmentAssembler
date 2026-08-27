@@ -9,18 +9,18 @@ test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_p
 
 
 test_full_sc_pipe_basic_wdl:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.inputs.json -d sc_pipe_outdir-basic $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.inputs.json -d sc_pipe_outdir-basic $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 
 test_full_sc_pipe_basic_wdl_QOnly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.inputs.json  -d sc_pipe_outdir-basic-QOnly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.inputs.json  -d sc_pipe_outdir-basic-QOnly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 
 test_full_sc_pipe_cluster_guided_wdl:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 test_full_sc_pipe_cluster_guided_wdl_QOnly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 
 
@@ -44,14 +44,14 @@ clean: reclaim_root_owned
 # the 10 Mb default every phase would produce exactly one chunk and exercise
 # the scatter plumbing trivially.
 test_sc_cg_by_chunk_refguided:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.REFGUIDED.inputs.json -d sc_cg_outdir-by_chunk-refguided $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.REFGUIDED.inputs.json -d sc_cg_outdir-by_chunk-refguided $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 # Cluster-guided fixture run with ALL THREE scatter phases set to by_chunk,
 # QUANT-ONLY.  The fixture contig is 2 Mb and the default cut spacing is 10 Mb,
 # so approx_MB_per_cut{,_init} are dropped to 0.2 -- at defaults every phase
 # would produce exactly one chunk and the fan-out would be untested.
 test_sc_cg_by_chunk_qonly:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.QUANTONLY.inputs.json -d sc_cg_outdir-by_chunk-qonly $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.QUANTONLY.inputs.json -d sc_cg_outdir-by_chunk-qonly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 # Cluster-guided fixture run, DE NOVO discovery, with all three scatter knobs
 # set to by_chunk -- init, per-cluster discovery, and final quant.
@@ -78,4 +78,4 @@ test_sc_cg_by_chunk_qonly:
 # the general one, and at the 10 Mb default every phase would produce exactly
 # one chunk and exercise the scatter plumbing trivially.
 test_sc_cg_by_chunk_denovo:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.DENOVO.inputs.json -d sc_cg_outdir-by_chunk-denovo $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-cluster-guided.by_chunk.DENOVO.inputs.json -d sc_cg_outdir-by_chunk-denovo $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose

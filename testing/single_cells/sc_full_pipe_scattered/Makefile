@@ -8,7 +8,7 @@ include ../../lraa_test_docker.mk
 test_wdls: check_test_image_revision test_full_sc_pipe_cluster_guided_scattered_wdl
 
 test_full_sc_pipe_cluster_guided_scattered_wdl:
-	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.scattered.inputs.json -d sc_pipe_outdir-cluster-guided-scattered $(LRAA_WDL_DOCKER_CORE_SC) --verbose
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.scattered.inputs.json -d sc_pipe_outdir-cluster-guided-scattered $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 
 clean: reclaim_root_owned
