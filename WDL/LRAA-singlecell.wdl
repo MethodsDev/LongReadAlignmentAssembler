@@ -164,6 +164,41 @@ workflow LRAA_singlecell_wf {
     Float? approx_MB_per_cut_init
     Float? approx_MB_per_cut_wiggle_window_init
 
+    # An EXISTING plan to run this pipeline on, instead of selecting one below.
+    #
+    # WHY THIS EXISTS. Cut placement READS a bam -- blocked positions and
+    # spanning-read cost are measured from alignments -- so two runs left to
+    # themselves select DIFFERENT cut positions, and their outputs are then
+    # partitioned differently: boundary overhang drops land in different places and
+    # per-chunk quantities are not comparable row for row. Run A, take its
+    # `shared_chunk_plan` output, pass it here as run B's input, and both runs are
+    # forced onto ONE geometry. That is what makes a de novo run and a ref-guided run
+    # over the same library directly comparable rather than approximately so.
+    #
+    # REUSING ONE PLAN ACROSS ANNOTATION MODES IS SUPPORTED, which is the opposite of
+    # what a reader expects. Nothing compares this plan's annotation to the emitter's
+    # -- there is no digest of it and no check that one was present. The driver checks
+    # the property that actually matters instead: no gene locus in THIS run's own gtf
+    # may span one of the plan's cuts (ChunkedRun.straddling_annotation_models). A de
+    # novo run carries no annotation and so has nothing to sever; a ref-guided run is
+    # checked against its own gtf on its own terms. The pair is refused only when a
+    # model really does straddle a cut -- in which case both neighbouring chunks omit
+    # that locus and nobody would have quantified it, which is the failure the check
+    # exists for, not a mode disagreement.
+    #
+    # GEOMETRY ONLY. The TPM denominator and the run mode come from THIS run, so
+    # quant_only, initial_annot_gtf and HiFi remain this run's to set. What IS matched
+    # is refused rather than silently misapplied: a plan whose cut-deciding parameters
+    # disagree with this run's -- so the approx_MB_per_cut pair above must be the one
+    # it was selected with -- or that omits a contig this run processes, or that places
+    # that contig's cuts on a different contig length, fails the run before a single
+    # region is read.
+    #
+    # Supplying this SUPPRESSES the emission below rather than running beside it, and
+    # the supplied file is then what every phase applies: the initial pass, per-cluster
+    # discovery and the final quant.
+    File? chunk_plan
+
     # How each LRAA phase divides its work; see LRAA.wdl's `scattering`. The three
     # phases want different shapes. The initial pass is ONE task over every read,
     # so by_chunk is the only way to parallelise it.
@@ -310,7 +345,10 @@ workflow LRAA_singlecell_wf {
   Boolean want_chunk_plan = run_cluster_guided
       && (scattering_per_cluster != "off" || scattering_final_quant != "off")
 
-  if (want_chunk_plan) {
+  # Emitted only when the caller did not bring one. A supplied chunk_plan replaces
+  # this call, exactly as LRAA_quant_by_cluster.wdl gates its own fallback emission
+  # on !defined(internal_chunk_plan): one geometry per run, from one source.
+  if (want_chunk_plan && !defined(chunk_plan)) {
     call QuantByCluster.emit_shared_chunk_plan as emit_run_chunk_plan {
       input:
         inputBAM = inputBAM,
@@ -331,8 +369,9 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  # The run's geometry, threaded to every phase below.
-  File? run_chunk_plan = emit_run_chunk_plan.chunk_plan
+  # The run's geometry, threaded to every phase below: the caller's when it supplied
+  # one, else the emission above.
+  File? run_chunk_plan = if defined(chunk_plan) then chunk_plan else emit_run_chunk_plan.chunk_plan
 
   # The initial pass JOINS that geometry when it runs and is scattered, and it has to:
   # the models it discovers become the annotation the cluster phases quantify, so a
@@ -342,7 +381,15 @@ workflow LRAA_singlecell_wf {
   # configuration holds the property only empirically, and a model that does straddle a
   # cut is refused by the consumer that would have severed it rather than quantified
   # quietly.
-  if (want_chunk_plan && run_initial_phase && scattering_init != "off") {
+  #
+  # Gated on a plan EXISTING rather than on want_chunk_plan, which is what makes a
+  # supplied plan reach the initial pass in BASIC mode too. Emitting one there would
+  # cost and buy nothing -- the argument above -- but a file the caller already holds
+  # costs no task, and basic mode is precisely the comparison shape this input is for:
+  # one LRAA run per mode, which have to cut identically to be compared. With
+  # chunk_plan unset the two conditions are the same one, since the emission runs
+  # exactly when want_chunk_plan holds and always produces the file.
+  if (defined(run_chunk_plan) && run_initial_phase && scattering_init != "off") {
     File init_chunk_plan = select_first([run_chunk_plan])
   }
 
@@ -548,9 +595,12 @@ workflow LRAA_singlecell_wf {
     # why the two phases' totals are not meant to reconcile. Absent when the initial
     # pass was skipped for precomputed inputs.
     File? init_read_assignment_summary = collate_init_read_assignment_summary.collatedSummary
-    # The ONE cut geometry every phase of a cluster-guided run applied. Absent in basic
-    # mode, which has a single LRAA run and so nothing to be consistent with, and when
-    # every cluster-guided phase is scattering=off.
+    # The ONE cut geometry every phase of this run applied, whether it was emitted
+    # here or supplied as the chunk_plan input -- this is the file a second run is
+    # handed to be forced onto the same cuts, so it is an output for that reason
+    # rather than for the record. Absent when no plan governed the run: basic mode
+    # with none supplied, which has a single LRAA run and so nothing to be consistent
+    # with, and a cluster-guided run whose every phase is scattering=off.
     File? shared_chunk_plan = run_chunk_plan
 
     # Initial single-cell matrices and clustering inputs/outputs

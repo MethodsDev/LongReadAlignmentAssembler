@@ -1718,8 +1718,14 @@ def main():
         "placement READS a bam, so per-caller selection slices the shared "
         "splice-graph evidence at different boundaries in every caller. Geometry "
         "only -- the TPM denominator and the run mode come from this run. "
-        "ChunkedRun refuses a plan whose parameters, annotation or contig lengths "
-        "disagree with this run's",
+        "ChunkedRun refuses a plan whose cut-deciding parameters disagree with "
+        "this run's (ChunkedRun.cut_geometry_params), one that omits a contig "
+        "this run processes or places its cuts on a different length for it, and "
+        "one whose cut falls inside a gene locus in THIS run's --gtf "
+        "(ChunkedRun.straddling_annotation_models). The annotation itself is NOT "
+        "compared against the emitter's -- there is no digest and no "
+        "presence check -- so one plan serves a de novo run and a ref-guided run "
+        "alike, which is what makes those two directly comparable",
     )
     contig_group_setting.add_argument(
         "--emit_cut_plan",
