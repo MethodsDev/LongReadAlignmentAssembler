@@ -379,6 +379,33 @@ workflow LRAA_singlecell_wf {
   File? init_gtf_generated = LRAA_init.mergedGTF
   File? init_gtf_file = if (!run_initial_phase && defined(precomputed_init_gtf)) then select_first([precomputed_init_gtf]) else init_gtf_generated
 
+  # The initial pseudobulk pass's own read-assignment accounting, in its OWN table.
+  #
+  # Run through the same collator as the cluster phases so both tables parse
+  # identically -- level=chunk rows carrying their chunk_id, then this pass's own
+  # total -- but NEVER pooled with them. The init pass normalizes coverage over the
+  # whole BAM while each cluster normalizes over its own reads, and coverage thinning
+  # is depth-dependent, so the same underlying reads are counted differently by the
+  # two phases and their totals legitimately disagree (measured: ~95k pooled against
+  # ~198k summed per-cluster). A single table holding both would invite a
+  # reconciliation that is not supposed to balance.
+  #
+  # --no_all_clusters because there is one invocation here: the aggregate row would
+  # restate the cluster row it aggregated.
+  if (defined(LRAA_init.mergedReadAssignmentSummary)) {
+    call QuantByCluster.collate_read_assignment_summaries as collate_init_read_assignment_summary {
+      input:
+        summaryFiles = [select_first([LRAA_init.mergedReadAssignmentSummary])],
+        clusterIds = ["pseudobulk"],
+        emitAllClusters = false,
+        outputFilePrefix = sample_id + ".init",
+        # Normalized over the WHOLE bam in one pass, not per cluster. That is the
+        # label that keeps this table from being diffed against a cluster_thinned one.
+        population = "pooled_thinned",
+        docker = docker
+    }
+  }
+
   # 2) Build single-cell sparse matrices from the initial tracking (skipped when precomputed clusters are provided)
   if (run_clustering_phase) {
     call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
@@ -503,6 +530,11 @@ workflow LRAA_singlecell_wf {
     File? init_quant_expr = init_quant_expr_file
     File? init_quant_tracking = init_quant_tracking_generated
     File? init_gtf = init_gtf_generated
+    # This pass's read-assignment accounting. Reported SEPARATELY from the
+    # cluster-phase tables below and never folded into them; see the call site for
+    # why the two phases' totals are not meant to reconcile. Absent when the initial
+    # pass was skipped for precomputed inputs.
+    File? init_read_assignment_summary = collate_init_read_assignment_summary.collatedSummary
     # The ONE cut geometry every phase of a cluster-guided run applied. Absent in basic
     # mode, which has a single LRAA run and so nothing to be consistent with, and when
     # every cluster-guided phase is scattering=off.
@@ -537,6 +569,13 @@ workflow LRAA_singlecell_wf {
     File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
     File? final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
     File? final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping
+
+    # Per-cluster read-assignment accounting from the cluster-guided phases, one
+    # table per phase. Each holds level=chunk / level=cluster / level=all_clusters
+    # rows; rows of different level must not be summed. Absent in basic mode, and
+    # the prelim table is additionally absent in quant_only mode.
+    File? prelim_collated_read_assignment_summary = cluster_guided.prelim_collated_read_assignment_summary
+    File? final_collated_read_assignment_summary = cluster_guided.collated_read_assignment_summary
 
     # Convenience tarballs and matrices from the cluster-guided phase
     File? partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar

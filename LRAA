@@ -5577,6 +5577,17 @@ def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stat
 
     Genomic graph assignment against transcriptome rescue, plus why rescue declined what
     it declined. Merged across work units by _merge_read_assignment_summary_files.
+
+    ``chunk_id`` is written EMPTY here and is not a parameter. A work unit knows the
+    contig and strand it was handed; it does not know whether a chunked driver cut
+    that contig, nor which cut it is. Only ChunkedRun knows, and it fills the column
+    in when it merges the per-unit files
+    (``ChunkedRun.merge_read_assignment_summaries``). The column is nevertheless
+    emitted on every path, because a NON-chunked run's own
+    ``<prefix>.read_assignment.summary.tsv`` is written by
+    ``_merge_read_assignment_summary_files``, which takes its header from whatever
+    this writer emitted -- so omitting it here would give chunked and non-chunked
+    runs two different schemas, and the cross-cluster collation reads both.
     """
 
     total_reads = int(stats.get("reads_total", 0) or 0)
@@ -5588,6 +5599,7 @@ def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stat
 
     fieldnames = [
         "row_type",
+        "chunk_id",
         "contig_acc",
         "contig_strand",
         "reads_total",
@@ -5619,6 +5631,7 @@ def _write_read_assignment_summary(summary_path, contig_acc, contig_strand, stat
 
     row = {
         "row_type": "worker",
+        "chunk_id": "",
         "contig_acc": contig_acc,
         "contig_strand": contig_strand,
         "reads_total": total_reads,

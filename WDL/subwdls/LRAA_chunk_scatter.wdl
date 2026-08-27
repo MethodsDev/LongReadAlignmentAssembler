@@ -630,7 +630,14 @@ import json, os
 paths = """~{sep="\n" unitsJsons}""".split()
 units = []
 for p in paths:
-    for u in json.load(open(p))["units"]:
+    doc = json.load(open(p))
+    # The CHUNK id, not the unit id: unit_id appends _plus/_minus, so it names an
+    # orientation within the chunk rather than the chunk. units.json carries the
+    # chunk id once, at top level.
+    cid = doc["chunk_id"]
+    for u in doc["units"]:
+        u = dict(u)
+        u["chunk_id"] = cid
         units.append(u)
 rank = {"+": 0, "-": 1}
 units.sort(key=lambda u: (rank[u["strand"]], u["order"]))
@@ -648,6 +655,14 @@ for u in units:
         "unit_id": uid,
         "quant_prefix": os.path.abspath(os.path.join("staged", uid)),
         "offset": int(u["offset"]),
+        # OPTIONAL to merge_chunk_outputs (REQUIRED_UNIT_FIELDS does not name it)
+        # and always emitted here anyway: it is the only route by which a
+        # WDL-built manifest can populate the chunk_id column of the merged
+        # read_assignment summary. ChunkedRun's in-process units carry it
+        # already; a scattered run's manifest is built right here, so omitting it
+        # would leave every worker row's chunk unidentified -- which is the whole
+        # point of that column.
+        "chunk_id": u["chunk_id"],
     })
 json.dump({"units": out}, open("manifest.json", "wt"), indent=2)
 print("manifest: {} unit(s)".format(len(out)))

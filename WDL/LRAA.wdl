@@ -702,6 +702,7 @@ for summary_file in summary_files:
 if fieldnames is None:
     fieldnames = [
         "row_type",
+        "chunk_id",
         "contig_acc",
         "contig_strand",
         "reads_total",

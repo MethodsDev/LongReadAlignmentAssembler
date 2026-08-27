@@ -1,4 +1,39 @@
 v0.28.0
+- ADDED: the read-assignment summaries are now usable as pipeline outputs rather than
+  per-unit debris. `<prefix>.read_assignment.summary.tsv` gains a `chunk_id` column
+  immediately after `row_type`, filled in by `ChunkedRun.merge_read_assignment_summaries`
+  from each unit's own chunk -- not from `unit_id`, which appends the orientation and so
+  names a strand rather than a cut. Chunking is unconditional and most runs are
+  single-contig, so every worker row previously read identically (`worker chr19 +`) and
+  the per-chunk detail, though present, was unusable; a chunked chr19 fixture now
+  reports chr19_00/01/02/03 against 411 / 6,565 / 42,477 / 5,615 reads. LRAA's own
+  writer emits the column EMPTY on every path, because a work unit knows its contig and
+  strand and not which cut it is, and because a non-chunked run's summary takes its
+  header from that writer -- omitting it there would give chunked and non-chunked runs
+  two different schemas. `merge_chunk_outputs.py` passes an optional per-unit `chunk_id`
+  through its manifest so a scattered stage 6 populates the column too; a manifest
+  without it leaves the column empty rather than guessing.
+- ADDED: `util/misc/collate_read_assignment_summaries.py`, N per-cluster summaries as ONE
+  TSV with three NESTED levels -- `chunk` (a cluster's worker rows, each naming its cut),
+  `cluster` (that file's TOTAL re-emitted) and one `all_clusters` aggregate -- keyed
+  `level, cluster_id, chunk_id` ahead of the inherited schema. Counts sum;
+  `rescue_alignment_rejections` sums BY KEY; every `all_clusters` fraction is recomputed
+  as summed numerator over summed denominator. Averaging the per-cluster fractions
+  instead would weight a 141-read cluster the same as a 16,167-read one, which is the
+  real spread of the single-cell fixture, so the regression test uses deliberately
+  unequal cluster sizes and carries the mutation as a negative control -- with the
+  recomputation swapped for a mean it reports 0.5 against the correct 0.008646.
+  A missing, unreadable, TOTAL-less or differently-columned input is REFUSED, naming the
+  file and its cluster, and no partial output is written. The file states in a leading
+  comment that rows of different `level` must not be summed, and that its `all_clusters`
+  reads_total is a sum of INDEPENDENTLY cluster-thinned pass-1 populations and so is not
+  a library size and not comparable to a pooled-normalized or pseudobulk total: coverage
+  thinning is depth-dependent, measured ~95,064 reads pooled-normalized against 198,415
+  summed over the same 32 clusters, both correct and ~2x apart. A `population` column
+  (`--population`, default `unspecified` because a wrong label is worse than an absent
+  one; `sum_of_<label>` on the aggregate) makes that non-comparability machine-visible.
+  An init/pseudobulk phase is therefore reported as its own file, never collated with
+  cluster rows.
 - BREAKING/FIXED: chunked discovery namespaced its model ids as `<unit_id>|<id>`, and
   gffcompare delimits the subfields of its .tracking query column with an UNESCAPED
   pipe -- `qJ:gene_id|transcript_id|num_exons|FPKM|TPM|cov|len` -- which

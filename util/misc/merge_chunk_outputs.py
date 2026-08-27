@@ -28,7 +28,8 @@ and a task does not -- a file-based input contract and a CLI -- and nothing else
 THE MANIFEST is that contract, because a workflow task cannot be handed Python
 dicts. It names only the three fields the merge actually reads off a unit
 (verified against every ``unit[...]`` access in the merge path), plus an optional
-group label this script consumes itself and never passes down:
+group label this script consumes itself and never passes down, and an optional
+chunk id that only the read-assignment summary uses:
 
     {
       "units": [
@@ -36,7 +37,11 @@ group label this script consumes itself and never passes down:
           "unit_id":      "chr1_00_plus",   # namespaces ids under --discovery
           "quant_prefix": "/path/chunk_quant",  # + .quant.expr/.quant.tracking.gz/.gtf
           "offset":       0,                # rebase applied by extraction; 0 = uncut
-          "group":        "chr1"            # OPTIONAL, for --group; ignored by the merge
+          "group":        "chr1",           # OPTIONAL, for --group; ignored by the merge
+          "chunk_id":     "chr1_00"         # OPTIONAL; labels the merged read-assignment
+                                            # summary's worker rows. NOT unit_id, which
+                                            # appends the orientation. Absent leaves the
+                                            # column empty; it is never guessed at
         }
       ]
     }
@@ -203,6 +208,11 @@ def write_manifest(path, units, group_of=None):
                 "quant_prefix": u["quant_prefix"],
                 "offset": u["offset"],
                 "group": picker(u),
+                # Always emitted, empty when the unit has none, because the merged
+                # read-assignment summary's chunk_id column has exactly those two
+                # states and a manifest that omits the key is indistinguishable from
+                # one asserting "no chunk".
+                "chunk_id": str(u.get("chunk_id") or ""),
             }
             for u in units
         ]

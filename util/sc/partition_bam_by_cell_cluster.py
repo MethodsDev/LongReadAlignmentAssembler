@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys, os, re
+import itertools
 import argparse
 import pysam
 from collections import defaultdict
@@ -53,6 +54,20 @@ def main():
         help="number of threads for BAM compression/decompression",
     )
 
+    parser.add_argument(
+        "--restrict_to_chromosomes",
+        type=str,
+        default=None,
+        help="restrict the EMITTED cluster bams to these references, named as in "
+        "the bam header and separated by spaces or commas. WHOLE contigs only, "
+        "which is what makes it sound: depth-normalization downstream anchors its "
+        "window grid per contig on that contig's first aligned base, so dropping "
+        "entire references leaves every retained reference's grid -- and therefore "
+        "which reads it thins -- untouched, while a sub-contig filter would move "
+        "that anchor. Reads on other references are read and counted, then not "
+        "written. Unset means emit every reference, the prior behaviour",
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.bam
@@ -60,6 +75,16 @@ def main():
     cell_clusters_filename = args.cell_clusters
     cell_barcode_tag = args.cell_barcode_tag
     num_threads = args.threads
+
+    # Named references to emit, or None for all of them. Accepts either separator
+    # because main_chromosomes is space-separated in the WDLs while ChunkedRun's
+    # --contigs is comma-separated, and this is called from both conventions.
+    restrict_to_chromosomes = None
+    if args.restrict_to_chromosomes:
+        restrict_to_chromosomes = set(
+            re.split(r"[,\s]+", args.restrict_to_chromosomes.strip())
+        )
+        restrict_to_chromosomes.discard("")
 
     #########
     ### begin
@@ -122,6 +147,7 @@ def main():
     reads_without_barcode = 0
     reads_unrecognized_cluster = 0
     reads_written = 0
+    reads_outside_restriction = 0
     report_interval = 100000  # Report progress every 100k reads
 
     logger.info("Starting to process reads...")
@@ -137,7 +163,79 @@ def main():
 
         return bamfile_writer
 
-    for read in bamfile_reader:
+    # Materialize an EMPTY bam for every cluster before dispatching any read, then
+    # let the loop below open writers lazily exactly as it always has.
+    #
+    # The file has to exist even for a cluster that ends up with nothing, because
+    # the task globs `*.bam` and `*.cells.txt` into two arrays that are paired BY
+    # INDEX downstream: a missing bam shifts every later cluster's cell list onto
+    # another cluster's bam, silently. Whole-genome that was unreachable in
+    # practice -- every cluster has reads somewhere. With --restrict_to_chromosomes
+    # it is ordinary, since a small cluster can legitimately hold nothing on a
+    # handful of contigs.
+    #
+    # Opened and CLOSED here rather than kept live: holding one writer per cluster
+    # open across the whole scan would cost a file descriptor and num_threads
+    # compression threads per cluster from the outset. The lazy path below reopens
+    # (and truncates) this placeholder for any cluster that does have reads, so the
+    # resource profile of the scan is unchanged and only genuinely empty clusters
+    # keep a header-only bam.
+    for cluster_name in sorted(cluster_to_cell_barcodes.keys()):
+        placeholder_filename = output_prefix + "." + cluster_name + ".bam"
+        pysam.AlignmentFile(
+            placeholder_filename, "wb", template=bamfile_reader
+        ).close()
+    logger.info(
+        f"Materialized {len(cluster_to_cell_barcodes)} empty cluster bams; "
+        "writers open lazily as reads arrive"
+    )
+
+    # WHICH RECORDS GET VISITED, as opposed to which get written.
+    #
+    # Restricting only the write leaves this scan reading the whole library to use
+    # a fraction of it, which is most of what restricting was supposed to avoid. So
+    # when an index is available the references are FETCHED BY NAME and nothing else
+    # is ever decompressed. Whole references in header order, so the output stays
+    # coordinate-sorted exactly as a full scan would leave it.
+    #
+    # Without an index there is no way to skip records, so the full scan stands and
+    # the write-side filter below is what makes it correct. That filter is kept on
+    # both paths deliberately: it costs one set-membership test per visited read and
+    # it means the two paths cannot disagree about what lands in a cluster bam.
+    read_source = bamfile_reader
+    if restrict_to_chromosomes is not None:
+        # Refuse a name the bam cannot hold rather than silently emitting nothing
+        # for it -- the same policy ChunkedRun applies to --contigs.
+        absent = sorted(restrict_to_chromosomes - set(bamfile_reader.references))
+        if absent:
+            logger.error(
+                "--restrict_to_chromosomes names {} absent from the bam header: {}".format(
+                    len(absent), " ".join(absent)
+                )
+            )
+            sys.exit(1)
+
+        fetch_order = [
+            ref for ref in bamfile_reader.references if ref in restrict_to_chromosomes
+        ]
+        if bamfile_reader.has_index():
+            logger.info(
+                "indexed fetch: reading only {} of {} references ({})".format(
+                    len(fetch_order), len(bamfile_reader.references), " ".join(fetch_order)
+                )
+            )
+            read_source = itertools.chain.from_iterable(
+                bamfile_reader.fetch(reference=ref) for ref in fetch_order
+            )
+        else:
+            logger.warning(
+                "bam has no index, so every record must be visited and the "
+                "restriction can only be applied on write. Index the bam to read "
+                "just the %d requested references.",
+                len(fetch_order),
+            )
+
+    for read in read_source:
         total_reads_processed += 1
 
         # Progress reporting
@@ -164,6 +262,19 @@ def main():
 
         if cell_barcode in cell_barcode_to_cluster:
             cluster_name = cell_barcode_to_cluster[cell_barcode]
+
+            # Tested BEFORE a writer is acquired, so a cluster whose reads all sit
+            # on unretained references never opens one and keeps the header-only
+            # placeholder written above. The read is counted as processed and
+            # deliberately not written: it belongs to a real cell of a real
+            # cluster, it just sits on a reference this run does not analyze.
+            if (
+                restrict_to_chromosomes is not None
+                and read.reference_name not in restrict_to_chromosomes
+            ):
+                reads_outside_restriction += 1
+                continue
+
             if cluster_name in cell_cluster_to_ofh:
                 bam_writer = cell_cluster_to_ofh[cluster_name]
             else:
@@ -189,6 +300,12 @@ def main():
         f"  Reads without cell barcode tag {cell_barcode_tag}: {reads_without_barcode:,}"
     )
     logger.info(f"  Reads with unrecognized cluster: {reads_unrecognized_cluster:,}")
+    if restrict_to_chromosomes is not None:
+        logger.info(
+            f"  Reads dropped by --restrict_to_chromosomes: "
+            f"{reads_outside_restriction:,} "
+            f"(emitting {len(restrict_to_chromosomes)} references)"
+        )
     logger.info(f"  Total clusters created: {len(cell_cluster_to_ofh)}")
     logger.info(f"  Peak memory usage: {final_memory:.2f} MB")
     logger.info(f"  Memory increase: {final_memory - initial_memory:.2f} MB")

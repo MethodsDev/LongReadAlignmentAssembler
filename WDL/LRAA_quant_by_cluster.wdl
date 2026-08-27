@@ -94,6 +94,11 @@ workflow LRAA_quant_by_cluster {
                 cell_clusters_info = select_first([cell_clusters_info]),
                 inputBAM = select_first([inputBAM]),
                 cell_barcode_tag = cell_barcode_tag,
+                # Same restriction as the cluster-guided caller applies to its own
+                # partition call. Needed here too: this branch runs when this
+                # workflow is called standalone without bam_files, and its output
+                # feeds the same normalize/merge/normalize chain below.
+                main_chromosomes = main_chromosomes,
                 docker = docker,
                 memoryGB = memoryGB_normalize
         }
@@ -297,6 +302,46 @@ workflow LRAA_quant_by_cluster {
                 chunkMergeMemoryGB = chunkMergeMemoryGB,
                 docker = docker
         }
+
+        # Cluster identity for this cluster's read-assignment summary, carried
+        # EXPLICITLY rather than by position.
+        #
+        # LRAA_wf.mergedReadAssignmentSummary is File? and genuinely can be absent:
+        # LRAA copies the table only when stage 6 actually merged one (LRAA:3821-3831),
+        # and LRAA_runner.wdl declares it File? for the same reason. select_all()
+        # COMPACTS the gathered Array[File?], so one cluster without a summary shifts
+        # every later element and the i-th surviving file is no longer cluster i.
+        # Gating this String on the SAME defined() predicate select_all applies means
+        # both arrays are filtered by one condition, in one order, and stay aligned
+        # pair for pair. Do not replace this with a filename parse: the basename is
+        # <cluster>.<LRAA.quant-only|ref-guided|ref-free>.read_assignment.summary.tsv,
+        # so recovering the cluster means stripping a suffix that varies with run mode.
+        if (defined(LRAA_quant_cluster.mergedReadAssignmentSummary)) {
+            String cluster_id_for_summary = cluster_sample_id
+        }
+    }
+
+    # Filtered by ONE predicate, so element k of each names the same cluster.
+    Array[File] cluster_read_assignment_summaries = select_all(LRAA_quant_cluster.mergedReadAssignmentSummary)
+    Array[String] cluster_read_assignment_ids = select_all(cluster_id_for_summary)
+
+    # One TSV for the whole per-cluster phase: every cluster's per-chunk rows labelled
+    # with their chunk, each cluster's own total, and one aggregate across clusters.
+    # Gated on there being anything to collate -- the util refuses an empty input list
+    # rather than writing an empty table, and every cluster's summary can legitimately
+    # be absent on a build of LRAA that predates the per-unit summaries.
+    if (length(cluster_read_assignment_summaries) > 0) {
+        call collate_read_assignment_summaries as collate_cluster_read_assignment_summaries {
+            input:
+                summaryFiles = cluster_read_assignment_summaries,
+                clusterIds = cluster_read_assignment_ids,
+                outputFilePrefix = sample_id + ".clusters",
+                # Each cluster's pass-1 reads were thinned by ITS OWN coverage
+                # normalization, so the all_clusters total is a sum over independently
+                # thinned populations and is not comparable to a pooled figure.
+                population = "cluster_thinned",
+                docker = docker
+        }
     }
 
     output {
@@ -304,7 +349,16 @@ workflow LRAA_quant_by_cluster {
         Array[File] quant_exprs = LRAA_quant_cluster.mergedQuantExpr
         Array[File] quant_trackings = LRAA_quant_cluster.mergedQuantTracking
         Array[Array[File]] read_assignment_shard_summaries_by_cluster = LRAA_quant_cluster.shardReadAssignmentSummaries
-        Array[File] read_assignment_merged_summaries_by_cluster = select_all(LRAA_quant_cluster.mergedReadAssignmentSummary)
+        Array[File] read_assignment_merged_summaries_by_cluster = cluster_read_assignment_summaries
+        # The cluster ids of the array above, same order, same length. Published
+        # because select_all() drops absent summaries and nothing else in this output
+        # set records WHICH clusters survived that filter.
+        Array[String] read_assignment_merged_summary_cluster_ids = cluster_read_assignment_ids
+        # Every cluster's read-assignment accounting in ONE table: level=chunk rows
+        # carrying cluster_id and chunk_id, one level=cluster row per cluster, one
+        # level=all_clusters row. Rows of different level MUST NOT be summed; the file
+        # says so on its first line.
+        File? collated_read_assignment_summary = collate_cluster_read_assignment_summaries.collatedSummary
         
         # Intermediate outputs (for debugging/reuse)
         Array[File]? partitioned_bams = partition_bam_by_cell_cluster.partitioned_bams
@@ -652,6 +706,65 @@ task emit_shared_chunk_plan {
         # pre-partition BAM. Same reasoning as make_chunks in
         # subwdls/LRAA_chunk_scatter.wdl.
         preemptible: 0
+        disks: "local-disk ~{diskGB} SSD"
+    }
+}
+
+
+
+task collate_read_assignment_summaries {
+    # Cross-invocation collation of LRAA's per-invocation read_assignment summaries.
+    # Called once per PHASE, never across phases: an init/pseudobulk pass and a
+    # per-cluster pass count the same underlying reads under different normalization,
+    # so their totals legitimately disagree and one table holding both would invite a
+    # false reconciliation.
+    input {
+        # One merged read_assignment.summary.tsv per LRAA invocation, chunked or not.
+        Array[File] summaryFiles
+        # Paired BY POSITION with summaryFiles; the util exits 2 naming both counts if
+        # the lengths differ, so a caller cannot silently mislabel rows.
+        Array[String] clusterIds
+        String outputFilePrefix
+        # WHICH read population these counts are over, written as the table's last
+        # column. Deliberately REQUIRED here rather than defaulted: the util defaults
+        # it to "unspecified" so an unwired caller is honest, and a WDL call site that
+        # forgot it should fail the check instead. The label exists because an
+        # all_clusters reads_total is a sum over per-cluster populations, each thinned
+        # independently by coverage normalization, and is NOT comparable to a
+        # pooled-normalized figure -- measured ~95,064 pooled against 198,415 summed
+        # over 32 clusters, ~2x apart and both correct. Naming the population makes
+        # that non-comparability machine-visible so nobody diffs the two files.
+        String population
+        # The aggregate row across every input. Turn it OFF for a single-invocation
+        # phase, where it would merely restate that one invocation's row.
+        Boolean emitAllClusters = true
+        String docker
+    }
+
+    # Text collation over a few hundred small TSVs; the inputs are the only thing on
+    # disk that scales, and the output is smaller than their sum.
+    Int diskGB = ceil(size(summaryFiles, "GB") * 3.0) + 10
+
+    command <<<
+    set -euo pipefail
+
+    # On PATH in the image via util/misc, so invoked bare.
+    collate_read_assignment_summaries.py \
+        ~{sep=" " prefix("--summary ", summaryFiles)} \
+        ~{sep=" " prefix("--cluster_id ", clusterIds)} \
+        --population ~{population} \
+        ~{true="" false="--no_all_clusters" emitAllClusters} \
+        --output "~{outputFilePrefix}.read_assignment.summary.collated.tsv"
+    >>>
+
+    output {
+        File collatedSummary = "~{outputFilePrefix}.read_assignment.summary.collated.tsv"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
         disks: "local-disk ~{diskGB} SSD"
     }
 }

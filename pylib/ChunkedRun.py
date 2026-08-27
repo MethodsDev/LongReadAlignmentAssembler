@@ -4751,6 +4751,17 @@ def merge_read_assignment_summaries(merged_dir, units):
     it is summed BY KEY rather than concatenated -- concatenation would repeat
     the same reason once per unit and make the field unreadable.
 
+    ``chunk_id`` is FILLED IN here rather than by the writer. LRAA emits the column
+    empty (``LRAA._write_read_assignment_summary``) because a work unit knows only
+    its contig and strand -- on a chunked single-contig run every worker row then
+    reads identically (``worker chr19 +``) and the per-chunk detail, though present,
+    is unusable. The value comes from the unit's ``chunk_id`` and NOT from
+    ``unit_id``, which appends the orientation (``chr19_00_plus``) and so would name
+    a strand rather than a cut. A unit record without one -- a manifest-driven stage
+    6 whose manifest predates the field -- leaves the column empty rather than
+    guessing at it. The TOTAL row's ``chunk_id`` is empty by construction: it spans
+    every chunk, so no single chunk id is true of it.
+
     Every unit must contribute. A missing per-unit summary is refused rather than
     skipped -- see the comment on ``absent`` below for what that replaced -- so the
     merged ``reads_total`` is the whole run's read population and not an unstated
@@ -4802,27 +4813,32 @@ def merge_read_assignment_summaries(merged_dir, units):
         return None
 
     rows = []
-    fieldnames = None
+    in_fieldnames = None
     totals = {k: 0 for k in _SUMMARY_TOTAL_KEYS}
     rejections = collections.OrderedDict()
     for unit, path in present:
         unit_id = unit["unit_id"]
+        # The CUT this unit's reads came from. Optional on the unit record so that a
+        # manifest-driven stage 6 (util/misc/merge_chunk_outputs.py) still merges when
+        # its manifest carries no chunk_id.
+        chunk_id = str(unit.get("chunk_id") or "")
         with open(path, "rt", newline="") as fh:
             reader = csv.DictReader(fh, delimiter="\t")
-            if fieldnames is None:
-                fieldnames = list(reader.fieldnames or [])
-            elif list(reader.fieldnames or []) != fieldnames:
+            if in_fieldnames is None:
+                in_fieldnames = list(reader.fieldnames or [])
+            elif list(reader.fieldnames or []) != in_fieldnames:
                 # Columns are summed by NAME, so a differing schema would drop or
                 # misplace counters rather than fail. Refuse instead.
                 raise PipelineError(
                     "read-assignment summaries disagree on their columns: {} has "
                     "{} field(s) against {} in the first unit merged".format(
-                        unit_id, len(reader.fieldnames or []), len(fieldnames)
+                        unit_id, len(reader.fieldnames or []), len(in_fieldnames)
                     )
                 )
             for row in reader:
                 if (row.get("row_type") or "").strip() == "TOTAL":
                     continue
+                row["chunk_id"] = chunk_id
                 rows.append(row)
                 for key in _SUMMARY_TOTAL_KEYS:
                     totals[key] += int(row.get(key) or 0)
@@ -4836,11 +4852,21 @@ def merge_read_assignment_summaries(merged_dir, units):
                     except ValueError:
                         continue
 
-    if not fieldnames:
+    if not in_fieldnames:
         raise PipelineError(
             "every read-assignment summary stage 6 found was empty of rows: {}".format(
                 ", ".join(p for _, p in present[:5])
             )
+        )
+
+    # chunk_id sits immediately after row_type. Inserted rather than assumed, so a
+    # per-unit summary written by a build that predates the column still merges into
+    # a table carrying it.
+    fieldnames = list(in_fieldnames)
+    if "chunk_id" not in fieldnames:
+        fieldnames.insert(
+            fieldnames.index("row_type") + 1 if "row_type" in fieldnames else 0,
+            "chunk_id",
         )
 
     total_reads = totals["reads_total"]

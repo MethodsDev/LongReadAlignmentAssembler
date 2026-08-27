@@ -92,6 +92,12 @@ workflow LRAA_cell_cluster_guided {
             cell_clusters_info = cell_clusters_info,
             inputBAM = inputBAM,
             cell_barcode_tag = cell_barcode_tag,
+            # Restrict what the cluster bams CONTAIN. Everything downstream of this
+            # task on the bam-preparation side -- per-cluster normalization, the
+            # merge, and the merged normalization -- consumes these bams, so this one
+            # input is what keeps them from doing whole-library work for a run that
+            # analyzes a few contigs. inputBAM itself is untouched.
+            main_chromosomes = main_chromosomes,
             docker = docker,
      }
 
@@ -211,6 +217,33 @@ workflow LRAA_cell_cluster_guided {
                     chunkMemoryGB = chunkMemoryGB,
                     chunkMergeCpu = chunkMergeCpu,
                     chunkMergeMemoryGB = chunkMergeMemoryGB,
+                    docker = docker
+            }
+
+            # Same pairing discipline as the final quant applies in
+            # LRAA_quant_by_cluster.wdl: mergedReadAssignmentSummary is File?, and
+            # select_all() compacts, so the cluster id has to be filtered by the SAME
+            # predicate to stay aligned with the surviving files.
+            if (defined(LRAA_by_cluster.mergedReadAssignmentSummary)) {
+                String prelim_cluster_id_for_summary = cluster_sample_id
+            }
+        }
+
+        # The phase-1 discovery pass's read-assignment accounting, collated into its
+        # OWN table. Deliberately not merged with the final quant's: the two passes
+        # count the same reads under different normalization and against different
+        # annotations, so their totals legitimately disagree and one combined table
+        # would invite a false reconciliation.
+        Array[File] prelim_read_assignment_summaries = select_all(LRAA_by_cluster.mergedReadAssignmentSummary)
+        Array[String] prelim_read_assignment_ids = select_all(prelim_cluster_id_for_summary)
+
+        if (length(prelim_read_assignment_summaries) > 0) {
+            call LRAA_quant_by_cluster.collate_read_assignment_summaries as collate_prelim_read_assignment_summaries {
+                input:
+                    summaryFiles = prelim_read_assignment_summaries,
+                    clusterIds = prelim_read_assignment_ids,
+                    outputFilePrefix = sample_id + ".prelim_clusters",
+                    population = "cluster_thinned",
                     docker = docker
             }
         }
@@ -385,6 +418,14 @@ workflow LRAA_cell_cluster_guided {
          # The ONE geometry every phase of this run cut on. Absent only when both
          # scattering knobs are off, the mode with nothing to share.
          File? shared_chunk_plan = shared_chunk_plan_resolved
+
+         # Read-assignment accounting, one table per PHASE and never pooled across
+         # them. Each carries level=chunk rows (with their chunk_id), one level=cluster
+         # row per cluster, and one level=all_clusters row; rows of different level
+         # must not be summed, which the file states on its first line.
+         # Absent in quant_only mode, which runs no phase-1 discovery.
+         File? prelim_collated_read_assignment_summary = collate_prelim_read_assignment_summaries.collatedSummary
+         File? collated_read_assignment_summary = LRAA_quant_final_bamlist.collated_read_assignment_summary
     
      }
      
