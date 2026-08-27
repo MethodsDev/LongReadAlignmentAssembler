@@ -82,6 +82,13 @@ workflow LRAA_quant_by_cluster {
         # guard reads MemAvailable and REDUCES concurrency rather than letting the box
         # OOM, so undersizing this costs wall time, not the run.
         Int memoryGB_chunk_plan = 8
+        # WORKING disk for the per-cluster LRAA_wf calls below: they hand it to
+        # subwdls/LRAA_runner.wdl, which spends it as `disks: "local-disk N HDD"` --
+        # not the boot disk, which that task pins at 30. 256 is the same default
+        # LRAA.wdl, LRAA-singlecell.wdl and LRAA-cell_cluster_guided.wdl already
+        # carry, so leaving it unset changes nothing about how this workflow ran
+        # before; a caller that already holds the value can now raise it.
+        Int diskSizeGB = 256
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
@@ -300,6 +307,7 @@ workflow LRAA_quant_by_cluster {
                 chunkMemoryGB = chunkMemoryGB,
                 chunkMergeCpu = chunkMergeCpu,
                 chunkMergeMemoryGB = chunkMergeMemoryGB,
+                diskSizeGB = diskSizeGB,
                 docker = docker
         }
 

@@ -231,9 +231,10 @@ workflow LRAA_cell_cluster_guided {
                     # LRAA-singlecell.wdl and LRAA.wdl both thread it; this workflow
                     # was the one that did not.
                     #
-                    # Reaches the per-cluster DISCOVERY runs only. The final quant
-                    # goes through LRAA_quant_by_cluster, which declares no
-                    # diskSizeGB of its own, so that phase still sizes its own disks.
+                    # Reaches BOTH phases: the per-cluster discovery runs here, and
+                    # the final quant via LRAA_quant_by_cluster, which now declares
+                    # its own diskSizeGB (same 256 default) and forwards it to its
+                    # per-cluster quant runs.
                     diskSizeGB = diskSizeGB,
                     docker = docker
             }
@@ -347,6 +348,7 @@ workflow LRAA_cell_cluster_guided {
             chunkMemoryGB = chunkMemoryGB,
             chunkMergeCpu = chunkMergeCpu,
             chunkMergeMemoryGB = chunkMergeMemoryGB,
+            diskSizeGB = diskSizeGB,
             docker = docker
     }
 
