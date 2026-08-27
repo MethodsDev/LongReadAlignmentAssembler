@@ -179,12 +179,14 @@ workflow LRAA_singlecell_wf {
     # what a reader expects. Nothing compares this plan's annotation to the emitter's
     # -- there is no digest of it and no check that one was present. The driver checks
     # the property that actually matters instead: no gene locus in THIS run's own gtf
-    # may span one of the plan's cuts (ChunkedRun.straddling_annotation_models). A de
-    # novo run carries no annotation and so has nothing to sever; a ref-guided run is
-    # checked against its own gtf on its own terms. The pair is refused only when a
-    # model really does straddle a cut -- in which case both neighbouring chunks omit
-    # that locus and nobody would have quantified it, which is the failure the check
-    # exists for, not a mode disagreement.
+    # may span one of the plan's cuts, nor sit within --margin of one
+    # (ChunkedRun.cut_blocking_annotation_models -- the same blocks_cut predicate the
+    # extractor applies to every chunk boundary). A de novo run carries no annotation
+    # and so has nothing to sever; a ref-guided run is checked against its own gtf on
+    # its own terms. The pair is refused only when a locus really does collide with a
+    # cut -- a severed one is quantified by nobody because both neighbouring chunks
+    # omit it, and one inside the margin kills extraction outright -- and never for a
+    # mode disagreement.
     #
     # GEOMETRY ONLY. The TPM denominator and the run mode come from THIS run, so
     # quant_only, initial_annot_gtf and HiFi remain this run's to set. What IS matched

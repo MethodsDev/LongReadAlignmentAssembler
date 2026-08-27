@@ -1721,8 +1721,9 @@ def main():
         "ChunkedRun refuses a plan whose cut-deciding parameters disagree with "
         "this run's (ChunkedRun.cut_geometry_params), one that omits a contig "
         "this run processes or places its cuts on a different length for it, and "
-        "one whose cut falls inside a gene locus in THIS run's --gtf "
-        "(ChunkedRun.straddling_annotation_models). The annotation itself is NOT "
+        "one whose cut falls inside a gene locus in THIS run's --gtf, or within "
+        "--margin of one -- the pair the extractor itself refuses "
+        "(ChunkedRun.cut_blocking_annotation_models). The annotation itself is NOT "
         "compared against the emitter's -- there is no digest and no "
         "presence check -- so one plan serves a de novo run and a ref-guided run "
         "alike, which is what makes those two directly comparable",

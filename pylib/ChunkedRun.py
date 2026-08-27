@@ -1233,8 +1233,8 @@ def write_bam_excluding(source_bam, names, dest_bam):
 SELECTOR_GRID_ORIGIN = 0
 
 
-def straddling_annotation_models(gtf_path, cuts_by_contig):
-    """Models in ``gtf_path`` that a plan's cut positions would SEVER.
+def cut_blocking_annotation_models(gtf_path, cuts_by_contig, margin):
+    """Models in ``gtf_path`` that a plan's cut positions COLLIDE with.
 
     THE DIRECT FORM of the property a shared plan must satisfy, and what replaced
     a per-contig sha256 of the annotation the plan was selected against.
@@ -1242,10 +1242,25 @@ def straddling_annotation_models(gtf_path, cuts_by_contig):
     A cut at 1-based ``p`` splits a contig into ``[lend, p]`` and
     ``[p + 1, rend]``, and the extractor emits an annotated LOCUS whole or not at
     all (``extract_contig_region_inputs.Annotation.genes_contained``). So a locus
-    survives the partition exactly when no cut ``p`` satisfies
-    ``locus.lend <= p < locus.rend``. One that does is contained by neither
-    neighbour, BOTH omit it, and the model is quantified by nobody while every
-    chunk reports success. That is the whole failure this guards.
+    is SEVERED by a cut ``p`` exactly when ``locus.lend <= p < locus.rend``. One
+    that is severed is contained by neither neighbour, BOTH omit it, and the
+    model is quantified by nobody while every chunk reports success. That is the
+    failure this began as a guard against.
+
+    THE MARGIN IS THE OTHER HALF, and without it this check was WEAKER than the
+    extraction it protects. ``admissibility_offenders`` refuses a boundary whose
+    clearance from an annotated locus is under ``--margin``, not merely one that
+    severs a locus, and it raises ``ExtractionError`` when it does. So a locus at
+    ``[p + 50, p + 500]`` against a cut at ``p`` severs nothing, passed the
+    straddle test, and then killed every chunk touching ``p`` at margin 200 --
+    minutes into a run, which is exactly what validating the plan up front exists
+    to prevent. The predicate here is now the extractor's OWN ``blocks_cut``,
+    called with THIS run's ``--margin`` -- the value ``extract_cmd`` hands the
+    extractor, not the extractor's ``DEFAULT_MARGIN`` -- so the two cannot answer
+    differently and cannot drift apart later. Reused rather than reimplemented
+    deliberately: ``lend <= cut + margin and rend >= cut - margin + 1`` is
+    asymmetric because a cut falls BETWEEN bases ``p`` and ``p + 1``, and a
+    second copy of that arithmetic is a second chance to get it wrong.
 
     WHY THE DIGEST WENT. It was a proxy for this, and it could not tell a
     legitimately evolved annotation from an incompatible one -- it refused both.
@@ -1269,16 +1284,20 @@ def straddling_annotation_models(gtf_path, cuts_by_contig):
     gene because the gene is the unit the extractor emits: a gene whose two
     transcripts sit either side of a cut straddles it even though neither
     transcript does, and both transcripts are then lost. Naming the transcript is
-    what makes the refusal actionable, so a straddling transcript is named when
-    there is one and the gene's first transcript otherwise, with the distinction
-    stated.
+    what makes the refusal actionable, so a transcript that collides with the cut
+    itself is named when there is one -- preferring one the cut severs -- and the
+    gene's first transcript otherwise, with the distinction stated.
 
     ONE streaming pass over the gtf, restricted to the contigs asked for --
     ``Util_funcs.file_identity_token`` could not serve the digest it replaces for
     the same reason it cannot serve here: Cromwell localizes the same annotation
     to a new path with a fresh mtime in every task.
 
-    Returns one record per (locus, cut) collision, in coordinate order.
+    Returns one record per (locus, cut) collision, in coordinate order. ``kind``
+    is ``"straddle"`` when the cut severs the locus and ``"margin"`` when it
+    merely comes too close; a ``"margin"`` record also carries ``side`` and
+    ``gap``, the bases strictly between the locus and the cut junction, which is
+    under ``margin`` exactly when ``blocks_cut`` fires on either side.
     """
 
     wanted = {
@@ -1335,15 +1354,20 @@ def straddling_annotation_models(gtf_path, cuts_by_contig):
         for members in table.values():
             members.sort()
 
+    blocks_cut = extractor.blocks_cut
     offences = []
     for chrom in sorted(wanted):
         for position in wanted[chrom]:
             for gene_id, (gene_lend, gene_rend) in genes[chrom].items():
-                if not (gene_lend <= position < gene_rend):
+                if not blocks_cut(gene_lend, gene_rend, position, margin):
                     continue
+                severed = gene_lend <= position < gene_rend
                 members = by_gene[chrom].get(gene_id) or []
                 straddling = [m for m in members if m[0] <= position < m[1]]
-                chosen = (straddling or members or [None])[0]
+                blocking = [
+                    m for m in members if blocks_cut(m[0], m[1], position, margin)
+                ]
+                chosen = (straddling or blocking or members or [None])[0]
                 if chosen is None:
                     model = "gene {} (whose records name no transcript_id)".format(
                         gene_id
@@ -1354,12 +1378,29 @@ def straddling_annotation_models(gtf_path, cuts_by_contig):
                     model = "transcript {} of gene {}".format(
                         transcript_id, gene_id
                     )
-                    if not straddling:
+                    if severed and not straddling:
                         model += (
                             " (no single transcript of that gene spans the cut, "
                             "but the gene LOCUS does, and the locus is what is "
                             "emitted whole or not at all)"
                         )
+                    elif not severed and not blocking:
+                        model += (
+                            " (no single transcript of that gene is that close to "
+                            "the cut, but the gene LOCUS is, and the locus is what "
+                            "the extractor's boundary check consults)"
+                        )
+                # Bases strictly between the locus and the cut JUNCTION, which
+                # falls between bases ``position`` and ``position + 1``. It is
+                # under ``margin`` exactly when ``blocks_cut`` fires, on BOTH
+                # sides -- which is why the predicate's asymmetric form is not an
+                # asymmetric rule, and why one number states the shortfall.
+                if severed:
+                    side, gap = None, None
+                elif gene_rend <= position:
+                    side, gap = "before", position - gene_rend
+                else:
+                    side, gap = "after", gene_lend - position - 1
                 offences.append(
                     {
                         "chrom": chrom,
@@ -1370,6 +1411,10 @@ def straddling_annotation_models(gtf_path, cuts_by_contig):
                         "model": model,
                         "lend": lend,
                         "rend": rend,
+                        "kind": "straddle" if severed else "margin",
+                        "side": side,
+                        "gap": gap,
+                        "margin": int(margin),
                     }
                 )
     offences.sort(key=lambda o: (o["chrom"], o["position"], o["gene_id"]))
@@ -2740,7 +2785,7 @@ def cut_geometry_params(args):
     consolidated GTF never equals phase 1's reference. Strict presence refused
     the first and the digest refused the second, both for geometry that is
     perfectly fine. The property is now checked DIRECTLY, against whatever gtf
-    each consumer actually holds; see ``straddling_annotation_models``.
+    each consumer actually holds; see ``cut_blocking_annotation_models``.
 
     ``discovery`` is deliberately not a member and is still enforced: it is what
     ``resolve_min_mapping_quality`` resolves the effective floor through, so a mode
@@ -2966,10 +3011,12 @@ def selections_from_chunk_plan(plan, path, args, contigs):
     caller chunk bounds its siblings do not have, which is the whole thing sharing
     a plan prevents.
 
-    THE ANNOTATION IS CHECKED DIRECTLY rather than by identity: no model in THIS
+    THE ANNOTATION IS CHECKED DIRECTLY rather than by identity: no locus in THIS
     run's ``--gtf`` may span a cut the plan places on a contig this run
-    processes. See ``straddling_annotation_models`` for what that catches which a
-    digest of the annotation could not, and which correct runs the digest refused.
+    processes, nor sit within ``--margin`` of one -- the pair the extractor
+    itself refuses. See ``cut_blocking_annotation_models`` for what that catches
+    which a digest of the annotation could not, and which correct runs the digest
+    refused.
     """
 
     geometry = validate_cut_plan_geometry(plan, path, args)
@@ -3042,7 +3089,7 @@ def selections_from_chunk_plan(plan, path, args, contigs):
         # by_chromosome shard, the single contig its slice holds. A plan contig
         # this run never reaches is not checked, for the same reason its length
         # is not: the run cannot sever a model it does not quantify.
-        offences = straddling_annotation_models(
+        offences = cut_blocking_annotation_models(
             args.gtf,
             {
                 chrom: [
@@ -3051,33 +3098,89 @@ def selections_from_chunk_plan(plan, path, args, contigs):
                 ]
                 for chrom in contigs
             },
+            # THIS RUN'S margin, which is also the plan's -- a disagreement was
+            # already refused above by ``validate_cut_plan_geometry`` -- and the
+            # value ``extract_cmd`` passes the extractor. Checking against the
+            # extractor's DEFAULT_MARGIN instead would validate a run configured
+            # at another margin against 200 and then extract it at its own.
+            args.margin,
         )
         if offences:
-            first = offences[0]
+            severing = [o for o in offences if o["kind"] == "straddle"]
+            # A severed locus is named first when there is one: it is the graver
+            # diagnosis and its remedy is the narrower. Both kinds are refused,
+            # because the extractor refuses both.
+            first = (severing or offences)[0]
+            if first["kind"] == "straddle":
+                raise PipelineError(
+                    "chunk plan {} places a cut at {}:{} and {} in this run's --gtf "
+                    "{} spans it: the model lies at {}:{}-{} and its gene locus at "
+                    "{}:{}-{}, so the locus is contained by neither the chunk ending "
+                    "at {} nor the one starting at {}. The extractor emits an "
+                    "annotated locus whole or not at all, so BOTH neighbours omit it "
+                    "and the model is quantified by nobody while every chunk reports "
+                    "success. {} model(s) of this annotation straddle a cut and {} "
+                    "block one at this run's --margin of {} bp; select the plan "
+                    "against an annotation that contains them, or quantify with the "
+                    "one it was selected against.".format(
+                        path,
+                        first["chrom"],
+                        first["position"],
+                        first["model"],
+                        args.gtf,
+                        first["chrom"],
+                        first["lend"],
+                        first["rend"],
+                        first["chrom"],
+                        first["gene_lend"],
+                        first["gene_rend"],
+                        first["position"],
+                        first["position"] + 1,
+                        len(severing),
+                        len(offences),
+                        args.margin,
+                    )
+                )
+            if first["side"] == "before":
+                holder = "ending at {}".format(first["position"])
+                neighbour = "starting at {}".format(first["position"] + 1)
+            else:
+                holder = "starting at {}".format(first["position"] + 1)
+                neighbour = "ending at {}".format(first["position"])
             raise PipelineError(
-                "chunk plan {} places a cut at {}:{} and {} in this run's --gtf "
-                "{} spans it: the model lies at {}:{}-{} and its gene locus at "
-                "{}:{}-{}, so the locus is contained by neither the chunk ending "
-                "at {} nor the one starting at {}. The extractor emits an "
-                "annotated locus whole or not at all, so BOTH neighbours omit it "
-                "and the model is quantified by nobody while every chunk reports "
-                "success. {} model(s) of this annotation straddle a cut; select "
-                "the plan against an annotation that contains them, or quantify "
-                "with the one it was selected against.".format(
+                "chunk plan {} places a cut at {}:{} that {} in this run's --gtf {} "
+                "clears by only {} bp: the model lies at {}:{}-{} and its gene locus "
+                "at {}:{}-{}, so the chunk {} holds the locus WHOLE -- nothing is "
+                "severed -- but the boundary between that chunk and the one {} sits "
+                "closer to the locus than this run's --margin of {} bp. The "
+                "extractor refuses such a boundary outright "
+                "(extract_contig_region_inputs.admissibility_offenders, over the "
+                "same blocks_cut predicate checked here), so both chunks either side "
+                "of {}:{} would die on it mid-extraction instead. {} locus/loci of "
+                "this annotation block a cut at this margin, {} of them by straddling "
+                "one; re-emit the plan against an annotation containing this locus -- "
+                "cut selection never places a cut within --margin of one, so a plan "
+                "selected with this --gtf clears it -- or quantify with the "
+                "annotation the plan was selected against.".format(
                     path,
                     first["chrom"],
                     first["position"],
                     first["model"],
                     args.gtf,
+                    first["gap"],
                     first["chrom"],
                     first["lend"],
                     first["rend"],
                     first["chrom"],
                     first["gene_lend"],
                     first["gene_rend"],
+                    holder,
+                    neighbour,
+                    first["margin"],
+                    first["chrom"],
                     first["position"],
-                    first["position"] + 1,
                     len(offences),
+                    len(severing),
                 )
             )
 

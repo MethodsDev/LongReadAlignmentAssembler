@@ -480,8 +480,8 @@ def test_the_plan_records_the_geometry_that_chose_the_cuts(shared_plan):
     # one plan is emitted for a whole run, so de novo single-cell emits with no
     # annotation while every consumer has one, and ref-guided emits against the
     # reference while phase 2 quantifies the consolidated gtf. The property is
-    # checked directly instead; see ChunkedRun.straddling_annotation_models and
-    # the straddle tests below.
+    # checked directly instead; see ChunkedRun.cut_blocking_annotation_models and
+    # the collision tests below.
     assert "annotation_present" not in params
     assert "annotation_identity" not in params
     assert "annotation" not in plan["geometry"]
@@ -914,6 +914,193 @@ def test_a_different_but_non_straddling_annotation_is_accepted(
     assert [
         (row[0], "{}:{}-{}".format(row[1], row[2], row[3])) for row in geometry
     ] == planned
+
+
+# The interior cut this fixture's plan places on CONTIG, and the margin every run
+# below uses -- neither is passed on any command line, so both are read from the
+# same places the pipeline reads them.
+CUT = 6000
+MARGIN = ChunkedRun.LRAA_Globals.config["chunk_margin"]
+
+# (label, locus lend, locus rend, kind, clearance) -- ONE single-exon locus placed
+# against the cut at CUT. ``kind`` is what the plan check must call it:
+#
+#   "straddle"  the cut severs the locus, so both neighbours omit it;
+#   "margin"    the locus is held WHOLE by one chunk but sits closer to the
+#               boundary than --margin, which extraction refuses outright;
+#   "clear"     the plan is fine and must be accepted.
+#
+# ``clearance`` is the bases strictly between the locus and the cut JUNCTION,
+# written as a LITERAL. The rule it samples -- a locus blocks a cut exactly when
+# its clearance is under --margin -- is asserted below rather than assumed, on
+# both sides of the cut, because ``blocks_cut``'s form is asymmetric
+# (``lend <= cut + margin`` against ``rend >= cut - margin + 1``) and only the
+# clearance makes the two sides one rule.
+CUT_CLEARANCE_CASES = (
+    ("straddles", 5900, 6100, "straddle", None),
+    # THE DEMONSTRATED GAP: severs nothing, so the straddle test alone passed it
+    # and every chunk touching the cut then died at margin 200.
+    ("inside_margin_after", 6050, 6500, "margin", 49),
+    ("inside_margin_before", 5500, 5950, "margin", 50),
+    ("exactly_margin_after", 6200, 6600, "margin", 199),
+    ("exactly_margin_before", 5401, 5801, "margin", 199),
+    ("margin_plus_one_after", 6201, 6601, "clear", 200),
+    ("margin_plus_one_before", 5400, 5800, "clear", 200),
+    ("comfortably_clear_after", 7000, 7400, "clear", 999),
+    ("comfortably_clear_before", 4600, 5000, "clear", 1000),
+)
+
+# The subset run END TO END. Both kinds of refusal, both sides of the cut, and
+# both an at-the-boundary and a comfortably-clear acceptance. The rest are pinned
+# against the extractor's own predicate by the test below, which is the same
+# function extraction calls, so agreement there is by construction.
+END_TO_END_LABELS = (
+    "straddles",
+    "inside_margin_after",
+    "exactly_margin_before",
+    "margin_plus_one_before",
+    "comfortably_clear_after",
+)
+END_TO_END_CASES = tuple(
+    case for case in CUT_CLEARANCE_CASES if case[0] in END_TO_END_LABELS
+)
+
+
+def _locus_gtf(path, name, lend, rend, base="", strand="+", contig=CONTIG):
+    """``base`` plus ONE extra single-exon locus, named for the assertion."""
+
+    path = Path(path)
+    path.write_text(
+        base
+        + '{}\ttest\texon\t{}\t{}\t.\t{}\t.\tgene_id "{}"; '
+        'transcript_id "{}.t1";\n'.format(contig, lend, rend, strand, name, name)
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "label,lend,rend,kind,clearance",
+    CUT_CLEARANCE_CASES,
+    ids=[case[0] for case in CUT_CLEARANCE_CASES],
+)
+def test_the_plan_check_refuses_exactly_what_extraction_refuses(
+    tmp_path, label, lend, rend, kind, clearance
+):
+    """THE AGREEMENT, at the boundary, in both directions.
+
+    The plan check used to test STRICT straddle only, while the extractor refuses
+    any boundary whose clearance from an annotated locus is under ``--margin``
+    and raises ``ExtractionError`` when it finds one. So a locus at ``[p + 50,
+    p + 500]`` against a cut at ``p`` passed validation and then killed every
+    chunk touching ``p`` -- which is what validating the plan against the
+    arguments exists to prevent.
+
+    Both directions matter. Refusing less than extraction is the defect; refusing
+    MORE would reject plans that would have run, so every acceptance here is
+    asserted against ``blocks_cut`` -- the extractor's own predicate, which the
+    check now calls rather than reimplements.
+
+    The margin-0 assertion at the end is the old behaviour, stated as data: at
+    margin 0 ``blocks_cut`` reduces to the strict straddle, so only the severed
+    row offends. Everything else in this table is what the check was missing.
+    """
+
+    extractor = ChunkedRun._extractor_module()
+    blocked = extractor.blocks_cut(lend, rend, CUT, MARGIN)
+    assert blocked == (kind != "clear")
+    if kind != "straddle":
+        # ONE rule, both sides: clearance under --margin blocks, at or above it
+        # does not. This is what "exactly margin" and "margin + 1" mean.
+        assert (clearance < MARGIN) == blocked
+
+    path = _locus_gtf(tmp_path / "one_locus.gtf", label, lend, rend)
+    offences = ChunkedRun.cut_blocking_annotation_models(
+        str(path), {CONTIG: [CUT]}, MARGIN
+    )
+    if kind == "clear":
+        assert offences == []
+    else:
+        assert len(offences) == 1, offences
+        (offence,) = offences
+        assert offence["kind"] == kind
+        assert offence["gene_id"] == label
+        assert (offence["lend"], offence["rend"]) == (lend, rend)
+        assert offence["gap"] == (None if kind == "straddle" else clearance)
+        assert offence["margin"] == MARGIN
+
+    at_zero = ChunkedRun.cut_blocking_annotation_models(
+        str(path), {CONTIG: [CUT]}, 0
+    )
+    assert [o["kind"] for o in at_zero] == (
+        ["straddle"] if kind == "straddle" else []
+    )
+
+
+@pytest.mark.parametrize(
+    "label,lend,rend,kind,clearance",
+    END_TO_END_CASES,
+    ids=[case[0] for case in END_TO_END_CASES],
+)
+def test_a_locus_colliding_with_a_plan_cut_is_refused_before_extraction(
+    tmp_path, inputs, shared_plan, label, lend, rend, kind, clearance
+):
+    """The same table, through the real driver, against a real extraction.
+
+    A refusal here is worth having only if it happens BEFORE the extractor's own
+    -- the extractor refuses these plans too, loudly, with
+    ``REJECTED: ... cuts an annotated locus at margin 200 bp``, but minutes into
+    a run and once per chunk. So the assertions are that the message is the PLAN
+    check's, that the extractor's is absent, and that no chunk was written.
+
+    And the accepted rows must genuinely EXTRACT, at the plan's own geometry:
+    that is the half a blanket tightening would break, and the only thing that
+    proves the two predicates agree on a boundary rather than merely both
+    refusing it.
+    """
+
+    genome, gtf, superset, _reads, _lengths = inputs
+    plan_path, plan, cuts = shared_plan
+    assert CUT in cuts[CONTIG], cuts
+    consumer = _locus_gtf(
+        tmp_path / "consumer_{}.gtf".format(label),
+        label,
+        lend,
+        rend,
+        base=gtf.read_text(),
+    )
+    workdir = tmp_path / ("work_" + label)
+    result = _apply(
+        tmp_path,
+        genome,
+        consumer,
+        superset,
+        plan_path,
+        label,
+        "--stop_after_make_chunks",
+    )
+
+    if kind == "clear":
+        _ok(result)
+        geometry = _geometry(workdir)
+        planned = [(c["chunk_id"], c["region"]) for c in plan["chunks"]]
+        assert [
+            (row[0], "{}:{}-{}".format(row[1], row[2], row[3])) for row in geometry
+        ] == planned
+        return
+
+    combined = _refused(result)
+    assert "chunk plan" in combined
+    assert "places a cut at {}:{}".format(CONTIG, CUT) in combined
+    assert "transcript {}.t1 of gene {}".format(label, label) in combined
+    assert "{}:{}-{}".format(CONTIG, lend, rend) in combined
+    assert "REJECTED:" not in combined
+    assert not sorted(workdir.glob("chunks/*/chunk.partition.json"))
+    if kind == "straddle":
+        assert "quantified by nobody" in combined
+        return
+    assert "clears by only {} bp".format(clearance) in combined
+    assert "--margin of {} bp".format(MARGIN) in combined
+    assert "re-emit the plan" in combined
 
 
 def test_a_per_contig_slice_of_the_plans_annotation_is_accepted(
