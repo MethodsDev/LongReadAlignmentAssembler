@@ -275,6 +275,7 @@ def collate(
         )
 
     seen_clusters = collections.OrderedDict()
+    seen_paths = collections.OrderedDict()
     for cluster_id, path in pairs:
         if not cluster_id.strip():
             raise CollationError(
@@ -288,6 +289,21 @@ def collate(
                 )
             )
         seen_clusters[cluster_id] = path
+        # The SYMMETRIC mistake, and it was absorbed silently until a review caught
+        # it: two cluster ids pointing at ONE file. An off-by-one in the caller's
+        # arrays -- files [s1, s1] against ids [c1, c2] -- collated cleanly and
+        # double-counted that file's reads into every all_clusters counter. The id
+        # check above cannot see it, because the ids really are distinct.
+        #
+        # realpath, so two spellings of one file are one file here.
+        real = os.path.realpath(path)
+        if real in seen_paths:
+            raise CollationError(
+                "summary {} is named twice, as cluster {!r} and cluster {!r}; one "
+                "file counted as two clusters would double its reads in the "
+                "all_clusters row".format(path, seen_paths[real], cluster_id)
+            )
+        seen_paths[real] = cluster_id
 
     in_fieldnames = None
     out_rows = []
@@ -334,7 +350,20 @@ def collate(
         for key in SUMMABLE_FIELDS:
             if key in fieldnames:
                 totals[key] += _count(total_row, key, where)
-        _add_rejections(rejections, total_row)
+        # REJECTIONS COME FROM THE WORKER ROWS, not from the TOTAL, because the two
+        # TOTAL writers disagree on this one field. ChunkedRun's merged TOTAL carries
+        # the per-key sum, but LRAA's non-chunked merger initialises its TOTAL to
+        # empty strings and never fills this cell -- the key=count entries live only
+        # on its worker rows. Reading the TOTAL therefore silently DROPPED every
+        # non-chunked cluster's rejections: mixing one such cluster (workers
+        # low_id=7,off_target=2 and low_id=1, TOTAL blank) with a chunked one (TOTAL
+        # low_id=4) reported low_id=4 where the truth is low_id=12,off_target=2.
+        #
+        # Worker rows are the common denominator: both writers populate them, and
+        # summing them by key reproduces what ChunkedRun's TOTAL already holds, so
+        # this is correct for chunked input too rather than merely tolerant of it.
+        for w in workers:
+            _add_rejections(rejections, w)
 
     out_fieldnames = (
         list(LEADING_FIELDS)

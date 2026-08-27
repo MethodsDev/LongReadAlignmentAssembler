@@ -2410,6 +2410,31 @@ def main():
                     bam_for_priors_cli, bam_file_for_sg
                 )
             )
+        # MEASURED, and the reason this is a refusal rather than a warning: with
+        # --no_stream_reads there is no second pass, so the priors bam is not the
+        # bam theta is estimated FROM, it is the only bam quantified. On the chr19
+        # cluster-00 fixture (27,142 reads full, 13,320 thinned) the same command
+        # with and without this flag reported sum(uniq_reads) 8,316 against 21,347
+        # -- 39% -- while sum(all_reads) moved only 24,070.7 against 24,177.1,
+        # because all_reads is XW-weighted and weights back up while uniq_reads is
+        # an integer count over thinning survivors. One reported column collapses,
+        # the other looks fine, and the run exits 0.
+        #
+        # The flag's whole contract is "used ONLY to estimate the first-pass theta",
+        # which cannot hold where there is no pass 2 to apply it to.
+        if not args.stream_reads:
+            sys.exit(
+                "Error, --bam_for_priors requires the two-pass streaming mode and "
+                "--no_stream_reads disables it.\n"
+                "With one pass there is no second read assignment for a prior to "
+                "condition, so this thinned bam would BE the quantification rather "
+                "than inform it: uniq_reads is then counted over thinning survivors "
+                "while the denominator stays at library scale, and the tracking file "
+                "enumerates survivors while reporting as though complete.\n"
+                "Drop --no_stream_reads to estimate theta from these reads and "
+                "assign over --bam, or drop --bam_for_priors to quantify this bam "
+                "single-pass."
+            )
         bam_file_for_priors = bam_for_priors_cli
         logger.info(
             "first-pass theta will be estimated from user-supplied pre-normalized "
