@@ -9,9 +9,33 @@ task partition_by_chromosome_task {
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
 
         String docker
-        Int samtools_threads = 16
+        # CORE BUDGET for this task, not a thread count -- see samtools_extra_threads
+        # below, which is derived from it. The name is kept for callers that already
+        # bind it.
+        #
+        # Was 16. On a 16-core single-worker swarm a cpu:16 reservation cannot be
+        # placed until the box is empty, and this task runs once per per-cluster
+        # LRAA_wf -- 14 to 32 times in a single-cell run -- for a few seconds of
+        # `samtools view` each, so it repeatedly drained the whole box. 5 is where
+        # the scaling measurement below stops paying.
+        Int samtools_threads = 5
         Int? memoryGB
     }
+
+    # samtools' -@ is ADDITIONAL threads, so N there means N+1 running. Spend the
+    # budget minus the main thread, and never more than 4 additional however large
+    # a budget a caller passes, because `samtools view` stops scaling there.
+    #
+    # Measured on a 1.30 GiB slice of a real library (chr1 of a 21.2 GiB mouse
+    # isoseqsim BAM), best of two, page cache warm, wall seconds by -@ N:
+    #   -@ 2 -> 3.81   -@ 3 -> 2.58   -@ 4 -> 1.97   -@ 5 -> 1.63   -@ 8 -> 1.67
+    # Per RESERVED core (N+1) that is 0.66 / 0.77 / 0.81 / 0.81 / 0.53 of linear,
+    # so budget 5 (-@ 4) is the knee and 9+ is strictly worse. A budget of 4 would
+    # mean -@ 3, which is 31% slower than -@ 4 -- hence 5 and not 4.
+    #
+    # WDL 1.0 has no min(); it is a 1.1 builtin and both miniwdl and womtool reject
+    # it here, so this is the conditional form.
+    Int samtools_extra_threads = if samtools_threads - 1 < 4 then samtools_threads - 1 else 4
 
     Float bam_size_gb = if defined(inputBAM) then size(inputBAM, "GB") else 0.0
     Float bam_for_sg_size_gb = if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0
@@ -29,7 +53,7 @@ task partition_by_chromosome_task {
     command <<<
         set -euo pipefail
 
-        export PARTITION_SAMTOOLS_THREADS=~{samtools_threads}
+        export PARTITION_SAMTOOLS_THREADS=~{samtools_extra_threads}
 
         ulimit -n 8192
 
@@ -39,7 +63,7 @@ task partition_by_chromosome_task {
             ~{if defined(genome_fasta) then "--genome-fasta " + genome_fasta else ""} \
             ~{if defined(annot_gtf) then "--annot-gtf " + annot_gtf else ""} \
             --chromosomes ~{chromosomes_want_partitioned} \
-            --samtools-threads ~{samtools_threads} \
+            --samtools-threads ~{samtools_extra_threads} \
             --bam-out-dir split_bams \
             --bam-for-sg-out-dir split_bams_for_sg \
             --fasta-out-dir split_fastas \
@@ -72,7 +96,9 @@ workflow partition_by_chromosome {
         File? annot_gtf
         String chromosomes_want_partitioned # ex. "chr1 chr2 chr3 ..."
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
-        Int samtools_threads = 16
+        # Core budget forwarded to the task; kept in step with the task's own
+        # default, whose comment carries the measurement.
+        Int samtools_threads = 5
     }
 
     call partition_by_chromosome_task {

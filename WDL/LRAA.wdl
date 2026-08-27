@@ -216,7 +216,12 @@ workflow LRAA_wf {
         
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
-        Int countBamThreads = 16
+        # Core budget for the one-off count_bam task, forwarded as its
+        # samtools_threads at the call below. MUST stay in step with the task's own
+        # default: this call input wins, so leaving it at 16 would keep the cpu:16
+        # reservation and cap only the thread count. The task's comment carries the
+        # measurement that puts the knee at 5.
+        Int countBamThreads = 5
         
         
     }
@@ -896,9 +901,29 @@ task validate_scattering {
 task count_bam {
   input {
     File bam
-        Int samtools_threads = 16
+        # CORE BUDGET, not a thread count -- samtools_extra_threads below is derived
+        # from it. Name kept for callers that already bind it.
+        #
+        # Was 16, which is a whole-swarm reservation on a 16-core single-worker
+        # swarm: nothing else can be placed while it runs, and this task runs once
+        # per per-cluster LRAA_wf -- 14 to 32 times in a single-cell run -- to do one
+        # `samtools view -c`. See the derivation below for why 5 rather than 4.
+        Int samtools_threads = 5
         String docker
   }
+
+    # samtools' -@ is ADDITIONAL threads, so N there means N+1 running, and a
+    # reservation equal to N under-declares by one. Spend the budget minus the main
+    # thread, capped at 4 additional because `samtools view` stops scaling there.
+    #
+    # Measured, 1.30 GiB slice of a real library, best of two, cache warm, wall s:
+    #   -@ 2 -> 3.81   -@ 3 -> 2.58   -@ 4 -> 1.97   -@ 5 -> 1.63   -@ 8 -> 1.67
+    # Fraction of linear speedup per RESERVED core (N+1): 0.66 / 0.77 / 0.81 / 0.81
+    # / 0.53. Budget 5 (-@ 4) is the knee; budget 4 would mean -@ 3, 31% slower.
+    #
+    # WDL 1.0 has no min() -- 1.1 builtin, rejected by both miniwdl and womtool --
+    # hence the conditional.
+    Int samtools_extra_threads = if samtools_threads - 1 < 4 then samtools_threads - 1 else 4
 
     Float bam_size_gb = size(bam, "GB")
     Float estimated_disk = ceil(bam_size_gb * 2.2 + 20.0)
@@ -910,7 +935,7 @@ task count_bam {
         # -F 0x904 drops unmapped/secondary/supplementary so this matches
         # count_reads_from_bam() in the LRAA driver: one count per genome-mapped
         # read. Both paths must agree or TPM depends on which one ran.
-        samtools view -@ ~{samtools_threads} -c -F 0x904 ~{bam}
+        samtools view -@ ~{samtools_extra_threads} -c -F 0x904 ~{bam}
 
   >>>
 
