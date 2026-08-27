@@ -14,7 +14,7 @@ come from Quant3Prime's read-level extraction of LRAA's own quant.tracking
 count, unnormalized bams, 1.0 per read). Two columns are supplied:
 
   all_ambig    every read compatible with >1 transcript. This is the
-               mechanistically faithful regressor: EM.py:290 counts every
+               mechanistically faithful regressor: EM.py:315 counts every
                multipath with len>1 into ambiguous_read_counts regardless of
                weight, so this is exactly alpha's reach.
   irreducible  the subset whose candidate transcripts share a 3' end exactly

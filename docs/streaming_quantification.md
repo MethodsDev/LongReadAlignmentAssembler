@@ -225,7 +225,7 @@ does for `--quant_only`.
 
 ## Interaction with XW read weights
 
-Pass 1's theta is XW-weighted, always, and there is no setting for it. `EM.py:87` feeds
+Pass 1's theta is XW-weighted, always, and there is no setting for it. `EM.py:90` feeds
 `mp.get_read_weight()` into EM, and that quantity is the weight the reads stand for wherever the
 BAM being read was thinned — which for pass 1 under streaming it is, by the invariant above.
 

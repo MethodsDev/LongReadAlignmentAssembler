@@ -2416,22 +2416,22 @@ def main():
             flag_name="--bam_for_priors",
             role="the reads the first assignment pass estimates theta from",
         )
-        if bam_file_for_sg is not None and os.path.realpath(
-            bam_for_priors_cli
-        ) == os.path.realpath(bam_file_for_sg):
+        if bam_file_for_sg is not None and Util_funcs.paths_name_one_file(
+            bam_for_priors_cli, bam_file_for_sg
+        ):
             sys.exit(
-                "Error, --bam_for_priors {} and --bam_for_sg {} resolve to the same "
-                "file.\n"
-                "That is the POOLED configuration this input exists to eliminate: the "
+                "Error, --bam_for_priors {} and --bam_for_sg {} are ONE file.\n"
+                "That is the POOLED configuration this input exists to discourage: the "
                 "sg bam is ONE splice graph shared across cell clusters, so a theta "
                 "estimated over it apportions every cluster's ambiguous reads by every "
                 "other cluster's expression -- and it would look like it worked, since "
                 "each cluster still reports its own read totals.\n"
+                "Compared by device and inode: a second path, a symlink or a HARD LINK "
+                "is caught. A byte-identical COPY is not, and cannot be without hashing "
+                "gigabytes, so passing this does not rule that shape out.\n"
                 "Pass this cluster's OWN normalized reads here (the per-cluster "
-                "normalized bam), or drop the flag and get today's behaviour: pass 1 "
-                "reads the splice-graph bam.".format(
-                    bam_for_priors_cli, bam_file_for_sg
-                )
+                "normalized bam), or drop the flag: pass 1 then reads the sg "
+                "bam.".format(bam_for_priors_cli, bam_file_for_sg)
             )
         # MEASURED, and the reason this is a refusal rather than a warning: with
         # --no_stream_reads there is no second pass, so the priors bam is not the
@@ -3757,7 +3757,7 @@ def _run_chunked_mode(args):
         # --oversimplify is declared and parsed on THIS command line (:927) and
         # then dropped, so every chunk worker silently receives ChunkedRun's own
         # default instead of the caller's list. That default deliberately matches
-        # this driver's ("chrM,M", ChunkedRun.py:5737-5752) so the flag's ABSENCE
+        # this driver's ("chrM,M", ChunkedRun.py:5764-5779) so the flag's ABSENCE
         # was always faithful -- which is exactly what hid this: only a caller who
         # NAMED contigs saw them ignored. And subwdls/LRAA_runner.wdl always
         # passes --chunk, so --oversimplify was inert on every WDL path.
@@ -5778,10 +5778,10 @@ def _first_pass_assignment_bam(
     priors input existed: all 32 clusters reported an identical reads_total of
     94,908 while assigning 24,083 / 27,616 / 17,414 / ... of them.
 
-    Precedence is priors first, then today's behaviour verbatim: under
-    --stream_reads the pass exists only to estimate abundances and so reads the
-    coverage-normalized bam, otherwise it reads the bam being quantified. A caller
-    that passes no priors bam therefore gets exactly what it got before.
+    Precedence is priors first, then today's behaviour verbatim, so a caller passing no
+    priors bam is unaffected: under --stream_reads the pass reads bam_file_for_sg, else
+    the bam being quantified. bam_file_for_sg is the coverage-normalized bam ONLY with
+    normalization on and no --bam_for_sg; with --no_norm and neither, it is the RAW --bam.
 
     Resolved here rather than at each use because the read-assignment summary's
     reads_total is a count over THIS bam, and a count taken from one of the other

@@ -1330,16 +1330,18 @@ def extract_partition(
                 "LRAA refuses it downstream anyway because --bam must carry no "
                 "XW while --bam_for_priors must.".format(os.path.realpath(bam))
             )
-        if sg_bam and os.path.realpath(priors_bam) == os.path.realpath(sg_bam):
+        if sg_bam and Util_funcs.paths_name_one_file(priors_bam, sg_bam):
             raise ExtractionError(
-                "--priors_bam and --sg_bam both resolve to {}. That is the POOLED "
-                "configuration the priors slice exists to eliminate: the sg bam "
+                "--priors_bam and --sg_bam are ONE file ({}). That is the POOLED "
+                "configuration the priors slice exists to discourage: the sg bam "
                 "is ONE splice graph shared by every cell cluster, so a theta "
                 "estimated over it apportions this cluster's ambiguous reads by "
                 "every other cluster's expression -- and it looks like it worked, "
-                "because each cluster still reports its own totals. Pass this "
-                "caller's own normalized reads, or pass no --priors_bam at "
-                "all.".format(os.path.realpath(sg_bam))
+                "because each cluster still reports its own totals. Compared by "
+                "device and inode, so a second path, a symlink or a hard link is "
+                "caught; a byte-identical COPY is not and cannot be without "
+                "hashing the bams. Pass this caller's own normalized reads, or "
+                "pass no --priors_bam at all.".format(os.path.realpath(sg_bam))
             )
 
     with pysam.FastaFile(genome_fa) as fasta:

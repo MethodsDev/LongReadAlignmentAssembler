@@ -4745,7 +4745,11 @@ def merge_read_assignment_summaries(merged_dir, units):
     Input rows of ``row_type == "TOTAL"`` are SKIPPED when aggregating. Each
     unit's file is itself the output of a complete LRAA run and therefore already
     carries both a ``worker`` row and its own ``TOTAL``; summing every row would
-    count each unit twice. The TOTAL here is recomputed from the worker rows.
+    count each unit twice. The TOTAL here is recomputed from the ``worker`` rows --
+    ENFORCED, not assumed: a row that is neither ``worker`` nor ``TOTAL`` is refused.
+    Summing every non-TOTAL row would have let a third row type into the grand total
+    and dropping every non-``worker`` row would have let one vanish from it, and this
+    table IS the run's read accounting, so neither may happen quietly.
 
     ``rescue_alignment_rejections`` is a comma-separated ``key=count`` list, so
     it is summed BY KEY rather than concatenated -- concatenation would repeat
@@ -4821,7 +4825,15 @@ def merge_read_assignment_summaries(merged_dir, units):
         # The CUT this unit's reads came from. Optional on the unit record so that a
         # manifest-driven stage 6 (util/misc/merge_chunk_outputs.py) still merges when
         # its manifest carries no chunk_id.
-        chunk_id = str(unit.get("chunk_id") or "")
+        #
+        # ABSENT and FALSY are different questions and ``or ""`` answered the wrong
+        # one: a real chunk id of 0 rendered as an empty column, indistinguishable
+        # from the deliberate "this unit record carries no chunk id" case above and
+        # from the TOTAL row, whose blank means "spans every chunk". Ids are strings
+        # like "chr19_00" today so nothing reaches it; a sentinel confused with a
+        # value in a provenance column is worth closing before something does.
+        chunk_id_value = unit.get("chunk_id")
+        chunk_id = "" if chunk_id_value is None else str(chunk_id_value)
         with open(path, "rt", newline="") as fh:
             reader = csv.DictReader(fh, delimiter="\t")
             if in_fieldnames is None:
@@ -4836,8 +4848,23 @@ def merge_read_assignment_summaries(merged_dir, units):
                     )
                 )
             for row in reader:
-                if (row.get("row_type") or "").strip() == "TOTAL":
+                row_type = (row.get("row_type") or "").strip()
+                if row_type == "TOTAL":
                     continue
+                if row_type != "worker":
+                    # LRAA writes exactly two row types -- "worker" (LRAA:5694) and
+                    # "TOTAL" (LRAA:5948) -- so no in-tree writer reaches this. If a
+                    # third ever appears, summing it into the run total and dropping
+                    # it from the run total are both wrong answers that no column in
+                    # the output would contradict, which is why neither is guessed.
+                    raise PipelineError(
+                        "read-assignment summary {} carries a row of row_type {!r}; "
+                        "only 'worker' (summed into the merged TOTAL) and 'TOTAL' "
+                        "(skipped) are known. Guessing would either double-count the "
+                        "new row into the run total or silently drop it".format(
+                            path, row_type
+                        )
+                    )
                 row["chunk_id"] = chunk_id
                 rows.append(row)
                 for key in _SUMMARY_TOTAL_KEYS:
@@ -4950,7 +4977,7 @@ def merge_and_translate(outdir, units, discovery=False):
 
     One field carries a chunk-local DENOMINATOR: ``TPM`` is
     ``all_reads / (total all_reads emitted by the same job) * 1e6``
-    (pylib/Quantify.py:1527), so a chunk's value is relative to that chunk. This
+    (pylib/Quantify.py:2133), so a chunk's value is relative to that chunk. This
     is not special pleading for the chunked arm: LRAA's own whole-contig merge
     rebases it the same way, recomputing TPM over every merged row from the
     printed ``all_reads`` (LRAA:_merge_quant_expr_files), because its per-job
@@ -6609,20 +6636,18 @@ def _run_inner(args):
             "named it -- read loss the chunked arm reports as success. The "
             "selection source must be an unthinned superset."
         )
-    if (
-        sg_bam
-        and priors_bam
-        and os.path.realpath(sg_bam) == os.path.realpath(priors_bam)
-    ):
+    if sg_bam and priors_bam and Util_funcs.paths_name_one_file(sg_bam, priors_bam):
         raise PipelineError(
-            "--bam_for_sg and --bam_for_priors resolve to the same file. That is "
-            "the POOLED configuration --bam_for_priors exists to eliminate: the "
-            "sg bam is ONE splice graph shared by every cell cluster, so a theta "
-            "estimated over it apportions this caller's ambiguous reads by every "
-            "other caller's expression -- and it looks like it worked, because "
-            "each caller still reports its own read totals. Name this caller's "
-            "OWN normalized reads, or pass no --bam_for_priors and get today's "
-            "behaviour."
+            "--bam_for_sg and --bam_for_priors are ONE file. That is the POOLED "
+            "configuration --bam_for_priors exists to discourage: the sg bam is ONE "
+            "splice graph shared by every cell cluster, so a theta estimated over it "
+            "apportions this caller's ambiguous reads by every other caller's "
+            "expression -- and it looks like it worked, because each caller still "
+            "reports its own read totals. Compared by device and inode, so a second "
+            "path, a symlink or a hard link is caught; a byte-identical COPY is not, "
+            "and cannot be without hashing the bams, so passing this does not rule "
+            "the pooled shape out. Name this caller's OWN normalized reads, or pass "
+            "no --bam_for_priors and get today's behaviour."
         )
 
     required = ["output_dir"] if args.only_chunk else ["bam", "genome_fa", "output_dir"]

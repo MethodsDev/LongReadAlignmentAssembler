@@ -144,6 +144,11 @@ class CollationError(Exception):
 def _read_summary(cluster_id, path):
     """One per-invocation summary as ``(fieldnames, worker_rows, total_row)``.
 
+    ``worker_rows`` is every row that is not a ``TOTAL``; only ``worker`` and ``TOTAL``
+    exist, and ChunkedRun.merge_read_assignment_summaries refuses anything else before a
+    file can reach here. The ``all_clusters`` aggregate below sums the ``TOTAL`` rows and
+    not these, so worker rows drive only the per-chunk detail.
+
     Comment lines are dropped before parsing so a collated file, or any summary
     that grows a provenance header, can be read back by this same function.
     """

@@ -93,10 +93,10 @@ class AssignmentTable:
         of two genes in one component gets ONE split across all of them; per-gene groups
         would each sum to 1 and count the read twice.
 
-        With no theta -- run_EM False -- the split is equal across a gene's compatible
-        isoforms, which is what _estimate_isoform_read_support does in that mode. Falling
-        through to a theta-weighted formula would divide by zero and silently assign
-        nothing.
+        With no theta -- run_EM False -- the split is equal across the COMPONENT's
+        compatible isoforms, not a gene's: quantify() hands _estimate_isoform_read_support
+        one component per call and its equal split divides by that handed set
+        (Quantify.py:333, :431, :1859-1868). Theta-weighting here would divide by zero.
 
         Everything a tracking row needs except the read name is fixed per (path, isoform),
         so it is computed once here rather than per read.
@@ -325,7 +325,7 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
             denom = sum(weights[k] * th[k] for k in weights)
             # Zero denominator yields zero fractions, so the read's fractions sum to 0
             # rather than 1. Deliberate: it is what the default path's E-step does
-            # (EM.py:309-313), and reproducing that is the requirement. An equal split here
+            # (EM.py:333-336, :342-344), and reproducing that is the requirement. An equal split here
             # would be better arithmetic and a divergence. Unreached on ONT and PacBio
             # chr20 -- 0 zero-valued fractions in 719k rows.
             fracs = {
@@ -336,10 +336,10 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
                 raise RuntimeError(
                     "EM ran but no theta was supplied for this multipath's transcripts"
                 )
-            # Equal split over the gene's isoforms, matching the no-EM branch of
-            # _estimate_isoform_read_support, which divides by the number of compatible
-            # transcripts within the gene it is called for (Quantify.py:162 runs it per
-            # gene) and applies no 3' weighting to the fraction.
+            # Equal split over the COMPONENT's compatible isoforms, no 3' weighting,
+            # matching the no-EM branch of _estimate_isoform_read_support: it divides by
+            # the transcripts sharing this mp within the set handed it
+            # (Quantify.py:1859-1868), and quantify() hands it one component (:333, :431).
             fracs = {k: 1.0 / len(by_tid) for k in weights}
 
         for tid, t in by_tid.items():

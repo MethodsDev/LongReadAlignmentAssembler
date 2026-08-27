@@ -15,7 +15,7 @@ evaluate: the profile is computable from read compatibility alone.
 
 The profile is built from LRAA's own quant.tracking, not re-derived. For every
 read, the set of transcripts it was assigned to; reads whose set has more than
-one member contribute 1 to EVERY member. That is exactly what EM.py:284-287
+one member contribute 1 to EVERY member. That is exactly what EM.py:309-312
 accumulates into ambiguous_read_counts, and it is independent of alpha, since
 alpha does not change which transcripts a read is compatible with.
 

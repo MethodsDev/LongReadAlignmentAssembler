@@ -192,9 +192,9 @@ estimate is 30% noise whatever the target was.
 
 ## XW weights during quantification
 
-Quantification consumes the weight through one expression: `EM.py:87` takes each multipath's
+Quantification consumes the weight through one expression: `EM.py:90` takes each multipath's
 support as `mp.get_read_weight()` rather than a read count, and the E-step apportions that
-quantity directly. The same call backs the count rollups in `Quantify.py:1824,1846,2212`.
+quantity directly. The same call backs the count rollups in `Quantify.py:1849,1871,2244`.
 
 **There is no setting.** `MultiPath.get_read_weight()` sums a per-read registry that
 `_populate_read_multi_paths` fills from whichever BAM the pass is reading
@@ -256,7 +256,7 @@ library. `util/lraa_merge_header.py` and `util/sc/singlecell_tracking_to_sparse_
 recognize and refuse the marker, deliberately: files written by earlier versions carry it
 legitimately and are just as incomplete as they ever were.
 
-Distinct from the other weight in EM: `weight_reads_by_3prime_agreement` (`EM.py:98`) is a
+Distinct from the other weight in EM: `weight_reads_by_3prime_agreement` (`EM.py:116`) is a
 per-(read, transcript) 3'-end agreement weight and is unrelated to `XW`.
 
 ## Parameters

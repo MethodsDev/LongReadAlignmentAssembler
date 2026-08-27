@@ -35,9 +35,11 @@ What these tests hold:
 * XW survives extraction AND the in-chunk strand split. LRAA:165-192 exits on a
   --bam_for_priors whose first aligned record has no XW, because an untagged read
   weighs 1 and the estimate would silently stop being weighted;
-* `--bam_for_priors` resolving to `--bam_for_sg` is refused at every layer that
-  can see both: it is the pooled configuration this input exists to eliminate, and
-  it would look like it worked;
+* `--bam_for_priors` naming the same FILE as `--bam_for_sg` is refused at every
+  layer that can see both, compared by device and inode so a HARD LINK is caught
+  too. A byte-identical COPY is not caught and cannot be without hashing the bams,
+  so the refusal NARROWS the pooled configuration rather than eliminating it, and
+  the messages say so;
 * the `--only_chunk` leaf rebuilds the priors paths rather than dropping them --
   the same omission the sg slice needed fixing for, invisible on the driver's
   machine because no chunk directory there would show it.
@@ -47,6 +49,8 @@ pylib/test_shared_cut_plan.py, which owns the plan fixtures.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +68,7 @@ sys.path.insert(0, str(REPO / "util" / "misc"))
 
 import ChunkedRun  # noqa: E402
 import extract_contig_region_inputs as extractor  # noqa: E402
+import Util_funcs  # noqa: E402
 
 
 # --------------------------------------------------------------------- fixtures
@@ -346,8 +351,155 @@ def test_lraa_refuses_priors_that_are_the_splice_graph_bam(tmp_path, inputs):
         timeout=1800,
     )
     combined = _refused(result)
-    assert "resolve to the same file" in combined
+    assert "are ONE file" in combined
     assert "POOLED configuration" in combined
+
+
+def test_lraa_refuses_a_hard_link_to_the_splice_graph_bam(tmp_path, inputs):
+    """A hard link IS the pooled bam, under a second name.
+
+    ``os.path.realpath`` cannot see it: there is no link to resolve, so the two
+    names come back distinct and the equality check passed. The configuration is the
+    same one -- one file, two flags, a theta estimated over pooled evidence -- and it
+    exits 0 with per-cluster numbers that look local.
+    """
+
+    genome, gtf, reads_bam, sg_bam, _priors = inputs
+    linked = tmp_path / "linked_priors.bam"
+    os.link(str(sg_bam), str(linked))
+    os.link(str(sg_bam) + ".bai", str(linked) + ".bai")
+    assert os.path.realpath(str(linked)) != os.path.realpath(str(sg_bam))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "LRAA"),
+            "--bam",
+            str(reads_bam),
+            "--genome",
+            str(genome),
+            "--gtf",
+            str(gtf),
+            "--quant_only",
+            "--no_chunk",
+            "--output_prefix",
+            str(tmp_path / "out_linked"),
+            "--num_total_reads",
+            "16",
+            "--bam_for_sg",
+            str(sg_bam),
+            "--bam_for_priors",
+            str(linked),
+            "--no_norm",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=1800,
+    )
+    combined = _refused(result)
+    assert "are ONE file" in combined
+    assert "POOLED configuration" in combined
+
+
+def test_the_refusal_does_not_claim_to_catch_a_copy(tmp_path, inputs):
+    """A byte-identical copy PASSES, and the message must not imply otherwise.
+
+    The limit of the check, asserted rather than left implicit: the pooled
+    configuration stays reachable by ``cp``. Detecting it needs the contents, and
+    these are bams -- the cost argument Util_funcs.file_identity_token already
+    records for hashing one on startup, and which that helper could not settle here
+    anyway because its token includes the resolved path, so two paths can never
+    match however identical their bytes.
+
+    So the requirement is the WORDING: the refusal that does fire must tell the
+    operator what it does not cover, or a passing run reads as proof of something it
+    is not.
+    """
+
+    genome, gtf, reads_bam, sg_bam, _priors = inputs
+    copied = tmp_path / "copied_priors.bam"
+    shutil.copyfile(str(sg_bam), str(copied))
+    with open(str(copied), "rb") as a, open(str(sg_bam), "rb") as b:
+        assert a.read() == b.read(), "the fixture is not actually a byte-identical copy"
+    assert not Util_funcs.paths_name_one_file(str(copied), str(sg_bam))
+
+    linked = tmp_path / "linked_for_message.bam"
+    os.link(str(sg_bam), str(linked))
+    os.link(str(sg_bam) + ".bai", str(linked) + ".bai")
+    caught = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "LRAA"),
+            "--bam",
+            str(reads_bam),
+            "--genome",
+            str(genome),
+            "--gtf",
+            str(gtf),
+            "--quant_only",
+            "--no_chunk",
+            "--output_prefix",
+            str(tmp_path / "out_msg"),
+            "--num_total_reads",
+            "16",
+            "--bam_for_sg",
+            str(sg_bam),
+            "--bam_for_priors",
+            str(linked),
+            "--no_norm",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=1800,
+    )
+    message = _refused(caught)
+    assert "byte-identical COPY is not" in message
+    assert "does not rule that shape out" in message
+    # And the wording that promised more than the check delivers is gone.
+    assert "exists to eliminate" not in message
+
+
+def test_paths_name_one_file_distinguishes_a_link_from_a_copy(tmp_path):
+    """The primitive all three layers share, on its own.
+
+    Four cases, because the point is WHICH of them are one file: the same path and a
+    symlink were already caught by realpath equality, a hard link was not and is the
+    gap being closed, and a byte-identical copy is genuinely two files.
+    """
+
+    original = tmp_path / "a.bin"
+    original.write_bytes(b"identical payload")
+
+    linked = tmp_path / "hard.bin"
+    os.link(str(original), str(linked))
+    symlinked = tmp_path / "soft.bin"
+    symlinked.symlink_to(original)
+    copied = tmp_path / "copy.bin"
+    shutil.copyfile(str(original), str(copied))
+    other = tmp_path / "other.bin"
+    other.write_bytes(b"different payload")
+
+    assert Util_funcs.paths_name_one_file(str(original), str(original))
+    assert Util_funcs.paths_name_one_file(str(original), str(symlinked))
+    assert Util_funcs.paths_name_one_file(str(original), str(linked))
+    # realpath equality, which this replaced, reports the hard link as two files.
+    assert os.path.realpath(str(linked)) != os.path.realpath(str(original))
+
+    assert not Util_funcs.paths_name_one_file(str(original), str(copied))
+    assert not Util_funcs.paths_name_one_file(str(original), str(other))
+
+
+def test_paths_name_one_file_survives_a_missing_path(tmp_path):
+    """A guard must not raise before the code that can report the absence usefully."""
+
+    present = tmp_path / "here.bin"
+    present.write_bytes(b"x")
+    absent = tmp_path / "gone.bin"
+
+    assert not Util_funcs.paths_name_one_file(str(present), str(absent))
+    assert Util_funcs.paths_name_one_file(str(absent), str(absent))
 
 
 def test_lraa_refuses_an_unweighted_priors_bam(tmp_path, inputs):
@@ -516,6 +668,29 @@ def test_extractor_refuses_priors_that_are_the_sg_bam(tmp_path, inputs):
     assert "POOLED" in str(excinfo.value)
 
 
+def test_extractor_refuses_a_hard_link_to_the_sg_bam(tmp_path, inputs):
+    """Same gap, one layer down: the extractor compared realpaths too."""
+
+    genome, gtf, reads_bam, sg_bam, _priors = inputs
+    linked = tmp_path / "linked_sg.bam"
+    os.link(str(sg_bam), str(linked))
+    os.link(str(sg_bam) + ".bai", str(linked) + ".bai")
+
+    with pytest.raises(extractor.ExtractionError) as excinfo:
+        _extract(
+            tmp_path,
+            genome,
+            gtf,
+            reads_bam,
+            "chr1:1-10000",
+            sg_bam=sg_bam,
+            priors_bam=linked,
+        )
+    message = str(excinfo.value)
+    assert "are ONE file" in message
+    assert "byte-identical COPY is not" in message
+
+
 def test_extractor_refuses_priors_that_are_the_read_bam(tmp_path, inputs):
     """Pass 1 over the population pass 2 assigns is the no-priors configuration."""
 
@@ -555,8 +730,35 @@ def test_chunked_run_refuses_priors_that_are_the_sg_bam(tmp_path, inputs):
             reads_bam,
         )
     )
-    assert "--bam_for_sg and --bam_for_priors resolve to the same file" in combined
+    assert "--bam_for_sg and --bam_for_priors are ONE file" in combined
     assert "POOLED configuration" in combined
+
+
+def test_chunked_run_refuses_a_hard_link_to_the_sg_bam(tmp_path, inputs):
+    """And at the driver's own pre-flight, before a single region is read."""
+
+    genome, gtf, reads_bam, sg_bam, _priors = inputs
+    linked = tmp_path / "linked_sg_chunked.bam"
+    os.link(str(sg_bam), str(linked))
+    os.link(str(sg_bam) + ".bai", str(linked) + ".bai")
+
+    combined = _refused(
+        _run_chunked(
+            tmp_path,
+            tmp_path / "work_linked",
+            genome,
+            gtf,
+            reads_bam,
+            "--bam_for_sg",
+            sg_bam,
+            "--bam_for_priors",
+            linked,
+            "--bam_for_cut_selection",
+            reads_bam,
+        )
+    )
+    assert "--bam_for_sg and --bam_for_priors are ONE file" in combined
+    assert "byte-identical COPY is not" in combined
 
 
 def test_chunked_run_refuses_priors_with_strand_first_chunking(tmp_path, inputs):

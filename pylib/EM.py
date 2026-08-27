@@ -72,7 +72,10 @@ def run_EM(
     # inputs to EM
     mp_assignments = list()  # list of lists of transcript indices
     mp_weights = list()  # list of lists of weights aligned with mp_assignments
-    mp_read_counts = list()  # number of reads assigned to each mp
+    # Weighted support per multipath, NOT a count of reads -- see the comment at its
+    # only assignment below. Equals a read count only for an unnormalized bam, which is
+    # why the name says support rather than count.
+    mp_support_weights = list()
 
     # populate inputs to EM
     start_prep_time = time.time()
@@ -84,8 +87,8 @@ def run_EM(
         # Weighted support, not a count of surviving reads: where coverage was thinned,
         # the reads that remain each stand for several, and the E-step apportions this
         # quantity directly. Equals the read count for an unnormalized bam.
-        num_reads_in_mp = mp.get_read_weight()
-        mp_read_counts.append(num_reads_in_mp)
+        mp_support_weight = mp.get_read_weight()
+        mp_support_weights.append(mp_support_weight)
 
         for (
             mp_mapped_transcript,
@@ -95,6 +98,21 @@ def run_EM(
 
             indiv_mp_to_trans_assignments.append(mp_mapped_transcript_idx)
 
+            # Flat 1.0, which is NOT the same statement as "no weighting". Every
+            # candidate of this multipath gets the same value, and that is equivalent to
+            # an even split only because the E-step renormalizes each multipath's weights
+            # across its OWN candidates: total_weight sums w*theta over exactly this mp's
+            # candidates (EM.py:333-336) and frac_assignment divides by it
+            # (EM.py:342-344), so a common factor cancels and w*theta/sum(w*theta)
+            # reduces to theta/sum(theta).
+            #
+            # Consequence worth stating because it is invisible here: this flattens the
+            # RATIOS within a multipath and leaves TOTALS alone. Each mp's fractions
+            # still sum to 1, so sum(transcript_sum_read_counts) still equals
+            # sum(mp_support_weights). Any other constant would do equally well; a
+            # non-uniform substitute would not. The equivalence is the E-step's property,
+            # not this line's, which is why the E-step is named here -- change the
+            # renormalization and this line becomes a silent rescaling of every read.
             if not LRAA_Globals.config["weight_reads_by_3prime_agreement"]:
                 mp_trans_weight_val = 1.0
 
@@ -148,7 +166,7 @@ def run_EM(
     ) = em_algorithm_with_weights(
         mp_assignments,
         mp_weights,
-        mp_read_counts,
+        mp_support_weights,
         num_transcripts,
         max_iter=max_EM_iterations,
         tol=LRAA_Globals.config["EM_convergence_tol"],
@@ -224,7 +242,11 @@ def get_multipath_to_transcripts_and_weights(transcripts):
 
             mp_weight = transcript.get_multipath_weight(mp)
             if not LRAA_Globals.config["weight_reads_by_3prime_agreement"]:
-                # not using the read weights.
+                # Flat 1.0 for every candidate of this mp, equivalent to an even split
+                # only because the E-step renormalizes per multipath: total_weight sums
+                # w*theta over this mp's candidates (EM.py:333-336) and frac_assignment
+                # divides by it (EM.py:342-344), so a constant cancels and only the
+                # ratios flatten. Totals are unaffected.
                 mp_weight = 1.0
 
             if mp not in multipath_to_transcripts_and_weights:
@@ -245,7 +267,7 @@ def get_multipath_to_transcripts_and_weights(transcripts):
 def em_algorithm_with_weights(
     mp_assignments,
     mp_weights,
-    mp_read_counts,
+    mp_support_weights,
     num_transcripts,
     max_iter=100,
     tol=1e-6,
@@ -260,7 +282,10 @@ def em_algorithm_with_weights(
                                           to which the mp is assigned (unique or ambiguous).
         mp_weights (list of lists): A matrix of weights where each sublist corresponds to
                                        the weights of a mp for the assigned transcripts.
-        mp_read_counts (list of ints): each element is the number of reads corresponding to that multipath.
+        mp_support_weights (list of floats): each element is the WEIGHTED support of the
+                                       corresponding multipath -- the sum of its reads'
+                                       XW weights, which equals a plain read count only
+                                       for an unnormalized bam.
         num_transcripts (int): Total number of transcripts.
         max_iter (int): Maximum number of iterations.
         tol (float): Convergence tolerance.
@@ -284,7 +309,7 @@ def em_algorithm_with_weights(
     for i, mp in enumerate(mp_assignments):
         if len(mp) > 1:  # Ambiguous mp
             for trans_id in mp:
-                ambiguous_read_counts[trans_id] += mp_read_counts[i]
+                ambiguous_read_counts[trans_id] += mp_support_weights[i]
 
     # Calculate transcript-specific alpha values based on ambiguous mps
     transcript_alphas = base_alpha * ambiguous_read_counts
@@ -319,7 +344,7 @@ def em_algorithm_with_weights(
                 )
 
                 transcript_sum_read_counts[trans_id] += (
-                    frac_assignment * mp_read_counts[mp_i]
+                    frac_assignment * mp_support_weights[mp_i]
                 )
 
                 fractional_mp_assignments[mp_i][j] = frac_assignment

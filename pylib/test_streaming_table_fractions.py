@@ -270,7 +270,7 @@ def test_zero_denominator_matches_default_path_rather_than_summing_to_one():
 
     All-zero theta gives a zero denominator, and the fractions come out 0.0, so this read's
     per-gene fractions sum to 0 instead of 1. That is what the default path's E-step does
-    (EM.py:309-313), and reproducing the default path is the whole point of this mode, so
+    (EM.py:333-336, :342-344), and reproducing the default path is the whole point of this mode, so
     an equal-split "fix" here would be a divergence bug rather than an improvement.
 
     Pinned so that nobody later reads the zero as an oversight and helpfully repairs it.

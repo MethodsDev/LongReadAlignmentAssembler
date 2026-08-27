@@ -526,7 +526,7 @@ individual choice harder.*
 
 As alpha grows, theta converges to the normalized AMBIGUOUS-SUPPORT profile —
 **not** to a uniform split, and the distinction is the whole mechanism.
-`ambiguous_read_counts` is computed once before the iteration loop (EM.py:283-290)
+`ambiguous_read_counts` is computed once before the iteration loop (EM.py:308-315)
 and never updates with theta, so at high alpha a constant vector dominates a term
 that iterates, and EM stops doing work. The limit prior therefore asserts
 "transcripts appearing in more ambiguous groups are more abundant", which has no

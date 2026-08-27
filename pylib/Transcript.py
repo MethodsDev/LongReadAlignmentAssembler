@@ -84,7 +84,7 @@ class Transcript(GenomeFeature):
         # Insertion-ordered set of the multipaths supporting this structure.
         # A dict, not a set: MultiPath has no __hash__, so a set of them
         # iterates in memory-address order, and _estimate_isoform_read_support
-        # accumulates `frac_mp_assignment * num_reads_in_mp` over exactly this
+        # accumulates `frac_mp_assignment * mp_support_weight` over exactly this
         # container.  Float addition is not associative, so address order
         # perturbed each isoform fraction in its low bits, which then reordered
         # the weakest-first isoform-fraction filter and changed which isoform

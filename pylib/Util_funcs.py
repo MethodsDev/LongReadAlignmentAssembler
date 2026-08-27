@@ -870,3 +870,30 @@ def resolve_polyA_signal_settings(config=None):
         )
 
     return motifs, window
+
+
+def paths_name_one_file(path_a, path_b):
+    """Whether two paths are ONE file on disk.
+
+    Device plus inode, via ``os.path.samefile``. That catches everything path
+    comparison catches AND a HARD LINK, which ``os.path.realpath`` equality does not:
+    a hard link is the same file under a second name, and realpath reports the two
+    names as distinct because there is no link to resolve.
+
+    What this does NOT establish is that the two paths hold different DATA. A
+    byte-identical copy has its own inode and is reported here as two files, which is
+    the truth about the filesystem and not about the contents. Deciding contents needs
+    the contents, and ``file_identity_token`` above is not a substitute on two counts:
+    it hashes resolved path plus size plus mtime rather than bytes, and it includes the
+    resolved path, so two distinct paths can never produce one token however identical
+    their bytes. Callers guarding against "the same data supplied twice" must say that
+    a copy defeats them rather than implying it does not.
+    """
+
+    try:
+        return os.path.samefile(path_a, path_b)
+    except OSError:
+        # One path is gone or unstattable. Fall back to the weaker comparison rather
+        # than raising from inside a guard: whatever needs the file reports its absence
+        # with the context to act on, and a guard that raises first hides that.
+        return os.path.realpath(path_a) == os.path.realpath(path_b)

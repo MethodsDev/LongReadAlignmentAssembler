@@ -38,11 +38,15 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 import LRAA_Globals
 from Quantify import Quantify
+from GenomeFeature import Exon, Intron
 
 
 class _FakeSplicegraph:
     def __init__(self, strand="+"):
         self._strand = strand
+
+    def get_contig_acc(self):
+        return "chrFake"
 
     def get_contig_strand(self):
         return self._strand
@@ -64,7 +68,7 @@ class _FakeTranscript:
         return [f"fake_sp_{self._id}"]
 
 
-def _weights_for(distances, P=None, monkeypatch=None):
+def _weights_for(distances, P=None, monkeypatch=None, strand="+"):
     """Renormalized 3'-agreement weights for a read at these 3'-end distances."""
     q = Quantify(run_EM=False, max_EM_iterations=1)
     transcripts = [_FakeTranscript(f"t{i}") for i in range(len(distances))]
@@ -79,9 +83,24 @@ def _weights_for(distances, P=None, monkeypatch=None):
         monkeypatch.setitem(LRAA_Globals.config, "max_dist_between_alt_polyA_sites", P)
 
     weights = q._assign_read_weights_based_on_read_end_agreement(
-        _FakeSplicegraph(), _FakeMultipath(), transcripts
+        _FakeSplicegraph(strand), _FakeMultipath(), transcripts
     )
     return [weights[t.get_transcript_id()] for t in transcripts]
+
+
+def _three_prime_keys_used(strand, monkeypatch):
+    """Which simple-path coordinate the weighting measured, for one contig strand."""
+    seen = []
+
+    def record(self, splice_graph, source_sp, target_sp, from_which_end):
+        seen.append(from_which_end)
+        return 0
+
+    monkeypatch.setattr(Quantify, "_get_simple_path_dist_to_termini", record)
+    Quantify(run_EM=False, max_EM_iterations=1)._assign_read_weights_based_on_read_end_agreement(
+        _FakeSplicegraph(strand), _FakeMultipath(), [_FakeTranscript("t0")]
+    )
+    return seen
 
 
 def test_single_compatible_transcript_gets_weight_one(monkeypatch):
@@ -246,3 +265,167 @@ def test_nonuniform_weights_do_change_EM(monkeypatch):
         mp_assignments, skewed, mp_read_counts, 3, max_iter=200, tol=1e-10
     )
     assert list(theta_a) != list(theta_b)
+
+
+# ------------------------------------------------ which end the weighting measures
+#
+# The weighting compares the read's 3' end to each candidate's 3' end. Simple paths
+# are ordered by genomic coordinate, so which COORDINATE that is depends on the
+# strand, and getting it wrong measures the 5' end instead -- producing weights that
+# still sum to 1, still look uniform on equidistant candidates, and are reversed.
+#
+# The hazard these pin is not a wrong branch but a missing strand. Splice_graph's
+# _contig_strand defaults to None (Splice_graph.py:62) and is assigned only by
+# build_splice_graph_for_contig (Splice_graph.py:289), and a bare
+# `"rend" if strand == "+" else "lend"` sends None down the MINUS branch. Every
+# production caller is downstream of that builder and it only ever receives "+" or
+# "-" (LRAA:2572 iterates exactly those), so this is a refusal for a state that
+# should be unreachable -- which is the point: unreachable is not the same as safe,
+# and the failure mode if it is ever reached is silent.
+
+
+def test_plus_strand_measures_the_rend(monkeypatch):
+    assert _three_prime_keys_used("+", monkeypatch) == ["rend"]
+
+
+def test_minus_strand_measures_the_lend(monkeypatch):
+    """Not a symmetry to assume: on '-' the 3' end IS the lower coordinate."""
+    assert _three_prime_keys_used("-", monkeypatch) == ["lend"]
+
+
+def test_an_unset_contig_strand_is_refused(monkeypatch):
+    """A graph constructed but never built reports strand None.
+
+    The refusal must NAME the contig and the value: on a whole-genome run "some
+    splice graph had no strand" is not actionable, and the value is what says whether
+    the graph was unbuilt (None) or carries something unexpected.
+    """
+
+    with pytest.raises(RuntimeError) as err:
+        _weights_for([10, 200], monkeypatch=monkeypatch, strand=None)
+
+    message = str(err.value)
+    assert "chrFake" in message
+    assert "None" in message
+    assert "3'" in message
+
+
+def test_a_stringified_none_strand_is_refused(monkeypatch):
+    """"None" the STRING, not the object, because CpuBudget.WorkUnit stringifies.
+
+    WorkUnit.__new__ stores str(contig_strand) (pylib/CpuBudget.py:109), so a strand
+    that went missing upstream arrives here as the four-character string "None" and
+    an `is None` check would wave it through into the minus-strand branch.
+    """
+
+    with pytest.raises(RuntimeError) as err:
+        _weights_for([10, 200], monkeypatch=monkeypatch, strand="None")
+    assert "'None'" in str(err.value)
+
+
+def test_a_present_strand_still_weights(monkeypatch):
+    """Guard for the three above: the refusal must not have swallowed the happy path."""
+    assert sum(_weights_for([10, 200], monkeypatch=monkeypatch)) == pytest.approx(1.0)
+
+
+# --------------------------------------- what counts as exonic in the 3' distance
+
+
+class _AnnotatedExon(Exon):
+    """A subclass of Exon.
+
+    None exists in the tree today (GenomeFeature.py:147 has no subclasses), so the
+    exact-type comparison this replaced was latent rather than live. It is declared
+    here because that is the only way to test the distinction, and because the day
+    someone adds a real one is the day the distance silently shortens.
+    """
+
+
+class _NodeLookupGraph:
+    def __init__(self, nodes):
+        self._nodes = {node.get_id(): node for node in nodes}
+
+    def get_contig_acc(self):
+        return "chrFake"
+
+    def get_contig_strand(self):
+        return "+"
+
+    def get_node_obj_via_id(self, node_id):
+        return self._nodes[node_id]
+
+
+def _dist_over(nodes, shared):
+    graph = _NodeLookupGraph(list(nodes) + [shared])
+    return Quantify(
+        run_EM=False, max_EM_iterations=1
+    )._get_simple_path_dist_to_termini(
+        graph,
+        [shared.get_id()],
+        [node.get_id() for node in nodes] + [shared.get_id()],
+        "lend",
+    )
+
+
+def test_an_exon_subclass_counts_toward_the_three_prime_distance():
+    """The distance is exonic bases, and a subclass of Exon is still exonic.
+
+    An exact type comparison skips it, shortening the distance and so raising that
+    candidate's weight -- with no error, no log line, and a weight vector that still
+    sums to 1. Here the subclassed exon carries 50 of the 150 bases, so skipping it
+    understates the distance by a third.
+    """
+
+    plain = Exon("chrFake", 101, 200, "+", 10.0)          # 100 bases
+    subclassed = _AnnotatedExon("chrFake", 301, 350, "+", 10.0)  # 50 bases
+    shared = Exon("chrFake", 401, 500, "+", 10.0)
+
+    assert _dist_over([plain, subclassed], shared) == 150
+
+
+def test_introns_still_do_not_count():
+    """Guard on the widening: Intron is a SIBLING of Exon, not a subclass.
+
+    The distance is exonic bases only, so relaxing the test all the way to
+    GenomeFeature would add intron length to every spliced candidate. isinstance(Exon)
+    admits Exon and its subclasses and nothing else, which is what this pins.
+    """
+
+    plain = Exon("chrFake", 101, 200, "+", 10.0)
+    intron = Intron("chrFake", 201, 300, "+", 5)
+    shared = Exon("chrFake", 401, 500, "+", 10.0)
+
+    assert _dist_over([plain, intron], shared) == 100
+
+
+# ------------------------------------- the E-step's per-read renormalization
+
+
+def test_flat_weights_conserve_the_read_total():
+    """What disabling 3' weighting relies on, asserted rather than assumed.
+
+    EM replaces every candidate weight with a flat 1.0 when
+    weight_reads_by_3prime_agreement is off (EM.py:117, :250). That is equivalent to an
+    even split ONLY because the E-step renormalizes each multipath across its own
+    candidates: total_weight sums w*theta over exactly that mp's candidates
+    (EM.py:333-336) and frac_assignment divides by it (EM.py:342-344), so each mp's
+    fractions sum to 1 and the per-transcript counts sum back to the input support.
+    Were it not renormalized, turning the feature off would rescale totals rather than
+    only flattening ratios. Asserted for both weight vectors so the invariant is shown
+    to be the E-step's and not a property of uniform input.
+    """
+
+    from EM import em_algorithm_with_weights
+
+    mp_assignments = [[0, 1], [1, 2], [0], [0, 1, 2], [2]]
+    support = [120.0, 45.0, 300.0, 17.0, 88.0]
+    flat = [[1.0] * len(mp) for mp in mp_assignments]
+    skewed = [[0.9, 0.1], [0.5, 0.5], [1.0], [0.7, 0.2, 0.1], [1.0]]
+
+    for weights in (flat, skewed):
+        _theta, sums, fracs = em_algorithm_with_weights(
+            mp_assignments, weights, support, 3, max_iter=200, tol=1e-12
+        )
+        for row in fracs:
+            assert sum(row) == pytest.approx(1.0)
+        assert sum(sums.values()) == pytest.approx(sum(support))

@@ -56,8 +56,13 @@ class Quantify:
         # for the other would misplace reads worst at genes with many ambiguous reads --
         # the genes whose isoforms are hardest to tell apart.
         #
-        # Normalized within each gene, since EM runs once per gene, so fractions computed
-        # from it must use a per-gene denominator.
+        # Normalized within the EM UNIT, and that unit is a read-sharing COMPONENT of
+        # genes rather than a single gene: quantify() builds the components at
+        # Quantify.py:298 and runs one joint EM per component. Fractions computed from
+        # theta must therefore use a per-COMPONENT denominator. A consumer that
+        # renormalizes per gene gives a read compatible with isoforms of two genes in one
+        # component a split summing to 2, which is arithmetically plausible and silent;
+        # get_transcript_id_to_component_id() is the grouping to use instead.
         self._transcript_id_to_theta = dict()
 
         # Whether the aggregate above describes one completed quantify(). Theta being empty is
@@ -1605,40 +1610,53 @@ class Quantify:
 
         mp_sp = mp.get_simple_path()
 
-        # Determine which end corresponds to the 3' end given strand.
-        # Simple paths are ordered by genomic coordinate; 3' is 'rend' on '+' and 'lend' on '-'.
-        try:
-            contig_strand = splice_graph.get_contig_strand()
-        except Exception:
-            contig_strand = "+"
+        # Which coordinate of a simple path is the read's 3' end depends on the strand:
+        # paths are ordered by genomic coordinate, so 3' is 'rend' on '+' and 'lend' on
+        # '-'. Choosing the wrong one measures the 5' end instead, and the weights it
+        # produces still sum to 1 and look entirely ordinary -- the whole weighting is
+        # reversed with nothing in the output saying so.
+        #
+        # Validated rather than defaulted, for a state that should be unreachable.
+        # get_contig_strand is a plain attribute read (Splice_graph.py:120-121) and
+        # cannot raise, so the try/except that used to stand here was dead code; but the
+        # attribute it returns defaults to None (Splice_graph.py:62) and is assigned only
+        # by build_splice_graph_for_contig (Splice_graph.py:289). Every production caller
+        # is downstream of that builder and it is only ever handed "+" or "-": LRAA:2572
+        # iterates exactly those two, and every strand below it -- the job dict at
+        # LRAA:2600, CpuBudget.WorkUnit.contig_strand -- is copied from that loop. What
+        # the guard covers is a Splice_graph constructed but never built, or a stand-in
+        # for one: those yield None, and a bare ternary on None picks 'lend', the
+        # MINUS-strand key, on a plus-strand contig. There is no strand-agnostic answer
+        # to "which end is 3'", so there is nothing safe to default to and refusing is
+        # the only correct response to a strand this code does not recognize.
+        contig_strand = splice_graph.get_contig_strand()
+        if contig_strand not in ("+", "-"):
+            raise RuntimeError(
+                "cannot weight reads by 3'-end agreement on contig {!r}: its splice "
+                "graph reports contig_strand {!r}, and only '+' or '-' says which end of "
+                "a simple path is the 3' end. Assuming one would weight by the 5' end "
+                "wherever the assumption is wrong, silently reversing every ambiguous "
+                "read's apportionment.".format(
+                    splice_graph.get_contig_acc(), contig_strand
+                )
+            )
         three_prime_end_key = "rend" if contig_strand == "+" else "lend"
 
-        # Weight only by agreement of the read 3' end (rend) with the transcript 3' end.
-        # The previous behavior used both 5' (lend) and 3' (rend) distances; now we use only 3' end.
-        transcript_id_to_sum_end_dists = dict()
+        # Weight only by agreement of the read's 3' end with the transcript's 3' end.
+        # The previous behavior summed the 5' and 3' distances; only the 3' distance is
+        # used now. WHICH coordinate that is is three_prime_end_key above -- 'rend' on
+        # the plus strand, 'lend' on the minus -- so calling it "rend" here, or summing
+        # it into anything, would misdescribe the code on half the genome.
+        transcript_id_to_three_prime_dist = dict()
         sum_dists = 0
         for transcript in transcripts_assigned:
             transcript_id = transcript.get_transcript_id()
             transcript_sp = transcript.get_simple_path()
-            dist_rend = self._get_simple_path_dist_to_termini(
+            three_prime_dist = self._get_simple_path_dist_to_termini(
                 splice_graph, mp_sp, transcript_sp, three_prime_end_key
             )
-            """
-            logger.debug(
-                "MP {} lend dist for {} = {}".format(
-                    mp.get_id(), transcript_id, dist_lend
-                )
-            )
-            logger.debug(
-                "MP {} rend dist for {} = {}".format(
-                    mp.get_id(), transcript_id, dist_rend
-                )
-            )
-            """
-            # Only consider the 3' end distance for weighting
-            sum_dist = dist_rend
-            transcript_id_to_sum_end_dists[transcript_id] = sum_dist
-            sum_dists += sum_dist
+            transcript_id_to_three_prime_dist[transcript_id] = three_prime_dist
+            sum_dists += three_prime_dist
 
         # determine relative weightings
         # Pseudocount sized to the alt-PolyA aggregation window: sub-window distance
@@ -1650,9 +1668,9 @@ class Quantify:
         adj_sum_dists = sum_dists + num_transcripts_assigned * end_dist_pseudocount
         for transcript in transcripts_assigned:
             transcript_id = transcript.get_transcript_id()
-            dist = transcript_id_to_sum_end_dists[transcript_id]
+            dist = transcript_id_to_three_prime_dist[transcript_id]
             logger.debug(
-                "transcript {} has sum_end_dist: {} and total_sum_dists_all_trans: {}".format(
+                "transcript {} has three_prime_dist: {} and total_sum_dists_all_trans: {}".format(
                     transcript_id, dist, sum_dists
                 )
             )
@@ -1702,7 +1720,14 @@ class Quantify:
         dist = 0
         for node_id in target_sp[0:matching_node_idx]:
             node = splice_graph.get_node_obj_via_id(node_id)
-            if type(node) == Exon:
+            # isinstance, not an exact type test: the sum is "exonic bases between the
+            # transcript's 3' terminus and the first node the read shares", and an Exon
+            # subclass is still exonic. An exact comparison would skip one, shorten every
+            # distance it appears in and so change the weights, with no error anywhere.
+            # No subclass of Exon exists in the tree today (GenomeFeature.py:147 has none),
+            # so this is latent rather than live -- and latent is exactly how it would
+            # stay until the day someone adds one.
+            if isinstance(node, Exon):
                 dist += node.get_feature_length()
 
         return dist
@@ -1843,9 +1868,11 @@ class Quantify:
                         else 0
                     )
 
-                    num_reads_in_mp = mp.get_read_weight()
+                    mp_support_weight = mp.get_read_weight()
 
-                    transcript_read_count_total += frac_mp_assignment * num_reads_in_mp
+                    transcript_read_count_total += (
+                        frac_mp_assignment * mp_support_weight
+                    )
                     transcript_to_fractional_mp_assignment[transcript_id][
                         mp
                     ] = frac_mp_assignment
@@ -1946,7 +1973,12 @@ class Quantify:
         return bool(self._run_EM)
 
     def get_transcript_id_to_theta(self):
-        """EM's converged abundance estimate per transcript, normalized within each gene.
+        """EM's converged abundance estimate per transcript, normalized within the
+        read-sharing COMPONENT of genes that EM ran on -- not within a gene.
+
+        Pair it with get_transcript_id_to_component_id(): a consumer that renormalizes
+        theta per gene gives a read compatible with isoforms of two genes in one
+        component a split summing to 2.
 
         Empty when run_EM is False. Use this, never the reported isoform_fraction: the
         M-step's alpha regularization enters theta but not the returned counts the fraction
