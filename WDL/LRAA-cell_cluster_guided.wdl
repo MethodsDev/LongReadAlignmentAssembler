@@ -31,8 +31,15 @@ workflow LRAA_cell_cluster_guided {
         # shorter than 10 Mb is never cut.
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
+        # `scattering` is per-cluster DISCOVERY, `scattering_final_quant` the final
+        # per-cluster quant. These MUST agree with LRAA-singlecell.wdl's defaults for
+        # the same two knobs: that workflow passes both through when it is the
+        # entrypoint, so a divergence here would only show when this workflow is
+        # called DIRECTLY -- the same run shape silently differing by entry path.
+        # Rationale for the split, including the measurement behind keeping discovery
+        # on by_chromosome, is at LRAA-singlecell.wdl:167-186.
         String scattering = "by_chromosome"
-        String scattering_final_quant = "by_chromosome"
+        String scattering_final_quant = "by_chunk"
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 

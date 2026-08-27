@@ -166,14 +166,27 @@ workflow LRAA_singlecell_wf {
 
     # How each LRAA phase divides its work; see LRAA.wdl's `scattering`. The three
     # phases want different shapes. The initial pass is ONE task over every read,
-    # so by_chunk is the only way to parallelise it. The per-cluster runs are many
-    # small tasks that already run side by side, and cutting them further only
-    # multiplies per-unit fixed cost -- measured on the test fixture, giving them
-    # 10 chunks took their stage-5 work from 27.2 to 43.7 min for no gain, because
-    # that phase already saturated every core.
+    # so by_chunk is the only way to parallelise it.
+    #
+    # PER-CLUSTER DISCOVERY stays by_chromosome, and that default is MEASURED: on the
+    # test fixture, giving those runs 10 chunks took their stage-5 work from 27.2 to
+    # 43.7 min for no gain, because many small clusters running side by side already
+    # saturated every core, and cutting them further only multiplies per-unit fixed
+    # cost.
+    #
+    # FINAL QUANT is by_chunk anyway. The measurement above was taken with miniwdl on
+    # ONE box, where leaf parallelism cannot help a phase that is already core-bound;
+    # it does not describe a backend that can place leaves on separate machines, where
+    # the same cut buys real concurrency. Final quant is also the phase whose peak
+    # memory is set by the widest single unit rather than by cluster count, so chunking
+    # it bounds that peak -- which is the reason chunking exists.
+    #
+    # The cost is two non-preemptible tasks per cluster (make_chunks and the merge)
+    # instead of none, so on a single-node run with many clusters by_chromosome may
+    # still be faster. It remains available; this is a default, not a constraint.
     String scattering_init = "by_chunk"
     String scattering_per_cluster = "by_chromosome"
-    String scattering_final_quant = "by_chromosome"
+    String scattering_final_quant = "by_chunk"
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
