@@ -212,17 +212,34 @@ test_reclaim_root_owned:
 #     construction.  Do not rebuild while test_wdls is running, in THIS worktree
 #     or another one on the same daemon.
 #
-# The durable fix is for LRAA_TEST_TAG to be a per-commit tag rather than a
-# moving one -- build_docker.testing.sh writes ${LRAA_VERSION}-<shortsha> for
-# exactly this reason, and its own comment argues the case.  That is a decision
-# about the test surface, not a bug fix, so it is left to whoever owns the next
-# release.  The tag is already overridable per run:
+# The durable fix for the RACE is for LRAA_TEST_TAG to name a per-commit tag
+# rather than a moving one -- build_docker.testing.sh writes
+# ${LRAA_VERSION}-<shortsha> for exactly this reason, and its own comment argues
+# the case.  A tag that is never reused cannot be reattached under a running
+# test.  For that to be usable as a DEFAULT it has to be DERIVED from the
+# worktree, e.g. $(LRAA_VERSION)-$(shell git rev-parse --short=7 HEAD), because
+# of the next paragraph.  That is a decision about the test surface rather than a
+# bug fix, so it is left to whoever owns the next release.
 #
-#     make test_wdls LRAA_TEST_TAG=0.28.0-64ce3fb
+# PINNING LRAA_TEST_TAG TO AN OLDER COMMIT'S TAG DOES NOT SATISFY THIS TARGET,
+# and it looks as though it should.  The comparison below is image label against
+# `git rev-parse HEAD` -- against the WORKTREE, not against the tag that was
+# requested -- because the invariant being defended is "the code in the image is
+# the code these wdls came from".  So `make test_wdls LRAA_TEST_TAG=0.28.0-abc1234`
+# on a worktree that has moved past abc1234 fails at this gate with the same
+# message it gives for a stale :testing, naming the tag you asked for.  Verified
+# 2026-08-27 against 0.28.0-64ce3fb at worktree 5d1cff20.  The variable is not
+# inert -- it selects the image this target inspects -- it simply cannot change
+# what that image is compared to.
 #
-# Escape hatch, for driving a hand-built or deliberately older image:
+# Which leaves exactly two ways to run against an image older than the worktree,
+# and they are the two the failure message names:
 #
-#     make test_wdls LRAA_TEST_SKIP_IMAGE_CHECK=1
+#   git worktree add ../scratch <sha>      # test the commit the image holds
+#   make test_wdls LRAA_TEST_SKIP_IMAGE_CHECK=1   # proceed unverified
+#
+# Prefer the first.  The second turns off the check, and the occasion for
+# wanting it is usually the occasion when it is correctly red.
 #
 .PHONY: check_test_image_revision
 check_test_image_revision:
