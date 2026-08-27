@@ -110,13 +110,35 @@ def main():
     logger.info("Loading cell cluster assignments...")
     cell_barcode_to_cluster = dict()
     with open(cell_clusters_filename, "rt") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, start=1):
             line = line.rstrip()
             vals = line.split("\t")
             if len(vals) != 2:
                 logger.warn("Skipping line from cell clusters file: {}".format(line))
                 continue
             cell_barcode, cluster_name = vals
+            # The Seurat step writes a HEADER ROW, and it has exactly two
+            # tab-separated fields, so the length check above admits it: the run
+            # then gets a cluster literally named "cluster" holding one barcode
+            # named "cell_barcode", which matches no read. The partitioner
+            # materializes an empty bam for every cluster by design, so that
+            # phantom reaches a per-cluster LRAA run as a header-only bam and
+            # dies on `count_reads_from_bam`'s "no reads counted" assertion.
+            # Observed as LRAA_by_cluster-27 / test_sc_wdl.cluster.bam in the
+            # sc_full_pipe cluster-guided run.
+            #
+            # Matched on the EXACT first line rather than dropped positionally:
+            # this argument is documented as headerless and the fixed-cluster
+            # fixtures are, so an unconditional skip would discard a real
+            # assignment.
+            if lineno == 1 and (cell_barcode, cluster_name) == (
+                "cell_barcode",
+                "cluster",
+            ):
+                logger.info(
+                    "Skipping cell clusters header line: {}".format(line)
+                )
+                continue
             cell_barcode_to_cluster[cell_barcode] = cluster_name
 
     logger.info(f"Loaded {len(cell_barcode_to_cluster)} cell barcodes across clusters")

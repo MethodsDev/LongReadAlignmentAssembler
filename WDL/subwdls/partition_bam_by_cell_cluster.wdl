@@ -60,12 +60,31 @@ task partition_bam_by_cell_cluster {
             BAM="$(pwd)/restrict_input.bam"
         fi
 
+        # The Seurat step writes its cluster assignments WITH a header row, and
+        # partition_bam_by_cell_cluster.py's format is headerless: the row has two
+        # tab-separated fields, so the parser accepts it and invents a cluster named
+        # "cluster" holding one barcode named "cell_barcode". No read carries that
+        # barcode, so the phantom cluster's bam is header-only, and the per-cluster
+        # LRAA run it reaches aborts on count_reads_from_bam's "no reads counted"
+        # assertion. The parser now drops the row itself; this strips it here as well
+        # so a run against an image built before that fix still completes.
+        #
+        # Matched on the EXACT header rather than dropped positionally: this input is
+        # documented as headerless and the fixed-cluster fixtures have no header, so an
+        # unconditional `tail -n +2` would silently discard a real cell's assignment.
+        CLUSTERS="~{cell_clusters_info}"
+        if [ "$(head -n 1 "$CLUSTERS")" = "$(printf 'cell_barcode\tcluster')" ]; then
+            tail -n +2 "$CLUSTERS" > clusters.noheader.tsv
+            CLUSTERS="$(pwd)/clusters.noheader.tsv"
+            echo "stripped cell_barcode/cluster header from cell_clusters_info" >&2
+        fi
+
         mkdir partitioned_bams
         cd partitioned_bams/
 
         (
             partition_bam_by_cell_cluster.py --bam "$BAM" \
-                                             --cell_clusters ~{cell_clusters_info} \
+                                             --cell_clusters "$CLUSTERS" \
                                              --output_prefix ~{sample_id} \
                                              --cell_barcode_tag ~{cell_barcode_tag} \
                                              ~{if main_chromosomes != "" then "--restrict_to_chromosomes '" + main_chromosomes + "'" else ""} \
