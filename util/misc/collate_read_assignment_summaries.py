@@ -341,6 +341,19 @@ def collate(
         # true of it.
         cluster_out["chunk_id"] = ""
         cluster_out[POPULATION_FIELD] = population
+        # Same disagreement as the aggregate below, and it bites this row too: on a
+        # non-chunked cluster the TOTAL's rejections cell is blank, so copying it
+        # published an empty field for a cluster that really did reject alignments.
+        # Recomputed from the worker rows, which both writers populate. For chunked
+        # input this reproduces the value the TOTAL already held rather than
+        # replacing it, so the two writers now render identically here.
+        if REJECTIONS_FIELD in fieldnames:
+            cluster_rejections = collections.OrderedDict()
+            for w in workers:
+                _add_rejections(cluster_rejections, w)
+            cluster_out[REJECTIONS_FIELD] = ",".join(
+                "{}={}".format(k, v) for k, v in sorted(cluster_rejections.items())
+            )
         out_rows.append(cluster_out)
 
         # THE CLUSTER TOTAL, not the sum of its worker rows. It is the number that
