@@ -224,6 +224,17 @@ workflow LRAA_cell_cluster_guided {
                     chunkMemoryGB = chunkMemoryGB,
                     chunkMergeCpu = chunkMergeCpu,
                     chunkMergeMemoryGB = chunkMergeMemoryGB,
+                    # Was DECLARED at :86 and passed nowhere, so raising it bought
+                    # nothing and a run could die on a full disk while reporting that
+                    # its request had been honoured. miniwdl said so the whole time:
+                    # "UnusedDeclaration, nothing references Int diskSizeGB".
+                    # LRAA-singlecell.wdl and LRAA.wdl both thread it; this workflow
+                    # was the one that did not.
+                    #
+                    # Reaches the per-cluster DISCOVERY runs only. The final quant
+                    # goes through LRAA_quant_by_cluster, which declares no
+                    # diskSizeGB of its own, so that phase still sizes its own disks.
+                    diskSizeGB = diskSizeGB,
                     docker = docker
             }
 
