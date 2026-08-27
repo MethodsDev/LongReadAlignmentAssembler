@@ -173,6 +173,46 @@ for `lraa-sc` and for the combined image. A run that only moves the commit takes
 a few minutes, because the checkout is the last layer of every image. That is
 what makes a per-commit testing build cheap enough to be routine.
 
+### `docker inspect` on `:testing` is not proof that a local image is HEAD
+
+The build scripts verify each of the four images' revision labels before pushing
+any of them, and that verification is sound at the moment it runs. It says
+nothing about the local tag a minute later.
+
+`:testing` is a MOVING tag, and any concurrent consumer that pulls it reattaches
+the local name. Observed on 2026-08-27: `build_docker.testing.sh` completed,
+asserted all four labels against `64ce3fb0`, and pushed; a `miniwdl` run in a
+DIFFERENT worktree that pins `lraa-core:testing` then pulled it -- while the
+registry still served the previous build -- and the local `lraa-core:testing`
+came to name an image stamped `d4aed737`, two commits behind. `lraa-sc`,
+`lraa-orf` and `lraa-combined` were untouched, because that run only needed
+core. The registry was never wrong. Only the local tag was.
+
+So a rebuild concurrent with any `:testing`-following run is racy by
+construction, and `docker inspect` on `:testing` is **not** sufficient evidence
+that the local image matches HEAD -- it reads whichever image currently answers
+to the name, which nothing prevents another process from changing. Confirm the
+published tag against the immutable per-commit tag instead:
+
+```bash
+HEAD=`git rev-parse HEAD`; SHORT=`git rev-parse --short=7 HEAD`
+for n in lraa-core lraa-sc lraa-orf lraa-combined; do
+  for t in testing ${LRAA_VERSION}-${SHORT}; do
+    docker manifest inspect -v <registry>/$n:$t |
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["Descriptor"]["digest"])'
+  done
+done
+```
+
+The two digests agreeing per image is the claim worth making: it is about the
+registry, which the release consumes, and `${LRAA_VERSION}-<shortsha>` is never
+reused, so nothing can move it. If the local tag has drifted, `docker pull
+<registry>/<name>:testing` restores it from the registry.
+
+All FOUR images, not three. `lraa-combined` is published and labelled like the
+others; checking three and inferring the fourth is the same incomplete check in
+miniature.
+
 ## Releasing a new version
 
 1. Update `VERSION` in the top-level `LRAA` script and `Docker/VERSION.txt` to

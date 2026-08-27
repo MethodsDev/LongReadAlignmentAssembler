@@ -187,6 +187,39 @@ test_reclaim_root_owned:
 # one checkout and verify each one's revision label before pushing any of them,
 # so core's revision is the tag's revision.
 #
+# WHAT THIS CHECK CANNOT ESTABLISH, and it is not a small gap.  It reads the
+# label off whichever image currently answers to $(LRAA_TEST_DOCKER), and
+# :testing is a MOVING tag that any concurrent consumer can reattach: a pull of
+# :testing in another worktree replaces the local name, and if the registry was
+# still serving the previous build at that moment the local tag ends up naming
+# an OLDER image than the one just built.  Observed on 2026-08-27 --
+# build_docker.testing.sh asserted all four labels against 64ce3fb0 and pushed,
+# a miniwdl run in a different worktree pinning lraa-core:testing then pulled,
+# and local lraa-core:testing came to name a d4aed737 image while the other
+# three stayed correct.  The registry was right throughout.
+#
+# Consequences, in order of how much they cost:
+#
+#   - This target passing is evidence about a NAME, not about a build.  If it
+#     reports agreement it is because the tag agrees right now; another process
+#     can move it before the first container starts.
+#   - `docker inspect` on :testing is therefore NOT proof that a local image is
+#     HEAD, which is the wrong conclusion to draw and the easy one.  Compare the
+#     registry digest of :testing against ${LRAA_VERSION}-<shortsha>, which is
+#     never reused; see Docker/README.md.  `docker pull` restores a drifted
+#     local tag.
+#   - A rebuild run concurrently with any :testing-following target is racy by
+#     construction.  Do not rebuild while test_wdls is running, in THIS worktree
+#     or another one on the same daemon.
+#
+# The durable fix is for LRAA_TEST_TAG to be a per-commit tag rather than a
+# moving one -- build_docker.testing.sh writes ${LRAA_VERSION}-<shortsha> for
+# exactly this reason, and its own comment argues the case.  That is a decision
+# about the test surface, not a bug fix, so it is left to whoever owns the next
+# release.  The tag is already overridable per run:
+#
+#     make test_wdls LRAA_TEST_TAG=0.28.0-64ce3fb
+#
 # Escape hatch, for driving a hand-built or deliberately older image:
 #
 #     make test_wdls LRAA_TEST_SKIP_IMAGE_CHECK=1
