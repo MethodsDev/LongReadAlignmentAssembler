@@ -30,6 +30,7 @@ column the merger fills in from each unit's chunk.
 import csv
 import importlib.util
 import os
+import re
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -421,6 +422,179 @@ def test_rescue_alignment_rejections_sum_by_key(collated):
 
     all_row = _one(_rows(collated["path"]), "all_clusters")
     assert all_row["rescue_alignment_rejections"] == "low_identity=5,short_overlap=1"
+
+
+# -- THE TWO TOTAL SHAPES
+#
+# The fixtures above are all chunked-shape, and that is exactly how the
+# rejections defect shipped twice in one morning: ChunkedRun's merged TOTAL
+# carries the per-key rejection sum, LRAA's own non-chunked merger initialises
+# its TOTAL to empty strings and never fills that cell, and the collator read the
+# TOTAL. All 17 tests passed through it, before and after, because no fixture had
+# ever supplied the blank-TOTAL shape. This is that fixture.
+
+
+# Non-chunked workers, and the chunked cluster whose TOTAL they are mixed with.
+# The numbers are the reviewer's reproduction case, kept verbatim so the
+# arithmetic in the assertions is checkable by eye: 7+1 within the non-chunked
+# cluster, +4 from the chunked one across the aggregate.
+BLANK_TOTAL_WORKERS = [("low_id=7,off_target=2", 90), ("low_id=1", 10)]
+BLANK_TOTAL_CHUNKED_REJECTIONS = "low_id=4"
+
+
+def _nonchunked_summary(root, cluster_id, workers):
+    """A summary in the shape an UNCHUNKED ``LRAA`` invocation writes.
+
+    Its per-work-unit rows go through the same writer the chunked fixtures use,
+    but the file is finished by ``_merge_read_assignment_summary_files`` alone --
+    no ``ChunkedRun.merge_read_assignment_summaries`` after it. That is the whole
+    point: that merger builds its TOTAL as ``{field: "" for field in fieldnames}``
+    and fills only the keys in its own ``total_keys`` list, which does not include
+    the rejections column. So the TOTAL's rejections cell is BLANK by
+    construction, and the counts exist only on the worker rows.
+    """
+
+    cdir = root / cluster_id
+    cdir.mkdir()
+    worker_paths = []
+    for index, (rejections, reads) in enumerate(workers):
+        path = str(cdir / "unit_{:02d}.worker.tsv".format(index))
+        lraa._write_read_assignment_summary(
+            path,
+            "chrT",
+            "+",
+            {
+                "reads_total": reads,
+                "reads_kept_genome": reads,
+                "rescue_alignment_rejections": rejections,
+            },
+        )
+        worker_paths.append(path)
+
+    merged = str(cdir / "{}.read_assignment.summary.tsv".format(cluster_id))
+    lraa._merge_read_assignment_summary_files(worker_paths, merged)
+    return merged
+
+
+@pytest.fixture(scope="module")
+def mixed_total_shapes(tmp_path_factory):
+    """One blank-TOTAL cluster collated beside one chunked-TOTAL cluster."""
+
+    root = tmp_path_factory.mktemp("mixed_totals")
+    nonchunked = _nonchunked_summary(root, "nonchunked", BLANK_TOTAL_WORKERS)
+    chunked = _cluster_summary(
+        root,
+        "chunked",
+        [
+            (
+                "chrT_00",
+                {
+                    "reads_total": 50,
+                    "reads_kept_genome": 50,
+                    "rescue_alignment_rejections": BLANK_TOTAL_CHUNKED_REJECTIONS,
+                },
+            )
+        ],
+    )
+    pairs = [("nonchunked", nonchunked), ("chunked", chunked)]
+    out = root / "mixed.read_assignment.summary.tsv"
+    collate_mod.collate(pairs, str(out), population="cluster_thinned")
+    return {"path": str(out), "pairs": pairs, "root": root}
+
+
+def test_the_blank_total_input_really_is_blank(mixed_total_shapes):
+    """Pin the PREMISE. If LRAA's merger ever starts filling this cell, the two
+    tests below stop testing anything and would still pass, so the shape the
+    fixture exists to supply is asserted rather than assumed."""
+
+    rows = _rows(mixed_total_shapes["pairs"][0][1])
+    total = [r for r in rows if r["row_type"] == "TOTAL"]
+    assert len(total) == 1, rows
+    assert total[0]["rescue_alignment_rejections"] == ""
+    assert [r["rescue_alignment_rejections"] for r in rows if r["row_type"] != "TOTAL"] == [
+        rejections for rejections, _ in BLANK_TOTAL_WORKERS
+    ]
+
+
+def test_a_blank_total_cluster_still_reports_its_rejections(mixed_total_shapes):
+    """The CLUSTER row, which is the one that was published empty.
+
+    Recomputed from the worker rows, so 7+1 and 2 survive; and the chunked
+    cluster's row is unchanged by that recomputation, which is what makes the two
+    writers render identically at this level.
+    """
+
+    rows = _rows(mixed_total_shapes["path"])
+    cluster_rows = {r["cluster_id"]: r for r in rows if r["level"] == "cluster"}
+    assert (
+        cluster_rows["nonchunked"]["rescue_alignment_rejections"]
+        == "low_id=8,off_target=2"
+    )
+    assert cluster_rows["chunked"]["rescue_alignment_rejections"] == "low_id=4"
+
+
+def test_all_clusters_sums_rejections_across_both_total_shapes(mixed_total_shapes):
+    """And the aggregate spans both writers: 7+1+4 low_id, 2 off_target."""
+
+    all_row = _one(_rows(mixed_total_shapes["path"]), "all_clusters")
+    assert all_row["rescue_alignment_rejections"] == "low_id=12,off_target=2"
+
+
+def test_reading_the_total_cell_instead_loses_the_blank_total_cluster(
+    mixed_total_shapes, tmp_path
+):
+    """THE NEGATIVE CONTROL, on the real collator with the fix reverted.
+
+    Both rejection recomputations are replaced by a copy of the TOTAL cell -- the
+    code that shipped -- and the two tests above must then fail. Without this the
+    assertions could be satisfied by a collator that happened to agree for other
+    reasons, and the fixture would prove nothing.
+    """
+
+    source = (REPO / "util/misc/collate_read_assignment_summaries.py").read_text()
+
+    reverted = source.replace(
+        """        if REJECTIONS_FIELD in fieldnames:
+            cluster_rejections = collections.OrderedDict()
+            for w in workers:
+                _add_rejections(cluster_rejections, w)
+            cluster_out[REJECTIONS_FIELD] = ",".join(
+                "{}={}".format(k, v) for k, v in sorted(cluster_rejections.items())
+            )
+""",
+        """        if REJECTIONS_FIELD in fieldnames:
+            cluster_out[REJECTIONS_FIELD] = total_row.get(REJECTIONS_FIELD, "")
+""",
+        1,
+    )
+    assert reverted != source, "the cluster-level recomputation is gone from collate()"
+
+    # And the aggregate, which was the half fixed first: sum the cluster TOTALs
+    # rather than the worker rows.
+    reverted, swapped = re.subn(
+        r"^(\s*)for w in workers:\n\1    _add_rejections\(rejections, w\)\n",
+        r"\1_add_rejections(rejections, total_row)\n",
+        reverted,
+        count=1,
+        flags=re.M,
+    )
+    assert swapped == 1, "the aggregate no longer accumulates from worker rows"
+
+    patched = tmp_path / "collate_reverted.py"
+    patched.write_text(reverted)
+    old = _load("collate_read_assignment_summaries_reverted", patched)
+
+    out = tmp_path / "reverted.tsv"
+    old.collate(mixed_total_shapes["pairs"], str(out), population="cluster_thinned")
+
+    rows = _rows(out)
+    cluster_rows = {r["cluster_id"]: r for r in rows if r["level"] == "cluster"}
+    # The defect, exactly: a cluster that rejected 10 alignments publishes nothing.
+    assert cluster_rows["nonchunked"]["rescue_alignment_rejections"] == ""
+    assert cluster_rows["chunked"]["rescue_alignment_rejections"] == "low_id=4"
+    assert (
+        _one(rows, "all_clusters")["rescue_alignment_rejections"] == "low_id=4"
+    )
 
 
 # -- refusals
