@@ -52,6 +52,13 @@ task LRAA_runner_task {
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
+        # Apportion an ambiguous read by how well its 3' end agrees with each
+        # candidate transcript, or split it flat. True replaces the computed weight
+        # with 1.0 (pylib/EM.py), so it CHANGES REPORTED NUMBERS -- surfaced here
+        # because a user who sets it and silently does not get it draws conclusions
+        # from the wrong apportionment, which is what happened: the flag reached no
+        # workflow at all, and on a chunked run LRAA parsed it and dropped it.
+        Boolean no_weight_reads_by_3prime_agreement = false
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -280,6 +287,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
                                  ~{if defined(min_monoexonic_TPM) then "--min_monoexonic_TPM " + min_monoexonic_TPM else ""} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
+                                 ~{true="--no_weight_reads_by_3prime_agreement" false='' no_weight_reads_by_3prime_agreement} \
                                  ~{if defined(min_alt_splice_freq) then "--min_alt_splice_freq " + min_alt_splice_freq else ""} \
                                  ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \
                                  ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
@@ -421,6 +429,7 @@ workflow LRAA_runner {
         Float? min_isoform_fraction
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
+        Boolean no_weight_reads_by_3prime_agreement = false
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -474,6 +483,7 @@ workflow LRAA_runner {
             min_isoform_fraction=min_isoform_fraction,
             min_monoexonic_TPM=min_monoexonic_TPM,
             no_filter_internal_priming=no_filter_internal_priming,
+            no_weight_reads_by_3prime_agreement=no_weight_reads_by_3prime_agreement,
             min_alt_splice_freq=min_alt_splice_freq,
             min_alt_unspliced_freq=min_alt_unspliced_freq,
             cell_barcode_tag = cell_barcode_tag,

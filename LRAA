@@ -436,8 +436,25 @@ _RENAMED_CONFIG_FLAGS = {
 }
 
 # Arguments whose config key holds the NEGATION of the parsed value.
+#
+# EXHAUSTIVE against main()'s own `config[KEY] = not args.DEST` assignments, and
+# now checked rather than merely claimed: pylib/test_declared_inputs_reach_flags.py
+# walks LRAA's AST for that exact shape and fails on a pair absent from here. It
+# has to be exhaustive, because the generic forwarding below routes on
+# `dest in config` -- and a negated flag's dest is NEVER a config key, so an
+# unmapped one falls through all three branches and is dropped. Silently: the run
+# completes, every chunk worker uses the library default, and the user's flag
+# changed nothing. Five of the six below were in exactly that state, including
+# no_weight_reads_by_3prime_agreement, which decides whether an ambiguous read is
+# apportioned by 3'-end agreement or split flat (EM.py) -- a number-changing
+# setting that a chunked run accepted and ignored.
 _NEGATED_CONFIG_FLAGS = {
     "no_EM": "run_EM",
+    "no_filter_internal_priming": "filter_internal_priming",
+    "no_infer_TSS": "infer_TSS",
+    "no_infer_PolyA": "infer_PolyA",
+    "no_use_community_clustering": "use_community_clustering",
+    "no_weight_reads_by_3prime_agreement": "weight_reads_by_3prime_agreement",
 }
 
 # Keys ChunkedRun already puts on each worker's own command line (lraa_cmd), so a
@@ -3730,6 +3747,19 @@ def _run_chunked_mode(args):
             if args.contig or not args.restrict_to_chromosomes
             else ",".join(re.split(r"[\s,]+", args.restrict_to_chromosomes.strip()))
         ),
+        # Same allowlist, and the third instance of the same omission. Unlisted,
+        # --oversimplify is declared and parsed on THIS command line (:927) and
+        # then dropped, so every chunk worker silently receives ChunkedRun's own
+        # default instead of the caller's list. That default deliberately matches
+        # this driver's ("chrM,M", ChunkedRun.py:5737-5752) so the flag's ABSENCE
+        # was always faithful -- which is exactly what hid this: only a caller who
+        # NAMED contigs saw them ignored. And subwdls/LRAA_runner.wdl always
+        # passes --chunk, so --oversimplify was inert on every WDL path.
+        # ChunkedRun does not apply this value directly: contigs are named as the
+        # genome fasta spells them and a chunk's own fasta holds a renamed mini
+        # contig, so resolve_oversimplify_for_chunk (ChunkedRun.py:3220) does the
+        # translation per chunk. Pinned by pylib/test_declared_inputs_reach_flags.py.
+        oversimplify=args.oversimplify,
         HiFi=args.HiFi,
         arm="chunked",
         num_total_reads=args.num_total_reads,

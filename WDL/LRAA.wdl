@@ -110,6 +110,16 @@ workflow LRAA_wf {
         
         Float? min_per_id
         Boolean no_EM = false
+        # Apportion an ambiguous read by how well its 3' end agrees with each
+        # candidate transcript, or split it flat. True makes pylib/EM.py use a flat
+        # 1.0 weight instead of the computed one, so it CHANGES REPORTED NUMBERS.
+        # Reaches all three scattering modes: by_chromosome and off as LRAA's own
+        # --no_weight_reads_by_3prime_agreement, by_chunk as a config override on
+        # each leaf. Until now it reached none of them -- no workflow declared it,
+        # and on a chunked run LRAA parsed the flag and then dropped it, because
+        # its config key is the NEGATION of its dest and _NEGATED_CONFIG_FLAGS did
+        # not map the pair.
+        Boolean no_weight_reads_by_3prime_agreement = false
         Boolean quant_only = false
         # Return the depth-normalized BAM(s) the splice graph was built from. Single-cell
         # workflows that call this one set this false; they never surface the file, and
@@ -271,6 +281,7 @@ workflow LRAA_wf {
                 chunk_plan = internal_chunk_plan,
                 main_chromosomes = main_chromosomes,
                 oversimplify = oversimplify,
+                no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 quant_only = quant_only,
                 HiFi = HiFi,
                 min_mapping_quality = min_mapping_quality,
@@ -404,6 +415,7 @@ workflow LRAA_wf {
                     HiFi = HiFi,
                     no_norm = no_norm,
                     no_EM = no_EM,
+                    no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
@@ -450,6 +462,28 @@ workflow LRAA_wf {
 
     if (run_without_splitting) {
             
+        # main_chromosomes is a contig FILTER in every mode (see its declaration),
+        # and off's only representation of one is LRAA's own --contig -- which
+        # subwdls/LRAA_runner.wdl has always declared, forwarded to its task and
+        # emitted. It simply was never connected here, so the input VALIDATED --
+        # validate_scattering below deliberately accepts exactly one name with
+        # scattering=off rather than refusing it -- and was then dropped, and
+        # scattering=off with main_chromosomes="chr21" processed the whole genome
+        # while reporting nothing amiss.
+        #
+        # A nested declaration rather than a ternary because an empty filter must
+        # leave off unrestricted and WDL 1.0 has no None to select: a declaration
+        # inside a false conditional is the only undefined String? it can produce.
+        #
+        # SUPPRESSED when region is set, mirroring the precedence LRAA already
+        # applies internally: --region names its own contig and narrows within it,
+        # so a region on one contig plus a --contig naming another would agree on
+        # nothing and quantify nothing. region requires scattering=off, so this is
+        # the one mode where the pair is reachable at all.
+        if (main_chromosomes != "" && !defined(region)) {
+            String direct_contig = main_chromosomes
+        }
+
         call LRAA_runner.LRAA_runner as LRAA_direct {
             input:
                 sample_id = sample_id,
@@ -459,12 +493,14 @@ workflow LRAA_wf {
                 genome_fasta = referenceGenome,
                 annot_gtf = annot_gtf,
                 region = region,
+                contig = direct_contig,
                 oversimplify = oversimplify,
                 min_per_id = min_per_id,
                 quant_only = quant_only,
                 HiFi = HiFi,
                 no_norm = no_norm,
                 no_EM = no_EM,
+                no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,

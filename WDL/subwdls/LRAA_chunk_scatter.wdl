@@ -70,6 +70,13 @@ workflow LRAA_chunk_scatter {
         # fasta. ChunkedRun resolves it per chunk and rewrites the name to the
         # mini contig, so a caller writes the ORIGINAL name here.
         String? oversimplify
+        # Apportion an ambiguous read by 3'-end agreement, or split it flat. True
+        # replaces the computed weight with 1.0 (pylib/EM.py), so it changes
+        # reported numbers. Reaches the leaf as a config override rather than a
+        # flag: ChunkedRun deliberately routes THRESHOLD settings through one
+        # --config_update file (see lraa_cmd) because per-flag forwarding there is
+        # the same allowlist that silently dropped every threshold once already.
+        Boolean no_weight_reads_by_3prime_agreement = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         File? cell_list
@@ -230,6 +237,7 @@ workflow LRAA_chunk_scatter {
                 stream_reads = stream_reads,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 oversimplify = oversimplify,
+                no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 chunkCpu = chunkCpu_use,
                 chunkMemoryGB = chunkMemoryGB_use,
                 chunkPreemptible = chunkPreemptible,
@@ -472,6 +480,7 @@ task process_chunk {
         Boolean stream_reads
         Boolean rescue_unassigned_reads_via_transcriptome_alignment
         String? oversimplify
+        Boolean no_weight_reads_by_3prime_agreement = false
         Int chunkCpu
         Int chunkMemoryGB
         Int chunkPreemptible
@@ -491,6 +500,18 @@ task process_chunk {
     cp ~{chunkPlan} work/chunk_plan.json
     tar -xf ~{chunkTar} -C work/chunks/~{chunkId}
 
+    # LRAA_Globals.config overrides for THIS leaf's stage-5 LRAA run. ChunkedRun
+    # forwards the file to the worker as --config_update (lraa_cmd), which LRAA
+    # applies LAST, so it wins over the worker's own defaults. Written only when
+    # there is something to say: an unconditional file would change every worker's
+    # argv and therefore its per-chunk quant sentinel (ChunkedRun.argv_digest),
+    # invalidating existing chunk directories for no reason. Passed ABSOLUTE via
+    # $PWD for the reason --cell_list is (see lraa_cmd): a chunk worker's cwd is
+    # its own chunk directory, not this task's.
+    if [[ "~{no_weight_reads_by_3prime_agreement}" == "true" ]]; then
+        printf '{"weight_reads_by_3prime_agreement": false}\n' > worker_config.json
+    fi
+
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --output_dir work \
         --only_chunk ~{chunkId} \
@@ -501,9 +522,11 @@ task process_chunk {
         --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \
         ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
         ~{true="" false="--no_stream_reads_rescue_unassigned" rescue_unassigned_reads_via_transcriptome_alignment} \
+        ~{if defined(oversimplify) then "--oversimplify " + oversimplify else ""} \
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
-        ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""}
+        ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
+        ~{if no_weight_reads_by_3prime_agreement then "--worker_config_json \"$PWD/worker_config.json\"" else ""}
 
     # Rename every unit artifact to <unit_id>.<suffix>. The merge addresses inputs as
     # quant_prefix + ".quant.expr" etc, so unit-scoped basenames let the merge task drop
