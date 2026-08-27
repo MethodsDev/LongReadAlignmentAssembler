@@ -1,4 +1,30 @@
 {
+    # Chunk-task reservations sized to what these tasks MEASURABLY use on this
+    # fixture, rather than to LRAA_chunk_scatter.wdl's whole-genome defaults
+    # (16 GiB / 2 cpu per leaf, 32 GiB / 16 cpu for make_chunks).  Measured from
+    # the tasks' own cgroup telemetry over 504 chunk leaves and 48 make_chunks
+    # runs of this suite: worst leaf peak 889 MiB, worst make_chunks peak 81 MiB.
+    #
+    # This is a THROUGHPUT fix, not a thrift one.  The swarm these tests run on
+    # has 62.8 GiB, so a 16 GiB leaf reservation admits three leaves however many
+    # clusters the scatter has, and a 32 GiB / 16 cpu make_chunks -- one per
+    # cluster -- cannot be placed until the box drains.  Measured effect of these
+    # eight lines: quant_only 385 -> 176 s, denovo 479 -> 294 s,
+    # cluster_guided_QOnly 944 -> 628 s, ref_guided 676 -> 496 s,
+    # scattered 399 -> 319 s, all still green.
+    #
+    # 4 GiB is 4.6x the worst leaf observed anywhere in the suite.  At that size
+    # memory stops binding and cpu becomes the constraint at 8 concurrent, which
+    # is the intended shape.
+    "LRAA_singlecell_wf.chunkCpu" : 2,
+    "LRAA_singlecell_wf.chunkMemoryGB" : 4,
+    "LRAA_singlecell_wf.chunkMakeChunksCpu" : 2,
+    "LRAA_singlecell_wf.chunkMakeChunksMemoryGB" : 4,
+    "LRAA_singlecell_wf.chunkMergeCpu" : 1,
+    "LRAA_singlecell_wf.chunkMergeMemoryGB" : 4,
+    "LRAA_singlecell_wf.cpu_chunk_plan" : 2,
+    "LRAA_singlecell_wf.memoryGB_chunk_plan" : 4,
+
     "LRAA_singlecell_wf.cpuScattered" : 2,
     "LRAA_singlecell_wf.cpu" : 2,
     "LRAA_singlecell_wf.memoryGBscSparseMatrices" : 4,
