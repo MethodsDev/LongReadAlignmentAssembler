@@ -459,6 +459,102 @@ def _wdl_files():
     return files
 
 
+# Surface E: a knob that never reaches a public entry point is unreachable from
+# Terra, which is where these workflows are actually launched from.
+#
+# The 3' weighting knob was the instance. ``LRAA_wf`` declared
+# ``no_weight_reads_by_3prime_agreement`` and delivered it correctly -- as the flag
+# via subwdls/LRAA_runner.wdl, and as a ``--config_update`` override per chunk leaf
+# via subwdls/LRAA_chunk_scatter.wdl -- but LRAA-singlecell.wdl,
+# LRAA-cell_cluster_guided.wdl and LRAA_quant_by_cluster.wdl never declared it, so
+# on EVERY single-cell path there was no way to turn 3' weighting off. No entry
+# point exposes a generic ``--config_update`` input either, so there was no escape
+# hatch to fall back on.
+#
+# Surfaces A-D could not see it. A and B bind inputs that already exist; C compares
+# two calls to the same callee and each of those files calls ``LRAA_wf`` exactly
+# once; D checks the driver's own flag map, which was correct. An input that is
+# never declared has nothing to drop.
+#
+# So the rule is transitive rather than a fixed file list: anything that calls a
+# workflow carrying this knob must carry it too, and pass it on. Add a new entry
+# point that reaches LRAA and it is covered without editing this test.
+THREE_PRIME_FLAG = "no_weight_reads_by_3prime_agreement"
+THREE_PRIME_ROOT = "LRAA_wf"
+
+
+def _workflow_input_block(src, name):
+    """The ``input {}`` block of workflow ``name``, or None.
+
+    Brace-matched rather than reusing ``INPUT_BLOCK_RE``, which closes on a ``}``
+    at the SAME indentation as its ``input``. That holds for tasks and does not
+    hold here: ``WDL/LRAA.wdl`` indents the workflow's ``input {`` by five spaces
+    and closes it at four, so the indentation form silently finds no block at all
+    and every check built on it would pass by vacuum on the one file that matters
+    most.
+    """
+
+    match = re.search(r"^workflow\s+" + re.escape(name) + r"\s*\{", src, re.M)
+    if match is None:
+        return None
+    opener = re.search(r"^[ \t]*input[ \t]*\{", src[match.end() :], re.M)
+    if opener is None:
+        return None
+    start = match.end() + opener.end()  # just inside the input block's brace
+    depth = 1
+    for i in range(start, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i]
+    return None
+
+
+def _wdl_workflows(src):
+    return re.findall(r"^workflow\s+(\w+)", src, re.M)
+
+
+def flag_reachability_offenders(
+    flag=THREE_PRIME_FLAG, root=THREE_PRIME_ROOT, sources=None
+):
+    """Callers of a flag-carrying workflow that fail to declare or forward it.
+
+    Grown to a fixpoint from ``root``: a workflow that calls a carrier becomes a
+    carrier itself, so the requirement propagates outward to the entry points
+    rather than being enumerated here.
+
+    ``sources`` overrides what is read from disk, so the mutation test below can
+    run this exact fixpoint against a deliberately broken tree. Without that the
+    guard could only ever be exercised on a passing tree, which proves nothing.
+    """
+
+    if sources is None:
+        sources = {path: _strip_comments(path.read_text()) for path in _wdl_files()}
+    carriers = {root}
+    offenders = {}
+
+    changed = True
+    while changed:
+        changed = False
+        for path, src in sources.items():
+            for callee, alias, names in _call_bodies(src):
+                if callee not in carriers:
+                    continue
+                declared = _workflow_input_block(src, _wdl_workflows(src)[0]) or ""
+                where = "{}::{}".format(path.name, alias)
+                if not re.search(r"\b" + flag + r"\b", declared):
+                    offenders[where] = "does not declare {}".format(flag)
+                elif flag not in names:
+                    offenders[where] = "declares {} but does not forward it".format(flag)
+                for name in _wdl_workflows(src):
+                    if name not in carriers:
+                        carriers.add(name)
+                        changed = True
+    return offenders
+
+
 @pytest.mark.parametrize("path", _wdl_files(), ids=lambda p: p.name)
 def test_pipeline_task_inputs_reach_the_command_line(path):
     """Surface A. A task input no command line sees is an input that does nothing."""
@@ -668,3 +764,142 @@ def test_surface_a_catches_the_unemitted_3prime_agreement_input():
     assert offenders.get("LRAA_runner_task") == [
         "no_weight_reads_by_3prime_agreement"
     ], offenders
+
+
+def test_every_entry_point_can_turn_off_3prime_weighting():
+    """Surface E. The knob has to be reachable from where runs are launched."""
+
+    offenders = flag_reachability_offenders()
+    assert offenders == {}, (
+        "these calls reach LRAA's 3' weighting knob but cannot set it: {}".format(
+            offenders
+        )
+    )
+
+
+def test_the_3prime_carrier_set_is_what_we_think_it_is():
+    """Every workflow that carries the knob, named.
+
+    Without this, a rule that silently stopped propagating -- a renamed workflow, a
+    call written through an alias the regex misses, or an input block the parser
+    fails to find -- would report zero offenders and look like a pass. The four
+    entry points are the point of surface E; the two subworkflows carry it because
+    they are what finally delivers it, as the flag (LRAA_runner) and as a per-leaf
+    ``--config_update`` override (LRAA_chunk_scatter).
+    """
+
+    sources = {p: _strip_comments(p.read_text()) for p in _wdl_files()}
+    carrying = {
+        path.name
+        for path, src in sources.items()
+        for name in _wdl_workflows(src)
+        if re.search(
+            r"\b" + THREE_PRIME_FLAG + r"\b", _workflow_input_block(src, name) or ""
+        )
+    }
+    assert carrying == {
+        # entry points -- launchable, so each must expose the knob
+        "LRAA.wdl",
+        "LRAA-singlecell.wdl",
+        "LRAA-cell_cluster_guided.wdl",
+        "LRAA_quant_by_cluster.wdl",
+        # delivery -- where it becomes a command line
+        "LRAA_runner.wdl",
+        "LRAA_chunk_scatter.wdl",
+    }, carrying
+
+
+def test_surface_e_catches_a_dropped_forward_on_one_call_of_two():
+    """The other half of the rule: declared up top, dropped on one edge.
+
+    ``LRAA-cell_cluster_guided.wdl`` forwards to both of its phases. Dropping just
+    the discovery one would leave the final quant weighting reads differently from
+    the models it is quantifying -- a divergence that produces numbers rather than
+    an error, so nothing downstream would report it.
+    """
+
+    sources = {p: _strip_comments(p.read_text()) for p in _wdl_files()}
+    target = WDL_DIR / "LRAA-cell_cluster_guided.wdl"
+    mutated, n = re.subn(
+        r"^\s*" + THREE_PRIME_FLAG + r"\s*=\s*" + THREE_PRIME_FLAG + r"\s*,\s*\n",
+        "",
+        sources[target],
+        count=1,
+        flags=re.M,
+    )
+    assert n == 1, "no forward left to drop in {}".format(target.name)
+    sources[target] = mutated
+
+    assert flag_reachability_offenders(sources=sources) == {
+        "LRAA-cell_cluster_guided.wdl::LRAA_by_cluster": (
+            "declares {} but does not forward it".format(THREE_PRIME_FLAG)
+        )
+    }
+
+
+def test_surface_e_catches_an_entry_point_that_never_declares_the_flag():
+    """The defect exactly as it shipped: declared by LRAA_wf, absent up top.
+
+    Deleting the declaration from ``LRAA-singlecell.wdl`` must be caught. Surfaces
+    A-D all pass on that file in this state, which is why E exists.
+    """
+
+    src = _strip_comments((WDL_DIR / "LRAA-singlecell.wdl").read_text())
+    reverted, n = re.subn(
+        r"^\s*Boolean\s+" + THREE_PRIME_FLAG + r"\s*=\s*false\s*\n",
+        "",
+        src,
+        count=1,
+        flags=re.M,
+    )
+    assert n == 1, "LRAA-singlecell.wdl no longer declares the flag"
+
+    # The point of the test: the guard itself, run over a tree where only that one
+    # declaration is missing, must name both of this entry point's LRAA-reaching
+    # calls. Asserting the deletion happened would prove nothing about the guard.
+    sources = {path: _strip_comments(path.read_text()) for path in _wdl_files()}
+    sources[WDL_DIR / "LRAA-singlecell.wdl"] = reverted
+
+    offenders = flag_reachability_offenders(sources=sources)
+    expected = "does not declare {}".format(THREE_PRIME_FLAG)
+    assert offenders == {
+        "LRAA-singlecell.wdl::LRAA_init": expected,
+        "LRAA-singlecell.wdl::cluster_guided": expected,
+    }, offenders
+
+    # ...and the unmutated tree is clean, so the assertion above is about the
+    # mutation rather than about a rule that fails everywhere.
+    assert flag_reachability_offenders() == {}
+
+
+def test_a_wdl_that_gates_on_rescue_emits_the_master_opt_out():
+    """Surface E, second instance: the RIGHT flag, not merely some flag.
+
+    ``subwdls/LRAA_runner.wdl`` renders
+    ``--no_rescue_unassigned_reads_via_transcriptome_alignment`` from its rescue
+    boolean. ``subwdls/LRAA_chunk_scatter.wdl`` rendered only
+    ``--no_stream_reads_rescue_unassigned`` from the SAME boolean, at both of its
+    LRAA-running command blocks -- so asking a chunked run for rescue-off left
+    every worker deriving rescue-on and failing LRAA's own guard.
+
+    Surfaces A-D cannot see this: the input IS referenced from the command block,
+    just spent on the narrower flag. Only the pairing of boolean to flag is wrong,
+    which is why this checks the emitted text rather than mere reachability.
+    """
+
+    boolean = "rescue_unassigned_reads_via_transcriptome_alignment"
+    offenders = {}
+    for path in _wdl_files():
+        src = _strip_comments(path.read_text())
+        for name, body in wdl_tasks(src):
+            command = COMMAND_RE.search(body)
+            if command is None or not INVOCATION_RE.search(command.group(1)):
+                continue
+            text = command.group(1)
+            if not re.search(r"\b" + boolean + r"\b", text):
+                continue
+            if "--no_" + boolean not in text:
+                offenders["{}::{}".format(path.name, name)] = (
+                    "gates on {} without emitting --no_{}".format(boolean, boolean)
+                )
+    assert offenders == {}, offenders

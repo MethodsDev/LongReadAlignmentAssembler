@@ -43,6 +43,12 @@ workflow LRAA_quant_by_cluster {
         String? oversimplify
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int normalize_max_cov_level = 1000
+
+        # Turn off 3' end weighting in the EM. LRAA_wf has declared this since the
+        # negated-flag threading landed, but no single-cell entry point forwarded it,
+        # so it was unreachable from Terra on every cluster path -- and 3'-biased
+        # chemistry is exactly where you would want to measure without it.
+        Boolean no_weight_reads_by_3prime_agreement = false
         
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -274,6 +280,13 @@ workflow LRAA_quant_by_cluster {
                 # this costs no new normalization. Supplying the sg bam also means LRAA
                 # does not normalize again: LRAA.wdl derives no_norm from it being
                 # defined, which is why there is no no_norm argument here any more.
+                #
+                # num_total_reads is deliberately NOT passed either. LRAA_wf counts the
+                # bam it is handed, which here is this cluster's, so the TPM denominator
+                # is THIS CLUSTER's read total and per-cluster TPM stays
+                # cluster-relative. Forwarding a whole-library count would silently
+                # rescale every cluster's TPM by that cluster's share of the library --
+                # numbers that still look like TPM. The omission IS the semantics.
                 internal_bam_for_sg = normalize_merged_bam.normalized_bam,
                 internal_bam_for_sg_index = normalize_merged_bam.normalized_bai,
                 internal_bam_for_priors = normalized_cluster_bams_use[i],
@@ -288,6 +301,7 @@ workflow LRAA_quant_by_cluster {
                 # workflow surfaces its normalized BAMs from Normalize_bam.wdl instead
                 retain_normalized_splice_graph_bam = false,
                 no_EM = false,
+                no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 HiFi = HiFi,
                 oversimplify = oversimplify,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,

@@ -134,6 +134,24 @@ workflow LRAA_singlecell_wf {
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
+    # Turn off 3' end weighting in the EM. This is the outermost entry point, so it
+    # has to reach BOTH the init discovery run below and the cluster-guided
+    # subworkflow, which carries it on to its own two phases. Every layer between
+    # here and LRAA's command line already declared it; only the entry points did
+    # not, which is what made it unreachable from Terra on single-cell runs.
+    Boolean no_weight_reads_by_3prime_agreement = false
+
+    # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
+    # case -- means LRAA counts the input bam itself, once, with its -F 0x904
+    # mapped-primary policy.
+    #
+    # Deliberately NOT forwarded to the cluster-guided subworkflow below. Once the
+    # bam is partitioned by cluster, each cluster's denominator is that cluster's own
+    # read total, so each per-cluster LRAA counts the bam it was handed. Passing this
+    # whole-library number down would rescale every cluster's TPM by that cluster's
+    # share of the library, and the result would still look like TPM.
+    Int? num_total_reads
+
     # Chunk geometry. Approximate MEGABASES between cut points, and the TOTAL width
     # of the search window centred on each target cut. LRAA's defaults are 10 and 1,
     # so a contig shorter than 10 Mb is never cut and chunking degenerates to one
@@ -410,6 +428,10 @@ workflow LRAA_singlecell_wf {
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+        no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+        # Init only. The cluster_guided call below deliberately does not get this --
+        # see the input's declaration for why.
+        num_total_reads = num_total_reads,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         scattering = scattering_init,
@@ -530,6 +552,7 @@ workflow LRAA_singlecell_wf {
         annot_gtf = if quant_only then initial_annot_gtf else init_gtf_file,
         HiFi = HiFi,
         oversimplify = oversimplify,
+        no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         main_chromosomes = main_chromosomes,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,

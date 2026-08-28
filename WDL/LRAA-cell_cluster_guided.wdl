@@ -80,6 +80,11 @@ workflow LRAA_cell_cluster_guided {
         Int cpu_chunk_plan = 16
         Int memoryGB_chunk_plan = 8
         Int normalize_max_cov_level = 1000
+
+        # Turn off 3' end weighting in the EM. Forwarded to BOTH phases below --
+        # per-cluster discovery and the final quant -- because a weighting that
+        # differed between the phases would make their numbers incomparable.
+        Boolean no_weight_reads_by_3prime_agreement = false
         Int memoryGBscSparseMatrices = 16
         String sparseMatrixCsvEngine = "python"
         Int sparseMatrixGzipLevel = 1
@@ -207,6 +212,7 @@ workflow LRAA_cell_cluster_guided {
                     # single-cell: this workflow never surfaces the normalized splice-graph BAM
                     retain_normalized_splice_graph_bam = false,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+                    no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     main_chromosomes = main_chromosomes,
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
@@ -332,6 +338,7 @@ workflow LRAA_cell_cluster_guided {
             HiFi = HiFi,
             oversimplify = oversimplify,
             rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+            no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
             normalize_max_cov_level = normalize_max_cov_level,
             main_chromosomes = main_chromosomes,
             cell_barcode_tag = cell_barcode_tag,

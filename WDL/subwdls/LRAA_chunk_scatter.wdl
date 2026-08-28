@@ -440,7 +440,7 @@ task make_chunks {
         ~{if defined(approx_MB_per_cut) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
         ~{if defined(approx_MB_per_cut_wiggle_window) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
         ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
-        ~{true="" false="--no_stream_reads_rescue_unassigned" rescue_unassigned_reads_via_transcriptome_alignment} \
+        ~{true="" false="--no_rescue_unassigned_reads_via_transcriptome_alignment" rescue_unassigned_reads_via_transcriptome_alignment} \
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
         ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""}
@@ -581,7 +581,7 @@ task process_chunk {
         --min_mapping_quality ~{min_mapping_quality} \
         --min_mapping_quality_for_final_quant ~{min_mapping_quality_for_final_quant} \
         ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
-        ~{true="" false="--no_stream_reads_rescue_unassigned" rescue_unassigned_reads_via_transcriptome_alignment} \
+        ~{true="" false="--no_rescue_unassigned_reads_via_transcriptome_alignment" rescue_unassigned_reads_via_transcriptome_alignment} \
         ~{if defined(oversimplify) then "--oversimplify " + oversimplify else ""} \
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
