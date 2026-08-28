@@ -2198,6 +2198,40 @@ def main():
     # apply generic config overrides last so they take precedence
     _apply_config_update_file(LRAA_Globals.config, args)
 
+    # A --config_update file is the one thing that can turn transcriptome rescue off
+    # AFTER the block above derived streaming rescue from argv, which would leave
+    # streaming rescue on for a run that has no rescue at all -- and in chunked mode
+    # would hand every worker --stream_reads_rescue_unassigned while its own config
+    # says rescue is off. MEASURED before this line existed: a chunked SIRV run with
+    # rescue off via --config_update exited 0 and rescued anyway, reporting nothing.
+    #
+    # Re-derived from the RESOLVED values rather than re-checked at each consumer:
+    # the implication (streaming rescue is a way of DOING transcriptome rescue, so
+    # it cannot outlive it) belongs with the mapping that establishes it.
+    if not LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"]:
+        LRAA_Globals.config["stream_reads_rescue_unassigned"] = False
+        LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"] = False
+
+    # A --config_update file naming num_total_reads is the caller PROVIDING the
+    # denominator, so it has to reach the same resolution the flag reaches. It was
+    # accepted here, written into config, and then overwritten: both resolutions read
+    # `args`, and the unchunked one recounts when args is None while the chunked one
+    # counts before it ever gets here. So the file's value was applied and then
+    # silently discarded, in BOTH modes, with no warning -- the run reported a TPM
+    # denominator the caller had explicitly set and not received.
+    #
+    # Seeded onto `args` rather than fixing each reader: this is the one point where
+    # the file has been applied and neither resolution has run, so both inherit it
+    # from here. config's own default is None, and nothing else writes this key
+    # before this line, so a value here came from the file -- and the file wins over
+    # the flag, which is the precedence every other --config_update key already has.
+    if LRAA_Globals.config["num_total_reads"] is not None:
+        args.num_total_reads = LRAA_Globals.config["num_total_reads"]
+        logger.info(
+            "using num_total_reads = %s from --config_update",
+            args.num_total_reads,
+        )
+
     runtime_config = _snapshot_runtime_config(LRAA_Globals.config)
 
     # Chunked mode delegates the whole run, and it delegates HERE -- after the
@@ -3629,7 +3663,33 @@ def _run_chunked_mode(args):
     # rather than inside a chunk means one count for the run instead of one per chunk,
     # and it happens before cut selection so a bam problem surfaces immediately
     # instead of after the partition has been computed.
-    if not args.num_total_reads:
+    # `is None`, NOT falsiness. `--num_total_reads 0` is a stated value, and the
+    # unchunked path REFUSES it (see the zero check beside the other
+    # num_total_reads assignment); reading it as "unset" made chunked mode silently
+    # substitute its own count and exit 0, quantifying against a denominator the
+    # caller never asked for. MEASURED on SIRVs: --no_chunk -N 0 exited 1 naming the
+    # zero, --chunk -N 0 exited 0 having counted 104766 instead.
+    #
+    # Refused HERE rather than left to each worker: the chunked dispatch happens
+    # before that check runs, so a 0 forwarded onward would fail every worker after
+    # the whole prep phase instead of before any of it.
+    if args.num_total_reads == 0:
+        raise RuntimeError("Error, number of total reads is set to zero.")
+    #
+    # Counted for BOTH chunking arms, deliberately. The -F 0x904 mapped-primary count
+    # is the library size TPM is defined against, and using it here is what makes a
+    # chunked run's TPM comparable with an unchunked one's --
+    # WDL/subwdls/LRAA_chunk_scatter.wdl states the same policy for the same reason.
+    #
+    # The strand-first arm retains a SMALLER set than this: its splitter also drops
+    # duplicate, qcfail and long-intron records
+    # (util/separate_bam_by_strand.py:get_discard_reason). ChunkedRun used to REFUSE
+    # the mismatch, which killed the run instead of quantifying -- MEASURED on a SIRV
+    # bam with 2,095 of 104,766 primary records flagged duplicate: exit 1, "-N 104766
+    # disagrees with the stage-1 retained record count". It now honours the supplied
+    # value and warns, naming both numbers, so one policy holds on every route
+    # instead of the arm quietly choosing a different denominator.
+    if args.num_total_reads is None:
         logger.info(
             "chunked mode: counting genome-mapped reads for the TPM denominator "
             "(no --num_total_reads given)"
@@ -3794,9 +3854,22 @@ def _run_chunked_mode(args):
         max_intron_length=LRAA_Globals.config["max_intron_length"],
         normalize_max_cov_level=LRAA_Globals.config["normalize_max_cov_level"],
         cell_list=args.cell_list,
-        stream_reads=args.stream_reads,
-        stream_reads_rescue_unassigned=args.stream_reads_rescue_unassigned,
-        stream_reads_rescue_unassigned_to_targets=args.stream_reads_rescue_unassigned_to_targets,
+        # From the RESOLVED config, not from args -- the distinction this file's own
+        # dispatch comment above insists on: there is exactly ONE args->config
+        # mapping and the chunked driver inherits its RESULT. Read from args, these
+        # four carry pre-`--config_update` values, so a file that turned rescue off
+        # forwarded no --no_rescue_unassigned_reads_via_transcriptome_alignment at
+        # all and every worker re-derived rescue as True.
+        stream_reads=LRAA_Globals.config["stream_reads"],
+        stream_reads_rescue_unassigned=LRAA_Globals.config[
+            "stream_reads_rescue_unassigned"
+        ],
+        stream_reads_rescue_unassigned_to_targets=LRAA_Globals.config[
+            "stream_reads_rescue_unassigned_to_targets"
+        ],
+        rescue_unassigned_reads_via_transcriptome_alignment=LRAA_Globals.config[
+            "rescue_unassigned_reads_via_transcriptome_alignment"
+        ],
         min_mapping_quality=LRAA_Globals.config["min_mapping_quality"],
         min_mapping_quality_for_final_quant=LRAA_Globals.config["min_mapping_quality_for_final_quant"],
         no_rdna_mask=args.no_rdna_mask,

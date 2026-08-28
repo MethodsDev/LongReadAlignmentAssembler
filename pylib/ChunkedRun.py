@@ -3465,6 +3465,14 @@ def lraa_cmd(
             cmd.append("--stream_reads_rescue_unassigned_to_targets")
     else:
         cmd.append("--no_stream_reads")
+    # The MASTER rescue opt-out, forwarded on the same principle as the streaming
+    # one above and for the same reason: a worker that is not handed it re-derives
+    # rescue as True. Placed AFTER the stream if/else, not inside it -- rescue is
+    # independent of streaming, and it applies to a --no_stream_reads worker too.
+    # getattr, because a caller reaching this through an older namespace may not
+    # carry the dest; True keeps that caller's behaviour unchanged.
+    if not getattr(args, "rescue_unassigned_reads_via_transcriptome_alignment", True):
+        cmd.append("--no_rescue_unassigned_reads_via_transcriptome_alignment")
     # The threshold settings. Forwarded as one --config_update file rather than as
     # per-flag arguments because the config keys a user can set outnumber the flags
     # that name them (min_TSS_iso_fraction and the containment/PolyA thresholds
@@ -4463,6 +4471,79 @@ def _namespace_id(unit_id, value):
     return "{}{}{}".format(unit_id, NAMESPACE_SEP, value)
 
 
+VERSION_COMMENT_PREFIX = "# LRAA version "
+
+
+def merged_provenance_header(units, suffix):
+    """The provenance lines a MERGED artifact must carry, read from its inputs.
+
+    A chunked run's merged output is the file that SHIPS, and it used to carry no
+    version at all: the GTF merge wrote only its own unit-count line, the
+    quant.expr merge wrote nothing, while every per-chunk input carried both
+    ``# LRAA version`` and ``# LRAA CMD:``. That left the work tree as the sole
+    provenance for a chunked deliverable -- so reclaiming that tree, which a
+    benchmark harness does per row, made the shipped file unattributable to a
+    build. Unchunked outputs never had this problem, which is how three different
+    behaviours grew for what is one contract.
+
+    Read from the UNITS rather than from this process, deliberately: the answer has
+    to describe what actually produced the rows, not what is doing the merging.
+    That also makes a mixed-version merge visible, and it is REFUSED rather than
+    resolved, because a merged file naming one version while half its rows came
+    from another is worse than a file naming none.
+
+    A unit with no version line is refused for the same reason: the alternative is
+    asserting a version this merge could not verify. Every current writer emits it
+    (LRAA prints it on the first line of both artifacts), so its absence means a
+    truncated or foreign file rather than an old one.
+
+    Returned so that ``head -1`` answers "which build made this" the same way for
+    chunked and unchunked outputs. Callers that also write their own provenance
+    line put it AFTER these.
+    """
+
+    if not units:
+        raise PipelineError("no units to merge; cannot establish provenance")
+
+    seen = {}
+    for unit in units:
+        path = unit["quant_prefix"] + suffix
+        version = None
+        with open_text(path) as fh:
+            for line in fh:
+                if not line.startswith("#"):
+                    break
+                if line.startswith(VERSION_COMMENT_PREFIX):
+                    version = line.rstrip("\n")
+                    break
+        if version is None:
+            raise PipelineError(
+                "unit {} carries no '{}' line in {}; refusing to write a merged "
+                "header asserting a version this merge could not read".format(
+                    unit["unit_id"], VERSION_COMMENT_PREFIX.strip(), path
+                )
+            )
+        seen.setdefault(version, []).append(unit["unit_id"])
+
+    if len(seen) > 1:
+        detail = "; ".join(
+            "{} from {} unit(s) e.g. {}".format(v, len(u), ", ".join(u[:3]))
+            for v, u in sorted(seen.items())
+        )
+        raise PipelineError(
+            "units disagree on LRAA version, refusing to merge them into one "
+            "artifact: {}".format(detail)
+        )
+
+    # VERSION ONLY, no `# LRAA CMD:` line. A CMD line would have to come from this
+    # process's argv, and that differs between the CLI entry point and a direct
+    # in-process call -- which would break the byte-identity those two are tested
+    # against (TestCliMatchesDirectCall). The merge's own shape is already recorded
+    # by the merge-provenance line each caller writes after these, and the version
+    # is the part that makes a shipped artifact attributable to a build.
+    return [next(iter(seen))]
+
+
 def merge_discovery_gtf(merged_dir, units):
     """Concatenate the per-chunk MODEL gtfs, back in the whole-run frame.
 
@@ -4492,7 +4573,13 @@ def merge_discovery_gtf(merged_dir, units):
     lines_written = 0
     transcripts = 0
     translate = not coords_already_whole_contig(units)
+    # Version and CMD first, then this merge's own line: a consumer reading line 1
+    # gets the same answer here as from an unchunked output.
+    provenance = merged_provenance_header(units, ".gtf")
+
     with open(gtf_out, "wt") as ofh:
+        for line in provenance:
+            print(line, file=ofh)
         print(
             "# LRAA chunked discovery merge: {} unit(s); {}, model ids "
             "namespaced per unit".format(
@@ -4780,27 +4867,65 @@ def combine_grouped_expr(result_paths, out_path):
     ``merged_scope_total_all_reads`` (a float), which is everything this needs.
     """
 
+    if not result_paths:
+        raise PipelineError("no group results to combine; cannot establish provenance")
+
     header = None
     rows = []
     global_total = 0.0
+    versions = {}
     for rp in result_paths:
         with open(rp, "rt") as fh:
             result = json.load(fh)
         global_total += float(result["merged_scope_total_all_reads"])
-        with open(result["quant_expr"], "rt") as fh:
-            lines = fh.read().splitlines()
-        this_header = lines[0].split("\t")
+        # read_tsv rather than lines[0]/lines[1:]: a merged quant.expr opens with
+        # the provenance comments this function has to carry forward, so the column
+        # row is no longer guaranteed to be the first line.
+        comments, this_header, these_rows = read_tsv(result["quant_expr"])
+        # EVERY group must carry one, checked here per group rather than in
+        # aggregate: a global "did any group have a version" test would let a group
+        # with none inherit a sibling's, stamping the combined table with a version
+        # that does not cover its rows -- the exact defect this header exists to
+        # remove. Same contract as merged_provenance_header.
+        version = None
+        for comment in comments:
+            if comment.startswith(VERSION_COMMENT_PREFIX):
+                version = comment
+                break
+        if version is None:
+            raise PipelineError(
+                "group {} carries no '{}' line in {}; refusing to write a combined "
+                "table asserting a version this combine could not read".format(
+                    rp, VERSION_COMMENT_PREFIX.strip(), result["quant_expr"]
+                )
+            )
+        versions.setdefault(version, []).append(rp)
         if header is None:
             header = this_header
         elif this_header != header:
             raise PipelineError(
                 "{} quant.expr header differs from the first group's".format(rp)
             )
-        rows.extend(line.split("\t") for line in lines[1:] if line)
+        rows.extend(these_rows)
+
+    # Same contract as merge_discovery_gtf and the whole-run quant merge: the
+    # combined table is the artifact that ships, so it names the build that made
+    # its rows, and a disagreement is refused rather than resolved.
+    if len(versions) > 1:
+        raise PipelineError(
+            "groups disagree on LRAA version, refusing to combine them into one "
+            "artifact: {}".format(", ".join(sorted(versions)))
+        )
 
     rebase_tpm(rows, header, total_override=global_total)
 
     with open(out_path, "wt") as ofh:
+        print(next(iter(versions)), file=ofh)
+        print(
+            "# LRAA chunked quant combine: {} group(s); TPM rebased to the "
+            "whole-run scope".format(len(result_paths)),
+            file=ofh,
+        )
         print("\t".join(header), file=ofh)
         for row in rows:
             print("\t".join(row), file=ofh)
@@ -5121,6 +5246,17 @@ def merge_and_translate(outdir, units, discovery=False):
     # merged table and a per-arm table the same way.
     track_out = os.path.join(merged_dir, "chunked.quant.tracking.gz")
 
+    # PREFLIGHT, before a single merged byte is written: resolve provenance for
+    # every artifact this call will produce. The gtf merge runs last, so leaving its
+    # check to `merge_discovery_gtf` would refuse only AFTER quant.expr, tracking
+    # and the read-assignment summary were already on disk -- and a partial merged
+    # dir is exactly what a harness stages and ships. Discarding the gtf result is
+    # deliberate: `merge_discovery_gtf` re-resolves it, staying self-sufficient for
+    # its own callers, and the reread costs one leading comment line per unit.
+    expr_provenance = merged_provenance_header(units, ".quant.expr")
+    if discovery:
+        merged_provenance_header(units, ".gtf")
+
     expr_header = None
     expr_rows = []
     hash_remap = {}  # (unit_id, old_hash) -> new_hash
@@ -5183,6 +5319,17 @@ def merge_and_translate(outdir, units, discovery=False):
     )
 
     with open(expr_out, "wt") as ofh:
+        # This table used to start at the column row, carrying no provenance at all
+        # while every per-chunk input carried both lines. Version first, so `head -1`
+        # answers the same question here as on an unchunked quant.expr, then the
+        # merge's own line for what the unchunked form has no equivalent of.
+        for line in expr_provenance:
+            print(line, file=ofh)
+        print(
+            "# LRAA chunked quant merge: {} unit(s); TPM rebased to the merged "
+            "scope".format(len(units)),
+            file=ofh,
+        )
         print("\t".join(expr_header), file=ofh)
         for _, row in expr_rows:
             print("\t".join(row), file=ofh)
@@ -6090,13 +6237,39 @@ def build_parser():
         help="pass --no_stream_reads to every chunk worker instead",
     )
     parser.add_argument(
+        "--rescue_unassigned_reads_via_transcriptome_alignment",
+        dest="rescue_unassigned_reads_via_transcriptome_alignment",
+        action="store_true",
+        default=LRAA_Globals.config[
+            "rescue_unassigned_reads_via_transcriptome_alignment"
+        ],
+        help="pass transcriptome rescue on to every chunk worker. ON BY DEFAULT, "
+        "matching LRAA's own default; see "
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+    )
+    parser.add_argument(
+        # Declared here so it exists on BOTH routes into the pipeline, which is the
+        # whole point of this parser holding every default. Without it, turning
+        # rescue off did not disable rescue -- it killed the run: the master flag
+        # reached the shard and stopped there, each worker re-derived rescue as True
+        # from its own default, and LRAA's guard then refused the resulting
+        # rescue-on + --stream_reads pair, naming the very flag the worker was never
+        # handed. The config-override route cannot substitute: that guard reads
+        # `args` and fires ~140 lines before --config_update is applied.
+        "--no_rescue_unassigned_reads_via_transcriptome_alignment",
+        dest="rescue_unassigned_reads_via_transcriptome_alignment",
+        action="store_false",
+        help="pass --no_rescue_unassigned_reads_via_transcriptome_alignment to "
+        "every chunk worker instead",
+    )
+    parser.add_argument(
         "--stream_reads_rescue_unassigned",
         dest="stream_reads_rescue_unassigned",
         action="store_true",
         default=None,
-        help="unset (the default) tracks --stream_reads: on whenever streaming is "
-        "on, since this parser has no independent transcriptome-rescue toggle of "
-        "its own -- see --no_stream_reads_rescue_unassigned",
+        help="unset (the default) tracks --stream_reads AND transcriptome rescue: "
+        "on only when both are on, which is how LRAA itself resolves it -- see "
+        "--no_stream_reads_rescue_unassigned",
     )
     parser.add_argument(
         "--no_stream_reads_rescue_unassigned",
@@ -6172,15 +6345,19 @@ def parse_args(argv=None):
 def _resolve_stream_reads_rescue_unassigned(args):
     """Resolve the ``None`` sentinel left by an unset ``--stream_reads_rescue_unassigned``.
 
-    This parser has no ``--rescue_unassigned_reads_via_transcriptome_alignment``
-    toggle of its own -- rescue is not forwarded into chunk workers at all today,
-    each worker's own LRAA invocation applies its own default there -- so unlike
-    LRAA's top-level parser, which tracks whichever way transcriptome rescue
-    resolved, this one has only ``--stream_reads`` to track.
+    Byte-for-byte the rule at ``LRAA:1855`` -- ``stream_reads and rescue`` -- now
+    that this parser carries the rescue toggle too. It previously tracked
+    ``--stream_reads`` alone, because rescue was never forwarded to a chunk worker
+    at all; a run with rescue off therefore resolved streaming rescue back ON here,
+    the opposite of what the caller asked for. The two resolutions must agree or a
+    chunked run and an unchunked one rescue differently from the same command line.
     """
 
     if args.stream_reads_rescue_unassigned is None:
-        args.stream_reads_rescue_unassigned = bool(args.stream_reads)
+        args.stream_reads_rescue_unassigned = bool(
+            args.stream_reads
+            and args.rescue_unassigned_reads_via_transcriptome_alignment
+        )
 
 
 def default_args(**overrides):
@@ -6902,17 +7079,39 @@ def _run_inner(args):
             num_total_reads = retained_total
             timing["num_total_reads_source"] = "stage 1 retained record count"
         else:
+            # AUTHORITATIVE, and only warned about when it differs. It used to be a
+            # hard refusal on the grounds that "the denominator has to be the record
+            # set the arms actually see, or TPM is not comparable between them" --
+            # but that argument is about not inventing a DIFFERENT default per arm.
+            # One stated value goes to both arms, so they stay comparable with each
+            # other, and it is the only way to stay comparable with an UNCHUNKED run:
+            # unchunked counts -F 0x904, which retains MORE than stage 1 does (the
+            # splitter also drops duplicate, qcfail and long-intron records), so the
+            # two can legitimately differ on a perfectly good bam. Refusing made the
+            # whole-library denominator unreachable on this arm -- MEASURED on a SIRV
+            # bam with 2,095 of 104,766 primary records flagged duplicate, `-N 104766`
+            # exited 1.
+            #
+            # Safe to trust because nothing DERIVES this value any more: LRAA leaves
+            # it unset for this arm precisely so stage 1 owns the default, and the
+            # only routes that set it are a caller's own -N.
             num_total_reads = args.num_total_reads
             timing["num_total_reads_source"] = "supplied via -N"
             if num_total_reads != retained_total:
-                raise PipelineError(
-                    "-N {} disagrees with the stage-1 retained record count {} "
-                    "({} on + plus {} on -). The denominator has to be the record "
-                    "set the arms actually see, or TPM is not comparable between "
-                    "them.".format(
+                # Both channels, because this module has no logger: stderr so the
+                # caller sees it, and timing.json so it survives into the run record
+                # a benchmark reads back.
+                warning = (
+                    "WARNING: -N {} differs from the stage-1 retained record count "
+                    "{} ({} on + plus {} on -); USING THE SUPPLIED VALUE. Unset -N "
+                    "to use the retained count instead. The two differ when the bam "
+                    "holds records the splitter drops but -F 0x904 keeps: "
+                    "duplicate, qcfail, or long-intron.".format(
                         num_total_reads, retained_total, retained["+"], retained["-"]
                     )
                 )
+                print(warning, file=sys.stderr)
+                timing["num_total_reads_warning"] = warning
     else:
         timing.setdefault("stages", {})["strand_split"] = {
             "skipped": "--strandless_chunks with --arm chunked: the orientation "

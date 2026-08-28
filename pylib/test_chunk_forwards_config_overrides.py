@@ -633,3 +633,198 @@ def test_config_update_moves_chunk_geometry(tmp_path, inputs, key, flag, value):
         "cut selection did not receive {}={} from --config_update; it received "
         "{}".format(key, value, seen)
     )
+
+
+
+# -- transcriptome rescue: off has to mean off, by either route ----------------
+#
+# Rescue is a config KEY and a flag whose dest is that key, so it can be turned
+# off two ways, and each failed differently before this was fixed.
+#
+# By flag: the shard got --no_rescue_unassigned_reads_via_transcriptome_alignment,
+# lraa_cmd forwarded only the streaming opt-out, and each worker re-derived rescue
+# as True. LRAA's own guard then refused rescue-on + --stream_reads and exited 1 --
+# so asking for rescue off KILLED the run. MEASURED on SIRVs at lraa-core:0.28.1:
+# every stage5_quant_strandless_* step failed in under a second.
+#
+# By --config_update: no crash, and worse for it. The driver read args rather than
+# the resolved config, so it forwarded no opt-out at all AND told every worker to do
+# streaming rescue, while the worker's own override file said rescue was off. That
+# run exited 0 and rescued anyway.
+#
+# The override file alone cannot fix either case: the guard reads `args` and fires
+# ~140 lines before _apply_config_update_file applies the file.
+
+MASTER_OFF = "--no_rescue_unassigned_reads_via_transcriptome_alignment"
+STREAMING_OFF = "--no_stream_reads_rescue_unassigned"
+
+
+def test_rescue_off_by_flag_reaches_every_chunk_worker(tmp_path, inputs):
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, MASTER_OFF)
+    _assert_ok(r, tmp_path)
+
+    argv = _worker_argv(tmp_path)
+    assert MASTER_OFF in argv, argv[-3000:]
+    # and the narrower flag with it, since streaming rescue cannot outlive rescue
+    assert STREAMING_OFF in argv, argv[-3000:]
+
+
+def test_rescue_off_by_config_update_reaches_every_chunk_worker(tmp_path, inputs):
+    """The route that exited 0 and rescued anyway.
+
+    Both flags are asserted on the worker's argv, not just the override file: the
+    file was already correct in the broken version, which is exactly why the run
+    looked fine.
+    """
+
+    bam, gtf, genome = inputs
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(
+        json.dumps({"rescue_unassigned_reads_via_transcriptome_alignment": False})
+    )
+
+    r = _chunked(tmp_path, bam, gtf, genome, "--config_update", str(cfg))
+    _assert_ok(r, tmp_path)
+
+    forwarded = _forwarded_config(tmp_path)
+    assert forwarded["rescue_unassigned_reads_via_transcriptome_alignment"] is False
+
+    argv = _worker_argv(tmp_path)
+    assert MASTER_OFF in argv, argv[-3000:]
+    assert STREAMING_OFF in argv, argv[-3000:]
+
+
+def test_a_plain_chunked_run_still_asks_for_rescue(tmp_path, inputs):
+    """Rescue on must add nothing to the worker's argv.
+
+    Every per-chunk sentinel is keyed on that argv (ChunkedRun.argv_digest), so an
+    extra token on the default path would invalidate existing chunk work and every
+    splice-graph cache entry for no behavioural change.
+    """
+
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome)
+    _assert_ok(r, tmp_path)
+
+    argv = _worker_argv(tmp_path)
+    assert MASTER_OFF not in argv
+    assert STREAMING_OFF not in argv
+    assert "--stream_reads_rescue_unassigned" in argv
+
+
+# -- the TPM denominator: resolved once, then used, never re-derived --------------
+#
+# The contract is deliberately simple: at the start of a run, a supplied
+# --num_total_reads is used throughout; unsupplied, LRAA counts the bam once with its
+# -F 0x904 mapped-primary policy. Nothing downstream recomputes it and nothing
+# substitutes a different number.
+#
+# Both chunking arms are exercised because they used to disagree. The strand-first arm
+# counts what its stage-1 splitter RETAINED, which is a smaller set than -F 0x904 --
+# the splitter also drops duplicate, qcfail and long-intron records -- and ChunkedRun
+# refused the mismatch outright. MEASURED on a SIRV bam with 2,095 of 104,766 primary
+# records flagged duplicate: `--chunk --chunk_by_strand` exited 1 with "-N 104766
+# disagrees with the stage-1 retained record count". It now uses the resolved value on
+# both arms and warns when the retained total differs.
+
+
+def _worker_denominators(tmp_path):
+    """The --num_total_reads value every chunk worker was given, as a set."""
+
+    seen = set()
+    for line in _worker_argv(tmp_path).splitlines():
+        tokens = line.split()
+        value = _argv_value(tokens, "--num_total_reads")
+        if value is not None:
+            seen.add(value)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "arm", ["--chunk_by_strand", None], ids=["strand_first", "strandless"]
+)
+def test_a_supplied_denominator_reaches_every_worker_unchanged(tmp_path, inputs, arm):
+    """Supplied means supplied, on both arms, and the run must SUCCEED.
+
+    Asserting completion matters as much as the value: the strand-first arm used to
+    fail this outright, and a test that only checked for the absence of a recount
+    would pass on a run that died for any reason at all.
+    """
+
+    bam, gtf, genome = inputs
+    extra = ["--num_total_reads", "777777"] + ([arm] if arm else [])
+    r = _chunked(tmp_path, bam, gtf, genome, *extra)
+    _assert_ok(r, tmp_path)
+
+    assert _worker_denominators(tmp_path) == {"777777"}, _worker_argv(tmp_path)[-2000:]
+
+
+@pytest.mark.parametrize(
+    "arm", ["--chunk_by_strand", None], ids=["strand_first", "strandless"]
+)
+def test_an_unsupplied_denominator_is_counted_once_and_then_forwarded(
+    tmp_path, inputs, arm
+):
+    """One count for the run, and every worker gets that same number.
+
+    The count belongs to the driver, not to the chunks: a per-chunk count would give
+    each worker its own chunk's total as the library size.
+    """
+
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, *([arm] if arm else []))
+    _assert_ok(r, tmp_path)
+
+    combined = r.stdout + r.stderr
+    assert combined.count("counting genome-mapped reads") == 1, combined[-2000:]
+
+    seen = _worker_denominators(tmp_path)
+    assert len(seen) == 1, seen
+    assert seen != {"0"}
+
+
+def test_a_config_update_denominator_reaches_every_worker(tmp_path, inputs):
+    """--config_update is an input path too, so naming the denominator there counts
+    as providing it.
+
+    It used to be accepted, written into config, and then discarded: both
+    resolutions read ``args``, so the unchunked one recounted and the chunked one had
+    already counted before the file was ever applied. The run then reported a TPM
+    denominator the caller had explicitly set and not received, in both modes, with
+    nothing said. Asserted on the workers' argv and on the ABSENCE of a counting
+    pass -- a value that arrives while the driver also counted would mean the file
+    was honoured by luck.
+    """
+
+    bam, gtf, genome = inputs
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"num_total_reads": 777777}))
+
+    r = _chunked(tmp_path, bam, gtf, genome, "--config_update", str(cfg))
+    _assert_ok(r, tmp_path)
+
+    combined = r.stdout + r.stderr
+    assert "counting genome-mapped reads" not in combined, combined[-2000:]
+    assert _worker_denominators(tmp_path) == {"777777"}, _worker_argv(tmp_path)[-2000:]
+
+
+def test_a_config_update_denominator_outranks_the_flag(tmp_path, inputs):
+    """Same precedence every other --config_update key has: the file is applied last.
+
+    The two values differ and neither is a prefix of the other, so a passing result
+    cannot come from reading the wrong one.
+    """
+
+    bam, gtf, genome = inputs
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"num_total_reads": 777777}))
+
+    r = _chunked(
+        tmp_path, bam, gtf, genome,
+        "--num_total_reads", "111111",
+        "--config_update", str(cfg),
+    )
+    _assert_ok(r, tmp_path)
+
+    assert _worker_denominators(tmp_path) == {"777777"}, _worker_argv(tmp_path)[-2000:]

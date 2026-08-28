@@ -309,8 +309,8 @@ def test_default_args_carries_every_pipeline_default():
     defaults to the sentinel ``None`` on the bare parser (unset: neither
     ``--stream_reads_rescue_unassigned`` nor its negation was given) and only
     ``parse_args``/``default_args`` resolve it, via the same
-    ``_resolve_stream_reads_rescue_unassigned`` helper, to track
-    ``--stream_reads``. The raw parser default would report a mismatch on
+    ``_resolve_stream_reads_rescue_unassigned`` helper, to track ``--stream_reads``
+    AND transcriptome rescue. The raw parser default would report a mismatch on
     that one field even though both routes agree once resolved.
     """
     built = ChunkedRun.default_args(bam="b", genome_fa="g", gtf="a", output_dir="/tmp/o")
@@ -776,6 +776,37 @@ def test_the_library_count_is_taken_once_before_any_partitioning(tmp_path):
     # and it happened before any cut selection: the run dies at the count, so no cut
     # stage token appears at all. ("cut" as a bare substring would match "execute".)
     assert "stage2_cuts" not in combined
+
+
+def test_a_zero_denominator_is_refused_rather_than_recounted(tmp_path):
+    """A stated --num_total_reads 0 must not be read as "unset".
+
+    The unchunked path has always refused a zero denominator. Chunked mode tested
+    the value for FALSINESS, so a stated 0 looked identical to no flag at all: it
+    counted the library itself, exited 0, and quantified against a denominator the
+    caller never asked for. MEASURED on SIRVs before the fix: `--no_chunk -N 0`
+    exited 1 naming the zero, `--chunk -N 0` exited 0 having counted 104766.
+
+    Refused before the count, not after: the assertion on the counting log is what
+    distinguishes "refused the 0" from "substituted its own number and then failed
+    for some other reason".
+    """
+
+    result = _lraa(
+        "--chunk",
+        "--num_total_reads", "0",
+        "--bam", "reads.bam",
+        "--genome", "genome.fa",
+        "--output_prefix", str(tmp_path / "sample"),
+        "--chunk_work_dir", str(tmp_path / "work"),
+    )
+    combined = result.stdout + result.stderr
+
+    assert result.returncode != 0, combined[-2000:]
+    assert "number of total reads is set to zero" in combined, combined[-2000:]
+    assert "counting genome-mapped reads" not in combined, (
+        "chunked mode substituted its own count for a stated 0"
+    )
 
 
 def test_chunk_by_strand_selects_the_strand_first_ordering():
@@ -1381,3 +1412,109 @@ def test_the_oversimplify_default_survives_chunking():
     # and a contig the default does not name still gets nothing
     other = {"chrom": "chr7", "manifest": {"mini_contig_name": "chr7_00_mini"}}
     assert ChunkedRun.resolve_oversimplify_for_chunk(args, other) is None
+
+
+# -- transcriptome rescue: the master opt-out has to reach the worker -----------
+#
+# Turning rescue off did not disable rescue; it KILLED the run. The flag reached
+# the shard, lraa_cmd forwarded only --no_stream_reads_rescue_unassigned, and each
+# worker -- a fresh LRAA invocation -- re-derived rescue as True from its own
+# default. LRAA's guard then refused rescue-on + --stream_reads and exited 1,
+# naming the very flag the worker was never handed. MEASURED on SIRVs at
+# lraa-core:0.28.1: every stage5_quant_strandless_* step failed in under a second.
+#
+# The --config_update route cannot substitute. The override file genuinely carries
+# rescue=false -- verified in that failing run -- but the guard reads `args` and
+# fires ~140 lines before _apply_config_update_file applies the file.
+
+_RESCUE_CMD_BASE = dict(
+    bam_for_quant="q.bam",
+    bam_for_sg="sg.bam",
+    genome="mini.fa",
+    gtf=None,
+    out_prefix="out",
+    num_total_reads=10,
+    cpu_budget=1,
+)
+MASTER_RESCUE_OFF = "--no_rescue_unassigned_reads_via_transcriptome_alignment"
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_rescue_off_forwards_the_master_flag_to_every_worker(stream):
+    """Independent of streaming: rescue is not a streaming setting."""
+
+    args = ChunkedRun.default_args(
+        stream_reads=stream,
+        rescue_unassigned_reads_via_transcriptome_alignment=False,
+    )
+    assert MASTER_RESCUE_OFF in ChunkedRun.lraa_cmd(args, **_RESCUE_CMD_BASE)
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_rescue_on_leaves_the_worker_command_unchanged(stream):
+    """Rescue on must add nothing.
+
+    Every per-chunk sentinel is keyed on the worker's argv (see argv_digest), so an
+    extra token on the default path would invalidate existing chunk work and every
+    splice-graph cache entry for no behavioural gain.
+    """
+
+    args = ChunkedRun.default_args(
+        stream_reads=stream,
+        rescue_unassigned_reads_via_transcriptome_alignment=True,
+    )
+    cmd = ChunkedRun.lraa_cmd(args, **_RESCUE_CMD_BASE)
+    assert MASTER_RESCUE_OFF not in cmd
+    assert "--rescue_unassigned_reads_via_transcriptome_alignment" not in cmd
+
+
+@pytest.mark.parametrize("rescue", [True, False])
+def test_the_stream_reads_flag_tracks_streaming_and_not_rescue(rescue):
+    """--no_stream_reads must depend on --stream_reads alone.
+
+    Guarding a specific near-miss: the master-rescue forward, written one block too
+    early, captured the ``else`` belonging to ``if args.stream_reads`` -- which
+    emits --no_stream_reads whenever rescue is ON, silently disabling streaming on
+    the default path. Both flags render from the same region, so the two settings
+    are checked against each other rather than each alone.
+    """
+
+    on = ChunkedRun.lraa_cmd(
+        ChunkedRun.default_args(
+            stream_reads=True,
+            rescue_unassigned_reads_via_transcriptome_alignment=rescue,
+        ),
+        **_RESCUE_CMD_BASE,
+    )
+    assert "--stream_reads" in on
+    assert "--no_stream_reads" not in on
+
+    off = ChunkedRun.lraa_cmd(
+        ChunkedRun.default_args(
+            stream_reads=False,
+            rescue_unassigned_reads_via_transcriptome_alignment=rescue,
+        ),
+        **_RESCUE_CMD_BASE,
+    )
+    assert "--no_stream_reads" in off
+    assert "--stream_reads" not in off
+
+
+@pytest.mark.parametrize(
+    "stream,rescue,expected",
+    [(True, True, True), (True, False, False), (False, True, False), (False, False, False)],
+)
+def test_streaming_rescue_resolves_exactly_as_LRAA_does(stream, rescue, expected):
+    """``stream_reads and rescue``, the rule at LRAA:1855.
+
+    This parser used to resolve the unset sentinel against ``--stream_reads``
+    alone, because rescue never reached a worker. A run with rescue off therefore
+    resolved streaming rescue back ON here -- the opposite of the request -- and a
+    chunked run rescued differently from an unchunked one given the same command.
+    """
+
+    args = ChunkedRun.default_args(
+        stream_reads=stream,
+        rescue_unassigned_reads_via_transcriptome_alignment=rescue,
+    )
+    assert args.stream_reads_rescue_unassigned is expected

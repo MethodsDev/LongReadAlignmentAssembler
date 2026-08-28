@@ -132,6 +132,10 @@ def _write_unit(root, unit_id, offset, tracking_rows):
     prefix = str(root / unit_id)
 
     with open(prefix + ".quant.expr", "wt") as fh:
+        # A real unit's quant.expr opens with these; the merge reads the version
+        # off them to stamp the merged artifact and refuses a unit carrying none.
+        print("# LRAA version test", file=fh)
+        print("# LRAA CMD: LRAA --contig chrT", file=fh)
         print("\t".join(EXPR_HEADER), file=fh)
         for gene, tx, exons, introns in MODELS:
             hash_code = Util_funcs.get_hash_code(introns) if introns else tx

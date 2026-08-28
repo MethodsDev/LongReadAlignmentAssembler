@@ -143,6 +143,11 @@ def _write_unit(root, unit_id, offset, all_reads_by_model, read_tokens):
     total = float(sum(reads)) or 1.0
 
     with open(prefix + ".quant.expr", "wt") as fh:
+        # A real unit's quant.expr opens with these two lines, exactly as the .gtf
+        # below does; the merge reads the version off them to stamp the merged
+        # artifact, and refuses a unit that carries none.
+        print("# LRAA version test", file=fh)
+        print("# LRAA CMD: LRAA --contig chrT", file=fh)
         print("\t".join(EXPR_HEADER), file=fh)
         for (gene, tx, exons, introns), ar in zip(MODELS, reads):
             hash_code = Util_funcs.get_hash_code(introns) if introns else tx
@@ -469,10 +474,12 @@ class TestHeaderMismatchRefusesBeforeOutput:
         self, two_group_units, tmp_path
     ):
         # Corrupt the second unit's expr header so it disagrees with the first.
+        # The column row is not line 0 -- a real quant.expr opens with provenance
+        # comments -- so find it rather than assuming a position.
         bad_prefix = two_group_units[1]["quant_prefix"]
-        text = Path(bad_prefix + ".quant.expr").read_text()
-        lines = text.splitlines()
-        lines[0] = lines[0] + "\textra_column"
+        lines = Path(bad_prefix + ".quant.expr").read_text().splitlines()
+        col_row = next(i for i, l in enumerate(lines) if not l.startswith("#"))
+        lines[col_row] = lines[col_row] + "\textra_column"
         Path(bad_prefix + ".quant.expr").write_text("\n".join(lines) + "\n")
 
         manifest = tmp_path / "manifest.json"
@@ -590,7 +597,10 @@ class TestGroupedMergeIdentities:
         combined = _read_text(str(combined_path))
 
         def rows_by_key(text):
-            lines = text.splitlines()
+            # Both tables carry provenance comments ahead of the column row, so
+            # compare the bodies: the version line matches either way, but this
+            # keeps the comparison about the numbers.
+            lines = [l for l in text.splitlines() if not l.startswith("#")]
             header = lines[0].split("\t")
             gi, ti, tpmi = header.index("gene_id"), header.index("transcript_id"), header.index("TPM")
             return {
@@ -616,6 +626,151 @@ class TestGroupedMergeIdentities:
         fake.write_text(json.dumps({"quant_expr": "/x", "merged_scope_total_all_reads": 1.0}))
         with pytest.raises(SystemExit):
             mco.main(["--combine-expr", "--group-result", str(fake)])
+
+
+class TestMergedProvenanceHeader:
+    """A merged artifact names the build that made its rows, or is not written.
+
+    A chunked run's merged output is the file that ships, and the per-chunk files
+    that carried the version live in a work tree a harness reclaims. So the
+    version has to survive the merge -- and must never be asserted from something
+    the merge did not actually read.
+    """
+
+    def _version_line(self, path):
+        with open(path, "rt") as fh:
+            return fh.readline().rstrip("\n")
+
+    def _strip_version(self, prefix, suffix):
+        path = Path(prefix + suffix)
+        kept = [
+            l
+            for l in path.read_text().splitlines()
+            if not l.startswith("# LRAA version")
+        ]
+        path.write_text("\n".join(kept) + "\n")
+
+    def test_both_merged_outputs_open_with_the_version(
+        self, two_group_units, tmp_path
+    ):
+        # Line 1, specifically: the same `head -1` probe then answers "which build
+        # made this" for a chunked output as for an unchunked one.
+        outdir = tmp_path / "out"
+        result = ChunkedRun.merge_and_translate(
+            str(outdir), two_group_units, discovery=True
+        )
+        assert self._version_line(result["gtf"]) == "# LRAA version test"
+        assert self._version_line(result["quant_expr"]) == "# LRAA version test"
+
+    def test_the_gtf_keeps_its_merge_provenance_line_after_the_version(
+        self, two_group_units, tmp_path
+    ):
+        # The version is added to, not substituted for, what the merge already said.
+        outdir = tmp_path / "out"
+        result = ChunkedRun.merge_and_translate(
+            str(outdir), two_group_units, discovery=True
+        )
+        with open(result["gtf"], "rt") as fh:
+            comments = [l.rstrip("\n") for l in fh if l.startswith("#")]
+        assert comments[0] == "# LRAA version test"
+        assert any("chunked discovery merge" in c for c in comments)
+
+    @pytest.mark.parametrize("suffix", [".gtf", ".quant.expr"])
+    def test_a_unit_with_no_version_refuses_the_merge(
+        self, two_group_units, tmp_path, suffix
+    ):
+        # Refuse rather than omit or guess: a merged file naming a version the
+        # merge could not verify is worse than one naming none.
+        self._strip_version(two_group_units[1]["quant_prefix"], suffix)
+        with pytest.raises(ChunkedRun.PipelineError, match="carries no"):
+            ChunkedRun.merge_and_translate(
+                str(tmp_path / "out"), two_group_units, discovery=True
+            )
+        # Refuse before writing ANY merged artifact, not just the one whose input is
+        # short: the gtf merge runs last, so without a preflight its refusal would
+        # land after quant.expr, tracking and the summary were already on disk, and
+        # a partial merged dir is what a harness stages and ships.
+        merged_dir = tmp_path / "out" / "merged"
+        assert not (merged_dir / "chunked.gtf").exists()
+        assert not (merged_dir / "chunked.quant.expr").exists()
+        assert not (merged_dir / "chunked.quant.tracking.gz").exists()
+        assert not (merged_dir / "chunked.read_assignment.summary.tsv").exists()
+
+    @pytest.mark.parametrize("suffix", [".gtf", ".quant.expr"])
+    def test_units_disagreeing_on_version_refuse_the_merge(
+        self, two_group_units, tmp_path, suffix
+    ):
+        # One artifact cannot honestly name two builds.
+        path = Path(two_group_units[1]["quant_prefix"] + suffix)
+        path.write_text(
+            path.read_text().replace("# LRAA version test", "# LRAA version other")
+        )
+        with pytest.raises(ChunkedRun.PipelineError, match="disagree on LRAA version"):
+            ChunkedRun.merge_and_translate(
+                str(tmp_path / "out"), two_group_units, discovery=True
+            )
+
+    def test_combine_expr_carries_the_version_into_the_combined_table(
+        self, two_group_units, tmp_path
+    ):
+        groups = TestGroupedMergeIdentities()._run_groups(two_group_units, tmp_path)
+        out = tmp_path / "combined.quant.expr"
+        rc = mco.main(
+            ["--combine-expr", "--out", str(out), "--result", str(tmp_path / "r.json")]
+            + [
+                arg
+                for g in sorted(groups)
+                for arg in ("--group-result", str(groups[g]["result"]))
+            ]
+        )
+        assert rc == 0
+        assert self._version_line(str(out)) == "# LRAA version test"
+
+    def test_one_group_missing_its_version_refuses_the_combine(
+        self, two_group_units, tmp_path
+    ):
+        # The mixed case, which a global "did ANY group carry a version" check
+        # passes wrongly: the surviving group's version would be stamped onto the
+        # unversioned group's rows too.
+        groups = TestGroupedMergeIdentities()._run_groups(two_group_units, tmp_path)
+        victim = sorted(groups)[0]
+        expr = Path(groups[victim]["merged_dir"] / "chunked.quant.expr")
+        expr.write_text(
+            "\n".join(
+                l
+                for l in expr.read_text().splitlines()
+                if not l.startswith("# LRAA version")
+            )
+            + "\n"
+        )
+        with pytest.raises(ChunkedRun.PipelineError, match="carries no"):
+            mco.main(
+                ["--combine-expr", "--out", str(tmp_path / "c.expr")]
+                + [
+                    arg
+                    for g in sorted(groups)
+                    for arg in ("--group-result", str(groups[g]["result"]))
+                ]
+            )
+
+    def test_groups_disagreeing_on_version_refuse_the_combine(
+        self, two_group_units, tmp_path
+    ):
+        groups = TestGroupedMergeIdentities()._run_groups(two_group_units, tmp_path)
+        victim = sorted(groups)[0]
+        expr = Path(groups[victim]["merged_dir"] / "chunked.quant.expr")
+        expr.write_text(
+            expr.read_text().replace("# LRAA version test", "# LRAA version other")
+        )
+        with pytest.raises(ChunkedRun.PipelineError, match="disagree on LRAA version"):
+            mco.main(
+                ["--combine-expr", "--out", str(tmp_path / "c.expr")]
+                + [
+                    arg
+                    for g in sorted(groups)
+                    for arg in ("--group-result", str(groups[g]["result"]))
+                ]
+            )
 
 
 class TestRebaseTpm:

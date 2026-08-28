@@ -126,6 +126,10 @@ def _write_unit(root, unit_id, offset):
     gene = "g.{}".format(unit_id)
 
     with open(prefix + ".quant.expr", "wt") as fh:
+        # A real unit's quant.expr opens with these; the merge reads the version
+        # off them to stamp the merged artifact and refuses a unit carrying none.
+        print("# LRAA version test", file=fh)
+        print("# LRAA CMD: LRAA --contig chrT", file=fh)
         print("\t".join(EXPR_HEADER), file=fh)
         print(
             "\t".join(
@@ -221,7 +225,11 @@ def _merge(outdir, units, discovery, forced=None):
 
 def _expr_rows(result):
     with open(result["quant_expr"], "rt") as fh:
-        rows = [line.rstrip("\n").split("\t") for line in fh]
+        rows = [
+            line.rstrip("\n").split("\t")
+            for line in fh
+            if not line.startswith("#")  # provenance comments precede the column row
+        ]
     return rows[0], rows[1:]
 
 
@@ -249,8 +257,18 @@ def _artifact_bytes(result, discovery):
 
 
 def _gtf_comment(result):
+    """Every leading comment of the merged gtf, joined.
+
+    Not ``readline()``: the merged header now opens with ``# LRAA version`` so that
+    line 1 answers "which build made this" identically for chunked and unchunked
+    outputs, and the merge-provenance line follows it. Callers assert with ``in``,
+    so joining keeps them about content rather than position.
+    """
+
     with open(result["gtf"], "rt") as fh:
-        return fh.readline().rstrip("\n")
+        return "\n".join(
+            line.rstrip("\n") for line in fh if line.startswith("#")
+        )
 
 
 # ------------------------------------------------------- 1. mixed offsets shift
