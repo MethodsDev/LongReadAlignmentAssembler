@@ -191,17 +191,18 @@ workflow LRAA_chunk_scatter {
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
     Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 32])
     Int chunkCpu_use = select_first([chunkCpu, 2])
-    # 8, halved from 16. OBSERVED on a live GRCh38 cell-line submission: LRAA's own
-    # per-unit peak RSS across 15 sampled chunk leaves was 55-268 MB, and the widest
-    # per-unit peak seen anywhere locally (chunked arabidopsis) was 409 MB. 8 GiB
-    # still leaves ~20x headroom on the worst of those.
+    # 8, halved from 16. Two independent measurements agree it is enough and that
+    # going lower would not be: LRAA's own per-unit peak RSS across 15 sampled chunk
+    # leaves of a live GRCh38 submission was 55-268 MB, but cgroup memory.peak over
+    # 150 PBMC leaves reached 3,003 MiB, and a controlled comparison puts INITIAL
+    # DISCOVERY leaves at 2,821 MiB against 1,485 for final quant on identical cuts.
+    # So 8 GiB is ~2.7x the worst leaf actually observed, and the 2 GiB that the
+    # per-unit figures alone would have suggested sits BELOW it.
     #
-    # Halved rather than cut to the measurement, deliberately: resources.summary.tsv
-    # reports the RSS of an LRAA WORK UNIT, which is not the container's peak -- it
-    # excludes whatever else the task holds at once, and units run concurrently under
-    # chunkCpu. Sizing straight to 268 MB would be sizing to the wrong quantity from a
-    # 15-leaf sample. WHAT WOULD SETTLE IT: task-level peak memory from Terra/Batch
-    # over a full genome's leaves, which is where the real ceiling would show.
+    # That gap is the lesson: resources.summary.tsv reports the RSS of one LRAA WORK
+    # UNIT, not the container's peak. It excludes whatever else the task holds at
+    # once, units run concurrently under chunkCpu, and the discovery phase is the
+    # heavy one. Size this from cgroup task-level peaks, never from per-unit RSS.
     Int chunkMemoryGB_use = select_first([chunkMemoryGB, 8])
     Int mergeCpu_use = select_first([mergeCpu, 2])
     Int mergeMemoryGB_use = select_first([mergeMemoryGB, 8])
@@ -217,6 +218,14 @@ workflow LRAA_chunk_scatter {
     # 3,003. So the 16 GiB below is ~5x the worst leaf of a real library at the
     # 10 Mb default, and on a ~300-leaf scatter that over-request is the
     # difference between a scatter that schedules and one that queues.
+    #
+    # A CONTROLLED comparison now shows span is not even the controlling variable.
+    # Same 10 Mb target, same library, same chunk boundaries, differing only in what
+    # the leaf does: final-quant leaves peaked at 1,485 MiB and initial-discovery
+    # leaves at 2,821 MiB on the same cuts. Nearly 2x from workload alone, with
+    # geometry held fixed. So a width-derived value is not merely loose at the tail
+    # (below) -- it is estimating from a variable that does not decide the answer,
+    # and any single constant has to cover the heavier of the two phases.
     #
     # A width-derived value (4 x (1 + 0.022 x span) GiB, mirroring
     # pylib/ChunkedRun.py's chunk_unit_peak_mib doubled for the two orientations)
