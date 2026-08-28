@@ -390,29 +390,21 @@ task LRAA_runner_task {
         cpu: cpu
         memory: "~{effective_memoryGB} GiB"
         disks: "local-disk ~{diskSizeGB} HDD"
-        # OPEN QUESTION, deliberately NOT decided here. This task declares no
-        # `preemptible`, while every neighbouring task that must not be preempted
-        # states it explicitly -- Partition_data_by_chromosome.wdl:85,
-        # LRAA_chunk_scatter.wdl:462 and :738. An independent benchmark flagged
-        # the asymmetry while costing by_chromosome against by_chunk, where it is
-        # load-bearing: the by_chromosome path is non-preemptible throughout while
-        # by_chunk's dominant term is `preemptible: 3`, and that difference is the
-        # entire basis of the platform comparison (break-even at p ~ 0.77, so
-        # by_chunk wins by 30-38% at typical spot discounts).
+        # This task declares no `preemptible`, while every neighbouring task that
+        # must not be preempted states it explicitly:
+        # Partition_data_by_chromosome.wdl:85, LRAA_chunk_scatter.wdl:462 and :738.
         #
-        # Left absent rather than set to 0, because what an absent attribute
-        # RESOLVES to is backend-specific and nothing in this repo pins it: no
-        # miniwdl cfg, Terra config or workflow-level default_runtime_attributes
-        # mentions preemptible. Writing 0 would preserve intent only if the
-        # backend already defaults to 0; if it defaults higher, 0 would silently
-        # make this task non-preemptible and RAISE cost. Deciding that needs the
-        # workspace's effective runtime attributes, which are not visible from the
-        # repository.
+        # Left absent rather than pinned, because what an absent attribute RESOLVES
+        # to is backend-specific and nothing in this repository pins it -- no
+        # miniwdl cfg, Terra config, or workflow-level default_runtime_attributes
+        # mentions preemptible. Writing 0 would preserve intent only if the backend
+        # already defaults to 0; if it defaults higher, 0 would make this task
+        # non-preemptible and raise cost. Absence verified; the effective value was
+        # not.
         #
         # To settle: read the resolved runtime attributes for one LRAA_runner_task
-        # from Terra's metadata endpoint. If it already resolves to 0, state it
-        # here for the reason the neighbours do. If not, the cost model above
-        # needs revisiting before anything is pinned.
+        # from Terra's metadata endpoint, then either state the value here for the
+        # reason the neighbours do, or leave it absent deliberately and say so.
     }
 
 }
