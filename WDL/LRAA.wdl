@@ -204,6 +204,23 @@ workflow LRAA_wf {
         # the caller getting `samtools view -c` right.
         Boolean chunk_by_strand = false
 
+        # Turn chunking OFF inside each LRAA invocation: the whole contig-strand in
+        # one worker, as LRAA ran before chunking became the default in v0.25.0.
+        #
+        # Chunking is otherwise unconditional and agrees with unchunked on the
+        # models -- MEASURED on a SIRV ref-free run at v0.28.1, 68 transcripts and
+        # 68 intron chains either way, Jaccard 1.00000. What differs is the IDS:
+        # chunked discovery namespaces every model as <unit_id>@<id>, and the merged
+        # outputs carry no `# LRAA version` / `# LRAA CMD:` header. So this exists
+        # for callers whose results must line up with unchunked history at the id
+        # level -- the SIRV and MORF benchmark corpora, whose every prior deposit is
+        # unchunked -- not because chunked output is wrong.
+        #
+        # Named for what setting it DOES, like chunk_by_strand and unlike the `chunk`
+        # input this does not revive: a Boolean whose false case silently meant "the
+        # other mode" is what made that one worth removing.
+        Boolean no_chunk = false
+
         # Two-pass streaming quantification; see subwdls/LRAA_runner.wdl's task input
         # for detail. ON by default since v0.25.0, matching LRAA's own default.
         Boolean stream_reads = true
@@ -316,6 +333,7 @@ workflow LRAA_wf {
             main_chromosomes = main_chromosomes,
             region_given = defined(region),
             chunk_plan_given = defined(internal_chunk_plan),
+            no_chunk = no_chunk,
             docker = docker
     }
 
@@ -492,6 +510,7 @@ workflow LRAA_wf {
                     approx_MB_per_cut = approx_MB_per_cut_resolved,
                     approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_resolved,
                     chunk_by_strand = chunk_by_strand,
+                    no_chunk = no_chunk,
                     stream_reads = stream_reads,
                     cpu = select_first([cpuScattered, shard_cpu_computed]),  # explicit override, else per-shard estimate above
                     min_mapping_quality = min_mapping_quality,
@@ -577,6 +596,7 @@ workflow LRAA_wf {
                 approx_MB_per_cut = approx_MB_per_cut_resolved,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_resolved,
                 chunk_by_strand = chunk_by_strand,
+                no_chunk = no_chunk,
                 stream_reads = stream_reads,
                 cpu = cpu,
                 num_total_reads = num_total_reads,
@@ -899,6 +919,7 @@ task validate_scattering {
         String main_chromosomes
         Boolean region_given
         Boolean chunk_plan_given
+        Boolean no_chunk
         String docker
     }
 
@@ -946,7 +967,27 @@ task validate_scattering {
         exit 1
     fi
 
-    echo "scattering=~{scattering} contigs=${n} region=~{region_given} chunk_plan=~{chunk_plan_given}"
+    # no_chunk turns chunking OFF inside each LRAA invocation, which leaves
+    # by_chunk with nothing to scatter over: that mode exists to fan out across cut
+    # positions, and unchunked runs place none. Refused rather than resolved by
+    # precedence, because either silent winner is wrong -- honouring by_chunk gives
+    # a chunked run to a caller who asked for none, and honouring no_chunk gives one
+    # whole-genome invocation to a caller who asked for a scatter.
+    if [[ "~{no_chunk}" == "true" && "~{scattering}" == "by_chunk" ]]; then
+        echo "Error: no_chunk cannot be combined with scattering=by_chunk; there are no chunks to scatter over" >&2
+        exit 1
+    fi
+
+    # And a plan is cut geometry, which an unchunked run has no use for. The rule
+    # above about by_chromosome consuming a plan holds only because --chunk was
+    # unconditional; with no_chunk the shards do not chunk, so a supplied plan would
+    # be silently unused -- the same invisible-drop this file refuses elsewhere.
+    if [[ "~{no_chunk}" == "true" && "~{chunk_plan_given}" == "true" ]]; then
+        echo "Error: internal_chunk_plan is cut geometry and no_chunk places no cuts; drop one" >&2
+        exit 1
+    fi
+
+    echo "scattering=~{scattering} contigs=${n} region=~{region_given} chunk_plan=~{chunk_plan_given} no_chunk=~{no_chunk}"
     >>>
 
     output {

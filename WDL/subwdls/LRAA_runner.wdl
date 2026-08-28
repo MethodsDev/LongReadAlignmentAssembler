@@ -17,9 +17,9 @@ task LRAA_runner_task {
         # resolving to the same file rather than silently pooling (LRAA:2380-2396).
         File? bam_for_priors
         # ONE shared cut plan, geometry only. Needed here for the same reason
-        # bam_for_sg is: this task ALWAYS passes --chunk (see the LRAA invocation
-        # below, and the note on chunk_by_strand further down), so a per-chromosome
-        # shard is NOT an unchunked run: it chunks its contig internally and, without
+        # bam_for_sg is: this task passes --chunk unless no_chunk is set (see the
+        # LRAA invocation below), so a per-chromosome shard is NOT an unchunked run:
+        # it chunks its contig internally and, without
         # a plan, selects those cut positions from ITS OWN bam. In the single-cell
         # final quant that means every cluster gets different chunk boundaries and
         # slices the shared bam_for_sg differently, so the clusters stop being
@@ -65,9 +65,10 @@ task LRAA_runner_task {
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
 
-        # Chunked mode is UNCONDITIONAL -- there is no `chunk` input, and the command
-        # below always passes --chunk. A workspace still binding it will fail on an
-        # unknown input rather than quietly change modes.
+        # Chunked mode is the DEFAULT. There is no `chunk` input -- a workspace still
+        # binding that name will fail on an unknown input rather than quietly change
+        # modes -- and the command below passes --chunk unless the `no_chunk` input
+        # above is set, which renders --no_chunk in its place.
         #
         # Chunking splits each contig-strand at low-coverage positions between annotated
         # loci, quantifies the chunks concurrently under one --cpu_budget, and merges. It
@@ -113,6 +114,12 @@ task LRAA_runner_task {
         # library itself, before any chunking, with the -F 0x904 policy that matches
         # the unchunked path.
         Boolean chunk_by_strand = false
+        # Run each contig-strand whole, in one worker, as LRAA did before chunking
+        # became the default in v0.25.0. Forwarded to the task below, which renders
+        # --no_chunk in place of --chunk. Callers wanting a cut plan or a by_chunk
+        # scatter are refused upstream, in LRAA.wdl's validate_scattering, because
+        # neither means anything for a run that places no cuts.
+        Boolean no_chunk = false
 
         # Two-pass streaming quantification. ON by default, matching LRAA's own
         # v0.25.0 default. Both true and false are emitted explicitly below
@@ -296,7 +303,7 @@ task LRAA_runner_task {
                                  ~{true="--quant_only" false='' quant_only} \
                                  ~{true="--HiFi" false='' HiFi} \
                                  ~{true="--no_parallelize_contigs" false='' no_parallelize_contigs} \
-                                 --chunk \
+                                 ~{true="--no_chunk" false="--chunk" no_chunk} \
                                  ~{if defined(chunk_plan) then "--chunk_plan " + chunk_plan else ""} \
                                  ~{true="--chunk_by_strand" false='' chunk_by_strand} \
                                  ~{if defined(approx_MB_per_cut) then "--approx_MB_per_cut " + approx_MB_per_cut else ""} \
@@ -456,6 +463,7 @@ workflow LRAA_runner {
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         Boolean chunk_by_strand = false
+        Boolean no_chunk = false
         # Two-pass streaming quantification; see the task's input for detail. ON by
         # default since v0.25.0, matching LRAA's own default.
         Boolean stream_reads = true
@@ -506,6 +514,7 @@ workflow LRAA_runner {
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             chunk_by_strand = chunk_by_strand,
+            no_chunk = no_chunk,
             stream_reads = stream_reads,
             shardno=shardno,
             docker=docker,
