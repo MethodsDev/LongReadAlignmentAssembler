@@ -1460,3 +1460,77 @@ def test_parse_region_still_refuses_what_it_should(region_str):
     extractor = _load_extractor()
     with pytest.raises(extractor.ExtractionError):
         extractor.parse_region(region_str)
+
+
+
+def _both_strand_gtf_lines(contig="SIRVX", gene_id="SIRVX"):
+    """One gene_id carrying transcripts on BOTH strands, as SIRVs really do.
+
+    The SIRV reference annotation names each gene after its contig and includes
+    antisense isoforms, so `gene_id "SIRV1"` legitimately holds features on + and
+    -: measured, 6 of the 7 genes in
+    SIRV_isoforms_multi-fasta-annotation.expressed.wGeneName.gtf are shaped this
+    way.
+    """
+
+    def row(feature, lend, rend, strand, attrs):
+        return "\t".join(
+            (contig, "test", feature, str(lend), str(rend), ".", strand, ".", attrs)
+        )
+
+    lines = []
+    for strand, (lend, rend), tx in (
+        ("+", (1000, 2000), "tx_plus"),
+        ("-", (5000, 6000), "tx_minus"),
+    ):
+        lines.append(row("gene", lend, rend, strand, 'gene_id "{}";'.format(gene_id)))
+        attrs = 'gene_id "{}"; transcript_id "{}";'.format(gene_id, tx)
+        lines.append(row("transcript", lend, rend, strand, attrs))
+        lines.append(row("exon", lend, rend, strand, attrs))
+    return lines
+
+
+def test_gene_on_both_strands_is_two_loci_not_an_error():
+    """A gene_id on both strands must ingest as two loci.
+
+    This used to raise "gene X appears on both strands (- and +)", which killed
+    every CHUNKED run against such an annotation at cut selection, before any work
+    started -- and chunking is unconditional, so it reached every caller. The
+    unchunked path read the same file without complaint, so the refusal, not the
+    annotation, was the anomaly.
+
+    Ingested strandlessly (strand=""), which is what the strandless cut selector
+    does: one set of cuts serving both orientations, islands taken as the union of
+    both strands' loci.
+    """
+    ingest = extractor._GtfIngest("SIRVX", "")
+    for line in _both_strand_gtf_lines():
+        ingest.ingest(line, "fixture@SIRVX")
+    annotation = ingest.finish()
+
+    loci = list(annotation.genes.values())
+    assert len(loci) == 2, "expected one locus per strand, got {}".format(len(loci))
+    # Same gene_id on both, because the id is what the annotation says; only the
+    # internal key is strand-aware.
+    assert {g.gene_id for g in loci} == {"SIRVX"}
+    assert {g.strand for g in loci} == {"+", "-"}
+    # Per-strand spans, NOT the union of both: a locus claiming 1000-6000 would
+    # veto every cut position between the two real loci.
+    assert {(g.lend, g.rend) for g in loci} == {(1000, 2000), (5000, 6000)}
+
+
+def test_gene_on_both_strands_keeps_its_transcripts_apart():
+    """Each per-strand locus must own only its own transcript.
+
+    The keying change would be worthless if both transcripts landed on one locus:
+    containment and cut admissibility are decided per locus, so a locus holding a
+    transcript from the other strand would mis-veto cuts.
+    """
+    ingest = extractor._GtfIngest("SIRVX", "")
+    for line in _both_strand_gtf_lines():
+        ingest.ingest(line, "fixture@SIRVX")
+    annotation = ingest.finish()
+
+    by_strand = {g.strand: g for g in annotation.genes.values()}
+    assert by_strand["+"].transcript_ids == ["tx_plus"]
+    assert by_strand["-"].transcript_ids == ["tx_minus"]

@@ -385,15 +385,29 @@ class _GtfIngest:
         if gene_id is None:
             gene_id = transcript_id
 
-        gene = self.genes.get(gene_id)
+        # KEYED BY (gene_id, strand), not gene_id alone. One gene_id carrying
+        # features on both strands is two distinct LOCI, and treating it as one
+        # is what this used to refuse outright:
+        #
+        #   ExtractionError: ...@SIRV1: gene SIRV1 appears on both strands (- and +)
+        #
+        # That refusal killed every CHUNKED run whose annotation does this, at cut
+        # selection, before any work started. The SIRV reference annotation does it
+        # by design -- antisense isoforms per locus, gene named after the contig --
+        # so 6 of its 7 genes collide (MEASURED on
+        # SIRV_isoforms_multi-fasta-annotation.expressed.wGeneName.gtf). The
+        # unchunked path reads the same file without complaint, so the guard, not
+        # the annotation, was the anomaly.
+        #
+        # Splitting is safe because the key is purely internal: every consumer
+        # reaches these through self.genes.values() (the interval index and the
+        # emit loop), none looks a locus up by gene_id, and GeneModel still carries
+        # the original gene_id for its label. Per-strand spans are also the more
+        # correct input to cut placement than the union of both strands would be.
+        gene_key = (gene_id, feature_strand)
+        gene = self.genes.get(gene_key)
         if gene is None:
-            gene = self.genes[gene_id] = GeneModel(gene_id, feature_strand)
-        elif gene.strand != feature_strand:
-            raise ExtractionError(
-                "{}: gene {} appears on both strands ({} and {})".format(
-                    where, gene_id, gene.strand, feature_strand
-                )
-            )
+            gene = self.genes[gene_key] = GeneModel(gene_id, feature_strand)
         gene.note_span(lend, rend)
 
         if transcript_id is None:
