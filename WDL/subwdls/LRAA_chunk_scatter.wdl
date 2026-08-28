@@ -191,19 +191,31 @@ workflow LRAA_chunk_scatter {
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
     Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 32])
     Int chunkCpu_use = select_first([chunkCpu, 2])
-    # 8, halved from 16. Two independent measurements agree it is enough and that
-    # going lower would not be: LRAA's own per-unit peak RSS across 15 sampled chunk
-    # leaves of a live GRCh38 submission was 55-268 MB, but cgroup memory.peak over
-    # 150 PBMC leaves reached 3,003 MiB, and a controlled comparison puts INITIAL
-    # DISCOVERY leaves at 2,821 MiB against 1,485 for final quant on identical cuts.
-    # So 8 GiB is ~2.7x the worst leaf actually observed, and the 2 GiB that the
-    # per-unit figures alone would have suggested sits BELOW it.
+    # 16, and NOT lowered. It was briefly dropped to 8 on the strength of typical
+    # leaves, which was wrong: the note below records a whole-chr1 unit at
+    # 5,594.7 MiB, 11.2 GiB for its PAIR, and a leaf carries both orientations. 8
+    # does not cover that; 16 does, with 1.4x spare.
     #
-    # That gap is the lesson: resources.summary.tsv reports the RSS of one LRAA WORK
-    # UNIT, not the container's peak. It excludes whatever else the task holds at
-    # once, units run concurrently under chunkCpu, and the discovery phase is the
-    # heavy one. Size this from cgroup task-level peaks, never from per-unit RSS.
-    Int chunkMemoryGB_use = select_first([chunkMemoryGB, 8])
+    # Wide leaves are not exotic. approx_MB_per_cut is a TARGET, so every contig's
+    # LAST segment absorbs the remainder, and a contig whose candidate positions are
+    # all annotation-blocked is not cut at all. A scatter of 300-475 leaves per
+    # genome therefore meets several chunks far wider than the target every run.
+    #
+    # The asymmetry is what decides it. Over-requesting costs reservation, linear in
+    # leaves and recoverable. ONE leaf OOM fails the workflow, and on Terra that
+    # means re-running the whole job -- every other leaf's work discarded. So this
+    # constant is sized to the worst chunk the geometry can produce, not the median.
+    #
+    # For the record, since the two get confused: typical leaves are nowhere near
+    # 16 GiB. cgroup memory.peak over 150 PBMC leaves was median 1,037 MiB, p95
+    # 2,026, max 3,003; a controlled comparison puts initial-discovery leaves at
+    # 2,821 MiB against 1,485 for final quant on identical cuts. LRAA's own
+    # resources.summary.tsv is lower still, 55-268 MB across 15 sampled leaves,
+    # because it reports ONE WORK UNIT's RSS rather than the container's peak --
+    # roughly a 10x gap on the same leaves. Never size this from per-unit RSS.
+    #
+    # Lowering it needs the per-chunk value described below, not a smaller constant.
+    Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
     Int mergeCpu_use = select_first([mergeCpu, 2])
     Int mergeMemoryGB_use = select_first([mergeMemoryGB, 8])
 
