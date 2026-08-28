@@ -1,3 +1,27 @@
+v0.28.1
+- FIXED: strandless GTF extraction refused an annotation carrying a gene_id on both
+  strands ("gene X appears on both strands (- and +)"), keyed as it was on gene_id
+  alone. Since chunking is unconditional this killed every chunked run against such
+  an annotation at cut selection, before any work started, while the unchunked path
+  read the same file without complaint -- so the refusal was the anomaly, not the
+  annotation. The bundled SIRV set is shaped precisely this way: the reference
+  annotation names each gene after its contig and includes antisense isoforms, so 6
+  of the 7 genes in SIRV_isoforms_multi-fasta-annotation.expressed.wGeneName.gtf
+  carry features on both strands, with gene_id "SIRV1" holding 2 transcripts on +
+  and 6 on -. MEASURED against a SIRV quant-only run: cut selection failed for
+  every contig-strand unit, so the workflow died before extraction. Loci are now
+  keyed by (gene_id, strand), which is what a gene_id on two strands means. The key
+  is internal -- every consumer reaches loci through genes.values() or the interval
+  index, none looks one up by gene_id, and GeneModel still carries the original
+  gene_id for its label -- and per-strand spans are the better input to cut
+  placement, because one locus claiming the union of both would veto every position
+  between the two real loci. Strand filtering elsewhere is unaffected: a stranded
+  region now compares against per-strand loci, and a strandless region already took
+  the union. This SUPERSEDES the v0.25.0 note directing callers to --no_chunk for
+  that corpus; no workaround is needed, which matters because no WDL can express
+  --no_chunk. Regression tests assert two loci with per-strand spans and no
+  transcript crossing between them, and both fail against the previous keying.
+
 v0.28.0
 - ADDED: the read-assignment summaries are now usable as pipeline outputs rather than
   per-unit debris. `<prefix>.read_assignment.summary.tsv` gains a `chunk_id` column
