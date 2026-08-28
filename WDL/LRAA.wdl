@@ -160,8 +160,33 @@ workflow LRAA_wf {
         # models, 0 of 11,811 GTF rows differing, in both rescue configurations. LRAA's
         # one refusal is --quant_only without a gtf, which has nothing to quantify and
         # which an unchunked run refuses too.
-        Float? approx_MB_per_cut
-        Float? approx_MB_per_cut_wiggle_window
+        # CHUNK GEOMETRY, in megabases. Both are 0 = "leave LRAA's own default
+        # alone" (10 Mb spacing, 1 Mb window), NOT optional-and-unset.
+        #
+        # Why a sentinel instead of Float?: a Terra sample table cannot hold an
+        # EMPTY numeric attribute, so a `Float?` bound to a table column forces a
+        # value into every row -- and there is no value meaning "default". With 0
+        # a table can carry 1 / 0.1 on the arabidopsis rows and 0 everywhere else,
+        # which is how a single submission spans corpora that need different
+        # geometry. Set from the Terra UI instead of a table? Then leaving these
+        # at 0 is the same as not touching them.
+        #
+        # EXACTLY 0 is the sentinel. A negative is NOT swallowed as "default" --
+        # it is passed through, and LRAA refuses it at cut selection
+        # (PipelineError, "refusing to extract or merge a partial result",
+        # MEASURED). That is deliberate: mapping a negative to the default would
+        # turn a mistyped arabidopsis row into a silent DEFAULT-GEOMETRY run,
+        # which is the one failure this whole input exists to prevent -- a
+        # plausible, wrong result that looks like everyone else's.
+        #
+        # The cost of 0-as-sentinel is that a genuinely ZERO-width wiggle window
+        # -- accept only the exact grid position, sever whatever that costs -- is
+        # not expressible here. Use the CLI flag or --config_update if ever wanted.
+        #
+        # Sizing follows approx_MB_per_cut for CPU only; see the per-shard block
+        # below, where memory is deliberately a fixed box.
+        Float approx_MB_per_cut = 0
+        Float approx_MB_per_cut_wiggle_window = 0
         # Chunk each contig-STRAND separately, splitting the whole bam by orientation
         # first as a serial phase. OFF by default: the strandless ordering splits inside
         # each chunk, concurrently with every other chunk, and removes the largest
@@ -263,6 +288,28 @@ workflow LRAA_wf {
     String LRAA_output_suffix = if !defined(annot_gtf) && !quant_only then "LRAA.ref-free" else if defined(annot_gtf) && !quant_only then "LRAA.ref-guided" else "LRAA.quant-only"
     String LRAA_output_prefix = sample_id + "." + LRAA_output_suffix
 
+    # Resolve the geometry sentinels ONCE, here, so every consumer below sees the
+    # same answer and the subworkflows keep their existing Float? signatures --
+    # nothing downstream and no other top-level WDL has to know a sentinel exists.
+    #
+    # An unset Float? is what makes LRAA_runner/LRAA_chunk_scatter omit the flag
+    # entirely (`if defined(...)`), which is what lets LRAA apply its own config
+    # default. Passing 0 through would instead render `--approx_MB_per_cut 0` and
+    # ask for a cut every zero megabases.
+    # `!= 0.0`, not `> 0`: a negative must reach LRAA so LRAA can refuse it. A
+    # `> 0` test would quietly resolve -1 to "unset" and run DEFAULT geometry,
+    # turning a typo in the arabidopsis row into a wrong-method run that looks
+    # exactly like every other corpus's.
+    if (approx_MB_per_cut != 0.0) {
+        Float approx_MB_per_cut_set = approx_MB_per_cut
+    }
+    Float? approx_MB_per_cut_resolved = approx_MB_per_cut_set
+
+    if (approx_MB_per_cut_wiggle_window != 0.0) {
+        Float approx_MB_per_cut_wiggle_window_set = approx_MB_per_cut_wiggle_window
+    }
+    Float? approx_MB_per_cut_wiggle_window_resolved = approx_MB_per_cut_wiggle_window_set
+
     call validate_scattering {
         input:
             scattering = scattering,
@@ -291,8 +338,8 @@ workflow LRAA_wf {
                 HiFi = HiFi,
                 min_mapping_quality = min_mapping_quality,
                 min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
-                approx_MB_per_cut = approx_MB_per_cut,
-                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                approx_MB_per_cut = approx_MB_per_cut_resolved,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_resolved,
                 cell_list = cell_list,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
@@ -381,7 +428,10 @@ workflow LRAA_wf {
             # chunked shard holds follows its chunk concurrency -- capped just below --
             # rather than the size of the chromosome it was handed.
             Float shard_contig_length_bp = size(splitByChr.chromosomeFASTAs[contig_index], "B")
-            Float effective_approx_mb_per_cut = select_first([approx_MB_per_cut, 10.0])
+            # MUST read the RESOLVED optional, not the raw input: the raw input is
+            # now a non-optional sentinel, so select_first would hand back 0 and
+            # the division below would be by zero.
+            Float effective_approx_mb_per_cut = select_first([approx_MB_per_cut_resolved, 10.0])
             Int shard_chunks_estimate = ceil(shard_contig_length_bp / (effective_approx_mb_per_cut * 1000000.0))
             Int shard_chunks_estimate_floored = if shard_chunks_estimate < 1 then 1 else shard_chunks_estimate
             Int shard_cpu_computed = if shard_chunks_estimate_floored > max_cpu_per_chunked_shard
@@ -425,8 +475,8 @@ workflow LRAA_wf {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
-                    approx_MB_per_cut = approx_MB_per_cut,
-                    approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                    approx_MB_per_cut = approx_MB_per_cut_resolved,
+                    approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_resolved,
                     chunk_by_strand = chunk_by_strand,
                     stream_reads = stream_reads,
                     cpu = select_first([cpuScattered, shard_cpu_computed]),  # explicit override, else per-shard estimate above
@@ -510,8 +560,8 @@ workflow LRAA_wf {
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
-                approx_MB_per_cut = approx_MB_per_cut,
-                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                approx_MB_per_cut = approx_MB_per_cut_resolved,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window_resolved,
                 chunk_by_strand = chunk_by_strand,
                 stream_reads = stream_reads,
                 cpu = cpu,
