@@ -157,9 +157,37 @@ workflow LRAA_chunk_scatter {
     }
 
     # The defaults, in one place. Every number here is justified in the input
-    # comments above. Prep and leaf memory are the PRE-EXISTING defaults, deliberately
-    # unchanged: each is a reduction I can argue for from a lower-bound measurement
-    # and cannot yet verify. The telemetry to settle them is wired.
+    # comments above. LEAF memory remains the pre-existing default, deliberately
+    # unchanged; see the note below, which an independent benchmark has now
+    # sharpened rather than settled.
+    # MAKE_CHUNKS STAYS AT 32 GiB, but the reason has changed and the evidence
+    # for dropping it is now most of the way there. MEASURED on a 187 GB /
+    # 28-core host against the PBMC library, varying chunk and contig count:
+    #
+    #     11 chunks /  3 contigs   ->    766-866 MiB
+    #    310 chunks / 25 contigs   ->  1,153 MiB
+    #    305 chunks / 25 contigs   ->  1,738 MiB
+    #
+    # 28x the chunks and 8x the contigs bought 1.3-2.0x the memory: emphatically
+    # SUBLINEAR. Cut selection itself, which touches every contig, peaked at
+    # 1,223 MiB. So the scaling this default was hedging against does not occur,
+    # and the 475-contig case is largely unreachable anyway now that cut
+    # selection honours main_chromosomes.
+    #
+    # NOT dropped to 8 regardless, because the measurement cannot yet carry it.
+    # Those are VmHWM figures summed per process tree, not a cgroup high-water
+    # mark -- the cgroup number is unavailable on that host, see the emission
+    # site. Summed VmHWM UNDERCOUNTS when peaks are staggered, and this task runs
+    # makeChunksCpu workers concurrently, which is exactly that case. Correcting
+    # by the 2.6x they measured gives 4.5 GiB and by a pessimistic 4x gives
+    # 6.9 GiB -- the latter is 14% under an 8 GiB cap, on a NON-PREEMPTIBLE task
+    # whose OOM discards the whole prep phase. Trading that for 24 GiB of
+    # reservation is the wrong direction.
+    #
+    # WHAT WOULD SETTLE IT: one whole-genome run with an ENFORCED 8 GiB limit --
+    # a real cgroup or allocator cap, not a reservation -- reporting whether the
+    # task completes. The knob is already exposed, so that costs a config value
+    # and no code change. Drop the default when that run is green.
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
     Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 32])
     Int chunkCpu_use = select_first([chunkCpu, 2])
