@@ -87,7 +87,21 @@ workflow LRAA_wf {
         # main_chromosomes is a CONTIG FILTER in every mode, not the mode switch it
         # used to be: by_chromosome partitions those contigs, by_chunk restricts the
         # partition to them, and off passes a single name through as --contig.
-        String scattering = "by_chunk"
+        #
+        # by_chromosome is the DEFAULT because by_chunk's per-leaf fixed cost swamps
+        # the work in each leaf on a real genome. MEASURED on a live GRCh38 cell-line
+        # submission: 475 chunk leaves, each 8.8-16.7 minutes end to end, containing
+        # 0-82 SECONDS of LRAA compute -- 4.9 minutes of compute across a 10-leaf
+        # sample whose leaves billed 89.2 minutes between them, and 4 of those 10 did
+        # no work at all. The narrow spread against 0-82 s of work is what identifies
+        # the cost as fixed per leaf rather than data-dependent.
+        #
+        # by_chunk still wins on WALL CLOCK when the backend can place leaves in
+        # parallel -- that scatter finished in 20.3 minutes against ~108 for the same
+        # cell line on one 16-core box -- so it stays available and is the right choice
+        # when turnaround matters more than resource-hours. It is no longer what you
+        # get without asking.
+        String scattering = "by_chromosome"
         # Preemptibility of the per-chunk leaf tasks in by_chunk mode. The only
         # preemptible knob surfaced here: a chunk leaf is short, independent and
         # cheap to redo, whereas a chromosome shard or a merge is long-running and

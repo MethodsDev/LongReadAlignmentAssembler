@@ -191,7 +191,18 @@ workflow LRAA_chunk_scatter {
     Int makeChunksCpu_use = select_first([makeChunksCpu, 16])
     Int makeChunksMemoryGB_use = select_first([makeChunksMemoryGB, 32])
     Int chunkCpu_use = select_first([chunkCpu, 2])
-    Int chunkMemoryGB_use = select_first([chunkMemoryGB, 16])
+    # 8, halved from 16. OBSERVED on a live GRCh38 cell-line submission: LRAA's own
+    # per-unit peak RSS across 15 sampled chunk leaves was 55-268 MB, and the widest
+    # per-unit peak seen anywhere locally (chunked arabidopsis) was 409 MB. 8 GiB
+    # still leaves ~20x headroom on the worst of those.
+    #
+    # Halved rather than cut to the measurement, deliberately: resources.summary.tsv
+    # reports the RSS of an LRAA WORK UNIT, which is not the container's peak -- it
+    # excludes whatever else the task holds at once, and units run concurrently under
+    # chunkCpu. Sizing straight to 268 MB would be sizing to the wrong quantity from a
+    # 15-leaf sample. WHAT WOULD SETTLE IT: task-level peak memory from Terra/Batch
+    # over a full genome's leaves, which is where the real ceiling would show.
+    Int chunkMemoryGB_use = select_first([chunkMemoryGB, 8])
     Int mergeCpu_use = select_first([mergeCpu, 2])
     Int mergeMemoryGB_use = select_first([mergeMemoryGB, 8])
 
