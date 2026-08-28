@@ -319,7 +319,21 @@ workflow LRAA_wf {
             docker = docker
     }
 
-    if (scatter_by_chunk) {
+    # GATE. Every branch below is conditioned on the validator having produced its
+    # output, which is what makes the refusals above actually prevent work.
+    #
+    # Without it the validator has no dependents, so Cromwell schedules it ALONGSIDE
+    # the expensive tasks rather than in front of them: MEASURED on a deliberately
+    # invalid run, chunk_scatter's make_chunks task started and 16 bams were
+    # localized before the workflow failed. The refusals still failed the run, but
+    # "runs before anything expensive" -- this task's own claim -- was untrue of all
+    # of them: region+scattering, off+multiple-contigs and chunk_plan+off alike.
+    #
+    # Reading `checked` is the whole point; the comparison is incidental. WDL 1.0 has
+    # no other way to order a task ahead of one that needs none of its outputs.
+    Boolean inputs_validated = validate_scattering.checked != ""
+
+    if (inputs_validated && scatter_by_chunk) {
         call ChunkScatter.LRAA_chunk_scatter as chunk_scatter {
             input:
                 sample_id = sample_id,
@@ -366,7 +380,7 @@ workflow LRAA_wf {
         }
     }
 
-    if (scatter_by_chromosome) {
+    if (inputs_validated && scatter_by_chromosome) {
 
         if (!defined(num_total_reads)) {
             call count_bam {
@@ -515,7 +529,7 @@ workflow LRAA_wf {
         }
     }
 
-    if (run_without_splitting) {
+    if (inputs_validated && run_without_splitting) {
             
         # main_chromosomes is a contig FILTER in every mode (see its declaration),
         # and off's only representation of one is LRAA's own --contig -- which
