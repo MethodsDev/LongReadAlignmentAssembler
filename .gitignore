@@ -74,3 +74,16 @@ doc_audit/
 # staged by Docker/build_docker.*.sh via git archive; regenerated every build
 Docker/lraa_checkout.tar.gz
 Docker/lraa_checkout.sha
+
+# Editor artefacts. Five were committed in e48fcded -- an Emacs autosave
+# (#file#) and four backups (file~) -- and nothing here excluded them.
+# Untracked from the index rather than deleted from disk: they are the
+# author's working files, they simply are not source.
+#
+# Safe as broad patterns because, unlike the __* debug-artefact convention
+# (which has ~100 legitimately tracked files under testing/sirvs and
+# util/sc/__deprecated), NO tracked file in this repo matches either shape
+# except the five removed alongside this entry.
+*~
+\#*\#
+.\#*
