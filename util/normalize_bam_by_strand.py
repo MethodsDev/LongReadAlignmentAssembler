@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import sys, os, re
+import concurrent.futures
+import multiprocessing
 import subprocess
 import argparse
 import hashlib
@@ -14,6 +16,12 @@ from Pipeliner import Pipeliner, Command
 import LRAA_Globals
 import RdnaMask
 import Util_funcs
+# One definition of "how many workers", shared with the strand split this farms
+# out to.  Appended rather than prepended so util/ cannot shadow a stdlib module.
+_UTIL_DIR = os.path.dirname(os.path.realpath(__file__))
+if _UTIL_DIR not in sys.path:
+    sys.path.append(_UTIL_DIR)
+from separate_bam_by_strand import resolve_num_workers
 
 # Named in every artifact this writes, so a cache from a different method cannot
 # be mistaken for a current one. Defined in LRAA_Globals because the driver keys
@@ -69,6 +77,23 @@ def main():
     parser.add_argument("--window_origin", type=int, default=None, help="absolute reference coordinate (0-based) that position 0 of this input maps to: 0 for a whole-contig bam, the rebase offset for a rebased chunk. Aligns the depth-window grid to the absolute coordinate grid, so the same absolute locus lands in the same window whether it is normalized whole or as part of a chunk. Default (unset): the grid is anchored per contig on the first aligned base seen there, making window boundaries a function of which records happen to be in the input")
     parser.add_argument("--rdna_mask_bed", type=str, default=None, help="BED of excluded regions (RdnaMask.build_rdna_mask_bed's output); reads whose alignment overlaps a region here are excluded from depth measurement and from the output, exactly like a record quant_discard_reason's other criteria reject. Unset means no masking, regardless of the caller's --no_rdna_mask/--rdna_mask_fasta -- the driver passes this explicitly when it built one")
 
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help=(
+            "concurrency for the work this script farms out: the strand split's "
+            "per-contig passes (see separate_bam_by_strand.py --num_workers), the "
+            "two depth-normalization jobs, which are independent files and so run "
+            "as two processes rather than two passes, and the thread counts handed "
+            "to samtools merge and samtools index. 0 (the default) means one per "
+            "CPU this process may run on; a container whose cpu quota is smaller "
+            "than the host's core count must say so here, because a quota does not "
+            "narrow what the kernel reports as available. 1 runs everything "
+            "serially, as this always did. (default: 0)"
+        ),
+    )
+
     args = parser.parse_args()
 
     input_bam_filename = args.input_bam
@@ -85,6 +110,13 @@ def main():
     # 0 and any negative value all mean "no intron filtering"; canonicalizing to
     # 0 keeps them from hashing to different checkpoint tokens for one behavior.
     max_intron_length = max(args.max_intron_length, 0)
+
+    # Deliberately NOT part of either checkpoint token below: the worker count
+    # decides how the work is divided, never which records survive it, so keying
+    # a cache on it would only miss.
+    num_workers = resolve_num_workers(args.num_workers)
+    # samtools counts its ADDITIONAL threads, so N workers means N-1 extra
+    samtools_threads = max(num_workers - 1, 0)
 
     # sampling is keyed on a hash of the read name, so a read's fate depends on
     # neither its position in the file nor the order reads are visited in
@@ -147,7 +179,11 @@ def main():
         cmd = " ".join([os.path.join(scriptdir, "separate_bam_by_strand.py"),
                         "--bam {}".format(input_bam_filename),
                         "--output_prefix {}".format(SS_output_prefix),
-                        "--max_intron_length {}".format(max_intron_length)])
+                        "--max_intron_length {}".format(max_intron_length),
+                        # the split is one thread per contig rather than one
+                        # thread for the file; measured on a 48.1 M-record
+                        # PBMC bam, 600 s down to 93 s on 16 workers
+                        "--num_workers {}".format(num_workers)])
 
 
         pipeliner.add_commands([Command(cmd, f"sep_by_strand.{split_token}.ok")])
@@ -159,15 +195,46 @@ def main():
             norm_jobs.append((SS_bam_file, norm_bam_filename, norm_bam_filename + ".ok"))
 
     ## run normalizations
-    norm_bam_files = list()
+    norm_bam_files = [job[1] for job in norm_jobs]
+    pending = [job for job in norm_jobs if not os.path.exists(job[2])]
+    settings = {
+        "normalize_max_cov_level": normalize_max_cov_level,
+        "depth_window": depth_window,
+        "random_seed": random_seed,
+        "window_origin": window_origin,
+        "min_per_id": min_per_id,
+        "min_mapping_quality": min_mapping_quality,
+        "rdna_mask": rdna_mask,
+    }
 
-    for source_bam_file, norm_bam_filename, norm_bam_checkpoint in norm_jobs:
-
-        if not os.path.exists(norm_bam_checkpoint):
-            sift_bam(source_bam_file, norm_bam_filename, normalize_max_cov_level, depth_window, random_seed, window_origin, min_per_id, min_mapping_quality, rdna_mask)
-            subprocess.check_call("touch {}".format(norm_bam_checkpoint), shell=True)
-
-        norm_bam_files.append(norm_bam_filename)
+    if len(pending) > 1 and num_workers > 1:
+        # The two strand bams are separate files sharing no state -- separate
+        # depth arrays, separate junction tallies, and an acceptance draw keyed on
+        # the read name rather than on visit order -- so they are two processes
+        # rather than two passes. Both peaks are then live at once: each holds one
+        # int64 depth array per contig it sees (contig length / --depth_window
+        # entries) plus its junction tally, ~0.5 GiB per job for a whole human
+        # genome at the default 100 bp window.
+        logger.info("normalizing {} strand bam(s) concurrently".format(len(pending)))
+        start_method = (
+            "fork" if "fork" in multiprocessing.get_all_start_methods() else None
+        )
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=min(len(pending), num_workers),
+            mp_context=multiprocessing.get_context(start_method),
+        ) as pool:
+            futures = {
+                pool.submit(normalize_job, job, settings): job for job in pending
+            }
+            for future in concurrent.futures.as_completed(futures):
+                # re-raises whatever the child raised, so a failed job fails the
+                # run rather than leaving a checkpoint over a missing bam
+                future.result()
+                subprocess.check_call(["touch", futures[future][2]])
+    else:
+        for job in pending:
+            normalize_job(job, settings)
+            subprocess.check_call(["touch", job[2]])
 
     if input_is_single_strand:
         # sift_bam already wrote the final output; there is nothing to merge, and
@@ -194,7 +261,13 @@ def main():
         # chains still concatenate, so on its own it merely caps growth: measured
         # on the cluster-guided path it would still leave 1,818,752 records /
         # ~792 MB. The collapse below is what removes the accumulated chain.
-        cmd = f"samtools merge --no-PG -f {output_bam_filename} " + " ".join(norm_bam_files)
+        # -@: this merge recompresses every record of both inputs, which is the
+        # whole of its cost; measured at 12.6 min single-threaded over 40.1 M
+        # records on the cluster-guided path
+        cmd = (
+            f"samtools merge --no-PG -@ {samtools_threads} -f {output_bam_filename} "
+            + " ".join(norm_bam_files)
+        )
         pipeliner.add_commands([Command(cmd, f"SS_merge.{run_token}.ok")])
         index_checkpoint = f"index_merged.{run_token}.ok"
 
@@ -215,7 +288,7 @@ def main():
     cmd = f"{sys.executable} {collapse_script} --input_bam {output_bam_filename} --no-index"
     pipeliner.add_commands([Command(cmd, f"collapse_pg.{run_token}.ok")])
 
-    cmd = f"samtools index {output_bam_filename}"
+    cmd = f"samtools index -@ {samtools_threads} {output_bam_filename}"
     pipeliner.add_commands([Command(cmd, index_checkpoint)])
 
     pipeliner.run()
@@ -223,6 +296,18 @@ def main():
     logger.info("Done.  See SS-normalized bam: {}".format(output_bam_filename))
 
     sys.exit(0)
+
+
+def normalize_job(job, settings):
+    """one strand's depth normalization, as a worker runs it.
+
+    Module level and taking its settings as an argument because a worker receives
+    both by pickle: a closure over main()'s locals cannot cross a process
+    boundary, even under fork, since the callable itself is what gets sent.
+    """
+
+    source_bam_file, norm_bam_filename, _checkpoint = job
+    sift_bam(source_bam_file, norm_bam_filename, **settings)
 
 
 def compute_tokens(
@@ -550,16 +635,21 @@ def sift_bam(
             for junction in _read_junctions(read):
                 junction_support[(contig, junction)] += 1
 
+    # Both log lines name their own job: the two strand bams are normalized
+    # concurrently, so unattributed lines from two jobs interleave on one stream.
     if overhanging:
         logger.warning(
-            "{} alignment(s) extend past the reference length declared in the bam header, "
+            "{}: {} alignment(s) extend past the reference length declared in the bam header, "
             "by up to {} bp. Their depth is measured over the windows they actually occupy; "
-            "the records themselves are left untouched.".format(overhanging, max_overhang)
+            "the records themselves are left untouched.".format(
+                os.path.basename(SS_bam_file), overhanging, max_overhang
+            )
         )
 
     logger.info(
-        "measured depth over {} contig(s), {} distinct junction(s), "
+        "{}: measured depth over {} contig(s), {} distinct junction(s), "
         "min_per_id={} min_mapq={}".format(
+            os.path.basename(SS_bam_file),
             len(window_bases), len(junction_support),
             min_per_id, min_mapping_quality,
         )

@@ -288,7 +288,14 @@ def _retained(path):
         }
 
 
-def _run_normalizer(input_bam, output_bam, cwd, window_origin=None, single_strand=False):
+def _run_normalizer(
+    input_bam,
+    output_bam,
+    cwd,
+    window_origin=None,
+    single_strand=False,
+    num_workers=None,
+):
     cmd = [
         sys.executable,
         str(NORMALIZER),
@@ -305,6 +312,8 @@ def _run_normalizer(input_bam, output_bam, cwd, window_origin=None, single_stran
         cmd += ["--window_origin", str(window_origin)]
     if single_strand:
         cmd += ["--input_is_single_strand"]
+    if num_workers is not None:
+        cmd += ["--num_workers", str(num_workers)]
 
     completed = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
@@ -728,3 +737,163 @@ def test_a_read_before_the_anchor_is_refused_while_the_anchor_depends_on_order(t
     )
 
     assert set(_retained(accepted)) == {"late", "early"}
+
+
+# ---------------------------------------------------------------------------
+# the worker count
+#
+# This script farms out a strand split that used to be one thread over the whole
+# bam -- 15 minutes of a 72-minute step, measured over 48.1 M records with 27 of
+# 28 cores idle -- plus two depth normalizations that are independent files. The
+# division of the work may not change the answer: this bam is the splice-graph
+# input for every cluster's quantification, so a different record set here is a
+# different splice graph and a different number in every downstream table.
+
+MULTI_CONTIGS = (("chr1", CONTIG_LEN), ("chr2", CONTIG_LEN), ("chrM", 16569))
+
+
+def _multi_contig_header():
+    return pysam.AlignmentHeader.from_dict(
+        {
+            "HD": {"VN": "1.6", "SO": "coordinate"},
+            "SQ": [{"SN": name, "LN": length} for name, length in MULTI_CONTIGS],
+        }
+    )
+
+
+def _multi_contig_corpus(header):
+    """piles above the target depth on every contig, in both orientations.
+
+    Both orientations because the split sends them to different files, and
+    unequal per-contig counts because the fan-out hands the biggest contig to a
+    worker first -- so the order the passes finish in is not the header order the
+    output has to come out in.
+    """
+
+    reads = []
+    for reference_id, (name, _length) in enumerate(MULTI_CONTIGS):
+        depth = 40 + reference_id * 25
+        for index in range(depth):
+            for orientation, flag in (("f", 0), ("r", 16)):
+                read = pysam.AlignedSegment(header)
+                read.query_name = "{}_{}_{:04d}".format(name, orientation, index)
+                read.query_sequence = "A" * 200
+                read.query_qualities = pysam.qualitystring_to_array("I" * 200)
+                read.flag = flag
+                read.reference_id = reference_id
+                read.reference_start = 350 + (index % 3) * 900
+                read.mapping_quality = 60
+                read.cigartuples = [(0, 200)]
+                reads.append(read)
+    return reads
+
+
+@pytest.fixture(scope="module")
+def worker_counts(tmp_path_factory):
+    """the same multi-contig bam normalized serially and on four workers"""
+
+    root = tmp_path_factory.mktemp("workers")
+    header = _multi_contig_header()
+    whole = root / "whole.bam"
+    with pysam.AlignmentFile(str(whole), "wb", header=header) as writer:
+        for read in sorted(
+            _multi_contig_corpus(header),
+            key=lambda r: (r.reference_id, r.reference_start),
+        ):
+            writer.write(read)
+    pysam.index(str(whole))
+
+    outputs = dict()
+    for label, num_workers in (("serial", 1), ("concurrent", 4)):
+        work = root / label
+        work.mkdir()
+        output = work / "norm.bam"
+        _run_normalizer(whole, output, work, num_workers=num_workers)
+        outputs[label] = output
+
+    return outputs
+
+
+def test_the_worker_count_does_not_change_which_reads_survive(worker_counts):
+    """The acceptance bar: same records, same XW weights, either way.
+
+    XW as well as the record set, because the weight is what the splice graph
+    reads support off; two runs keeping the same reads under different weights
+    would still build different graphs.
+    """
+
+    serial = _retained(worker_counts["serial"])
+    concurrent = _retained(worker_counts["concurrent"])
+
+    # the corpus has to be thinned, or the comparison is between two runs that
+    # both kept everything
+    assert 0 < len(serial) < 2 * sum(40 + i * 25 for i in range(len(MULTI_CONTIGS)))
+    assert concurrent == serial
+
+
+def test_the_concurrent_run_output_is_coordinate_sorted_and_region_fetchable(
+    worker_counts,
+):
+    """What the merge of per-contig parts must not lose.
+
+    Record-set equality above cannot see ordering; this walks the records, and
+    then fetches the LAST contig in the header by region, which is the query a
+    concatenation in completion order answers wrongly.
+    """
+
+    output = worker_counts["concurrent"]
+    with pysam.AlignmentFile(str(output), "rb") as reader:
+        positions = [
+            (read.reference_id, read.reference_start)
+            for read in reader.fetch(until_eof=True)
+        ]
+    assert positions == sorted(positions)
+
+    assert Path(str(output) + ".bai").exists()
+    late_contig = MULTI_CONTIGS[-1][0]
+    with pysam.AlignmentFile(str(output), "rb") as reader:
+        fetched = [read.query_name for read in reader.fetch(late_contig)]
+    assert fetched
+    assert all(name.startswith(late_contig) for name in fetched)
+
+
+def test_changing_the_worker_count_does_not_invalidate_a_warm_run(worker_counts):
+    """A cache may not miss over a choice that decides nothing about content.
+
+    The worker count is not part of either checkpoint token, so re-running the
+    serial arm's directory on four workers must do no work at all.
+    """
+
+    work_dir = worker_counts["serial"].parent
+    before = {
+        path.relative_to(work_dir): path.stat().st_mtime_ns
+        for path in work_dir.rglob("*")
+        if path.is_file()
+    }
+    assert before
+
+    _run_normalizer(
+        work_dir.parent / "whole.bam",
+        worker_counts["serial"],
+        work_dir,
+        num_workers=4,
+    )
+
+    after = {
+        path.relative_to(work_dir): path.stat().st_mtime_ns
+        for path in work_dir.rglob("*")
+        if path.is_file()
+    }
+
+    assert after == before
+
+
+def test_help_reports_the_worker_count():
+    help_text = subprocess.run(
+        [sys.executable, str(NORMALIZER), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert "--num_workers" in help_text
