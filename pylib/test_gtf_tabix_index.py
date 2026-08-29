@@ -168,7 +168,10 @@ def test_strand_filter_matches_full_scan(plain_gtf):
     indexed = extractor.load_gtf_for_region(plain_gtf, CONTIG, "-", 1, 50000)
     full = extractor.load_gtf(plain_gtf, CONTIG, "-")
     assert _snapshot(indexed) == _snapshot(full)
-    assert set(indexed.genes) == {"gC"}
+    # Genes are keyed (gene_id, strand) since 2d28609f, which stopped treating a
+    # gene_id present on both strands as an error and reads it as two loci. This
+    # extraction is strand-filtered to "-", so gC appears once, on that strand.
+    assert set(indexed.genes) == {("gC", "-")}
 
 
 def test_transcript_models_match_full_scan(plain_gtf):
@@ -196,7 +199,9 @@ def test_index_is_rebuilt_when_the_gtf_changes(tmp_path):
         tmp_path / "mutating.gtf", _transcript_rows("g1", "g1.1", "+", [(100, 200)])
     )
     extractor.ensure_gtf_index(gtf)
-    assert set(extractor.load_gtf_for_region(gtf, CONTIG, "+", 1, 10000).genes) == {"g1"}
+    assert set(extractor.load_gtf_for_region(gtf, CONTIG, "+", 1, 10000).genes) == {
+        ("g1", "+")
+    }
 
     _write_gtf(
         tmp_path / "mutating.gtf",
@@ -204,7 +209,7 @@ def test_index_is_rebuilt_when_the_gtf_changes(tmp_path):
         + _transcript_rows("g2", "g2.1", "+", [(1000, 9000)]),
     )
     reloaded = extractor.load_gtf_for_region(gtf, CONTIG, "+", 1, 10000)
-    assert set(reloaded.genes) == {"g1", "g2"}
+    assert set(reloaded.genes) == {("g1", "+"), ("g2", "+")}
 
 
 def test_the_source_gtf_is_never_modified(plain_gtf):
