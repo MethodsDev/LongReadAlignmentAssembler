@@ -639,22 +639,24 @@ workflow LRAA_wf {
     #                   chunk directories and the denominator that belong to the
     #                   run that built them.
     #
-    # This is not internal_chunk_plan coming back out. That input, when supplied,
-    # REPLACES selection in every shard, so gathering afterwards would return a
-    # copy of what the caller handed in; the value here is for the case where no
-    # plan was supplied and the run picked its own cuts, which until now could not
-    # be handed to anything.
+    # NOT SET UP WHEN internal_chunk_plan WAS SUPPLIED, and this is a cost decision
+    # as much as a semantic one. A supplied plan REPLACES selection in every shard,
+    # so gathering afterwards returns a copy of the file the caller already holds --
+    # and this workflow is called once per cluster per phase by
+    # LRAA-cell_cluster_guided.wdl, so on a ~29-cluster run that would be ~87 tasks
+    # producing ~87 copies of one input. The value here is the case where NO plan
+    # was supplied and the run picked its own cuts, which until now could not be
+    # handed to anything.
     #
-    # Empty only when no shard placed a cut to record: no_chunk=true, where LRAA
-    # never enters the chunked driver. Then the gather task is not set up at all
-    # and the output below is null.
+    # Also not set up when no shard placed a cut to record: no_chunk=true, where
+    # LRAA never enters the chunked driver. In both cases the output below is null.
     Array[File] shardCutPlans = flatten([
         select_all(select_first([LRAA_scatter.LRAA_shard_cut_plan, []])),
         select_all([LRAA_direct.LRAA_shard_cut_plan]),
         select_all([chunk_scatter.chunkPlan])
     ])
 
-    if (length(shardCutPlans) > 0) {
+    if (!defined(internal_chunk_plan) && length(shardCutPlans) > 0) {
         call gather_shard_cut_plans {
             input:
                 shardCutPlans = shardCutPlans,
@@ -691,10 +693,12 @@ workflow LRAA_wf {
     Array[File] chunkLogs = select_first([chunk_scatter.chunkLogs, []])
     File? mergedTpmAudit = chunk_scatter.mergedTpmAudit
     File? mergeResult = chunk_scatter.mergeResult
-    # The cut geometry this run chose, in the format --chunk_plan / internal_chunk_plan
-    # consumes: hand it to a second run to force it onto identical chunk bounds.
-    # Geometry only -- no denominator, no chunk directories. Null when no shard
-    # placed a cut, i.e. no_chunk=true. See the gather above.
+    # The cut geometry this run CHOSE, in the format --chunk_plan /
+    # internal_chunk_plan consumes: hand it to a second run to force it onto
+    # identical chunk bounds. Geometry only -- no denominator, no chunk
+    # directories. Null when the run chose none: internal_chunk_plan was supplied,
+    # so the caller already holds the geometry, or no_chunk=true, so no cut was
+    # placed. See the gather above.
     File? gatheredChunkPlan = gather_shard_cut_plans.gatheredChunkPlan
     }
 }

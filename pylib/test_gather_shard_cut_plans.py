@@ -691,9 +691,13 @@ def test_lraa_gathers_every_mode_that_places_cuts():
         "chunk_scatter.chunkPlan",
     ):
         assert producer in text, producer
-    # Gated on there being something to gather, so a no_chunk run does not set the
-    # task up at all rather than running it on an empty array.
-    assert "if (length(shardCutPlans) > 0)" in text
+    # Gated on there being something to gather AND on the run having chosen it.
+    # A no_chunk run does not set the task up at all rather than running it on an
+    # empty array; a run handed internal_chunk_plan does not pay ~87 tasks on a
+    # 29-cluster run to copy the file its caller already holds.
+    assert (
+        "if (!defined(internal_chunk_plan) && length(shardCutPlans) > 0)" in text
+    )
     assert (
         "File? gatheredChunkPlan = gather_shard_cut_plans.gatheredChunkPlan" in text
     )
