@@ -1,4 +1,43 @@
 v0.28.1
+- FIXED: consuming a `--chunk_plan` was fatal whenever a cut merely came within
+  `--margin` of an annotated locus, not only when it severed one. The margin is
+  satisfiable while a cut is being PLACED -- the wiggle window exists to move the
+  position, and cut selection still refuses such a position outright -- but once the
+  geometry is fixed a consumer whose model set differs from the emitter's has no
+  remedy for a shortfall, and differing is the normal case: one plan is emitted per
+  run before phase 1, so a de novo plan carries no annotation while every consumer
+  has one, and ref-guided phase 2 quantifies the consolidated GTF. MEASURED cost of
+  the old verdict: four multi-hour runs lost across two libraries, every one
+  margin-only with ZERO straddles, at clearances of 95, 3, 23 and 52 bp; one died
+  5 h 26 m in, on a cut the plan had already moved 211 bp to clear GENCODE47's
+  SLC2A13, defeated by a discovered model reaching 14 bp further than the annotated
+  one. A margin shortfall is now a WARNING at both consumption sites -- the plan
+  check and `extract_contig_region_inputs`, which had refused it mid-extraction --
+  carrying the locus, the cut, the exact clearance, the run's `--margin`, and a
+  per-run count of how many loci fell inside the margin against how many straddled.
+  The count is the point: each shortfall is individually benign, so only the number
+  distinguishes an annotation that moved slightly from a plan badly matched to the
+  model set applying it. What a shortfall costs is READS of that locus which
+  overhang the boundary -- dropped, counted and named -- and severed reads are
+  already priced as collateral here (docs/denovo_chunking.md). A cut that SEVERS a
+  locus stays fatal everywhere: neither neighbour contains it, both omit it, and it
+  is quantified by nobody while every chunk reports success.
+- FIXED: two ways `ChunkedRun.cut_blocking_annotation_models` disagreed with the
+  extractor about what a locus IS, both load-bearing now that straddling is the only
+  fatal verdict. It keyed loci on `gene_id` alone while `_GtfIngest` keys on
+  `(gene_id, strand)` since v0.28.1, so a gene_id on both strands had its two spans
+  UNIONED and every cut between them read as a straddle -- the SIRV shape exactly,
+  `SIRV1+` at 1000-2000 and `SIRV1-` at 9000-9500 reported as one locus straddling a
+  cut at 6000 that the extractor was perfectly happy with. And it skipped a GTF line
+  carrying `transcript_id` but no `gene_id` as "not placeable in a locus", while the
+  extractor sets `gene_id = transcript_id` and emits such a locus by gene
+  containment, so a genuinely severed model was invisible to the check that is now
+  the sole guard against silent loss. Both now follow `_GtfIngest`. The straddle
+  boundary itself was already exact and is pinned by a table of every case that
+  decides it -- a locus ending AT the cut, one base past it, starting at the cut,
+  one before, a single base at the cut, and one containing it -- each classified from
+  the between-bases partition by enumerating the locus' bases rather than from what
+  `blocks_cut` returns.
 - FIXED: strandless GTF extraction refused an annotation carrying a gene_id on both
   strands ("gene X appears on both strands (- and +)"), keyed as it was on gene_id
   alone. Since chunking is unconditional this killed every chunked run against such

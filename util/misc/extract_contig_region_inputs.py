@@ -7,25 +7,34 @@ There is no halo and no widening: a chunk emits exactly the records that lie
 wholly inside it. Two different rules get it there, and the difference between
 them is the whole design.
 
-Annotated loci: a boundary may not cut one, ever
-------------------------------------------------
+Annotated loci: a boundary may not SEVER one, ever
+--------------------------------------------------
 A record spanning ``[s, e]`` BLOCKS the cut positions ``[s - margin, e + margin - 1]``.
 With ``margin == 0`` that is exactly the set of cuts the record spans; a positive
 margin additionally demands clearance on both sides. Every same-strand GENE locus
-blocks, and blocking is absolute: ``extract_partition`` refuses the region.
+blocks, and ``blocks_cut`` is the one predicate that says so.
 
-It has to be absolute because a locus cannot be dropped and recovered. LRAA's GTF
-reader filters features by containment, so a locus straddling a boundary is
-contained by NEITHER neighbour and both omit it -- its isoforms would vanish from
-the run with nothing anywhere to attribute the loss to. Blocking is on the GENE
-span rather than each isoform because ``genes_contained`` emits a gene whole or
-not at all; that makes it the strictly stronger form of "no cut inside an
-annotated isoform" and the form that matches emission.
+SEVERING is absolute: ``extract_partition`` refuses a region whose boundary falls
+strictly inside a locus. It has to be, because a locus cannot be dropped and
+recovered. LRAA's GTF reader filters features by containment, so a locus
+straddling a boundary is contained by NEITHER neighbour and both omit it -- its
+isoforms would vanish from the run with nothing anywhere to attribute the loss
+to. Blocking is on the GENE span rather than each isoform because
+``genes_contained`` emits a gene whole or not at all; that makes it the strictly
+stronger form of "no cut inside an annotated isoform" and the form that matches
+emission.
 
-Merging the blocked intervals yields ISLANDS: maximal runs of coordinate that
-cannot be divided. The gaps between them are the admissible CUT ZONES, and this
-is the hard constraint the cut selector in ``select_contig_cut_points.py``
-respects when it searches a window for a position.
+THE MARGIN IS A SELECTION CRITERION, not an extraction veto, and the two call
+sites differ deliberately. Merging the blocked intervals yields ISLANDS: maximal
+runs of coordinate that cannot be divided. The gaps between them are the
+admissible CUT ZONES, and that is the HARD constraint the cut selector in
+``select_contig_cut_points.py`` respects when it searches a window for a
+position -- there the position is still movable and the wiggle window exists to
+move it. By the time a region reaches ``extract_partition`` the geometry is
+fixed, so a margin shortfall has no remedy; it is warned about and the extraction
+proceeds. What it costs is not the locus, which one side still holds whole, but
+reads of that locus which overhang the boundary and are dropped, counted and
+named by the rule below. See ``admissibility_offences``.
 
 Alignments: an overhanging read is DROPPED, counted and named
 ------------------------------------------------------------
@@ -84,14 +93,22 @@ therefore safer notion.
 
 What the margin buys
 --------------------
-Because a locus blocks every cut within ``margin`` of itself, no annotated model
-sits within ``margin`` of either edge: every emitted GTF feature has that much
-clean flanking sequence inside the mini contig. At the default 200 bp that covers
-every sequence-context window LRAA evaluates near a model's ends -- the 40 bp
-polyA-signal window (``polyA_signal_window`` [-40, -10]), the 20 bp
-internal-priming window (``Util_funcs.check_internal_priming``, check_length=20)
-and the 50 bp read-enrichment window (``TSS_window_read_enrich_len``) -- as well
-as the 50 bp TSS/polyA site-snapping distances.
+Because cut SELECTION admits no position within ``margin`` of a locus, no
+annotated model sits within ``margin`` of either edge of a chunk it placed: every
+emitted GTF feature has that much clean flanking sequence inside the mini contig.
+At the default 200 bp that covers every sequence-context window LRAA evaluates
+near a model's ends -- the 40 bp polyA-signal window (``polyA_signal_window``
+[-40, -10]), the 20 bp internal-priming window
+(``Util_funcs.check_internal_priming``, check_length=20) and the 50 bp
+read-enrichment window (``TSS_window_read_enrich_len``) -- as well as the 50 bp
+TSS/polyA site-snapping distances.
+
+That is a guarantee about cuts this pipeline CHOSE against a given annotation. A
+chunk extracted at bounds chosen elsewhere -- a shared cut plan applied by a run
+holding a different model set -- can hold a model closer than ``margin`` to an
+edge, which is warned about at extraction rather than refused. Such a model gets
+less flanking context than the windows above want, and its reads on that flank
+are largely dropped for overhang; nothing annotated is lost.
 
 Stated rather than implied: the margin does NOT extend to alignments. A read may
 sit flush against a boundary with no flank at all. Extending the margin to reads
@@ -917,21 +934,37 @@ def blocks_cut(lend, rend, cut, margin):
     return lend <= cut + margin and rend >= cut - margin + 1
 
 
-def admissibility_offenders(annotation, region, contig_length, margin=DEFAULT_MARGIN):
-    """Annotated loci that forbid this region's boundaries, named.
+def admissibility_offences(annotation, region, contig_length, margin=DEFAULT_MARGIN):
+    """Annotated loci that collide with this region's boundaries, as RECORDS.
 
     Loci only. An alignment crossing a boundary is dropped at emission, counted
     and named; a LOCUS crossing a boundary cannot be dropped, because
     ``genes_contained`` would omit it from both neighbours and its isoforms would
-    disappear from the run. So this stays a hard refusal and takes no bam.
+    disappear from the run.
 
-    A STRANDLESS region (``region.strand == ""``) is checked against the UNION:
-    the strand test below falls through, and the annotation a strandless region
-    loads carries both strands, so a boundary is refused if it cuts a locus on
-    EITHER strand. That is the right rule and not merely a convenient
-    fall-through -- a strandless chunk is the sole container for both strands'
-    loci over its interval, so a locus it splits is lost exactly as a
-    same-strand one would be.
+    THE VERDICT IS THE CALLER'S, and that is the point of returning records. A
+    ``"straddle"`` is unrecoverable and stays fatal at every call site. A
+    ``"margin"`` shortfall is not the same fact: the locus lies WHOLLY inside one
+    neighbour, so nothing annotated is lost, and what it costs is reads of that
+    locus which overhang the boundary and are dropped-and-counted. See
+    ``extract_region_inputs`` below for why extraction warns on the second rather
+    than refusing, and ``ChunkedRun.selections_from_chunk_plan`` for the same
+    split stated against a shared plan.
+
+    ``kind`` is ``"straddle"`` when the locus has bases either side of the cut
+    junction -- ``lend <= cut < rend``, which is ``blocks_cut`` at margin 0 -- and
+    ``"margin"`` when one neighbour holds it whole but its clearance from the
+    junction is under ``margin``. ``gap`` is that clearance in bases and is
+    ``None`` for a straddle.
+
+    A STRANDLESS region (``region.strand == ""``) is checked against BOTH
+    strands' loci: the strand test below falls through, and the annotation a
+    strandless region loads carries both. That is the right rule and not merely a
+    convenient fall-through -- a strandless chunk is the sole container for both
+    strands' loci over its interval, so a locus it splits is lost exactly as a
+    same-strand one would be. Note that ``_GtfIngest`` keys a locus on
+    ``(gene_id, strand)``, so one gene_id on both strands is two loci here and
+    each is judged on its own span.
     """
 
     edges = []
@@ -940,12 +973,7 @@ def admissibility_offenders(annotation, region, contig_length, margin=DEFAULT_MA
     if region.rend < contig_length:
         edges.append(("right", region.rend))
 
-    def _why(lend, rend, cut):
-        if lend <= cut < rend:
-            return " which straddles it"
-        return " which is within the {} bp margin".format(margin)
-
-    offenders = []
+    offences = []
     for side, cut in edges:
         for gene in annotation.genes_overlapping(
             max(1, cut - margin), min(contig_length, cut + margin + 1)
@@ -954,19 +982,66 @@ def admissibility_offenders(annotation, region, contig_length, margin=DEFAULT_MA
                 continue
             if not blocks_cut(gene.lend, gene.rend, cut, margin):
                 continue
-            offenders.append(
-                "{} edge cut at {} is blocked by gene locus {} ({}{}:{}-{}){}".format(
-                    side,
-                    cut,
-                    gene.gene_id,
-                    region.chrom,
-                    gene.strand,
-                    gene.lend,
-                    gene.rend,
-                    _why(gene.lend, gene.rend, cut),
+            if gene.lend <= cut < gene.rend:
+                kind, gap = "straddle", None
+                why = " which straddles it"
+            else:
+                kind = "margin"
+                # Bases strictly between the locus and the junction after base
+                # ``cut``. Under ``margin`` exactly when ``blocks_cut`` fires, on
+                # either side, which is what makes one number state the shortfall.
+                gap = (
+                    cut - gene.rend if gene.rend <= cut else gene.lend - cut - 1
                 )
+                why = " which clears it by only {} bp against a {} bp margin".format(
+                    gap, margin
+                )
+            offences.append(
+                {
+                    "side": side,
+                    "cut": cut,
+                    "gene_id": gene.gene_id,
+                    "strand": gene.strand,
+                    "lend": gene.lend,
+                    "rend": gene.rend,
+                    "kind": kind,
+                    "gap": gap,
+                    "margin": int(margin),
+                    "text": (
+                        "{} edge cut at {} is blocked by gene locus {} "
+                        "({}{}:{}-{}){}".format(
+                            side,
+                            cut,
+                            gene.gene_id,
+                            region.chrom,
+                            gene.strand,
+                            gene.lend,
+                            gene.rend,
+                            why,
+                        )
+                    ),
+                }
             )
-    return offenders
+    return offences
+
+
+def admissibility_offenders(annotation, region, contig_length, margin=DEFAULT_MARGIN):
+    """``admissibility_offences`` as named strings, both kinds.
+
+    The screening form, kept because it is the shape cut SELECTION is checked
+    against: ``test_select_contig_cut_points`` asserts that the positions
+    ``find_islands``/``cut_zones`` admit are exactly the ones this reports clear,
+    and at selection a margin shortfall is a hard bar -- the position is still
+    movable and the wiggle window exists to move it. Callers that must act
+    differently on the two kinds take the records instead.
+    """
+
+    return [
+        offence["text"]
+        for offence in admissibility_offences(
+            annotation, region, contig_length, margin
+        )
+    ]
 
 
 def _write_mini_fasta(fasta, chrom, lend, rend, mini_contig_name, path, line_width=60):
@@ -1393,7 +1468,7 @@ def extract_partition(
                 region.strand,
                 region.lend,
                 region.rend,
-                # the same margin admissibility_offenders applies below, so the
+                # the same margin admissibility_offences applies below, so the
                 # fetch covers exactly the coordinates the check will consult
                 margin=margin,
                 cache_dir=gtf_index_cache_dir,
@@ -1402,25 +1477,73 @@ def extract_partition(
             else Annotation()
         )
 
-        offenders = admissibility_offenders(annotation, region, contig_length, margin)
-        if offenders:
+        # TWO VERDICTS FOR ONE PREDICATE, and the split is by CALL SITE, not by
+        # taste. At cut SELECTION the position is still being chosen: the wiggle
+        # window exists precisely to move it, clearing an annotated boundary
+        # costs nothing there, and ``find_islands``/``cut_zones`` therefore bar a
+        # margin shortfall outright. HERE the geometry is already fixed -- these
+        # bounds arrived as a region argument -- so no remedy exists, and the
+        # question is only what is actually lost.
+        #
+        # A STRADDLE loses a LOCUS: neither neighbour contains it, both omit it,
+        # and its isoforms are quantified by nobody while every chunk reports
+        # success. Unrecoverable, so still fatal.
+        #
+        # A MARGIN shortfall loses READS. The locus lies wholly inside one
+        # neighbour and is emitted there intact; what goes are its reads that
+        # overhang the boundary, dropped and counted by ``dropped_read_names``.
+        # This repository already priced that: docs/denovo_chunking.md records a
+        # hard zero-severed rule as REJECTED because "it will be impossible to
+        # achieve as data sets get deeper ... collateral severed reads is an
+        # acceptable cost". Refusing here instead cost four multi-hour runs, every
+        # one margin-only with zero straddles at clearances of 95, 3, 23 and 52 bp
+        # -- one of them 5 h 26 m in, on a cut the plan had already moved 211 bp to
+        # clear the annotated locus, defeated by a discovered model reaching 14 bp
+        # further than the annotated one it was selected against.
+        offences = admissibility_offences(annotation, region, contig_length, margin)
+        severing = [o for o in offences if o["kind"] == "straddle"]
+        if severing:
             raise ExtractionError(
-                "REJECTED: {}{}:{}-{} cuts an annotated locus at margin {} bp. {} "
-                "blocking locus/loci; first {}: {}. Nothing was written. Unlike an "
-                "alignment, a locus cannot be dropped and re-derived: a locus "
-                "straddling a boundary is contained by neither neighbour, so BOTH "
-                "would omit it and its isoforms would vanish from the run "
-                "entirely. Choose a boundary that clears every annotated "
-                "locus.".format(
+                "REJECTED: {}{}:{}-{} severs an annotated locus. {} straddling "
+                "locus/loci ({} more within the {} bp margin); first {}: {}. "
+                "Nothing was written. Unlike an alignment, a locus cannot be "
+                "dropped and re-derived: a locus straddling a boundary is "
+                "contained by neither neighbour, so BOTH would omit it and its "
+                "isoforms would vanish from the run entirely. Choose a boundary "
+                "that severs no annotated locus.".format(
                     region.chrom,
                     region.strand,
                     region.lend,
                     region.rend,
+                    len(severing),
+                    len(offences) - len(severing),
                     margin,
-                    len(offenders),
-                    min(3, len(offenders)),
-                    "; ".join(offenders[:3]),
+                    min(3, len(severing)),
+                    "; ".join(o["text"] for o in severing[:3]),
                 )
+            )
+        # Built from the margin-only subset rather than from ``offences``, even
+        # though the raise above makes the two identical here. A sentence that
+        # says "severs nothing" must be true of the records it is counting, not
+        # true only because of a branch above it.
+        inside_margin = [o for o in offences if o["kind"] == "margin"]
+        if inside_margin:
+            logger.warning(
+                "%s%s:%s-%s severs no annotated locus, but %d locus/loci sit "
+                "within the %d bp margin of a boundary; first %d: %s. "
+                "PROCEEDING: each is held WHOLE by one side, so nothing "
+                "annotated is lost -- what is lost is reads of it that overhang "
+                "the boundary, which are dropped and counted in this chunk's "
+                "dropped_reads.txt. The margin is a criterion for CHOOSING a "
+                "cut, and this cut's position is already fixed.",
+                region.chrom,
+                region.strand,
+                region.lend,
+                region.rend,
+                len(inside_margin),
+                margin,
+                min(3, len(inside_margin)),
+                "; ".join(o["text"] for o in inside_margin[:3]),
             )
 
         offset = region.lend - 1
@@ -2041,9 +2164,12 @@ def main(argv=None):
         "--margin",
         type=int,
         default=DEFAULT_MARGIN,
-        help="clearance demanded either side of a cut, in bp. 0 means only that "
-        "nothing crosses it; the default is 4x the largest boundary-snapping "
-        "distance in LRAA_Globals (50 bp) so no snapping can reach across a cut.",
+        help="clearance expected either side of a cut, in bp. A boundary that "
+        "SEVERS a locus is refused at any margin; one that merely clears a locus "
+        "by less than this is warned about and extracted, because a region "
+        "handed to this script has its geometry already fixed. The default is 4x "
+        "the largest boundary-snapping distance in LRAA_Globals (50 bp) so no "
+        "snapping can reach across a cut a selector placed.",
     )
 
     parser.add_argument(

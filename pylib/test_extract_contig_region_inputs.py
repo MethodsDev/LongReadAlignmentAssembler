@@ -13,6 +13,7 @@ contract that the extracted inputs are self-consistent.
 
 import importlib.util
 import json
+import logging
 import re
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -826,7 +827,25 @@ def test_islands_bound_granularity_and_zones_are_exactly_the_legal_cuts(tmp_path
         ), inside
 
 
-def test_margin_demands_clearance_beyond_mere_non_crossing(tmp_path):
+def test_margin_is_a_selection_criterion_not_an_extraction_veto(tmp_path, caplog):
+    """WAS ``test_margin_demands_clearance_beyond_mere_non_crossing``, which
+    asserted ``extract_partition`` RAISES on a margin-only boundary. That verdict
+    was the defect: by the time a region reaches the extractor its geometry is
+    FIXED, so a margin shortfall has no remedy, and refusing it cost four
+    multi-hour runs -- every one margin-only with zero straddles, clearances of
+    95, 3, 23 and 52 bp, one of them 5 h 26 m in.
+
+    What the margin still does is decide where a cut GOES: at selection the
+    position is movable and the wiggle window exists to move it, so
+    ``find_islands``/``cut_zones`` bar these positions outright -- asserted here
+    too, so the downgrade is pinned to this call site and cannot be read as the
+    rule having gone away.
+
+    What extraction refuses is a SEVERED locus, and only that. The test kept its
+    fixture: gA at [9000, 9900] clears the boundary at 9950 by 50 bp and gB at
+    [10050, 11000] by 99 bp, both under 200, neither severed.
+    """
+
     fixture = Fixture(tmp_path, length=30000)
     fixture.add_transcript("gA", "tA", "+", [(9000, 9900)])
     fixture.add_transcript("gB", "tB", "+", [(10050, 11000)])
@@ -846,8 +865,23 @@ def test_margin_demands_clearance_beyond_mere_non_crossing(tmp_path):
     )
     assert manifest["counts"]["gtf_transcripts_emitted"] == 1
 
-    with pytest.raises(extractor.ExtractionError) as excinfo:
-        extractor.extract_partition(
+    # SELECTION still bars 9950: both loci block it at margin 200, so the
+    # position is not in any admissible zone.
+    annotation = extractor.load_gtf(fixture.gtf, fixture.contig, "+")
+    islands = extractor.find_islands(annotation, fixture.contig, "+", 200)
+    zones = extractor.cut_zones(islands, 1, fixture.length)
+    assert not any(lo <= 9950 <= hi for lo, hi in zones), zones
+    offences = extractor.admissibility_offences(
+        annotation, extractor.parse_region(region), fixture.length, margin=200
+    )
+    assert [o["kind"] for o in offences] == ["margin"] * 2, offences
+    assert sorted(o["gap"] for o in offences) == [50, 99], offences
+
+    # EXTRACTION at the same margin now proceeds, warns, and emits the same
+    # locus: the margin changed nothing about what is contained, only about
+    # whether the boundary was tolerated.
+    with caplog.at_level(logging.WARNING, logger=extractor.logger.name):
+        warned = extractor.extract_partition(
             genome_fa=fixture.fasta,
             bam=fixture.bam,
             region=region,
@@ -855,9 +889,42 @@ def test_margin_demands_clearance_beyond_mere_non_crossing(tmp_path):
             gtf=fixture.gtf,
             margin=200,
         )
+    assert warned["counts"]["gtf_transcripts_emitted"] == 1
+    message = caplog.text
+    assert "2 locus/loci sit within the 200 bp margin" in message
+    assert "PROCEEDING" in message
+    assert "gA" in message and "gB" in message
+
+
+def test_extraction_still_refuses_a_boundary_that_severs_a_locus(tmp_path):
+    """The half that stays fatal, and the reason the half above may be relaxed.
+
+    A severed locus is contained by neither neighbour, so both omit it and its
+    isoforms are quantified by nobody while every chunk reports success. There is
+    no remedy and nothing to notice, which is what separates it from a margin
+    shortfall -- where one side holds the locus whole and only its overhanging
+    reads are dropped, and counted.
+    """
+
+    fixture = Fixture(tmp_path, length=30000)
+    fixture.add_transcript("gSpans", "tSpans", "+", [(9800, 10200)])
+    fixture.add_read("rSpans", "+", [(9800, 10200)])
+    fixture.build()
+
+    with pytest.raises(extractor.ExtractionError) as excinfo:
+        extractor.extract_partition(
+            genome_fa=fixture.fasta,
+            bam=fixture.bam,
+            region="{}+:1-10000".format(fixture.contig),
+            output_prefix=str(tmp_path / "sever"),
+            gtf=fixture.gtf,
+            # margin 0: the ONLY thing left to object to is the straddle itself
+            margin=0,
+        )
     message = str(excinfo.value)
-    assert "within the 200 bp margin" in message
-    assert "gA" in message or "gB" in message
+    assert "severs an annotated locus" in message
+    assert "gSpans" in message
+    assert "which straddles it" in message
 
 
 def test_secondary_alignments_are_excluded_or_rejected_never_mishandled(tmp_path):

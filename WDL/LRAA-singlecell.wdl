@@ -197,14 +197,22 @@ workflow LRAA_singlecell_wf {
     # what a reader expects. Nothing compares this plan's annotation to the emitter's
     # -- there is no digest of it and no check that one was present. The driver checks
     # the property that actually matters instead: no gene locus in THIS run's own gtf
-    # may span one of the plan's cuts, nor sit within --margin of one
+    # may be SEVERED by one of the plan's cuts
     # (ChunkedRun.cut_blocking_annotation_models -- the same blocks_cut predicate the
     # extractor applies to every chunk boundary). A de novo run carries no annotation
     # and so has nothing to sever; a ref-guided run is checked against its own gtf on
-    # its own terms. The pair is refused only when a locus really does collide with a
-    # cut -- a severed one is quantified by nobody because both neighbouring chunks
-    # omit it, and one inside the margin kills extraction outright -- and never for a
-    # mode disagreement.
+    # its own terms. The pair is refused only when a cut really does sever a locus,
+    # which is quantified by nobody because both neighbouring chunks omit it, and
+    # never for a mode disagreement.
+    #
+    # A cut merely INSIDE --margin of a locus is a warning, not a refusal, and this
+    # workflow is why: the plan is emitted before phase 1 and every consumer's model
+    # set differs from the emitter's -- per-cluster discovery reads the init GTF,
+    # final quant the consolidated one -- so a margin shortfall is normal here and has
+    # no remedy once the geometry is fixed. The locus is held whole by one chunk; what
+    # it costs is reads of it that overhang the boundary, which are dropped, counted
+    # and named. The margin remains a hard bar at cut SELECTION, where the wiggle
+    # window can still move the position.
     #
     # GEOMETRY ONLY. The TPM denominator and the run mode come from THIS run, so
     # quant_only, initial_annot_gtf and HiFi remain this run's to set. What IS matched
