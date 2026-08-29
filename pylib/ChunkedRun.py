@@ -2754,6 +2754,12 @@ def ordered_units(chunks):
 # handed a file that looks like a plan and answers a different question.
 CHUNK_PLAN_VERSION = 2
 
+# Written by EVERY real chunked run, into the cut directory, beside the
+# per-contig ``<contig>.<tag>.cuts.json`` records it is assembled from. Named
+# here rather than spelled in the WDL that lifts it out, so the producer and
+# ``util/misc/gather_shard_cut_plans.py`` cannot drift apart.
+SHARD_CUT_PLAN_NAME = "shard_cut_plan.json"
+
 
 def cut_geometry_params(args):
     """Every argument that MOVES A CUT, and nothing that does not.
@@ -7297,6 +7303,43 @@ def _run_inner(args):
             ),
             flush=True,
         )
+
+        # THE GEOMETRY THIS RUN CHOSE, in the exact format --chunk_plan consumes,
+        # written by every real chunked run rather than only by the two flags whose
+        # purpose is to produce a plan. Without it a run that has already selected
+        # its cuts has no way to hand them on: --emit_cut_plan pays a second
+        # selection to restate the same partition, and moving selection into that
+        # separate phase costs the overlap with extraction that run_prep_concurrently
+        # exists to get (a contig's extractions are submitted the moment that
+        # contig's selection finishes).
+        #
+        # Assembled from the same ``selections`` the per-contig
+        # ``<contig>.<tag>.cuts.json`` files were read back into, and carried
+        # verbatim under geometry.by_source[*].selections -- so this file cannot
+        # state cuts other than the ones this run extracted at.
+        #
+        # num_total_reads null and chunks_extracted false, exactly as
+        # --emit_cut_plan records them: the TPM denominator belongs to whoever
+        # quantifies, and the chunk directories this run built are its own working
+        # files at its own paths, which no consumer can address. A caller that
+        # wants both recorded asks for --stop_after_make_chunks, which writes its
+        # leaf plan to <output_dir>/chunk_plan.json and is unaffected by this.
+        #
+        # A --contig shard writes only its own contig's geometry. That is what
+        # makes the per-shard files of a scattered workflow gatherable into one
+        # genome-wide plan; see util/misc/gather_shard_cut_plans.py.
+        shard_cut_plan_path = os.path.join(cut_dir, SHARD_CUT_PLAN_NAME)
+        write_chunk_plan(
+            shard_cut_plan_path,
+            args,
+            sources,
+            selections,
+            None,
+            chunks_extracted=False,
+        )
+        timing["shard_cut_plan"] = shard_cut_plan_path
+        outputs["shard_cut_plan"] = shard_cut_plan_path
+        flush()
 
         if args.stop_after_make_chunks:
             plan_path = os.path.join(outdir, "chunk_plan.json")

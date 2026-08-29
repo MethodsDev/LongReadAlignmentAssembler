@@ -624,6 +624,45 @@ workflow LRAA_wf {
 
     }
     
+    # THE CUT GEOMETRY THIS RUN CHOSE, gathered into one shared plan.
+    #
+    # All three scattering modes produce it, from the same file format:
+    #
+    #   by_chromosome   one shard_cut_plan.json per chromosome shard, each holding
+    #                   its own contig -- the case the gather exists for.
+    #   off             one whole-genome invocation, so one file already covering
+    #                   every contig. Gathered anyway rather than passed through,
+    #                   so one output shape is produced by one code path and a
+    #                   consumer never has to ask which mode wrote its plan.
+    #   by_chunk        make_chunks already writes exactly this file, as its leaf
+    #                   plan; the gather restates it as GEOMETRY ONLY, dropping the
+    #                   chunk directories and the denominator that belong to the
+    #                   run that built them.
+    #
+    # This is not internal_chunk_plan coming back out. That input, when supplied,
+    # REPLACES selection in every shard, so gathering afterwards would return a
+    # copy of what the caller handed in; the value here is for the case where no
+    # plan was supplied and the run picked its own cuts, which until now could not
+    # be handed to anything.
+    #
+    # Empty only when no shard placed a cut to record: no_chunk=true, where LRAA
+    # never enters the chunked driver. Then the gather task is not set up at all
+    # and the output below is null.
+    Array[File] shardCutPlans = flatten([
+        select_all(select_first([LRAA_scatter.LRAA_shard_cut_plan, []])),
+        select_all([LRAA_direct.LRAA_shard_cut_plan]),
+        select_all([chunk_scatter.chunkPlan])
+    ])
+
+    if (length(shardCutPlans) > 0) {
+        call gather_shard_cut_plans {
+            input:
+                shardCutPlans = shardCutPlans,
+                outputFilePrefix = LRAA_output_prefix,
+                docker = docker
+        }
+    }
+
     output {
     # Three producers now, so each output names all of them. by_chunk merges
     # inside its subworkflow, by_chromosome merges here, off produces directly.
@@ -652,6 +691,11 @@ workflow LRAA_wf {
     Array[File] chunkLogs = select_first([chunk_scatter.chunkLogs, []])
     File? mergedTpmAudit = chunk_scatter.mergedTpmAudit
     File? mergeResult = chunk_scatter.mergeResult
+    # The cut geometry this run chose, in the format --chunk_plan / internal_chunk_plan
+    # consumes: hand it to a second run to force it onto identical chunk bounds.
+    # Geometry only -- no denominator, no chunk directories. Null when no shard
+    # placed a cut, i.e. no_chunk=true. See the gather above.
+    File? gatheredChunkPlan = gather_shard_cut_plans.gatheredChunkPlan
     }
 }
 
@@ -697,6 +741,43 @@ task merge_GTFs {
         disks: "local-disk " + ceil(size(gtfFiles, "GB") * 2.0 + 5) + " SSD"
     }
 }
+
+task gather_shard_cut_plans {
+    # One shared chunk plan out of the cut geometry the shards of THIS run already
+    # chose. Not a second cut selection: each shard's make-chunks phase wrote its
+    # own contigs' geometry beside the .cuts.json records that produced it, and this
+    # merges those under a single strandless source. See
+    # util/misc/gather_shard_cut_plans.py for what it refuses and why the envelope
+    # cannot be a concatenation of the shards' own sources.
+    #
+    # Tiny by construction -- one JSON object per contig, no reads -- so this is
+    # sized at the floor rather than off its inputs.
+    input {
+        Array[File] shardCutPlans
+        String outputFilePrefix
+        String docker
+    }
+
+    command <<<
+    set -eo pipefail
+
+    gather_shard_cut_plans.py \
+        --shard_plans ~{sep=' ' shardCutPlans} \
+        --output "~{outputFilePrefix}.shared_chunk_plan.json"
+    >>>
+
+    output {
+        File gatheredChunkPlan = "~{outputFilePrefix}.shared_chunk_plan.json"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
+        disks: "local-disk " + ceil(size(shardCutPlans, "GB") * 2.0 + 5) + " SSD"
+    }
+}
+
 
 task mergeQuantResults {
     input {

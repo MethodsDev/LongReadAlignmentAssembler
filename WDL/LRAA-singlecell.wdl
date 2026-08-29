@@ -620,13 +620,33 @@ workflow LRAA_singlecell_wf {
     # why the two phases' totals are not meant to reconcile. Absent when the initial
     # pass was skipped for precomputed inputs.
     File? init_read_assignment_summary = collate_init_read_assignment_summary.collatedSummary
-    # The ONE cut geometry every phase of this run applied, whether it was emitted
-    # here or supplied as the chunk_plan input -- this is the file a second run is
-    # handed to be forced onto the same cuts, so it is an output for that reason
-    # rather than for the record. Absent when no plan governed the run: basic mode
-    # with none supplied, which has a single LRAA run and so nothing to be consistent
-    # with, and a cluster-guided run whose every phase is scattering=off.
-    File? shared_chunk_plan = run_chunk_plan
+    # The ONE cut geometry this run applied or chose, and the file a second run is
+    # handed to be forced onto the same cuts. Three sources, in precedence order:
+    #
+    #   the chunk_plan input, when the caller supplied one -- every phase applied
+    #   exactly that, so it is what a sibling must be given to match;
+    #
+    #   else the plan emitted above, which only CLUSTER-GUIDED runs emit (see
+    #   want_chunk_plan: basic mode has one LRAA run, so there is nothing for its
+    #   cuts to agree with and a separate selection task would cost the overlap
+    #   between selection and extraction inside that run's own make_chunks);
+    #
+    #   else, in basic mode, the geometry the initial pass's own chunking chose,
+    #   GATHERED from its shards rather than re-selected -- LRAA.wdl's
+    #   gather_shard_cut_plans over each shard's shard_cut_plan.json. This is what
+    #   lets a basic run kickstart a cluster-guided one: its init_gtf becomes
+    #   precomputed_init_gtf and its clusters become
+    #   precomputed_cluster_assignments_tsv, and this makes its GEOMETRY carry
+    #   across the same lineage instead of the derived run picking its own bounds.
+    #
+    # Deliberately not gathered in cluster-guided mode: what that mode emits is
+    # unchanged, so a cluster-guided run whose every phase is scattering=off still
+    # reports no plan rather than the init pass's cuts, which governed only the
+    # init pass. Null also when the initial pass was skipped for precomputed
+    # inputs, or when it ran with no_chunk and so placed no cuts.
+    File? shared_chunk_plan = if defined(chunk_plan) then chunk_plan
+        else if run_cluster_guided then emit_run_chunk_plan.chunk_plan
+        else LRAA_init.gatheredChunkPlan
 
     # Initial single-cell matrices and clustering inputs/outputs
     File? init_sc_gene_sparse_tar_gz = build_sc_from_init_tracking.gene_sparse_dir_tgz

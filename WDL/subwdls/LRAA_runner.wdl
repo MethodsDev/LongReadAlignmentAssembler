@@ -375,6 +375,37 @@ task LRAA_runner_task {
             echo "WARNING: chunked run left no timing.json at $chunk_timing" >&2
         fi
 
+        # THE CUT RECORDS THIS SHARD'S OWN CHUNKING PRODUCED, in the format
+        # --chunk_plan consumes. Lifted out of the same chunk work directory as the
+        # report above, from beside the per-contig <contig>.strandless.cuts.json
+        # files the selector wrote: those selections are carried in it VERBATIM,
+        # under geometry.by_source[0].selections, together with the parameters that
+        # chose them (margin, max_intron_length, the resolved min_per_id and
+        # min_mapping_quality) which the .cuts.json files do not record and which
+        # ChunkedRun.validate_cut_plan_geometry requires. So this one file is the
+        # cut records plus exactly what makes them applicable; the raw .cuts.json
+        # and .cuts.txt are left in the undelocalized work directory.
+        #
+        # A shard restricted with --contig carries only its own contig, which is
+        # what makes the per-shard files of a scatter gatherable into one
+        # genome-wide plan -- see util/misc/gather_shard_cut_plans.py, invoked by
+        # LRAA.wdl's gather_shard_cut_plans task.
+        #
+        # Absent when this run placed no cuts to record, which is one case and not
+        # the one it looks like: no_chunk=true, where LRAA never enters the chunked
+        # driver at all (LRAA:2261 exits into it only when --chunk is on) and so
+        # writes no cut directory. A SINGLE-CHUNK run is NOT that case -- selection
+        # still runs and still writes its record, with zero cuts and one
+        # whole-contig segment -- so the file is present for every chunked run
+        # however coarse its geometry.
+        shard_cut_plan_out="~{output_prefix_use}.~{output_suffix}.shard_cut_plan.json"
+        shard_cut_plan_src="~{output_prefix_use}.~{output_suffix}.chunked_work/cuts/shard_cut_plan.json"
+        if [[ -s "$shard_cut_plan_src" ]]; then
+            cp "$shard_cut_plan_src" "$shard_cut_plan_out"
+        else
+            echo "NOTE: chunked run left no cut plan at $shard_cut_plan_src; an unchunked run places no cuts" >&2
+        fi
+
         
     >>>
 
@@ -388,6 +419,10 @@ task LRAA_runner_task {
         # The chunk manifests and per-chunk timings. Optional only because LRAA can leave
         # no timing.json behind; every run chunks.
         File? LRAA_chunk_report = "~{output_prefix_use}.~{output_suffix}.chunk_report.json"
+        # This shard's cut geometry, gatherable into a shared chunk plan. OPTIONAL
+        # because no_chunk=true never enters the chunked driver and so places no
+        # cuts; a single-chunk run does write one. See the command above.
+        File? LRAA_shard_cut_plan = "~{output_prefix_use}.~{output_suffix}.shard_cut_plan.json"
     }
 
 
@@ -535,6 +570,7 @@ workflow LRAA_runner {
         File? LRAA_normalized_splice_graph_bam = LRAA_runner_task.LRAA_normalized_splice_graph_bam
         File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
         File? LRAA_chunk_report = LRAA_runner_task.LRAA_chunk_report
+        File? LRAA_shard_cut_plan = LRAA_runner_task.LRAA_shard_cut_plan
     }
 
 }
