@@ -9,9 +9,17 @@ workflow FilterGoodCells {
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     Int memoryGB = 32
     
-    # Filter parameters
+    # Filter parameters.
+    #
+    # `seed` seeds the emptyDrops Monte Carlo p-value simulation.  It has a
+    # default because an unset seed is what made two runs of one library disagree
+    # on 8 of ~15k cells, which Seurat then amplified to 55; a seed that only
+    # helps when someone remembers to pass it leaves the pipeline
+    # non-reproducible for everyone who does not.  Spelling matches the Seurat
+    # subworkflow's `Int seed = 1` -> `--seed`.
     Float fdr_threshold = 0.01
     Int? lower_threshold
+    Int seed = 1
   }
 
   String output_prefix = sample_id + ".genes.filtered"
@@ -25,6 +33,7 @@ workflow FilterGoodCells {
       docker = docker,
       memoryGB = memoryGB,
       fdr_threshold = fdr_threshold,
+      seed = seed,
       lower_threshold = lower_threshold
   }
 
@@ -47,6 +56,7 @@ task run_filter_good_cells {
     String docker
     Int memoryGB = 32
     Float fdr_threshold
+    Int seed
     Int? lower_threshold
   }
 
@@ -87,6 +97,7 @@ task run_filter_good_cells {
       --matrix_dir gene-sparseM-input \
       --output_dir gene-sparseM-filtered \
       --fdr_threshold ~{fdr_threshold} \
+      --seed ~{seed} \
       ~{if defined(lower_threshold) then "--lower " + lower_threshold else ""} \
       ${ISOFORM_ARGS} \
       ${SPLICE_PATTERN_ARGS} \

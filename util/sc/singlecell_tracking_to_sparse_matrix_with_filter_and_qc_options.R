@@ -20,6 +20,10 @@ parser$add_argument("--sample_name", required=TRUE, help="Sample name")
 parser$add_argument("--create_filtered", type="integer", default=1,
                     help="1 to create filtered matrix and related QC plots, 0 to generate raw matrix only")
 parser$add_argument("--fdr_threshold", type="double", default=0.01, help="FDR threshold")
+parser$add_argument("--seed", type="integer", default=1,
+                    help=paste("Random seed for the emptyDrops Monte Carlo p-value",
+                               "simulation (default: 1). Unseeded, barcodes near the FDR",
+                               "threshold flip between runs of identical input."))
 parser$add_argument("--umistats_file", required=FALSE, default=NULL, help="UMI stats file path")
 args <- parser$parse_args()
 
@@ -30,6 +34,7 @@ dat_filename_bstats <- args$bstats_file
 sample_name         <- args$sample_name
 create_filtered     <- (args$create_filtered == 1)
 fdr_threshold       <- args$fdr_threshold
+seed                <- args$seed
 umistats_file       <- args$umistats_file
 
 # Read the tracking data.
@@ -64,9 +69,13 @@ message("-writing isoform cell counts table: ", isoform_cell_counts_tsv)
 #   - umistats_df: if provided (as a data frame or file path), sequencing saturation is calculated.
 #   - create_filtered: if TRUE, the filtered matrix and related QC plots are created;
 #                      if FALSE, only the raw sparse matrix and its associated QC plots/summary are generated.
+#   - seed: seeds the emptyDrops Monte Carlo simulation.  A parameter rather than
+#           one set.seed at the top of the script so that each matrix is
+#           reproducible on its own, independent of how many earlier calls drew
+#           from the RNG first.
 make_sparse_matrix_outputs <- function(counts_data, outdirname, fdr_threshold = 0.01,
                                        bstats_file_path = NULL, umistats_df = NULL,
-                                       create_filtered = TRUE) {
+                                       create_filtered = TRUE, seed = 1) {
   message("-making sparse matrix outputs for: ", outdirname)
   
   # If umistats_df is provided as a file path, load it.
@@ -104,6 +113,15 @@ make_sparse_matrix_outputs <- function(counts_data, outdirname, fdr_threshold = 
   write(cell_barcodes, file = file.path(raw_dir, "barcodes.tsv"))
   
   # Run emptyDrops with error handling.
+  #
+  # emptyDrops estimates its p-values by Monte Carlo simulation from the ambient
+  # profile, so an unseeded call draws a different simulation every run and
+  # barcodes whose p-value straddles the FDR threshold flip between runs of
+  # identical input.  One set.seed governs both calls below: the retry runs only
+  # after the first raised, from an RNG state that is itself determined by this
+  # seed and the input matrix.
+  set.seed(seed)
+
   droplet_measure <- tryCatch({
     emptyDrops(sparseM)
   }, error = function(e) {
@@ -341,18 +359,22 @@ make_sparse_matrix_outputs <- function(counts_data, outdirname, fdr_threshold = 
               summary_stats = summary_df))
 }
 
-# Example function calls.
+# Example function calls.  Note that fdr_threshold is pinned to 0.01 at both call
+# sites, so --fdr_threshold does not reach emptyDrops here -- pre-existing, left
+# alone because fixing it would change which cells this script selects.
 gene_count_list <- make_sparse_matrix_outputs(gene_cell_counts, 
                                                paste0(sample_name, "^gene-sparseM"),
                                                fdr_threshold = 0.01,
                                                bstats_file_path = dat_filename_bstats,
                                                umistats_df = umistats_file,
-                                               create_filtered = TRUE)
+                                               create_filtered = TRUE,
+                                               seed = seed)
 isoform_count_list <- make_sparse_matrix_outputs(isoform_cell_counts, 
                                                   paste0(sample_name, "^isoform-sparseM"),
                                                   fdr_threshold = 0.01,
                                                   bstats_file_path = dat_filename_bstats,
                                                   umistats_df = umistats_file,
-                                                  create_filtered = TRUE)
+                                                  create_filtered = TRUE,
+                                                  seed = seed)
 
 message("Gene and Isoform matrices Created.")

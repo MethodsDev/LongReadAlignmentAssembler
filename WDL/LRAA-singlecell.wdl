@@ -324,10 +324,16 @@ workflow LRAA_singlecell_wf {
     Int n_variable_features = 2000
     Int seed = 1
 
-    # Filter good cells parameters
+    # Filter good cells parameters.
+    #
+    # `filter_seed` is the emptyDrops Monte Carlo seed, forwarded to the filter
+    # subworkflow's `seed`.  Qualified here only because `seed` above is already
+    # Seurat's; the two are separate knobs on purpose -- changing which cells
+    # Seurat is handed and changing Seurat's own draw are different experiments.
     Boolean enable_filter_good_cells = true
     Float fdr_threshold = 0.01
     Int? lower_threshold
+    Int filter_seed = 1
 
     File? ref_annot_gtf_source_gene_symbols # used as source for gene symbol assignment at the end.
   }
@@ -521,7 +527,8 @@ workflow LRAA_singlecell_wf {
           docker = docker_sc,
           memoryGB = memoryGBFilterCells,
           fdr_threshold = fdr_threshold,
-          lower_threshold = lower_threshold
+          lower_threshold = lower_threshold,
+          seed = filter_seed
       }
     }
 

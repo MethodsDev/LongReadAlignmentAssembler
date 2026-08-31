@@ -15,6 +15,10 @@ parser$add_argument("--fdr_threshold", type="double", default=0.01,
                     help="FDR threshold for emptyDrops (default: 0.01)")
 parser$add_argument("--lower", type="integer", default=NULL, 
                     help="Lower UMI count threshold for emptyDrops (default: auto)")
+parser$add_argument("--seed", type="integer", default=1,
+                    help=paste("Random seed for the emptyDrops Monte Carlo p-value",
+                               "simulation (default: 1). Leaving this unset is what made",
+                               "two runs of one library disagree on ~8 cells in 15k."))
 parser$add_argument("--isoform_matrix_dir", default=NULL, 
                     help="Optional: Input directory for isoform sparse matrix to filter with same cells")
 parser$add_argument("--isoform_output_dir", default=NULL, 
@@ -30,6 +34,7 @@ matrix_dir <- args$matrix_dir
 output_dir <- args$output_dir
 fdr_threshold <- args$fdr_threshold
 lower_threshold <- args$lower
+seed <- args$seed
 isoform_matrix_dir <- args$isoform_matrix_dir
 isoform_output_dir <- args$isoform_output_dir
 splice_pattern_matrix_dir <- args$splice_pattern_matrix_dir
@@ -85,8 +90,24 @@ colnames(sparse_matrix) <- barcodes
 message("Loaded matrix: ", nrow(sparse_matrix), " features x ", ncol(sparse_matrix), " barcodes")
 message("Total UMI count: ", sum(sparse_matrix))
 
-# Run emptyDrops with error handling
-message("Running emptyDrops with FDR threshold: ", fdr_threshold)
+# Run emptyDrops with error handling.
+#
+# emptyDrops estimates its p-values by Monte Carlo simulation from the ambient
+# profile, so an unseeded call draws a different simulation on every invocation
+# and every barcode whose p-value straddles the FDR threshold flips between
+# runs.  Measured on 10x library XP132120: two runs of byte-identical input
+# (1,549,813 barcodes, matching UMI totals to seven decimals) selected 15,266
+# and 15,274 cells, and Seurat amplified those 8 to 55 differing cells.  This
+# one call was the whole pipeline's only source of run-to-run drift.
+#
+# ONE set.seed here governs every path below.  The two calls in the tryCatch
+# body are the arms of an if/else -- exactly one of them runs -- and the third
+# is reached only after one of those raised, from an RNG state that is itself a
+# deterministic function of this seed and the input matrix.  So a fixed seed
+# fixes the whole sequence, not merely its first draw.
+set.seed(seed)
+
+message("Running emptyDrops with FDR threshold: ", fdr_threshold, ", seed: ", seed)
 droplet_measure <- tryCatch({
   if (!is.null(lower_threshold)) {
     message("Using lower threshold: ", lower_threshold)
@@ -135,17 +156,19 @@ system(paste0("gzip -f ", file.path(output_dir, "matrix.mtx")))
 system(paste0("gzip -f ", file.path(output_dir, "features.tsv")))
 system(paste0("gzip -f ", file.path(output_dir, "barcodes.tsv")))
 
-# Write summary statistics
+# Write summary statistics.  The seed is recorded because it is what makes this
+# cell set reproducible; a summary that reports the cell count without the seed
+# that produced it cannot be checked against a re-run.
 summary_stats <- data.frame(
   Metric = c("Input Barcodes", "Input UMI Count", 
              "Filtered Barcodes", "Filtered UMI Count",
              "Fraction Barcodes Retained", "Fraction UMI Retained",
-             "FDR Threshold"),
+             "FDR Threshold", "Random Seed"),
   Value = c(ncol(sparse_matrix), sum(sparse_matrix),
             ncol(filtered_matrix), sum(filtered_matrix),
             round(ncol(filtered_matrix) / ncol(sparse_matrix), 4),
             round(sum(filtered_matrix) / sum(sparse_matrix), 4),
-            fdr_threshold)
+            fdr_threshold, seed)
 )
 
 summary_file <- file.path(output_dir, "filtering_summary.tsv")
