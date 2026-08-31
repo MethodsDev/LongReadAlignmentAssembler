@@ -761,3 +761,66 @@ def test_an_oversimplified_contig_still_reports_its_reads(tmp_path):
     run = _run_chunked(tmp_path / "work", bam, fasta, len(records), discovery=True)
 
     assert _merged_totals(run["units"], tmp_path / "merged") == len(records)
+
+
+def test_an_empty_gtf_does_not_disqualify_the_oversimplify_aggregate(tmp_path):
+    """An empty annotation IS no annotation, and the dispatch must read it that way.
+
+    ``WDL/subwdls/Partition_data_by_chromosome.wdl`` emits a per-contig annotation
+    file for every contig even when the caller supplied no annotation: with no
+    ``--annot-gtf``, ``_partition_gtf`` still opens one file per chromosome and
+    writes ``# no gtf records`` into it (util/partition_data_by_chromosome.py:305).
+    The chromosome shard then passes that 17-byte file as a real ``--gtf``.
+
+    That one argument used to disqualify all three oversimplify arms at once --
+    quant-only needs QUANT_ONLY, ref-guided needs transcripts the file does not
+    contain, and the de novo arm tested ``input_gtf is None`` -- so control fell
+    through to ordinary discovery. MEASURED on a production whole-genome de novo
+    run: chrM came back as 75 multi-exon models over 16,569 unspliced bases, its
+    13.7M reads assembled rather than counted, and the arm ran 5h17m. A hand-run
+    LRAA never passes an empty ``--gtf``, which is why every direct invocation
+    tested fine and only the workflow was broken.
+
+    Asserted on the emitted models rather than on a log line: per-contig worker
+    output goes to ``<prefix>.contigtmp/<contig>/<strand>/*.err.log``, so grepping
+    the main log shows nothing even when the branch fires.
+    """
+
+    records = [("m_{}".format(i), 1000 + (i % 5), 1000, 0) for i in range(30)]
+    records += [("mr_{}".format(i), 4000, 800, 16) for i in range(10)]
+    fasta, bam = _tiny_genome(tmp_path, "chrM", 8000, records)
+
+    empty_gtf = tmp_path / "empty.annot.gtf"
+    empty_gtf.write_text("# no gtf records\n")
+
+    run = _run_chunked(
+        tmp_path / "work",
+        bam,
+        fasta,
+        len(records),
+        gtf=str(empty_gtf),
+        discovery=True,
+    )
+
+    # One aggregate pseudo-transcript per strand, spanning its unit, and nothing
+    # assembled. Without the fix these units carry ordinary multi-exon models.
+    def _features(path, kind):
+        out = []
+        for line in open(path):
+            if line.startswith("#"):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) >= 3 and cols[2] == kind:
+                out.append(line)
+        return out
+
+    for unit in run["units"]:
+        gtf_path = unit["quant_prefix"] + ".gtf"
+        assert os.path.exists(gtf_path), gtf_path
+        transcripts = _features(gtf_path, "transcript")
+        assert len(transcripts) == 1, (unit["unit_id"], len(transcripts))
+        assert "OVSIMP" in transcripts[0], transcripts[0]
+        assert len(_features(gtf_path, "exon")) == 1, unit["unit_id"]
+
+    # and the reads are still all accounted for
+    assert _merged_totals(run["units"], tmp_path / "merged") == len(records)

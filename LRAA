@@ -4934,10 +4934,24 @@ def _contig_job_runner(job):
                         f"[{contig_acc}{contig_strand}] oversimplify ref-guided: failed writing provided transcripts to GTF: {_e}"
                     )
         elif (
+            # De novo: no annotation to assign against. Tested on the TRANSCRIPTS
+            # rather than on whether a --gtf argument was present, because the two
+            # are not the same thing and the difference cost a 5h17m whole-genome
+            # run. WDL/subwdls/Partition_data_by_chromosome.wdl emits a per-contig
+            # annotation file even when the caller supplied no annotation; in de
+            # novo mode that file is 17 bytes of "# no gtf records" and is passed
+            # as a real --gtf. It disqualified every arm at once: branch 1 needs
+            # QUANT_ONLY, branch 2 needs transcripts it does not have, and this arm
+            # used to need input_gtf to be None -- so chrM fell through to ordinary
+            # discovery and came back as 75 multi-exon models on 16,569 unspliced
+            # bases, with 13.7M reads assembled instead of counted.
+            #
+            # An empty transcript set IS no annotation, whatever argument produced
+            # it, and branch 2 already guards this way, so the two now agree.
             oversimplify_enabled
             and (contig_acc in oversimplify_contigs)
             and (not job["QUANT_ONLY"])
-            and (job["input_gtf"] is None)
+            and not input_transcripts
         ):
             logger.info(
                 f"[{contig_acc}{contig_strand}] Oversimplify enabled: de novo aggregate pseudo-transcript spanning contig/region"
