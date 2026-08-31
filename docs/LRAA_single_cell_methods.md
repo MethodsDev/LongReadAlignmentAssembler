@@ -178,14 +178,22 @@ hash the same read names with the same default seed, correlated. MEASURED on `ch
 clusters: summed `XW` recovers the original read count to 0.08 % after one pass and reaches 4.53x
 it after the second.
 
-That has no arithmetic consequence for quantification, and the reason is worth stating because it
-is enforced by absence rather than by a check: `get_normalization_weight` is read at exactly one
-site in the codebase (`Splice_graph.py:608`) and never in `pylib/Quantify.py`. The sg BAM
-contributes the graph's node and edge set and nothing else. It does not supply anyone's
-multipaths — the cluster-merged GTF's isoforms, the priors reads (`LRAA:6288`) and the full BAM's
-reads (`LRAA:6502`) are each resolved independently against that shared structure from their own
-alignments. Theta comes from `--bam_for_priors`, whose weights are single-pass and accurate to
-0.08 %; pass-2 apportionment reads the `XW`-free full BAM and breaks ties on 3'-end agreement.
+Those compounded weights still do not perturb an abundance, but not because the weight is walled
+off from quantification — it is not. XW weighting is default-on (`LRAA.py:1238`) and honoured by
+EM (`EM.py:90`), `Quantify.py` (`:1849`, `:1871`, `:2244`) and `TranscriptFiltering.py:589`,
+reached through `LRAA_Globals.register_read_weight` (`LRAA.py:1400`, `:1428`, `:1471`) rather than
+by the `get_normalization_weight` name, which is why grepping that one symbol understates it.
+`LRAA.py:1227-1232` is explicit that there is no configuration in which the graph honours the tag
+while EM ignores it.
+
+The protection is which consumer READS which file. The sg BAM is opened only for graph
+construction, so its compounded weights never enter an arithmetic consumer. The weights that do
+reach EM come from the other two inputs, and both are sound: `--bam` is refused outright if it
+carries `XW`, so its reads weigh exactly 1 during pass-2 apportionment (ties broken on 3'-end
+agreement); `--bam_for_priors` carries SINGLE-pass weights, measured accurate to 0.08 %, which is
+what theta is estimated from. The sg BAM also supplies nobody's multipaths — the cluster-merged
+GTF's isoforms, the priors reads (`LRAA:6288`) and the full BAM's reads (`LRAA:6502`) are each
+resolved independently against the shared structure from their own alignments.
 
 What the compounding can still affect is which features the shared graph contains, since three
 support thresholds are absolute read counts rather than fractions. That exposure, the immune

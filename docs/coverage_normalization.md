@@ -191,11 +191,34 @@ with every read weighing 1, giving a different prior for pass-2 apportionment wi
 crash and no anomaly in the output. Hence the startup refusal, which names the flag and
 its role (`LRAA:2387-2395`).
 
-**`--bam_for_sg`'s weights reach graph STRUCTURE only, never quantification.** This is the
-invariant that bounds everything above, and it is enforced by absence rather than by a check:
-`get_normalization_weight` is read at exactly ONE site in the codebase, `Splice_graph.py:608`,
-and does not appear in `pylib/Quantify.py` at all. From there it accumulates into six counters,
-all structural:
+**XW weighting is honoured everywhere, including EM — the sg BAM is confined by which consumer
+READS it, not by a code boundary.** An earlier version of this section claimed
+`get_normalization_weight` was read at one site and absent from `Quantify.py`. That was wrong:
+`Quantify.py` reads the same weight under a different name. The tag is honoured at three direct
+sites and propagates into quantification through a registry:
+
+| site | what it does |
+|---|---|
+| `Splice_graph.py:608` | graph counters (table below) |
+| `LRAA.py:1400`, `:1428`, `:1471` | records each read's weight into `LRAA_Globals.register_read_weight` |
+| `MultiPath.get_read_weight` (`MultiPath.py:216`) | serves it back to consumers |
+
+and from the registry it reaches `EM.py:90`, `Quantify.py:1849`, `:1871`, `:2244`, and
+`TranscriptFiltering.py:589`. Weighting is default-on — `use_XW_weights = True if weight_reads is
+None` (`LRAA.py:1238`) — and deliberately so: `LRAA.py:1227-1232` states there is "no
+configuration in which the splice graph honours the tag (it always has) while EM ignores it."
+`weight_reads=False` is the one exception, used by discovery's pre-filter quantification because
+its gates mix EM-derived quantities with integer tallies that cannot follow a weight.
+
+So the reason a doubly-normalized `--bam_for_sg` cannot perturb an abundance is NOT that the
+weight is structurally confined. It is that **the sg BAM is read only for graph construction.**
+The weights that reach EM come from the BAM being quantified and the BAM supplying theta:
+`--bam` is refused if it carries `XW` at all, so its reads weigh exactly 1 in EM; and
+`--bam_for_priors` carries SINGLE-pass weights, which the measurement above found accurate to
+0.08 %. Both are correct inputs to a weighted EM. The compounded 4.53x weights exist only in the
+file that no arithmetic consumer opens.
+
+From `Splice_graph.py:608` the weight accumulates into six counters, all structural:
 
 | site | counter | decides |
 |---|---|---|
@@ -205,12 +228,18 @@ all structural:
 | `:694-695` | `intron_splice_site_support` | splice-site support |
 | `:705` | `_contig_base_cov` | per-base exon coverage |
 
-So a compounded weight can change which features the graph contains. What it cannot do is enter
-theta or the assignment arithmetic directly: quantification takes theta from `--bam_for_priors`
-and apportions the full `--bam`, with ambiguity resolved by 3'-end agreement
-(`Quantify.py:839-859`) rather than by any normalization weight. Any effect on an abundance is
-therefore MEDIATED — through the candidate isoform set the graph defines, as the exposure below
-describes — and never a misused weight in a sum.
+All six are weighted; no feature counter counts records. The three raw counters in the same loop —
+`total_read_alignments_used` (`:697`), `processed` (`:698`), `total_bases_added` (`:707`) — are
+consumed only inside `logger.info` calls (`:720`, `:729`, `:736`), so no fraction anywhere divides
+a weighted numerator by a raw denominator. VERIFIED for each fraction: `frac_intron_support`
+(`:754`) takes both terms from `intron_counter`; `min_TSS_iso_fraction` (`:2965-2966`) divides
+`TSS_obj.get_read_support()` by `sum_TSS_read_support`, built by summing the same objects
+(`:2943-2945`); `min_PolyA_iso_fraction` (`:3129-3130`) has the same shape (`:3107`). A common factor
+cancels from each.
+
+So a compounded weight in the sg BAM can change which features the graph contains. Any effect on
+an abundance is MEDIATED through the candidate isoform set the graph defines, as the exposure
+below describes.
 
 **Three consumers resolve independently against the one graph.** The sg BAM supplies the node and
 edge set; it does not supply anyone's multipaths. The cluster-merged GTF's isoforms, the priors
