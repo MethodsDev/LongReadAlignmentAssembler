@@ -601,7 +601,7 @@ def split_scope(context, task):
     return task["scope"], counters
 
 
-def verify_part_order(tasks, strand):
+def verify_part_order(tasks, part_key, label=None):
     """refuses to concatenate parts that would not come out coordinate-sorted.
 
     Costs one record read per part rather than a pass over the output.  That is
@@ -617,17 +617,29 @@ def verify_part_order(tasks, strand):
     unsorted -- so a merge or any streaming consumer downstream reads it wrongly.
     Within a reference htslib does refuse ("Unsorted positions on sequence #N"),
     which is the half of the property this design cannot get wrong anyway.
+
+    ``part_key`` names the entry in each task holding that part's filename, and
+    ``label`` names the SERIES being checked in the refusals.  Both are arguments
+    because the same guarantee is owed by two fan-outs over the same partition:
+    this split, whose parts are keyed by strand, and the per-contig depth
+    normalization in normalize_bam_by_strand.py, whose units carry one part each.
+    One implementation rather than two, because two copies of an ordering
+    assertion drift and the drifting copy is the one that stops catching
+    anything.
     """
+
+    if label is None:
+        label = part_key
 
     previous_reference_id = None
     previous_scope = None
 
     for task in tasks:
-        with pysam.AlignmentFile(task[strand], "rb") as reader:
+        with pysam.AlignmentFile(task[part_key], "rb") as reader:
             first = next(reader.fetch(until_eof=True), None)
 
         if first is None:
-            # nothing of this scope survived on this strand: no records to place
+            # nothing of this scope survived here: no records to place
             continue
 
         if first.reference_id != task["reference_id"]:
@@ -636,7 +648,7 @@ def verify_part_order(tasks, strand):
                 "rather than {}: the parts do not describe the scopes they were "
                 "split from, so concatenating them would not reproduce the "
                 "input's order.".format(
-                    strand, task["scope"], first.reference_id, task["reference_id"]
+                    label, task["scope"], first.reference_id, task["reference_id"]
                 )
             )
 
@@ -647,7 +659,7 @@ def verify_part_order(tasks, strand):
                 "produce a bam that is not coordinate-sorted, which samtools "
                 "would index without complaint and every consumer fetching it by "
                 "region would read wrongly.".format(
-                    strand,
+                    label,
                     task["scope"],
                     first.reference_id,
                     previous_scope,

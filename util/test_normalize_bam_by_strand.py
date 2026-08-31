@@ -31,6 +31,7 @@ there would shift every window by a base and flip reads with nothing erroring.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,19 @@ import normalize_bam_by_strand as nbs
 
 NORMALIZER = UTIL_DIR / "normalize_bam_by_strand.py"
 EXTRACTOR = UTIL_DIR / "misc" / "extract_contig_region_inputs.py"
+# A real multi-contig bam: 11,763 records over chr1, chr2, chr3 and chrM, of very
+# unequal size (5,627 / 4,510 / 15 / 1,611) and carrying alignments that overhang
+# their contig by up to 238 kb.  A synthetic corpus can be made to look like this
+# but cannot be relied on to; the per-contig fan-out is exactly the change a real
+# corpus's asymmetries break.
+REAL_MULTI_CONTIG_BAM = (
+    REPO_ROOT
+    / "testing"
+    / "single_cells"
+    / "sc_full_pipe_scattered"
+    / "data"
+    / "chr1_2_3_M.PBMCs.mini.bam"
+)
 
 BASE_ARGS = dict(
     normalize_max_cov_level=1000,
@@ -897,3 +911,370 @@ def test_help_reports_the_worker_count():
     ).stdout
 
     assert "--num_workers" in help_text
+
+
+# ---------------------------------------------------------------------------
+# the per-contig fan-out of the depth normalization
+#
+# The two strand bams are two units, so --num_workers governed the strand split
+# and the samtools thread counts but not the normalization itself: on a 28 GB
+# 10x bam (179 M mapped-primary records) with --num_workers 8, the split took
+# 8.3 min and the normalization 50.5 min of a 65.9 min task, its own log saying
+# "normalizing 2 strand bam(s) concurrently" with 6 of 8 cores idle.  The unit is
+# now (strand bam, populated reference), so the same flag governs this stage too.
+#
+# The division of the work may not change the answer.  This bam is the
+# splice-graph input for every cluster's quantification, so a different record
+# set OR a different XW weight here is a different splice graph and a different
+# number in every downstream table -- and nothing downstream would notice, it
+# would just be different.
+
+
+def _units_logged(stderr):
+    """(num_bams, num_units, num_workers) from the fan-out's own summary line."""
+
+    for line in stderr.splitlines():
+        match = re.search(
+            r"normalizing (\d+) bam\(s\) as (\d+) unit\(s\) on (\d+) worker\(s\)", line
+        )
+        if match:
+            return tuple(int(group) for group in match.groups())
+    raise AssertionError("no fan-out summary line in:\n" + stderr)
+
+
+def _identities(bam_path):
+    """name, flag, reference, position and XW of every retained record, in order.
+
+    Compared instead of the file's bytes because BGZF framing may legitimately
+    differ: the fanned-out arm's output is a concatenation of per-contig parts,
+    each compressed independently, so block boundaries fall elsewhere than in a
+    single writer's stream while the records are identical.
+    """
+
+    with pysam.AlignmentFile(str(bam_path), "rb") as reader:
+        return [
+            (
+                read.query_name,
+                read.flag,
+                read.reference_name,
+                read.reference_start,
+                round(float(read.get_tag("XW")), 6) if read.has_tag("XW") else None,
+            )
+            for read in reader.fetch(until_eof=True)
+        ]
+
+
+@pytest.fixture(scope="module")
+def real_bam_arms(tmp_path_factory):
+    """the real multi-contig bam normalized as 2 units and as 2 x N units.
+
+    The serial arm is the whole-file pass this script has always run -- one
+    ``sift_bam`` over each whole strand bam -- which is what ``--num_workers 1``
+    still means.  The concurrent arm divides each strand bam per reference.
+    """
+
+    root = tmp_path_factory.mktemp("real_bam")
+    arms = dict()
+    for label, num_workers in (("whole_file", 1), ("per_contig", 8)):
+        work = root / label
+        work.mkdir()
+        output = work / "norm.bam"
+        completed = _run_normalizer(
+            REAL_MULTI_CONTIG_BAM, output, work, num_workers=num_workers
+        )
+        arms[label] = {"output": output, "stderr": completed.stderr}
+    return arms
+
+
+@pytest.mark.skipif(
+    not REAL_MULTI_CONTIG_BAM.exists(),
+    reason="the real multi-contig fixture is not in this checkout",
+)
+def test_the_fan_out_retains_the_same_records_with_the_same_weights(real_bam_arms):
+    """The acceptance bar, on a real bam: same records, same XW, either way.
+
+    A single-contig bam cannot exercise this at all -- it has one unit either way
+    -- which is why the fixture is the four-reference one.
+    """
+
+    whole_file = _identities(real_bam_arms["whole_file"]["output"])
+    per_contig = _identities(real_bam_arms["per_contig"]["output"])
+
+    # the corpus has to be thinned, or this compares two runs that kept
+    # everything, and it has to span every reference, or the fan-out was not
+    # exercised across them
+    assert 0 < len(whole_file) < 11763
+    assert len({identity[2] for identity in whole_file}) == 4
+
+    assert set(per_contig) == set(whole_file)
+    assert per_contig == whole_file
+
+
+@pytest.mark.skipif(
+    not REAL_MULTI_CONTIG_BAM.exists(),
+    reason="the real multi-contig fixture is not in this checkout",
+)
+def test_the_fan_out_is_one_unit_per_populated_reference_per_strand(real_bam_arms):
+    """What makes --num_workers govern this stage rather than the number 2.
+
+    Four populated references and two strand bams is eight units, which is the
+    whole point: the two-way pass could not use more than two workers however
+    many were asked for.
+    """
+
+    assert _units_logged(real_bam_arms["per_contig"]["stderr"]) == (2, 8, 8)
+
+
+@pytest.mark.skipif(
+    not REAL_MULTI_CONTIG_BAM.exists(),
+    reason="the real multi-contig fixture is not in this checkout",
+)
+def test_one_worker_is_still_the_unchanged_whole_file_pass(real_bam_arms):
+    """The documented escape hatch, and it may not quietly become the fan-out.
+
+    --num_workers 1 needs no index and reads each strand bam whole, which is what
+    an input the fan-out cannot address falls back to as well.
+    """
+
+    stderr = real_bam_arms["whole_file"]["stderr"]
+    assert _units_logged(stderr) == (2, 2, 1)
+    assert stderr.count("(whole file)") == 2
+
+
+@pytest.mark.skipif(
+    not REAL_MULTI_CONTIG_BAM.exists(),
+    reason="the real multi-contig fixture is not in this checkout",
+)
+def test_the_fan_outs_output_is_sorted_and_fetchable_on_a_late_contig(real_bam_arms):
+    """Record-set equality cannot see ordering, and it is what a merge loses.
+
+    Two assertions, because they fail on different mistakes.  Walking
+    ``(reference_id, reference_start)`` catches a concatenation in completion
+    order.  An indexed fetch of the LAST reference in the header catches an index
+    built over a file whose references are out of order -- which samtools does
+    without complaint, see the negative control below.
+    """
+
+    output = real_bam_arms["per_contig"]["output"]
+    with pysam.AlignmentFile(str(output), "rb") as reader:
+        positions = [
+            (read.reference_id, read.reference_start)
+            for read in reader.fetch(until_eof=True)
+        ]
+        references = list(reader.references)
+    assert positions == sorted(positions)
+
+    assert Path(str(output) + ".bai").exists()
+    late_contig = references[-1]
+    with pysam.AlignmentFile(str(output), "rb") as reader:
+        fetched = [
+            (read.query_name, read.reference_name)
+            for read in reader.fetch(late_contig)
+        ]
+    assert fetched
+    assert all(reference == late_contig for _name, reference in fetched)
+
+
+def test_the_part_order_guard_is_what_catches_a_reversed_concatenation(tmp_path):
+    """The negative control for the ordering guarantee, on the shared guard.
+
+    ``verify_part_order`` is the SAME function the strand split uses, called here
+    with the normalization's own part key -- two copies of an ordering assertion
+    drift, and the drifting copy is the one that stops catching anything.  The
+    second half of this test is why the guard has to exist at all: samtools
+    indexes the reversed concatenation with exit 0 and no warning, so nothing
+    downstream would say the file is unsorted.
+    """
+
+    header = _multi_contig_header()
+    parts = list()
+    for index, (name, _length) in enumerate(MULTI_CONTIGS):
+        part = tmp_path / "part_{:05d}.bam".format(index)
+        read = pysam.AlignedSegment(header)
+        read.query_name = "{}_only".format(name)
+        read.query_sequence = "A" * 50
+        read.query_qualities = pysam.qualitystring_to_array("I" * 50)
+        read.flag = 0
+        read.reference_id = index
+        read.reference_start = 100
+        read.mapping_quality = 60
+        read.cigartuples = [(0, 50)]
+        with pysam.AlignmentFile(str(part), "wb", header=header) as writer:
+            writer.write(read)
+        parts.append(
+            {"scope": name, "reference_id": index, "part": str(part)}
+        )
+
+    # header order passes
+    nbs.verify_part_order(parts, "part", label="norm.bam")
+
+    with pytest.raises(RuntimeError) as raised:
+        nbs.verify_part_order(list(reversed(parts)), "part", label="norm.bam")
+    assert "not in header order" in str(raised.value)
+    assert "norm.bam" in str(raised.value)
+
+    reversed_output = tmp_path / "reversed.bam"
+    nbs.concatenate_bam_parts(
+        str(reversed_output), [part["part"] for part in reversed(parts)]
+    )
+    with pysam.AlignmentFile(str(reversed_output), "rb") as reader:
+        positions = [
+            (read.reference_id, read.reference_start)
+            for read in reader.fetch(until_eof=True)
+        ]
+    assert positions != sorted(positions), "the negative control must be unsorted"
+
+    indexed = subprocess.run(
+        ["samtools", "index", str(reversed_output)], capture_output=True, text=True
+    )
+    assert indexed.returncode == 0, (
+        "if samtools started refusing this, the guard could be simplified"
+    )
+
+
+def test_a_part_holding_the_wrong_reference_is_refused_by_the_shared_guard(tmp_path):
+    """The other half of the guard, reached through the normalization's part key."""
+
+    header = _multi_contig_header()
+    part = tmp_path / "part_00000.bam"
+    read = pysam.AlignedSegment(header)
+    read.query_name = "misplaced"
+    read.query_sequence = "A" * 50
+    read.query_qualities = pysam.qualitystring_to_array("I" * 50)
+    read.flag = 0
+    read.reference_id = 2
+    read.reference_start = 100
+    read.mapping_quality = 60
+    read.cigartuples = [(0, 50)]
+    with pysam.AlignmentFile(str(part), "wb", header=header) as writer:
+        writer.write(read)
+
+    with pytest.raises(RuntimeError) as raised:
+        nbs.verify_part_order(
+            [{"scope": "chr1", "reference_id": 0, "part": str(part)}],
+            "part",
+            label="norm.bam",
+        )
+    assert "rather than 0" in str(raised.value)
+    # the normalize's call shape: an explicit label, because "part" would read as
+    # "the part part". The split calls the same function with two positional
+    # arguments and gets its strand as the label; util/test_separate_bam_by_strand.py
+    # pins that default, so neither caller's spelling is left implicit.
+    assert "the norm.bam part for scope" in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# the window grid under the fan-out
+#
+# The default anchor is a function of the input -- the first aligned base seen on
+# a contig -- which is why the CONTIG is the unit and not a fragment of one.  A
+# caller supplying --window_origin is on an absolute grid instead, and is also
+# the caller whose input is a single rebased contig, so the fan-out is not taken
+# for it at all.  Both halves are asserted, because "buys nothing" and "changes
+# nothing" are different claims.
+
+
+def test_a_window_origin_caller_gets_the_whole_file_pass_and_todays_answer(tmp_path):
+    """A rebased chunk bam is ONE contig, so it takes the unfanned pass.
+
+    Same records and same weights as the same run before this change, which the
+    module-scoped `chunked` fixture above already pins against a whole-contig
+    control; what is asserted here is that the fan-out is not entered, so those
+    equivalences are untouched however many workers are asked for.
+    """
+
+    header = _bam_header()
+    src = tmp_path / "chunk.bam"
+    _write_bam(src, _corpus(header), header)
+
+    output = tmp_path / "chunk.norm.bam"
+    completed = _run_normalizer(
+        src, output, tmp_path, window_origin=0, single_strand=True, num_workers=8
+    )
+
+    num_bams, num_units, _workers = _units_logged(completed.stderr)
+    assert (num_bams, num_units) == (1, 1)
+    assert "(whole file)" in completed.stderr
+
+
+def test_an_explicit_origin_survives_the_fan_out_unchanged(tmp_path):
+    """Multi-contig plus an origin: the fan-out is entered and is still exact.
+
+    ``grid_anchor`` is then ``-(window_origin % depth_window)`` -- one constant,
+    independent of which records or contigs a unit holds -- so the boundaries a
+    unit measures over are the boundaries the whole-file pass measures over.  The
+    origin is deliberately NOT a multiple of the window, so it moves the
+    boundaries off the coordinate grid and a unit silently falling back to the
+    default anchor would be visible.
+    """
+
+    header = _multi_contig_header()
+    src = tmp_path / "multi.bam"
+    with pysam.AlignmentFile(str(src), "wb", header=header) as writer:
+        for read in sorted(
+            _multi_contig_corpus(header),
+            key=lambda r: (r.reference_id, r.reference_start),
+        ):
+            writer.write(read)
+    pysam.index(str(src))
+
+    outputs = dict()
+    for label, num_workers in (("whole_file", 1), ("per_contig", 4)):
+        work = tmp_path / label
+        work.mkdir()
+        output = work / "norm.bam"
+        completed = _run_normalizer(
+            src, output, work, window_origin=37, num_workers=num_workers
+        )
+        outputs[label] = (output, completed.stderr)
+
+    assert _units_logged(outputs["per_contig"][1])[1] == 6  # 3 contigs x 2 strands
+    assert "offset 37 within a 100 bp window" in outputs["per_contig"][1]
+
+    whole_file = _identities(outputs["whole_file"][0])
+    per_contig = _identities(outputs["per_contig"][0])
+    assert 0 < len(whole_file)
+    assert per_contig == whole_file
+
+
+def test_an_input_the_fan_out_cannot_address_falls_back_rather_than_failing(tmp_path):
+    """A unit reaches its reference by name, and not every input can be reached.
+
+    Refusing would regress a caller that works today, so the fan-out is declined
+    and the whole-file pass runs.  Provoked with a header declaring a sort order
+    other than coordinate, which is the case no amount of indexing works around:
+    the parts' order is the input's order, and the concatenation is only
+    coordinate-sorted for a coordinate-sorted input.
+
+    Run with --input_is_single_strand because the strand split REFUSES such an
+    input outright (separate_bam_by_strand.require_coordinate_sorted) and so the
+    normalization would never be reached; that refusal is the split's, is correct,
+    and is not what this asserts.
+    """
+
+    header = pysam.AlignmentHeader.from_dict(
+        {
+            "HD": {"VN": "1.6", "SO": "queryname"},
+            "SQ": [{"SN": name, "LN": length} for name, length in MULTI_CONTIGS],
+        }
+    )
+    src = tmp_path / "queryname.bam"
+    # records still in coordinate order, so the pass itself succeeds; only the
+    # header's claim stops the parts from being concatenable
+    with pysam.AlignmentFile(str(src), "wb", header=header) as writer:
+        for read in sorted(
+            _multi_contig_corpus(header),
+            key=lambda r: (r.reference_id, r.reference_start),
+        ):
+            writer.write(read)
+    pysam.index(str(src))
+
+    output = tmp_path / "norm.bam"
+    completed = _run_normalizer(
+        src, output, tmp_path, single_strand=True, num_workers=4
+    )
+
+    # three populated references, so a fan-out would be three units
+    assert _units_logged(completed.stderr) == (1, 1, 1)
+    assert "whole-file pass rather than per reference" in completed.stderr
+    assert _identities(output)

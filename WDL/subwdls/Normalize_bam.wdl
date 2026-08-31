@@ -17,14 +17,22 @@ task normalize_bam_by_strand {
     # core inside a 2-cpu task. 8 rather than 2 because the work this task does is
     # divisible and was not being divided: the strand split ran as one thread over
     # the whole bam (measured: 15.3 min of a 72.6 min step over 48.1 M records,
-    # with 27 of 28 cores idle), and the two depth normalizations are independent
-    # files. Past ~10 there is nothing left to give it -- the split's floor is its
-    # largest contig, chr1 at ~10% of a whole-genome bam's records.
+    # with 27 of 28 cores idle), and the depth normalization that follows it ran
+    # as TWO units, one per strand bam, however many workers were asked for.
+    # Both are now one unit per populated reference, so the floor of each is its
+    # largest contig -- chr1 at ~10% of a whole-genome bam's records -- and past
+    # ~10 workers there is nothing left to give either of them.
     Int cpu = 8
-    # Both depth normalizations now run at once, so both peaks are live together:
-    # each holds one int64 array per contig of contig_length/depth_window entries
-    # plus its junction tally, ~0.5 GiB per job for a whole human genome at the
-    # default 100 bp window.
+    # Up to `cpu` normalization units are live at once, but a unit now holds ONE
+    # contig's int64 depth array (contig_length/depth_window entries) plus that
+    # contig's junction tally, where a per-strand unit held one array per contig
+    # in the file. MEASURED over the 55 M-record whole-genome strand bam pair of a
+    # real cluster-guided run, as summed VmHWM across live workers: 1.05 GiB for
+    # the two-way pass (0.52 GiB in its largest worker) against 0.56 GiB for 130
+    # per-contig units on 8 workers (0.08 GiB in its largest). Summed VmHWM is a
+    # FLOOR -- it adds high-water marks that need not have been simultaneous and
+    # is roughly 2.6x under a true cgroup peak -- so 8 GiB stays, unchanged: the
+    # measurement says this stage got cheaper, not that the request can shrink.
     Int memoryGB = 8
   }
 
@@ -41,11 +49,16 @@ samtools index -@ ~{cpu} "~{base}.norm_~{normalize_max_cov_level}.bam"
 echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm_~{normalize_max_cov_level}.bam.bai"
 >>>
 
-  # Live at once on this disk: the localized input, the two strand bams, the
-  # per-contig parts the strand split concatenates them from, the two normalized
-  # strand bams, and the merged output -- ~5x the input, where it used to be ~4x.
-  # The parts are removed as soon as they are concatenated, but they are on disk
-  # while the split runs.
+  # Two stages now write per-contig parts, and neither overlaps the other: the
+  # split's parts are gone before the normalization's exist. The high-water mark
+  # is the normalization's concatenation -- localized input + two strand bams +
+  # every normalized part + the two normalized strand bams -- which is the same
+  # shape the merge that follows it already had (input + two strand bams + two
+  # normalized bams + merged output), and normalized bams are smaller than the
+  # strand bams they were thinned from. MEASURED on a real 5.6 GB cluster-guided
+  # input: split peak 3.05x, normalization peak 3.85x, merge peak 3.85x. So ~5x
+  # is unchanged and still covers it; every part set is removed as soon as it is
+  # concatenated.
   Int disksize = 50 + ceil(5 * size(input_bam, "GB"))
 
   output {

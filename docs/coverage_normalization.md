@@ -14,6 +14,17 @@ Thinning is performed by `util/normalize_bam_by_strand.py`, invoked from
 independently per strand, and merged, because the splice graph is itself built per contig and
 strand.
 
+Normalization is independent per CONTIG as well, and not merely as an implementation
+convenience: `sift_bam` keys its depth windows, its window anchors and its junction tallies per
+contig, and acceptance is a draw on a hash of the read name rather than on a position in a
+stream, so nothing outside the contig a read sits on can move that read's measured depth, its
+scarce-junction exemption or its `XW` weight. That is why the utility can be handed one
+reference at a time — which is how it uses `--num_workers`, one unit per populated reference per
+strand bam, concatenating the per-contig outputs in header order. It is also why the unit stops
+at the contig: with no `--window_origin` the depth-window grid anchors on the first aligned base
+seen on a contig, so a FRAGMENT of a contig would anchor its grid somewhere else and count
+junction support from a partial record set.
+
 The requirement that shapes the design is not how many reads survive but **which relative
 quantities survive**. The splice graph decides what to keep by comparing features against each
 other — a junction against the strongest junction sharing its exon island, an unspliced

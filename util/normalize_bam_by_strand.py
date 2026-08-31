@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import sys, os, re
-import concurrent.futures
 import multiprocessing
+import shutil
 import subprocess
+import tempfile
+import time
 import argparse
 import hashlib
 import logging
@@ -16,12 +18,22 @@ from Pipeliner import Pipeliner, Command
 import LRAA_Globals
 import RdnaMask
 import Util_funcs
-# One definition of "how many workers", shared with the strand split this farms
-# out to.  Appended rather than prepended so util/ cannot shadow a stdlib module.
+# The whole-bam fan-out this shares with the strand split: one definition of "how
+# many workers", one part-ordering assertion, one concatenation, one index
+# partition of a bam.  Appended rather than prepended so util/ cannot shadow a
+# stdlib module.
 _UTIL_DIR = os.path.dirname(os.path.realpath(__file__))
 if _UTIL_DIR not in sys.path:
     sys.path.append(_UTIL_DIR)
-from separate_bam_by_strand import resolve_num_workers
+from separate_bam_by_strand import (
+    UNPLACED_SCOPE,
+    concatenate_bam_parts,
+    ensure_bam_index,
+    index_record_counts,
+    require_coordinate_sorted,
+    resolve_num_workers,
+    verify_part_order,
+)
 
 # Named in every artifact this writes, so a cache from a different method cannot
 # be mistaken for a current one. Defined in LRAA_Globals because the driver keys
@@ -84,13 +96,17 @@ def main():
         help=(
             "concurrency for the work this script farms out: the strand split's "
             "per-contig passes (see separate_bam_by_strand.py --num_workers), the "
-            "two depth-normalization jobs, which are independent files and so run "
-            "as two processes rather than two passes, and the thread counts handed "
-            "to samtools merge and samtools index. 0 (the default) means one per "
-            "CPU this process may run on; a container whose cpu quota is smaller "
-            "than the host's core count must say so here, because a quota does not "
-            "narrow what the kernel reports as available. 1 runs everything "
-            "serially, as this always did. (default: 0)"
+            "depth normalization, which divides into one unit per populated "
+            "reference per strand bam and runs them as one pool of that many "
+            "units, and the thread counts handed to samtools merge and samtools "
+            "index. 0 (the default) means one per CPU this process may run on; a "
+            "container whose cpu quota is smaller than the host's core count must "
+            "say so here, because a quota does not narrow what the kernel reports "
+            "as available. 1 runs everything serially, as this always did. An "
+            "input that cannot be addressed by reference name -- no index, or a "
+            "header declaring a non-coordinate sort order -- is normalized as one "
+            "whole-file pass per strand regardless, which is what it always was. "
+            "(default: 0)"
         ),
     )
 
@@ -207,34 +223,8 @@ def main():
         "rdna_mask": rdna_mask,
     }
 
-    if len(pending) > 1 and num_workers > 1:
-        # The two strand bams are separate files sharing no state -- separate
-        # depth arrays, separate junction tallies, and an acceptance draw keyed on
-        # the read name rather than on visit order -- so they are two processes
-        # rather than two passes. Both peaks are then live at once: each holds one
-        # int64 depth array per contig it sees (contig length / --depth_window
-        # entries) plus its junction tally, ~0.5 GiB per job for a whole human
-        # genome at the default 100 bp window.
-        logger.info("normalizing {} strand bam(s) concurrently".format(len(pending)))
-        start_method = (
-            "fork" if "fork" in multiprocessing.get_all_start_methods() else None
-        )
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=min(len(pending), num_workers),
-            mp_context=multiprocessing.get_context(start_method),
-        ) as pool:
-            futures = {
-                pool.submit(normalize_job, job, settings): job for job in pending
-            }
-            for future in concurrent.futures.as_completed(futures):
-                # re-raises whatever the child raised, so a failed job fails the
-                # run rather than leaving a checkpoint over a missing bam
-                future.result()
-                subprocess.check_call(["touch", futures[future][2]])
-    else:
-        for job in pending:
-            normalize_job(job, settings)
-            subprocess.check_call(["touch", job[2]])
+    if pending:
+        run_normalizations(pending, settings, num_workers)
 
     if input_is_single_strand:
         # sift_bam already wrote the final output; there is nothing to merge, and
@@ -298,16 +288,312 @@ def main():
     sys.exit(0)
 
 
-def normalize_job(job, settings):
-    """one strand's depth normalization, as a worker runs it.
+# set once per worker process, so a fork inherits the rdna mask itrees rather
+# than pickling them per unit -- a whole-genome header divides into hundreds of
+# units, and the mask is a {contig: IntervalTree} per contig it covers
+_normalize_worker_settings = dict()
+
+
+def _init_normalize_worker(settings):
+    _normalize_worker_settings.update(settings)
+
+
+def _normalize_one_unit(unit):
+    return normalize_unit(unit, _normalize_worker_settings)
+
+
+def normalize_unit(unit, settings):
+    """one unit's depth normalization, as a worker runs it.
 
     Module level and taking its settings as an argument because a worker receives
     both by pickle: a closure over main()'s locals cannot cross a process
     boundary, even under fork, since the callable itself is what gets sent.
     """
 
+    started = time.time()
+    stats = sift_bam(
+        unit["source"], unit["part"], contig=unit["scope"], **settings
+    )
+    logger.info(
+        "-normalized {} {}: {} of {} record(s) retained in {:.1f}s".format(
+            os.path.basename(unit["source"]),
+            unit["scope"] if unit["scope"] is not None else "(whole file)",
+            stats["kept"],
+            stats["total"],
+            time.time() - started,
+        )
+    )
+    return unit["job_index"], unit["index"], stats
+
+
+def whole_file_unit(job_index, job):
+    """the one unit a bam that cannot be divided normalizes as.
+
+    ``part`` IS the final output and ``scope`` is None, so this is literally the
+    pass this script has always run: no per-contig fetch, no parts, no
+    concatenation.  Three inputs take it -- a single-reference bam, which is what
+    a rebased chunk from ``extract_contig_region_inputs`` is; one the fan-out
+    cannot address; and ``--num_workers 1``.
+
+    NOT every caller supplying ``--window_origin``: ``LRAA``'s
+    ``_normalize_bam_for_splice_graph`` passes an absolute origin over a WHOLE
+    library, which is exactly the multi-contig input the fan-out is for, and it is
+    exact there because an explicit origin makes the grid anchor a constant.
+    """
+
     source_bam_file, norm_bam_filename, _checkpoint = job
-    sift_bam(source_bam_file, norm_bam_filename, **settings)
+    return [
+        {
+            "job_index": job_index,
+            "index": 0,
+            "scope": None,
+            "reference_id": None,
+            "num_records": None,
+            "source": source_bam_file,
+            "part": norm_bam_filename,
+            "fanned_out": False,
+        }
+    ]
+
+
+def plan_units(job_index, job, part_dir, num_workers):
+    """the units one bam's normalization divides into, in HEADER order.
+
+    One per populated reference, or a single whole-file unit when the input
+    cannot be divided or there is nothing to divide.  Ordering is the header's,
+    which for a coordinate-sorted input is also the order the parts have to be
+    concatenated in; the caller schedules the biggest unit first for load balance
+    and concatenates by this order, never by completion order.
+
+    The three ways the fan-out is declined all fall back to the whole-file pass,
+    which is always correct and is what every caller gets today:
+
+      no index, or one that cannot be built
+          a unit reaches its reference BY NAME, which is an index lookup.  An
+          input in a read-only directory is the honest case and it works today.
+      a header declaring a sort order other than coordinate
+          the parts' order is the input's order, and the concatenation would only
+          be coordinate-sorted for a coordinate-sorted input.  Refusing outright
+          would regress a caller supplying ``--window_origin``, for whom an
+          unsorted input is fine: the grid is absolute, so
+          ``_reject_read_before_anchor`` never fires.
+      an index whose per-reference counts do not sum to the file's record total
+          the fan-out would read a different record set than the whole-file pass.
+          Falling back reads every record, which is the point.
+
+    ``UNPLACED_SCOPE`` gets no unit, unlike the strand split's fan-out.  Every
+    coordinate-less record is discarded by ``_record_is_evidence`` --
+    ``Util_funcs.quant_discard_reason`` returns ``unmapped`` or ``no_chromosome``
+    for it -- so pass 1 measures nothing from that scope and pass 2 writes
+    nothing, and the ``total`` this script reports never counted them.  A unit for
+    it would be a full read of the unplaced records for a provably empty part.
+
+    A single populated reference gets the whole-file unit rather than a
+    one-element fan-out: identical records either way, and it skips a part file,
+    an ordering check and a ``samtools cat``.  A rebased chunk bam is such an
+    input, which is how ``ChunkedRun``'s stage 4 -- the caller that always
+    supplies ``--window_origin`` -- keeps the exact pass it has today without the
+    fan-out being special-cased for it.
+
+    An explicit ``--window_origin`` over a MULTI-contig bam does fan out, and is
+    exact when it does: ``grid_anchor`` is then ``-(window_origin %
+    depth_window)``, one constant independent of which records or contigs a unit
+    holds.  That case is not hypothetical -- ``LRAA``'s
+    ``_normalize_bam_for_splice_graph`` is it, over a whole library -- and
+    declining the fan-out there would have left the largest normalization in the
+    codebase at two workers.  Only the DEFAULT anchor is a function of the input,
+    and it is a function of the input PER CONTIG, which is why the contig is the
+    unit and nothing smaller.
+
+    ``--num_workers 1`` never reaches here; ``run_normalizations`` hands it the
+    whole-file unit directly, so the documented escape hatch stays the pass this
+    script has always run and needs no index at all.
+    """
+
+    source_bam_file, norm_bam_filename, _checkpoint = job
+
+    if not ensure_bam_index(source_bam_file, threads=num_workers):
+        logger.warning(
+            "-{} has no index and one could not be built, so its normalization "
+            "cannot be divided per reference; taking the whole-file pass".format(
+                source_bam_file
+            )
+        )
+        return whole_file_unit(job_index, job)
+
+    try:
+        require_coordinate_sorted(source_bam_file)
+        scopes, _num_records = index_record_counts(source_bam_file)
+    except RuntimeError as err:
+        logger.warning(
+            "-normalizing {} as one whole-file pass rather than per reference: "
+            "{}".format(source_bam_file, err)
+        )
+        return whole_file_unit(job_index, job)
+
+    populated = [
+        (scope, count) for scope, count in scopes if scope != UNPLACED_SCOPE
+    ]
+    if len(populated) < 2:
+        return whole_file_unit(job_index, job)
+
+    units = list()
+    with pysam.AlignmentFile(source_bam_file, "rb") as reader:
+        for index, (scope, count) in enumerate(populated):
+            # numbered rather than named: a reference name may hold characters a
+            # filename may not, and the number is the header position the parts
+            # are concatenated in
+            units.append(
+                {
+                    "job_index": job_index,
+                    "index": index,
+                    "scope": scope,
+                    "reference_id": reader.get_tid(scope),
+                    "num_records": count,
+                    "source": source_bam_file,
+                    "part": os.path.join(
+                        part_dir, "part_{:05d}.bam".format(index)
+                    ),
+                    "fanned_out": True,
+                }
+            )
+
+    return units
+
+
+def run_normalizations(pending, settings, num_workers):
+    """every pending bam's normalization, as one pool over 2 x N units.
+
+    The unit is a (bam, reference) pair rather than a bam, so ``--num_workers``
+    governs this stage instead of the two strand bams doing it.  Flattened into
+    ONE pool rather than nested pools per bam: the two bams' references are
+    independent work, so a straggler on one strand is filled by the other's, and
+    the live worker count is the requested one rather than its square.
+
+    Scheduling is biggest-unit-first across both bams, so the longest pass is not
+    the one that starts last.  Concatenation walks the units in header order --
+    never completion order -- and ``verify_part_order`` asserts that against the
+    parts themselves before they are joined, because nothing later would:
+    measured, ``samtools index`` builds an index over references in reverse
+    header order with exit 0 and no warning.
+
+    MEASURED over the whole-genome strand bam pair of a real cluster-guided run
+    (2.96 GB / 2.78 GB, 28.5 M + 26.4 M records, 65 and 68 populated references),
+    both arms over the SAME already-split bams so the split is out of the
+    comparison, ``--normalize_max_cov_level 1000``, 8 workers:
+
+        two units (what this was)   1351.6 s   2 workers live
+        130 units (what this is)     343.4 s   8 workers live, + 7.9 s to
+                                               concatenate the parts
+
+    3.9x, and the ceiling is the largest single contig: chr1 holds ~10% of a
+    whole-genome bam's records, so past ~10 workers there is nothing left to give
+    this stage.
+
+    Memory FELL, which is the direction worth stating because more processes are
+    live: a unit holds ONE contig's int64 depth array plus that contig's junction
+    tally, where a strand unit held one array per contig in the file.  Summed
+    VmHWM across live workers, same runs: 1.05 GiB for the two-way arm (0.52 GiB
+    in its largest worker) against 0.56 GiB for the fanned-out arm (0.08 GiB in
+    its largest).  That sum is a FLOOR -- it adds high-water marks that need not
+    have been simultaneous, and a true cgroup peak runs roughly 2.6x above it --
+    so it is grounds for leaving every memory request alone, not for shrinking
+    one.
+    """
+
+    plans = list()
+    part_dirs = list()
+
+    try:
+        for job_index, job in enumerate(pending):
+            norm_bam_filename = job[1]
+            if num_workers == 1:
+                # the documented way out, and it may not quietly become the
+                # fan-out: --num_workers 1 runs everything serially exactly as
+                # this always did, over the whole file, with no index required
+                plans.append((job, whole_file_unit(job_index, job)))
+                continue
+            # alongside the output, so the parts share its filesystem and its
+            # disk budget
+            part_dir = tempfile.mkdtemp(
+                prefix=".{}.parts.".format(os.path.basename(norm_bam_filename)),
+                dir=os.path.dirname(os.path.abspath(norm_bam_filename)),
+            )
+            part_dirs.append(part_dir)
+            plans.append((job, plan_units(job_index, job, part_dir, num_workers)))
+
+        units = [unit for _job, job_units in plans for unit in job_units]
+        resolved = resolve_num_workers(num_workers, len(units))
+        logger.info(
+            "normalizing {} bam(s) as {} unit(s) on {} worker(s)".format(
+                len(plans), len(units), resolved
+            )
+        )
+
+        # biggest unit first, for load balance. This is the ONLY place completion
+        # order is allowed to differ from header order; the concatenation below
+        # walks each job's own unit list, not this.
+        scheduled = sorted(
+            units, key=lambda unit: unit["num_records"] or 0, reverse=True
+        )
+
+        started = time.time()
+        stats_by_unit = dict()
+
+        if resolved == 1:
+            for unit in scheduled:
+                job_index, index, stats = normalize_unit(unit, settings)
+                stats_by_unit[(job_index, index)] = stats
+        else:
+            # fork inherits the rdna mask for free; the fallback pickles the
+            # settings once per worker, which is still once rather than per unit
+            start_method = (
+                "fork" if "fork" in multiprocessing.get_all_start_methods() else None
+            )
+            pool_context = multiprocessing.get_context(start_method)
+            with pool_context.Pool(
+                processes=resolved,
+                initializer=_init_normalize_worker,
+                initargs=(settings,),
+            ) as pool:
+                for job_index, index, stats in pool.imap_unordered(
+                    _normalize_one_unit, scheduled
+                ):
+                    stats_by_unit[(job_index, index)] = stats
+
+        logger.info(
+            "{} unit(s) normalized in {:.1f}s".format(len(units), time.time() - started)
+        )
+
+        for job, job_units in plans:
+            _source_bam_file, norm_bam_filename, checkpoint = job
+            kept = sum(
+                stats_by_unit[(unit["job_index"], unit["index"])]["kept"]
+                for unit in job_units
+            )
+            total = sum(
+                stats_by_unit[(unit["job_index"], unit["index"])]["total"]
+                for unit in job_units
+            )
+            if job_units[0]["fanned_out"]:
+                verify_part_order(
+                    job_units, "part", label=os.path.basename(norm_bam_filename)
+                )
+                concatenate_bam_parts(
+                    norm_bam_filename, [unit["part"] for unit in job_units]
+                )
+            logger.info(
+                "{}: retained {} of {} record(s) across {} unit(s)".format(
+                    os.path.basename(norm_bam_filename), kept, total, len(job_units)
+                )
+            )
+            # only now: a checkpoint is trusted on sight, so it may not exist
+            # before the file it describes is whole
+            subprocess.check_call(["touch", checkpoint])
+
+    finally:
+        for part_dir in part_dirs:
+            shutil.rmtree(part_dir, ignore_errors=True)
 
 
 def compute_tokens(
@@ -527,6 +813,24 @@ def _grow_windows(bases, window):
     target = max(window + 1, 2 * len(bases))
     bases.extend(array("q", bytes(8 * (target - len(bases)))))
 
+
+def _scoped_reader(reader, contig):
+    """The records of one reference, or the whole file when `contig` is None.
+
+    One definition, used by BOTH passes of `sift_bam`, so the two cannot come to
+    disagree about which records they are looking at -- which is the one way a
+    per-contig unit could silently produce a different answer than a whole-file
+    pass: pass 1 measuring depth over a record set pass 2 does not sample from.
+
+    `until_eof=True` for the whole file rather than a plain iterator, because it
+    is the spelling that returns the coordinate-less records too; they are
+    discarded either way by `_record_is_evidence`, but the whole-file arm is the
+    behaviour every existing caller has and it stays byte-identical.
+    """
+
+    return reader.fetch(contig) if contig is not None else reader.fetch(until_eof=True)
+
+
 def sift_bam(
     SS_bam_file,
     norm_bam_filename,
@@ -537,6 +841,7 @@ def sift_bam(
     min_per_id=0,
     min_mapping_quality=0,
     rdna_mask=None,
+    contig=None,
 ):
     """Thin coverage toward a target depth, recording each read's sampling weight.
 
@@ -576,7 +881,38 @@ def sift_bam(
     contig on the first aligned base seen there, exactly as this always did --
     which is correct for a whole input and wrong for a chunk of one, because the
     chunk's first read is not the contig's first read.
+
+    `contig` restricts both passes to one reference, fetched from the index, and
+    is what lets the whole file be normalized as one unit per reference rather
+    than as one unit per strand. Equivalent to the whole-file pass over that
+    reference's records, not merely similar to it, and the CONTIG is the smallest
+    unit that is:
+
+      - every piece of state either pass builds is already keyed per contig --
+        `window_bases`, `contig_anchor`, and `junction_support` on
+        `(contig, junction)` -- and `_acceptance_probability` reads only the
+        entries of the contig the read is on. So no record outside the fetched
+        reference can move a read's measured depth, its junction exemption, or
+        its weight.
+      - acceptance is a draw keyed on the read NAME (`_read_variate`), not on a
+        stream consumed in visit order, so dividing the input cannot reassign it.
+      - both passes fetch the SAME `contig`, so they see the same record set.
+        The double read is per unit and unchanged in total: two reads of every
+        record either way, divided across per-reference fetches instead of two
+        whole-file sweeps.
+      - a SUB-contig unit would not be equivalent. With no `window_origin` the
+        grid anchors on the first aligned base of the unit, and a fragment's
+        first read is not the contig's, so the boundaries move (see
+        `_window_span`); and a fragment counts junction support from a partial
+        record set, which is precisely the exactness the scarce-junction
+        exemption depends on.
     """
+
+    # names this unit in every line it logs. The units run concurrently, so
+    # unattributed lines from several of them interleave on one stream.
+    label = os.path.basename(SS_bam_file)
+    if contig is not None:
+        label = "{} [{}]".format(label, contig)
 
     window_bases = dict()  # contig -> aligned bases per window
     contig_anchor = dict()  # contig -> window origin, in this input's coordinates
@@ -600,25 +936,32 @@ def sift_bam(
         overhanging = 0
         max_overhang = 0
 
-        for read in reader.fetch(until_eof=True):
+        for read in _scoped_reader(reader, contig):
             if not _record_is_evidence(read, min_per_id, min_mapping_quality, rdna_mask):
                 continue
 
-            contig = read.reference_name
-            bases = window_bases.get(contig)
+            # NOT `contig`: that names the scope BOTH passes are restricted to,
+            # and rebinding it here left pass 2 fetching whichever reference pass
+            # 1's last record happened to sit on -- silently normalizing one
+            # contig of the file and writing that as the whole answer.
+            read_contig = read.reference_name
+            bases = window_bases.get(read_contig)
             if bases is None:
                 if grid_anchor is None:
                     # the contig's minimum aligned position, given sorted input;
                     # _reject_read_before_anchor holds every later read to it
-                    contig_anchor[contig] = read.reference_start
+                    contig_anchor[read_contig] = read.reference_start
                 else:
-                    contig_anchor[contig] = grid_anchor
-                bases = array("q", bytes(8 * (contig_length[contig] // depth_window + 2)))
-                window_bases[contig] = bases
-            anchor = contig_anchor[contig]
-            _reject_read_before_anchor(read, contig, anchor, SS_bam_file)
+                    contig_anchor[read_contig] = grid_anchor
+                bases = array(
+                    "q",
+                    bytes(8 * (contig_length[read_contig] // depth_window + 2)),
+                )
+                window_bases[read_contig] = bases
+            anchor = contig_anchor[read_contig]
+            _reject_read_before_anchor(read, read_contig, anchor, SS_bam_file)
 
-            overhang = (read.reference_end or 0) - contig_length[contig]
+            overhang = (read.reference_end or 0) - contig_length[read_contig]
             if overhang > 0:
                 overhanging += 1
                 max_overhang = max(max_overhang, overhang)
@@ -633,23 +976,21 @@ def sift_bam(
                     bases[window] += covered_rend - covered_lend
 
             for junction in _read_junctions(read):
-                junction_support[(contig, junction)] += 1
+                junction_support[(read_contig, junction)] += 1
 
-    # Both log lines name their own job: the two strand bams are normalized
-    # concurrently, so unattributed lines from two jobs interleave on one stream.
     if overhanging:
         logger.warning(
             "{}: {} alignment(s) extend past the reference length declared in the bam header, "
             "by up to {} bp. Their depth is measured over the windows they actually occupy; "
             "the records themselves are left untouched.".format(
-                os.path.basename(SS_bam_file), overhanging, max_overhang
+                label, overhanging, max_overhang
             )
         )
 
     logger.info(
         "{}: measured depth over {} contig(s), {} distinct junction(s), "
         "min_per_id={} min_mapq={}".format(
-            os.path.basename(SS_bam_file),
+            label,
             len(window_bases), len(junction_support),
             min_per_id, min_mapping_quality,
         )
@@ -660,17 +1001,17 @@ def sift_bam(
 
     with pysam.AlignmentFile(SS_bam_file, "rb") as reader:
         with pysam.AlignmentFile(norm_bam_filename, "wb", template=reader) as writer:
-            for read in reader.fetch(until_eof=True):
+            for read in _scoped_reader(reader, contig):
                 if not _record_is_evidence(read, min_per_id, min_mapping_quality, rdna_mask):
                     continue
                 total += 1
 
-                contig = read.reference_name
+                read_contig = read.reference_name
                 probability = _acceptance_probability(
                     read,
-                    contig,
-                    window_bases[contig],
-                    contig_anchor[contig],
+                    read_contig,
+                    window_bases[read_contig],
+                    contig_anchor[read_contig],
                     junction_support,
                     normalize_max_cov_level,
                     depth_window,
@@ -694,11 +1035,21 @@ def sift_bam(
 
     logger.info(
         "{}: retained {} of {} reads targeting depth {}".format(
-            os.path.basename(norm_bam_filename), kept, total, normalize_max_cov_level
+            label, kept, total, normalize_max_cov_level
         )
     )
 
-    return
+    # Returned rather than only logged so that a fan-out over per-contig units can
+    # report one accounting for the file instead of one per unit, and so a caller
+    # can check the units add up to the pass they replaced.
+    return {
+        "kept": kept,
+        "total": total,
+        "num_contigs": len(window_bases),
+        "num_junctions": len(junction_support),
+        "overhanging": overhanging,
+        "max_overhang": max_overhang,
+    }
 
 
 def _read_junctions(read):

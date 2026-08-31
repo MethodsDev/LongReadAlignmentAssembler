@@ -1007,11 +1007,17 @@ def test_concatenating_the_parts_out_of_order_is_what_verify_part_order_catches(
     assert _positions(in_order) == sorted(_positions(in_order))
     assert _positions(reversed_order) != sorted(_positions(reversed_order))
 
-    # the guard fires on the reversed order and stays quiet on the right one
+    # the guard fires on the reversed order and stays quiet on the right one.
+    # Two positional arguments deliberately: this is the SPLIT's call shape, in
+    # which the key naming the part also names the series in the refusal.  The
+    # same function is called with a separate label by the per-contig depth
+    # normalization (normalize_bam_by_strand.run_normalizations), so leaving the
+    # default untested would let a signature change break this caller silently.
     sbs.verify_part_order(tasks, "+")
     with pytest.raises(RuntimeError) as raised:
         sbs.verify_part_order(list(reversed(tasks)), "+")
     assert "not in header order" in str(raised.value)
+    assert "the + parts are not in header order" in str(raised.value)
 
     # and the reason the guard cannot be left to samtools
     indexed = subprocess.run(
@@ -1046,6 +1052,7 @@ def test_a_part_holding_the_wrong_reference_is_refused(tmp_path):
         sbs.verify_part_order([task], "+")
 
     assert "rather than 2" in str(raised.value)
+    assert "the + part for scope" in str(raised.value)
 
 
 def test_an_input_declaring_a_non_coordinate_sort_order_is_refused(tmp_path):
