@@ -172,6 +172,26 @@ stands for, so a thinned BAM is a weighted sample rather than a subset -- which 
 why pass 1 can use it (ratios survive thinning) while pass 2 uses the full BAM
 (counts do not).
 
+The shared graph BAM is normalized TWICE — each cluster BAM is thinned, the results are merged,
+and the merged file is thinned again — so its `XW` weights are compounded and, because both passes
+hash the same read names with the same default seed, correlated. MEASURED on `chr19.2M` with 31
+clusters: summed `XW` recovers the original read count to 0.08 % after one pass and reaches 4.53x
+it after the second.
+
+That has no arithmetic consequence for quantification, and the reason is worth stating because it
+is enforced by absence rather than by a check: `get_normalization_weight` is read at exactly one
+site in the codebase (`Splice_graph.py:608`) and never in `pylib/Quantify.py`. The sg BAM
+contributes the graph's node and edge set and nothing else. It does not supply anyone's
+multipaths — the cluster-merged GTF's isoforms, the priors reads (`LRAA:6288`) and the full BAM's
+reads (`LRAA:6502`) are each resolved independently against that shared structure from their own
+alignments. Theta comes from `--bam_for_priors`, whose weights are single-pass and accurate to
+0.08 %; pass-2 apportionment reads the `XW`-free full BAM and breaks ties on 3'-end agreement.
+
+What the compounding can still affect is which features the shared graph contains, since three
+support thresholds are absolute read counts rather than fractions. That exposure, the immune
+fractional criteria, and the measurement that would settle it are in
+`docs/coverage_normalization.md`.
+
 `--bam_for_priors` exists because pass 1 previously read whichever file supplied the
 graph. Under the cluster-guided shape that is the POOLED BAM, so each cluster's
 ambiguous reads were apportioned using population-average abundances. The visible

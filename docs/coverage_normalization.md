@@ -128,6 +128,46 @@ while normalization is left at its default. Replacing the weight instead dropped
 factor outright: on the bundled corpus, chaining a loose pass into a tight one drove a record's
 weight from 10.0 down to 3.87 and collapsed the weighted total to 615 against 4,970 input records.
 
+**Composition assumes independent draws, and the two passes are not independent.** The
+`1/(p1*p2)` arithmetic above is the correct inverse-probability weight when the second pass
+draws afresh. It does not: the per-read variate is
+`blake2b("{seed}:{read_name}")` (`util/normalize_bam_by_strand.py:697`), deterministic in read
+name and seed, and `chunk_random_seed = 42` is the default with no seed input declared in
+`Normalize_bam.wdl` — so both passes hash the same names with the same constant and a read's
+draw is IDENTICAL in both. Selections are therefore positively correlated, while the weight
+update is the arithmetic for independent selection.
+
+The effect is largely self-limiting when one library is normalized twice: where pass 1 brought a
+locus to `normalize_max_cov_level`, pass 2 measures the same unweighted depth (`bases[window] +=
+covered_rend - covered_lend`, never `XW`-weighted), finds it at target, sets `p2 = 1`, and no
+weight changes. Largely, not wholly — pass 1 can leave a locus ABOVE target, through the
+scarce-junction exemption described at :95-101, where peak retained depth across fifteen
+high-expression loci ran to 1.78x the target, and through ordinary sampling variation. The target
+is a target and not a bound, so `p2 < 1` follows without any pooling.
+
+Pooling is what makes a second thinning both likely and material. The cluster-guided path
+normalizes per cluster, merges, then normalizes the merged file, so pass 2 sees the summed depth
+of every cluster — a locus at target in each of 31 clusters arrives at the merge far above it, and
+is thinned again against the same per-read draw.
+
+MEASURED on `chr19.2M`, 31 clusters, quant-only cluster-guided: summing `XW` after ONE pass
+recovers the original count to 0.08 % (374,027.5 weighted against 373,717 primary-mapped reads),
+validating the estimator and the measurement method. Summing after the second pass gives
+1,691,420.4 over 95,513 records — **4.53x the original count**, and 4.52x the pass-1 total, so the
+excess is attributable to the second pass. The distribution is severely skewed: median 1.000,
+p75 1.853, p95 193.5, max 891.5. Thinning concentrates in a minority of deep loci, so a
+low-coordinate sample of the same file shows a mean of 1.361 and reveals nothing.
+
+The factor is that run's, not a constant; it scales with how much deeper the merge is than the
+per-cluster target. What the measurement does NOT establish is any consequence: summed `XW` reaches
+only splice-graph construction, and no arithmetic path carries it into quantification — see
+"`--bam_for_sg`'s weights reach graph STRUCTURE only" below for why, and for what that does still
+leave exposed. A fix would need a pass-specific salt threaded through `_read_variate` and
+`sift_bam` — which take `(read_name, random_seed)` only — plus a normalization method/cache
+identity bump so checkpointed BAMs from the correlated sampler are not reused. With a genuinely
+independent second draw the existing `prior_weight / probability` composition is the correct
+conditional Horvitz-Thompson estimator; the arithmetic in the file is right, only the draw is not.
+
 **The three BAMs have roles, and each is checked against its own.** Weighting is not a mode with a
 setting; it is a property of the data, and what makes that safe is that each input's role fixes
 whether a weight can be there (`LRAA:145-222,2393-2428`):
@@ -150,6 +190,57 @@ An unweighted priors BAM is the least visible of the three: theta would be estim
 with every read weighing 1, giving a different prior for pass-2 apportionment with no
 crash and no anomaly in the output. Hence the startup refusal, which names the flag and
 its role (`LRAA:2387-2395`).
+
+**`--bam_for_sg`'s weights reach graph STRUCTURE only, never quantification.** This is the
+invariant that bounds everything above, and it is enforced by absence rather than by a check:
+`get_normalization_weight` is read at exactly ONE site in the codebase, `Splice_graph.py:608`,
+and does not appear in `pylib/Quantify.py` at all. From there it accumulates into six counters,
+all structural:
+
+| site | counter | decides |
+|---|---|---|
+| `Splice_graph.py:630` | `TSS_position_counter` | which TSS sites exist |
+| `:651` | `polyA_position_counter` | which PolyA sites exist |
+| `:690` | `intron_counter` | which introns exist |
+| `:694-695` | `intron_splice_site_support` | splice-site support |
+| `:705` | `_contig_base_cov` | per-base exon coverage |
+
+So a compounded weight can change which features the graph contains; it can never change an
+abundance. Quantification takes theta from `--bam_for_priors` and apportions the full `--bam`,
+with ambiguity resolved by 3'-end agreement (`Quantify.py:839-859`) rather than by any
+normalization weight.
+
+**Three consumers resolve independently against the one graph.** The sg BAM supplies the node and
+edge set; it does not supply anyone's multipaths. The cluster-merged GTF's isoforms, the priors
+reads (`LRAA:6288`, `_first_pass_assignment_bam` -> `bam_file_for_pass1`) and the full BAM's reads
+(`LRAA:6502`, `StreamingQuant.stream_assign` -> `bam_file_for_quant`) are each mapped onto that
+shared structure from their own alignments. Sharing it is the point: every cluster is scored
+against an identical isoform set, and theta estimation and read assignment cannot disagree about
+structure because they read the same one.
+
+**What that leaves exposed, and it is not arithmetic.** The graph defines the candidate isoform set
+EM apportions reads across, and three thresholds on those weighted counters are ABSOLUTE counts
+rather than fractions:
+
+| threshold | value |
+|---|---|
+| `Splice_graph._min_intron_support` (`:51`, tested `:745`) | 2 |
+| `min_alignments_define_TSS_site` | 5 |
+| `min_alignments_define_polyA_site` | 5 |
+
+They are written in units of READS while the counters hold estimated original reads, so on a
+doubly-normalized BAM they are compared against inflated values. The fractional criteria are
+immune to a uniform factor, since it cancels from a ratio: `frac_intron_support =
+min_support / max_support` (`:754`), `min_TSS_iso_fraction`, `min_PolyA_iso_fraction`,
+`min_frac_alignments_define_polyA_site`. Tests at the 0/1 boundary are also immune, because the
+minimum weight is 1 and inflation cannot turn zero coverage into nonzero.
+
+UNMEASURED: whether any real feature is admitted that raw support would have rejected. The
+deciding count needs no new code — introns whose weighted support clears 2 while raw support is 1,
+and TSS/PolyA sites clearing 5 on fewer than five reads. Cancellation in the fractional criteria
+also assumes the factor is COMMON across a locus, which the per-cluster `p` makes only
+approximately true where a locus draws coverage from clusters of differing depth. Neither is
+established here; both are stated so a reader does not infer more safety than was measured.
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
