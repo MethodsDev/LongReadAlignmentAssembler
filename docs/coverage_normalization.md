@@ -268,12 +268,31 @@ min_support / max_support` (`:754`), `min_TSS_iso_fraction`, `min_PolyA_iso_frac
 `min_frac_alignments_define_polyA_site`. Tests at the 0/1 boundary are also immune, because the
 minimum weight is 1 and inflation cannot turn zero coverage into nonzero.
 
-UNMEASURED: whether any real feature is admitted that raw support would have rejected. The
-deciding count needs no new code — introns whose weighted support clears 2 while raw support is 1,
-and TSS/PolyA sites clearing 5 on fewer than five reads. Cancellation in the fractional criteria
+MEASURED for the intron threshold, and NOT OBSERVED in the BAM measured: **0 of 7,096** distinct
+introns in a doubly-normalized cluster-guided sg BAM (chr19 fixture, 95,513 records) clear
+`_min_intron_support` on weighted support while failing it on raw support. 1,869 pass on raw
+support, 5,227 fail both, none was admitted by inflation.
+
+The scarce-junction exemption above (:90-101) is why, and in this BAM it held exactly: every one
+of those 5,227 singleton introns has weighted support of **precisely 1.000** -- min, median and
+max alike -- because the normalizer retains reads carrying weakly-supported junctions instead of
+thinning them. Spliced reads as a population are thinned hard in the same file (median 1.000,
+p95 259.8, max 891.5), so this is not spliced reads escaping normalization; it is the exemption
+holding weight at 1.0 where an absolute threshold is decided.
+
+That is one library, and it does NOT establish immunity in general. The exemption is keyed on a
+junction's support at the time thinning runs, so a junction abundant enough to be thinned in an
+earlier pass and left singleton in a later one would carry surviving reads with `XW > 1` and could
+clear 2 on one record. No such case appeared here; whether the exemption forecloses it or this
+library simply lacks it is not established, so the conclusion is conditional on the corpus rather
+than structural.
+
+STILL UNMEASURED: the TSS and PolyA thresholds. Those counters aggregate read ENDS rather than
+junctions, so the scarce-junction exemption says nothing about them, and a site whose reads sit at
+a thinned depth could clear 5 on fewer than five records. Cancellation in the fractional criteria
 also assumes the factor is COMMON across a locus, which the per-cluster `p` makes only
 approximately true where a locus draws coverage from clusters of differing depth. Neither is
-established here; both are stated so a reader does not infer more safety than was measured.
+established here.
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
