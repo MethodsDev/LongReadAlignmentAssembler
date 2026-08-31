@@ -506,7 +506,21 @@ workflow LRAA_wf {
                     # removes.
                     chunk_plan = internal_chunk_plan,
                     genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
-                    annot_gtf = splitByChr.chromosomeGTFs[contig_index],
+                    # Only when an annotation was actually supplied. splitByChr
+                    # emits a per-contig gtf for EVERY contig regardless: with no
+                    # annotation, partition_data_by_chromosome still opens one file
+                    # per chromosome and writes "# no gtf records" into it, so this
+                    # used to hand every de novo shard a 17-byte file as a real
+                    # --gtf. That argument disqualified all three oversimplify arms
+                    # at once and chrM was assembled -- 75 multi-exon models on
+                    # 16,569 unspliced bases in a production run. LRAA now treats an
+                    # empty transcript set as no annotation, so this is the second
+                    # half of that fix: stop sending an argument that means nothing.
+                    # The else branch is the workflow's own undefined File?, which is
+                    # how an optional is left unset without a None literal.
+                    annot_gtf = if defined(annot_gtf)
+                                then splitByChr.chromosomeGTFs[contig_index]
+                                else annot_gtf,
                     oversimplify = oversimplify,
                     contig = contig_name,
                     num_total_reads = scatter_num_total_reads,
