@@ -205,10 +205,12 @@ all structural:
 | `:694-695` | `intron_splice_site_support` | splice-site support |
 | `:705` | `_contig_base_cov` | per-base exon coverage |
 
-So a compounded weight can change which features the graph contains; it can never change an
-abundance. Quantification takes theta from `--bam_for_priors` and apportions the full `--bam`,
-with ambiguity resolved by 3'-end agreement (`Quantify.py:839-859`) rather than by any
-normalization weight.
+So a compounded weight can change which features the graph contains. What it cannot do is enter
+theta or the assignment arithmetic directly: quantification takes theta from `--bam_for_priors`
+and apportions the full `--bam`, with ambiguity resolved by 3'-end agreement
+(`Quantify.py:839-859`) rather than by any normalization weight. Any effect on an abundance is
+therefore MEDIATED — through the candidate isoform set the graph defines, as the exposure below
+describes — and never a misused weight in a sum.
 
 **Three consumers resolve independently against the one graph.** The sg BAM supplies the node and
 edge set; it does not supply anyone's multipaths. The cluster-merged GTF's isoforms, the priors
