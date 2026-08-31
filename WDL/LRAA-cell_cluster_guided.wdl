@@ -302,6 +302,11 @@ workflow LRAA_cell_cluster_guided {
                 LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
                 referenceGenome = referenceGenome,
                 HiFi = HiFi,
+                # Same list the per-cluster runs were given, so the contigs the
+                # merge carries forward are exactly the ones those runs collapsed.
+                # select_first because the workflow input is String? (:43) while the
+                # task takes String; "" is the task's own "no contigs" value.
+                oversimplify = select_first([oversimplify, ""]),
                 docker = docker,
                 memoryGB = memoryGBmergeGTFs ,
         }
@@ -583,6 +588,14 @@ task lraa_merge_gtf_task {
         Array[File] LRAA_cell_cluster_gtfs
         File referenceGenome
         Boolean HiFi = false
+        # An oversimplified contig was never assembled, so there is nothing across
+        # the per-cluster gtfs to reconcile. Without this, the merge rebuilds a
+        # splice graph over its aggregate models and reconstructs them, which moved
+        # a measured chrM from 1-16569 to 1-16570 -- one base past the contig end --
+        # and replaced the OVSIMP ids with comp-N:iso-N. The merge copies these
+        # contigs' records verbatim from the inputs instead, and refuses if the
+        # inputs disagree about them.
+        String oversimplify = ""
         String docker
         Int memoryGB
     }
@@ -599,6 +612,7 @@ task lraa_merge_gtf_task {
       
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
                            ~{if HiFi then "--HiFi" else ""} \
+                           ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
       ) || {

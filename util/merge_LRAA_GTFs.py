@@ -33,7 +33,7 @@ import LRAA_Globals  # type: ignore
 import logging
 import traceback
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import Util_funcs  # type: ignore
 
 FORMAT = (
@@ -112,6 +112,30 @@ def main():
         action="store_true",
         default=False,
         help="exclude single-exon isoforms from the merge",
+    )
+
+    # An oversimplified contig is not a merge target. Its models were never
+    # assembled -- LRAA collapsed the contig deliberately, into one aggregate gene
+    # spanning the whole contig on each strand so the two strands count separately,
+    # or into the reference models as-is when an annotation was supplied -- so there
+    # is nothing across the inputs to reconcile. Running the merge over them anyway
+    # round-trips each model through splice-graph construction and
+    # reconstruct_isoforms(), which re-derives it: MEASURED on a chrM whose input
+    # models span 1-16569, the output spans 1-16570 -- one base past the contig end,
+    # an invalid GTF coordinate -- and the OVSIMP identity is replaced by
+    # comp-N:iso-N. Both are consequences of reconstructing what only needed copying.
+    #
+    # No separate source file is needed: every input to this merge already carries
+    # the contig's records, and for an oversimplified contig they are identical
+    # across inputs. So one input supplies them and the rest are a free consistency
+    # check on that assumption.
+    parser.add_argument(
+        "--oversimplify",
+        type=str,
+        default=None,
+        help="contigs whose annotations are carried forward VERBATIM from the "
+        "inputs instead of being merged, named as the genome fasta spells them, "
+        "comma- or whitespace-separated (e.g. 'chrM,M')",
     )
 
     parser.add_argument(
@@ -246,6 +270,20 @@ def main():
     output_gtf = args.output_gtf
     exclude_SE = args.exclude_SE_transcripts
 
+    # Same tokenization as LRAA's own --oversimplify (LRAA:1892-1894), so a value
+    # that names a contig there names it here.
+    oversimplify_contigs = set()
+    if args.oversimplify:
+        oversimplify_contigs = {
+            t for t in re.split(r"[\s,]+", args.oversimplify.strip()) if t
+        }
+
+    if oversimplify_contigs:
+        logger.info(
+            "-oversimplify contig(s) {}: records carried forward VERBATIM from the "
+            "inputs, not merged".format(",".join(sorted(oversimplify_contigs)))
+        )
+
     if len(gtf_list) < 2 and not LRAA_Globals.DEBUG:
         exit("Error, need at least two gtf files to merge")
 
@@ -279,6 +317,11 @@ def main():
             )
         )
         for contig, transcript_obj_list in contig_to_input_transcripts.items():
+            # Dropped BEFORE the merge sees them rather than filtered out of its
+            # output: these are the per-input namespaced duplicates, and the
+            # authoritative records are copied from --carry_forward_gtf below.
+            if contig in oversimplify_contigs:
+                continue
             for transcript in transcript_obj_list:
                 if exclude_SE and not transcript.has_introns():
                     logger.debug("-excluding SE isoform: {}".format(transcript))
@@ -415,6 +458,143 @@ def main():
                     )
             except Exception:
                 pass
+
+    # Copied as RAW LINES, not parsed into Transcript objects and re-emitted. That
+    # round trip is what corrupts these records -- it is how a model spanning
+    # 1-16569 comes back spanning 1-16570 and loses its OVSIMP id -- and a byte copy
+    # also preserves attributes this script has no model for, which is what "carry
+    # the annotation forward" has to mean to be worth anything.
+    if oversimplify_contigs:
+
+        def _contig_records(path, contig):
+            """The contig's non-comment gtf lines, honouring --contig if it was given."""
+            out = []
+            with open(path, "rt") as fh:
+                for line in fh:
+                    if line.startswith("#"):
+                        continue
+                    cols = line.rstrip("\n").split("\t")
+                    if len(cols) < 7 or cols[0] != contig:
+                        continue
+                    if chr_restrict is not None and cols[0] != chr_restrict:
+                        continue
+                    if strand_restrict is not None and cols[6] != strand_restrict:
+                        continue
+                    out.append(line if line.endswith("\n") else line + "\n")
+            return out
+
+        for contig in sorted(oversimplify_contigs):
+            # EVERY input is recorded, including the ones carrying nothing. An input
+            # missing the contig entirely is the most important disagreement to
+            # catch -- it is a cluster whose annotation would vanish -- and skipping
+            # empties would let exactly that pass as agreement.
+            per_input = []
+            for gtf_file in gtf_list:
+                try:
+                    per_input.append((gtf_file, _contig_records(gtf_file, contig)))
+                except OSError as _e:
+                    exit(
+                        "Error, could not read {} while carrying forward {}: {}".format(
+                            gtf_file, contig, _e
+                        )
+                    )
+
+            if all(not recs for _f, recs in per_input):
+                # Not fatal: no input emitted anything there, which is consistent.
+                # Loud because the same silence would cover a misspelled contig, and
+                # the visible result of either is a contig simply missing from the
+                # merged annotation.
+                logger.warning(
+                    "-NO records found for oversimplify contig {} in any of the {} "
+                    "input gtf(s); it will be ABSENT from the merged gtf. Check the "
+                    "contig spelling against the genome fasta".format(
+                        contig, len(gtf_list)
+                    )
+                )
+                continue
+
+            # Compared as MULTISETS: identical records in a different order are
+            # still identical annotations, and line order within a contig is not a
+            # property any consumer of this file relies on.
+            source_file, source_recs = per_input[0]
+            source_key = Counter(source_recs)
+            disagreeing = [
+                (f, recs) for f, recs in per_input[1:] if Counter(recs) != source_key
+            ]
+
+            # FATAL. Copying from one input is sound only because they agree; once
+            # they do not, emitting one of them anyway silently discards what the
+            # others said, which is the same class of silent annotation loss this
+            # whole bypass exists to prevent. There is no defensible way to pick.
+            if disagreeing:
+                detail = "; ".join(
+                    "{} has {} record(s)".format(os.path.basename(f), len(recs))
+                    for f, recs in [(source_file, source_recs)] + disagreeing
+                )
+                exit(
+                    "Error, oversimplify contig {} is NOT identical across the merge "
+                    "inputs: {}. An oversimplified contig is collapsed the same way in "
+                    "every run, so its records must match everywhere; this means the "
+                    "inputs were not all produced with --oversimplify naming {}. "
+                    "Refusing to carry one input forward, because that would discard "
+                    "the others silently.".format(contig, detail, contig)
+                )
+
+            for line in source_recs:
+                ofh.write(line)
+
+            # Provenance still has to be emitted. The tracking TSV below is a
+            # declared workflow output (LRAA_final_gtf_tracking), and a merged gtf
+            # whose tracking file omits a whole contig is the kind of gap nothing
+            # downstream reports: the models are present, their lineage simply is
+            # not. Built from the raw attribute column rather than a Transcript, so
+            # the gtf copy stays a byte copy.
+            #
+            # merged id == source id here, because carrying forward means the record
+            # was not renamed. That is the point of the option, and it makes these
+            # rows the identity mapping rather than a translation.
+            carried_tracking = 0
+            for line in source_recs:
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) < 9 or cols[2] != "transcript":
+                    continue
+                attrs = cols[8]
+                tid_m = re.search(r'transcript_id\s+"([^"]*)"', attrs)
+                gid_m = re.search(r'gene_id\s+"([^"]*)"', attrs)
+                if tid_m is None:
+                    continue
+                tid = tid_m.group(1)
+                gid = gid_m.group(1) if gid_m else ""
+                tss_m = re.search(r'TSS\s+"([^"]*)"', attrs)
+                polya_m = re.search(r'PolyA\s+"([^"]*)"', attrs)
+                tracking_records.append(
+                    {
+                        "merged_transcript_id": tid,
+                        "merged_gene_id": gid,
+                        "contig": contig,
+                        "strand": cols[6],
+                        "source_gtf": os.path.basename(source_file),
+                        "source_transcript_id": tid,
+                        "source_has_TSS": 1
+                        if (tss_m and tss_m.group(1).lower() == "true")
+                        else 0,
+                        "source_has_PolyA": 1
+                        if (polya_m and polya_m.group(1).lower() == "true")
+                        else 0,
+                    }
+                )
+                carried_tracking += 1
+
+            logger.info(
+                "-carried forward {} record(s) VERBATIM for {} from {} ({} tracking "
+                "row(s)); all {} input gtf(s) agreed".format(
+                    len(source_recs),
+                    contig,
+                    os.path.basename(source_file),
+                    carried_tracking,
+                    len(per_input),
+                )
+            )
 
     logger.info("Done.")
 
