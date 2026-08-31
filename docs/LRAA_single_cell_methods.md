@@ -187,7 +187,9 @@ by the `get_normalization_weight` name, which is why grepping that one symbol un
 while EM ignores it.
 
 The protection is which consumer READS which file. The sg BAM is opened only for graph
-construction, so its compounded weights never enter an arithmetic consumer. The weights that do
+construction. Its compounded weights ARE summed there — `Splice_graph.py:608` is an arithmetic
+consumer — but by no EM or quantification consumer, so the effect stays topology-mediated. The
+weights that do
 reach EM come from the other two inputs, and both are sound: `--bam` is refused outright if it
 carries `XW`, so its reads weigh exactly 1 during pass-2 apportionment (ties broken on 3'-end
 agreement); `--bam_for_priors` carries SINGLE-pass weights, measured accurate to 0.08 %, which is

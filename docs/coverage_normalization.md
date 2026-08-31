@@ -215,8 +215,10 @@ weight is structurally confined. It is that **the sg BAM is read only for graph 
 The weights that reach EM come from the BAM being quantified and the BAM supplying theta:
 `--bam` is refused if it carries `XW` at all, so its reads weigh exactly 1 in EM; and
 `--bam_for_priors` carries SINGLE-pass weights, which the measurement above found accurate to
-0.08 %. Both are correct inputs to a weighted EM. The compounded 4.53x weights exist only in the
-file that no arithmetic consumer opens.
+0.08 %. Both are correct inputs to a weighted EM. The compounded 4.53x weights are summed by an
+arithmetic consumer — `Splice_graph.py:608` sums them into the graph counters — but by no
+QUANTIFICATION consumer, which is why the effect stays topology-mediated rather than landing in
+an abundance.
 
 From `Splice_graph.py:608` the weight accumulates into six counters, all structural:
 
