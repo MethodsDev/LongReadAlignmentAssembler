@@ -255,6 +255,12 @@ def _reference_merge_tracking(units, hash_remap, discovery, track_out):
     peak is measured against.
     """
 
+    # Derived exactly as the implementation derives it, from the same units.
+    # Accepting one as an argument would let the oracle and the implementation
+    # disagree about ids, and the byte comparison would then be testing the
+    # argument rather than the merge.
+    id_map = ChunkedRun.merged_id_plan(units) if discovery else {}
+
     track_header = None
     track_rows = []
     for unit in units:
@@ -272,11 +278,21 @@ def _reference_merge_tracking(units, hash_remap, discovery, track_out):
         for row in rows:
             row = list(row)
             if discovery:
-                row[col["gene_id"]] = ChunkedRun._namespace_id(
-                    unit["unit_id"], row[col["gene_id"]]
+                # Mirrors the real implementation's lookup, not the old
+                # unconditional prefix: the oracle has to apply the SAME id
+                # decision or the byte comparison stops testing the merge and
+                # starts testing whether both sides namespace alike.
+                row[col["gene_id"]] = ChunkedRun.mapped_id(
+                    id_map or {},
+                    unit["unit_id"],
+                    ChunkedRun.ID_KIND_GENE,
+                    row[col["gene_id"]],
                 )
-                row[col["transcript_id"]] = ChunkedRun._namespace_id(
-                    unit["unit_id"], row[col["transcript_id"]]
+                row[col["transcript_id"]] = ChunkedRun.mapped_id(
+                    id_map or {},
+                    unit["unit_id"],
+                    ChunkedRun.ID_KIND_TX,
+                    row[col["transcript_id"]],
                 )
             old = row[col["transcript_splice_hash_code"]]
             row[col["transcript_splice_hash_code"]] = hash_remap.get(

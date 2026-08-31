@@ -4652,6 +4652,149 @@ def _namespace_id(unit_id, value):
     return "{}{}{}".format(unit_id, NAMESPACE_SEP, value)
 
 
+
+# gene_id and transcript_id are INDEPENDENT id spaces. An annotation is free to
+# name a gene and a transcript identically, and the rows downstream carry the two
+# in separate columns, so a plan keyed on the bare id would conflate them and hand
+# a transcript the disambiguation its gene needed.
+ID_KIND_GENE = "gene_id"
+ID_KIND_TX = "transcript_id"
+
+
+# Derived, never passed. merge_discovery_gtf's signature is guarded against gaining
+# parameters precisely because a caller could get one wrong, and an id plan is the
+# clearest case: hand it an empty map and every chunk's comp-1 fuses into one model
+# again, silently. So each consumer derives the same plan from the same units, and
+# the result is cached so the per-chunk gtfs are read once rather than three times.
+_MERGED_ID_PLAN_CACHE = {}
+
+
+def merged_id_plan(units):
+    """The id plan for these units, derived and memoised.
+
+    Keyed on what the plan is a function of -- each unit's id, its output prefix and
+    its offset, plus whether coordinates are being translated -- so two consumers of
+    one merge share the answer while a different merge computes its own.
+    """
+
+    translate = not coords_already_whole_contig(units)
+    key = (
+        translate,
+        tuple((u["unit_id"], u["quant_prefix"], u["offset"]) for u in units),
+    )
+    if key not in _MERGED_ID_PLAN_CACHE:
+        _MERGED_ID_PLAN_CACHE[key] = plan_merged_ids(units, translate)
+    return _MERGED_ID_PLAN_CACHE[key]
+
+
+def plan_merged_ids(units, translate):
+    """Which per-chunk model ids need disambiguating in the merged frame.
+
+    Namespacing every id was the smallest change that could not collide, but it
+    prefixes ids that were never at risk. MEASURED on two independent 5-unit chr22
+    lineages: of 1,551 and 1,918 distinct transcript ids, 122 and 112 appear in more
+    than one unit -- so 92% and 94% carried a prefix for nothing. The cost is not
+    cosmetic: a chunked run whose input is another chunked run's gtf, which is what
+    a per-cluster run is, prefixes ids that already carry a prefix, and the
+    annotation a caller supplied stops being recognisable in the output.
+
+    So a prefix is applied only where two units genuinely name different models the
+    same. Everything else -- reference accessions, aggregate models on an
+    oversimplified contig, and every de novo id no other chunk happened to mint --
+    passes through as itself.
+
+    Returns {(unit_id, kind, source_id): final_id}, covering every id present, so a
+    caller looks up rather than deciding.
+    """
+
+    # kind -> source_id -> unit_id -> structure
+    seen = collections.defaultdict(lambda: collections.defaultdict(dict))
+
+    for unit in units:
+        offset = unit["offset"] if translate else 0
+        path = unit["quant_prefix"] + ".gtf"
+        if not os.path.exists(path):
+            # FATAL, not skipped. A unit whose gtf is missing contributes no ids to
+            # the plan, so every id it later names falls through unmapped and
+            # unprefixed -- which is the model fusion this plan exists to prevent,
+            # arriving silently through a missing file rather than a wrong decision.
+            # merge_discovery_gtf reads this same path unconditionally, so a run that
+            # cannot plan could not have merged either.
+            raise PipelineError(
+                "unit {} has no model gtf at {}, so its model ids cannot be "
+                "planned; refusing rather than merging ids that were never "
+                "checked for collisions".format(unit["unit_id"], path)
+            )
+        # Structure is the exon set in the MERGED frame, which is what decides
+        # whether two records naming one id are one model or two.
+        exons = collections.defaultdict(lambda: collections.defaultdict(list))
+        for line in open(path, "rt"):
+            if line.startswith("#") or not line.strip():
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9:
+                continue
+            span = (int(fields[3]) + offset, int(fields[4]) + offset)
+            for kind in (ID_KIND_GENE, ID_KIND_TX):
+                m = re.search(r'{}\s+"([^"]*)"'.format(kind), fields[8])
+                if m is None:
+                    continue
+                if fields[2] == "exon":
+                    exons[kind][m.group(1)].append(span)
+                else:
+                    exons[kind].setdefault(m.group(1), [])
+        for kind, by_id in exons.items():
+            for source_id, spans in by_id.items():
+                seen[kind][source_id][unit["unit_id"]] = frozenset(spans)
+
+    id_map = {}
+    for kind, by_id in seen.items():
+        for source_id, per_unit in by_id.items():
+            if len(per_unit) == 1:
+                for unit_id in per_unit:
+                    id_map[(unit_id, kind, source_id)] = source_id
+                continue
+
+            # One id, several units. Two readings, and they need opposite handling:
+            # DIFFERENT structures mean two models that happen to share a name, which
+            # is the documented chr21 incident and wants disambiguating; IDENTICAL
+            # structures mean ONE model reported twice, where prefixing invents a
+            # second model and dropping one loses whatever its quant rows carried.
+            #
+            # Identical is only asserted on POSITIVE evidence. A record with no exon
+            # lines yields an empty structure, and several empty structures are not
+            # evidence of sameness -- they are absence of evidence, and treating them
+            # as identical would refuse a merge that the unconditional prefix used to
+            # complete. So an id lacking structure anywhere falls back to the prefix,
+            # which is exactly the old behaviour for that id.
+            structures = set(per_unit.values())
+            have_structure = all(bool(s) for s in per_unit.values())
+            if have_structure and len(structures) == 1:
+                raise PipelineError(
+                    "{} {} appears in {} units with IDENTICAL exon structure ({}): "
+                    "that is one model reported more than once, not a name collision, "
+                    "and merging it needs its quant rows combined rather than its id "
+                    "changed. Refusing rather than inventing a second model or "
+                    "discarding one.".format(
+                        kind, source_id, len(per_unit), ", ".join(sorted(per_unit))
+                    )
+                )
+
+            for unit_id in per_unit:
+                id_map[(unit_id, kind, source_id)] = _namespace_id(unit_id, source_id)
+
+    return id_map
+
+
+def mapped_id(id_map, unit_id, kind, source_id):
+    """The merged-frame id, or the source id when the plan does not name it.
+
+    A miss is not an error: quant rows can name a model whose gtf record this unit
+    did not write, and an unplanned id is by definition one nothing else claimed.
+    """
+
+    return id_map.get((unit_id, kind, source_id), source_id)
+
 VERSION_COMMENT_PREFIX = "# LRAA version "
 
 
@@ -4754,6 +4897,9 @@ def merge_discovery_gtf(merged_dir, units):
     lines_written = 0
     transcripts = 0
     translate = not coords_already_whole_contig(units)
+    # Derived here from the same units, so no caller can hand this merge an id
+    # decision that disagrees with the one quant.expr and quant.tracking used.
+    id_map = merged_id_plan(units)
     # Version and CMD first, then this merge's own line: a consumer reading line 1
     # gets the same answer here as from an unchunked output.
     provenance = merged_provenance_header(units, ".gtf")
@@ -4790,9 +4936,14 @@ def merge_discovery_gtf(merged_dir, units):
                     if translate:
                         fields[3] = str(int(fields[3]) + offset)
                         fields[4] = str(int(fields[4]) + offset)
+                    # m.group(1) is the attribute name, which IS the kind, so the
+                    # gene and transcript spaces stay separate through the lookup.
                     fields[8] = _GTF_ID_ATTR.sub(
                         lambda m: '{} "{}"'.format(
-                            m.group(1), _namespace_id(unit["unit_id"], m.group(2))
+                            m.group(1),
+                            mapped_id(
+                                id_map or {}, unit["unit_id"], m.group(1), m.group(2)
+                            ),
                         ),
                         fields[8],
                     )
@@ -4859,7 +5010,6 @@ def _read_sorted_run(path, key_columns, live):
             yield (fields[read_i], fields[tx_i], fields[gene_i]), line
             live[0] -= 1
 
-
 def _merge_tracking_streaming(units, hash_remap, discovery, track_out):
     """Stage 6's quant.tracking merge, as an external sort rather than a list.
 
@@ -4892,6 +5042,10 @@ def _merge_tracking_streaming(units, hash_remap, discovery, track_out):
 
     Returns (track_header, n_rows, peak_resident_rows).
     """
+
+    # Same derivation as the gtf and expr merges, from the same units: the three
+    # artifacts have to name the same models, and deriving beats being told.
+    id_map = merged_id_plan(units) if discovery else {}
 
     track_header = None
     tcol = None
@@ -4943,8 +5097,12 @@ def _merge_tracking_streaming(units, hash_remap, discovery, track_out):
             unit_id = unit["unit_id"]
             for row in rows:
                 if discovery:
-                    row[gene_i] = _namespace_id(unit_id, row[gene_i])
-                    row[tx_i] = _namespace_id(unit_id, row[tx_i])
+                    row[gene_i] = mapped_id(
+                        id_map or {}, unit_id, ID_KIND_GENE, row[gene_i]
+                    )
+                    row[tx_i] = mapped_id(
+                        id_map or {}, unit_id, ID_KIND_TX, row[tx_i]
+                    )
                 old = row[hash_i]
                 row[hash_i] = hash_remap.get((unit_id, old), old)
                 buf.append(
@@ -5442,6 +5600,11 @@ def merge_and_translate(outdir, units, discovery=False):
     expr_rows = []
     hash_remap = {}  # (unit_id, old_hash) -> new_hash
     translate = not coords_already_whole_contig(units)
+    # Computed ONCE, here, because the consumers do not run in an order that would
+    # let any of them own it: the quant.expr rewrite is in the loop below, the
+    # tracking merge runs after it, and the gtf merge runs after that. All three
+    # must agree on every id, so the decision is made before any of them.
+    id_map = merged_id_plan(units) if discovery else {}
     for unit in units:
         offset = unit["offset"]
         _, header, rows = read_tsv(unit["quant_prefix"] + ".quant.expr")
@@ -5463,14 +5626,14 @@ def merge_and_translate(outdir, units, discovery=False):
                 )
             row = list(row)
             if discovery:
-                # The model ids are this chunk's, and every chunk names a
-                # comp-1. The merged GTF applies the identical prefix, so the
-                # table and the models keep naming the same things.
-                row[col["gene_id"]] = _namespace_id(
-                    unit["unit_id"], row[col["gene_id"]]
+                # One plan drives the gtf, this table and the tracking rows, so the
+                # three artifacts keep naming the same models -- which is the whole
+                # reason the prefix had to be unconditional before.
+                row[col["gene_id"]] = mapped_id(
+                    id_map, unit["unit_id"], ID_KIND_GENE, row[col["gene_id"]]
                 )
-                row[col["transcript_id"]] = _namespace_id(
-                    unit["unit_id"], row[col["transcript_id"]]
+                row[col["transcript_id"]] = mapped_id(
+                    id_map, unit["unit_id"], ID_KIND_TX, row[col["transcript_id"]]
                 )
             if translate:
                 row[col["exons"]] = _shift_coord_string(row[col["exons"]], offset)

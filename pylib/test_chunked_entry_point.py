@@ -1240,6 +1240,128 @@ def test_a_namespaced_model_id_survives_gffcompare_tracking(tmp_path):
     assert mappings[tx] == ("ENSG00000141933.8", "ENST00000359315.5")
 
 
+def _plan_unit(tmp_path, unit_id, records):
+    """A unit whose model gtf holds `records` as (tx_id, gene_id, lend, rend)."""
+
+    d = tmp_path / unit_id
+    d.mkdir(parents=True, exist_ok=True)
+    prefix = str(d / "q")
+    with open(prefix + ".gtf", "wt") as fh:
+        for tx, gene, lend, rend in records:
+            attrs = 'gene_id "{}"; transcript_id "{}";'.format(gene, tx)
+            for feat in ("transcript", "exon"):
+                fh.write(
+                    "chrT\tLRAA\t{}\t{}\t{}\t.\t+\t.\t{}\n".format(
+                        feat, lend, rend, attrs
+                    )
+                )
+    return {"unit_id": unit_id, "quant_prefix": prefix, "offset": 0}
+
+
+def test_an_id_only_one_unit_names_is_carried_through_unprefixed(tmp_path):
+    """The prefix is for collisions, and most ids are not in one.
+
+    Namespacing unconditionally cost more than tidiness. A chunked run whose input
+    is another chunked run's gtf -- which is exactly what a per-cluster run is --
+    prefixed ids that already carried a prefix, so a single-cell cluster-guided
+    output shipped `chrM_00_plus@chrM_00_plus@t:chrM:+:OVSIMP`, and a reference
+    accession a caller supplied stopped being recognisable as one. MEASURED on two
+    5-unit chr22 lineages: 92% and 94% of ids appeared in a single unit.
+    """
+
+    units = [
+        _plan_unit(tmp_path, "c0", [("ENST00000361899.2", "MT-ATP6", 100, 200)]),
+        _plan_unit(tmp_path, "c1", [("t:chrT:+:comp-9:iso-1", "g:chrT:+:comp-9", 900, 950)]),
+    ]
+
+    plan = ChunkedRun.merged_id_plan(units)
+
+    # each id names one model in one unit, so each is its own final id
+    assert plan[("c0", "transcript_id", "ENST00000361899.2")] == "ENST00000361899.2"
+    assert plan[("c0", "gene_id", "MT-ATP6")] == "MT-ATP6"
+    assert (
+        plan[("c1", "transcript_id", "t:chrT:+:comp-9:iso-1")]
+        == "t:chrT:+:comp-9:iso-1"
+    )
+    assert ChunkedRun.NAMESPACE_SEP not in "".join(plan.values())
+
+
+def test_two_units_naming_different_models_alike_are_still_prefixed(tmp_path):
+    """The case the prefix exists for, unchanged.
+
+    Every chunk restarts the component counter at 1, so two chunks of one contig
+    both mint comp-1 for unrelated models. Concatenating those unpatched produced 37
+    spurious chromosome-crossing models on chr21 and had to be diagnosed before any
+    conclusion could be drawn. Relaxing the prefix to collisions only must not
+    relax it here.
+    """
+
+    same = [("t:chrT:+:comp-1:iso-1", "g:chrT:+:comp-1", 100, 200)]
+    other = [("t:chrT:+:comp-1:iso-1", "g:chrT:+:comp-1", 8000, 8100)]
+    units = [
+        _plan_unit(tmp_path, "c0", same),
+        _plan_unit(tmp_path, "c1", other),
+    ]
+
+    plan = ChunkedRun.merged_id_plan(units)
+    sep = ChunkedRun.NAMESPACE_SEP
+
+    # different structures under one name: two models, so two names
+    assert (
+        plan[("c0", "transcript_id", "t:chrT:+:comp-1:iso-1")]
+        == "c0{}t:chrT:+:comp-1:iso-1".format(sep)
+    )
+    assert (
+        plan[("c1", "transcript_id", "t:chrT:+:comp-1:iso-1")]
+        == "c1{}t:chrT:+:comp-1:iso-1".format(sep)
+    )
+
+
+def test_one_model_reported_by_two_units_is_refused_not_renamed(tmp_path):
+    """Identical structure under one name is not a collision, and renaming lies.
+
+    Prefixing would publish two models where the inputs described one, and dropping
+    either would lose whatever its quant rows carried. Neither is a choice the plan
+    may make silently, so it refuses and names the units. MEASURED absent on both
+    lineages checked -- straddling cuts are fatal, so a model should not span units
+    -- which is why this is a guard rather than a merge path.
+    """
+
+    rec = [("t:chrT:+:comp-1:iso-1", "g:chrT:+:comp-1", 100, 200)]
+    units = [
+        _plan_unit(tmp_path, "c0", rec),
+        _plan_unit(tmp_path, "c1", rec),
+    ]
+
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.merged_id_plan(units)
+
+    assert "IDENTICAL exon structure" in str(err.value)
+    assert "c0" in str(err.value) and "c1" in str(err.value)
+
+
+def test_a_unit_without_a_model_gtf_is_refused_rather_than_skipped(tmp_path):
+    """A missing gtf must not become a silent absence of disambiguation.
+
+    Skipping the unit leaves every id it names unplanned, and an unplanned id passes
+    through unprefixed -- so a missing file would reintroduce the model fusion the
+    plan exists to prevent, arriving through I/O rather than through a decision.
+    """
+
+    good = _plan_unit(tmp_path, "c0", [("t1", "g1", 100, 200)])
+    missing = {
+        "unit_id": "c1",
+        "quant_prefix": str(tmp_path / "c1" / "absent"),
+        "offset": 0,
+    }
+
+    with pytest.raises(ChunkedRun.PipelineError) as err:
+        ChunkedRun.merged_id_plan([good, missing])
+
+    assert "no model gtf" in str(err.value)
+    assert "c1" in str(err.value)
+
+
 def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     make_chunks_run,
 ):

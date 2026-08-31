@@ -290,9 +290,11 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
     col = {name: i for i, name in enumerate(header)}
     by_id = {row[col["transcript_id"]]: row for row in rows}
 
-    sep = ChunkedRun.NAMESPACE_SEP
-    c0 = by_id["c0{}t.c0.multi".format(sep)]
-    c1 = by_id["c1{}t.c1.multi".format(sep)]
+    # No unit prefix: each of these ids names one model in one unit, so nothing
+    # collides and the merge carries the id through as it found it. The prefix
+    # appears only where two units name different models the same.
+    c0 = by_id["t.c0.multi"]
+    c1 = by_id["t.c1.multi"]
 
     # offset 0: unmoved
     assert c0[col["exons"]] == "chrT:(+)[[100, 200], [300, 400]]"
@@ -307,7 +309,7 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
     assert shifted_hash != MULTI_HASH
 
     # the monoexonic row has no introns to shift and keeps its id as its hash
-    mono = by_id["c1{}t.c1.mono".format(sep)]
+    mono = by_id["t.c1.mono"]
     assert mono[col["introns"]] == ""
     assert mono[col["splice_hash_code"]] == "t.c1.mono"
     assert mono[col["exons"]] == "chrT:(+)[[5600, 5700]]"
@@ -320,8 +322,8 @@ def test_mixed_offsets_translate_to_exactly_the_values_the_shift_produces(tmp_pa
         row[tcol["transcript_id"]]: row[tcol["transcript_splice_hash_code"]]
         for row in track[1:]
     }
-    assert hashes["c0{}t.c0.multi".format(sep)] == MULTI_HASH
-    assert hashes["c1{}t.c1.multi".format(sep)] == shifted_hash
+    assert hashes["t.c0.multi"] == MULTI_HASH
+    assert hashes["t.c1.multi"] == shifted_hash
 
     # gtf columns 4 and 5, both, every row
     with open(result["gtf"], "rt") as fh:
