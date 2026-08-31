@@ -1,3 +1,45 @@
+v0.29.0
+- FIXED: `merge_LRAA_GTFs.py` merged oversimplified contigs instead of carrying them
+  through, corrupting the models it should have left alone. An oversimplified contig
+  was never assembled -- LRAA collapses it deliberately, into one aggregate gene
+  spanning the whole contig on each strand so the strands count separately, or into
+  the reference models as-is when an annotation was supplied -- so there is nothing
+  across the per-cluster GTFs to reconcile. The merge had no notion of the mode
+  (`grep -c oversimplif` returned 0), so every contig went through
+  `build_splice_graph_for_contig`, `reconstruct_isoforms()` and
+  `recluster_transcripts_to_genes()`. Reconstructing what only needed copying changes
+  it: MEASURED on two copies of a chrM whose input models span 1-16569, the merged
+  output spans 1-16570 -- one base past the contig end, an invalid GTF coordinate --
+  and `t:chrM:+:OVSIMP` comes back as `t:chrM:+:comp-1:iso-1`, so the aggregate models
+  become indistinguishable from ordinary single-exon assemblies. Reproducible in under
+  two seconds from the models alone, with no cluster or workflow involved. Observed
+  end to end on a PBMC single-cell cluster-guided run over chr22+chrM (5,541,259 chrM
+  reads): the per-cluster GTFs held 1-16569 with OVSIMP intact and the merged output
+  did not.
+  `--oversimplify` now names contigs whose records are copied VERBATIM from the merge
+  inputs, as raw lines: the `Transcript` round trip IS the corruption, and a byte copy
+  also keeps attributes the script has no model for. No separate source file is
+  needed -- every input already carries the contig, and for an oversimplified contig
+  they are identical. That identity is enforced rather than assumed: all inputs are
+  compared, INCLUDING those carrying nothing, because an input missing the contig is a
+  cluster whose annotation would vanish and skipping empties would let exactly that
+  pass as agreement. Records compare as multisets, so ordering differences pass. Any
+  disagreement is FATAL and names the files and counts, because copying from one input
+  is sound only while they agree and emitting one anyway would silently discard the
+  others. A contig absent from every input warns loudly and is not fatal.
+  Carried records also get tracking rows: the tracking TSV is a declared workflow
+  output (`LRAA_final_gtf_tracking`), and a merged GTF whose tracking omits a whole
+  contig is a gap nothing downstream reports -- the models are present, their lineage
+  is not. Merged id equals source id, because carrying forward means not renaming.
+  `WDL/LRAA-cell_cluster_guided.wdl` threads the same list the per-cluster runs were
+  given into the merge task, quoted so a multi-contig value survives as one argv word.
+  Behaviour without the flag is unchanged.
+- NOTE: verified at this revision that `--oversimplify chrM` is respected across
+  bulk quant-only, bulk de novo, bulk ref-guided (HG002 chr22+chrM, 1,199,182 chrM
+  reads) and single-cell basic de novo (PBMC, 5,541,259 chrM reads) -- chrM collapses
+  to one single-exon model per strand, or to the annotation as-is, while the control
+  contig assembles normally. The defect above was confined to the cross-cluster merge.
+
 v0.28.1
 - FIXED: consuming a `--chunk_plan` was fatal whenever a cut merely came within
   `--margin` of an annotated locus, not only when it severed one. The margin is
