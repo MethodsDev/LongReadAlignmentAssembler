@@ -287,12 +287,50 @@ clear 2 on one record. No such case appeared here; whether the exemption foreclo
 library simply lacks it is not established, so the conclusion is conditional on the corpus rather
 than structural.
 
-STILL UNMEASURED: the TSS and PolyA thresholds. Those counters aggregate read ENDS rather than
-junctions, so the scarce-junction exemption says nothing about them, and a site whose reads sit at
-a thinned depth could clear 5 on fewer than five records. Cancellation in the fractional criteria
-also assumes the factor is COMMON across a locus, which the per-cluster `p` makes only
-approximately true where a locus draws coverage from clusters of differing depth. Neither is
-established here.
+MEASURED for TSS and PolyA, and unlike the intron threshold this one IS reached. Those counters
+aggregate read ENDS rather than junctions, so the scarce-junction exemption gives them nothing: a
+read at a deep locus is thinned like any other, and its surviving weight lands whole on one end
+position.
+
+Measured on the FINAL sites, not at the threshold gate. `aggregate_sites_within_window` is only the
+first filter -- `filter_non_peaky_positions` and site incorporation follow it, and later
+`min_TSS_iso_fraction` prunes again -- so counting at the gate says nothing about what survives.
+Two complete `build_splice_graph_for_contig` runs over the same doubly-normalized BAM (chr19
+fixture, 95,513 records), identical except that one honours `XW` and the other forces every weight
+to 1, compared by the `_TSS_objs` and `_PolyA_objs` they end with:
+
+| | raw | weighted | only weighted | new (>50 bp from any raw site) |
+|---|---|---|---|---|
+| TSS + | 197 | 202 | 12 | 12 |
+| TSS - | 185 | 189 | 4 | 4 |
+| PolyA + | 93 | 101 | 12 | 12 |
+| PolyA - | 71 | 70 | 0 | 0 |
+| total | 546 | 562 | 28 | **28** |
+
+So **28 of 562 final sites (5.0 %) exist only because weights are summed**, and none of the 28 is
+a shifted peak -- each is more than a window away from any site the unweighted build produced.
+
+Note the PolyA minus strand: 70 weighted against 71 raw. Weighting can also REMOVE a site, because
+the peakiness filter and the aggregator's greedy selection are competitions, and changing the
+counts changes who wins. The effect is not one-directional.
+
+At the aggregate gate the picture is starker and worth recording as the mechanism: of the sites
+clearing the threshold of 5 on weighted support but not on raw, the raw support at the peak is
+min 1, median 1, max 4, and 40 are held up by a SINGLE read -- the extreme being a PolyA position
+carrying one record with `XW` 277.4. Most of those are then dropped downstream, which is why the
+final figure is 28 rather than 62, but the threshold is plainly not doing what its name says on a
+doubly-normalized BAM: "5 alignments" is being satisfied by one.
+
+Not fixed here, because the fix changes feature calling rather than bookkeeping and it has a
+choice: compare these thresholds against RAW support while leaving the fractional criteria
+weighted, or extend a scarce-junction-style exemption to read ends so a lone survivor keeps weight
+1. The first is smaller and matches what the threshold's units already claim; the second preserves
+the estimator everywhere at the cost of retaining more reads. Either moves TSS and PolyA calls on
+every normalized run, so it wants deciding rather than defaulting.
+
+Cancellation in the fractional criteria separately assumes the factor is COMMON across a locus,
+which the per-cluster `p` makes only approximately true where a locus draws coverage from clusters
+of differing depth. That remains unmeasured.
 
 One record decides each: normalization tags **every** record it retains, including those kept
 whole at $p=1$ (`XW:f:1.0`), so a BAM it produced has the tag on its first aligned record and a
