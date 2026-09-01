@@ -63,7 +63,12 @@ task partition_by_chromosome_task {
     # At the default partition_workers = 1 this is samtools_threads + 2, one core more
     # than the historical 5, which is honest rather than new: the FASTA and GTF jobs
     # always ran alongside the bam pass and were never counted.
-    Int partition_cpu = partition_workers * (samtools_extra_threads + 1) + 2
+    # Clamped, because the reservation is DERIVED from it and the two must not
+    # disagree: the script floors its pool at 1 regardless, so a 0 or negative value
+    # here would reserve 2 cores for a run that still starts one samtools at -@ 4.
+    # WDL 1.0 has no max(), hence the conditional form.
+    Int effective_partition_workers = if partition_workers < 1 then 1 else partition_workers
+    Int partition_cpu = effective_partition_workers * (samtools_extra_threads + 1) + 2
 
     Float bam_size_gb = if defined(inputBAM) then size(inputBAM, "GB") else 0.0
     Float bam_for_sg_size_gb = if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0
@@ -84,7 +89,7 @@ task partition_by_chromosome_task {
     # from a real wide run before the allowance is tightened or a default is raised.
     Float mem_raw_partition = 0.5 * (bam_size_gb + bam_for_sg_size_gb + fasta_size_gb)
     Int computed_memoryGB = if mem_raw_partition > 24.0 then ceil(mem_raw_partition) else 24
-    Int concurrency_memoryGB = computed_memoryGB + (partition_workers - 1)
+    Int concurrency_memoryGB = computed_memoryGB + (effective_partition_workers - 1)
     Int effective_memoryGB = select_first([memoryGB, concurrency_memoryGB])
 
     command <<<
@@ -101,7 +106,7 @@ task partition_by_chromosome_task {
             ~{if defined(annot_gtf) then "--annot-gtf " + annot_gtf else ""} \
             --chromosomes ~{chromosomes_want_partitioned} \
             --samtools-threads ~{samtools_extra_threads} \
-            --num-workers ~{partition_workers} \
+            --num-workers ~{effective_partition_workers} \
             --bam-out-dir split_bams \
             --bam-for-sg-out-dir split_bams_for_sg \
             --fasta-out-dir split_fastas \

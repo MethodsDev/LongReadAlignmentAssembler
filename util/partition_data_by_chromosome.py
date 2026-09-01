@@ -437,10 +437,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the exact count of concurrent samtools processes -- not a per-kind figure that
     # doubles when bam_for_sg exists, and not a floor division that strands capacity
     # at odd budgets or runs 2 when the budget says 1.
-    #
-    # Submitted in the order planned, because callers pass main_chromosomes
-    # read-count descending so the longest contigs start first; reordering would leave
-    # a long contig for the tail and give back the makespan this buys.
     bam_work = []
     bam_work += _plan_bam_partition(
         input_bam, chromosomes, args.bam_out_dir, "BAM", args.samtools_threads
@@ -448,6 +444,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     bam_work += _plan_bam_partition(
         bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", args.samtools_threads
     )
+
+    # Longest first, ACROSS both kinds, by the mapped count already read from each
+    # index. Callers pass main_chromosomes read-count descending, which orders each
+    # kind correctly on its own -- but concatenating them puts every splice-graph
+    # contig behind every primary one, so the largest SG contig would start only after
+    # the whole primary bam finished and would then run alone at the tail. Sorting the
+    # flattened list is what actually makes the pool's last job a small one.
+    bam_work.sort(key=lambda unit: unit[5], reverse=True)
 
     workers = max(1, min(args.num_workers, len(bam_work))) if bam_work else 1
     threads_each = _samtools_threads(args.samtools_threads)
