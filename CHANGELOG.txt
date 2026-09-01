@@ -1,3 +1,44 @@
+v0.29.1
+- FIXED: an exon reaching the contig's LAST base was reported one base past it.
+  `_contig_base_cov` is sized `contig_len + 1` so position p lives at index p
+  (`Splice_graph.py:493`). The scan that turns coverage into exon segments visits
+  i = 1..contig_len and every close inside the loop uses i or i - 1, correctly; only the
+  tail case -- a segment still open when the scan runs out of array -- used the array's
+  LENGTH as a coordinate. MEASURED on a 5,000 bp contig: an input model spanning 1-5000
+  merged to 1-5001, two records outside the contig, while an interior model at 1000-2000
+  was unaffected. An invalid GTF coordinate, which tools that validate or extract
+  sequence are entitled to reject.
+  Latent for as long as it existed, because with
+  `fracture_splice_graph_at_input_transcript_bounds` ON -- the default -- an input
+  transcript's rend is a registered boundary and the segment closes there first.
+  `merge_LRAA_GTFs.py` turns that off for every merge, which is how the 1-16570 chrM span
+  in cluster-guided output arose. Carrying oversimplified contigs verbatim stopped those
+  models reaching this code in v0.29.0, but the defect stayed live for any
+  full-contig-spanning model on any other contig.
+- VERSION NOTE: this bump exists because FOUR image sets shipped under the `0.29.0`
+  label during development, and the earliest lacks the fixes the 0.29.0 entry describes:
+
+      0.29.0-2b7c9af   none of the fixes below
+      0.29.0-1be5801   + empty-gtf guard, collision-only ids, WDL placeholder guard
+      0.29.0-e6d1211   + documentation
+      0.29.0-8284bfb   + this contig-end fix
+
+  A version string does not pin a commit -- the image tag's SHA suffix does -- so anyone
+  holding a `0.29.0` image has to inspect it to know what is inside. `0.29.1` is the first
+  version that means the complete set. Prefer it over any 0.29.0 image; if you must use
+  one, check for `resolve_oversimplify_for_chunk` in `pylib/ChunkedRun.py`,
+  `not input_transcripts` in `LRAA`, and `len(self._contig_base_cov) - 1` in
+  `pylib/Splice_graph.py`.
+- COVERAGE: `--oversimplify chrM` is now verified in every mode -- bulk quant-only, de
+  novo and ref-guided (HG002 chr22+chrM, 1,199,182 chrM reads); chromosome-scattered de
+  novo with no annotation, which is the configuration that was broken; and single-cell
+  basic de novo plus cluster-guided de novo, ref-guided and quant-only (PBMC chr22+chrM,
+  5,541,259 chrM reads). In the quant-only arm, all 4,090,083 tracked oversimplified
+  assignments across 14 clusters are whole assignments at frac_assigned = 1.0 with none
+  fractional, which is best-overlap without EM. That row count is smaller than the chrM
+  read count because tracking omits filtered and unassigned reads; the two populations
+  were not reconciled.
+
 v0.29.0
 - FIXED: `--oversimplify` was inert on every chromosome-scattered de novo run, because
   the shard was handed an annotation file containing no annotation. `splitByChr` emits
