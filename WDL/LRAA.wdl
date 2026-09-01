@@ -73,6 +73,14 @@ workflow LRAA_wf {
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
 
+        # Contigs the whole-genome partition extracts concurrently. 1 is the
+        # historical serial pass and stays the default because the same subworkflow
+        # serves the per-cluster partitions, where a wide cpu reservation cannot be
+        # placed; see the call site below for the measurement and the tradeoff. Set 4
+        # for a whole-genome single-cell run, where this step is dead time at the head
+        # of the pipeline on an otherwise idle box.
+        Int partition_workers = 1
+
         # HOW the work is divided across tasks. Chunking itself is unconditional in
         # all three; what differs is where the chunks run.
         #
@@ -451,6 +459,22 @@ workflow LRAA_wf {
                 annot_gtf = annot_gtf,
                 chromosomes_want_partitioned = chromosomes_to_partition,
                 docker = docker,
+                # MEASURED on 58.3 M mapped reads across 12 contigs at -@ 4: wall
+                # 2:02 at 1 worker, 1:13 at 2, 0:56 at 4, 0:57 at 6 -- so 2.19x and
+                # the knee is 4. Peak RSS was flat across all of them.
+                #
+                # Left at 1 anyway, deliberately. cpu is derived from this
+                # (workers * (samtools_extra_threads + 1) + 2), so 4 reserves 22
+                # cores, and this same subworkflow runs once per cluster -- 14 to 32
+                # times in a single-cell run, seconds of work each -- where a
+                # 22-core reservation cannot be placed until the box drains. That is
+                # the exact regression that cut this task's cpu to 5.
+                #
+                # Raise it for the ONE whole-genome partition that precedes all shard
+                # work: on a 188 GB library that step ran 27+ minutes single-cored on
+                # an idle 28-core box. 4 is the measured knee; going past it buys
+                # nothing.
+                partition_workers = partition_workers,
             }
      
                   

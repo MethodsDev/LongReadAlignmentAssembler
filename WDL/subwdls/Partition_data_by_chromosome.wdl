@@ -20,6 +20,21 @@ task partition_by_chromosome_task {
         # the scaling measurement below stops paying.
         Int samtools_threads = 5
         Int? memoryGB
+
+        # Contigs extracted CONCURRENTLY. Default 1 is the historical serial pass,
+        # and it is the default for a reason: this task also runs once per cluster --
+        # 14 to 32 times in a single-cell run, seconds of work each -- and that is
+        # exactly the case a wide reservation ruins, which is why cpu was cut to 5
+        # above. Only the caller that owns the ONE big top-level partition should
+        # raise this.
+        #
+        # MEASURED without it, on a 188 GB library (1.51 B mapped reads, 25 contigs)
+        # on a 28-core host: partition_by_chromosome_task ran 27+ minutes with ONE
+        # core busy, because the script's four-way pool fans out over JOB TYPES --
+        # BAM, BAM_FOR_SG, FASTA, GTF -- and three of the four are trivial or absent,
+        # so the whole task is a serial pass over the largest bam in the pipeline.
+        # It precedes all shard work, on an otherwise idle box.
+        Int partition_workers = 1
     }
 
     # samtools' -@ is ADDITIONAL threads, so N there means N+1 running. Spend the
@@ -37,6 +52,19 @@ task partition_by_chromosome_task {
     # it here, so this is the conditional form.
     Int samtools_extra_threads = if samtools_threads - 1 < 4 then samtools_threads - 1 else 4
 
+    # What the script can actually run at once: partition_workers concurrent
+    # `samtools view`, each needing its -@ count PLUS its own main thread, plus the
+    # two single-threaded FASTA/GTF jobs that run alongside them. Reserving less
+    # oversubscribes -- and under unprivileged Apptainer there is no cgroup, so a
+    # reservation does not CAP anything and an oversubscribed task competes with its
+    # neighbours for real. Reserving more repeats the mistake that cut this task to 5:
+    # cpu nobody uses cannot be placed until the box drains.
+    #
+    # At the default partition_workers = 1 this is samtools_threads + 2, one core more
+    # than the historical 5, which is honest rather than new: the FASTA and GTF jobs
+    # always ran alongside the bam pass and were never counted.
+    Int partition_cpu = partition_workers * (samtools_extra_threads + 1) + 2
+
     Float bam_size_gb = if defined(inputBAM) then size(inputBAM, "GB") else 0.0
     Float bam_for_sg_size_gb = if defined(bam_for_sg) then size(bam_for_sg, "GB") else 0.0
     Float fasta_size_gb = if defined(genome_fasta) then size(genome_fasta, "GB") else 0.0
@@ -45,10 +73,19 @@ task partition_by_chromosome_task {
     Float disk_gb = if estimated_disk > 150.0 then estimated_disk else 150.0
     Int disk_gb_int = ceil(disk_gb)
 
-    # Dynamic memory: 0.5× (BAM + splice-graph BAM + FASTA), floor 24 GiB
+    # Dynamic memory: 0.5x (BAM + splice-graph BAM + FASTA), floor 24 GiB.
+    #
+    # Concurrency adds to this, because each `samtools view` holds its own read and
+    # BGZF buffers: partition_workers of them run at once. 1 GiB per additional worker
+    # is a deliberately loose allowance -- samtools' per-process footprint at -@ 4 is
+    # far below that -- chosen because under unprivileged Apptainer there is NO cgroup,
+    # so this reservation caps nothing and an underestimate becomes a host OOM rather
+    # than a task failure. UNMEASURED at concurrency above 1; the peak wants recording
+    # from a real wide run before the allowance is tightened or a default is raised.
     Float mem_raw_partition = 0.5 * (bam_size_gb + bam_for_sg_size_gb + fasta_size_gb)
     Int computed_memoryGB = if mem_raw_partition > 24.0 then ceil(mem_raw_partition) else 24
-    Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
+    Int concurrency_memoryGB = computed_memoryGB + (partition_workers - 1)
+    Int effective_memoryGB = select_first([memoryGB, concurrency_memoryGB])
 
     command <<<
         set -euo pipefail
@@ -64,6 +101,7 @@ task partition_by_chromosome_task {
             ~{if defined(annot_gtf) then "--annot-gtf " + annot_gtf else ""} \
             --chromosomes ~{chromosomes_want_partitioned} \
             --samtools-threads ~{samtools_extra_threads} \
+            --num-workers ~{partition_workers} \
             --bam-out-dir split_bams \
             --bam-for-sg-out-dir split_bams_for_sg \
             --fasta-out-dir split_fastas \
@@ -80,7 +118,7 @@ task partition_by_chromosome_task {
     runtime {
         docker: docker
         bootDiskSizeGb: 50
-        cpu: samtools_threads
+        cpu: partition_cpu
         memory: effective_memoryGB + " GiB"
         preemptible: 0
         disks: "local-disk " + disk_gb_int + " SSD"
@@ -99,6 +137,12 @@ workflow partition_by_chromosome {
         # Core budget forwarded to the task; kept in step with the task's own
         # default, whose comment carries the measurement.
         Int samtools_threads = 5
+        # Contigs extracted concurrently. Default 1 is the historical serial pass; see
+        # the task's own comment for why the default is not higher (this task also runs
+        # once per cluster, 14 to 32 times per single-cell run). The task's cpu
+        # reservation is derived from this, so raising it here raises the reservation
+        # rather than oversubscribing it.
+        Int partition_workers = 1
     }
 
     call partition_by_chromosome_task {
@@ -109,7 +153,8 @@ workflow partition_by_chromosome {
             annot_gtf = annot_gtf,
             chromosomes_want_partitioned = chromosomes_want_partitioned,
             docker = docker,
-            samtools_threads = samtools_threads
+            samtools_threads = samtools_threads,
+            partition_workers = partition_workers
     }
 
     output {

@@ -139,17 +139,92 @@ def _collect_chromosomes_from_gtf(gtf_path: str) -> List[str]:
     return chroms
 
 
-def _partition_bam(
+def _extract_one_contig(bam_path, chrom, out_path, threads, chrom_lengths, mapped):
+    """One contig's extraction: its own output file, nothing shared with any other.
+
+    Split out of the loop so it can run in a worker. Everything it needs is passed in,
+    because the header and the mapped counts are read ONCE by the caller -- re-reading
+    the header of a 188 GB bam per worker would spend more than the fan-out saves.
+    """
+
+    if mapped == 0:
+        LOGGER.info("BAM partition: chromosome %s has no mapped reads; writing empty stub", chrom)
+        _write_empty_bam(out_path, [chrom], chrom_lengths)
+        return
+
+    LOGGER.info(
+        "BAM partition: extracting chromosome %s with %d mapped alignments using %d additional thread(s)",
+        chrom,
+        mapped,
+        threads,
+    )
+    start_time = time.time()
+    try:
+        # --no-PG: this writes one output BAM per chromosome, and samtools appends one
+        # @PG record per existing chain tip on every write. With the shared
+        # bam_for_sg's 2,727,296-record header that added ~302,848 records here.
+        # `samtools view -b` also copies the source header into every output, so each
+        # per-chromosome BAM inherited that whole chain -- ~1.1 GiB as uncompressed SAM
+        # header TEXT, far smaller on disk once BGZF-compressed, but replicated 25
+        # times per cluster: a chrY.bam holding only 26,725 alignments measured 87.9 MB
+        # on disk, and across the 325 per-chromosome SG outputs roughly 27 GB of the
+        # 44 GB total was duplicated header rather than alignment data.
+        pysam.view(
+            "--no-PG",
+            "-@",
+            str(threads),
+            "-h",
+            "-b",
+            "-o",
+            out_path,
+            bam_path,
+            chrom,
+            catch_stdout=False,
+        )
+    except pysam.SamtoolsError as exc:  # pragma: no cover - htslib surface error
+        LOGGER.warning(
+            "BAM partition: samtools view failed for %s (%s); writing empty stub",
+            chrom,
+            exc,
+        )
+        _write_empty_bam(out_path, [chrom], chrom_lengths)
+        return
+
+    elapsed = time.time() - start_time
+    rate = mapped / (elapsed / 60.0) if elapsed > 0 else 0.0
+    LOGGER.info(
+        "BAM partition: wrote %s with %d alignments in %.2f minutes (%.1f alignments/min)",
+        chrom,
+        mapped,
+        elapsed / 60.0,
+        rate,
+    )
+
+
+def _plan_bam_partition(
     bam_path: Optional[str],
     chromosomes: List[str],
     out_dir: str,
+    label: str,
     samtools_threads: Optional[int] = None,
-) -> None:
+):
+    """Prepare `out_dir` and return the contig extractions that still need running.
+
+    Stubs -- absent bam, contig missing from the header, contig with no mapped reads --
+    are written HERE, because they cost nothing and leaving them in the work list would
+    make a worker slot wait on a file write. What comes back is only real extraction.
+
+    A planner rather than an executor so both bam kinds can be flattened into ONE pool.
+    Giving each kind its own pool of N cannot honour a budget of N: floor division
+    strands capacity at odd budgets, and a floor of 1 per kind runs 2 concurrent
+    samtools when the budget says 1.
+    """
+
     _clean_output_dir(out_dir)
     if bam_path is None or not os.path.exists(bam_path):
         for chrom in chromosomes:
             _write_empty_bam(os.path.join(out_dir, f"{chrom}.bam"), [chrom])
-        return
+        return []
 
     _maybe_index_bam(bam_path)
 
@@ -160,67 +235,35 @@ def _partition_bam(
     mapped_counts = _collect_mapped_counts(bam_path)
     threads = _samtools_threads(samtools_threads)
 
+    work = []
     for chrom in chromosomes:
         out_path = os.path.join(out_dir, f"{chrom}.bam")
         if chrom not in references:
-            LOGGER.info("BAM partition: chromosome %s missing from BAM header; writing empty stub", chrom)
+            LOGGER.info(
+                "%s partition: chromosome %s missing from BAM header; writing empty stub",
+                label,
+                chrom,
+            )
             _write_empty_bam(out_path, [chrom], chrom_lengths)
             continue
-
         mapped = mapped_counts.get(chrom, 0)
         if mapped == 0:
-            LOGGER.info("BAM partition: chromosome %s has no mapped reads; writing empty stub", chrom)
-            _write_empty_bam(out_path, [chrom], chrom_lengths)
-            continue
-
-        LOGGER.info(
-            "BAM partition: extracting chromosome %s with %d mapped alignments using %d thread(s)",
-            chrom,
-            mapped,
-            threads,
-        )
-        start_time = time.time()
-        try:
-            # --no-PG: this writes one output BAM per chromosome, and samtools
-            # appends one @PG record per existing chain tip on every write. With
-            # the shared bam_for_sg's 2,727,296-record header that added ~302,848
-            # records here. `samtools view -b` also copies the source header into
-            # every output, so each per-chromosome BAM inherited that whole chain
-            # -- ~1.1 GiB as uncompressed SAM header TEXT, far smaller on disk
-            # once BGZF-compressed, but replicated 25 times per cluster: a chrY.bam
-            # holding only 26,725 alignments measured 87.9 MB on disk, and across
-            # the 325 per-chromosome SG outputs roughly 27 GB of the 44 GB total
-            # was duplicated header rather than alignment data.
-            pysam.view(
-                "--no-PG",
-                "-@",
-                str(threads),
-                "-h",
-                "-b",
-                "-o",
-                out_path,
-                bam_path,
+            LOGGER.info(
+                "%s partition: chromosome %s has no mapped reads; writing empty stub",
+                label,
                 chrom,
-                catch_stdout=False,
-            )
-        except pysam.SamtoolsError as exc:  # pragma: no cover - htslib surface error
-            LOGGER.warning(
-                "BAM partition: samtools view failed for %s (%s); writing empty stub",
-                chrom,
-                exc,
             )
             _write_empty_bam(out_path, [chrom], chrom_lengths)
             continue
+        work.append((bam_path, chrom, out_path, threads, chrom_lengths, mapped))
 
-        elapsed = time.time() - start_time
-        rate = mapped / (elapsed / 60.0) if elapsed > 0 else 0.0
-        LOGGER.info(
-            "BAM partition: wrote %s with %d alignments in %.2f minutes (%.1f alignments/min)",
-            chrom,
-            mapped,
-            elapsed / 60.0,
-            rate,
-        )
+    LOGGER.info(
+        "%s partition: %d contig(s) to extract at %d additional samtools thread(s) each",
+        label,
+        len(work),
+        threads,
+    )
+    return work
 
 
 def _write_fasta_record(handle, chrom: str, sequence: str) -> None:
@@ -325,6 +368,29 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Threads to use for samtools view (default pulls from PARTITION_SAMTOOLS_THREADS or 1)",
     )
+    # The contig loop in _partition_bam is the whole cost of this script: FASTA and
+    # GTF finish in seconds and bam_for_sg is often absent, so the four-way job pool
+    # is one serial pass over the largest bam in the pipeline. MEASURED on a 188 GB
+    # library (1.51 B mapped reads, 25 contigs) on a 28-core host: 27 minutes and
+    # still running with ONE core busy, on track to exceed an hour before a single
+    # shard starts.
+    #
+    # Contigs are independent -- separate output files, no shared state, and
+    # --samtools-threads already sizes each invocation -- so they fan out. Default 1
+    # keeps today's behaviour, because this task also runs once per cluster (14 to 32
+    # times in a single-cell run) where a wide pool would drain the box, which is why
+    # its cpu reservation was reduced to 5 in the first place. The caller that owns
+    # the big top-level partition raises this and its reservation together.
+    parser.add_argument(
+        "--num-workers",
+        dest="num_workers",
+        type=int,
+        default=1,
+        help="contigs to extract concurrently (default 1, the historical serial "
+        "pass). --samtools-threads is samtools' -@, which is ADDITIONAL threads, so "
+        "each worker needs samtools_threads + 1 runnable threads and a caller's cpu "
+        "reservation must cover num_workers * (samtools_threads + 1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -357,23 +423,73 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not chromosomes:
         raise ValueError("No chromosomes supplied or detected.")
 
-    partition_jobs = (
-        ("BAM", _partition_bam, (input_bam, chromosomes, args.bam_out_dir, args.samtools_threads)),
-        ("BAM_FOR_SG", _partition_bam, (bam_for_sg, chromosomes, args.bam_for_sg_out_dir, args.samtools_threads)),
+    # FASTA and GTF first, in their own 2-wide pool, because they are single-threaded
+    # and short next to the bam work, and running them alongside the bam pool keeps
+    # today's overlap. They are the "+ 2" the caller's reservation carries; they are
+    # NOT drawn from the bam worker budget, so that budget stays exactly the number of
+    # concurrent samtools processes.
+    light_jobs = (
         ("FASTA", _partition_fasta, (genome_fasta, chromosomes, args.fasta_out_dir)),
         ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
     )
 
-    with ProcessPoolExecutor(max_workers=len(partition_jobs)) as executor:
-        future_to_name = {
-            executor.submit(func, *func_args): job_name for job_name, func, func_args in partition_jobs
+    # Both bam kinds flattened into ONE work list and ONE pool, so `num_workers` is
+    # the exact count of concurrent samtools processes -- not a per-kind figure that
+    # doubles when bam_for_sg exists, and not a floor division that strands capacity
+    # at odd budgets or runs 2 when the budget says 1.
+    #
+    # Submitted in the order planned, because callers pass main_chromosomes
+    # read-count descending so the longest contigs start first; reordering would leave
+    # a long contig for the tail and give back the makespan this buys.
+    bam_work = []
+    bam_work += _plan_bam_partition(
+        input_bam, chromosomes, args.bam_out_dir, "BAM", args.samtools_threads
+    )
+    bam_work += _plan_bam_partition(
+        bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", args.samtools_threads
+    )
+
+    workers = max(1, min(args.num_workers, len(bam_work))) if bam_work else 1
+    threads_each = _samtools_threads(args.samtools_threads)
+    LOGGER.info(
+        "partition: %d contig extraction(s) across both bam kind(s), %d at a time, "
+        "%d additional samtools thread(s) each -> up to %d runnable thread(s) for the "
+        "bam work plus 2 for FASTA/GTF",
+        len(bam_work),
+        workers,
+        threads_each,
+        workers * (threads_each + 1),
+    )
+
+    failures = []
+    with ProcessPoolExecutor(max_workers=len(light_jobs)) as light_pool:
+        light_futures = {
+            light_pool.submit(func, *func_args): name for name, func, func_args in light_jobs
         }
-        for future in as_completed(future_to_name):
-            job_name = future_to_name[future]
+
+        with ProcessPoolExecutor(max_workers=workers) as bam_pool:
+            bam_futures = {}
+            for unit in bam_work:
+                bam_futures[bam_pool.submit(_extract_one_contig, *unit)] = unit[1]
+            for future in as_completed(bam_futures):
+                chrom = bam_futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    failures.append(("contig {}".format(chrom), exc))
+
+        for future in as_completed(light_futures):
+            name = light_futures[future]
             try:
                 future.result()
             except Exception as exc:
-                raise RuntimeError(f"{job_name} partition step failed") from exc
+                failures.append((name, exc))
+
+    if failures:
+        what, exc = failures[0]
+        raise RuntimeError(
+            "{} partition step failed ({} failure(s) total)".format(what, len(failures))
+        ) from exc
 
     return 0
 
