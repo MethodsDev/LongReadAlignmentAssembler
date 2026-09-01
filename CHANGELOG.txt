@@ -1,3 +1,56 @@
+v0.30.0
+- ADDED, and REQUIRED with the WDLs of this release: `--reserved-cpu` on
+  `util/partition_data_by_chromosome.py`, passed by
+  `subwdls/Partition_data_by_chromosome.wdl`. A workflow from this release run against
+  an image from an earlier one dies at argparse -- `error: unrecognized arguments:
+  --reserved-cpu 12` -- so the WDLs and the images must move together. That
+  compatibility boundary is why this is a minor bump rather than a patch on v0.29.2.
+
+- FIXED: the partition pool trusted `--num-workers` and could oversubscribe the cores
+  it was actually granted. A WDL `cpu` declaration is a REQUEST: miniwdl applies it as
+  docker `--limit-cpu`, reports "cpu adjusted to host limit" when it trims one, and
+  hands the task fewer cores while the argv it already built still names the wider
+  pool. MEASURED inside `docker run --cpus=8`: `sched_getaffinity` still reports all 16
+  host cores, so an affinity check does not bind there, while the cgroup quota reports
+  8 and does. The pool is now the minimum of three caps -- the cgroup quota (what the
+  runtime enforces; v2 `cpu.max`, v1 `cpu.cfs_quota_us`), affinity (the cpuset form of
+  the same grant), and `--reserved-cpu` (self-consistency with what the caller promised
+  the scheduler, which cannot detect a grant SMALLER than the request) -- and the log
+  names whichever cap bound.
+
+- FIXED: capping the pool was not sufficient by itself. One worker at `-@ 4` is 5
+  runnable threads and the two light FASTA/GTF jobs are 2 more, so a 3-core grant was
+  still oversubscribed at a pool of one. Below that floor the effective `-@` gives way
+  instead, being the only lever here with no correctness meaning, and it is resolved
+  BEFORE the work is planned: every planned unit carries its own thread count into its
+  own `samtools` invocation, so deciding it afterwards logged `-@ 0` while the
+  processes ran `-@ 4`. Relatedly, an explicit `-@ 0` is now honoured rather than
+  raised to 1 by `_samtools_threads`; it is samtools' own default and the only value
+  that fits one extraction plus the two light jobs inside three cores exactly.
+
+  A grant below the floor is adapted to rather than refused, because a grant is a fact
+  about the environment and aborting would fail a run that can still finish. A
+  `--reserved-cpu` below the floor is still refused: that one is a caller declaration
+  with two valid fixes -- raise the reservation, lower `--samtools-threads` -- and the
+  script cannot choose between them.
+
+- CHANGED: `Partition_data_by_chromosome.wdl` serves two regimes that cannot share one
+  worker count, so the knob is split. `LRAA-singlecell.wdl` gains
+  `initial_partition_workers` for the ONE whole-library partition and
+  `cluster_partition_workers` for the 14-32 per-cluster ones, threaded through
+  `LRAA-cell_cluster_guided.wdl` and `LRAA_quant_by_cluster.wdl`. Locally miniwdl puts
+  the per-cluster jobs on one host at `task_concurrency` 7, so widening each multiplies
+  a reservation that then cannot be placed -- the regression recorded at
+  `Partition_data_by_chromosome.wdl:16-21`.
+
+  `initial_partition_workers` defaults to 2, NOT the measured knee of 4. `cpu` is
+  derived as `workers * (samtools -@ + 1) + 2`, so 2 asks for 12 cores and 4 asks for
+  22: twelve fits a 16-core machine, while 22 forces the next instance size up -- a
+  32-core VM billed for the whole task to buy the 18 s between 1:13.8 and 0:55.8 on
+  58.3 M mapped reads across 12 contigs. Two captures 1.65x of the available 2.19x for
+  half the reservation. `cluster_partition_workers` stays 1 on both backends, because
+  that one is billed 14 to 32 times over for jobs that already run in seconds.
+
 v0.29.2
 - PERFORMANCE: the chromosome partition ran ~1 core wide regardless of the host.
   `partition_data_by_chromosome` fanned out over JOB TYPES -- BAM, BAM_FOR_SG, FASTA,
