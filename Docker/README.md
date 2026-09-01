@@ -73,14 +73,21 @@ which names the core, sc and orf images and the tag they share.
 
 ## Tags
 
-> **`:latest` means the current official public release. Nothing else.**
+> **`:latest` is reserved for the current official public release.**
 >
-> It is not "the newest build", and it is not a development pointer. Public users
-> resolve it, and the wdls of the released branch name it directly, so moving it to
-> a devel commit hands unreleased code to every public caller. The release it names
-> changes when a release is made; it is deliberately not written down as a number
-> anywhere, because a second copy of the release state goes stale the first time
-> someone releases without updating it.
+> It is not "the newest build", and it is not a development pointer. The release it
+> names changes when a release is made; it is deliberately not written down as a
+> number anywhere, because a second copy of the release state goes stale the first
+> time someone releases without updating it.
+>
+> The public guarantee is on **`lraa:latest`** -- the one repository public users
+> and the released wdls resolve. The four split repositories
+> (`lraa-core`, `lraa-sc`, `lraa-orf`, `lraa-combined`) postdate the last release, so
+> their `:latest` tags are a LEGACY EXCEPTION holding pre-release 0.18.3-era digests
+> that no release backs; see the registry-state table below. That makes them stale,
+> not free: the rule still applies, so they are neither moved to a devel build nor
+> repointed until a release closes the gap. Nothing should depend on them -- name a
+> `<version>-<shortsha>` tag instead.
 >
 > `build_docker.latest.sh` enforces this: it refuses unless `HEAD` equals
 > `origin/main`, the released branch. **Do not hand-retag `:latest`** -- a
