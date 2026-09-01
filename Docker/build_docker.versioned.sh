@@ -46,6 +46,63 @@ if [ -z "`git -C .. branch -r --contains ${LRAA_CO} 2>/dev/null`" ]; then
     exit 1
 fi
 
+# A BARE version tag asserts a published release -- that is the whole difference
+# between `0.30.0` and `0.30.0-testing`, and someone pulling the bare name has no
+# way to tell it was cut mid-development.  This script writes bare version tags and
+# the plain `lraa:<version>` alias, so it is a release script and gets the same gate
+# as build_docker.latest.sh.  Without it, a devel run silently publishes a version
+# that was never released; that happened on 2026-09-01 with 0.30.0 and the tags had
+# to be deleted afterwards.
+#
+# The released commit is derived from `origin/main`, never a version written down
+# here, and the test is EQUALITY: every devel branch descends from main, so an
+# ancestry test would pass for exactly the commits this rejects.
+RELEASE_REF=refs/remotes/origin/main
+
+# FAIL CLOSED on a stale ref, for the same reason as build_docker.latest.sh: the
+# reachability check above fetches with `|| true` because it only needs a hint, while
+# this gate decides whether a bare version tag gets written.  A local tracking ref
+# that has not been updated could name an OLD release, and if HEAD happens to be that
+# commit the equality test below passes and republishes superseded code under a
+# release name.
+#
+# EXPLICIT REFSPEC.  `git fetch origin main` is only guaranteed to write FETCH_HEAD;
+# whether it also updates refs/remotes/origin/main depends on the configured refspec,
+# so a bare `fetch origin main` followed by `rev-parse origin/main` can succeed and
+# still read a stale ref.  Naming the destination removes the question.
+if ! git -C .. fetch --quiet origin +refs/heads/main:${RELEASE_REF} 2>/dev/null; then
+    set +x
+    echo "" >&2
+    echo "REFUSING to publish release tags: cannot verify the public release." >&2
+    echo "" >&2
+    echo "Fetching main from origin failed, so ${RELEASE_REF} may be stale and this" >&2
+    echo "script cannot tell whether HEAD is the current release.  Restore network" >&2
+    echo "access to the remote and re-run." >&2
+    echo "" >&2
+    exit 1
+fi
+
+RELEASE_CO=`git -C .. rev-parse ${RELEASE_REF} 2>/dev/null || echo unknown`
+if [ "${LRAA_CO}" != "${RELEASE_CO}" ]; then
+    set +x
+    echo "" >&2
+    echo "REFUSING to publish release tags from a commit that is not the public release." >&2
+    echo "" >&2
+    echo "  HEAD           ${LRAA_CO}  (VERSION.txt says ${VERSION})" >&2
+    echo "  ${RELEASE_REF}    ${RELEASE_CO}" >&2
+    echo "" >&2
+    echo "This script writes BARE version tags, which assert a published release." >&2
+    echo "See the Tags section of Docker/README.md." >&2
+    echo "" >&2
+    echo "To publish the commit you are on for testing, use a devel tag:" >&2
+    echo "" >&2
+    echo "    bash build_docker.testing.sh    # writes 'testing' and '<version>-testing'" >&2
+    echo "" >&2
+    echo "To release: merge to main, push, and re-run this from that commit." >&2
+    echo "" >&2
+    exit 1
+fi
+
 # The checkout is staged into the build context by git archive rather than fetched
 # from GitHub.  git archive reads content-addressed objects, so the tarball is
 # byte-determined by the SHA -- the same guarantee fetching by SHA gave -- without

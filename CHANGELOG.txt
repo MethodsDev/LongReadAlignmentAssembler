@@ -1,10 +1,16 @@
 v0.30.0
-- ADDED, and REQUIRED with the WDLs of this release: `--reserved-cpu` on
-  `util/partition_data_by_chromosome.py`, passed by
-  `subwdls/Partition_data_by_chromosome.wdl`. A workflow from this release run against
-  an image from an earlier one dies at argparse -- `error: unrecognized arguments:
-  --reserved-cpu 12` -- so the WDLs and the images must move together. That
-  compatibility boundary is why this is a minor bump rather than a patch on v0.29.2.
+- ADDED: `--reserved-cpu` on `util/partition_data_by_chromosome.py`, passed by
+  `subwdls/Partition_data_by_chromosome.wdl`. New CLI surface plus the changed
+  defaults below are why this is a minor bump rather than a patch on v0.29.2.
+
+  The devel wdls of this commit require an image of this commit: run them against an
+  earlier image and the partition task dies at argparse with `error: unrecognized
+  arguments: --reserved-cpu 12`. That pairing is ordinary for devel and is handled the
+  way it always is -- test runs name their image through the inputs JSON
+  (`testing/lraa_test_docker.mk`), never through `:latest`, which is reserved for the
+  current official public release. An earlier draft of this entry called the pairing a
+  public compatibility boundary; it is not one, because no public caller resolves the
+  devel wdls or the devel images.
 
 - FIXED: the partition pool trusted `--num-workers` and could oversubscribe the cores
   it was actually granted. A WDL `cpu` declaration is a REQUEST: miniwdl applies it as

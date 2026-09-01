@@ -48,6 +48,67 @@ if [ -z "`git -C .. branch -r --contains ${LRAA_CO} 2>/dev/null`" ]; then
     exit 1
 fi
 
+# `:latest` is the PUBLIC RELEASE pointer, and this is the only script that writes
+# it, so the check belongs here.  Public users resolve `lraa:latest`; the wdls of
+# the released branch name it directly.  Publishing it from a devel commit silently
+# hands every public caller unreleased code.
+#
+# The released commit is whatever `origin/main` holds -- derived, never a version
+# written down here.  A hardcoded number is a second copy of the release state and
+# would go stale the day someone releases without editing this file.
+#
+# EQUALITY, not ancestry: every devel branch descends from main, so "contains main"
+# is satisfied by exactly the commit this guard exists to reject.
+#
+# To release: merge to main, push it, and run this from that commit.  The guard then
+# passes on its own, because the condition it tests IS "this is the release".
+RELEASE_REF=refs/remotes/origin/main
+
+# FAIL CLOSED on a stale ref.  The reachability check above fetches with `|| true`
+# because it only needs a hint; this gate decides what public users resolve, and a
+# local tracking ref that has not been updated could name an OLD release -- which, if
+# HEAD happens to be that old commit, passes the equality test below and republishes
+# superseded code as `:latest`.  So the fetch must succeed here.
+#
+# EXPLICIT REFSPEC.  `git fetch origin main` is only guaranteed to write FETCH_HEAD;
+# whether it also updates refs/remotes/origin/main depends on the configured refspec,
+# so a bare `fetch origin main` followed by `rev-parse origin/main` can succeed and
+# still read a stale ref.  Naming the destination removes the question.
+if ! git -C .. fetch --quiet origin +refs/heads/main:${RELEASE_REF} 2>/dev/null; then
+    set +x
+    echo "" >&2
+    echo "REFUSING to publish ':latest': cannot verify the public release." >&2
+    echo "" >&2
+    echo "Fetching main from origin failed, so ${RELEASE_REF} may be stale and this" >&2
+    echo "script cannot tell whether HEAD is the current release.  Restore network" >&2
+    echo "access to the remote and re-run." >&2
+    echo "" >&2
+    exit 1
+fi
+
+RELEASE_CO=`git -C .. rev-parse ${RELEASE_REF} 2>/dev/null || echo unknown`
+if [ "${LRAA_CO}" != "${RELEASE_CO}" ]; then
+    set +x
+    echo "" >&2
+    echo "REFUSING to publish ':latest' from a commit that is not the public release." >&2
+    echo "" >&2
+    echo "  HEAD           ${LRAA_CO}  (VERSION.txt says ${LRAA_VERSION})" >&2
+    echo "  ${RELEASE_REF}    ${RELEASE_CO}" >&2
+    echo "" >&2
+    echo "':latest' is what public users and the released wdls resolve, so it must" >&2
+    echo "name the current official public release and nothing else.  See the Tags" >&2
+    echo "section of Docker/README.md." >&2
+    echo "" >&2
+    echo "To test the commit you are on, use a devel tag instead:" >&2
+    echo "" >&2
+    echo "    bash build_docker.testing.sh    # writes 'testing' and '<version>-testing'" >&2
+    echo "" >&2
+    echo "To make this commit the public release: merge it to main, push, and re-run" >&2
+    echo "this script from that commit." >&2
+    echo "" >&2
+    exit 1
+fi
+
 # The checkout is staged into the build context by git archive rather than fetched
 # from GitHub.  git archive reads content-addressed objects, so the tarball is
 # byte-determined by the SHA -- the same guarantee fetching by SHA gave -- without

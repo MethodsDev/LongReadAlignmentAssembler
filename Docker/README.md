@@ -73,16 +73,39 @@ which names the core, sc and orf images and the tag they share.
 
 ## Tags
 
+> **`:latest` means the current official public release. Nothing else.**
+>
+> It is not "the newest build", and it is not a development pointer. Public users
+> resolve it, and the wdls of the released branch name it directly, so moving it to
+> a devel commit hands unreleased code to every public caller. The release it names
+> changes when a release is made; it is deliberately not written down as a number
+> anywhere, because a second copy of the release state goes stale the first time
+> someone releases without updating it.
+>
+> `build_docker.latest.sh` enforces this: it refuses unless `HEAD` equals
+> `origin/main`, the released branch. **Do not hand-retag `:latest`** -- a
+> `docker tag`/`docker push` pair bypasses that guard, which is exactly how it was
+> moved by mistake once (see the note at the end of this section).
+>
+> To publish the commit you are on for testing, use `build_docker.testing.sh`,
+> which writes `testing` and `<version>-testing`.
+
 | tag | set by | built from | used by |
 |---|---|---|---|
-| `latest` | `build_docker.latest.sh` | `git rev-parse HEAD` | defaults written inside the `.wdl` files |
-| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `git rev-parse HEAD` | release pins |
+| `latest` | `build_docker.latest.sh` | `git rev-parse HEAD`, refused unless it equals `origin/main` | defaults written inside the `.wdl` files, and every public caller |
+| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `git rev-parse HEAD` | release pins -- a BARE version asserts a published release |
 | `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | local WDL test targets, through `testing/lraa_test_docker.mk` |
 | `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving tag, e.g. runs dispatched to VMs |
+| `<version>-<shortsha>` | by hand, from a devel build | a specific commit | identifying a devel image later without claiming it is a release |
 
 Neither testing tag is a release artifact. Both come out of the same build, so
 they cannot drift apart, and only the release scripts write `latest` or a bare
 version.
+
+Devel work is tagged `<version>-testing` or `<version>-<shortsha>`, never a bare
+version: a devel run needs an image it can name later, not a claim that the
+version was released. Testing configures its image through the inputs JSON
+(`testing/lraa_test_docker.mk`), so a devel build never needs `:latest` to move.
 
 `testing` is a moving pointer: it names the last commit someone validated and is
 overwritten as often as anyone runs the script. That is what the local test
@@ -121,6 +144,31 @@ the claim becomes true again.
 script writes it**. `build_docker.testing.sh` deliberately avoids the plain name,
 so nothing will ever move it. Treat it as stale. `lraa-sc:0.18.3-sklearn` is a
 hand-made tag outside this taxonomy from the same period.
+
+### It has been moved by mistake once, which is why the guard exists
+
+On 2026-09-01 a v0.30.0 devel build was published and the four split `:latest`
+tags were hand-retagged to it with `docker tag` + `docker push`, on the incorrect
+assumption that `:latest` meant "the newest build". That is precisely the move
+the paragraph above rules out. The public `lraa:latest` was NOT affected -- the
+retag loop named only the split repositories, and `build_docker.versioned.sh`
+writes `lraa:<version>`, never `lraa:latest` -- so public users never resolved
+devel code.
+
+Restored the same day with `gcloud artifacts docker tags add`, server-side:
+
+| tag | verified after restore |
+|---|---|
+| `lraa:latest` | `LRAA VERSION: v0.17.7` |
+| `lraa-core:latest` | `LRAA VERSION: v0.18.3` |
+
+The bare `0.30.0` tags created by the release script were converted to
+`0.30.0-testing` and `0.30.0-<shortsha>` and the bare name deleted, since a bare
+version asserts a published release. Two lessons are now enforced rather than
+written down: `build_docker.latest.sh` refuses any commit that is not
+`origin/main`, and the rule at the top of this section states what `:latest` is
+for. Neither stops a hand-retag -- nothing can -- so the prohibition on
+hand-retagging `:latest` is the part that has to be read.
 
 ## Building
 
