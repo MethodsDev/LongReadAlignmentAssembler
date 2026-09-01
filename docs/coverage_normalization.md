@@ -287,46 +287,49 @@ clear 2 on one record. No such case appeared here; whether the exemption foreclo
 library simply lacks it is not established, so the conclusion is conditional on the corpus rather
 than structural.
 
-MEASURED for TSS and PolyA, and unlike the intron threshold this one IS reached. Those counters
-aggregate read ENDS rather than junctions, so the scarce-junction exemption gives them nothing: a
-read at a deep locus is thinned like any other, and its surviving weight lands whole on one end
-position.
+MEASURED for TSS and PolyA against the FULL un-normalized data, which is the only baseline that
+answers the question. These counters aggregate read ENDS rather than junctions, so the
+scarce-junction exemption gives them nothing and a thinned read's whole weight lands on one end
+position -- but "lands on one position" is not by itself a defect, because that weight is an
+estimate of how many original read ends were there. A lone survivor carrying `XW` 277 may
+legitimately stand for 277 real ends, in which case clearing a threshold of 5 is CORRECT and the
+count of retained records is the thing that is wrong.
 
-Measured on the FINAL sites, not at the threshold gate. `aggregate_sites_within_window` is only the
-first filter -- `filter_non_peaky_positions` and site incorporation follow it, and later
-`min_TSS_iso_fraction` prunes again -- so counting at the gate says nothing about what survives.
-Two complete `build_splice_graph_for_contig` runs over the same doubly-normalized BAM (chr19
-fixture, 95,513 records), identical except that one honours `XW` and the other forces every weight
-to 1, compared by the `_TSS_objs` and `_PolyA_objs` they end with:
+So the comparison is against ground truth, not against the thinned records. Complete
+`build_splice_graph_for_contig` runs on the chr19 fixture, compared on the `_TSS_objs` and
+`_PolyA_objs` they finish with, matching sites within the 50 bp aggregation window so a shifted
+peak is not counted as a difference:
 
-| | raw | weighted | only weighted | new (>50 bp from any raw site) |
+| build | records | false positives | missed | total discordance |
 |---|---|---|---|---|
-| TSS + | 197 | 202 | 12 | 12 |
-| TSS - | 185 | 189 | 4 | 4 |
-| PolyA + | 93 | 101 | 12 | 12 |
-| PolyA - | 71 | 70 | 0 | 0 |
-| total | 546 | 562 | 28 | **28** |
+| un-normalized (GROUND TRUTH: 201/194 TSS, 102/72 PolyA) | 373,717 | — | — | — |
+| once-normalized | 195,524 | 1 | 8 | **9** |
+| twice-normalized, weights honoured | 95,513 | 9 | 16 | **25** |
+| twice-normalized, weights IGNORED | 95,513 | 16 | 39 | **55** |
 
-So **28 of 562 final sites (5.0 %) exist only because weights are summed**, and none of the 28 is
-a shifted peak -- each is more than a window away from any site the unweighted build produced.
+Three things follow, and the first is the one worth stating loudest.
 
-Note the PolyA minus strand: 70 weighted against 71 raw. Weighting can also REMOVE a site, because
-the peakiness filter and the aggregator's greedy selection are competitions, and changing the
-counts changes who wins. The effect is not one-directional.
+**Summing `XW` works, and ignoring it is far worse.** Honouring weights on the doubly-normalized
+BAM lands at 25 discordant sites against ~570; ignoring them lands at 55. Weighting more than
+halves the error, and most of it is recovery of sites the full data supports rather than invention
+of sites it does not. An earlier revision of this section reported "28 sites exist only because
+weights are summed" from a weighted-versus-retained-record comparison; that baseline is a thinned
+undercount, not truth, and the claim was wrong in both direction and attribution.
 
-At the aggregate gate the picture is starker and worth recording as the mechanism: of the sites
-clearing the threshold of 5 on weighted support but not on raw, the raw support at the peak is
-min 1, median 1, max 4, and 40 are held up by a SINGLE read -- the extreme being a PolyA position
-carrying one record with `XW` 277.4. Most of those are then dropped downstream, which is why the
-final figure is 28 rather than 62, but the threshold is plainly not doing what its name says on a
-doubly-normalized BAM: "5 alignments" is being satisfied by one.
+**One pass is nearly lossless.** 1 false positive and 8 missed out of ~570 sites, consistent with
+summed `XW` recovering the original read count to 0.08 % on the same corpus.
 
-Not fixed here, because the fix changes feature calling rather than bookkeeping and it has a
-choice: compare these thresholds against RAW support while leaving the fractional criteria
-weighted, or extend a scarce-junction-style exemption to read ends so a lone survivor keeps weight
-1. The first is smaller and matches what the threshold's units already claim; the second preserves
-the estimator everywhere at the cost of retaining more reads. Either moves TSS and PolyA calls on
-every normalized run, so it wants deciding rather than defaulting.
+**The second pass costs +16 discordance** -- 9 false positives against 1, and 16 missed against 8.
+That is the price of double normalization for these features specifically: real, bidirectional, and
+about 2.8 % of sites. It is not one-directional inflation; weighting can also remove a site,
+because the peakiness filter and the aggregator's greedy selection are competitions and changing
+the counts changes who wins.
+
+Not fixed here. The residual is small, it is not obviously a threshold-units problem now that the
+correct baseline says weighting helps, and any change to these thresholds moves TSS and PolyA calls
+on every normalized run. What would reduce it is reducing the second pass's thinning depth on the
+shared graph BAM, or an independent second draw (above) so the composed weights stop being
+correlated -- both of which are decisions about the pipeline rather than about this threshold.
 
 Cancellation in the fractional criteria separately assumes the factor is COMMON across a locus,
 which the per-cluster `p` makes only approximately true where a locus draws coverage from clusters
