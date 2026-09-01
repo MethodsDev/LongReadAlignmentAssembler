@@ -1,3 +1,56 @@
+v0.29.2
+- PERFORMANCE: the chromosome partition ran ~1 core wide regardless of the host.
+  `partition_data_by_chromosome` fanned out over JOB TYPES -- BAM, BAM_FOR_SG, FASTA,
+  GTF -- with a pool fixed at four, while the contig loop inside `_partition_bam` ran
+  serially, one `samtools view` per contig. Three of those four jobs are trivial or
+  absent (FASTA and GTF finish in seconds; `bam_for_sg` is undefined unless supplied),
+  so the task was a single serial pass over the largest BAM in the pipeline. REPORTED
+  on a 188 GB library (1.51 B mapped reads, 25 contigs) on a 28-core host:
+  `partition_by_chromosome_task` at 27+ minutes and still running with one core busy,
+  ahead of all shard work on an otherwise idle box. Third instance of the shape fixed
+  by 956543d and 7f99764.
+  Contigs are independent -- separate output files, no shared state -- so they now fan
+  out, with `--num-workers` as the control. ONE pool across BOTH bam kinds rather than
+  one pool each: per-kind pools cannot honour a budget, because floor division strands
+  capacity at odd budgets and a floor of 1 per kind runs two concurrent `samtools` when
+  the budget says one. Work is sorted longest-first ACROSS both kinds by the mapped
+  count already read from each index -- concatenating the kinds put every splice-graph
+  contig behind every primary one, so the largest SG contig would have started only
+  after the whole primary BAM finished and then run alone at the tail.
+  MEASURED on 58.3 M mapped reads across 12 contigs at `-@ 4`: wall 2:02 at 1 worker,
+  1:13.8 at 2, 0:55.8 at 4, 0:56.5 at 6 -- so 2.19x, and 4 is the knee because
+  `samtools view` stops scaling there. Outputs record-count and byte-count identical at
+  every worker count. Peak RSS flat at 0.04 GiB (max single-process as
+  `/usr/bin/time -v` reports it, not a tree sum, so treat it as a floor).
+- CHANGED: the partition task's `cpu` is now derived from what it can actually run --
+  `effective_partition_workers * (samtools_extra_threads + 1) + 2` -- because samtools'
+  `-@` is ADDITIONAL threads, so each worker needs its `-@` count plus a main thread,
+  and the two single-threaded FASTA/GTF jobs run alongside. At one worker that is 7
+  rather than the historical 5, which is honest rather than new: those two jobs always
+  ran alongside the BAM pass and were never counted. Under unprivileged Apptainer there
+  is no cgroup, so a reservation caps nothing and an oversubscribed task competes with
+  its neighbours for real. The worker count is clamped at 1 so a 0 or negative input
+  cannot under-reserve a run that still starts one `samtools`.
+- CHANGED, default behaviour: `LRAA-singlecell.wdl` now sets
+  `initial_partition_workers = 4` on THE one initial full-library partition, so a
+  single-cell run gets the fan-out without being asked. That task's reservation goes
+  from cpu 7 to cpu 22 for its single invocation. The per-cluster `LRAA_wf` calls in
+  `LRAA-cell_cluster_guided.wdl` and `LRAA_quant_by_cluster.wdl` deliberately do NOT
+  pass it and keep the default of 1: they run 14 to 32 times for seconds each, and a
+  22-core reservation there cannot be placed until the box drains, which is the
+  regression that cut this task's cpu to 5 in the first place. LOWER
+  `initial_partition_workers` on a host with fewer than ~24 usable cores, where cpu 22
+  would simply wait.
+- NOTE: measured TSS/PolyA feature calling against the FULL un-normalized data and
+  RETRACTED the previous claim that sites are admitted by inflated `XW` weights.
+  Comparing a weighted build against one with weights forced to 1 compares against
+  RETAINED records, which is a thinned undercount rather than truth. Against 373,717
+  un-normalized reads: once-normalized discords on 9 sites of ~570, twice-normalized
+  weighted on 25, twice-normalized with weights IGNORED on 55. Summing `XW` more than
+  halves the error rather than causing it. What survives is that the second
+  normalization pass costs +16 discordant sites, bidirectionally, about 2.8 %. See
+  `docs/coverage_normalization.md`.
+
 v0.29.1
 - FIXED: an exon reaching the contig's LAST base was reported one base past it.
   `_contig_base_cov` is sized `contig_len + 1` so position p lives at index p
