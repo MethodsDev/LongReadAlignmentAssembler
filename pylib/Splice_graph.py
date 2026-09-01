@@ -1821,7 +1821,23 @@ class Splice_graph:
 
         # get last one if it runs off to the end of the contig
         if exon_seg_start is not None:
-            exon_segments.append([exon_seg_start, len(self._contig_base_cov)])
+            # -1 because the coverage array is sized contig_len + 1 (:493) so that
+            # position p lives at index p, which makes its LAST valid position
+            # len - 1, not len. The loop above never trips over this: it visits
+            # i = 1..contig_len and every close inside it uses i or i - 1. Only this
+            # tail case, reached when coverage is still open as the scan runs out of
+            # array, used the array's length as a coordinate -- producing an exon
+            # node one base past the contig and a GTF record no consumer can
+            # validate.
+            #
+            # Latent until the merge tool: with
+            # fracture_splice_graph_at_input_transcript_bounds ON (the default), an
+            # input transcript's rend is a registered boundary and :1817 closes the
+            # segment there first. merge_LRAA_GTFs.py turns that off (:218), so a
+            # model reaching the contig's last base fell through to here. MEASURED
+            # on a 5,000 bp contig: an input model spanning 1-5000 merged to 1-5001,
+            # while an interior model at 1000-2000 was unaffected either way.
+            exon_segments.append([exon_seg_start, len(self._contig_base_cov) - 1])
 
         if LRAA_Globals.DEBUG:
             # write exon list to file
