@@ -4673,9 +4673,16 @@ def merged_id_plan(units):
     CONTENT at those prefixes, and a retry that regenerates a unit's gtf in the same
     process would be served the plan computed from the file it replaced. That is a
     wrong collision decision reached silently, against reading a handful of model gtfs
-    twice more. The gtfs are small next to everything else stage 6 touches, and the
-    derivation is deterministic, so three consumers reading them independently agree
-    by construction rather than by cache discipline.
+    twice more, and those gtfs are negligible next to everything else stage 6 touches.
+
+    The three consumers -- the gtf, quant.expr and quant.tracking merges -- each derive
+    this independently and MUST reach the same answer. That rests on an ASSUMPTION, not
+    on the derivation being deterministic: the per-chunk gtfs must not change between
+    their reads. Stage 6 runs only after every leaf has completed and nothing in the
+    pipeline rewrites a unit's gtf while it is merging, so the assumption holds here --
+    but it is an assumption about WHEN this runs, not a property of this function. If a
+    caller ever merges concurrently with regeneration, the three could disagree, and the
+    fix then is a snapshot scoped to one merge rather than a cache keyed on units.
     """
 
     return plan_merged_ids(units, not coords_already_whole_contig(units))

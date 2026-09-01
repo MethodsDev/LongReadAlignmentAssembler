@@ -45,9 +45,12 @@ v0.29.0
   function of the GTF CONTENT at those prefixes, so a cache keyed on the units would
   serve a retry that regenerated a unit's GTF the plan computed from the file it
   replaced -- a wrong collision decision reached silently, against reading a handful of
-  small model GTFs twice more. The GTF, quant.expr and quant.tracking merges run in that
-  order and all three must name the same models, which a deterministic derivation gives
-  by construction rather than by cache discipline.
+  small model GTFs twice more. The GTF, quant.expr and quant.tracking merges each derive
+  it independently and must reach the same answer, which rests on the per-chunk GTFs not
+  changing between their reads -- true because stage 6 runs only after every leaf has
+  completed and nothing rewrites a unit's GTF while it merges. That is an assumption
+  about when this runs, not a property of the derivation; a caller merging concurrently
+  with regeneration would need a snapshot scoped to one merge.
   Two refusals rather than guesses: a unit with no model GTF is fatal (skipping it would
   leave its ids unplanned and unprefixed -- the same fusion, arriving through I/O), and
   one id in several units with IDENTICAL structure is fatal (one model reported twice, so
