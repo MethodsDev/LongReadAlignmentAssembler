@@ -125,7 +125,35 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 # testing carries -testing, and :latest and the bare version tags stay the
 # exclusive property of the release scripts.
 
-docker build -f Dockerfile.base -t ${BASE_IMAGE} .
+# --cache-from, and the inline cache that makes it work.
+#
+# The docker driver supports INLINE cache only: a pushed image carries its own
+# cache metadata when built with BUILDKIT_INLINE_CACHE=1, and a later build seeds
+# from it by naming that image in --cache-from.  `type=registry` needs a
+# docker-container driver, which this script does not use.
+#
+# Why base is now PUSHED as well: the R stack in Dockerfile.sc is 2.3 GB and
+# roughly an hour of compiling Seurat, cached across commits only because the
+# checkout is the last layer.  That holds while the local cache holds.  Once it is
+# pruned, base is rebuilt, and `apt-get update` resolves whatever package versions
+# are current that day -- so base comes out with a DIFFERENT digest, every layer
+# in Dockerfile.sc that descends from it misses, and Seurat recompiles.  Naming a
+# published base as both the parent cache source and a --cache-from input is what
+# breaks that chain: the layers come off the registry instead of the compiler.
+#
+# The release scripts deliberately do NOT do this.  A release should resolve its
+# own apt and CRAN content rather than inherit a cached layer from whenever a devel
+# build last ran; freshness is worth an hour there, and releases are rare.
+#
+# --cache-from on an image that does not exist is a warning, not an error, so a
+# first run against an empty registry still builds.
+docker build -f Dockerfile.base \
+    --build-arg BUILDKIT_INLINE_CACHE=1 \
+    --cache-from ${REGISTRY}/lraa-base:${VERSION} \
+    -t ${BASE_IMAGE} \
+    -t ${REGISTRY}/lraa-base:${VERSION} \
+    -t ${REGISTRY}/lraa-base:${VERSIONED_TAG} \
+    -t ${REGISTRY}/lraa-base:${COMMIT_TAG} .
 
 build_image() {
     local name=$1
@@ -135,6 +163,8 @@ build_image() {
         --build-arg LRAA_BASE_IMAGE=${BASE_IMAGE} \
         --build-arg LRAA_VERSION=v${LRAA_VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --cache-from ${REGISTRY}/${name}:${VERSION} \
         -t ${REGISTRY}/${name}:${VERSION} \
         -t ${REGISTRY}/${name}:${VERSIONED_TAG} \
         -t ${REGISTRY}/${name}:${COMMIT_TAG} .
@@ -198,6 +228,17 @@ for name in ${IMAGES}; do
     docker push ${REGISTRY}/${name}:${VERSION}
     docker push ${REGISTRY}/${name}:${VERSIONED_TAG}
     docker push ${REGISTRY}/${name}:${COMMIT_TAG}
+done
+
+# lraa-base, pushed for one reason: to be the --cache-from source for the next
+# build on a machine whose local cache is gone.  It is NOT in ${IMAGES} because
+# that list drives the revision-label assertion above and base carries no
+# LRAA_CO -- it holds no checkout, which is exactly why it is reusable across
+# commits.  Pushed after the assertions for the same reason as the rest: a base
+# published while a later image fails its check would seed future builds from a
+# commit that never passed.
+for tag in ${VERSION} ${VERSIONED_TAG} ${COMMIT_TAG}; do
+    docker push ${REGISTRY}/lraa-base:${tag}
 done
 
 # The pin a benchmark run should record, printed rather than left to be

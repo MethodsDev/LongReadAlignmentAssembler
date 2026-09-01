@@ -109,6 +109,46 @@ Neither testing tag is a release artifact. Both come out of the same build, so
 they cannot drift apart, and only the release scripts write `latest` or a bare
 version.
 
+### Cold builds pull the R stack instead of recompiling it
+
+`Dockerfile.sc` carries ~2.3 GB of R: 862 MB of apt libraries, 1.02 GB of Seurat
+and Bioconductor, 417 MB of scientific Python. The LRAA checkout is the last
+layer, so a commit bump reuses all of it -- while the local build cache lasts.
+
+Once that cache is pruned, the chain breaks in a way the layer ordering cannot
+fix: `lraa-base` is rebuilt, `apt-get update` resolves whatever package versions
+are current that day, base comes out with a DIFFERENT digest, and every layer in
+`Dockerfile.sc` descending from it misses. MEASURED: Seurat recompiles for about
+59 minutes.
+
+`build_docker.testing.sh` closes that with two halves, which only work together:
+
+- `--build-arg BUILDKIT_INLINE_CACHE=1` on every build, so each pushed image
+  carries its own cache metadata. The `docker` driver supports INLINE cache only;
+  `type=registry` needs a `docker-container` driver, which these scripts do not use.
+- `--cache-from <the published counterpart>`, so a later build seeds from it. On an
+  image that does not exist yet this is a warning, not an error, so a first run
+  against an empty repository still builds.
+
+`lraa-base` is therefore PUSHED as well, purely as a cache source. It is not in
+`${IMAGES}`: that list drives the revision-label assertion, and base carries no
+`LRAA_CO` because it holds no checkout -- which is exactly what makes it reusable
+across commits.
+
+MEASURED end to end, from 0 B of build cache and no local `lraa-sc` image:
+
+| step | result |
+|---|---|
+| `lraa-base` rebuild | 12 layers CACHED, **1.4 s** |
+| `lraa-sc` rebuild | 6 layers CACHED, **26.1 s** |
+| the Seurat/BiocManager layer | CACHED, against ~59 min to compile |
+
+The resulting image runs and reports `LRAA VERSION: v0.30.0` with `Seurat 5.0.0`.
+
+The RELEASE scripts deliberately do none of this. A release should resolve its own
+apt and CRAN content rather than inherit a layer cached from whenever a devel build
+last ran; freshness is worth an hour there, and releases are rare.
+
 Devel work is tagged `<version>-testing` or `<version>-<shortsha>`, never a bare
 version: a devel run needs an image it can name later, not a claim that the
 version was released. Testing configures its image through the inputs JSON
