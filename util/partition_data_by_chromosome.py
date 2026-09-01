@@ -22,13 +22,20 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _samtools_threads(cli_value: Optional[int] = None) -> int:
+    """samtools' -@, which is ADDITIONAL threads on top of the main one.
+
+    An explicit 0 is honoured rather than raised to 1: it is samtools' own default and
+    the only value that fits one extraction plus the two light jobs inside a 3-core
+    grant. Absent any value the default is 1, unchanged.
+    """
+
     if cli_value is not None:
-        return max(1, cli_value)
+        return max(0, cli_value)
 
     env_value = os.environ.get("PARTITION_SAMTOOLS_THREADS")
     if env_value:
         try:
-            return max(1, int(env_value))
+            return max(0, int(env_value))
         except ValueError:
             LOGGER.warning(
                 "Invalid PARTITION_SAMTOOLS_THREADS value %r; falling back to 1 thread",
@@ -351,6 +358,46 @@ def _partition_gtf(
         handle.close()
 
 
+def _cgroup_cpu_quota(root: str = "/sys/fs/cgroup") -> Optional[int]:
+    """Cores this process was GRANTED by its cgroup, or None if no quota is set.
+
+    This is the number a container runtime actually enforces, which is what makes it
+    worth reading: a WDL `cpu` declaration is a request, and the backend may grant
+    less. miniwdl's swarm backend applies it as `--limit-cpu`, Cromwell sets a per-VM
+    quota, and both surface here.
+
+    ``root`` is a parameter so this is testable without a container.
+
+    v2 puts "<quota> <period>" in cpu.max ("max" meaning unlimited); v1 splits it
+    across cpu.cfs_quota_us (-1 unlimited) and cpu.cfs_period_us. Rounded DOWN to whole
+    cores, then floored at 1, because a fractional grant still has to run something.
+    """
+
+    v2 = os.path.join(root, "cpu.max")
+    try:
+        with open(v2, "rt") as fh:
+            quota_s, period_s = fh.read().split()[:2]
+        if quota_s != "max":
+            period = int(period_s)
+            if period > 0:
+                return max(1, int(quota_s) // period)
+        return None
+    except (OSError, ValueError):
+        pass
+
+    try:
+        with open(os.path.join(root, "cpu", "cpu.cfs_quota_us"), "rt") as fh:
+            quota = int(fh.read().strip())
+        with open(os.path.join(root, "cpu", "cpu.cfs_period_us"), "rt") as fh:
+            period = int(fh.read().strip())
+        if quota > 0 and period > 0:
+            return max(1, quota // period)
+    except (OSError, ValueError):
+        pass
+
+    return None
+
+
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Partition BAM/FASTA/GTF by chromosome")
     parser.add_argument("--input-bam", dest="input_bam", type=str, default=None)
@@ -390,6 +437,21 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "pass). --samtools-threads is samtools' -@, which is ADDITIONAL threads, so "
         "each worker needs samtools_threads + 1 runnable threads and a caller's cpu "
         "reservation must cover num_workers * (samtools_threads + 1)",
+    )
+    # The cores the CALLER reserved, so the pool can hold itself inside them. This is
+    # the contract; affinity is only a secondary net, because a backend may constrain
+    # scheduling shares without constraining a cpuset: miniwdl reports "cpu adjusted to
+    # host limit" and hands the task fewer cores, yet the task can still SEE every
+    # core, so sched_getaffinity would not bind there. Passing the reservation makes
+    # the cap independent of whether the backend enforces one.
+    parser.add_argument(
+        "--reserved-cpu",
+        dest="reserved_cpu",
+        type=int,
+        default=None,
+        help="cores the caller reserved for this task. The pool is held so that "
+        "num_workers * (samtools_threads + 1) + 2 stays within it, so the script "
+        "cannot oversubscribe its own reservation even where nothing enforces it",
     )
     return parser.parse_args(argv)
 
@@ -433,16 +495,67 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("GTF", _partition_gtf, (annot_gtf, chromosomes, args.gtf_out_dir)),
     )
 
+    # The cores this process actually HAS, resolved before any work is planned, because
+    # the effective -@ is derived from it and every planned unit carries that value into
+    # its samtools invocation. Deciding it afterwards would log one number and run
+    # another.
+    #
+    # The CGROUP QUOTA is the only number the runtime both grants and enforces. It is
+    # how a cpu reservation is actually applied under docker: miniwdl's swarm backend
+    # passes --limit-cpu, Cromwell/Terra sets a quota per VM, and both land as cpu.max
+    # (v2) or cpu.cfs_quota_us (v1) inside the task. That makes it the right primary
+    # signal, because it reflects what was GRANTED rather than what was asked for --
+    # the case where miniwdl reports "cpu adjusted to host limit" and hands the task
+    # fewer cores than the WDL requested. MEASURED inside `docker run --cpus=8`:
+    # sched_getaffinity still reports all 16 host cores, the quota reports 8.
+    #
+    # AFFINITY catches the cpuset form of the same grant (taskset, Apptainer with one).
+    try:
+        visible = len(os.sched_getaffinity(0))
+    except AttributeError:  # pragma: no cover - non-Linux
+        visible = os.cpu_count() or 1
+    granted = _cgroup_cpu_quota()
+    binding_grant = min([c for c in (granted, visible) if c])
+
+    requested_threads = _samtools_threads(args.samtools_threads)
+    threads_each = requested_threads
+
+    # A GRANT below the floor is a fact about the environment, not a caller mistake, so
+    # it is adapted to rather than refused: failing here would abort a run that can
+    # still complete, just slower. -@ is the one lever with no correctness meaning, so
+    # it gives way first. Capping the POOL alone does not cover this -- one worker at
+    # -@ 4 is 5 threads, plus the 2 light jobs, under an enforced 3-core quota.
+    if binding_grant < requested_threads + 3:
+        threads_each = max(0, binding_grant - 3)
+        LOGGER.warning(
+            "partition: --samtools-threads reduced from %d to %d -- only %d core(s) "
+            "granted and one worker plus the 2 FASTA/GTF jobs needs %d at the "
+            "requested value. Throughput only; -@ is ADDITIONAL threads",
+            requested_threads,
+            threads_each,
+            binding_grant,
+            requested_threads + 3,
+        )
+        if binding_grant < 3:
+            LOGGER.warning(
+                "partition: %d core(s) cannot hold one extraction plus the 2 FASTA/GTF "
+                "jobs even at -@ 0; running 3 process(es) anyway, which is the minimum "
+                "this script has",
+                binding_grant,
+            )
+
     # Both bam kinds flattened into ONE work list and ONE pool, so `num_workers` is
     # the exact count of concurrent samtools processes -- not a per-kind figure that
     # doubles when bam_for_sg exists, and not a floor division that strands capacity
     # at odd budgets or runs 2 when the budget says 1.
     bam_work = []
+    # threads_each, not args.samtools_threads: the value resolved against the grant
+    # above is the one each unit must carry into its samtools invocation.
     bam_work += _plan_bam_partition(
-        input_bam, chromosomes, args.bam_out_dir, "BAM", args.samtools_threads
+        input_bam, chromosomes, args.bam_out_dir, "BAM", threads_each
     )
     bam_work += _plan_bam_partition(
-        bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", args.samtools_threads
+        bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", threads_each
     )
 
     # Longest first, ACROSS both kinds, by the mapped count already read from each
@@ -453,16 +566,69 @@ def main(argv: Optional[List[str]] = None) -> int:
     # flattened list is what actually makes the pool's last job a small one.
     bam_work.sort(key=lambda unit: unit[5], reverse=True)
 
-    workers = max(1, min(args.num_workers, len(bam_work))) if bam_work else 1
-    threads_each = _samtools_threads(args.samtools_threads)
+    # THREE caps on the POOL, because no one of them is sufficient. The grant numbers
+    # come from above; the RESERVATION is self-consistency only -- it holds the pool
+    # inside what the caller PROMISED the scheduler even where nothing enforces it, and
+    # cannot detect a grant smaller than the request, which is what the other two are
+    # for.
+
+    def _affordable(cores):
+        # minus the 2 light FASTA/GTF jobs, divided by the runnable threads a worker
+        # needs (-@ is ADDITIONAL, so + 1 for its main thread)
+        return max(1, (cores - 2) // (threads_each + 1))
+
+    caps = {}
+    if granted:
+        caps["cgroup quota({} core)".format(granted)] = _affordable(granted)
+    caps["affinity({} core)".format(visible)] = _affordable(visible)
+    if args.reserved_cpu is not None and args.reserved_cpu > 0:
+        caps["reservation({} core)".format(args.reserved_cpu)] = _affordable(args.reserved_cpu)
+
+    # A reservation smaller than the floor cannot be honoured by capping: one worker
+    # is 5 runnable threads at -@ 4 and the two light jobs are 2 more, so 7 is the
+    # minimum this script can run inside. Below that, max(1, ...) would floor the pool
+    # at one worker and STILL exceed the reservation -- the same violation the cap
+    # exists to prevent, just quieter. Refused rather than silently overrun, because
+    # the caller has two real fixes (raise the reservation, or lower
+    # --samtools-threads) and the script cannot choose between them.
+    minimum_cpu = threads_each + 3
+    if args.reserved_cpu is not None and 0 < args.reserved_cpu < minimum_cpu:
+        raise ValueError(
+            "--reserved-cpu {} cannot run this task: one worker needs {} runnable "
+            "thread(s) at --samtools-threads {} and the FASTA/GTF jobs need 2 more, "
+            "so the floor is {}. Raise the reservation or lower "
+            "--samtools-threads.".format(
+                args.reserved_cpu,
+                threads_each + 1,
+                threads_each,
+                minimum_cpu,
+            )
+        )
+
+    requested = max(1, args.num_workers)
+    ceiling = min(caps.values())
+    workers = max(1, min(requested, len(bam_work), ceiling)) if bam_work else 1
+
+    if bam_work and workers < min(requested, len(bam_work)):
+        binding = [k for k, v in caps.items() if v == ceiling]
+        LOGGER.warning(
+            "partition: --num-workers %d reduced to %d by %s -- each worker needs %d "
+            "runnable thread(s), so the requested pool would oversubscribe",
+            requested,
+            workers,
+            " and ".join(sorted(binding)),
+            threads_each + 1,
+        )
+
     LOGGER.info(
         "partition: %d contig extraction(s) across both bam kind(s), %d at a time, "
         "%d additional samtools thread(s) each -> up to %d runnable thread(s) for the "
-        "bam work plus 2 for FASTA/GTF",
+        "bam work plus 2 for FASTA/GTF, against %d visible core(s)",
         len(bam_work),
         workers,
         threads_each,
         workers * (threads_each + 1),
+        visible,
     )
 
     failures = []

@@ -44,6 +44,11 @@ workflow LRAA_cell_cluster_guided {
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
+
+        # Contigs each per-cluster partition extracts concurrently. 1 locally, where
+        # these jobs share one host; 4 on Terra, where each is its own VM and the
+        # 2.19x measured for the fan-out is available on every one of them.
+        Int cluster_partition_workers = 1
         
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -214,6 +219,7 @@ workflow LRAA_cell_cluster_guided {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     main_chromosomes = main_chromosomes,
+                    partition_workers = cluster_partition_workers,
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
@@ -319,6 +325,7 @@ workflow LRAA_cell_cluster_guided {
             sample_id = sample_id,
             referenceGenome = referenceGenome,
             scattering = scattering_final_quant,
+            cluster_partition_workers = cluster_partition_workers,
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),

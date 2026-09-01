@@ -26,6 +26,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "util" / "partition_data_by_chromosome.py"
 
+# the tag the repo's own build script publishes, so this follows a rebuild rather than
+# pinning a revision that goes stale
+DOCKER_IMAGE = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing"
+
 # Uneven on purpose: the pool is meant to start the biggest first, and equal-sized
 # contigs would hide an ordering mistake behind a symmetric workload.
 CONTIGS = [("chrA", 4000, 40), ("chrB", 3000, 25), ("chrC", 2000, 10), ("chrD", 1000, 3)]
@@ -210,15 +214,278 @@ def test_the_single_cell_workflow_widens_only_its_initial_partition():
     sc = (REPO / "WDL" / "LRAA-singlecell.wdl").read_text()
     top = (REPO / "WDL" / "LRAA.wdl").read_text()
 
-    # the single-cell workflow declares it and forwards it to the initial call
-    assert "Int initial_partition_workers = 4" in sc
+    # the single-cell workflow declares it and forwards it to the initial call. 2, not
+    # the measured knee of 4: cpu is workers * (-@ + 1) + 2, so 2 asks 12 and fits a
+    # 16-core machine while 4 asks 22 and forces a 32-core instance to be billed for
+    # the whole task, buying the 18 s between 1:13.8 and 0:55.8. Pinned because either
+    # number is defensible and the reason for choosing between them is not recoverable
+    # from the value.
+    assert "Int initial_partition_workers = 2" in sc
     assert "partition_workers = initial_partition_workers" in sc
 
     # LRAA.wdl accepts it and hands it to the partition subworkflow
     assert "Int partition_workers = 1" in top
     assert "partition_workers = partition_workers" in top
 
-    # and the per-cluster paths do NOT pass it, so they keep the default of 1
+    # the per-cluster paths take a SEPARATE knob, because the cost differs: the initial
+    # partition is one task widened once, while this one is billed 14 to 32 times over,
+    # and locally miniwdl puts all of them on ONE host where the multiplied reservation
+    # cannot be placed until the box drains.
+    assert "Int cluster_partition_workers = 1" in sc
+    assert "cluster_partition_workers = cluster_partition_workers" in sc
     for name in ("LRAA-cell_cluster_guided.wdl", "LRAA_quant_by_cluster.wdl"):
         text = (REPO / "WDL" / name).read_text()
-        assert "partition_workers" not in text, name
+        assert "Int cluster_partition_workers = 1" in text, name
+        assert "partition_workers = cluster_partition_workers" in text, name
+
+def test_the_pool_is_held_inside_the_reservation(inputs, tmp_path):
+    """A cpu declaration is a promise to the scheduler; the pool must fit inside it.
+
+    Nothing necessarily ENFORCES it. miniwdl adjusts cpu as a scheduling share and
+    reports "cpu adjusted to host limit", but the task still sees every core -- so an
+    affinity check does not bind there and the argv it already built still says
+    --num-workers 4. Passing the reservation is what makes the cap independent of the
+    backend. Reserved 7 -- the WDL's own one-worker default -- affords (7 - 2) // 5 = 1,
+    so it forces one worker on any host, including one with cores to spare.
+
+    Deliberately not parametrized over a generous reservation: on a box whose visible
+    cores afford less than the reservation does, affinity binds first and the expected
+    count would be a property of the test machine rather than of the code.
+    """
+
+    import subprocess as sp
+
+    reserved, requested = 7, 8
+    _d, bam, _sg, fasta = inputs
+    out = tmp_path / "reserved{}".format(reserved)
+    out.mkdir()
+    res = sp.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--input-bam", str(bam),
+            "--genome-fasta", str(fasta),
+            "--chromosomes", *[c[0] for c in CONTIGS],
+            "--samtools-threads", "4",
+            "--num-workers", str(requested),
+            "--reserved-cpu", str(reserved),
+            "--bam-out-dir", str(out / "bams"),
+            "--fasta-out-dir", str(out / "fa"),
+            "--gtf-out-dir", str(out / "gtf"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr[-2000:]
+    # the reservation is the binding cap, and it says which one bound
+    assert "reservation(7 core)" in res.stderr, res.stderr[-2000:]
+    assert "1 at a time" in res.stderr, res.stderr[-2000:]
+    # capped, not failed: the output is still complete
+    assert _counts(out / "bams") == {"{}.bam".format(c[0]): c[2] for c in CONTIGS}
+
+
+def test_the_wdl_passes_its_reservation_to_the_script():
+    """The knob and the number it must respect travel together, or the cap is inert."""
+
+    wdl = (REPO / "WDL" / "subwdls" / "Partition_data_by_chromosome.wdl").read_text()
+    assert "--num-workers ~{effective_partition_workers}" in wdl
+    assert "--reserved-cpu ~{partition_cpu}" in wdl
+
+
+@pytest.mark.parametrize("reserved", [1, 3, 6])
+def test_a_reservation_below_the_floor_is_refused(inputs, tmp_path, reserved):
+    """Capping cannot honour a reservation smaller than one worker plus the light jobs.
+
+    max(1, ...) would floor the pool at one worker and still exceed the reservation --
+    the same oversubscription, just quieter. The caller has two real fixes (raise the
+    reservation, lower --samtools-threads) and the script cannot pick between them, so
+    it refuses and names both.
+    """
+
+    import subprocess as sp
+
+    _d, bam, _sg, fasta = inputs
+    out = tmp_path / "floor{}".format(reserved)
+    out.mkdir()
+    res = sp.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--input-bam", str(bam),
+            "--genome-fasta", str(fasta),
+            "--chromosomes", *[c[0] for c in CONTIGS],
+            "--samtools-threads", "4",   # floor is 4 + 3 = 7
+            "--num-workers", "4",
+            "--reserved-cpu", str(reserved),
+            "--bam-out-dir", str(out / "bams"),
+            "--fasta-out-dir", str(out / "fa"),
+            "--gtf-out-dir", str(out / "gtf"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "cannot run this task" in res.stderr
+    assert "the floor is 7" in res.stderr
+
+
+def test_the_default_reservation_is_exactly_the_floor():
+    """cpu at one worker is 7, which is the smallest this script can run inside.
+
+    Not a coincidence worth losing: if the WDL default and the script's floor ever
+    drift apart, the default configuration either refuses to start or overruns.
+    """
+
+    threads_each = 4  # samtools_extra_threads at the WDL default of samtools_threads 5
+    assert 1 * (threads_each + 1) + 2 == threads_each + 3 == 7
+
+
+@pytest.mark.parametrize(
+    "layout,expected",
+    [
+        ({"cpu.max": "800000 100000"}, 8),          # v2, docker --cpus=8
+        ({"cpu.max": "250000 100000"}, 2),          # v2, fractional 2.5 rounds DOWN
+        ({"cpu.max": "50000 100000"}, 1),           # v2, half a core still runs one
+        ({"cpu.max": "max 100000"}, None),          # v2, unlimited
+        ({"cpu/cpu.cfs_quota_us": "600000",
+          "cpu/cpu.cfs_period_us": "100000"}, 6),   # v1
+        ({"cpu/cpu.cfs_quota_us": "-1",
+          "cpu/cpu.cfs_period_us": "100000"}, None),  # v1, unlimited
+        ({}, None),                                 # no cgroup at all
+    ],
+)
+def test_the_granted_cpu_is_read_from_the_cgroup(tmp_path, layout, expected):
+    """The grant has to come from what the runtime ENFORCES, not what was requested.
+
+    A WDL cpu declaration is a request. miniwdl applies it as docker --limit-cpu and
+    reports "cpu adjusted to host limit" when it trims one, so the task can be granted
+    fewer cores than its argv was built for. Measured inside `docker run --cpus=8`:
+    sched_getaffinity still reports every host core (16 here), while the cgroup quota
+    reads 8 -- so this is the only signal that binds in the case that motivated it.
+    """
+
+    sys.path.insert(0, str(REPO / "util"))
+    from partition_data_by_chromosome import _cgroup_cpu_quota
+
+    for name, text in layout.items():
+        f = tmp_path / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+
+    assert _cgroup_cpu_quota(str(tmp_path)) == expected
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("docker"), reason="needs docker to constrain a cgroup"
+)
+def test_the_pool_is_capped_by_a_real_container_grant(inputs, tmp_path):
+    """End-to-end through the mechanism miniwdl itself uses to apply cpu.
+
+    This is the case a reservation argument cannot catch: the caller asked for enough,
+    the backend granted less, and nothing in the argv changed. Affinity does not bind
+    inside `--cpus`; the quota does.
+    """
+
+    import shutil
+    import subprocess as sp
+
+    _d, bam, _sg, fasta = inputs
+    out = tmp_path / "granted"
+    out.mkdir()
+    res = sp.run(
+        [
+            shutil.which("docker"), "run", "--rm", "--cpus=8",
+            "-v", "{}:/u:ro".format(REPO / "util"),
+            "-v", "{}:/d:ro".format(bam.parent),
+            "-v", "{}:/w".format(out),
+            DOCKER_IMAGE,
+            "python3", "/u/partition_data_by_chromosome.py",
+            "--input-bam", "/d/{}".format(bam.name),
+            "--chromosomes", *[c[0] for c in CONTIGS],
+            "--samtools-threads", "4",
+            "--num-workers", "8",
+            "--reserved-cpu", "42",   # the caller asked for plenty; the grant is 8
+            "--bam-out-dir", "/w/bams",
+            "--fasta-out-dir", "/w/fa",
+            "--gtf-out-dir", "/w/gtf",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0 and "Cannot connect to the Docker daemon" in res.stderr:
+        pytest.skip("docker daemon unavailable")
+    assert res.returncode == 0, res.stderr[-2000:]
+
+    # the GRANT bound it, and the log names which cap did
+    assert "cgroup quota(8 core)" in res.stderr, res.stderr[-2000:]
+    assert "1 at a time" in res.stderr, res.stderr[-2000:]
+
+
+def test_the_planned_units_carry_the_thread_count_they_were_given(inputs):
+    """The unit's thread field IS the -@ argv, so it must be the adapted value.
+
+    `_extract_one_contig` passes unit[3] straight to `pysam.view("-@", str(threads))`.
+    The units are planned before the pool is sized, so a thread count resolved after
+    planning would be logged and never applied -- the summary would claim -@ 0 while
+    four samtools ran at -@ 4.
+    """
+
+    sys.path.insert(0, str(REPO / "util"))
+    from partition_data_by_chromosome import _plan_bam_partition
+
+    _d, bam, _sg, _fasta = inputs
+    work = _plan_bam_partition(
+        str(bam), [c[0] for c in CONTIGS], str(_d / "planned"), "BAM", 3
+    )
+    assert work, "fixture should plan work"
+    assert {unit[3] for unit in work} == {3}
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("docker"), reason="needs docker to constrain a cgroup"
+)
+def test_a_grant_below_the_floor_lowers_the_threads_that_actually_run(inputs, tmp_path):
+    """Under an enforced 3-core quota the pool cap alone is not enough.
+
+    One worker at -@ 4 is 5 runnable threads and the two light jobs are 2 more, so
+    capping the pool at 1 still runs 7 processes' worth of threads inside a 3-core
+    grant. -@ is the only lever with no correctness meaning, so it gives way -- and
+    this asserts the PER-CONTIG line, which sits beside the `-@` argv, not just the
+    summary, so a value that was logged but not applied would fail here.
+
+    Adapted rather than refused: a grant is a fact about the environment, and aborting
+    would fail a run that can still finish.
+    """
+
+    import shutil
+    import subprocess as sp
+
+    _d, bam, _sg, fasta = inputs
+    out = tmp_path / "tight"
+    out.mkdir()
+    res = sp.run(
+        [
+            shutil.which("docker"), "run", "--rm", "--cpus=3",
+            "-v", "{}:/u:ro".format(REPO / "util"),
+            "-v", "{}:/d:ro".format(bam.parent),
+            "-v", "{}:/w".format(out),
+            DOCKER_IMAGE,
+            "python3", "-u", "/u/partition_data_by_chromosome.py",
+            "--input-bam", "/d/{}".format(bam.name),
+            "--chromosomes", *[c[0] for c in CONTIGS],
+            "--samtools-threads", "4",
+            "--num-workers", "8",
+            "--bam-out-dir", "/w/bams",
+            "--fasta-out-dir", "/w/fa",
+            "--gtf-out-dir", "/w/gtf",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0 and "Cannot connect to the Docker daemon" in res.stderr:
+        pytest.skip("docker daemon unavailable")
+    assert res.returncode == 0, res.stderr[-2000:]
+
+    assert "--samtools-threads reduced from 4 to 0" in res.stderr, res.stderr[-3000:]
+    # the line beside the -@ argv: what samtools was ACTUALLY told
+    assert "using 0 additional thread(s)" in res.stderr, res.stderr[-3000:]
+    # 1 worker + 2 light jobs == 3 processes, exactly the grant
+    assert "1 at a time" in res.stderr, res.stderr[-3000:]

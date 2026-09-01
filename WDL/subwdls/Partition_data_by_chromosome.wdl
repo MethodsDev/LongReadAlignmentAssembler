@@ -107,6 +107,7 @@ task partition_by_chromosome_task {
             --chromosomes ~{chromosomes_want_partitioned} \
             --samtools-threads ~{samtools_extra_threads} \
             --num-workers ~{effective_partition_workers} \
+            --reserved-cpu ~{partition_cpu} \
             --bam-out-dir split_bams \
             --bam-for-sg-out-dir split_bams_for_sg \
             --fasta-out-dir split_fastas \

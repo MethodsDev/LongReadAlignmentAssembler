@@ -55,6 +55,9 @@ workflow LRAA_quant_by_cluster {
         
         # Chromosome splitting parameters for LRAA quantification
         String main_chromosomes = "" # Set to split by chromosomes, leave empty to run without splitting
+        # Contigs each per-cluster partition extracts concurrently. 1 locally, where
+        # these jobs share one host; 4 on Terra, where each is its own VM.
+        Int cluster_partition_workers = 1
         
         # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides
         # across work units. There is no second knob to multiply it by.
@@ -258,6 +261,9 @@ workflow LRAA_quant_by_cluster {
                 sample_id = cluster_sample_id,
                 referenceGenome = referenceGenome,
                 inputBAM = cluster_bams[i],
+                # Per-cluster, so backend-dependent: 1 locally where these jobs share a
+                # host, 4 on Terra where each is its own VM.
+                partition_workers = cluster_partition_workers,
                 # THREE bams, three roles, and they must be three different files:
                 #
                 #   inputBAM                 = this cluster's FULL reads. Pass 2
