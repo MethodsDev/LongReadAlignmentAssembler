@@ -1,4 +1,57 @@
 v0.29.0
+- FIXED: `--oversimplify` was inert on every chromosome-scattered de novo run, because
+  the shard was handed an annotation file containing no annotation. `splitByChr` emits
+  a per-contig GTF for EVERY contig regardless of whether the caller supplied one: with
+  no `--annot-gtf`, `_partition_gtf` still opens a file per chromosome and writes
+  `# no gtf records` into it (`util/partition_data_by_chromosome.py:305`). That 17-byte
+  file reached LRAA as a real `--gtf`, and one argument disqualified all three
+  oversimplify arms at once -- quant-only needs `QUANT_ONLY`, ref-guided needs
+  transcripts the file does not contain, and the de novo arm tested
+  `job["input_gtf"] is None` -- so control fell through to ordinary discovery. MEASURED
+  on a production whole-genome de novo run: chrM came back as 75 multi-exon models over
+  16,569 unspliced bases, its 13.7M reads (7.6% of a 179M-read library) assembled
+  instead of counted, and that arm ran 5h17m against a predicted 0.97x of quant-only.
+  Every direct invocation of LRAA tested correct, because a hand-run never passes an
+  empty `--gtf`; only the workflow manufactured one, which is why seven modes checked
+  by hand all passed while the pipeline was broken.
+  Fixed on both sides. The de novo arm now tests `not input_transcripts`: an empty
+  transcript set IS no annotation whatever argument produced it, and the ref-guided arm
+  already guarded that way, so the two are consistent and LRAA is correct regardless of
+  caller. `WDL/LRAA.wdl` additionally passes the per-contig GTF only when a top-level
+  annotation was supplied, so the meaningless argument is no longer sent. The
+  placeholder files themselves are left alone: suppressing them would empty the
+  `chromosomeGTFs` glob that this one site indexes.
+  Regression test asserts the emitted models rather than a log line -- per-contig worker
+  output goes to `<prefix>.contigtmp/<contig>/<strand>/*.err.log`, so the main log shows
+  nothing even when the arm fires, which cost two wrong localisations during diagnosis.
+  Negative control run: reverting the predicate fails the test with an assembled
+  `t:chrM:+:comp-1:iso-1`, which is the production symptom.
+- FIXED: chunked discovery prefixed EVERY merged model id with its unit id. That cannot
+  collide, which is why it was chosen, but it prefixed ids never at risk. MEASURED on two
+  independent 5-unit chr22 lineages: of 1,551 and 1,918 distinct transcript ids, only 122
+  and 112 appeared in more than one unit -- 92% and 94% carried a prefix for nothing. The
+  cost was not cosmetic: a chunked run whose input is another chunked run's GTF, which is
+  exactly what a per-cluster run is, prefixed ids that already carried one, so
+  cluster-guided output shipped `chrM_00_plus@chrM_00_plus@t:chrM:+:OVSIMP` and a supplied
+  GENCODE accession shipped as `chrM_00_plus@chrM_00_plus@ENST00000387314.1`.
+  `merged_id_plan` now derives per merge which ids need disambiguating: an id one unit
+  names is carried through as itself, an id two units give DIFFERENT structures is
+  prefixed exactly as before. Keyed on `(unit_id, attribute_kind, source_id)` because
+  gene_id and transcript_id are independent spaces. Derived rather than passed --
+  `merge_discovery_gtf`'s signature is guarded against gaining parameters, and an id plan
+  is the clearest reason why: an empty map would refuse nothing and fuse every chunk's
+  comp-1 into one model silently, which is the chr21 incident that produced 37 spurious
+  chromosome-crossing models. Memoised, since the GTF, quant.expr and quant.tracking
+  merges run in that order and all three must name the same models.
+  Two refusals rather than guesses: a unit with no model GTF is fatal (skipping it would
+  leave its ids unplanned and unprefixed -- the same fusion, arriving through I/O), and
+  one id in several units with IDENTICAL structure is fatal (one model reported twice, so
+  prefixing invents a second and dropping either loses its quant rows; MEASURED absent on
+  both lineages, since straddling cuts remain fatal). A unit whose GTF exists but holds no
+  models is unaffected.
+  VERIFIED end to end on PBMC chr22+chrM (5,541,259 chrM reads): basic de novo then
+  cluster-guided from its output, chrM identical in and out as `t:chrM:+:OVSIMP` with zero
+  namespace separators, span 1-16569, two tracking rows, chr22 assembling 7,648 models.
 - FIXED: `merge_LRAA_GTFs.py` merged oversimplified contigs instead of carrying them
   through, corrupting the models it should have left alone. An oversimplified contig
   was never assembled -- LRAA collapses it deliberately, into one aggregate gene
@@ -34,11 +87,16 @@ v0.29.0
   `WDL/LRAA-cell_cluster_guided.wdl` threads the same list the per-cluster runs were
   given into the merge task, quoted so a multi-contig value survives as one argv word.
   Behaviour without the flag is unchanged.
-- NOTE: verified at this revision that `--oversimplify chrM` is respected across
-  bulk quant-only, bulk de novo, bulk ref-guided (HG002 chr22+chrM, 1,199,182 chrM
-  reads) and single-cell basic de novo (PBMC, 5,541,259 chrM reads) -- chrM collapses
-  to one single-exon model per strand, or to the annotation as-is, while the control
-  contig assembles normally. The defect above was confined to the cross-cluster merge.
+- NOTE: `--oversimplify chrM` was verified respected across bulk quant-only, bulk de novo,
+  bulk ref-guided (HG002 chr22+chrM, 1,199,182 chrM reads) and single-cell basic de novo
+  (PBMC, 5,541,259 chrM reads) -- chrM collapses to one single-exon model per strand, or
+  to the annotation as-is, while the control contig assembles normally.
+  Those were all DIRECT invocations, and that is the trap: seven modes checked by hand all
+  passed while the chromosome-scattered workflow was broken, because only the workflow
+  manufactures the empty `--gtf` above. Two independent defects shipped here -- one in the
+  cross-cluster merge, one in what the scatter passes its shards -- and neither was
+  reachable by the tests that covered the other. A mode passing by hand says nothing about
+  the same mode under the WDL.
 
 v0.28.1
 - FIXED: consuming a `--chunk_plan` was fatal whenever a cut merely came within
