@@ -41,8 +41,13 @@ v0.29.0
   `merge_discovery_gtf`'s signature is guarded against gaining parameters, and an id plan
   is the clearest reason why: an empty map would refuse nothing and fuse every chunk's
   comp-1 into one model silently, which is the chr21 incident that produced 37 spurious
-  chromosome-crossing models. Memoised, since the GTF, quant.expr and quant.tracking
-  merges run in that order and all three must name the same models.
+  chromosome-crossing models. Recomputed per call rather than memoised: the plan is a
+  function of the GTF CONTENT at those prefixes, so a cache keyed on the units would
+  serve a retry that regenerated a unit's GTF the plan computed from the file it
+  replaced -- a wrong collision decision reached silently, against reading a handful of
+  small model GTFs twice more. The GTF, quant.expr and quant.tracking merges run in that
+  order and all three must name the same models, which a deterministic derivation gives
+  by construction rather than by cache discipline.
   Two refusals rather than guesses: a unit with no model GTF is fatal (skipping it would
   leave its ids unplanned and unprefixed -- the same fusion, arriving through I/O), and
   one id in several units with IDENTICAL structure is fatal (one model reported twice, so

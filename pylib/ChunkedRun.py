@@ -4664,27 +4664,21 @@ ID_KIND_TX = "transcript_id"
 # Derived, never passed. merge_discovery_gtf's signature is guarded against gaining
 # parameters precisely because a caller could get one wrong, and an id plan is the
 # clearest case: hand it an empty map and every chunk's comp-1 fuses into one model
-# again, silently. So each consumer derives the same plan from the same units, and
-# the result is cached so the per-chunk gtfs are read once rather than three times.
-_MERGED_ID_PLAN_CACHE = {}
-
-
+# again, silently. So each consumer derives the same plan from the same units.
 def merged_id_plan(units):
-    """The id plan for these units, derived and memoised.
+    """The id plan for these units, recomputed on every call.
 
-    Keyed on what the plan is a function of -- each unit's id, its output prefix and
-    its offset, plus whether coordinates are being translated -- so two consumers of
-    one merge share the answer while a different merge computes its own.
+    NOT memoised, deliberately. A cache keyed on the units -- their ids, prefixes and
+    offsets -- would be keyed on the wrong thing: the plan is a function of the GTF
+    CONTENT at those prefixes, and a retry that regenerates a unit's gtf in the same
+    process would be served the plan computed from the file it replaced. That is a
+    wrong collision decision reached silently, against reading a handful of model gtfs
+    twice more. The gtfs are small next to everything else stage 6 touches, and the
+    derivation is deterministic, so three consumers reading them independently agree
+    by construction rather than by cache discipline.
     """
 
-    translate = not coords_already_whole_contig(units)
-    key = (
-        translate,
-        tuple((u["unit_id"], u["quant_prefix"], u["offset"]) for u in units),
-    )
-    if key not in _MERGED_ID_PLAN_CACHE:
-        _MERGED_ID_PLAN_CACHE[key] = plan_merged_ids(units, translate)
-    return _MERGED_ID_PLAN_CACHE[key]
+    return plan_merged_ids(units, not coords_already_whole_contig(units))
 
 
 def plan_merged_ids(units, translate):

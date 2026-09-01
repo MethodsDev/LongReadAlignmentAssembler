@@ -1362,6 +1362,37 @@ def test_a_unit_without_a_model_gtf_is_refused_rather_than_skipped(tmp_path):
     assert "c1" in str(err.value)
 
 
+def test_the_plan_follows_the_gtf_content_not_the_unit_paths(tmp_path):
+    """Recomputed per call, because the plan is a function of the FILES.
+
+    This was memoised on (unit_id, quant_prefix, offset) -- which is keyed on the wrong
+    thing. The plan is decided by the gtf CONTENT at those prefixes, so a retry that
+    regenerated a unit's gtf in the same process would be served the plan computed from
+    the file it replaced, and two models that now collide would both be emitted under
+    one id. Silent, and worth more than the saved reads: the model gtfs are small next
+    to everything else stage 6 touches.
+    """
+
+    units = [
+        _plan_unit(tmp_path, "c0", [("tA", "gA", 100, 200)]),
+        _plan_unit(tmp_path, "c1", [("tB", "gB", 900, 950)]),
+    ]
+
+    # distinct ids: nothing collides, nothing is prefixed
+    before = ChunkedRun.merged_id_plan(units)
+    assert before[("c1", "transcript_id", "tB")] == "tB"
+    assert ChunkedRun.NAMESPACE_SEP not in "".join(before.values())
+
+    # regenerate c1's gtf AT THE SAME PREFIX so it now names c0's model differently
+    _plan_unit(tmp_path, "c1", [("tA", "gA", 5000, 5100)])
+
+    after = ChunkedRun.merged_id_plan(units)
+    sep = ChunkedRun.NAMESPACE_SEP
+    assert after[("c0", "transcript_id", "tA")] == "c0{}tA".format(sep)
+    assert after[("c1", "transcript_id", "tA")] == "c1{}tA".format(sep)
+    assert after != before
+
+
 def test_stage_six_merges_read_assignment_summaries_with_real_counts(
     make_chunks_run,
 ):
