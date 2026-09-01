@@ -189,3 +189,36 @@ def test_the_reservation_covers_what_the_script_can_run(workers, extra_threads, 
     # clamped, because the reservation is derived from it and the script floors at 1
     assert "if partition_workers < 1 then 1 else partition_workers" in wdl
     assert "--num-workers ~{effective_partition_workers}" in wdl
+
+
+
+def test_the_single_cell_workflow_widens_only_its_initial_partition():
+    """The fan-out has to REACH the workflow that motivated it, and only there.
+
+    A knob on LRAA.wdl alone ships nothing: the reported case is a single-cell run,
+    and LRAA-singlecell.wdl calls LRAA_wf three ways -- once for the initial
+    full-library phase, then once per cluster from LRAA-cell_cluster_guided.wdl and
+    LRAA_quant_by_cluster.wdl. Only the first should widen. The per-cluster calls run
+    14 to 32 times for seconds each, and a 22-core reservation there cannot be placed
+    until the box drains, which is the regression that cut this task's cpu to 5.
+
+    Asserted on the wiring rather than on a run, because reaching this in a real
+    invocation costs a whole-library partition -- but the failure mode is silent
+    (default 1 everywhere, no error, no slower-than-before), so it needs pinning.
+    """
+
+    sc = (REPO / "WDL" / "LRAA-singlecell.wdl").read_text()
+    top = (REPO / "WDL" / "LRAA.wdl").read_text()
+
+    # the single-cell workflow declares it and forwards it to the initial call
+    assert "Int initial_partition_workers = 4" in sc
+    assert "partition_workers = initial_partition_workers" in sc
+
+    # LRAA.wdl accepts it and hands it to the partition subworkflow
+    assert "Int partition_workers = 1" in top
+    assert "partition_workers = partition_workers" in top
+
+    # and the per-cluster paths do NOT pass it, so they keep the default of 1
+    for name in ("LRAA-cell_cluster_guided.wdl", "LRAA_quant_by_cluster.wdl"):
+        text = (REPO / "WDL" / name).read_text()
+        assert "partition_workers" not in text, name

@@ -131,6 +131,23 @@ workflow LRAA_singlecell_wf {
     Boolean HiFi = false
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
     String main_chromosomes = ""  # if empty, runs without partitioning
+
+    # Contigs the ONE initial full-library partition extracts concurrently. Defaulted
+    # to the measured knee rather than to 1, because in a single-cell run this step is
+    # dead time at the head of the pipeline on an otherwise idle box: REPORTED on a
+    # 188 GB library (1.51 B mapped reads, 25 contigs, 28-core host),
+    # partition_by_chromosome_task ran 27+ minutes with ONE core busy before any shard
+    # started.
+    #
+    # MEASURED on 58.3 M mapped reads across 12 contigs at -@ 4: wall 2:02 at 1
+    # worker, 1:13.8 at 2, 0:55.8 at 4, 0:56.5 at 6. So 2.19x, and 4 is the knee --
+    # past it `samtools view` stops scaling and the extra reservation buys nothing.
+    #
+    # The cost is the reservation: cpu is derived as workers * (samtools -@ + 1) + 2,
+    # so 4 asks for 22 cores. That is affordable HERE and only here -- this task runs
+    # once, first, before any shard exists to compete with it. Lower it on a host with
+    # fewer than ~24 usable cores, where a 22-core reservation would simply wait.
+    Int initial_partition_workers = 4
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
@@ -439,6 +456,13 @@ workflow LRAA_singlecell_wf {
         oversimplify = oversimplify,
         main_chromosomes = main_chromosomes,
         region = region,
+        # THE one full-library chromosome partition in a single-cell run, and the only
+        # place this is raised. The per-cluster LRAA_wf calls in
+        # LRAA-cell_cluster_guided.wdl and LRAA_quant_by_cluster.wdl deliberately do
+        # NOT pass it, so they keep LRAA.wdl's default of 1: they run 14 to 32 times
+        # for seconds each, and a wide cpu reservation there cannot be placed until
+        # the box drains.
+        partition_workers = initial_partition_workers,
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
