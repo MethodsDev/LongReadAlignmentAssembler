@@ -232,6 +232,46 @@ written down: `build_docker.latest.sh` refuses any commit that is not
 for. Neither stops a hand-retag -- nothing can -- so the prohibition on
 hand-retagging `:latest` is the part that has to be read.
 
+### Finding out what is published
+
+```bash
+bash published_tags.sh              # lraa-core, 5 rows
+bash published_tags.sh lraa-sc 10   # any repository, more rows
+```
+
+Each row is a registry entry with its digest and, resolved from git, the commit
+its tag names:
+
+```
+0.31.0-03b9c9a,0.31.0-testing,testing  sha256:634d41111769  2026-09-02 03b9c9ad Bump to v0.31.0: ...
+0.30.0-b105a80,0.30.0-testing          sha256:943dc1d2af02  2026-09-01 b105a802 Say which :latest ...
+0.18.3,latest                          sha256:0dd578248e83  no commit in tag
+```
+
+Read the COMMIT column to find the newest code. The rows are ordered by
+`UPDATE_TIME`, which is the last time the entry changed -- including a tag being
+added or restored -- and NOT when the image was built. OBSERVED: restoring the
+`0.30.0` tag lifted its entry above a newer build, and `0.30.0-b105a80` reported
+the same minute as an 0.31.0 build made a day later. Sorting by it and taking the
+top row is how you name older code while looking careful.
+
+Two smaller traps the script also absorbs:
+
+- The tag list is comma-joined INSIDE one field, so `--format=csv` cannot be
+  parsed by splitting on commas. It reads json instead.
+- `gcloud` user credentials are subject to Google Cloud session control and stop
+  working unattended. On a GCE VM the attached service account has no such policy,
+  so the script falls back to a metadata token and keeps answering; that path
+  prints neither digests nor an order, because the registry v2 API returns
+  neither, and it says so rather than implying a newest.
+
+To learn what an image CONTAINS rather than what it is called, read the label --
+the tag is a pointer and the label was stamped at build time:
+
+```bash
+docker inspect <image> --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+```
+
 ## Building
 
 Three paths. All three build the commit you are sitting on; they differ only in
