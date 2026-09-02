@@ -13,10 +13,18 @@ def make_mock_transcript(idx, lend, rend):
     return t
 
 
-def test_large_cluster_skips_leiden_and_uses_dsu():
+def test_large_cluster_skips_leiden_and_uses_dsu(monkeypatch):
     # Force a large cluster triggering DSU fallback.
-    LRAA_Globals.config["use_community_clustering"] = True
-    LRAA_Globals.config["max_transcripts_for_community_clustering"] = 10  # very small threshold for test
+    #
+    # monkeypatch, NOT direct assignment: LRAA_Globals.config is process-global, and a
+    # threshold of 10 left behind sends every later test in the session down the DSU
+    # path. That is not hypothetical -- assigning these directly made
+    # test_recluster_extent_invariance fail whenever it ran after this file, because
+    # its fixture cluster exceeds 10 and its recorded Leiden call never happened.
+    monkeypatch.setitem(LRAA_Globals.config, "use_community_clustering", True)
+    monkeypatch.setitem(
+        LRAA_Globals.config, "max_transcripts_for_community_clustering", 10
+    )
 
     transcripts = []
     # Create 25 transcripts with overlapping spans so they end up in one initial cluster
