@@ -159,7 +159,7 @@ def main():
     parser.add_argument(
         "--community_resolution",
         type=float,
-        default=1.0,
+        default=LRAA_Globals.config["community_resolution"],
         help=(
             "Leiden resolution parameter (higher → more communities)."
         ),
@@ -168,7 +168,7 @@ def main():
     parser.add_argument(
         "--community_random_seed",
         type=int,
-        default=42,
+        default=LRAA_Globals.config["community_random_seed"],
         help=(
             "Random seed for Leiden community clustering."
         ),
@@ -251,19 +251,21 @@ def main():
 
     logger.info("merge store backend: %s", resolved_backend)
 
-    # Map community clustering flags into global config
-    try:
-        LRAA_Globals.config["use_community_clustering"] = not args.no_use_community_clustering
-        LRAA_Globals.config["community_resolution"] = float(args.community_resolution)
-        LRAA_Globals.config["community_random_seed"] = int(args.community_random_seed)
-        logger.debug(
-            "Community clustering settings (merge): use=%s, resolution=%.3f, seed=%d",
-            LRAA_Globals.config["use_community_clustering"],
-            LRAA_Globals.config["community_resolution"],
-            LRAA_Globals.config["community_random_seed"],
-        )
-    except Exception as _e:
-        logger.warning(f"Failed to apply community clustering config overrides: {_e}")
+    # These --community_* defaults are seeded from LRAA_Globals.config above, so an
+    # absent flag writes the config's own value back and changes nothing; only an
+    # explicit flag moves a setting. The negated flag is conditional because absent
+    # means False, which would otherwise force clustering on over a config saying off.
+    if args.no_use_community_clustering:
+        LRAA_Globals.config["use_community_clustering"] = False
+    LRAA_Globals.config["community_resolution"] = args.community_resolution
+    LRAA_Globals.config["community_random_seed"] = args.community_random_seed
+
+    logger.info(
+        "Community clustering settings (merge): use=%s, resolution=%.3f, seed=%d",
+        LRAA_Globals.config["use_community_clustering"],
+        LRAA_Globals.config["community_resolution"],
+        LRAA_Globals.config["community_random_seed"],
+    )
 
     gtf_list = args.gtf
     genome_fasta_file = args.genome

@@ -138,6 +138,17 @@ config = {
     # gene reclustering overlap thresholds
     "min_recluster_overlap_shorter_iso_frac": 0.50,  # (overlap_len / shorter_transcript_len) >= this to connect isoforms in second-stage graph
     "min_recluster_overlap_longer_iso_frac": 0.20,  # also require (overlap_len / longer_transcript_len) >= this to avoid linking large multi-exon to long single-exon with tiny shared portion
+    # shared splice junctions as gene evidence. Denominator is the SMALLER intron
+    # count of the pair, so a fragmentary model is judged on how much of its OWN
+    # splice pattern agrees. Both conditions must hold. Isoforms with identical intron
+    # chains are one gene unconditionally and are subject to NEITHER threshold.
+    "min_recluster_shared_intron_frac": 0.20,  # shared_introns / min(intron count) > this to connect isoforms
+    # Floor on the shared COUNT. The fraction alone is met by ONE shared junction
+    # whenever the smaller isoform has <= 4 introns, which is enough for a single
+    # fragment to bind two neighbouring genes together. Measured over four contigs,
+    # raising this from 1 to 2 gave up 16 of 42 recovered gene ids and avoided 8 of 10
+    # added fusions -- an exchange rate of 13:1 rather than 4.2:1.
+    "min_recluster_shared_introns": 2,
     # community clustering (Leiden) for transcript→gene reassignment
     "use_community_clustering": True,     # enabled by default; use Leiden communities within initial clusters
     "community_resolution": 0.2,          # Leiden resolution parameter (higher → more, smaller communities)

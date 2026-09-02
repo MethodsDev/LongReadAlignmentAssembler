@@ -784,9 +784,11 @@ class Transcript(GenomeFeature):
                     contig_acc,
                     contig_strand,
                 )
-            use_comm = bool(LRAA_Globals.config.get("use_community_clustering", False))
+            # Indexed: LRAA_Globals.config defines these keys, so a .get() fallback
+            # here would be a competing default that wins silently when one is absent.
+            use_comm = bool(LRAA_Globals.config["use_community_clustering"])
             max_for_leiden = int(
-                LRAA_Globals.config.get("max_transcripts_for_community_clustering", 1500)
+                LRAA_Globals.config["max_transcripts_for_community_clustering"]
             )
             if len(cluster) == 1:
                 refined_clusters.append(cluster)
@@ -803,8 +805,8 @@ class Transcript(GenomeFeature):
                     cluster,
                     contig_acc,
                     contig_strand,
-                    resolution=LRAA_Globals.config.get("community_resolution", 1.0),
-                    seed=LRAA_Globals.config.get("community_random_seed", 42),
+                    resolution=LRAA_Globals.config["community_resolution"],
+                    seed=LRAA_Globals.config["community_random_seed"],
                 )
                 comm_to_indices = defaultdict(list)
                 for idx, cid in enumerate(membership):
