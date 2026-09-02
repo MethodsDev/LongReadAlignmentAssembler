@@ -1,3 +1,108 @@
+v0.31.0
+- BREAKING: isoform-to-gene clustering now reads shared splice junctions, so gene ids
+  and gene groupings MOVE for the same input. A minor bump rather than a patch because
+  every gene-scoped consumer sees different groups, and gene id is how a caller keys
+  them.
+
+- FIXED: `merge_LRAA_GTFs.py` never honoured the shared clustering defaults. argparse
+  always supplies a value, so a default hardcoded in the merge script overwrote
+  `LRAA_Globals.config` unconditionally -- there is no "flag was not given" state to
+  test against, and `LRAA_Globals.config[...] = args....` ran either way.
+  `--community_resolution` was hardcoded 1.0 against a config default of 0.2, and the
+  WDL never passes the flag, so every production merge reclustered at 1.0 while the
+  per-cluster LRAA runs it was reconciling had used 0.2. The merge script now seeds
+  these defaults FROM the config, the way `LRAA` itself already did, and the negated
+  clustering flag only writes when actually passed, since an absent store_true is
+  False and would otherwise force clustering on over a config that said off.
+
+  MEASURED on chr8 of a 14-input single-cell merge, holding reconstruction and the
+  initial clusters identical (1180 clusters, max 46, 3695 transcripts): 120 excess gene
+  ids at 1.0 against 16 at 0.2, where "excess" counts sum(k-1) over reference genes
+  split across k gene ids, each id anchored only on introns present in no other id.
+  Genome-wide at 1.0, 2838 of 13502 anchored reference genes were split (21.0%), for
+  3119 excess ids. Nothing distinguished the two runs in the output or the logs,
+  because the log line reported the value it had just overwritten; the effective
+  settings are now logged at INFO.
+
+  Also removed four `.get(key, literal)` fallbacks in `Transcript` and
+  `GeneCommunityCluster` that encoded competing defaults for the same keys -- one said
+  `use_community_clustering` was False by default, against a config saying True.
+
+- ADDED: shared introns as gene evidence. Two isoforms are linked when they share at
+  least `min_recluster_shared_introns` (2) introns AND that count exceeds
+  `min_recluster_shared_intron_frac` (0.20, strict >) of the SMALLER isoform's own
+  intron count. Previously the second-stage graph that decides genes consulted only
+  exonic overlap of the shorter isoform plus containment: junctions reached the
+  candidate components and were then discarded, so cutting a 19-shared-intron
+  relationship cost the objective exactly what cutting a bare 50% overlap cost.
+
+  The denominator is the smaller intron count so a fragmentary model is judged on how
+  much of its OWN splice pattern agrees; normalizing by the longer isoform scores such
+  models near zero however well they agree. The count floor is separate from the
+  fraction because the fraction alone is satisfied by ONE shared junction whenever the
+  smaller model has four introns or fewer, which is enough for a single fragment to
+  bind two neighbouring genes into one. MEASURED over four contigs, a floor of 2
+  against a floor of 1 gave up 16 of 42 recovered gene ids and avoided 8 of 10 added
+  fusions -- 13:1 rather than 4.2:1. Against the pre-change baseline the shipped
+  setting is -26 excess ids for +2 fusions.
+
+- ADDED: isoforms with IDENTICAL intron chains are now one gene unconditionally.
+  Enforced structurally, not as an edge and not as a threshold, because an edge only
+  makes a cut expensive and Leiden may still take it: 220 intron chains in a measured
+  merge were split across two or more gene ids. Under Leiden the transcripts are
+  contracted to a single graph vertex before partitioning; the DSU fallback unions them
+  before its sweep. Neither route consults either threshold, which matters because the
+  shipped floor of 2 REJECTS an identical 1-intron pair as an edge -- so a rule derived
+  from the fraction would leave exactly that pair free to split.
+
+  Contraction keeps edge multiplicity as weights and internal edges as self-loops.
+  RBConfiguration's null model is degree-based, so collapsing a ten-member class to one
+  vertex with one unit edge strips it of most of its degree and Leiden maximizes a
+  DIFFERENT function. VERIFIED on a synthetic component: with multiplicity and
+  self-loops the contracted quality equals the full-graph quality for every
+  must-link-respecting partition tried (spread 0), while deduplicating to a simple
+  graph gives a partition-dependent discrepancy spanning 14.4 quality units, i.e. a
+  different argmax. On the measured contigs both constructions happened to yield the
+  same partitions, so this is correctness of the objective rather than an observed
+  output change.
+
+  Single-exon transcripts are excluded from both rules. An empty intron chain is not a
+  shared splice pattern, and treating it as one would contract every single-exon model
+  in a component into a single gene -- irreversibly, contraction being a hard
+  must-link.
+
+- FIXED: `test_recluster_memory_guard` assigned `LRAA_Globals.config` directly and left
+  `max_transcripts_for_community_clustering` at 10 for the rest of the session, sending
+  every later test down the DSU path. `test_recluster_extent_invariance` failed
+  whenever it ran after that file -- at HEAD, before any change here -- because its
+  fixture cluster exceeds 10 and the Leiden call it records never happened. Now
+  monkeypatched.
+
+- FIXED: `util/collapse_LRAA_GTF_by_splice_pattern.py` emitted DUPLICATE
+  transcript_ids, silently. Isoforms are grouped by (gene_id, splice_pattern) while the
+  collapsed transcript_id is minted from the splice pattern plus any `gene_symbol^`
+  prefix, so an intron pattern carried by two gene_ids produced two groups that minted
+  the SAME id and wrote both -- gtf has no uniqueness constraint, so nothing objected.
+  MEASURED on chr8 of a 14-input single-cell merge: 4 conflicting patterns, 4 duplicate
+  ids, exit status 0, and the gene-conflicts report naming them while the gtf kept the
+  collision.
+
+  Such an input is now REFUSED, before the output gtf is opened, so a rejected run
+  leaves no partial file to be mistaken for a collapse that worked. The conflicts
+  report is still written either way, since it is a declared output and a missing file
+  is indistinguishable from a run that never checked. The collapsed gtf is also scanned
+  for duplicate ids on the way out, which pins the property the refusal exists for.
+
+  NOT reconciled by unifying the gene_ids, which would be a gene REASSIGNMENT. Gene
+  identity is decided by clustering, and the expression matrices key their features on
+  the gene_id carried by the quant files (`build_LRAA_expr_matrices.py:132-135`), so a
+  gene_id invented in this script would appear in the collapsed gtf and nowhere else.
+  The invariant is established upstream instead, by the identical-chain contraction
+  above, which keeps the gtf and the matrices describing the same genes. A conflicting
+  input therefore means it predates v0.31.0 or came from another tool, and the refusal
+  says so.
+
+
 v0.30.0
 - ADDED: `--reserved-cpu` on `util/partition_data_by_chromosome.py`, passed by
   `subwdls/Partition_data_by_chromosome.wdl`. New CLI surface plus the changed
