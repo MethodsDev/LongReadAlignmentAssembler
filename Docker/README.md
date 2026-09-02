@@ -187,6 +187,21 @@ come to depend on them. Neither is worth doing until the release that closes the
 0.17.7-to-devel gap, which is when they should be pointed at that release and
 the claim becomes true again.
 
+A bare `0.30.0` also exists in all five repositories, and is the same kind of
+exception. `build_docker.versioned.sh` was run from devel before it had a release
+gate, so it published one; the tags were deleted the same day as not naming a
+release, and restored hours later while diagnosing a Terra failure whose reported
+symptom -- every task stopped before its command ran -- is what an unpullable
+image looks like. That turned out not to be the cause, but the lesson stands and
+is why they are still there: DELETING A PUBLISHED TAG IS A BREAKING CHANGE to
+whatever references it, and a naming convention is not sufficient reason. The
+right move was to stop creating them, which the release gate now does, and to
+leave the published one alone.
+
+So `0.30.0` is reachable without being a release. Anything that must not be
+broken by a tag operation should name a digest instead -- `<repo>@sha256:...`,
+which the build scripts print for every image they push.
+
 `lraa:testing` is a third case: it holds a 0.18.3-era digest and **no current
 script writes it**. `build_docker.testing.sh` deliberately avoids the plain name,
 so nothing will ever move it. Treat it as stale. `lraa-sc:0.18.3-sklearn` is a
