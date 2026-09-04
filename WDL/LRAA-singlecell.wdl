@@ -271,16 +271,17 @@ workflow LRAA_singlecell_wf {
     # saturated every core, and cutting them further only multiplies per-unit fixed
     # cost.
     #
-    # ALL THREE phases now default to by_chromosome, so a run has one scattering shape
-    # rather than three and the phases are comparable to each other.
+    # ALL THREE phases are by_chromosome, so a run has one scattering shape rather
+    # than three and the phases are comparable to each other. off is the only other
+    # accepted value: validate_scattering in LRAA.wdl refuses by_chunk, so these are
+    # not merely defaults here.
     #
-    # The arguments for by_chunk on init and final quant still hold on the backends
-    # they were made for: leaf parallelism buys real concurrency where leaves land on
-    # separate machines, and chunking final quant bounds a peak memory set by the widest
-    # single unit rather than by cluster count. It also costs two non-preemptible tasks
-    # per cluster (make_chunks and the merge) instead of none, which on a single-node
-    # run with many clusters makes it the slower choice. by_chunk remains available for
-    # every phase; these are defaults, not constraints.
+    # Everything implementing by_chunk is still in the tree and its arguments still
+    # hold on the backends they were made for -- leaf parallelism buys real
+    # concurrency where leaves land on separate machines, and chunking final quant
+    # bounds a peak memory set by the widest single unit rather than by cluster count,
+    # against a cost of two non-preemptible tasks per cluster. Re-enabling it is the
+    # case statement in validate_scattering and nothing else.
     String scattering_init = "by_chromosome"
     String scattering_per_cluster = "by_chromosome"
     String scattering_final_quant = "by_chromosome"

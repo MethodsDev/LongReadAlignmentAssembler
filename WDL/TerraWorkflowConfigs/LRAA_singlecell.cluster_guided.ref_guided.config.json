@@ -5,20 +5,12 @@
   "LRAA_singlecell_wf.initial_annot_gtf": "${this.referenceAnnotation_full}",
   "LRAA_singlecell_wf.ref_annot_gtf_source_gene_symbols": "${this.referenceAnnotation_full}",
   "LRAA_singlecell_wf.precomputed_cluster_assignments_tsv": "${this.cell_clusters_info}",
-
   "LRAA_singlecell_wf.single_cell_pipe_mode": "cluster-guided",
   "LRAA_singlecell_wf.quant_only": "${false}",
-
   "LRAA_singlecell_wf.HiFi": "${this.LRAA_HiFi}",
   "LRAA_singlecell_wf.main_chromosomes": "${this.LRAA_main_chromosomes}",
-
-  "LRAA_singlecell_wf.scattering_init": "by_chunk",
-  "LRAA_singlecell_wf.scattering_per_cluster": "by_chunk",
-  "LRAA_singlecell_wf.scattering_final_quant": "by_chunk",
-
   "LRAA_singlecell_wf.cell_barcode_tag": "CB",
   "LRAA_singlecell_wf.read_umi_tag": "XM",
-
   "LRAA_singlecell_wf.docker": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:testing",
   "LRAA_singlecell_wf.docker_sc": "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:testing"
 }

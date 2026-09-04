@@ -1651,7 +1651,7 @@ def test_a_de_novo_run_may_apply_a_plan_selected_around_an_annotation(
 def denovo_plan(tmp_path, inputs):
     """ONE plan for a whole de novo run, emitted with NO annotation.
 
-    The shape `WDL/TerraWorkflowConfigs/LRAA_singlecell.cluster_guided.by_chunk.
+    The shape `WDL/TerraWorkflowConfigs/LRAA_singlecell.cluster_guided.
     de_novo.config.json` runs: geometry is fixed before phase 1, when there is no
     reference to fix it around, while every consumer downstream has a gtf -- the
     init GTF for per-cluster discovery, the consolidated one for final quant.

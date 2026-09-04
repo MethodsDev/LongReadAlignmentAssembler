@@ -96,6 +96,10 @@ workflow LRAA_wf {
         # used to be: by_chromosome partitions those contigs, by_chunk restricts the
         # partition to them, and off passes a single name through as --contig.
         #
+        # by_chunk is not accepted by validate_scattering; the mode and everything
+        # implementing it stay in the tree, and re-enabling it is that case statement
+        # alone. The comparison below is why by_chromosome is what callers get.
+        #
         # by_chromosome is the DEFAULT because by_chunk's per-leaf fixed cost swamps
         # the work in each leaf on a real genome. MEASURED on a live GRCh38 cell-line
         # submission: 475 chunk leaves, each 8.8-16.7 minutes end to end, containing
@@ -1063,10 +1067,19 @@ task validate_scattering {
     command <<<
     set -euo pipefail
 
+    # by_chunk is deliberately NOT selectable, while everything that implements it
+    # stays in place: the subworkflow, its call, and its inputs are untouched, so
+    # re-enabling it is this case statement and nothing else. Rejected here rather
+    # than removed so a workflow that still sets it fails immediately with a reason,
+    # instead of silently running a different scattering than it asked for.
     case "~{scattering}" in
-        off|by_chromosome|by_chunk) ;;
+        off|by_chromosome) ;;
+        by_chunk)
+            echo "Error: scattering=by_chunk is not currently selectable; use by_chromosome or off" >&2
+            exit 1
+            ;;
         *)
-            echo "Error: scattering must be off, by_chromosome or by_chunk; got '~{scattering}'" >&2
+            echo "Error: scattering must be off or by_chromosome; got '~{scattering}'" >&2
             exit 1
             ;;
     esac
