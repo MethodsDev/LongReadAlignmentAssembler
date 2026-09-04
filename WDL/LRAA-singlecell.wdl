@@ -337,13 +337,14 @@ workflow LRAA_singlecell_wf {
     # wherever a run ends up emitting it.
     Int cpu_chunk_plan = 16
     Int memoryGB_chunk_plan = 8
-    Int memoryGBbuildSparseMatrices = 32
+    # PROVISIONAL -- see LRAA-build_sparse_matrices_from_tracking.wdl.
+    Int memoryGBbuildSparseMatrices = 64
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
     Int memoryGBmergeGTFs = 32
     Int memoryGBquantFinal = 32
     Int memoryGBscSparseMatrices = 32
-    String sparseMatrixCsvEngine = "python"
+    String sparseMatrixCsvEngine = "direct"
     Int sparseMatrixGzipLevel = 1
     Int diskSizeGB = 256
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"

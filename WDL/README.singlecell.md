@@ -31,7 +31,7 @@ Resources:
 - `main_chromosomes` determines whether LRAA runs direct or chromosome-sharded; if empty, `memoryGBPerWorkerScattered` has no effect because the run stays in direct mode
 - In cluster-guided single-cell mode, the outer per-cluster scatter does not by itself activate `memoryGBPerWorkerScattered`; that setting only applies if each per-cluster `LRAA.wdl` call is also chromosome-sharded via `main_chromosomes`
 - `diskSizeGB` defaults to `256`
-- Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`, `sparseMatrixCsvEngine` (`python` by default), `sparseMatrixGzipLevel` (`1` by default for faster compression)
+- Sparse matrix build tuning: `memoryGBbuildSparseMatrices`, `memoryGBscSparseMatrices`, `sparseMatrixCsvEngine` (`direct` by default: no CSV parser, 4.1x faster than the python engine; `python` and `c` select the pandas readers), `emit_dense_counts` (off by default; the `*_cell_counts.tsv` files are 111 GiB on a 1.5 B-read library and no workflow output references them), `sparseMatrixGzipLevel` (`1` by default for faster compression)
 
 Seurat clustering parameters (defaults mirror included R pipeline):
 - `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` (`^(MT-|mt-|g:(chrM|MT|M):)`; matches conventional mitochondrial gene symbols and annotation-free LRAA gene IDs on `chrM`, `MT`, or `M`)

@@ -91,7 +91,7 @@ workflow LRAA_cell_cluster_guided {
         # differed between the phases would make their numbers incomparable.
         Boolean no_weight_reads_by_3prime_agreement = false
         Int memoryGBscSparseMatrices = 16
-        String sparseMatrixCsvEngine = "python"
+        String sparseMatrixCsvEngine = "direct"
         Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
@@ -427,9 +427,9 @@ workflow LRAA_cell_cluster_guided {
 
          # single-cell sparse matrices and intermediate counts
          File sc_gene_transcript_splicehash_mapping = build_sc_sparse_matrices.mapping_file
-         File sc_gene_counts = build_sc_sparse_matrices.gene_counts
-         File sc_isoform_counts = build_sc_sparse_matrices.isoform_counts
-         File sc_splice_pattern_counts = build_sc_sparse_matrices.splice_pattern_counts
+         File? sc_gene_counts = build_sc_sparse_matrices.gene_counts
+         File? sc_isoform_counts = build_sc_sparse_matrices.isoform_counts
+         File? sc_splice_pattern_counts = build_sc_sparse_matrices.splice_pattern_counts
          # gene/isoform/splice-pattern sparse directories as tar.gz
          File sc_gene_sparse_tar_gz = build_sc_sparse_matrices.gene_sparse_dir_tgz
          File sc_isoform_sparse_tar_gz = build_sc_sparse_matrices.isoform_sparse_dir_tgz
@@ -710,9 +710,11 @@ task sc_build_sparse_matrices {
         String sample_id
         File tracking_file
         String docker
-        Int memoryGB = 32
-        String csv_engine = "python"
+        # PROVISIONAL -- see LRAA-build_sparse_matrices_from_tracking.wdl.
+        Int memoryGB = 64
+        String csv_engine = "direct"
         Int gzip_level = 1
+        Boolean emit_dense_counts = false
     }
 
     Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
@@ -726,7 +728,8 @@ task sc_build_sparse_matrices {
             --tracking ~{tracking_file} \
             --output_prefix ~{output_prefix} \
             --csv_engine ~{csv_engine} \
-            --gzip_level ~{gzip_level}
+            --gzip_level ~{gzip_level} \
+            ~{true="--emit_dense_counts" false="" emit_dense_counts}
 
         # Tar the generated sparse matrix directories for compact output.
         # NOTE: archive filenames use "." rather than the "^" that
@@ -747,9 +750,9 @@ task sc_build_sparse_matrices {
 
     output {
         File mapping_file = "~{output_prefix}.gene_transcript_splicehashcode.tsv"
-        File gene_counts = "~{output_prefix}.gene_cell_counts.tsv"
-        File isoform_counts = "~{output_prefix}.isoform_cell_counts.tsv"
-        File splice_pattern_counts = "~{output_prefix}.splice_pattern_cell_counts.tsv"
+        File? gene_counts = "~{output_prefix}.gene_cell_counts.tsv"
+        File? isoform_counts = "~{output_prefix}.isoform_cell_counts.tsv"
+        File? splice_pattern_counts = "~{output_prefix}.splice_pattern_cell_counts.tsv"
 
         # tar.gz of sparse matrix directories
         File gene_sparse_dir_tgz = "~{output_prefix}.gene-sparseM.tar.gz"

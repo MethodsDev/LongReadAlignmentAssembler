@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-# Note: Explicitly specifying dtypes in pd.read_csv() is critical to avoid
-# segmentation faults during type inference on large chunked datasets.
-import argparse, os, sys, gzip, logging, faulthandler, shutil, subprocess
+# The default reader ("direct") uses no CSV parser at all: the tracking file is
+# machine-generated TSV with no quoting, so a plain split() loop is enough, and
+# on the VILLAGE 1.5 B-read library it measured 4.1x faster than pandas' python
+# engine and 1.7x faster than its C engine -- while having no exposure to the
+# segfaults that made the C engine unusable here.
+#
+# --csv_engine python and c still select the pandas readers.  Explicitly
+# specifying dtypes there is critical to avoid segmentation faults during type
+# inference on large chunked datasets.
+import argparse, os, sys, gzip, gc, logging, faulthandler, shutil, subprocess
+from sys import intern
 import pandas as pd
 from scipy import sparse
 from scipy.io import mmwrite
@@ -16,6 +24,8 @@ except ImportError:  # pragma: no cover - resource is UNIX-only
     resource = None
 
 logger = logging.getLogger(__name__)
+
+_INT32_MAX = 2 ** 31
 
 # Global peak memory tracker
 peak_rss_bytes = 0
@@ -96,12 +106,20 @@ class LevelAccumulator:
 
     def consume_chunk(self, chunk, barcode_idx):
         feature_values = chunk[self.feature_col]
-        for feat in pd.unique(feature_values):
-            if feat not in self.feature_to_index:
-                self.feature_to_index[feat] = len(self.feature_labels)
+        # factorize once, then map only the distinct values through the dict:
+        # O(unique) python lookups instead of one per row
+        codes, uniques = pd.factorize(feature_values.to_numpy())
+        lut = np.empty(len(uniques), dtype=np.int64)
+        for k, feat in enumerate(uniques):
+            idx = self.feature_to_index.get(feat)
+            if idx is None:
+                idx = self.feature_to_index[feat] = len(self.feature_labels)
                 self.feature_labels.append(feat)
-
-        feature_idx = feature_values.map(self.feature_to_index)
+            lut[k] = idx
+        if len(self.feature_labels) >= _INT32_MAX:
+            raise SystemExit(f"{self.label}: more than 2^31 features; widen the "
+                             "accumulator index dtype")
+        feature_idx = pd.Series(lut[codes], index=chunk.index)
         grouped = (
             pd.DataFrame(
                 {
@@ -115,18 +133,25 @@ class LevelAccumulator:
         )
 
         if not grouped.empty:
-            self.row_chunks.append(grouped.index.get_level_values(0).to_numpy(dtype=np.int64))
-            self.col_chunks.append(grouped.index.get_level_values(1).to_numpy(dtype=np.int64))
+            # int32 rather than int64: 12 bytes per accumulated entry instead of
+            # 20.  On the VILLAGE library that is 37.5 GiB -> 22.5 GiB resident
+            # through the whole read, and since throughput falls as the resident
+            # set grows it buys time as well as memory.
+            self.row_chunks.append(grouped.index.get_level_values(0).to_numpy(dtype=np.int32))
+            self.col_chunks.append(grouped.index.get_level_values(1).to_numpy(dtype=np.int32))
             self.val_chunks.append(grouped.to_numpy(dtype=np.float32))
 
-    def finalize(self, barcode_labels):
+    def finalize(self, barcode_labels, build_counts_df=False):
+        # release each list as soon as it is concatenated; holding all three
+        # levels' chunk lists to the end of the process was 37.5 GiB of the old
+        # peak, and concatenating without releasing doubles the level in flight
         if self.row_chunks:
-            rows = np.concatenate(self.row_chunks)
-            cols = np.concatenate(self.col_chunks)
-            vals = np.concatenate(self.val_chunks)
+            rows = np.concatenate(self.row_chunks); self.row_chunks = None
+            cols = np.concatenate(self.col_chunks); self.col_chunks = None
+            vals = np.concatenate(self.val_chunks); self.val_chunks = None
         else:
-            rows = np.array([], dtype=np.int64)
-            cols = np.array([], dtype=np.int64)
+            rows = np.array([], dtype=np.int32)
+            cols = np.array([], dtype=np.int32)
             vals = np.array([], dtype=np.float32)
 
         matrix = sparse.coo_matrix(
@@ -142,11 +167,13 @@ class LevelAccumulator:
             format_rss(),
         )
 
-        if matrix.nnz:
-            matrix.sum_duplicates()
-
+        # No explicit sum_duplicates(): tocsr() sums duplicates itself, and the
+        # explicit call costs a full lexsort over every non-zero -- measured at
+        # 4.24 GiB peak against 1.91 GiB per 100 M entries, for no change to the
+        # output.  On this library it collapsed 0.039% of entries.
         logger.info("%s: converting to CSR and sorting (RSS %s)", self.label, format_rss())
         matrix = matrix.tocsr()
+        del rows, cols, vals
 
         feature_arr = np.array(self.feature_labels, dtype=object)
         barcode_arr = np.array(barcode_labels, dtype=object)
@@ -163,24 +190,28 @@ class LevelAccumulator:
 
         matrix = matrix.tocoo()
 
-        logger.info("%s: creating counts dataframe (RSS %s)", self.label, format_rss())
-        if matrix.nnz:
-            counts_df = pd.DataFrame(
-                {
-                    "feature_id": feature_arr[matrix.row],
-                    "cell_barcode": barcode_arr[matrix.col],
-                    "UMI_counts": matrix.data.astype(float),
-                }
-            )
-        else:
-            counts_df = pd.DataFrame(columns=["feature_id", "cell_barcode", "UMI_counts"])
+        # The dense counts dataframe costs 22.4 bytes per non-zero against the
+        # sparse accumulator's 11.2 -- twice the memory of the data it
+        # duplicates -- and its only consumer is the *_cell_counts.tsv write.
+        # Those files are declared task outputs in the WDLs but no workflow
+        # output block references them, so they were delocalized and dropped.
+        # Off unless --emit_dense_counts is passed.
+        counts_df = None
+        if build_counts_df:
+            logger.info("%s: creating counts dataframe (RSS %s)", self.label, format_rss())
+            if matrix.nnz:
+                counts_df = pd.DataFrame(
+                    {
+                        "feature_id": feature_arr[matrix.row],
+                        "cell_barcode": barcode_arr[matrix.col],
+                        "UMI_counts": matrix.data.astype(float),
+                    }
+                )
+            else:
+                counts_df = pd.DataFrame(columns=["feature_id", "cell_barcode", "UMI_counts"])
+            logger.info("%s: counts dataframe has %d rows (RSS %s)", self.label,
+                        len(counts_df), format_rss())
 
-        logger.info(
-            "%s: final counts dataframe has %d rows (RSS %s)",
-            self.label,
-            len(counts_df),
-            format_rss(),
-        )
         return counts_df, matrix, feature_arr, barcode_arr
 
 
@@ -233,31 +264,73 @@ def _reject_if_weighted_tracking(filename, opener):
         return
 
 
-def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
+USECOLS = ["read_name", "gene_id", "transcript_id",
+           "transcript_splice_hash_code", "num_exons", "frac_assigned"]
+MAPPING_COLUMNS = ["gene_id", "transcript_id", "transcript_splice_hash_code",
+                   "num_exons"]
+
+
+def _chunk_frame(read_name_bc, gene, tx, hsh, nexon, frac):
+    return pd.DataFrame({
+        "cell_barcode": np.asarray(read_name_bc, dtype=object),
+        "gene_id": np.asarray(gene, dtype=object),
+        "transcript_id": np.asarray(tx, dtype=object),
+        "transcript_splice_hash_code": np.asarray(hsh, dtype=object),
+        "num_exons": np.asarray(nexon, dtype=np.int64),
+        "frac_assigned": np.asarray(frac, dtype=np.float32),
+    })
+
+
+def _iter_chunks_direct(filename, chunksize):
+    """No CSV parser: split on tabs, take the six columns by header position.
+
+    The cell barcode is pulled from read_name in the same pass, which removes a
+    separate .str.split(expand=True) that measured 2.44 s per million rows -- on
+    its own more than the whole sparse aggregation.
+
+    The three id columns and the barcode are interned.  pandas' parsers
+    deduplicate repeated strings, so their dict lookups hit the fast
+    pointer-equality path; a plain split() allocates a fresh string per field and
+    would pay a full hash and compare every time.  read_name is NOT interned: it
+    is unique per row.
     """
-    Stream the tracking file once and aggregate mapping, gene, isoform,
-    and splice-pattern outputs together.
-    """
-    logger.info("starting single-pass aggregation from %s (RSS %s)", filename, format_rss())
-
-    levels = [
-        LevelAccumulator("gene", "gene_id"),
-        LevelAccumulator("isoform", "transcript_id"),
-        LevelAccumulator("splice_pattern", "transcript_splice_hash_code"),
-    ]
-
-    mapping_columns = [
-        "gene_id",
-        "transcript_id",
-        "transcript_splice_hash_code",
-        "num_exons",
-    ]
-    mapping_entries = set()
-    barcode_to_index = {}
-    barcode_labels = []
-    rows_processed = 0
-
     opener = gzip.open if filename.endswith(".gz") else open
+    with opener(filename, "rt") as handle:
+        while True:
+            line = handle.readline()
+            if not line:
+                sys.exit(f"Error, {filename} has no header line")
+            if not line.startswith("#"):
+                break
+        header = line.rstrip("\n").split("\t")
+        missing = [c for c in USECOLS if c not in header]
+        if missing:
+            sys.exit(f"Error, {filename} lacks required column(s): {missing}")
+        i_rn, i_g, i_t, i_h, i_n, i_f = (header.index(c) for c in USECOLS)
+
+        while True:
+            bc = []; g = []; t = []; h = []; n = []; f = []
+            bca, ga, ta, ha, na, fa = (bc.append, g.append, t.append,
+                                       h.append, n.append, f.append)
+            for _ in range(chunksize):
+                raw = handle.readline()
+                if not raw:
+                    break
+                if raw.startswith("#"):
+                    continue
+                parts = raw.split("\t")
+                bca(intern(parts[i_rn].partition("^")[0]))
+                ga(intern(parts[i_g])); ta(intern(parts[i_t]))
+                ha(intern(parts[i_h])); na(parts[i_n]); fa(parts[i_f])
+            if not t:
+                return
+            yield _chunk_frame(bc, g, t, h, n, f)
+            if len(t) < chunksize:
+                return
+
+
+def _iter_chunks_pandas(filename, chunksize, engine):
+    """The previous readers, kept so --csv_engine python|c still works."""
     dtype_spec = {
         "read_name": str,
         "gene_id": str,
@@ -266,69 +339,92 @@ def stream_all_counts(filename, chunksize=1_000_000, engine="python"):
         "num_exons": np.int64,
         "frac_assigned": np.float32,
     }
+    opener = gzip.open if filename.endswith(".gz") else open
+    with opener(filename, "rt") as handle:
+        kwargs = {"sep": "\t", "chunksize": chunksize, "usecols": USECOLS,
+                  "dtype": dtype_spec, "engine": engine, "comment": "#"}
+        if engine == "c":
+            kwargs["low_memory"] = False
+        for chunk in pd.read_csv(handle, **kwargs):
+            chunk = chunk.fillna({"gene_id": "", "transcript_id": "",
+                                  "transcript_splice_hash_code": ""})
+            out = _chunk_frame(
+                chunk["read_name"].str.split("^", n=1, expand=True)[0].to_numpy(),
+                chunk["gene_id"].to_numpy(), chunk["transcript_id"].to_numpy(),
+                chunk["transcript_splice_hash_code"].to_numpy(),
+                chunk["num_exons"].to_numpy(), chunk["frac_assigned"].to_numpy())
+            yield out
 
+
+def stream_all_counts(filename, chunksize=1_000_000, engine="direct"):
+    """Stream the tracking file once, accumulating all three feature levels.
+
+    Returns (mapping_df, levels, barcode_labels).  The levels are NOT finalized
+    here: main() finalizes and writes them one at a time so that no level's
+    matrices are held while another is being built.
+    """
+    logger.info("starting single-pass aggregation from %s (RSS %s)", filename, format_rss())
+
+    levels = [
+        LevelAccumulator("gene", "gene_id"),
+        LevelAccumulator("isoform", "transcript_id"),
+        LevelAccumulator("splice_pattern", "transcript_splice_hash_code"),
+    ]
+    mapping_entries = set()
+    barcode_to_index = {}
+    barcode_labels = []
+    rows_processed = 0
+
+    opener = gzip.open if filename.endswith(".gz") else open
     _reject_if_weighted_tracking(filename, opener)
 
-    with opener(filename, "rt") as handle:
-        read_csv_kwargs = {
-            "sep": "\t",
-            "chunksize": chunksize,
-            "usecols": [
-                "read_name",
-                "gene_id",
-                "transcript_id",
-                "transcript_splice_hash_code",
-                "num_exons",
-                "frac_assigned",
-            ],
-            "dtype": dtype_spec,
-            "engine": engine,
-            "comment": "#",
-        }
-        if engine == "c":
-            read_csv_kwargs["low_memory"] = False
+    if engine == "direct":
+        chunks = _iter_chunks_direct(filename, chunksize)
+    else:
+        chunks = _iter_chunks_pandas(filename, chunksize, engine)
 
-        for chunk_num, chunk in enumerate(pd.read_csv(handle, **read_csv_kwargs), 1):
-            rows_processed += len(chunk)
-            logger.info("[chunk %d] processed %d rows (RSS %s)", chunk_num, rows_processed, format_rss())
+    for chunk_num, chunk in enumerate(chunks, 1):
+        rows_processed += len(chunk)
+        logger.info("[chunk %d] processed %d rows (RSS %s)", chunk_num,
+                    rows_processed, format_rss())
 
-            chunk = chunk.fillna(
-                {
-                    "gene_id": "",
-                    "transcript_id": "",
-                    "transcript_splice_hash_code": "",
-                }
-            )
+        # distinct 4-tuples per chunk, not one set.add per row.  Same result as
+        # iterating every row; the mapping table has 327,187 entries on a file
+        # with 1.78 billion rows.
+        for entry in chunk[MAPPING_COLUMNS].drop_duplicates().itertuples(
+                index=False, name=None):
+            mapping_entries.add(entry)
 
-            for entry in chunk[mapping_columns].itertuples(index=False, name=None):
-                mapping_entries.add(entry)
+        cell_barcodes = chunk["cell_barcode"]
+        codes, uniques = pd.factorize(cell_barcodes.to_numpy())
+        lut = np.empty(len(uniques), dtype=np.int64)
+        for k, bc in enumerate(uniques):
+            idx = barcode_to_index.get(bc)
+            if idx is None:
+                idx = barcode_to_index[bc] = len(barcode_labels)
+                barcode_labels.append(bc)
+            lut[k] = idx
+        if len(barcode_labels) >= _INT32_MAX:
+            sys.exit("Error, more than 2^31 cell barcodes; widen the accumulator "
+                     "index dtype in LevelAccumulator.consume_chunk")
+        barcode_idx = pd.Series(lut[codes], index=chunk.index)
 
-            cell_barcodes = chunk["read_name"].str.split("^", n=2, expand=True)[0]
-            for bc in pd.unique(cell_barcodes):
-                if bc not in barcode_to_index:
-                    barcode_to_index[bc] = len(barcode_labels)
-                    barcode_labels.append(bc)
-            barcode_idx = cell_barcodes.map(barcode_to_index)
-
-            for level in levels:
-                level.consume_chunk(chunk, barcode_idx)
+        for level in levels:
+            level.consume_chunk(chunk, barcode_idx)
 
     logger.info(
-        "finished single-pass aggregation after %d rows, finalizing outputs (RSS %s)",
+        "finished single-pass aggregation after %d rows (RSS %s)",
         rows_processed,
         format_rss(),
     )
 
     if mapping_entries:
-        mapping_df = pd.DataFrame(sorted(mapping_entries), columns=mapping_columns)
+        mapping_df = pd.DataFrame(sorted(mapping_entries), columns=MAPPING_COLUMNS)
     else:
-        mapping_df = pd.DataFrame(columns=mapping_columns)
+        mapping_df = pd.DataFrame(columns=MAPPING_COLUMNS)
 
-    results = {}
-    for level in levels:
-        results[level.label] = level.finalize(barcode_labels)
+    return mapping_df, levels, barcode_labels
 
-    return mapping_df, results
 
 def make_sparse_matrix_outputs(matrix, feature_labels, barcode_labels, outdirname, gzip_level=6):
     logger.info("making sparse matrix outputs for: %s (RSS %s)",
@@ -358,8 +454,15 @@ def main():
     parser.add_argument("--output_prefix", required=True, help="output prefix")
     parser.add_argument("--chunksize", type=int, default=1_000_000,
                         help="rows per chunk (default 1e6)")
-    parser.add_argument("--csv_engine", choices=["python", "c"], default="python",
-                        help="pandas CSV engine to use (default python; C engine has segfaulted in production runs)")
+    parser.add_argument("--csv_engine", choices=["direct", "python", "c"], default="direct",
+                        help="reader to use. 'direct' (default) uses no CSV parser at all: "
+                             "measured 4.1x faster than the python engine and 1.7x faster than "
+                             "the C engine, with no segfault exposure. 'python' and 'c' select "
+                             "the pandas readers and are kept for fallback.")
+    parser.add_argument("--emit_dense_counts", action="store_true",
+                        help="also write the dense *_cell_counts.tsv files. Off by default: "
+                             "111 GiB on a 1.5 B-read library, and no workflow output block "
+                             "references them.")
     parser.add_argument("--parallel", action="store_true",
                         help="process gene/isoform/splice_pattern levels in parallel (requires more RAM)")
     parser.add_argument("--gzip_level", type=int, choices=range(1, 10), default=1,
@@ -392,7 +495,7 @@ def main():
     if output_parent:
         os.makedirs(output_parent, exist_ok=True)
 
-    mapping_df, level_results = stream_all_counts(
+    mapping_df, levels, barcode_labels = stream_all_counts(
         args.tracking,
         chunksize=args.chunksize,
         engine=args.csv_engine,
@@ -406,16 +509,30 @@ def main():
         len(mapping_df),
         format_rss(),
     )
+    del mapping_df
 
-    for label, (counts, matrix, feature_labels, barcode_labels) in level_results.items():
-        counts.to_csv(f"{args.output_prefix}.{label}_cell_counts.tsv", sep="\t", index=False)
+    # One level at a time: finalize, write, free.  Holding all three levels'
+    # finalized results at once was the largest single component of the old
+    # peak, and nothing needs them together.
+    for level in levels:
+        counts, matrix, feature_labels, barcodes = level.finalize(
+            barcode_labels, build_counts_df=args.emit_dense_counts)
+        if counts is not None:
+            counts.to_csv(f"{args.output_prefix}.{level.label}_cell_counts.tsv",
+                          sep="\t", index=False)
+        del counts
         make_sparse_matrix_outputs(
             matrix,
             feature_labels,
-            barcode_labels,
-            f"{args.output_prefix}^{label}-sparseM",
+            barcodes,
+            f"{args.output_prefix}^{level.label}-sparseM",
             gzip_level=args.gzip_level,
         )
+        del matrix, feature_labels, barcodes
+        level.feature_to_index = None
+        level.feature_labels = None
+        gc.collect()
+        logger.info("%s: done (RSS %s)", level.label, format_rss())
 
     logger.info("all done (current RSS %s, peak RSS %s)", format_rss(), format_peak_rss())
 
