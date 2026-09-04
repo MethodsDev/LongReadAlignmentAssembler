@@ -3,6 +3,7 @@ version 1.0
 import "LRAA.wdl" as LRAA
 import "LRAA_quant_by_cluster.wdl" as LRAA_quant_by_cluster
 import "subwdls/partition_bam_by_cell_cluster.wdl" as PartitionBam
+import "subwdls/LRAA-build_sparse_matrices_from_tracking.wdl" as BuildMatrices
 
 
 
@@ -91,6 +92,11 @@ workflow LRAA_cell_cluster_guided {
         # differed between the phases would make their numbers incomparable.
         Boolean no_weight_reads_by_3prime_agreement = false
         Int memoryGBscSparseMatrices = 16
+        # Build the single-cell matrices per (cluster, contig) shard during the
+        # final quantification wave and merge them, instead of one
+        # single-threaded pass over the merged cluster tracking file. REQUIRES
+        # scattering_final_quant = "by_chromosome".
+        Boolean sc_sparse_from_shards = false
         String sparseMatrixCsvEngine = "direct"
         Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
@@ -325,6 +331,8 @@ workflow LRAA_cell_cluster_guided {
             sample_id = sample_id,
             referenceGenome = referenceGenome,
             scattering = scattering_final_quant,
+            build_sc_sparse_shards = sc_sparse_from_shards,
+            docker_sc = docker_sc,
             cluster_partition_workers = cluster_partition_workers,
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
@@ -403,15 +411,50 @@ workflow LRAA_cell_cluster_guided {
     }
 
      # Build sparse matrices (Seurat-compatible) from the merged tracking
-     call sc_build_sparse_matrices as build_sc_sparse_matrices {
-         input:
-                 sample_id = sample_id,
-                 tracking_file = merge_cluster_trackings.merged_tracking,
-                 docker = docker_sc,
-                 memoryGB = memoryGBscSparseMatrices,
-                 csv_engine = sparseMatrixCsvEngine,
-                 gzip_level = sparseMatrixGzipLevel
+     if (sc_sparse_from_shards && scattering_final_quant != "by_chromosome") {
+         call refuse_sc_sparse_from_shards_cg {
+             input:
+                 scattering_final_quant = scattering_final_quant,
+                 docker = docker
+         }
      }
+
+     if (!sc_sparse_from_shards) {
+         call sc_build_sparse_matrices as build_sc_sparse_matrices {
+             input:
+                     sample_id = sample_id,
+                     tracking_file = merge_cluster_trackings.merged_tracking,
+                     docker = docker_sc,
+                     memoryGB = memoryGBscSparseMatrices,
+                     csv_engine = sparseMatrixCsvEngine,
+                     gzip_level = sparseMatrixGzipLevel
+         }
+     }
+
+     # shared_features is TRUE here, and that is the whole difference from basic
+     # mode: cells partition across clusters while features do not, so one
+     # feature legitimately arrives from every cluster carrying disjoint cells.
+     # Still no summing -- feature -> contig and cell -> cluster together put
+     # each (feature, cell) pair in exactly one shard.
+     if (sc_sparse_from_shards) {
+         call BuildMatrices.merge_sc_shard_sparse as merge_sc_cluster_shards {
+             input:
+                 sample_id = sample_id,
+                 shard_sparse_tars = LRAA_quant_final_bamlist.scShardSparse,
+                 docker = docker_sc,
+                 gzip_level = sparseMatrixGzipLevel,
+                 shared_features = true
+         }
+     }
+
+     File sc_gene_tgz = select_first([merge_sc_cluster_shards.gene_sparse_dir_tgz,
+                                      build_sc_sparse_matrices.gene_sparse_dir_tgz])
+     File sc_isoform_tgz = select_first([merge_sc_cluster_shards.isoform_sparse_dir_tgz,
+                                         build_sc_sparse_matrices.isoform_sparse_dir_tgz])
+     File sc_splice_tgz = select_first([merge_sc_cluster_shards.splice_pattern_sparse_dir_tgz,
+                                        build_sc_sparse_matrices.splice_pattern_sparse_dir_tgz])
+     File sc_mapping_tsv = select_first([merge_sc_cluster_shards.mapping_file,
+                                         build_sc_sparse_matrices.mapping_file])
 
      output {
          # final outputs
@@ -426,14 +469,14 @@ workflow LRAA_cell_cluster_guided {
          File LRAA_final_tracking = merge_cluster_trackings.merged_tracking
 
          # single-cell sparse matrices and intermediate counts
-         File sc_gene_transcript_splicehash_mapping = build_sc_sparse_matrices.mapping_file
+         File sc_gene_transcript_splicehash_mapping = sc_mapping_tsv
          File? sc_gene_counts = build_sc_sparse_matrices.gene_counts
          File? sc_isoform_counts = build_sc_sparse_matrices.isoform_counts
          File? sc_splice_pattern_counts = build_sc_sparse_matrices.splice_pattern_counts
          # gene/isoform/splice-pattern sparse directories as tar.gz
-         File sc_gene_sparse_tar_gz = build_sc_sparse_matrices.gene_sparse_dir_tgz
-         File sc_isoform_sparse_tar_gz = build_sc_sparse_matrices.isoform_sparse_dir_tgz
-         File sc_splice_pattern_sparse_tar_gz = build_sc_sparse_matrices.splice_pattern_sparse_dir_tgz
+         File sc_gene_sparse_tar_gz = sc_gene_tgz
+         File sc_isoform_sparse_tar_gz = sc_isoform_tgz
+         File sc_splice_pattern_sparse_tar_gz = sc_splice_tgz
 
          # preliminary intermediate outputs (only in discovery mode)
          File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
@@ -800,4 +843,19 @@ task require_annot_gtf {
     }
 }
 
-     
+
+task refuse_sc_sparse_from_shards_cg {
+  input {
+    String scattering_final_quant
+    String docker
+  }
+  command <<<
+    echo "Error, sc_sparse_from_shards requires scattering_final_quant = \"by_chromosome\", got \"~{scattering_final_quant}\"." >&2
+    echo "Per-shard sparse matrices need a partition no feature can straddle. Features are" >&2
+    echo "contig-disjoint, but a gene can span a chunk boundary, so by_chunk would need the" >&2
+    echo "cross-shard summing this design exists to avoid." >&2
+    exit 1
+  >>>
+  output { String checked = "unreachable" }
+  runtime { docker: docker  cpu: 1  memory: "1 GiB" }
+}

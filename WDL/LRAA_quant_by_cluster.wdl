@@ -100,6 +100,11 @@ workflow LRAA_quant_by_cluster {
         Int diskSizeGB = 256
         
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
+
+        # Have every (cluster, contig) shard build its own single-cell sparse
+        # matrices. Requires scattering = "by_chromosome"; the caller validates.
+        Boolean build_sc_sparse_shards = false
+        String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     }
 
     # If bam_files not provided, partition the input BAM by cell clusters
@@ -315,6 +320,8 @@ workflow LRAA_quant_by_cluster {
                 cell_barcode_tag = cell_barcode_tag,
                 read_umi_tag = read_umi_tag,
                 scattering = scattering,
+                build_sc_sparse_shards = build_sc_sparse_shards,
+                docker_sc = docker_sc,
                 approx_MB_per_cut = approx_MB_per_cut,
                 approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
                 cpu = cpu,
@@ -376,6 +383,11 @@ workflow LRAA_quant_by_cluster {
         # Per-cluster quantification outputs
         Array[File] quant_exprs = LRAA_quant_cluster.mergedQuantExpr
         Array[File] quant_trackings = LRAA_quant_cluster.mergedQuantTracking
+        # (cluster, contig) shard artifacts, flattened across clusters. Empty
+        # unless build_sc_sparse_shards. A feature appears once per cluster
+        # here, each time carrying that cluster's disjoint cells, so the merge
+        # that consumes these must be given --shared-features.
+        Array[File] scShardSparse = flatten(LRAA_quant_cluster.scShardSparse)
         Array[Array[File]] read_assignment_shard_summaries_by_cluster = LRAA_quant_cluster.shardReadAssignmentSummaries
         Array[File] read_assignment_merged_summaries_by_cluster = cluster_read_assignment_summaries
         # The cluster ids of the array above, same order, same length. Published

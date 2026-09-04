@@ -3,6 +3,7 @@ version 1.0
 import "subwdls/Partition_data_by_chromosome.wdl" as PartByChr
 import "subwdls/LRAA_runner.wdl" as LRAA_runner
 import "subwdls/LRAA_chunk_scatter.wdl" as ChunkScatter
+import "subwdls/LRAA-build_sparse_matrices_from_tracking.wdl" as BuildMatrices
 
 
 workflow LRAA_wf {
@@ -284,6 +285,21 @@ workflow LRAA_wf {
         
         Int diskSizeGB = 256
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
+
+        # Build each contig shard's single-cell sparse matrices alongside that
+        # shard's quantification, so the library-wide build becomes a streaming
+        # merge instead of one 12 h single-threaded pass over the merged
+        # tracking file. Set by LRAA-singlecell.wdl; meaningless otherwise.
+        #
+        # by_chromosome ONLY. The partition has to be one a feature cannot
+        # straddle: features are contig-disjoint (verified: 0 of 152,492 genes,
+        # 0 of 326,517 splice hashes and 0 of 327,261 transcripts span two
+        # contigs on GENCODE v44), but a gene CAN straddle a chunk boundary, so
+        # by_chunk would reintroduce cross-partition summing. `off` produces a
+        # single shard, which is correct but buys nothing.
+        Boolean build_sc_sparse_shards = false
+        String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
+        Int memoryGBscShardSparse = 8
         # Core budget for the one-off count_bam task, forwarded as its
         # samtools_threads at the call below. MUST stay in step with the task's own
         # default: this call input wins, so leaving it at 16 would keep the cpu:16
@@ -575,6 +591,20 @@ workflow LRAA_wf {
                     memoryGB = scattered_memoryGB,  # memoryGB_per_chromosome_shard, 16 GiB
                     diskSizeGB = diskSizeGB
             }
+
+            # Inside the scatter, so this shard's matrices are built as soon as
+            # this shard's quantification finishes and overlap the other shards
+            # still running. Gathering the tracking files first and scattering
+            # again would put a barrier here and lose exactly that.
+            if (build_sc_sparse_shards) {
+                call BuildMatrices.sc_build_shard_sparse as sc_shard_sparse {
+                    input:
+                        shard_name = "shard_" + contig_index,
+                        tracking_file = LRAA_scatter.LRAA_quant_tracking,
+                        docker = docker_sc,
+                        memoryGB = memoryGBscShardSparse
+                }
+            }
         }
 
         # Always merge quant outputs regardless of quant_only
@@ -730,6 +760,10 @@ workflow LRAA_wf {
     # two modes that run a chunked LRAA per task; by_chunk reports its partition
     # through chunkPlan and chunkLogs instead.
     Array[File] chunkReports = if (run_without_splitting) then select_all([LRAA_direct.LRAA_chunk_report]) else select_all(select_first([LRAA_scatter.LRAA_chunk_report, []]))
+    # One per contig shard, when build_sc_sparse_shards is set. Empty in every
+    # other mode; LRAA-singlecell.wdl hands these to merge_sc_shard_sparse.
+    Array[File] scShardSparse = select_all(select_first([sc_shard_sparse.shard_sparse_tar, []]))
+
     # by_chunk only, empty otherwise.
     File? chunkPlan = chunk_scatter.chunkPlan
     Array[File] chunkLogs = select_first([chunk_scatter.chunkLogs, []])

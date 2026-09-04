@@ -111,3 +111,129 @@ task sc_build_sparse_matrices_from_tracking {
     disks: "local-disk ~{disksize} HDD"
   }
 }
+
+
+# ---------------------------------------------------------------------------
+# Per-shard build + streaming merge.
+#
+# The task above builds the whole library's matrices in one single-threaded
+# pass over the merged tracking file: 12.48 h and 114.6 GiB on a 1.5 B-read
+# library. These two split that work by shard.
+#
+# A shard is a (cluster, contig) partition. Every (feature, cell) pair belongs
+# to exactly one shard, because feature -> contig and cell -> cluster are both
+# functions, so the merge never sums across shards. See
+# PLAN.sc_sparse_from_shards.md.
+#
+# sc_build_shard_sparse runs on the sc image rather than inside
+# LRAA_runner_task, because lraa-core carries numpy but not pandas or scipy.
+# Called from inside LRAA.wdl's per-contig scatter, so each shard's build starts
+# as soon as that shard's runner finishes and overlaps the other shards' work --
+# there is no barrier. The alternative, adding pandas and scipy to lraa-base so
+# the build can happen in the runner task itself, would avoid re-localizing the
+# shard tracking file; it was not taken because it puts those dependencies into
+# every published image.
+# ---------------------------------------------------------------------------
+
+task sc_build_shard_sparse {
+  input {
+    String shard_name
+    File tracking_file
+    String docker
+    # PROVISIONAL. Scales with this shard's non-zeros, not the library's: the
+    # largest VILLAGE shard (chr1, ~9% of 1.78 B rows) would hold roughly 0.8
+    # GiB. Not measured on a real shard.
+    Int memoryGB = 8
+    Int cpu = 1
+  }
+
+  Int disksize = 20 + ceil(3 * size(tracking_file, "GB"))
+
+  command <<<
+    set -ex
+    mkdir -p shard_out
+    tracking_to_shard_sparse.py \
+      --tracking ~{tracking_file} \
+      --outdir shard_out \
+      --shard "~{shard_name}"
+    tar -cf "~{shard_name}.sc_shard_sparse.tar" -C shard_out .
+  >>>
+
+  output {
+    File shard_sparse_tar = "~{shard_name}.sc_shard_sparse.tar"
+  }
+
+  runtime {
+    docker: docker
+    cpu: cpu
+    memory: "~{memoryGB} GiB"
+    disks: "local-disk ~{disksize} HDD"
+  }
+}
+
+
+task merge_sc_shard_sparse {
+  input {
+    String sample_id
+    Array[File] shard_sparse_tars
+    String docker
+    # PROVISIONAL. The merge holds no matrix -- file handles, the barcode
+    # remaps and one output row -- so this should be generous by a wide margin.
+    # Not measured at library scale.
+    Int memoryGB = 16
+    Int gzip_level = 1
+    # Set for cluster-guided runs, where one feature legitimately comes from
+    # several shards (the clusters) carrying disjoint cells. Left false in basic
+    # mode so that a feature appearing twice is reported as the error it is.
+    Boolean shared_features = false
+  }
+
+  Int disksize = 100 + ceil(8 * size(shard_sparse_tars, "GB"))
+
+  String output_prefix = "~{sample_id}.LRAA.sc"
+
+  command <<<
+    set -ex
+
+    mkdir -p shards
+    i=0
+    for t in ~{sep=' ' shard_sparse_tars}; do
+      i=$((i+1))
+      d="shards/$(printf 's%04d' $i)"
+      mkdir -p "$d"
+      tar -xf "$t" -C "$d"
+    done
+
+    merge_shard_sparse_matrices.py \
+      --shard_dirs shards/s* \
+      --output_prefix "~{output_prefix}" \
+      --gzip_level ~{gzip_level} \
+      ~{true="--shared-features" false="" shared_features}
+
+    # Same naming as sc_build_sparse_matrices_from_tracking: the archives use
+    # "." where the directories use "^", because Apptainer's --bind spec parser
+    # mis-splits paths containing a literal "^".
+    for level in gene isoform splice_pattern; do
+      if command -v pigz >/dev/null 2>&1; then
+        tar --use-compress-program="pigz -~{gzip_level}" \
+            -cvf "~{output_prefix}.${level}-sparseM.tar.gz" "~{output_prefix}^${level}-sparseM"
+      else
+        tar -zcvf "~{output_prefix}.${level}-sparseM.tar.gz" "~{output_prefix}^${level}-sparseM"
+      fi
+    done
+  >>>
+
+  output {
+    File mapping_file = "~{output_prefix}.gene_transcript_splicehashcode.tsv"
+    File gene_sparse_dir_tgz = "~{output_prefix}.gene-sparseM.tar.gz"
+    File isoform_sparse_dir_tgz = "~{output_prefix}.isoform-sparseM.tar.gz"
+    File splice_pattern_sparse_dir_tgz = "~{output_prefix}.splice_pattern-sparseM.tar.gz"
+  }
+
+  runtime {
+    docker: docker
+    cpu: 1
+    memory: "~{memoryGB} GiB"
+    disks: "local-disk ~{disksize} HDD"
+  }
+}
