@@ -6,7 +6,7 @@ v0.32.0
   question: run_EM writes an assignment entry for every structurally compatible
   transcript, including ones holding no mass at the current abundances, so a read
   compatible with two isoforms cleared either bound whenever its competitor held
-  none. One test now feeds every consumer: quant.expr's `uniq_reads` and
+  none. One compatibility criterion now feeds every consumer: quant.expr's `uniq_reads` and
   `unique_gene_read_fraction`, the novel-isoform read floor, and
   `frac_gene_unique_reads` during filtering. `unique_read_report_min_frac` is removed.
   `unique_read_filter_min_frac` remains but decides nothing; it is read only to record
@@ -63,10 +63,6 @@ v0.32.0
   column, a long one puts the surplus under the None key -- so a writer omitting a
   column produced a file that merged without complaint. Either shape is now refused,
   naming the shard.
-
-- REMOVED: the prototype unique-read rescue that restored isoforms the standard
-  criteria had filtered. Its effect on isoform identification did not justify a
-  second, differently motivated retention path in the filter.
 
 v0.31.0
 - BREAKING: isoform-to-gene clustering now reads shared splice junctions, so gene ids
