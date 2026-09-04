@@ -897,3 +897,34 @@ def paths_name_one_file(path_a, path_b):
         # than raising from inside a guard: whatever needs the file reports its absence
         # with the context to act on, and a guard that raises first hides that.
         return os.path.realpath(path_a) == os.path.realpath(path_b)
+
+def intron_chain_from_simple_path(simple_path):
+    """The intron nodes of a splice-graph path, in order.
+
+    Introns are nodes of the gene's own graph, so identity of node sequence is identity
+    of intron chain -- which makes a full-splice-match test an exact tuple comparison
+    without resolving either side back to coordinates. Shared by the reporting paths
+    and TranscriptFiltering so "FSM" means one thing: the read's intron chain is
+    EXACTLY the isoform's, not a prefix, not a subset, not merely compatible.
+
+    Only valid within a single gene's graph. Pretty_alignment.get_splice_hashcode
+    carries the coordinate form where stability across graphs matters.
+    """
+    return tuple(node for node in simple_path if node.startswith("I:"))
+
+
+def intron_chain_from_segments(segments):
+    """The intron chain implied by a pretty alignment's exon segments.
+
+    Gaps BETWEEN consecutive segments, as (start, end) inclusive coordinates. Valid
+    because these are LRAA's own post-processed segments -- the same ones the splice
+    graph is built from, with alignment noise already merged -- so a gap here is an
+    intron rather than an indel artifact. Raw CIGAR gaps would need the small-gap merge
+    applied first and must not be passed here.
+
+    Returns () for a single-segment (monoexonic) alignment.
+    """
+    ordered = sorted(segments, key=lambda s: s[0])
+    return tuple(
+        (ordered[i - 1][1] + 1, ordered[i][0] - 1) for i in range(1, len(ordered))
+    )

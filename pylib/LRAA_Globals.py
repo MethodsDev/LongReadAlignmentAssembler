@@ -296,6 +296,11 @@ config = {
     # Only the last carrier is spared, so terminal variants of one chain do not
     # all survive on the strength of the reads they share. 0 disables.
     "min_FSM_reads_retain_isoform": 0,
+    # "Uniquely assigned" means exclusively assignable: exactly one compatible
+    # isoform. One definition feeds every consumer -- the novel-isoform floor and
+    # frac_gene_unique_reads. unique_read_filter_min_frac no longer decides
+    # uniqueness; it is retained only as a decision-log diagnostic so the divergence
+    # from the old threshold stays observable.
     # Substitute an absolute count of full-splice-match reads for the relative
     # unique-read fraction when deciding a model is too weakly supported. The
     # default 0 keeps the fraction. On chr20 ref-guided a gate of 2 moved

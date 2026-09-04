@@ -32,7 +32,9 @@ _FILTER_DECISION_LOG = os.environ.get("LRAA_FILTER_DECISION_LOG") or None
 
 _FILTER_DECISION_FIELDS = (
     "verdict transcript_id unique_reads gene_reads frac_unique "
-    "isoform_fraction FSM_reads n_introns carriers_standing novel_splice"
+    "isoform_fraction FSM_reads n_introns carriers_standing novel_splice "
+    "near_unique effectively_unique "
+    "contig strand filtering_round chain"
 ).split()
 
 _filter_decision_ofh = None
@@ -57,6 +59,36 @@ def _record_filter_decision(*values):
         # than none at all.
         _filter_decision_failed = True
         logger.warning("filter-decision recording disabled after error: %s", e)
+
+_PREFILTER_FIELDS = (
+    "verdict transcript_id contig strand reads_assigned novel_splice"
+).split()
+_prefilter_ofh = None
+_prefilter_failed = False
+
+
+def _record_prefilter_decision(*values):
+    """Log for min_reads_novel_isoform, which is NOT the same gate as the in-loop
+    min_unique_reads_novel_isoform: it runs once before any iterative filtering and
+    tests get_read_counts_assigned(), a FRACTIONAL total shared with competing
+    isoforms, not a literal count of reads unique to this model. Kept in its own
+    file so the two floors are never summed or confused.
+    """
+    global _prefilter_ofh, _prefilter_failed
+    if _prefilter_failed or _FILTER_DECISION_LOG is None:
+        return
+    try:
+        if _prefilter_ofh is None:
+            _prefilter_ofh = open(
+                "{}.prefilter.{}.tsv".format(_FILTER_DECISION_LOG, os.getpid()), "w"
+            )
+            _prefilter_ofh.write("\t".join(_PREFILTER_FIELDS) + "\n")
+        _prefilter_ofh.write("\t".join(str(v) for v in values) + "\n")
+        _prefilter_ofh.flush()
+    except Exception as e:
+        _prefilter_failed = True
+        logger.warning("prefilter recording disabled after error: %s", e)
+
 
 def filter_transcripts_by_min_length(transcripts, min_transcript_length):
     """Retain only transcripts meeting minimum cDNA length.
@@ -541,6 +573,13 @@ def filter_isoforms_by_min_isoform_fraction(
     min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
     min_FSM_reads_retain_isoform = LRAA_Globals.config["min_FSM_reads_retain_isoform"]
     min_FSM_reads_gate = LRAA_Globals.config["min_FSM_reads_gate"]
+    min_unique_reads_novel_isoform = LRAA_Globals.config[
+        "min_unique_reads_novel_isoform"
+    ]
+    _recording = _FILTER_DECISION_LOG is not None
+    # The compatible-map inversion is needed on every path now: the novel-isoform
+    # floor and frac_gene_unique_reads both read the unique counts, so there is no
+    # configuration in which it can be skipped.
 
     # Build contig/strand prefix from transcripts if available
     try:
@@ -559,38 +598,61 @@ def filter_isoforms_by_min_isoform_fraction(
         [(x.get_transcript_id(), x) for x in transcripts]
     )
 
-    def get_isoform_unique_assigned_read_count(transcript_id, frac_read_assignments):
-        """(literal reads, weighted support) among this isoform's near-unique multipaths.
+    def build_multipath_isoform_counts(frac_read_assignments):
+        """multipath -> number of isoforms of this gene it can be assigned to.
 
-        Two quantities, because the consumers want different things and conflating them is
-        what put this filter on two scales.
+        EM.run_EM writes an mp_assignments entry for every structurally compatible
+        transcript, including ones whose E-step fraction is zero under the current
+        theta, so membership in the map is the statement "this read could be assigned
+        here". A read is UNIQUE to an isoform when exactly one map contains it.
+        """
+        n_compat = defaultdict(int)
+        for mp_to_frac in frac_read_assignments.values():
+            for mp in mp_to_frac:
+                n_compat[mp] += 1
+        return n_compat
 
-        The WEIGHTED figure estimates how much of the original library is uniquely
-        explained by this isoform, and belongs in any ratio: frac_gene_unique_reads
-        divides it by a gene total that Quantify.get_gene_read_counts also builds from
-        get_read_weight(), so numerator and denominator agree. A literal numerator over
-        that weighted denominator depressed the fraction by roughly the acceptance rate,
-        worst at exactly the deep loci thinning touches.
+    def get_isoform_unique_support(transcript_id, frac_read_assignments, n_compat):
+        """Support from reads that can ONLY be assigned to this isoform.
 
-        The LITERAL figure counts observations, and belongs in
-        min_unique_reads_novel_isoform. "Two unique reads" is a confidence statement about
-        having seen a structure twice; a single read retained at p = 1/15 stands for
-        fifteen but was still seen once, and re-weighting one observation cannot make it
-        two.
+        "Uniquely assigned" means exclusively assignable -- one compatible isoform --
+        and that single definition now feeds every consumer: the literal count used by
+        the novel-isoform floor, and the weighted share used by
+        frac_gene_unique_reads. Previously both came from a fraction threshold
+        (unique_read_filter_min_frac, 0.9995), which asks whether EM happened to
+        concentrate a read's mass and so admits reads compatible with a competitor.
+
+        The two returned magnitudes still differ on purpose. The WEIGHTED figure
+        estimates how much of the original library this isoform uniquely explains and
+        belongs in any ratio: frac_gene_unique_reads divides it by a gene total that
+        Quantify.get_gene_read_counts also builds from get_read_weight(), so numerator
+        and denominator agree. The LITERAL figure counts observations, because "two
+        unique reads" is a confidence statement about having seen a structure twice.
+
+        near_unique / effectively_unique are returned for the decision log only, so the
+        divergence between this definition and the old threshold stays observable.
         """
         num_unique_reads = 0
         weighted_unique_support = 0.0
-        for mp in frac_read_assignments[transcript_id]:
-            if (
-                frac_read_assignments[transcript_id][mp]
-                >= LRAA_Globals.config["unique_read_filter_min_frac"]
-            ):
-                num_unique_reads += mp.get_read_count()
+        near_unique = 0
+        effectively_unique = 0
+        gate = LRAA_Globals.config["unique_read_filter_min_frac"]
+        for mp, frac in frac_read_assignments[transcript_id].items():
+            n = mp.get_read_count()
+            if n_compat[mp] == 1:
+                num_unique_reads += n
                 weighted_unique_support += mp.get_read_weight()
-
-        return num_unique_reads, weighted_unique_support
-
-
+            if frac >= gate:
+                near_unique += n
+                if n_compat[mp] > 1:
+                    # clears the old threshold yet is NOT exclusively assignable
+                    effectively_unique += n
+        return (
+            num_unique_reads,
+            weighted_unique_support,
+            near_unique,
+            effectively_unique,
+        )
 
     gene_id_to_transcripts = _get_gene_id_to_transcripts(transcripts)
 
@@ -630,6 +692,8 @@ def filter_isoforms_by_min_isoform_fraction(
             frac_read_assignments = q._estimate_isoform_read_support(
                 isoforms_of_gene, prefix_str=_prefix
             )
+
+            n_compat_mp = build_multipath_isoform_counts(frac_read_assignments)
 
             gene_id_to_read_count = Quantify.get_gene_read_counts(
                 frac_read_assignments, transcript_id_to_transcript_obj
@@ -675,8 +739,10 @@ def filter_isoforms_by_min_isoform_fraction(
                 (
                     transcript_unique_read_count,
                     transcript_unique_weighted_support,
-                ) = get_isoform_unique_assigned_read_count(
-                    transcript_id, frac_read_assignments
+                    near_unique_reads,
+                    effectively_uniq_reads,
+                ) = get_isoform_unique_support(
+                    transcript_id, frac_read_assignments, n_compat_mp
                 )
 
                 # Weighted over weighted: gene_read_count is itself built from
@@ -784,7 +850,7 @@ def filter_isoforms_by_min_isoform_fraction(
                 elif not isoforms_were_filtered and (
                     transcript.has_novel_splice_pattern() is True
                     and transcript_unique_read_count
-                    < LRAA_Globals.config["min_unique_reads_novel_isoform"]
+                    < min_unique_reads_novel_isoform
                 ):
                     verdict = "filtered_novel_too_few_unique_reads"
 
@@ -829,6 +895,22 @@ def filter_isoforms_by_min_isoform_fraction(
                             else 0
                         ),
                         transcript.has_novel_splice_pattern(),
+                        near_unique_reads,
+                        effectively_uniq_reads,
+                        # Coordinate chain plus contig/strand and round: the node-tuple
+                        # form (get_splice_pattern) is only identity-stable within one
+                        # gene's graph, so it must not key cross-run joins. The round is
+                        # required because the same transcript_id is reconsidered as EM
+                        # support changes, and a bare id would silently collapse rounds.
+                        transcript.get_contig_acc(),
+                        transcript.get_strand(),
+                        filtering_round,
+                        ",".join(
+                            "{}-{}".format(lend, rend)
+                            for lend, rend in transcript.get_introns()
+                        )
+                        if transcript.get_introns()
+                        else "monoexonic",
                     )
 
             logger.debug(
@@ -1422,6 +1504,19 @@ def filter_novel_isoforms_by_min_read_support(
                 )
             except Exception:
                 logger.info("transcript {} is a novel isoform with {} read support".format(transcript, transcript.get_read_counts_assigned()))
+            _record_prefilter_decision(
+                (
+                    "prefilter_novel_retained"
+                    if transcript.get_read_counts_assigned()
+                    >= min_reads_novel_isoform
+                    else "prefilter_novel_removed"
+                ),
+                transcript.get_transcript_id(),
+                _ca,
+                _cs,
+                transcript.get_read_counts_assigned(),
+                True,
+            )
             if transcript.get_read_counts_assigned() >= min_reads_novel_isoform:
                 retained_transcripts.append(transcript)
             else:
