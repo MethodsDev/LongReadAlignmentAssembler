@@ -39,7 +39,7 @@ workflow LRAA_cell_cluster_guided {
         # Rationale for the split, including the measurement behind keeping discovery
         # on by_chromosome, is at LRAA-singlecell.wdl:167-186.
         String scattering = "by_chromosome"
-        String scattering_final_quant = "by_chunk"
+        String scattering_final_quant = "by_chromosome"
         String? oversimplify # comma-separated contig names to simplify (e.g., "chrM" or "chrM,MT")
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 

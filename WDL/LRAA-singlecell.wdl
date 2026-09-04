@@ -271,19 +271,19 @@ workflow LRAA_singlecell_wf {
     # saturated every core, and cutting them further only multiplies per-unit fixed
     # cost.
     #
-    # FINAL QUANT is by_chunk anyway. The measurement above was taken with miniwdl on
-    # ONE box, where leaf parallelism cannot help a phase that is already core-bound;
-    # it does not describe a backend that can place leaves on separate machines, where
-    # the same cut buys real concurrency. Final quant is also the phase whose peak
-    # memory is set by the widest single unit rather than by cluster count, so chunking
-    # it bounds that peak -- which is the reason chunking exists.
+    # ALL THREE phases now default to by_chromosome, so a run has one scattering shape
+    # rather than three and the phases are comparable to each other.
     #
-    # The cost is two non-preemptible tasks per cluster (make_chunks and the merge)
-    # instead of none, so on a single-node run with many clusters by_chromosome may
-    # still be faster. It remains available; this is a default, not a constraint.
-    String scattering_init = "by_chunk"
+    # The arguments for by_chunk on init and final quant still hold on the backends
+    # they were made for: leaf parallelism buys real concurrency where leaves land on
+    # separate machines, and chunking final quant bounds a peak memory set by the widest
+    # single unit rather than by cluster count. It also costs two non-preemptible tasks
+    # per cluster (make_chunks and the merge) instead of none, which on a single-node
+    # run with many clusters makes it the slower choice. by_chunk remains available for
+    # every phase; these are defaults, not constraints.
+    String scattering_init = "by_chromosome"
     String scattering_per_cluster = "by_chromosome"
-    String scattering_final_quant = "by_chunk"
+    String scattering_final_quant = "by_chromosome"
 
     # Optional: reuse outputs from a prior initial discovery run and skip LRAA_init
     File? precomputed_init_quant_tracking
