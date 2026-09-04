@@ -138,7 +138,7 @@ def test_a_real_isoform_match_on_a_different_path_is_unaffected(bam, tmp_path):
     tracking = tmp_path / "tracking.tsv"
     with open(tracking, "wt") as fh:
         table = StreamingQuant.AssignmentTable()
-        table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0)])
+        table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0, 0)])
         totals = StreamingQuant.stream_assign(
             str(_write_bam(tmp_path / "reads2.bam")), CONTIG, "+", "A" * CONTIG_LEN,
             _FakeLRAA(), table, fh,

@@ -2105,6 +2105,19 @@ class Quantify:
             reverse=True,
         )
 
+        # Reads that can only be assigned to ONE isoform of their gene. This is the
+        # same definition the filter uses, and it replaces unique_read_report_min_frac:
+        # EM.run_EM writes an mp_assignments entry for every structurally compatible
+        # transcript, so membership in more than one map means the read could have gone
+        # elsewhere. The old test asked whether EM had concentrated a read's mass, and
+        # a read compatible with two isoforms still reaches 1.0 whenever the competitor
+        # holds zero mass under the current theta -- so it could report as unique a read
+        # that another isoform could equally have claimed.
+        n_compat_mp = defaultdict(int)
+        for _mp_to_frac in transcript_to_fractional_mp_assignment.values():
+            for _mp in _mp_to_frac:
+                n_compat_mp[_mp] += 1
+
         # first, get sum of reads per gene
         gene_to_read_count = defaultdict(int)
         total_reported_read_count = 0
@@ -2137,6 +2150,10 @@ class Quantify:
             rpm_total_reads = transcript.get_TPM()
 
             num_uniquely_assigned_reads = 0
+            num_uniq_FSM_reads = 0
+            transcript_intron_chain = Util_funcs.intron_chain_from_simple_path(
+                transcript.get_simple_path()
+            )
 
             for mp in multipaths:
                 frac_read_assigned = transcript_to_fractional_mp_assignment[
@@ -2144,6 +2161,15 @@ class Quantify:
                 ][mp]
 
                 mp_id = mp.get_id()
+
+                # Both are properties of the (multipath, isoform) pair, not of the
+                # read, so they are computed once here and reused for every read row
+                # this multipath contributes.
+                mp_is_unique = n_compat_mp[mp] == 1
+                mp_is_FSM = bool(transcript_intron_chain) and (
+                    Util_funcs.intron_chain_from_simple_path(mp.get_simple_path())
+                    == transcript_intron_chain
+                )
 
                 # get_read_names() returns a set of str, whose iteration order
                 # is randomised per process by PYTHONHASHSEED.  These become one
@@ -2166,15 +2192,16 @@ class Quantify:
                         else 1.0
                     )
                     tracking_report_info.append("{:.6f}".format(read_weight))
+                    tracking_report_info.append("1" if mp_is_unique else "0")
+                    tracking_report_info.append("1" if mp_is_FSM else "0")
 
                     # Always emit read tracking rows for robustness; downstream annotator filters/consumes as needed
                     print("\t".join(tracking_report_info), file=ofh_read_tracking)
 
-                    if (
-                        frac_read_assigned
-                        >= LRAA_Globals.config["unique_read_report_min_frac"]
-                    ):
+                    if mp_is_unique:
                         num_uniquely_assigned_reads += 1
+                        if mp_is_FSM:
+                            num_uniq_FSM_reads += 1
 
             gene_read_count = gene_to_read_count[gene_id]
             unique_gene_read_fraction = (
@@ -2212,6 +2239,7 @@ class Quantify:
                 )
 
             report_vals.append(f"{rpm_total_reads:.3f}")
+            report_vals.append(f"{num_uniq_FSM_reads}")
 
             report_txt = "\t".join(report_vals)
 

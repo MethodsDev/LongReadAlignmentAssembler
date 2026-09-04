@@ -153,7 +153,7 @@ def _write_bam(path):
 
 def _table():
     table = StreamingQuant.AssignmentTable()
-    table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0)])
+    table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0, 0)])
     # Seen and matched nothing, which is a real answer the table must carry as one.
     table.add("canon:E:9", [])
     return table

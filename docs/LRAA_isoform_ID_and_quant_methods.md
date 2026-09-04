@@ -416,11 +416,38 @@ isoform $$i$$ has no ambiguous RCC support.
 Iteration continues until the Euclidean norm of the change between consecutive
 isoform-proportion vectors falls below $$10^{-6}$$ or maximum iterations are reached (250 for
 final quantification and quantification-only mode, 1000 during assembly). From the final
-proportions, unique read counts (reads assigned wholly to a single isoform,
-`unique_read_report_min_frac`), total fractional read counts, isoform fractions, and TPM are
-computed. Isoform filtering applies a slightly looser unique-read criterion of $$0.9995$$
-(`unique_read_filter_min_frac`) so that EM rounding does not disqualify an otherwise unique
-read. In the final expression report, TPM is normalized over the final reported transcripts;
+proportions, total fractional read counts, isoform fractions, and TPM are computed.
+
+A read is UNIQUE to an isoform when that isoform is the only one it can be assigned to.
+The EM writes an assignment entry for every structurally compatible transcript, including
+ones holding zero mass at the current proportions, so membership in exactly one such map
+is the criterion, and it is the same one everywhere: the reported `uniq_reads` and
+`unique_gene_read_fraction` columns, the novel-isoform read floor, and
+`frac_gene_unique_reads` during filtering. No fractional threshold participates. Earlier
+revisions instead asked whether the EM had allocated a read's mass to one isoform --
+$$1.0$$ for reporting (`unique_read_report_min_frac`, since removed) and $$0.9995$$ for
+filtering -- which is a different question: a read compatible with two isoforms reaches
+either bound whenever its competitor holds no mass, and was then reported as unique
+although another isoform could equally have explained it. `unique_read_filter_min_frac`
+survives only to record how far that older criterion diverges from this one, as the
+`near_unique` and `effectively_unique` columns of the filter-decision log.
+
+`uniq_FSM_reads` counts the subset of an isoform's unique reads whose intron chain is
+EXACTLY the isoform's -- not a prefix, not a subset, not merely compatible -- so it is
+direct evidence for the whole structure rather than for a locus. It can never exceed
+`uniq_reads`, and a monoexonic model reports zero because it has no chain to match. The
+read-tracking file carries both properties per row, as `is_unique` and `is_FSM`, so both
+expression columns are recomputable from it: `uniq_reads` counts rows with `is_unique`
+set and `uniq_FSM_reads` those with both. Uniqueness is recorded explicitly rather than
+inferred from the number of rows a read produces, because that inference does not hold on
+every path -- the `--oversimplify` writers break a best-overlap tie at random and emit a
+single row for a read that several isoforms could equally have taken, and that read is
+correctly excluded from `uniq_reads`.
+
+`splice_compat_contained` and `splice_contained_by` are diagnostics emitted only under
+`--debug`; without it the containment relationships are not computed at all.
+
+In the final expression report, TPM is normalized over the final reported transcripts;
 the separate `RPM_total_reads` column scales against `num_total_reads`, the count of
 genome-mapped reads in the input BAM. That count excludes unmapped, secondary, and
 supplementary records (`samtools view -c -F 0x904`, `LRAA:5137-5163`), so each aligned read

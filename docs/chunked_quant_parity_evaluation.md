@@ -216,12 +216,14 @@ names, not positions.
 
 **2. Per-transcript numbers.** Load both `quant.expr` files into dicts keyed on
 `transcript_id` and compare `uniq_reads`, `all_reads`, `isoform_fraction`,
-`unique_gene_read_fraction`, `TPM` and `RPM_total_reads`, plus the structural columns
-`exons`, `introns`, `splice_hash_code` and `gene_id`. Report the maximum absolute delta per
+`unique_gene_read_fraction`, `TPM`, `RPM_total_reads` and `uniq_FSM_reads`, plus the
+structural columns `exons`, `introns`, `splice_hash_code` and `gene_id`.
+`splice_compat_contained`/`splice_contained_by` are present only under `--debug`, so
+compare them only when both arms ran with it. Report the maximum absolute delta per
 column rather than a pass/fail, so a small real divergence is distinguishable from a large one.
 
 **3. Per-read assignments.** Key the two `quant.tracking` files on `(read_name, transcript_id)`
-and compare the key sets and `frac_assigned`. This catches compensating errors that cancel in
+and compare the key sets, `frac_assigned`, `is_unique` and `is_FSM`. This catches compensating errors that cancel in
 the per-transcript totals.
 
 **Confirm the hard case was present.** Before drawing any conclusion, count reads assigned to

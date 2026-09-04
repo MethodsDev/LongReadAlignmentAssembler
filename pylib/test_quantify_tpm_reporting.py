@@ -15,6 +15,16 @@ class _FakeMultipath:
     def get_id(self):
         return self._mp_id
 
+    def get_simple_path(self):
+        """Node path, as the real MultiPath exposes.
+
+        report_quant_results reads this to decide whether the read's intron chain is
+        exactly the isoform's (is_FSM / uniq_FSM_reads). Returns a chain that matches
+        no transcript double's path, so every row here is non-FSM -- which is correct
+        for a fixture that asserts TPM renormalization and says nothing about FSM.
+        """
+        return ["E:mp5p", "I:mp", "E:mp3p"]
+
     def get_read_names(self):
         return self._read_names
 
@@ -69,6 +79,18 @@ class _FakeTranscript:
     def get_exons_string(self):
         return "1-100"
 
+    def get_simple_path(self):
+        """Node path, as the real Transcript exposes.
+
+        report_quant_results compares a read's intron chain to the isoform's to set the
+        tracking file's is_FSM and the quant.expr uniq_FSM_reads column. This test
+        asserts TPM renormalization, not FSM, so the path only has to be well formed
+        and distinct per transcript.
+        """
+        return ["E:5p:" + str(self.get_transcript_id()),
+                "I:" + str(self.get_transcript_id()),
+                "E:3p:" + str(self.get_transcript_id())]
+
     def get_introns_string(self):
         return "151-199" if self._num_exons > 1 else ""
 
@@ -104,10 +126,17 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         quant_by_transcript = {row[1]: row for row in rows}
         assert quant_by_transcript["tx1"][0] == "GENE1^gene1"
         assert quant_by_transcript["tx2"][0] == "gene2"
-        rpm_total_reads_sum = sum(float(row[-1]) for row in rows)
+        # RPM_total_reads is the SECOND-to-last column: uniq_FSM_reads is appended
+        # after it, deliberately last so that every column before it keeps its index.
+        # row[-1] would read the FSM count here.
+        rpm_total_reads_sum = sum(float(row[-2]) for row in rows)
+        uniq_FSM_sum = sum(int(row[-1]) for row in rows)
 
         assert round(tpm_sum, 3) == 1000000.0
         assert round(rpm_total_reads_sum, 3) == 400000.0
+        # The multipath double's chain matches no transcript double's, so no row is a
+        # full splice match. Asserted so the column's presence is covered here too.
+        assert uniq_FSM_sum == 0
 
         tracking_rows = [
             line.split("\t") for line in tracking_out.getvalue().strip().splitlines()
@@ -115,7 +144,16 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         tracking_by_transcript = {row[1]: row for row in tracking_rows}
         assert tracking_by_transcript["tx1"][0] == "GENE1^gene1"
         assert tracking_by_transcript["tx2"][0] == "gene2"
-        assert all(len(row) == 8 for row in tracking_rows)
+        # 8 original columns plus is_unique and is_FSM.
+        assert all(len(row) == 10 for row in tracking_rows)
+        # Both are 0/1 flags. NOT asserted: that is_FSM implies is_unique -- it does
+        # not. is_FSM is a property of the (read, isoform) pair, so a read whose chain
+        # matches several endpoint variants of that chain is FSM for each of them while
+        # being unique to none. Only the AGGREGATE applies the conjunction, which is
+        # why uniq_FSM_reads counts rows with both flags rather than the is_FSM rows.
+        for row in tracking_rows:
+            assert row[8] in ("0", "1"), "is_unique must be a 0/1 flag"
+            assert row[9] in ("0", "1"), "is_FSM must be a 0/1 flag"
         assert {row[3] for row in tracking_rows if row[1] == "tx1"} == {"1"}
         assert {row[3] for row in tracking_rows if row[1] == "tx2"} == {"2"}
         assert {row[7] for row in tracking_rows if row[1] == "tx1"} == {"0.250000"}

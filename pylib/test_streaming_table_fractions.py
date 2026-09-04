@@ -65,6 +65,17 @@ class _FakeTranscript:
     def get_num_exon_segments(self):
         return self._num_exons
 
+    def get_simple_path(self):
+        """Node path, as the real Transcript exposes.
+
+        rows_for_multipath compares a read's intron chain to the isoform's to set the
+        tracking file's is_FSM, so a transcript double has to carry a path. The intron
+        node is keyed on the transcript id, which keeps distinct isoforms distinct --
+        these tests assert fractions and row counts, not FSM, so what matters is that
+        the chains are well formed and unequal rather than what they contain.
+        """
+        return ["E:5p:" + self._tid, "I:" + self._tid, "E:3p:" + self._tid]
+
     def get_introns_string(self):
         return "i:" + self._tid
 

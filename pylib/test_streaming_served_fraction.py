@@ -95,7 +95,7 @@ def _run(bam, tmp_path, table):
             str(bam), CONTIG, "+", "A" * CONTIG_LEN, _FakeLRAA(), table, fh,
             # The resolver answers, as it does in a real run: an unseen path is resolved
             # once and cached, never dropped.
-            resolver=lambda path: [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0)],
+            resolver=lambda path: [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0, 0)],
             try_correct_alignments=False,
         )
     return totals, tracking.read_text().splitlines()
@@ -148,7 +148,7 @@ def test_the_report_logs_the_served_fraction_and_what_it_means(bam, tmp_path, ca
 def test_a_fully_served_unit_reports_the_other_end(bam, tmp_path, caplog):
     """The control: a table carrying the path resolves nothing and serves everything."""
     table = StreamingQuant.AssignmentTable()
-    table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0)])
+    table.add("canon:E:1", [("g1", "t1", "h1", 2, "mp1", 1.0, 1.0, 0)])
 
     with caplog.at_level(logging.INFO, logger="StreamingQuant"):
         totals, _rows = _run(bam, tmp_path, table)

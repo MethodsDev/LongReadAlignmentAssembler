@@ -205,7 +205,7 @@ class CrossComponentAmbiguousPath(RuntimeError):
 
 def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weight_of,
                        component_of):
-    """The tracking rows one multipath contributes: (gene, tx, hash, exons, mp, frac, w).
+    """The tracking rows one multipath contributes: (gene, tx, hash, exons, mp, frac, w, is_FSM).
 
     The single definition of the split, called both when precomputing the table from a
     finished quantification and when a streaming pass resolves a path that quantification
@@ -234,6 +234,8 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
     by_component = defaultdict(list)
     gene_of_tid = {}
     component_of_tid = {}
+    mp_intron_chain = Util_funcs.intron_chain_from_simple_path(mp.get_simple_path())
+
     for t in transcripts_assigned:
         tid = t.get_transcript_id()
         gene_id = t.get_gene_id()
@@ -344,9 +346,16 @@ def rows_for_multipath(mp, transcripts_assigned, theta, em_was_run, use_3p, weig
 
         for tid, t in by_tid.items():
             num_exons = t.get_num_exon_segments()
+            # FSM is a property of the (multipath, isoform) pair: the read's intron
+            # chain is EXACTLY this isoform's. Same predicate the batch reporter and
+            # TranscriptFiltering use, via the shared Util_funcs helper, so "FSM"
+            # cannot come to mean two things across the two quant paths.
+            t_chain = Util_funcs.intron_chain_from_simple_path(t.get_simple_path())
+            is_fsm = bool(t_chain) and mp_intron_chain == t_chain
             out.append(
                 (t.get_output_gene_id(), tid, _splice_hash_code(t, num_exons),
-                 num_exons, mp.get_id(), fracs[tid], weights[tid])
+                 num_exons, mp.get_id(), fracs[tid], weights[tid],
+                 1 if is_fsm else 0)
             )
 
     # deterministic row order: tracking output must not follow dict order
@@ -489,6 +498,7 @@ class StreamingTotals:
         # rescue-driven path resolution must stay out of the served/unseen accounting,
         # whose accounted denominator is assigned plus unassignable reads and would
         # otherwise be smaller than its own numerator.
+        self.uniq_FSM_reads = defaultdict(int)
         self.rescue_offered = defaultdict(int)
         self.rescue_assigned = defaultdict(int)
         self.rescue_unassignable = defaultdict(int)
@@ -496,15 +506,22 @@ class StreamingTotals:
         self.rescue_paths_resolved_in_stream = 0
 
     def record(self, rows):
-        report_min = LRAA_Globals.config["unique_read_report_min_frac"]
+        # `rows` is one read's rows -- one per isoform it can be assigned to -- so
+        # len(rows) == 1 IS exclusive assignability, and no compatibility map is
+        # needed here. This replaces unique_read_report_min_frac, which asked whether
+        # the read's fraction reached 1.0: a read compatible with two isoforms reaches
+        # that whenever the competitor holds zero mass, and would be reported unique.
+        read_is_unique = len(rows) == 1
         any_positive = False
-        for gene_id, transcript_id, _hash, _nex, _mp, frac, _w in rows:
+        for gene_id, transcript_id, _hash, _nex, _mp, frac, _w, is_fsm in rows:
             self.frac_sum[transcript_id] += frac
             self.gene_frac_sum[gene_id] += frac
             if frac > 0.0:
                 any_positive = True
-            if frac >= report_min:
+            if read_is_unique:
                 self.uniq_reads[transcript_id] += 1
+                if is_fsm:
+                    self.uniq_FSM_reads[transcript_id] += 1
         if rows and not any_positive:
             self.reads_zero_fraction += 1
 
@@ -735,11 +752,18 @@ def stream_assign(
             return 0
 
         read_name = Util_funcs.get_read_name_include_sc_encoding(read)
-        for gene_id, transcript_id, splice_hash, num_exons, mp_id, frac, weight in rows:
+        # Uniqueness is a property of the READ, not of the row: this read has one row
+        # per isoform it can be assigned to, so a single row means nothing else could
+        # claim it. Written per row so the column is self-describing rather than
+        # something a consumer has to infer by counting rows -- which is not even
+        # valid on every path (the oversimplify writers emit one row for a tie).
+        read_is_unique = "1" if len(rows) == 1 else "0"
+        for (gene_id, transcript_id, splice_hash, num_exons, mp_id, frac, weight,
+             is_fsm) in rows:
             tracking_fh.write(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{:.6f}\t{:.6f}\n".format(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:.6f}\t{:.6f}\t{}\t{}\n".format(
                     gene_id, transcript_id, splice_hash, num_exons, mp_id,
-                    read_name, frac, weight,
+                    read_name, frac, weight, read_is_unique, is_fsm,
                 )
             )
         totals.record(rows)
@@ -871,9 +895,10 @@ def write_expr(
     for byte. Emitted exactly when ``splice_compatible_containments is not None`` --
     the SAME decision point ``report_quant_results`` uses, rather than a second one --
     so the caller that already knows whether this run's header carries the two extra
-    discovery columns (``quant_header_final``'s own ``if not quant_only``) makes it
-    once, by whether it passes the dicts at all. Quant-only's own call never passes
-    them; discovery's does, even when both dicts are empty.
+    columns (``quant_header_final``'s own ``if LRAA_Globals.DEBUG``) makes it once, by
+    whether it passes the dicts at all. They are DEBUG-only diagnostics, not a
+    discovery-vs-quant-only distinction: without --debug the containment relationships
+    are never computed and the caller passes None.
 
     ``transcripts`` is deliberately allowed to be a superset of what ``totals`` covers:
     every lookup below defaults to zero rather than asserting presence, so an isoform
@@ -929,6 +954,9 @@ def write_expr(
                 )
             )
         vals.append(f"{rpm:.3f}")
+        # Matches quant_header's own trailing order: RPM_total_reads then
+        # uniq_FSM_reads, so this path and report_quant_results stay byte-comparable.
+        vals.append(f"{totals.uniq_FSM_reads.get(transcript_id, 0)}")
         print("\t".join(vals), file=ofh)
 
 

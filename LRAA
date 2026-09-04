@@ -3552,6 +3552,22 @@ def _merge_quant_expr_files(src_paths, output_path, fieldnames):
         with open(src_path, "rt") as fh:
             reader = csv.DictReader(_iter_non_comment_lines(fh), delimiter="\t")
             for row in reader:
+                # A shard whose rows do not match its own header is malformed, and
+                # DictReader hides it: short rows get None values and long ones land in
+                # restkey, so a writer that omits a conditional column produces a file
+                # that merges "successfully" with every later field shifted. Refuse it
+                # here, where the header is known, rather than let a silently wrong
+                # column reach the merged output.
+                # Two distinct failure shapes, and the obvious test catches only one.
+                # A SHORT row leaves None as the VALUE of every missing column, which
+                # is the OVSIMP shape: a writer omitting two conditional columns. A
+                # LONG row puts the surplus under the None KEY (restkey). `None in row`
+                # tests keys only, so it sees the second and misses the first.
+                if any(value is None for value in row.values()) or None in row:
+                    raise RuntimeError(
+                        "malformed quant.expr shard {}: row does not match its header "
+                        "({} columns expected)".format(src_path, len(reader.fieldnames))
+                    )
                 try:
                     counts = float(row.get("all_reads", 0) or 0)
                 except ValueError:
@@ -4447,9 +4463,15 @@ def _run_jobs_schedule_and_merge(
         "introns",
         "splice_hash_code",
     ]
-    if not quant_only:
+    # Diagnostic columns: emitted only under --debug. They are large (a set of
+    # transcript ids per row) and no consumer of the standard output reads them.
+    if LRAA_Globals.DEBUG:
         quant_header_final += ["splice_compat_contained", "splice_contained_by"]
     quant_header_final.append("RPM_total_reads")
+    # Appended last, after RPM_total_reads, so every existing column keeps its index
+    # for consumers that read positionally (the benchmarking registry's quant_id_col
+    # among them).
+    quant_header_final.append("uniq_FSM_reads")
 
     tracking_header_final = [
         "gene_id",
@@ -4460,6 +4482,8 @@ def _run_jobs_schedule_and_merge(
         "read_name",
         "frac_assigned",
         "read_weight",
+        "is_unique",
+        "is_FSM",
     ]
     # No incompleteness marker is emitted any more. It warned that rows covered only the
     # reads coverage normalization retained, which could only happen when the bam being
@@ -4843,9 +4867,13 @@ def _contig_job_runner(job):
         "introns",
         "splice_hash_code",
     ]
-    if not job["QUANT_ONLY"]:
+    # Diagnostic columns: emitted only under --debug (see quant_header_final).
+    if LRAA_Globals.DEBUG:
         quant_header += ["splice_compat_contained", "splice_contained_by"]
     quant_header.append("RPM_total_reads")
+    # Appended last, matching quant_header_final above: the two must stay identical or
+    # the chunked merge reads a header that does not describe its own rows.
+    quant_header.append("uniq_FSM_reads")
 
     tracking_header = [
         "gene_id",
@@ -4856,6 +4884,8 @@ def _contig_job_runner(job):
         "read_name",
         "frac_assigned",
         "read_weight",
+        "is_unique",
+        "is_FSM",
     ]
 
     ofh_quant = open(quant_expr_tmp, "wt")
@@ -5203,6 +5233,9 @@ def _run_oversimplify_best_overlap(
     assigned_tids = set()
     mp_id_token = f"ovsimp:{contig_acc}:{contig_strand}"
 
+    uniq_read_counts = {}
+    uniq_FSM_read_counts = {}
+
     for pa in pretty_alignments or []:
         segs = pa.get_pretty_alignment_segments()
         if not segs:
@@ -5234,6 +5267,21 @@ def _run_oversimplify_best_overlap(
         transcript.set_read_counts_assigned(transcript.get_read_counts_assigned() + 1.0)
         assigned_read_count += 1
         assigned_tids.add(tid)
+        # A tie means several isoforms overlap this read equally well and one was
+        # picked at random above, so the read could have been credited elsewhere and
+        # is NOT uniquely assignable. Only a sole candidate is.
+        if len(candidate_tids) == 1:
+            uniq_read_counts[tid] = uniq_read_counts.get(tid, 0) + 1
+
+        # FSM is measurable here rather than assumed: compare the read's own intron
+        # chain to this model's. Assignment was by best overlap and ignored the chain,
+        # but that says nothing about whether the chains match -- reporting 0 on that
+        # basis would publish "not a full splice match" where nothing was measured.
+        read_chain = Util_funcs.intron_chain_from_segments(segs)
+        tx_chain = Util_funcs.intron_chain_from_segments(tx_exons[tid])
+        read_is_FSM = bool(tx_chain) and read_chain == tx_chain
+        if read_is_FSM and len(candidate_tids) == 1:
+            uniq_FSM_read_counts[tid] = uniq_FSM_read_counts.get(tid, 0) + 1
 
         num_exons = transcript.get_num_exon_segments()
         splice_hash = (
@@ -5252,6 +5300,11 @@ def _run_oversimplify_best_overlap(
                     read_name,
                     "1.000000",
                     "1.000000",
+                    # A tie was broken at random above, so a tied read could have been
+                    # credited elsewhere and is not exclusively assignable -- even
+                    # though exactly one row is emitted for it.
+                    "1" if len(candidate_tids) == 1 else "0",
+                    "1" if read_is_FSM else "0",
                 ]
             ),
             file=ofh_track,
@@ -5283,8 +5336,10 @@ def _run_oversimplify_best_overlap(
         tid = t.get_transcript_id()
         counts = t.get_read_counts_assigned()
         isoform_frac = t.get_isoform_fraction()
-        # unique count equals counts in this mode
-        uniq_reads = int(round(counts))
+        # Reads whose best overlap was this model ALONE. Not the assigned total: a
+        # tie was broken at random, so a tied read is not uniquely assignable even
+        # though exactly one model was credited with it.
+        uniq_reads = int(uniq_read_counts.get(tid, 0))
         gene_total = gene_totals.get(gene_id, 0.0)
         unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
         tpm = (
@@ -5310,7 +5365,17 @@ def _run_oversimplify_best_overlap(
             t.get_exons_string(),
             introns_str,
             splice_hash,
+        ]
+        # quant_header carries the two containment columns exactly when DEBUG is on,
+        # so the row must make the SAME decision. Omitting them shifted every later
+        # column one place left, which is how this path came to write RPM into a
+        # containment field and leave uniq_FSM_reads blank. Empty strings because this
+        # path computes no containment relationships.
+        if LRAA_Globals.DEBUG:
+            row += ["", ""]
+        row += [
             f"{rpm_total_reads:.3f}",
+            f"{int(uniq_FSM_read_counts.get(tid, 0))}",
         ]
         print("\t".join(row), file=ofh_quant)
 
@@ -5428,6 +5493,10 @@ def _run_oversimplify_aggregate(
                     rn,
                     "1.000000",
                     "1.000000",
+                    # One pseudo-transcript exists on this contig/strand, so there is
+                    # nothing else a read could be assigned to.
+                    "1",
+                    ("0" if num_exons == 1 else "NA"),
                 ]
             ),
             file=ofh_track,
@@ -5451,7 +5520,17 @@ def _run_oversimplify_aggregate(
         t.get_exons_string(),
         introns_str,
         splice_hash,
+    ]
+    # Same header contract as the best-overlap writer above.
+    if LRAA_Globals.DEBUG:
+        row += ["", ""]
+    row += [
         f"{rpm_total_reads:.3f}",
+        # A monoexonic model has no intron chain to match, so 0 is a measurement.
+        # A multi-exon aggregate here was assembled from spans without per-read chain
+        # comparison, so FSM is UNMEASURED and says so rather than reporting 0 --
+        # which a consumer could not tell from "measured, none matched".
+        ("0" if num_exons == 1 else "NA"),
     ]
     print("\t".join(row), file=ofh_quant)
 
@@ -7244,10 +7323,20 @@ def run_transcript_assembly(
 
     ###############################################
     # examine splice compatible isoform differences (note, not currently filtering here, just annotating feature)
-    (
-        transcript_splice_compatible_containments,
-        transcript_splice_compatible_contained_by,
-    ) = TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
+    #
+    # Only the two DEBUG-only quant.expr columns consume this, so computing it
+    # otherwise is pairwise work over every gene's isoforms whose result is then
+    # discarded -- on a whole genome that is not free. Gated at the computation rather
+    # than only at the writers, and the (None, None) it yields is the same value the
+    # writers already treat as "these columns are absent".
+    if LRAA_Globals.DEBUG:
+        (
+            transcript_splice_compatible_containments,
+            transcript_splice_compatible_contained_by,
+        ) = TranscriptFiltering.evaluate_splice_compatible_alt_isoforms(transcripts)
+    else:
+        transcript_splice_compatible_containments = None
+        transcript_splice_compatible_contained_by = None
 
     if LRAA_Globals.config["stream_reads"]:
         # `totals` came from run_quant_only's own streaming second pass over this

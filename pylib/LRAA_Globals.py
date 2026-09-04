@@ -531,9 +531,10 @@ config = {
     "stream_reads_rescue_unassigned_to_targets": False,
     "EM_alpha": 0.01,  # regularization
     "EM_convergence_tol": 1e-6,  # L2 change in normalized abundances; shared by both EM passes
-    # assignment fraction at or above which a read counts as uniquely assigned.
-    # Reporting requires a whole read; isoform filtering tolerates EM rounding.
-    "unique_read_report_min_frac": 1.0,
+    # Assignment fraction at or above which the SUPERSEDED criterion counted a read
+    # as uniquely assigned. It no longer decides uniqueness anywhere -- exclusive
+    # assignability does -- and is read only to record how far the two diverge, as the
+    # decision log's near_unique and effectively_unique columns.
     "unique_read_filter_min_frac": 0.9995,
     # low-memory tuning knobs (now implicit defaults: always avoid in-memory read-name storage; always track spans)
     #
