@@ -95,7 +95,8 @@ workflow LRAA_cell_cluster_guided {
         # Build the single-cell matrices per (cluster, contig) shard during the
         # final quantification wave and merge them, instead of one
         # single-threaded pass over the merged cluster tracking file. REQUIRES
-        # scattering_final_quant = "by_chromosome".
+        # scattering_final_quant = "by_chromosome", the default since v0.32.0;
+        # "off" produces no per-contig shards to merge.
         Boolean sc_sparse_from_shards = false
         String sparseMatrixCsvEngine = "direct"
         Int sparseMatrixGzipLevel = 1
@@ -851,9 +852,9 @@ task refuse_sc_sparse_from_shards_cg {
   }
   command <<<
     echo "Error, sc_sparse_from_shards requires scattering_final_quant = \"by_chromosome\", got \"~{scattering_final_quant}\"." >&2
-    echo "Per-shard sparse matrices need a partition no feature can straddle. Features are" >&2
-    echo "contig-disjoint, but a gene can span a chunk boundary, so by_chunk would need the" >&2
-    echo "cross-shard summing this design exists to avoid." >&2
+    echo "That is the default, so this is reachable only by setting it explicitly. With \"off\"" >&2
+    echo "each cluster runs one whole-genome invocation rather than a per-contig scatter, so no" >&2
+    echo "per-shard sparse matrices are produced and the merge would receive an empty list." >&2
     exit 1
   >>>
   output { String checked = "unreachable" }

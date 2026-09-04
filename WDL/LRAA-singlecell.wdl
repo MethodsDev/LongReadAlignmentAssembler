@@ -346,9 +346,11 @@ workflow LRAA_singlecell_wf {
     Int memoryGBscSparseMatrices = 32
     # Build the single-cell matrices per contig shard, alongside quantification,
     # and merge them; instead of one single-threaded pass over the merged
-    # tracking file. REQUIRES scattering_init = "by_chromosome": features are
-    # contig-disjoint but a gene can straddle a chunk boundary, so by_chunk
-    # would need cross-partition summing. Validated below rather than assumed.
+    # tracking file. REQUIRES scattering_init = "by_chromosome", which since
+    # v0.32.0 is the default, so this is compatible with a stock run. The
+    # excluded case is "off": that path runs one whole-genome LRAA invocation
+    # rather than the per-contig scatter, so no shard artifacts exist to merge.
+    # Refused below rather than assumed.
     Boolean sc_sparse_from_shards = false
     String sparseMatrixCsvEngine = "direct"
     Int sparseMatrixGzipLevel = 1
@@ -827,10 +829,10 @@ task refuse_sc_sparse_from_shards {
   }
   command <<<
     echo "Error, sc_sparse_from_shards requires scattering_init = \"by_chromosome\", got \"~{scattering_init}\"." >&2
-    echo "Per-shard sparse matrices need a partition no feature can straddle. Features are" >&2
-    echo "contig-disjoint, but a gene can span a chunk boundary, so by_chunk would need the" >&2
-    echo "cross-shard summing this design exists to avoid. 'off' yields a single shard, which" >&2
-    echo "is correct but no faster than the merged-tracking build." >&2
+    echo "That is the default, so this is reachable only by setting scattering_init explicitly." >&2
+    echo "With \"off\" LRAA runs one whole-genome invocation instead of the per-contig scatter," >&2
+    echo "so no per-shard sparse matrices are produced and the merge would receive an empty list." >&2
+    echo "Either drop sc_sparse_from_shards or set scattering_init = \"by_chromosome\"." >&2
     exit 1
   >>>
   output { String checked = "unreachable" }

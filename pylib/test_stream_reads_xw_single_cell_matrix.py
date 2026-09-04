@@ -212,8 +212,10 @@ def _run_lraa(tmp_path, bam, gtf, genome, prefix, *extra):
 
 def _convert(tmp_path, tracking, prefix):
     out_prefix = tmp_path / prefix
+    # --emit_dense_counts because _feature_totals below reads the dense
+    # *_cell_counts.tsv, which the converter no longer writes by default.
     cmd = [sys.executable, CONVERTER, "--tracking", str(tracking),
-           "--output_prefix", str(out_prefix)]
+           "--output_prefix", str(out_prefix), "--emit_dense_counts"]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     return out_prefix

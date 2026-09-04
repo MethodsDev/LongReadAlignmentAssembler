@@ -291,12 +291,21 @@ workflow LRAA_wf {
         # merge instead of one 12 h single-threaded pass over the merged
         # tracking file. Set by LRAA-singlecell.wdl; meaningless otherwise.
         #
-        # by_chromosome ONLY. The partition has to be one a feature cannot
-        # straddle: features are contig-disjoint (verified: 0 of 152,492 genes,
-        # 0 of 326,517 splice hashes and 0 of 327,261 transcripts span two
-        # contigs on GENCODE v44), but a gene CAN straddle a chunk boundary, so
-        # by_chunk would reintroduce cross-partition summing. `off` produces a
-        # single shard, which is correct but buys nothing.
+        # by_chromosome ONLY, which since v0.32.0 is also the default for every
+        # phase. The partition has to be one a feature cannot straddle, and
+        # features are contig-disjoint: verified on run A's own outputs, 0 of
+        # 152,492 genes, 0 of 326,517 splice hashes and 0 of 327,261 transcripts
+        # span two contigs on GENCODE v44.
+        #
+        # The case this excludes in practice is `off`, which takes the
+        # LRAA_direct path instead of the scatter below, so no shard artifact is
+        # produced at all and the merge would get an empty list. Callers refuse
+        # the combination up front rather than letting that happen.
+        #
+        # by_chunk is no longer selectable (validate_scattering rejects it), but
+        # were it re-enabled it would be excluded here too: a gene CAN straddle a
+        # chunk boundary, which is exactly the cross-partition summing this
+        # design exists to avoid.
         Boolean build_sc_sparse_shards = false
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int memoryGBscShardSparse = 8
