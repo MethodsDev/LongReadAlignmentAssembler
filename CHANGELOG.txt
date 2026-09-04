@@ -1,3 +1,73 @@
+v0.32.0
+
+- BREAKING: a uniquely assigned read now means one only that isoform can take.
+  Previously it meant the EM had allocated at or above a threshold of a read there --
+  1.0 for the reported columns, 0.9995 for isoform filtering -- which is a different
+  question: run_EM writes an assignment entry for every structurally compatible
+  transcript, including ones holding no mass at the current abundances, so a read
+  compatible with two isoforms cleared either bound whenever its competitor held
+  none. One test now feeds every consumer: quant.expr's `uniq_reads` and
+  `unique_gene_read_fraction`, the novel-isoform read floor, and
+  `frac_gene_unique_reads` during filtering. `unique_read_report_min_frac` is removed.
+  `unique_read_filter_min_frac` remains but decides nothing; it is read only to record
+  how far the superseded criterion diverges, as the decision log's `near_unique` and
+  `effectively_unique` columns.
+
+- BREAKING: `splice_compat_contained` and `splice_contained_by` are emitted only under
+  `--debug`, and the containment relationships behind them are not computed otherwise.
+  Consumers reading them by name need the flag; those reading positionally past
+  `splice_hash_code` see a shorter row without it.
+
+- BREAKING: `scattering=by_chunk` is no longer accepted. `off` and `by_chromosome` are
+  the selectable modes, and every scattering input across the workflows defaults to
+  `by_chromosome`, so a run has one shape rather than three. Everything implementing
+  by_chunk stays in the tree -- the subworkflow, its call and its inputs are untouched
+  -- and re-enabling it is the case statement in `validate_scattering` and nothing
+  else. Rejected rather than removed so a workflow still setting it fails with a
+  reason instead of silently running a different scattering than it asked for.
+  The `TerraWorkflowConfigs` cluster-guided examples no longer pin the mode and are
+  renamed accordingly.
+
+- CHANGED: near-adjacent splice-boundary aggregation now weighs support. An
+  alternative intron sharing a donor or acceptor with a better-supported one was
+  discarded on distance alone, after the support test above it had already passed, so
+  a junction carrying nearly as many reads as its neighbour was lost for being a few
+  bases away -- tandem acceptor pairs of the NAGNAG class in particular.
+  `aggregate_splice_boundary_max_rel_support` (default 0.2, inclusive) now also
+  requires the alternative to be at or below that share of the top junction's support.
+  Lopsided pairs still collapse. De novo output moves on any input carrying such
+  pairs. At 1.0 the branch is unconditional again, which is the previous behaviour
+  exactly: an alternative's support can never exceed the top's, so an inclusive bound
+  there is always satisfied.
+
+- ADDED: `uniq_FSM_reads` in quant.expr -- of the reads only this isoform can take,
+  how many carry exactly its intron chain rather than a prefix, a subset, or a merely
+  compatible one. `uniq_reads` says how many reads nothing else explains;
+  this says how many attest the whole structure rather than the locus. quant.tracking
+  gains `is_unique` and `is_FSM`, the per-row properties the column aggregates, so it
+  is recomputable from the tracking file. `is_unique` is recorded rather than inferred
+  from a read's row count, because the oversimplify writers break a best-overlap tie
+  at random and emit one row for a read several isoforms could equally have taken.
+  `is_FSM` does not imply `is_unique`: a read matching several endpoint variants of
+  one chain is a full splice match to each while unique to none, so only the aggregate
+  applies the conjunction. `uniq_FSM_reads` is appended last, so existing columns keep
+  their positions.
+
+- FIXED: the `--oversimplify` writers omitted the two containment columns their own
+  header carried, shifting every later field one place left so merged output held
+  `RPM_total_reads` under a containment name. They also reported every assigned read
+  as unique although a best-overlap tie had been broken at random.
+
+- FIXED: the quant.expr merge accepted shards whose rows did not match their header.
+  DictReader hides both shapes -- a short row leaves None as the value of each missing
+  column, a long one puts the surplus under the None key -- so a writer omitting a
+  column produced a file that merged without complaint. Either shape is now refused,
+  naming the shard.
+
+- REMOVED: the prototype unique-read rescue that restored isoforms the standard
+  criteria had filtered. Its effect on isoform identification did not justify a
+  second, differently motivated retention path in the filter.
+
 v0.31.0
 - BREAKING: isoform-to-gene clustering now reads shared splice junctions, so gene ids
   and gene groupings MOVE for the same input. A minor bump rather than a patch because
