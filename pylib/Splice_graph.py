@@ -1659,6 +1659,27 @@ class Splice_graph:
                     LRAA_Globals.config["aggregate_adjacent_splice_boundaries"] is True
                     and delta_other_boundary
                     <= LRAA_Globals.config["aggregate_splice_boundary_dist"]
+                    # PROTOTYPE: only aggregate a near-adjacent boundary when the
+                    # alternative is substantially the weaker of the pair. The
+                    # distance test alone is support-blind, so a near-tie such as
+                    # 464 vs 465 reads three bases apart lost the alternative
+                    # outright. Separate key from min_alt_splice_freq (0.03): that
+                    # floor governs all alt junctions at a shared boundary, this one
+                    # governs only the near-adjacent aggregation branch, which the
+                    # 0.03 test has already passed by the time control reaches here.
+                    #
+                    # The bound is INCLUSIVE, and that is load-bearing. Support ties are
+                    # explicitly permitted upstream (the assert above is <=), so an
+                    # equal-support alternative has alt_rel_of_top == 1.0 exactly. With
+                    # a strict <, the default of 1.0 would SPARE those ties while the
+                    # old distance-only branch purged them -- so 1.0 would not be the
+                    # no-op it is documented as. Since alt support can never exceed the
+                    # top's, <= 1.0 is always true and the branch is unconditional at
+                    # the default, which is exactly the legacy behaviour.
+                    and alt_intron_rel_of_top
+                    <= LRAA_Globals.config.get(
+                        "aggregate_splice_boundary_max_rel_support", 1.0
+                    )
                 ):
                     logger.debug(
                         "alt intron: {} is within aggregation distance ({} < {})  of {} and will be purged".format(

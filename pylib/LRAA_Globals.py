@@ -132,6 +132,7 @@ config = {
     "max_exon_spur_length": 14,  # maximum terminal exon spur length; HiFi sets 13
     "aggregate_adjacent_splice_boundaries": True,
     "aggregate_splice_boundary_dist": 5,
+    "aggregate_splice_boundary_max_rel_support": 0.2,  # inclusive; collapse only when alt/top support <= this. 1.0 = legacy unconditional collapse
     "fracture_splice_graph_at_input_transcript_bounds": True,
     "max_path_nodes_per_component": 1000,  # max number of path graph nodes per connected component
     # transcript reclustering (gene definition) criteria
