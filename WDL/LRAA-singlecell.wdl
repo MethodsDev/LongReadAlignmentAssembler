@@ -346,12 +346,18 @@ workflow LRAA_singlecell_wf {
     Int memoryGBscSparseMatrices = 32
     # Build the single-cell matrices per contig shard, alongside quantification,
     # and merge them; instead of one single-threaded pass over the merged
-    # tracking file. REQUIRES scattering_init = "by_chromosome", which since
-    # v0.32.0 is the default, so this is compatible with a stock run. The
-    # excluded case is "off": that path runs one whole-genome LRAA invocation
-    # rather than the per-contig scatter, so no shard artifacts exist to merge.
-    # Refused below rather than assumed.
-    Boolean sc_sparse_from_shards = false
+    # tracking file. Measured on VILLAGE 2493-NPC (1.78 B tracking rows): the
+    # single pass took 12.48 h at ~100 GiB, the shards 555 s at 3.29 GiB each
+    # -- overlapping quant, so off the critical path -- plus a 0.72 h merge at
+    # 7.22 GiB. Output verified identical to the single pass over 1.87 B
+    # non-zeros, all three levels.
+    #
+    # Requires scattering_init = "by_chromosome", which since v0.32.0 is the
+    # default, so on is what a stock run gets. The excluded case is "off": that
+    # path runs one whole-genome LRAA invocation rather than the per-contig
+    # scatter, so no shard artifacts exist to merge. Such a run does not have to
+    # unset this -- it is forced false below and the library-wide build is used.
+    Boolean sc_sparse_from_shards = true
     String sparseMatrixCsvEngine = "direct"
     Int sparseMatrixGzipLevel = 1
     Int diskSizeGB = 256
@@ -388,6 +394,11 @@ workflow LRAA_singlecell_wf {
   Boolean run_initial_phase = !has_precomputed_init
   Boolean run_clustering_phase = !has_precomputed_clusters
   Boolean run_cluster_guided = single_cell_pipe_mode == "cluster-guided"
+
+  # The shard path needs shards. With scattering_init = "off" there is one
+  # whole-genome LRAA invocation and no per-contig artifacts to merge, so the
+  # request is forced off rather than left to fail on an empty shard list.
+  Boolean use_sc_sparse_from_shards = sc_sparse_from_shards && scattering_init == "by_chromosome"
 
   # ONE geometry for the whole run; see the input comments above for the precedence and
   # for why there cannot be two.
@@ -500,7 +511,7 @@ workflow LRAA_singlecell_wf {
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         scattering = scattering_init,
-        build_sc_sparse_shards = sc_sparse_from_shards,
+        build_sc_sparse_shards = use_sc_sparse_from_shards,
         docker_sc = docker_sc,
         # The run's ONE geometry, selected above. The initial pass discovers inside
         # these chunks, which is what makes the same cuts safe for the cluster phases
@@ -557,21 +568,11 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  # Refused rather than silently producing an empty shard list and a merge that
-  # fails several hours in with an opaque error.
-  if (sc_sparse_from_shards && scattering_init != "by_chromosome") {
-    call refuse_sc_sparse_from_shards {
-      input:
-        scattering_init = scattering_init,
-        docker = docker
-    }
-  }
-
   # 2) Build single-cell sparse matrices from the initial tracking (skipped when precomputed clusters are provided)
   if (run_clustering_phase) {
 
     # The library-wide build, over the merged tracking file.
-    if (!sc_sparse_from_shards) {
+    if (!use_sc_sparse_from_shards) {
       call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
         input:
           sample_id = sample_id,
@@ -586,7 +587,7 @@ workflow LRAA_singlecell_wf {
     # Or the streaming merge of what the shards already built. shared_features
     # stays false here: in basic mode features partition across contigs, so a
     # feature turning up in two shards is an error worth hearing about.
-    if (sc_sparse_from_shards) {
+    if (use_sc_sparse_from_shards) {
       call BuildMatrices.merge_sc_shard_sparse as merge_sc_from_shards {
         input:
           sample_id = sample_id,
@@ -667,6 +668,9 @@ workflow LRAA_singlecell_wf {
         read_umi_tag = read_umi_tag,
         scattering = scattering_per_cluster,
         scattering_final_quant = scattering_final_quant,
+        # The request, not this workflow's resolved value: the cluster-guided
+        # phases are gated by scattering_final_quant, so that workflow applies
+        # the same test against its own setting.
         sc_sparse_from_shards = sc_sparse_from_shards,
         # The run's ONE geometry, emitted above before the initial pass. Passed
         # whenever it exists; that workflow gates it per phase, since a phase running
@@ -822,19 +826,3 @@ workflow LRAA_singlecell_wf {
 }
 
 
-task refuse_sc_sparse_from_shards {
-  input {
-    String scattering_init
-    String docker
-  }
-  command <<<
-    echo "Error, sc_sparse_from_shards requires scattering_init = \"by_chromosome\", got \"~{scattering_init}\"." >&2
-    echo "That is the default, so this is reachable only by setting scattering_init explicitly." >&2
-    echo "With \"off\" LRAA runs one whole-genome invocation instead of the per-contig scatter," >&2
-    echo "so no per-shard sparse matrices are produced and the merge would receive an empty list." >&2
-    echo "Either drop sc_sparse_from_shards or set scattering_init = \"by_chromosome\"." >&2
-    exit 1
-  >>>
-  output { String checked = "unreachable" }
-  runtime { docker: docker  cpu: 1  memory: "1 GiB" }
-}

@@ -140,9 +140,11 @@ task sc_build_shard_sparse {
     String shard_name
     File tracking_file
     String docker
-    # PROVISIONAL. Scales with this shard's non-zeros, not the library's: the
-    # largest VILLAGE shard (chr1, ~9% of 1.78 B rows) would hold roughly 0.8
-    # GiB. Not measured on a real shard.
+    # Scales with this shard's non-zeros, not the library's. Measured over all 25
+    # VILLAGE shards: chr1 (163.6 M rows, 75.2 M isoform non-zeros) peaked at
+    # 3.29 GiB and every other shard below that, so 8 GiB carries ~2.4x headroom.
+    # Non-zeros drive it, not rows -- chrM has 83.5 M rows but oversimplified
+    # collapses to 3.1 M non-zeros and 0.61 GiB.
     Int memoryGB = 8
     Int cpu = 1
   }
@@ -177,9 +179,10 @@ task merge_sc_shard_sparse {
     String sample_id
     Array[File] shard_sparse_tars
     String docker
-    # PROVISIONAL. The merge holds no matrix -- file handles, the barcode
-    # remaps and one output row -- so this should be generous by a wide margin.
-    # Not measured at library scale.
+    # The merge holds no matrix -- file handles, the barcode remaps and one
+    # output row. Measured at library scale on VILLAGE's 25 shards (2.97 M
+    # barcodes, 1.87 B non-zeros over the three levels): 7.22 GiB peak including
+    # the gzip of every output, so 16 GiB carries ~2.2x headroom.
     Int memoryGB = 16
     Int gzip_level = 1
     # Set for cluster-guided runs, where one feature legitimately comes from

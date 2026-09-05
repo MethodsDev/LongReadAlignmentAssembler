@@ -94,10 +94,12 @@ workflow LRAA_cell_cluster_guided {
         Int memoryGBscSparseMatrices = 16
         # Build the single-cell matrices per (cluster, contig) shard during the
         # final quantification wave and merge them, instead of one
-        # single-threaded pass over the merged cluster tracking file. REQUIRES
-        # scattering_final_quant = "by_chromosome", the default since v0.32.0;
-        # "off" produces no per-contig shards to merge.
-        Boolean sc_sparse_from_shards = false
+        # single-threaded pass over the merged cluster tracking file. On by
+        # default; see LRAA-singlecell.wdl's input for the measured basis.
+        # Requires scattering_final_quant = "by_chromosome", the default since
+        # v0.32.0; "off" produces no per-contig shards to merge and forces this
+        # false below.
+        Boolean sc_sparse_from_shards = true
         String sparseMatrixCsvEngine = "direct"
         Int sparseMatrixGzipLevel = 1
         Int diskSizeGB = 256
@@ -108,6 +110,11 @@ workflow LRAA_cell_cluster_guided {
         Array[File]? pre_normalized_cluster_bais
 
      }
+
+    # The shard path needs shards; scattering_final_quant = "off" produces none,
+    # so the request is forced off rather than left to fail on an empty list.
+    Boolean use_sc_sparse_from_shards =
+        sc_sparse_from_shards && scattering_final_quant == "by_chromosome"
 
       
      call PartitionBam.partition_bam_by_cell_cluster {
@@ -332,7 +339,7 @@ workflow LRAA_cell_cluster_guided {
             sample_id = sample_id,
             referenceGenome = referenceGenome,
             scattering = scattering_final_quant,
-            build_sc_sparse_shards = sc_sparse_from_shards,
+            build_sc_sparse_shards = use_sc_sparse_from_shards,
             docker_sc = docker_sc,
             cluster_partition_workers = cluster_partition_workers,
             approx_MB_per_cut = approx_MB_per_cut,
@@ -412,15 +419,7 @@ workflow LRAA_cell_cluster_guided {
     }
 
      # Build sparse matrices (Seurat-compatible) from the merged tracking
-     if (sc_sparse_from_shards && scattering_final_quant != "by_chromosome") {
-         call refuse_sc_sparse_from_shards_cg {
-             input:
-                 scattering_final_quant = scattering_final_quant,
-                 docker = docker
-         }
-     }
-
-     if (!sc_sparse_from_shards) {
+     if (!use_sc_sparse_from_shards) {
          call sc_build_sparse_matrices as build_sc_sparse_matrices {
              input:
                      sample_id = sample_id,
@@ -437,7 +436,7 @@ workflow LRAA_cell_cluster_guided {
      # feature legitimately arrives from every cluster carrying disjoint cells.
      # Still no summing -- feature -> contig and cell -> cluster together put
      # each (feature, cell) pair in exactly one shard.
-     if (sc_sparse_from_shards) {
+     if (use_sc_sparse_from_shards) {
          call BuildMatrices.merge_sc_shard_sparse as merge_sc_cluster_shards {
              input:
                  sample_id = sample_id,
@@ -845,18 +844,3 @@ task require_annot_gtf {
 }
 
 
-task refuse_sc_sparse_from_shards_cg {
-  input {
-    String scattering_final_quant
-    String docker
-  }
-  command <<<
-    echo "Error, sc_sparse_from_shards requires scattering_final_quant = \"by_chromosome\", got \"~{scattering_final_quant}\"." >&2
-    echo "That is the default, so this is reachable only by setting it explicitly. With \"off\"" >&2
-    echo "each cluster runs one whole-genome invocation rather than a per-contig scatter, so no" >&2
-    echo "per-shard sparse matrices are produced and the merge would receive an empty list." >&2
-    exit 1
-  >>>
-  output { String checked = "unreachable" }
-  runtime { docker: docker  cpu: 1  memory: "1 GiB" }
-}
