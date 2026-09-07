@@ -801,7 +801,33 @@ class Splice_graph:
 
         return
 
-    def _incorporate_TSS_objects(self, contig_acc, contig_strand, TSS_position_counter):
+    @staticmethod
+    def _site_within_window(site_objs, position, window):
+        """An existing site of this type within `window` of `position`, or None.
+
+        TSS and PolyA sites had no interning of any kind, unlike introns
+        (_intron_objs / get_intron_node_obj), so the annotation pass appended a second
+        object wherever the read pass had already put one. Two nodes of one type at one
+        coordinate render identically under canonical_simple_path -- which keys on node
+        TYPE and coordinates precisely so the key survives id drift between runs -- and
+        StreamingQuant.AssignmentTable refuses the pair rather than merge row sets whose
+        weights and mp ids differ.
+
+        A window rather than an exact coordinate, because peak selection names ONE
+        position out of a cluster: the read pass and the annotation pass cluster
+        different evidence and can land a few bases apart on one biological site. Where
+        the reads have already called a site in the neighbourhood they are the better
+        evidence for where the boundary is, so the annotation defers to them.
+        """
+        for obj in site_objs:
+            lend, _rend = obj.get_coords()
+            if abs(lend - position) <= window:
+                return obj
+        return None
+
+    def _incorporate_TSS_objects(
+        self, contig_acc, contig_strand, TSS_position_counter, from_reads=True
+    ):
 
         if LRAA_Globals.DEBUG:
             write_pos_counter_info(
@@ -811,20 +837,52 @@ class Splice_graph:
                 contig_strand,
             )
 
+        window = LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
+
         TSS_grouped_positions = aggregate_sites_within_window(
             TSS_position_counter,
-            LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
+            window,
             LRAA_Globals.config["min_alignments_define_TSS_site"],
         )
 
-        TSS_grouped_positions = filter_non_peaky_positions(
-            TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
-        )
+        # Read pass only, in EVERY mode -- merge included, which has no read pass at all.
+        #
+        # The test asks whether a position carries at least
+        # TSS_window_read_enrich_factor times the median of its non-zero neighbours
+        # within TSS_window_read_enrich_len: it separates a sharp pileup of read 5' ends
+        # from the smear a degraded or randomly fragmented molecule leaves behind. An
+        # annotation-derived counter is not a pileup -- its entries are one assertion per
+        # annotated 5' end -- so peakiness is not a property it HAS, and the test
+        # discards prior knowledge on a criterion that does not describe it. PolyA's own
+        # read-shape gate, the internal-priming veto below, was already read-pass-only
+        # for exactly this reason; this brings TSS into line with it.
+        if from_reads:
+            TSS_grouped_positions = filter_non_peaky_positions(
+                TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
+            )
 
         for TSS_peak in TSS_grouped_positions:
             position, count = TSS_peak
+
+            if (
+                Splice_graph._site_within_window(self._TSS_objs, position, window)
+                is not None
+            ):
+                # Already called here. The reads define the boundary where they have
+                # evidence; the annotation is carried only where they have none.
+                continue
+
+            if from_reads or LRAA_Globals.LRAA_MODE == "MERGE":
+                site_count = count
+            else:
+                # Prior knowledge with no read evidence behind it in THIS library. Seeded
+                # at the configured minimum: enough to be admitted and not discarded out
+                # of hand, and no more, since claiming support it does not have would let
+                # it outrank sites the reads actually measured.
+                site_count = LRAA_Globals.config["min_alignments_define_TSS_site"]
+
             self._TSS_objs.append(
-                TSS(contig_acc, position, position, contig_strand, count)
+                TSS(contig_acc, position, position, contig_strand, site_count)
             )
 
         if LRAA_Globals.DEBUG:
@@ -926,9 +984,11 @@ class Splice_graph:
                 contig_strand,
             )
 
+        window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+
         PolyA_grouped_positions = aggregate_sites_within_window(
             polyA_position_counter,
-            LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
+            window,
             LRAA_Globals.config["min_alignments_define_polyA_site"],
         )
 
@@ -964,8 +1024,21 @@ class Splice_graph:
                     n_internally_primed += 1
                     continue
 
+            if (
+                Splice_graph._site_within_window(self._PolyA_objs, position, window)
+                is not None
+            ):
+                # See _incorporate_TSS_objects: the reads define the boundary wherever
+                # they have called a site in the neighbourhood.
+                continue
+
+            if from_reads or LRAA_Globals.LRAA_MODE == "MERGE":
+                site_count = count
+            else:
+                site_count = LRAA_Globals.config["min_alignments_define_polyA_site"]
+
             self._PolyA_objs.append(
-                PolyAsite(contig_acc, position, position, contig_strand, count)
+                PolyAsite(contig_acc, position, position, contig_strand, site_count)
             )
 
         if from_reads:
@@ -1081,19 +1154,28 @@ class Splice_graph:
                         tss_added = True
 
                     if not tss_added:
-                        if transcript.has_annotated_TPM():
-                            TSS_evidence_counter[TSS_coord] += round(
-                                transcript.get_TPM()
-                            )
-                        else:
-                            TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
-                                "min_alignments_define_TSS_site"
-                            ]
+                        # No recorded count on this model. Seed at the configured
+                        # minimum; TPM is not consulted, see below.
+                        TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
+                            "min_alignments_define_TSS_site"
+                        ]
                 else:
-                    if transcript.has_annotated_TPM():
-                        TSS_evidence_counter[TSS_coord] += round(transcript.get_TPM())
-                    else:
-                        TSS_evidence_counter[TSS_coord] = 1
+                    # Quant-only and ref-guided: the annotation says WHERE a site is,
+                    # and what it is worth is settled at the mint in
+                    # _incorporate_TSS_objects.
+                    #
+                    # TPM is deliberately not consulted, here or in the MERGE fallback
+                    # above. LRAA writes no TPM attribute into the gtfs these paths
+                    # consume, so has_annotated_TPM() was false for every transcript and
+                    # the branch never executed -- it read as a supported way to weight a
+                    # boundary while doing nothing at all. It was also actively unsafe:
+                    # it and the fallback beside it wrote the SAME key with different
+                    # operators, += against =, so a coordinate named by both a
+                    # TPM-bearing and a non-TPM transcript had its accumulated total
+                    # clobbered, or not, by transcript iteration order alone.
+                    TSS_evidence_counter[TSS_coord] = LRAA_Globals.config[
+                        "min_alignments_define_TSS_site"
+                    ]
 
             if transcript.has_annotated_PolyA():
                 polyA_coord = trans_rend if orient == "+" else trans_lend
@@ -1116,21 +1198,15 @@ class Splice_graph:
                         polya_added = True
 
                     if not polya_added:
-                        if transcript.has_annotated_TPM():
-                            PolyA_evidence_counter[polyA_coord] += round(
-                                transcript.get_TPM()
-                            )
-                        else:
-                            PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
-                                "min_alignments_define_polyA_site"
-                            ]
+                        # No recorded count on this model; see _incorporate_TSS_objects'
+                        # counterpart for why TPM is not consulted.
+                        PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
+                            "min_alignments_define_polyA_site"
+                        ]
                 else:
-                    if transcript.has_annotated_TPM():
-                        PolyA_evidence_counter[polyA_coord] += round(
-                            transcript.get_TPM()
-                        )
-                    else:
-                        PolyA_evidence_counter[polyA_coord] = 1
+                    PolyA_evidence_counter[polyA_coord] = LRAA_Globals.config[
+                        "min_alignments_define_polyA_site"
+                    ]
 
             if (
                 LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]
@@ -1182,7 +1258,7 @@ class Splice_graph:
 
         if LRAA_Globals.config["infer_TSS"] and len(TSS_evidence_counter) > 0:
             self._incorporate_TSS_objects(
-                contig_acc, contig_strand, TSS_evidence_counter
+                contig_acc, contig_strand, TSS_evidence_counter, from_reads=False
             )
 
         if LRAA_Globals.config["infer_PolyA"] and len(PolyA_evidence_counter) > 0:
