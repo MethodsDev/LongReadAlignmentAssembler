@@ -71,7 +71,12 @@ def test_tracking_mapping_and_symbol_annotation_preserve_num_exons(tmp_path):
         "G1\tTX2\tHASH2\t3\tmp2\tBC2^U2^r2\t1.000\t1.000\n"
     )
 
-    mapping, _ = SPARSE_CONVERTER.stream_all_counts(str(tracking), chunksize=1)
+    # Three values since a4f070be: the accumulators and the barcode labels are
+    # returned unfinalized so main() can write one level at a time. Only the
+    # mapping is under test here.
+    mapping, _levels, _barcodes = SPARSE_CONVERTER.stream_all_counts(
+        str(tracking), chunksize=1
+    )
 
     assert mapping.columns.tolist() == [
         "gene_id",
