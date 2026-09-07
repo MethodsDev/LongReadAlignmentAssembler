@@ -1,3 +1,56 @@
+v0.33.0
+
+- BREAKING: a TSS or PolyA site from an input GTF is incorporated only if the splice
+  graph has no site of that type within the window (`max_dist_between_alt_TSS_sites` /
+  `max_dist_between_alt_polyA_sites`). Neither type was interned at all, unlike introns,
+  so the annotation pass appended a second node wherever the read pass had already put
+  one. Two nodes of one type at one coordinate render identically under
+  `canonical_simple_path` -- which keys on node type and coordinates precisely so the key
+  survives id drift -- and `StreamingQuant.AssignmentTable` refuses the pair rather than
+  merge row sets carrying different weights and mp ids, so a quant-only run against an
+  LRAA-produced GTF aborted on the first locus where a recorded 3' end coincided with a
+  read-called one. Reads now define these boundaries wherever they have evidence; the
+  annotation is carried only where they have none. Site counts and read assignments move
+  at every affected locus.
+
+- BREAKING: outside MERGE, an annotation-derived TSS or PolyA site is seeded at
+  `min_alignments_define_TSS_site` / `min_alignments_define_polyA_site` rather than a flat
+  1. At 1 no single annotated end could ever clear its own admission threshold, so a lone
+  annotated site was dropped and a site was admitted only when enough annotated ends
+  happened to cluster inside one window -- admission by model multiplicity rather than by
+  evidence. The seed is the minimum and no more: prior knowledge is kept from being
+  discarded out of hand without letting it outrank sites the reads measured.
+
+- FIXED: the TSS enrichment test no longer runs outside the read pass. It requires a
+  position to carry at least `TSS_window_read_enrich_factor` times the median of its
+  non-zero neighbours, which separates a sharp pileup of read 5' ends from the smear a
+  degraded molecule leaves. An annotation-derived counter is not a pileup -- its entries
+  are one assertion per annotated 5' end -- so the test discarded prior knowledge on a
+  criterion that does not describe it. In MERGE, where the annotation pass is the only
+  pass, it was silently rejecting sites the inputs assert: on LP00714 chr1+ the merge
+  produced 1091 TSS nodes against the 1097 clusters its 14 input GTFs name, and now
+  produces exactly 1097. PolyA's own read-shape gate, the internal-priming veto, was
+  already read-pass-only for this reason; TSS is now consistent with it.
+
+- FIXED: TPM is no longer consulted when weighting a TSS or PolyA boundary from an input
+  GTF. LRAA writes no TPM attribute into the GTFs these paths consume, so
+  `has_annotated_TPM()` was false for every transcript and the branch never executed --
+  it read as a supported way to weight a boundary while doing nothing. It was also
+  unsafe: it and the fallback beside it wrote the same counter key with different
+  operators, `+=` against `=`, so a coordinate named by both a TPM-bearing and a non-TPM
+  transcript had its accumulated total clobbered, or not, by transcript iteration order
+  alone. Boundary support now comes from the recorded read counts only.
+
+- `_incorporate_TSS_objects` gains the `from_reads` parameter `_incorporate_PolyA_objects`
+  already had; without it the function could not tell which pass was calling it, which is
+  why its read-shape test was applied to annotation-derived positions in the first place.
+
+MERGE keeps its own evidence path unchanged: recorded `TSS_read_count` /
+`PolyA_read_count` with per-source-GTF max support, so one input's evidence is not
+multiplied across its isoforms. It has no read pass, so the window check never fires
+there and only the enrichment-test change is observable.
+
+
 v0.32.0
 
 - BREAKING: a uniquely assigned read now means one only that isoform can take.
