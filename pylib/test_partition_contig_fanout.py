@@ -82,6 +82,10 @@ def _run(tmp, bam, fasta, workers, out_root, bam_for_sg=None):
         "--samtools-threads", "1",
         "--num-workers", str(workers),
         "--bam-out-dir", str(out_root / "bams"),
+        # named explicitly: the default is a RELATIVE "split_bams_for_sg", so
+        # leaving it out writes into the caller's cwd -- the repo root under
+        # pytest, and a read-only image directory under `docker run --user`
+        "--bam-for-sg-out-dir", str(out_root / "sg_bams"),
         "--fasta-out-dir", str(out_root / "fa"),
         "--gtf-out-dir", str(out_root / "gtf"),
     ]
@@ -269,6 +273,7 @@ def test_the_pool_is_held_inside_the_reservation(inputs, tmp_path):
             "--num-workers", str(requested),
             "--reserved-cpu", str(reserved),
             "--bam-out-dir", str(out / "bams"),
+            "--bam-for-sg-out-dir", str(out / "sg_bams"),
             "--fasta-out-dir", str(out / "fa"),
             "--gtf-out-dir", str(out / "gtf"),
         ],
@@ -316,6 +321,7 @@ def test_a_reservation_below_the_floor_is_refused(inputs, tmp_path, reserved):
             "--num-workers", "4",
             "--reserved-cpu", str(reserved),
             "--bam-out-dir", str(out / "bams"),
+            "--bam-for-sg-out-dir", str(out / "sg_bams"),
             "--fasta-out-dir", str(out / "fa"),
             "--gtf-out-dir", str(out / "gtf"),
         ],
@@ -393,6 +399,9 @@ def test_the_pool_is_capped_by_a_real_container_grant(inputs, tmp_path):
     res = sp.run(
         [
             shutil.which("docker"), "run", "--rm", "--cpus=8",
+            # so the output is not root-owned: pytest cannot clean tmp_path
+            # otherwise, and every run leaks a directory into /tmp
+            "--user", "{}:{}".format(os.getuid(), os.getgid()),
             "-v", "{}:/u:ro".format(REPO / "util"),
             "-v", "{}:/d:ro".format(bam.parent),
             "-v", "{}:/w".format(out),
@@ -404,6 +413,7 @@ def test_the_pool_is_capped_by_a_real_container_grant(inputs, tmp_path):
             "--num-workers", "8",
             "--reserved-cpu", "42",   # the caller asked for plenty; the grant is 8
             "--bam-out-dir", "/w/bams",
+            "--bam-for-sg-out-dir", "/w/sg_bams",
             "--fasta-out-dir", "/w/fa",
             "--gtf-out-dir", "/w/gtf",
         ],
@@ -464,6 +474,7 @@ def test_a_grant_below_the_floor_lowers_the_threads_that_actually_run(inputs, tm
     res = sp.run(
         [
             shutil.which("docker"), "run", "--rm", "--cpus=3",
+            "--user", "{}:{}".format(os.getuid(), os.getgid()),
             "-v", "{}:/u:ro".format(REPO / "util"),
             "-v", "{}:/d:ro".format(bam.parent),
             "-v", "{}:/w".format(out),
@@ -474,6 +485,7 @@ def test_a_grant_below_the_floor_lowers_the_threads_that_actually_run(inputs, tm
             "--samtools-threads", "4",
             "--num-workers", "8",
             "--bam-out-dir", "/w/bams",
+            "--bam-for-sg-out-dir", "/w/sg_bams",
             "--fasta-out-dir", "/w/fa",
             "--gtf-out-dir", "/w/gtf",
         ],
