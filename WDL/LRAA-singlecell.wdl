@@ -51,11 +51,14 @@ version 1.0
 #    - Effect: Skips LRAA_init, uses your GTF and tracking files directly
 #    - Use case: Re-run clustering with different parameters without re-discovering isoforms
 #
-# 2. Skip Initial Discovery + Matrix Building + Clustering:
+# 2. Skip Initial Discovery + Clustering:
 #    - Provide: precomputed_init_gtf + precomputed_cluster_assignments_tsv
 #    - Effect: Jumps directly to cluster-guided refinement (if mode = "cluster-guided")
 #             or just outputs the precomputed results (if mode = "basic")
 #    - Use case: Test cluster-guided refinement with different discovery parameters
+#    - NOTE: this is the ONE configuration that emits no init_sc_* matrices, because
+#            no init tracking file exists to build them from. Add
+#            precomputed_init_quant_tracking to get them.
 #
 # 3. Kickstart Cluster-Guided Mode:
 #    - Provide: precomputed_init_gtf + precomputed_cluster_assignments_tsv
@@ -395,10 +398,15 @@ workflow LRAA_singlecell_wf {
   Boolean run_clustering_phase = !has_precomputed_clusters
   Boolean run_cluster_guided = single_cell_pipe_mode == "cluster-guided"
 
-  # The shard path needs shards. With scattering_init = "off" there is one
-  # whole-genome LRAA invocation and no per-contig artifacts to merge, so the
-  # request is forced off rather than left to fail on an empty shard list.
-  Boolean use_sc_sparse_from_shards = sc_sparse_from_shards && scattering_init == "by_chromosome"
+  # The shard path needs shards, so it needs the initial pass to have RUN and to have
+  # scattered. With scattering_init = "off" there is one whole-genome LRAA invocation
+  # and no per-contig artifacts to merge; with the initial pass skipped for
+  # precomputed inputs there are no artifacts at all. Either way the request is forced
+  # off and the library-wide build over the tracking file is used, rather than a merge
+  # of an empty shard list.
+  Boolean use_sc_sparse_from_shards = sc_sparse_from_shards
+      && scattering_init == "by_chromosome"
+      && run_initial_phase
 
   # ONE geometry for the whole run; see the input comments above for the precedence and
   # for why there cannot be two.
@@ -568,53 +576,79 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  # 2) Build single-cell sparse matrices from the initial tracking (skipped when precomputed clusters are provided)
+  # 2) Single-cell sparse matrices from the INITIAL pass's tracking.
+  #
+  # Built whenever an init tracking artifact EXISTS, independent of whether clustering
+  # runs. This block used to sit inside the run_clustering_phase gate below, which made
+  # the matrices an intermediate of clustering rather than a deliverable of the initial
+  # pass: precomputed_cluster_assignments_tsv says only "do not re-cluster", yet it also
+  # dropped the build, and the init_sc_* outputs came back null with the tracking file
+  # they are derived from sitting right there.
+  #
+  # The two sources are exclusive and between them cover every case that HAS a tracking
+  # file: the streaming merge of the per-contig shard artifacts the initial pass built
+  # alongside quantification, else one library-wide pass over the merged tracking file
+  # -- which is also the path a PRECOMPUTED tracking file takes, since a skipped
+  # initial pass leaves no shards behind.
+  if (!use_sc_sparse_from_shards && defined(init_quant_tracking_file)) {
+    call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
+      input:
+        sample_id = sample_id,
+        tracking_file = select_first([init_quant_tracking_file]),
+        docker = docker_sc,
+        memoryGB = memoryGBbuildSparseMatrices,
+        csv_engine = sparseMatrixCsvEngine,
+        gzip_level = sparseMatrixGzipLevel
+    }
+  }
+
+  # shared_features stays false here: in basic mode features partition across contigs,
+  # so a feature turning up in two shards is an error worth hearing about.
+  if (use_sc_sparse_from_shards) {
+    call BuildMatrices.merge_sc_shard_sparse as merge_sc_from_shards {
+      input:
+        sample_id = sample_id,
+        # NOT defaulted to []: use_sc_sparse_from_shards now implies the initial pass
+        # ran and scattered, so an absent array is a bug to surface rather than an
+        # empty merge to publish.
+        shard_sparse_tars = select_first([LRAA_init.scShardSparse]),
+        docker = docker_sc,
+        gzip_level = sparseMatrixGzipLevel,
+        shared_features = false
+    }
+  }
+
+  # Optional now, where these used to be select_first over two branches of a block that
+  # always ran exactly one of them. Null only in the single configuration with no init
+  # tracking at all: precomputed_init_gtf plus precomputed_cluster_assignments_tsv and
+  # no precomputed_init_quant_tracking. Whenever clustering runs a tracking file is
+  # guaranteed to exist -- clusters are not precomputed, so has_precomputed_init
+  # required a tracking file -- which is what makes the select_first uses below safe.
+  File? init_sc_gene_tgz = if defined(merge_sc_from_shards.gene_sparse_dir_tgz)
+      then merge_sc_from_shards.gene_sparse_dir_tgz
+      else build_sc_from_init_tracking.gene_sparse_dir_tgz
+  File? init_sc_isoform_tgz = if defined(merge_sc_from_shards.isoform_sparse_dir_tgz)
+      then merge_sc_from_shards.isoform_sparse_dir_tgz
+      else build_sc_from_init_tracking.isoform_sparse_dir_tgz
+  File? init_sc_splice_tgz = if defined(merge_sc_from_shards.splice_pattern_sparse_dir_tgz)
+      then merge_sc_from_shards.splice_pattern_sparse_dir_tgz
+      else build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz
+  File? init_sc_mapping = if defined(merge_sc_from_shards.mapping_file)
+      then merge_sc_from_shards.mapping_file
+      else build_sc_from_init_tracking.mapping_file
+
+  # 2.5/3) Empty-droplet filtering and clustering, skipped when cluster assignments
+  # were supplied. Only these steps are gated; the matrices above are not.
   if (run_clustering_phase) {
-
-    # The library-wide build, over the merged tracking file.
-    if (!use_sc_sparse_from_shards) {
-      call BuildMatrices.BuildSparseMatricesFromTracking as build_sc_from_init_tracking {
-        input:
-          sample_id = sample_id,
-          tracking_file = select_first([init_quant_tracking_file]),
-          docker = docker_sc,
-          memoryGB = memoryGBbuildSparseMatrices,
-          csv_engine = sparseMatrixCsvEngine,
-          gzip_level = sparseMatrixGzipLevel
-      }
-    }
-
-    # Or the streaming merge of what the shards already built. shared_features
-    # stays false here: in basic mode features partition across contigs, so a
-    # feature turning up in two shards is an error worth hearing about.
-    if (use_sc_sparse_from_shards) {
-      call BuildMatrices.merge_sc_shard_sparse as merge_sc_from_shards {
-        input:
-          sample_id = sample_id,
-          shard_sparse_tars = select_first([LRAA_init.scShardSparse, []]),
-          docker = docker_sc,
-          gzip_level = sparseMatrixGzipLevel,
-          shared_features = false
-      }
-    }
-
-    File init_sc_gene_tgz = select_first([merge_sc_from_shards.gene_sparse_dir_tgz,
-                                          build_sc_from_init_tracking.gene_sparse_dir_tgz])
-    File init_sc_isoform_tgz = select_first([merge_sc_from_shards.isoform_sparse_dir_tgz,
-                                             build_sc_from_init_tracking.isoform_sparse_dir_tgz])
-    File init_sc_splice_tgz = select_first([merge_sc_from_shards.splice_pattern_sparse_dir_tgz,
-                                            build_sc_from_init_tracking.splice_pattern_sparse_dir_tgz])
-    File init_sc_mapping = select_first([merge_sc_from_shards.mapping_file,
-                                         build_sc_from_init_tracking.mapping_file])
 
     # 2.5) Filter good cells from the gene-level sparse matrix (optional)
     if (enable_filter_good_cells) {
       call FilterCells.FilterGoodCells as filter_good_cells {
         input:
           sample_id = sample_id,
-          gene_sparse_tar_gz = init_sc_gene_tgz,
-          isoform_sparse_tar_gz = init_sc_isoform_tgz,
-          splice_pattern_sparse_tar_gz = init_sc_splice_tgz,
+          gene_sparse_tar_gz = select_first([init_sc_gene_tgz]),
+          isoform_sparse_tar_gz = select_first([init_sc_isoform_tgz]),
+          splice_pattern_sparse_tar_gz = select_first([init_sc_splice_tgz]),
           docker = docker_sc,
           memoryGB = memoryGBFilterCells,
           fdr_threshold = fdr_threshold,
@@ -624,7 +658,7 @@ workflow LRAA_singlecell_wf {
     }
 
     # 3) Cluster cells from the gene-level sparse matrix (filtered or unfiltered)
-    File gene_sparse_for_clustering = if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_sparse_tar_gz]) else init_sc_gene_tgz
+    File gene_sparse_for_clustering = if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_sparse_tar_gz]) else select_first([init_sc_gene_tgz])
     
     call Seurat.GeneSparseM_To_SeuratClusters as cluster_cells {
       input:
@@ -702,12 +736,24 @@ workflow LRAA_singlecell_wf {
     }
   }
 
-  # 5) Incorporate gene symbols: use cluster-guided outputs if available, otherwise use filtered (if enabled) or unfiltered good cell outputs
-  # In quant_only mode, these GTF values will naturally be undefined since discovery doesn't produce them
+  # 5) Incorporate gene symbols, from the cluster-guided matrices when that phase
+  # ran, else the initial ones -- filtered if the empty-droplet filter actually
+  # RAN, which is not the same as enable_filter_good_cells being set.
+  #
+  # That distinction is load-bearing now that the initial matrices outlive the
+  # clustering gate. filter_good_cells sits INSIDE that gate, so with cluster
+  # assignments supplied it does not run while the input stays at its default of
+  # true; selecting on the input alone therefore picked a null and took every
+  # selector below with it, leaving ref_annot_gtf_source_gene_symbols silently
+  # inert in exactly the configuration that now has matrices to annotate.
+  #
+  # In quant_only mode the GTF values are naturally undefined, since discovery
+  # produces none.
+  Boolean have_filtered_matrices = run_clustering_phase && enable_filter_good_cells
   File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
-  File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_gene_sparse_tar_gz else init_sc_gene_tgz)
-  File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_isoform_sparse_tar_gz else init_sc_isoform_tgz)
-  File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if enable_filter_good_cells then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else init_sc_splice_tgz)
+  File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_gene_sparse_tar_gz else init_sc_gene_tgz)
+  File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_isoform_sparse_tar_gz else init_sc_isoform_tgz)
+  File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else init_sc_splice_tgz)
   File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else init_sc_mapping
 
   if (defined(ref_annot_gtf_source_gene_symbols) && defined(gene_sparse_for_symbols) && defined(isoform_sparse_for_symbols) && defined(splice_pattern_sparse_for_symbols) && defined(mapping_for_symbols)) {
