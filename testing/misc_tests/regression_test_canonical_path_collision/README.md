@@ -20,8 +20,20 @@ fail is not a regression test, so the 0.31.0 leg is the point of the table.
 
 ## Running it
 
+    make test                                          # this checkout's LRAA, ~3 s
+    make test_image IMG=/path/to/lraa-core_<tag>.sif   # a built image
+
+`make test` is what `make test` in `testing/misc_tests` (and so in `testing`)
+runs for this directory, so the working tree is covered by default. Underneath:
+
     ./run_test.sh /path/to/lraa-core_<tag>.sif        # or a docker:// uri, or a docker tag
     LRAA_HOME=/path/to/LRAA pytest test_streaming_quant_canonical_path_collision.py
+
+`LRAA_HOME` wins over that walk when it is set, so `make test` pins it to this
+checkout; a caller who happens to export `LRAA_HOME` for another install still
+gets the working tree tested. Invoked directly, the pytest file walks its own
+parents for an `LRAA` executable and finds this checkout's only when
+`LRAA_HOME` is unset.
 
 `run_test.sh` uses `mktemp -d`, so export `TMPDIR` to somewhere exec-permitted if
 `/tmp` is mounted `noexec` (it is on the Broad methods boxes, and Apptainer's

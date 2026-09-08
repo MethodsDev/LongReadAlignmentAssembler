@@ -51,6 +51,23 @@ testing/multigene_secondary_quant/data/**
 !testing/strandless_parity/Makefile
 !testing/strandless_parity/run_strandless_gate.py
 
+# misc_tests is swept up by testing/** above, and its subdirectories are where
+# LRAA writes its outputs, so the blanket ignore is right for it. The
+# canonical-path-collision regression test is the exception: it is source, it
+# runs entirely in temp directories, and its Makefile is on the default
+# `make test` path, so an ignored copy would leave the suite unable to find it
+# on a fresh clone. Directories are re-included so git descends into them;
+# testing/** still ignores every file below that is not named here.
+!testing/misc_tests/
+!testing/misc_tests/Makefile
+!testing/misc_tests/regression_test_canonical_path_collision/
+!testing/misc_tests/regression_test_canonical_path_collision/Makefile
+!testing/misc_tests/regression_test_canonical_path_collision/*.py
+!testing/misc_tests/regression_test_canonical_path_collision/*.sh
+!testing/misc_tests/regression_test_canonical_path_collision/*.md
+!testing/misc_tests/regression_test_canonical_path_collision/fixture/
+!testing/misc_tests/regression_test_canonical_path_collision/fixture/**
+
 # EM_alpha sweep: measurement harness plus the small result tables and figure
 # it produces. The run outputs themselves (one quant.expr per arm, ~250 arms)
 # stay outside the repo; only the scored summaries are tracked, because those
