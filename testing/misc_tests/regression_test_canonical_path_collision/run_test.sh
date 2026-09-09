@@ -14,8 +14,17 @@ trap 'rm -rf "$W"' EXIT
 cp "$HERE"/fixture/* "$W"/
 echo '{"HiFi": true, "cpu_budget": 2}' > "$W/cfg.json"
 
+# --containall --no-mount hostfs --fakeroot are not cosmetic. An Apptainer install
+# missing etc/apptainer/capability.json -- which a relocated/unprivileged install can
+# be -- fails a PLAIN `apptainer exec` with
+#     FATAL: while opening capability config file: ... capability.json: no such file
+# BEFORE the container starts, so LRAA never runs and the test reports a failure
+# indistinguishable from the collision it exists to catch. These are the same flags
+# miniwdl's singularity backend passes for every task in the production workflows.
+# Override with APPTAINER_EXEC_FLAGS="" where a full install makes them unnecessary.
+APPTAINER_EXEC_FLAGS="${APPTAINER_EXEC_FLAGS---containall --no-mount hostfs --fakeroot}"
 if [[ "$IMG" == docker://* || "$IMG" == *.sif ]]; then
-    RUN=(apptainer exec -B "$W:$W" --pwd "$W" "$IMG" python3 /usr/local/src/LRAA/LRAA)
+    RUN=(apptainer exec $APPTAINER_EXEC_FLAGS -B "$W:$W" --pwd "$W" "$IMG" python3 /usr/local/src/LRAA/LRAA)
 else
     RUN=(docker run --rm -v "$W:$W" -w "$W" "$IMG" python3 /usr/local/src/LRAA/LRAA)
 fi
