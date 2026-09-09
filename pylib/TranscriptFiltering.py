@@ -90,23 +90,71 @@ def _record_prefilter_decision(*values):
         logger.warning("prefilter recording disabled after error: %s", e)
 
 
+def reference_model_reprieved(transcript):
+    """Whether retain_expressed exempts this model from a discovery filter.
+
+    One predicate for every reprieve site, because the rule is one rule. It asks for
+    assigned READ COUNTS, not TPM: get_TPM() is read_counts_assigned / num_total_reads,
+    so the previous `get_TPM() > 0` fired on any nonzero EM mass however small, and on
+    a 52M-read library that is any mass at all. min_reads_retain_reference (default
+    1.0) is the count of assigned reads the annotation must actually have attracted.
+
+    Not a unique-read requirement. An isoform no single read can distinguish from its
+    neighbours still qualifies once the fractional assignments landing on it sum to a
+    whole read.
+    """
+    if LRAA_Globals.config["ref_trans_filter_mode"] != "retain_expressed":
+        return False
+
+    if not transcript.contains_reference_model():
+        return False
+
+    return (
+        transcript.get_assigned_read_count()
+        >= LRAA_Globals.config["min_reads_retain_reference"]
+    )
+
+
+def filter_isoforms_by_min_assigned_reads(transcripts, min_reads):
+    """Drop every model quantification could not put `min_reads` of a read on.
+
+    The absolute floor, and the only one. Every other threshold in this module is
+    relative -- TPM against library depth, isoform fraction against the gene,
+    supporting cells against the roster -- so each can be cleared by a model holding a
+    hundredth of a read in a quiet neighbourhood. Measured on a 52M-read PBMC
+    ref-guided run before this existed: 14,193 multi-exonic reference chains were
+    reported whose entire assigned mass was under 0.05 of one read.
+
+    Applies to novel and reference-containing models alike, and to monoexonic and
+    spliced alike. There is no reprieve here: the reference reprieve exempts a model
+    from thresholds that ask a question the annotation has already answered, and
+    "did a read support this" is not such a question.
+
+    Runs before the other filters so that the EM inside
+    filter_isoforms_by_min_isoform_fraction redistributes over a model set that has
+    already had its unsupported members removed.
+    """
+
+    if min_reads is None or min_reads <= 0:
+        return transcripts
+
+    return [t for t in transcripts if t.get_assigned_read_count() >= min_reads]
+
+
 def filter_transcripts_by_min_length(transcripts, min_transcript_length):
     """Retain only transcripts meeting minimum cDNA length.
 
-    A model containing an expressed reference transcript is exempt: the annotation
-    asserts a transcript there, and its component was admitted for assembly on that
-    basis, so dropping it here would discard its reads without any output row."""
+    A model containing a reference transcript that reads actually support is exempt:
+    the annotation asserts a transcript there, and its component was admitted for
+    assembly on that basis, so dropping it here would discard its reads without any
+    output row. See reference_model_reprieved() for what "actually support" means."""
 
     if min_transcript_length is None or min_transcript_length <= 0:
         return transcripts
 
     transcripts_retained = []
     for transcript in transcripts:
-        if (
-            transcript.contains_reference_model()
-            and LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
-            and transcript.get_TPM() > 0
-        ):
+        if reference_model_reprieved(transcript):
             transcripts_retained.append(transcript)
             continue
 
@@ -162,10 +210,11 @@ def filter_novel_monoexonic_isoforms_by_min_cells(
     independent axis of evidence available: reads all drawn from one cell describe a
     single amplification event, not a transcript the population expresses.
 
-    A model containing a reference model is exempt, on the same basis as the
-    reference reprieve in filter_monoexonic_isoforms_by_TPM_threshold(): the
-    annotation already asserts a transcript there, so prevalence is not the evidence
-    being asked for. Only novel monoexonic models must clear the bar.
+    A model containing a reference model is exempt: the annotation already asserts a
+    transcript there, so prevalence is not the evidence being asked for. Only novel
+    monoexonic models must clear the bar. The exemption is
+    reference_model_reprieved(), so it is conditional on the annotation having attracted
+    min_reads_retain_reference of a read -- it is not categorical.
 
     An absolute cell count rather than a fraction of the cells present. A fraction
     makes the bar scale with however many cells a cluster happens to contain, so the
@@ -182,10 +231,6 @@ def filter_novel_monoexonic_isoforms_by_min_cells(
     if min_supporting_cells is None or min_supporting_cells <= 0:
         return transcripts
 
-    retain_reference = (
-        LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
-    )
-
     if not _input_has_cell_barcodes(transcripts):
         # Bulk input encodes no barcode in read names; there is no cell axis to judge on.
         return transcripts
@@ -198,7 +243,7 @@ def filter_novel_monoexonic_isoforms_by_min_cells(
             transcripts_retained.append(transcript)
             continue
 
-        if retain_reference and transcript.contains_reference_model():
+        if reference_model_reprieved(transcript):
             transcripts_retained.append(transcript)
             continue
 
@@ -426,11 +471,7 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
         tpm = transcript.get_TPM()
 
         # reftrans logic:
-        if (
-            transcript.contains_reference_model()
-            and LRAA_Globals.config["ref_trans_filter_mode"] == "retain_expressed"
-            and tpm > 0
-        ):
+        if reference_model_reprieved(transcript):
             transcripts_retained.append(transcript)
             continue
 
@@ -463,10 +504,16 @@ def filter_multiexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
     selection order cannot. This is where the judgement is made.
 
     Retains a transcript when its TPM is strictly greater than min_TPM, so the
-    default of 0 means "keep it if EM gave it any expression at all", matching what
-    ref_trans_filter_mode=retain_expressed asks everywhere else. A structure no read
-    supports quantifies to zero and is dropped here rather than being reported on the
-    strength of its own annotation.
+    default of 0 means "keep it if EM gave it any expression at all". A structure no
+    read supports quantifies to zero and is dropped here rather than being reported
+    on the strength of its own annotation.
+
+    This is a floor on EVERY multi-exonic model and is not the reference reprieve.
+    reference_model_reprieved() asks for a whole assigned read
+    (min_reads_retain_reference); this asks only for nonzero mass. A
+    reference-containing model below one read therefore passes here and is then judged
+    on its own merits by filter_isoforms_by_min_isoform_fraction, which no longer
+    exempts it.
 
     Applies to every multi-exonic model, not only reference-containing ones: a novel
     model with no expression is no better evidenced than a supplied one. Monoexonic
@@ -816,12 +863,7 @@ def filter_isoforms_by_min_isoform_fraction(
                     and num_FSM_reads >= min_FSM_reads_retain_isoform
                 )
 
-                if (
-                    transcript.contains_reference_model()
-                    and LRAA_Globals.config["ref_trans_filter_mode"]
-                    == "retain_expressed"
-                    and transcript.get_TPM() > 0
-                ):
+                if reference_model_reprieved(transcript):
                     transcripts_retained.append(transcript)
                     verdict = "retained_reference_model"
 

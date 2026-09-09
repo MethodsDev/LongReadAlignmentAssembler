@@ -490,6 +490,15 @@ class Transcript(GenomeFeature):
         self._read_counts_assigned = read_counts
 
     def get_read_counts_assigned(self):
+        """Assigned reads, OR the input GTF's TPM attribute if it carried one.
+
+        Two units behind one name. When an input model was parsed from a GTF with a
+        `TPM` attribute (:1054) that value is returned verbatim, so a caller asking
+        "how many reads" can receive a rate against a library it never saw. Callers
+        comparing against a read COUNT must use get_assigned_read_count() instead;
+        this one is kept as-is because report and quant paths depend on the imported
+        value surfacing here.
+        """
 
         if self._imported_TPM_val is not None:
             return self._imported_TPM_val
@@ -497,6 +506,20 @@ class Transcript(GenomeFeature):
         assert (
             self._read_counts_assigned is not None
         ), "Error, read counts assigned is None - maybe quant not run yet? " + str(self)
+        return self._read_counts_assigned
+
+    def get_assigned_read_count(self):
+        """Reads quantification assigned to this model. Always a read count.
+
+        Unlike get_read_counts_assigned() this never substitutes an input GTF's TPM
+        attribute, which is a rate against a library this run did not measure and is
+        not comparable to a read threshold. A model that has not been quantified has
+        no assigned reads, which is the honest answer for a floor to act on rather
+        than an imported number standing in for one.
+        """
+
+        if self._read_counts_assigned is None:
+            return 0.0
         return self._read_counts_assigned
 
     def has_annotated_TPM(self):

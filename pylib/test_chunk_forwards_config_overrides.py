@@ -159,6 +159,39 @@ def test_chunk_forwards_an_explicit_min_alt_splice_freq(tmp_path, inputs):
     _assert_worker_applied(tmp_path, "min_alt_splice_freq")
 
 
+def test_chunk_forwards_min_reads_retain_reference(tmp_path, inputs):
+    """The reference-retention read floor decides what a ref-guided run reports.
+
+    It is applied by TranscriptFiltering inside the WORKER, so a driver that parses
+    the flag and does not forward it leaves every worker on the 1.0 default while the
+    command line says otherwise -- the same silent shape as the min_alt_splice_freq
+    loss above, and invisible in the output because the only symptom is which
+    reference isoforms are absent.
+    """
+    bam, gtf, genome = inputs
+    r = _chunked(
+        tmp_path, bam, gtf, genome, "--min_reads_retain_reference", "3.5"
+    )
+    _assert_ok(r, tmp_path)
+
+    assert _forwarded_config(tmp_path)["min_reads_retain_reference"] == 3.5
+    _assert_worker_applied(tmp_path, "min_reads_retain_reference")
+
+
+def test_chunk_forwards_min_reads_retain_isoform(tmp_path, inputs):
+    """The absolute read floor decides what any run reports at all.
+
+    Applied by TranscriptFiltering inside the WORKER, so an unforwarded flag leaves
+    every worker on the default while the command line says otherwise.
+    """
+    bam, gtf, genome = inputs
+    r = _chunked(tmp_path, bam, gtf, genome, "--min_reads_retain_isoform", "4.0")
+    _assert_ok(r, tmp_path)
+
+    assert _forwarded_config(tmp_path)["min_reads_retain_isoform"] == 4.0
+    _assert_worker_applied(tmp_path, "min_reads_retain_isoform")
+
+
 def test_chunk_forwards_a_config_only_key_with_no_flag(tmp_path, inputs):
     """`min_TSS_iso_fraction` has no CLI flag, so only --config_update reaches it.
 

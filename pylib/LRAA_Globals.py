@@ -221,13 +221,38 @@ config = {
     "min_transcript_length": 200,
     "min_isoform_fraction": 0.01,
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
+    # No model survives assembly/discovery filtering that quantification could not put a
+    # whole read on. A COUNT of assigned reads, applied to every model -- novel and
+    # reference-containing, monoexonic and spliced -- before any other filter runs, and
+    # again after the isoform-fraction EM moves the counts.
+    #
+    # Scoped to filtering, not to the reported number. The final quant that follows can
+    # still put an all_reads below this, and is deliberately not gated: see the NOTE
+    # beside it in LRAA. Quant-only does not apply it either -- a quantification answers
+    # about every transcript it was asked about.
+    #
+    # The thresholds below it are all relative -- TPM against library depth, isoform
+    # fraction against the gene, cells against the roster -- so each of them can be
+    # cleared by a model holding a hundredth of a read in a quiet neighbourhood. This is
+    # the one absolute floor, and it is in the unit the question is actually asked in:
+    # "did a read support this". Fractional because EM assignments are fractional, and a
+    # total rather than a unique count because an isoform indistinguishable from its
+    # neighbours over every individual read still earns its row once a read's worth of
+    # mass lands on it.
+    #
+    # 0 disables it and restores the previous behaviour, where any nonzero EM mass was
+    # enough for a multi-exonic model.
+    "min_reads_retain_isoform": 1.0,
     "min_monoexonic_TPM": 1.0,
     # A multi-exonic model is kept only if quantification gave it expression above this
-    # value. The default of 0 means "any expression at all", which is the judgement
-    # ref_trans_filter_mode=retain_expressed asks for: supplied models are selectable
-    # from the trellis on their synthetic template read, then this decides whether they
-    # were actually expressed. Raise it to demand more than a trace; set it negative to
-    # disable the check and report every selected multi-exonic model.
+    # value. The default of 0 means "any expression at all": supplied models are
+    # selectable from the trellis on their synthetic template read, and this decides
+    # whether they were actually expressed. Raise it to demand more than a trace; set it
+    # negative to disable the check and report every selected multi-exonic model.
+    #
+    # This is NOT the reference reprieve and no longer matches it. retain_expressed asks
+    # for min_reads_retain_reference (a whole assigned read); this asks only for nonzero
+    # mass, and it applies to novel and reference-containing models alike.
     "min_multiexonic_TPM": 0.0,
     # A monoexonic model has no intron chain to corroborate it, so its only structural
     # evidence is that its reads describe one contiguous thing. Reads that tile a long
@@ -244,9 +269,10 @@ config = {
     # measures agreement rather than abundance. 0 disables the check.
     "min_monoexonic_adjusted_TPM_ratio": 0.20,
     # Single-cell only. Minimum number of distinct cells that must contribute a read
-    # to a NOVEL monoexonic model; monoexonic models containing a reference model are
-    # exempt under ref_trans_filter_mode retain_expressed, and bulk input carries no
-    # barcode in its read names so the check self-disables there. An absolute count
+    # to a NOVEL monoexonic model. Monoexonic models containing a reference model are
+    # exempt via reference_model_reprieved(), so the exemption is conditional on
+    # min_reads_retain_reference and is not categorical; bulk input carries no barcode
+    # in its read names so the check self-disables there. An absolute count
     # rather than a fraction of the cluster: measured across 14 PBMC clusters (122 to
     # 1,506 cells), a fraction's stringency swung with roster size, while recovery of
     # reference-matching monoexons against an absolute bar was stable -- 98% at 3
@@ -278,6 +304,22 @@ config = {
     # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
     "spare_polyA_veto_at_known_3prime": True,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
+    # What retain_expressed demands of a reference-containing model before it is
+    # exempted from the discovery filters. A COUNT of assigned reads, not a rate:
+    # the reprieve previously asked get_TPM() > 0, which is
+    # read_counts_assigned / num_total_reads and so fires on any nonzero EM mass at
+    # all. On a 52M-read PBMC library that admitted 14,193 multi-exon reference
+    # chains whose entire assigned mass was below 0.05 of one read -- 99% of them
+    # carried some fractional assignment, none carried a read. write_expr prints
+    # all_reads at one decimal, so they surfaced as "0.0" and read as unsupported
+    # models being reported on the strength of their annotation.
+    #
+    # 1.0 means "the reads assigned to this structure sum to at least one read".
+    # Deliberately not a UNIQUE read: an isoform indistinguishable from its
+    # neighbours over every read still earns its output row once a full read's worth
+    # of mass lands on it. Fractional because EM assignments are fractional; set 0
+    # to restore the any-nonzero-mass behaviour.
+    "min_reads_retain_reference": 1.0,
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,
     "min_isoform_count_aggressive_filtering_iso_fraction": 10,  # allow for filtering mult isoforms in a single round if more than this number of isoform candidates.

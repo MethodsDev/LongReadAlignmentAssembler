@@ -1,3 +1,119 @@
+v0.34.0
+
+- The read floor is applied on the two paths that bypassed it, so "no model without a
+  read" holds for the run and not only for one filter.
+
+  OVERSIMPLIFY: a ref-guided run on an oversimplified contig skips
+  run_transcript_assembly and reports the provided annotation directly, so the floor
+  never saw it. chrM is oversimplified by default in the single-cell workflow, which
+  made this the default path for every mitochondrial model.
+  `_run_oversimplify_best_overlap` now takes `min_reads_retain_isoform`, applies it to
+  its own transcript list before it reports anything, and RETURNS the models it
+  reported; the caller writes that return value to the GTF. Filtering only the caller's
+  GTF emission would have left the dropped models in quant.expr and made the two
+  outputs disagree about which models exist, so the filter is inside the function and
+  the set equality is structural rather than two filters that have to agree. Tracking
+  is included in that set: its rows used to be written during assignment, before the
+  floor was known, so at any floor above 1 a one-read model dropped from the GTF and
+  quant survived in tracking alone. At a floor of 1 or less a dropped model holds zero
+  reads and wrote nothing, so that path still streams and costs nothing; above 1 the
+  rows are spooled to a temporary file and replayed for retained models only. Spooled
+  rather than buffered because chrM carries ~13.7M reads through this path and one
+  Python tuple per read is on the order of a gigabyte.
+  Its accumulator also read the running total through
+  get_read_counts_assigned() -- and it operates on transcripts parsed straight from the
+  input GTF, which is precisely where an imported TPM exists -- so a guide carrying TPM
+  started its read count at the TPM. That and the five other count reads in the
+  oversimplify quant/report block now use get_assigned_read_count(). Quant-only passes
+  no floor and keeps its contract: a row per transcript the caller asked about.
+
+  RE-EM: filter_isoforms_by_min_isoform_fraction reruns EM, so the counts the up-front
+  floor checked are not the counts it produced -- dropping a competitor redistributes
+  its mass, and a model that cleared one read on the old abundances can hold less than
+  one on the new ones. The floor is reapplied immediately after that filter, which is
+  the last EM in the filtering process; the thresholds after it read stored values and
+  do not requantify.
+
+  The floor is scoped to filtering, not to the reported number, and the final quant that
+  follows is deliberately NOT gated -- v0.31's reporting semantics are unchanged. Two
+  separate things could put a reported count below it. EM is expected not to, though
+  this is evidence rather than proof: the final quant is the only one carrying EM_alpha,
+  and alpha ADDS a pseudocount in proportion to ambiguous support, which is what a
+  low-count model has, while filtering has already removed the competitors whose mass
+  gets redistributed. The pseudocount enters theta before normalization, so it shifts
+  relative mass and no monotonicity is claimed for an individual transcript. Measured on
+  testing/single_contig ref-guided at floors 1, 2 and 5, the minimum reported count was
+  1.00, 2.00 and 5.20 -- on the floor where models hold only unique reads, since alpha
+  is 0 for those, and above it otherwise. The final quant's own read filtering
+  definitely can, and that is the documented reason v0.31 removed the post-quant filter:
+  a count that falls there reflects reads that quant could not use, not an absent
+  isoform, so gating on it would delete real models. Quant-only is ungated for its own
+  reason: it answers about every transcript it was asked about.
+
+- `Transcript.get_assigned_read_count()` is the accessor for a read COUNT.
+  `get_read_counts_assigned()` returns the input GTF's `TPM` attribute in preference to
+  the quantified count whenever the parser found one (Transcript.py:1054), so it carries
+  two units behind one name and a caller comparing it against a read threshold can be
+  handed a rate against a library this run never measured. Both read floors
+  (`min_reads_retain_isoform`, `min_reads_retain_reference`) now use the new accessor, so
+  a guide asserting TPM 5000 with 0.02 assigned reads is dropped and one asserting TPM 0
+  with 42 assigned reads is kept. The old getter is unchanged, because the report and
+  quant paths depend on the imported value surfacing there; it now says so.
+  `filter_novel_isoforms_by_min_read_support` is safe without the change: it compares
+  only models with `has_novel_splice_pattern()`, which are never annotation-derived.
+  Whether an imported-TPM model can reach the discovery filters at all is not
+  established either way -- the fix removes the question rather than answering it.
+
+- BREAKING: no model is reported that quantification could not put a whole read on.
+  `min_reads_retain_isoform`, default 1.0, applied to every model -- novel and
+  reference-containing, monoexonic and spliced -- as the first filter, before the
+  relative thresholds and before the EM inside the isoform-fraction filter, so that EM
+  redistributes over a model set whose members are each supported. Every other
+  threshold in TranscriptFiltering is relative: TPM against library depth, isoform
+  fraction against the gene, supporting cells against the roster. Each of them can be
+  cleared by a model holding a hundredth of a read in a quiet neighbourhood, and
+  `min_multiexonic_TPM` defaulted to 0.0, which asks only for nonzero EM mass. On the
+  single_contig ref-guided fixture this removes 12 of 81 models and leaves nothing
+  below one read in the output; before it, 10 of 81 were reported at under one read,
+  nine of them at zero. There is no reference reprieve here and there must not be: the
+  reprieve exempts a model from thresholds asking something the annotation has already
+  answered, and "did a read support this" is not such a question. New
+  `--min_reads_retain_isoform`; 0 restores the previous behaviour.
+
+- The reference reprieve is no longer categorical at
+  `filter_novel_monoexonic_isoforms_by_min_cells`, which exempted any
+  reference-containing monoexonic model outright while the other three reprieve sites
+  asked for expression. All four now share `reference_model_reprieved()`, so a
+  reference monoexon below `min_reads_retain_reference` is subject to the supporting-cell
+  bar like any other. Its docstring and the `min_monoexonic_supporting_cells` comment
+  said the exemption was unconditional; they now say what it is.
+
+- BREAKING: `ref_trans_filter_mode=retain_expressed` now exempts a reference-containing
+  model only once the reads assigned to it total `min_reads_retain_reference`, default
+  1.0. It asked `get_TPM() > 0`, and get_TPM() is read_counts_assigned / num_total_reads,
+  so on any real library the reprieve fired on any nonzero EM mass whatsoever. Measured
+  on a 52M-read PBMC ref-guided run: 14,193 multi-exon reference chains were reported
+  whose entire assigned mass was below 0.05 of one read -- 99% of them carried some
+  fractional assignment and none carried a whole read. `write_expr` prints all_reads to
+  one decimal, so the whole population surfaced as a column of "0.0" and read as
+  annotation being reported on its own authority. The same run's ref-free arm, which has
+  no reference model to reprieve, produced none of them. Deliberately a total and not a
+  unique read: an isoform no single read can distinguish from its neighbours still earns
+  its row once a read's worth of mass lands on it. Set 0 to restore the previous
+  behaviour. New `--min_reads_retain_reference`. The four reprieve sites in
+  TranscriptFiltering now share one predicate, `reference_model_reprieved()`, rather than
+  three copies of the condition and one site that exempted reference models
+  unconditionally.
+
+- The retired-guard scan in test_streaming_served_fraction enumerates tracked files via
+  `git ls-files` instead of walking the checkout. It read every file under the repo,
+  which in a working checkout means testing/'s accumulated run output: 454,649 files and
+  285 GB against its 524 tracked fixtures, costing 690 s of a 1,164 s suite for one
+  assertion. Now 0.7 s, and the suite is 480 s. Tracked files are also exactly the set a
+  remnant could ship in, so this is the correct definition rather than a cheaper
+  approximation. A pruned walk still covers the released image, which unpacks a
+  `git archive` tarball and so has no .git; both paths are now tested.
+
 v0.33.0
 
 - BREAKING: a TSS or PolyA site from an input GTF is incorporated only if the splice

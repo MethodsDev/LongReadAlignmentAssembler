@@ -17,6 +17,7 @@ splice graph, which is what the abort never gave anybody.
 
 import logging
 import os
+import subprocess
 import sys
 
 import pysam
@@ -194,8 +195,54 @@ def test_zero_reads_is_undefined_rather_than_zero():
     assert StreamingQuant.served_read_fraction(_Totals(0, 0)) is None
 
 
+def _codebase_files(repo):
+    """Paths that make up the codebase, without reading the run output beside it.
+
+    `git ls-files` is the definition rather than a walk of the checkout. testing/
+    accumulates run artifacts next to its tracked fixtures -- measured in a working
+    checkout at 454,649 files and 285 GB against 524 tracked ones -- and full-reading
+    all of them cost this single assertion 690 s of a 1,164 s suite. Tracked files are
+    also exactly the set a remnant could ship in, so the cheap definition is the
+    correct one rather than an approximation of it.
+
+    Falls back to a pruned walk where there is no git metadata, which is the released
+    image: Docker/Dockerfile:257 unpacks a `git archive` tarball, so .git is absent and
+    testing/ was excluded before the tarball was built. The size cap bounds the
+    fallback in a checkout that has neither git nor a clean testing/; nothing that
+    large is source.
+    """
+    try:
+        listing = subprocess.run(
+            ["git", "-C", repo, "ls-files", "-z"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        ).stdout
+        tracked = [p for p in listing.split("\0") if p]
+        if tracked:
+            return [os.path.join(repo, p) for p in tracked]
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    max_source_bytes = 4 * 1024 * 1024
+    skip_dirs = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache"}
+    walked = []
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for filename in filenames:
+            full = os.path.join(dirpath, filename)
+            try:
+                if os.path.getsize(full) > max_source_bytes:
+                    continue
+            except OSError:
+                continue
+            walked.append(full)
+    return walked
+
+
 def test_the_retired_guard_leaves_no_trace():
-    """No accepted-and-ignored remnant of either name anywhere in the tree.
+    """No accepted-and-ignored remnant of either name anywhere in the codebase.
 
     Commit b15430d is the cautionary case: a flag declared as a no-op survived releases
     while one path still acted on it. The needles are assembled from fragments so that this
@@ -205,20 +252,76 @@ def test_the_retired_guard_leaves_no_trace():
     repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     # CHANGELOG.txt is excluded on purpose: it is the record that these were removed, and a
     # release history that cannot name what it removed is useless.
-    skip_dirs = {".git", ".venv", "__pycache__", "node_modules"}
     hits = []
-    for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for filename in filenames:
-            if filename == "CHANGELOG.txt":
-                continue
-            full = os.path.join(dirpath, filename)
-            try:
-                with open(full, "rt", encoding="utf-8", errors="strict") as fh:
-                    text = fh.read()
-            except (OSError, UnicodeDecodeError):
-                continue  # binary fixtures and unreadable paths carry no source reference
-            for needle in needles:
-                if needle in text:
-                    hits.append(f"{os.path.relpath(full, repo)}: {needle}")
+    for full in _codebase_files(repo):
+        if os.path.basename(full) == "CHANGELOG.txt":
+            continue
+        try:
+            with open(full, "rt", encoding="utf-8", errors="strict") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue  # binary fixtures and unreadable paths carry no source reference
+        for needle in needles:
+            if needle in text:
+                hits.append(f"{os.path.relpath(full, repo)}: {needle}")
     assert hits == []
+
+
+def _git_repo(root):
+    """A minimal repo with one tracked and one untracked file, or None without git."""
+    try:
+        for argv in (
+            ["init", "-q"],
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(root)] + argv, check=True, capture_output=True
+            )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    (root / "tracked.py").write_text("tracked\n")
+    (root / "untracked.py").write_text("untracked\n")
+    subprocess.run(
+        ["git", "-C", str(root), "add", "tracked.py"], check=True, capture_output=True
+    )
+    return root
+
+
+def test_enumeration_is_the_tracked_set_not_the_directory(tmp_path):
+    """The git path answers with tracked files, which is what a remnant could ship in.
+
+    The untracked file is the stand-in for testing/'s 454,649 run artifacts: present in
+    the directory, not part of the codebase, and the whole reason this is not a walk.
+    """
+    repo = _git_repo(tmp_path)
+    if repo is None:
+        pytest.skip("git unavailable")
+
+    found = {os.path.basename(p) for p in _codebase_files(str(repo))}
+    assert found == {"tracked.py"}
+
+
+def test_enumeration_falls_back_to_a_walk_without_git_metadata(tmp_path):
+    """The released image has no .git (Docker/Dockerfile:257 unpacks a git archive).
+
+    Without a fallback the assertion would not run there at all, which is where it
+    matters most: the image is what ships.
+    """
+    (tmp_path / "plain.py").write_text("source\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "nested.py").write_text("more source\n")
+
+    found = {os.path.basename(p) for p in _codebase_files(str(tmp_path))}
+    assert found == {"plain.py", "nested.py"}
+
+
+def test_the_fallback_walk_skips_what_is_too_large_to_be_source(tmp_path):
+    """The cap is what bounds a checkout holding neither git metadata nor a clean
+    testing/. Source files are kilobytes; run output is gigabytes."""
+    (tmp_path / "small.py").write_text("source\n")
+    (tmp_path / "huge.bam").write_bytes(b"\0" * (5 * 1024 * 1024))
+
+    found = {os.path.basename(p) for p in _codebase_files(str(tmp_path))}
+    assert found == {"small.py"}

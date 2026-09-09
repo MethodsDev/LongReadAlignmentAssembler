@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.33.0"
+VERSION = "v0.34.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -1497,6 +1497,20 @@ def main():
         help="logic around retaining input reference transcripts in guided ID mode",
     )
 
+    config_group.add_argument(
+        "--min_reads_retain_reference",
+        type=float,
+        default=LRAA_Globals.config["min_reads_retain_reference"],
+        help="assigned reads a reference-containing model must total before ref_trans_filter_mode=retain_expressed exempts it from the discovery filters; not required to be unique reads",
+    )
+
+    config_group.add_argument(
+        "--min_reads_retain_isoform",
+        type=float,
+        default=LRAA_Globals.config["min_reads_retain_isoform"],
+        help="assigned reads a model must total during assembly/discovery filtering to be reported; applies to novel and reference models alike, monoexonic and spliced alike, and need not be unique reads. Not a floor on the final reported all_reads, which the final quant can put lower, and not applied in quant-only mode. 0 disables",
+    )
+
     # Community clustering (Leiden) settings
     config_group.add_argument(
         "--no_use_community_clustering",
@@ -2142,6 +2156,10 @@ def main():
     )
     # Deprecated: EM implementation selection removed; rely on current Quantify defaults
     LRAA_Globals.config["ref_trans_filter_mode"] = args.ref_trans_filter_mode
+    LRAA_Globals.config["min_reads_retain_reference"] = (
+        args.min_reads_retain_reference
+    )
+    LRAA_Globals.config["min_reads_retain_isoform"] = args.min_reads_retain_isoform
 
     # community clustering config
     # community clustering config
@@ -4943,7 +4961,7 @@ def _contig_job_runner(job):
             logger.info(
                 f"[{contig_acc}{contig_strand}] Oversimplify enabled (ref-guided, no discovery): assigning reads to best-overlap reference transcripts and emitting provided annotations to GTF"
             )
-            _run_oversimplify_best_overlap(
+            reported_transcripts = _run_oversimplify_best_overlap(
                 contig_acc=contig_acc,
                 contig_strand=contig_strand,
                 contig_seq_str=contig_seq_str,
@@ -4953,11 +4971,20 @@ def _contig_job_runner(job):
                 input_transcripts=input_transcripts,
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
+                # This branch bypasses run_transcript_assembly, so it is the only place
+                # these models are gated. chrM is oversimplified by default, so without
+                # this every annotated mitochondrial model is reported whatever the
+                # reads did.
+                min_reads_retain_isoform=LRAA_Globals.config[
+                    "min_reads_retain_isoform"
+                ],
             )
-            # Emit the provided GTF transcripts for this contig/strand to the output GTF (no de novo discovery)
+            # Emit exactly what was quantified, not the supplied list: the two must name
+            # the same models, and taking the GTF from the return value is what makes
+            # that structural rather than a pair of filters that have to agree.
             if ofh_gtf_local is not None:
                 try:
-                    for t in input_transcripts:
+                    for t in reported_transcripts:
                         ofh_gtf_local.write(t.to_GTF_format(include_TPM=False) + "\n")
                 except Exception as _e:
                     logger.warning(
@@ -5159,6 +5186,7 @@ def _run_oversimplify_best_overlap(
     input_transcripts,
     ofh_quant,
     ofh_track,
+    min_reads_retain_isoform=0,
 ):
     """Assign each read to the single best-overlapping reference transcript on this contig/strand.
 
@@ -5166,13 +5194,23 @@ def _run_oversimplify_best_overlap(
     - Ties are broken randomly among top-scoring transcripts.
     - Always strand-specific (reads are fetched already filtered by strand).
     - Outputs quant.expr and quant.tracking rows directly (no EM, no multipath graph).
+
+    Returns the transcripts it reported, which is what the caller must write to the
+    GTF. min_reads_retain_isoform drops models the reads did not support, and it is
+    applied HERE rather than by the caller so that the quant rows and the GTF describe
+    the same set: filtering only the emission would leave the dropped models in
+    quant.expr and make the two outputs disagree about which models exist.
+
+    Defaults to 0, meaning report everything supplied. That is quant-only's contract --
+    a row per transcript the caller asked about -- so only the ref-guided discovery
+    caller passes a floor.
     """
 
     if not input_transcripts:
         logger.info(
             f"[{contig_acc}{contig_strand}] oversimplify: no reference transcripts; nothing to do"
         )
-        return
+        return []
 
     # Prepare alignment fetcher
     pam = Pretty_alignment_manager(splice_graph=None)
@@ -5236,6 +5274,26 @@ def _run_oversimplify_best_overlap(
     uniq_read_counts = {}
     uniq_FSM_read_counts = {}
 
+    # A tracking row names a model that gets reported, and whether this one is reported
+    # is not known until every read has been counted and the floor applied.
+    #
+    # At a floor of 1 or less -- the default -- a model dropped by the floor holds zero
+    # reads and therefore contributed no row, so writing straight out is already
+    # consistent and costs nothing. Above 1 a model can be dropped while holding rows,
+    # and those rows have to be withheld or tracking disagrees with quant and the GTF.
+    #
+    # Spooled to disk rather than held in memory: chrM carries ~13.7M reads through this
+    # path, and one Python tuple per read is on the order of a gigabyte before counting
+    # the strings, on top of a pretty_alignments list already fully materialised.
+    spool_tracking = min_reads_retain_isoform > 1
+    track_spool = (
+        tempfile.TemporaryFile(
+            mode="w+", dir=os.environ.get("LRAA_TMP_DIR") or None
+        )
+        if spool_tracking
+        else None
+    )
+
     for pa in pretty_alignments or []:
         segs = pa.get_pretty_alignment_segments()
         if not segs:
@@ -5264,7 +5322,7 @@ def _run_oversimplify_best_overlap(
 
         tid = random.choice(candidate_tids)
         transcript = tid_to_tx[tid]
-        transcript.set_read_counts_assigned(transcript.get_read_counts_assigned() + 1.0)
+        transcript.set_read_counts_assigned(transcript.get_assigned_read_count() + 1.0)
         assigned_read_count += 1
         assigned_tids.add(tid)
         # A tie means several isoforms overlap this read equally well and one was
@@ -5289,34 +5347,67 @@ def _run_oversimplify_best_overlap(
             if num_exons > 1
             else tid
         )
-        print(
-            "\t".join(
-                [
-                    transcript.get_output_gene_id(),
-                    tid,
-                    splice_hash,
-                    f"{num_exons}",
-                    mp_id_token,
-                    read_name,
-                    "1.000000",
-                    "1.000000",
-                    # A tie was broken at random above, so a tied read could have been
-                    # credited elsewhere and is not exclusively assignable -- even
-                    # though exactly one row is emitted for it.
-                    "1" if len(candidate_tids) == 1 else "0",
-                    "1" if read_is_FSM else "0",
-                ]
-            ),
-            file=ofh_track,
+        track_row = "\t".join(
+            [
+                transcript.get_output_gene_id(),
+                tid,
+                splice_hash,
+                f"{num_exons}",
+                mp_id_token,
+                read_name,
+                "1.000000",
+                "1.000000",
+                # A tie was broken at random above, so a tied read could have been
+                # credited elsewhere and is not exclusively assignable -- even
+                # though exactly one row is emitted for it.
+                "1" if len(candidate_tids) == 1 else "0",
+                "1" if read_is_FSM else "0",
+            ]
         )
+        if track_spool is not None:
+            print(f"{tid}\t{track_row}", file=track_spool)
+        else:
+            print(track_row, file=ofh_track)
+
+    # The floor, before anything is reported. Applied here rather than by the caller so
+    # that quant.expr and the GTF describe one set of models: filtering only the
+    # emission would leave the dropped models in the quant table and make the two
+    # outputs disagree.
+    if min_reads_retain_isoform > 0:
+        num_pre_floor = len(tx_list)
+        tx_list = [
+            t for t in tx_list if t.get_assigned_read_count() >= min_reads_retain_isoform
+        ]
+        if len(tx_list) < num_pre_floor:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] oversimplify: min assigned reads filter ({min_reads_retain_isoform}) retained {len(tx_list)} / {num_pre_floor} transcripts"
+            )
+        retained_tids = {t.get_transcript_id() for t in tx_list}
+        gene_to_tx = defaultdict(
+            list,
+            {
+                gene_id: [t for t in tlist if t.get_transcript_id() in retained_tids]
+                for gene_id, tlist in gene_to_tx.items()
+            },
+        )
+
+    # Replay the spool, keeping only rows belonging to a reported model, so tracking
+    # names the same transcripts as quant.expr and the GTF.
+    if track_spool is not None:
+        track_spool.seek(0)
+        for spooled in track_spool:
+            spooled_tid, _, row = spooled.partition("\t")
+            if spooled_tid in retained_tids:
+                ofh_track.write(row)
+        track_spool.close()
 
     gene_totals = {}
     for gene_id, tlist in gene_to_tx.items():
-        gene_sum = sum(tt.get_read_counts_assigned() for tt in tlist)
+        gene_sum = sum(tt.get_assigned_read_count() for tt in tlist)
         gene_totals[gene_id] = gene_sum
         for transcript in tlist:
             frac = (
-                transcript.get_read_counts_assigned() / gene_sum
+                transcript.get_assigned_read_count() / gene_sum
                 if gene_sum > 0
                 else 0.0
             )
@@ -5326,15 +5417,15 @@ def _run_oversimplify_best_overlap(
     # Sort like existing report: by counts desc then transcript_id
     sorted_tx = sorted(
         tx_list,
-        key=lambda x: (x.get_read_counts_assigned(), x.get_transcript_id()),
+        key=lambda x: (x.get_assigned_read_count(), x.get_transcript_id()),
         reverse=True,
     )
-    total_reported_read_count = sum(t.get_read_counts_assigned() for t in sorted_tx)
+    total_reported_read_count = sum(t.get_assigned_read_count() for t in sorted_tx)
     for t in sorted_tx:
         gene_id = t.get_gene_id()
         output_gene_id = t.get_output_gene_id()
         tid = t.get_transcript_id()
-        counts = t.get_read_counts_assigned()
+        counts = t.get_assigned_read_count()
         isoform_frac = t.get_isoform_fraction()
         # Reads whose best overlap was this model ALONE. Not the assigned total: a
         # tie was broken at random, so a tied read is not uniquely assignable even
@@ -5382,7 +5473,8 @@ def _run_oversimplify_best_overlap(
     logger.info(
         f"[{contig_acc}{contig_strand}] oversimplify: assigned {assigned_read_count} reads across {len(assigned_tids)} transcripts"
     )
-    return
+    # Exactly the models that got a quant row, so the caller's GTF cannot disagree.
+    return sorted_tx
 
 
 def _run_oversimplify_aggregate(
@@ -6967,6 +7059,27 @@ def run_transcript_assembly(
 
     transcripts = all_transcripts  # legacy varname
 
+    # The absolute floor, first, so every relative threshold below judges a model set
+    # whose members quantification could each put a read on -- and so the EM inside the
+    # isoform-fraction filter redistributes over that set rather than over models it is
+    # about to discard.
+    min_reads_retain_isoform = LRAA_Globals.config["min_reads_retain_isoform"]
+    if min_reads_retain_isoform > 0:
+        num_pre_read_floor = len(transcripts)
+        transcripts = TranscriptFiltering.filter_isoforms_by_min_assigned_reads(
+            transcripts, min_reads_retain_isoform
+        )
+        logger.info(
+            f"[{contig_acc}{contig_strand}] Min assigned reads filter ({min_reads_retain_isoform}) retained {len(transcripts)} / {num_pre_read_floor} transcripts"
+        )
+        if len(transcripts) < 1:
+            logger.info(
+                "-no transcripts on contig {} {} carried the minimum assigned reads".format(
+                    contig_acc, contig_strand
+                )
+            )
+            return
+
     # Enforce transcript-level minimum cDNA length. Component-level filtering alone
     # can still allow shorter final transcripts after terminal-boundary adjustments.
     min_transcript_length = LRAA_Globals.config["min_transcript_length"]
@@ -7088,6 +7201,24 @@ def run_transcript_assembly(
             logger.info(
                 f"[{contig_acc}{contig_strand}] After filtering, have {len(transcripts)} transcripts"
             )
+
+            # filter_isoforms_by_min_isoform_fraction reruns EM, so the counts the
+            # floor checked at the top of this function are not the counts that came
+            # out of it: dropping a competitor redistributes its mass, and a model
+            # that cleared one read on the old abundances can hold less than one on
+            # the new ones. Reapply, so "every surviving model carries a read" is true
+            # of the set filtering actually produces and not only of the set it
+            # started from. This is the last EM in the filtering process; the
+            # thresholds below read stored values and do not requantify.
+            if min_reads_retain_isoform > 0:
+                num_pre_refloor = len(transcripts)
+                transcripts = TranscriptFiltering.filter_isoforms_by_min_assigned_reads(
+                    transcripts, min_reads_retain_isoform
+                )
+                if len(transcripts) < num_pre_refloor:
+                    logger.info(
+                        f"[{contig_acc}{contig_strand}] Min assigned reads filter reapplied after isoform-fraction EM: retained {len(transcripts)} / {num_pre_refloor} transcripts"
+                    )
 
             if len(transcripts) < 1:
                 logger.info(
@@ -7316,6 +7447,26 @@ def run_transcript_assembly(
     # supporting reads are mapq=0 and get filtered at the final-quant step) are
     # still reported. Discovery-stage filtering already enforces the isoform
     # fraction cutoff with discovery-stage read support.
+    #
+    # min_reads_retain_isoform is deliberately not reapplied here. Two separate things
+    # could in principle put a reported count below it, and neither warrants a filter:
+    #
+    #   EM. Expected not to lower the observed low end, not proven unable to. The final
+    #   quant is the only one carrying EM_alpha, and alpha ADDS a pseudocount in
+    #   proportion to ambiguous support (EM.py:315, 359, pinned in
+    #   test_EM_alpha_semantics.py), which is what a low-count model has; filtering has
+    #   also already removed the competitors whose mass gets redistributed. But the
+    #   pseudocount enters theta before normalization, so it shifts RELATIVE mass: a
+    #   model holding some shared reads can still lose them to a more ambiguous
+    #   neighbour whose alpha is larger. No monotonicity is claimed for an individual
+    #   transcript. Measured on testing/single_contig ref-guided at floors 1, 2 and 5,
+    #   the minimum reported count was 1.00, 2.00 and 5.20 -- on the floor where models
+    #   hold only unique reads (alpha 0 for those, so they do not move) and above it
+    #   otherwise. One fixture, so evidence rather than proof.
+    #
+    #   The final quant's own read filtering. Real, and the paragraph above is it: a
+    #   count that falls here reflects reads this quant could not use, not an absent
+    #   isoform, which is exactly why the model stays reported.
 
     # Report in a fixed structural order. Filtering passes transcripts through
     # gene-keyed sets, so the surviving list order otherwise varies between runs.
