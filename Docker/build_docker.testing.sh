@@ -107,7 +107,6 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 #   lraa-core       Dockerfile.core
 #   lraa-sc         Dockerfile.sc
 #   lraa-orf        Dockerfile.orf
-#   lraa-combined   Dockerfile        (everything in one image)
 #
 # Every image takes the LRAA checkout as its final layer, so pointing at a
 # different commit rebuilds one small layer per image rather than recompiling
@@ -175,12 +174,11 @@ build_image() {
 # the last one leaves the registry holding a partial set: some tags moved to this
 # commit, some still on the previous, and nothing recording which.  The tags a
 # test harness follows are exactly the ones that must not be half updated.
-IMAGES="lraa-core lraa-sc lraa-orf lraa-combined"
+IMAGES="lraa-core lraa-sc lraa-orf"
 
 build_image lraa-core     Dockerfile.core
 build_image lraa-sc       Dockerfile.sc
 build_image lraa-orf      Dockerfile.orf
-build_image lraa-combined Dockerfile
 
 # Every image must carry the commit this build was told to use.  Checking one and
 # assuming the rest is what let four images drift apart before: they share a base

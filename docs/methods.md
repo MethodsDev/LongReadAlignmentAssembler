@@ -302,7 +302,8 @@ path removes per-read state from quantification altogether (`docs/streaming_quan
   MultiPath counting, and assignment logic. Example scenarios are available under `testing/`
   (e.g., SIRVs and quant-only cases), with `testing/Makefile` documenting canonical runs of
   `./LRAA`.
-- Environments and containers: A Docker image defined in `Docker/Dockerfile` pins dependencies.
+- Environments and containers: Docker images defined in `Docker/Dockerfile.base` and its
+  `Dockerfile.core`/`Dockerfile.sc`/`Dockerfile.orf` children pin dependencies.
   End-to-end WDL workflows are provided under `WDL/` for smoke tests and evaluation.
 - Configuration capture: For publication, record the exact LRAA version (git tag/commit),
   Docker image tag, key `config` overrides, and the read aligner/version/settings.

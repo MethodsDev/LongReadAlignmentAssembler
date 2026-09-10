@@ -39,7 +39,7 @@ This repo implements LRAA: isoform discovery and/or quantification from long-rea
 - Read assignment: Default requires substantial overlap (`config['fraction_read_align_overlap']`) and may weight assignments (`config['weight_reads_by_3prime_agreement']`, based on 3' end agreement). EM regularization is `config['EM_alpha']`.
 
 ## Dependencies and external tools
-- Python libs: `pysam`, `networkx`, `intervaltree`, `tqdm`, plus scientific stack for utilities/tests. See `Docker/Dockerfile` for an authoritative list.
+- Python libs: `pysam`, `networkx`, `intervaltree`, `tqdm`, plus scientific stack for utilities/tests. See `Docker/Dockerfile.base` for an authoritative list.
 - `mappy` (minimap2's own Python binding, pin to your minimap2 release, e.g. `mappy==2.28`) is required on the default path since v0.24.x: `--chunk` and `--stream_reads` both default on, and `--stream_reads_rescue_unassigned` defaults on whenever transcriptome rescue is (also default-on), which needs `mappy` to run inside the streaming pass. Pass `--no_chunk --no_stream_reads` to run without it.
 - External tools used in workflows/tests: `samtools` (indexing), `gffcompare` (evaluation in `testing/sirvs`), and `miniwdl` for WDL-based smoke tests.
 - Utilities live in `util/` (Perl and Python helpers for BAM/GTF transformations) and are invoked by the main script.
@@ -66,7 +66,7 @@ pip install pysam networkx intervaltree tqdm mappy==2.28
 - If `pysam` installation fails, ensure you have build tools (Xcode on macOS, build-essential on Linux)
 - The `.venv` directory is git-ignored; recreate it as needed
 - Always activate the venv before running `LRAA` or utility scripts directly (e.g., `../../util/normalize_bam_by_strand.py`)
-- For containerized environments, use `Docker/Dockerfile` which contains the complete dependency list
+- For containerized environments, use `Docker/Dockerfile.core` (or `Dockerfile.sc` for the R stack)
 
 ## Testing and examples
 - End-to-end examples: `testing/Makefile` runs scenarios in subfolders (SIRVs, quant-only, etc.). The `testing/sirvs/Makefile` shows canonical invocations of `../../LRAA` and expected outputs.

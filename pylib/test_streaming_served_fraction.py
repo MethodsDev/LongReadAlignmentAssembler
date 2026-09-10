@@ -206,7 +206,7 @@ def _codebase_files(repo):
     correct one rather than an approximation of it.
 
     Falls back to a pruned walk where there is no git metadata, which is the released
-    image: Docker/Dockerfile:257 unpacks a `git archive` tarball, so .git is absent and
+    image: Docker/Dockerfile.core:31 unpacks a `git archive` tarball, so .git is absent and
     testing/ was excluded before the tarball was built. The size cap bounds the
     fallback in a checkout that has neither git nor a clean testing/; nothing that
     large is source.
@@ -304,7 +304,7 @@ def test_enumeration_is_the_tracked_set_not_the_directory(tmp_path):
 
 
 def test_enumeration_falls_back_to_a_walk_without_git_metadata(tmp_path):
-    """The released image has no .git (Docker/Dockerfile:257 unpacks a git archive).
+    """The released image has no .git (Docker/Dockerfile.core:31 unpacks a git archive).
 
     Without a fallback the assertion would not run there at all, which is where it
     matters most: the image is what ships.

@@ -10,7 +10,6 @@ carries the shared dependencies and is never pushed.
 | `lraa-core` | `Dockerfile.core` | 422 MB | `FROM lraa-base`, plus the LRAA checkout |
 | `lraa-orf` | `Dockerfile.orf` | 615 MB | `FROM lraa-base`, plus TransDecoder, diamond, the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs, and the LRAA checkout |
 | `lraa-sc` | `Dockerfile.sc` | 2.69 GB | `FROM lraa-base`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, pandas, scipy, matplotlib, seaborn, statsmodels, pytest, and the LRAA checkout |
-| `lraa-combined` | `Dockerfile` | 3.95 GB | everything in one image, as it was before the split |
 | `lraa` | none | 422 MB | the same digest as `lraa-core`, pushed under the plain name |
 
 Registry: `us-central1-docker.pkg.dev/methods-dev-lab/lraa/`
@@ -22,7 +21,7 @@ thing that can run an assembly. Someone who pulls it to assemble isoforms gets
 storage and no extra build.
 
 The plain name used to hold the combined image, through the 0.18.0 tags. Anyone
-who needs that content should switch to `lraa-combined`; `lraa-core` covers
+who needs the R stack should switch to `lraa-sc`; `lraa-core` covers
 isoform discovery and quantification on its own.
 
 ## Layer order, and why lraa-base exists
@@ -82,7 +81,7 @@ which names the core, sc and orf images and the tag they share.
 >
 > The public guarantee is on **`lraa:latest`** -- the one repository public users
 > and the released wdls resolve. The four split repositories
-> (`lraa-core`, `lraa-sc`, `lraa-orf`, `lraa-combined`) postdate the last release, so
+> (`lraa-core`, `lraa-sc`, `lraa-orf`) postdate the last release, so
 > their `:latest` tags are a LEGACY EXCEPTION holding pre-release 0.18.3-era digests
 > that no release backs; see the registry-state table below. That makes them stale,
 > not free: the rule still applies, so they are neither moved to a devel build nor
@@ -172,7 +171,7 @@ two places, deliberately, and both are easy to misread:
 | repository | `:latest` serves | backed by a release? |
 |---|---|---|
 | `lraa` | **v0.17.7** | yes -- `origin/main` is v0.17.7, and its wdls hardcode `lraa:latest` in twenty places |
-| `lraa-core`, `lraa-sc`, `lraa-orf`, `lraa-combined` | 0.18.3-era digests | **no** |
+| `lraa-core`, `lraa-sc`, `lraa-orf` | 0.18.3-era digests | **no** |
 
 `lraa:latest` is the one public users resolve, and it is correct: it points at
 the image built for the last published GitHub release. Nothing on `main`
@@ -335,7 +334,7 @@ asserted all four labels against `64ce3fb0`, and pushed; a `miniwdl` run in a
 DIFFERENT worktree that pins `lraa-core:testing` then pulled it -- while the
 registry still served the previous build -- and the local `lraa-core:testing`
 came to name an image stamped `d4aed737`, two commits behind. `lraa-sc`,
-`lraa-orf` and `lraa-combined` were untouched, because that run only needed
+and `lraa-orf` were untouched, because that run only needed
 core. The registry was never wrong. Only the local tag was.
 
 So a rebuild concurrent with any `:testing`-following run is racy by
@@ -346,7 +345,7 @@ published tag against the immutable per-commit tag instead:
 
 ```bash
 HEAD=`git rev-parse HEAD`; SHORT=`git rev-parse --short=7 HEAD`
-for n in lraa-core lraa-sc lraa-orf lraa-combined; do
+for n in lraa-core lraa-sc lraa-orf; do
   for t in testing ${LRAA_VERSION}-${SHORT}; do
     docker manifest inspect -v <registry>/$n:$t |
       python3 -c 'import json,sys; print(json.load(sys.stdin)["Descriptor"]["digest"])'
@@ -359,9 +358,8 @@ registry, which the release consumes, and `${LRAA_VERSION}-<shortsha>` is never
 reused, so nothing can move it. If the local tag has drifted, `docker pull
 <registry>/<name>:testing` restores it from the registry.
 
-All FOUR images, not three. `lraa-combined` is published and labelled like the
-others; checking three and inferring the fourth is the same incomplete check in
-miniature.
+All THREE images. Checking two and inferring the third is the same incomplete
+check in miniature.
 
 ## Releasing a new version
 
@@ -393,7 +391,6 @@ nothing but the checkout, so a dependency put there would be missing from
 `lraa-sc` and `lraa-orf`, which build from the base rather than from core.
 Anything only an R script or a pandas/scipy helper needs belongs in
 `Dockerfile.sc`; anything only TransDecoder needs belongs in `Dockerfile.orf`.
-Whatever you add, add it to `Dockerfile` too, which is standalone.
 
 Two dependencies are load-bearing in ways the imports do not show, both found
 by running the images rather than reading the source:
@@ -405,7 +402,7 @@ by running the images rather than reading the source:
 - `pytest` is imported at module scope by `pylib/SQANTI_like_annotator.py`, so
   the image running the SQANTI-like task needs it.
 
-The R layer in `Dockerfile` and `Dockerfile.sc` ends by loading every package it
+The R layer in `Dockerfile.sc` ends by loading every package it
 claims to install. Keep new packages in that list. `BiocManager::install` only
 warns when a dependency fails to build, so without the check a layer can exit 0
 having installed nothing. That is how `clustermole` was missing from every image

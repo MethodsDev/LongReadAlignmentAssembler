@@ -145,7 +145,6 @@ BASE_IMAGE=lraa-base:${VERSION}
 #   lraa-core       Dockerfile.core
 #   lraa-sc         Dockerfile.sc
 #   lraa-orf        Dockerfile.orf
-#   lraa-combined   Dockerfile        (everything in one image)
 #
 # Every image takes the LRAA checkout as its final layer, from the commit named
 # by the LRAA_CO build arg, so bumping a version rebuilds one small layer rather
@@ -185,12 +184,11 @@ alias_core() {
 # last one leaves the registry holding a partial set: some tags on this commit,
 # some on the previous, nothing recording which.  For release tags that is worse
 # than for testing tags, because :latest is what every WDL default resolves to.
-IMAGES="lraa-core lraa-sc lraa-orf lraa-combined"
+IMAGES="lraa-core lraa-sc lraa-orf"
 
 build_image lraa-core     Dockerfile.core
 build_image lraa-sc       Dockerfile.sc
 build_image lraa-orf      Dockerfile.orf
-build_image lraa-combined Dockerfile
 
 # Each image separately: they share a base and a build arg, but nothing
 # structurally forces the checkout to match, which is how four images drifted
