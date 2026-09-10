@@ -1,16 +1,18 @@
 # LRAA Docker images
 
-Four images are published from this directory, plus the plain `lraa` name as an
-alias for the smallest of them. A fifth, `lraa-base`, is a build input that
-carries the shared dependencies and is never pushed.
+Three images carry the LRAA checkout and are published per release, plus the
+plain `lraa` name as an alias for the smallest. Two more carry only
+dependencies: they hold no LRAA code, are published on their own cadence by
+`build_docker.deps.sh`, and a release PULLS them rather than rebuilding them.
 
-| image | Dockerfile | size | contents |
+| image | Dockerfile | built by | contents |
 |---|---|---|---|
-| `lraa-base` | `Dockerfile.base` | 400 MB | not published. Python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
-| `lraa-core` | `Dockerfile.core` | 422 MB | `FROM lraa-base`, plus the LRAA checkout |
-| `lraa-orf` | `Dockerfile.orf` | 615 MB | `FROM lraa-base`, plus TransDecoder, diamond, the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs, and the LRAA checkout |
-| `lraa-sc` | `Dockerfile.sc` | 2.69 GB | `FROM lraa-base`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, pandas, scipy, matplotlib, seaborn, statsmodels, pytest, and the LRAA checkout |
-| `lraa` | none | 422 MB | the same digest as `lraa-core`, pushed under the plain name |
+| `lraa-base` | `Dockerfile.base` | `build_docker.deps.sh` | Python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
+| `lraa-sc-base` | `Dockerfile.sc-base` | `build_docker.deps.sh` | `FROM lraa-base`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, and pandas, scipy, matplotlib, seaborn, statsmodels, scikit-learn, pytest |
+| `lraa-core` | `Dockerfile.core` | release scripts | `FROM lraa-base`, plus the LRAA checkout |
+| `lraa-orf` | `Dockerfile.orf` | release scripts | `FROM lraa-base`, plus TransDecoder, diamond, the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs, and the LRAA checkout |
+| `lraa-sc` | `Dockerfile.sc` | release scripts | `FROM lraa-sc-base`, plus the LRAA checkout. 37 lines |
+| `lraa` | none | release scripts | the same digest as `lraa-core`, pushed under the plain name |
 
 Registry: `us-central1-docker.pkg.dev/methods-dev-lab/lraa/`
 
@@ -108,45 +110,38 @@ Neither testing tag is a release artifact. Both come out of the same build, so
 they cannot drift apart, and only the release scripts write `latest` or a bare
 version.
 
-### Cold builds pull the R stack instead of recompiling it
+### The dependency images are pulled, not rebuilt
 
-`Dockerfile.sc` carries ~2.3 GB of R: 862 MB of apt libraries, 1.02 GB of Seurat
-and Bioconductor, 417 MB of scientific Python. The LRAA checkout is the last
-layer, so a commit bump reuses all of it -- while the local build cache lasts.
+`Dockerfile.sc-base` carries ~2.3 GB of R: 862 MB of apt libraries, 1.02 GB of
+Seurat and Bioconductor, 417 MB of scientific Python. It holds no LRAA code, so
+cutting a release cannot change it.
 
-Once that cache is pruned, the chain breaks in a way the layer ordering cannot
-fix: `lraa-base` is rebuilt, `apt-get update` resolves whatever package versions
-are current that day, base comes out with a DIFFERENT digest, and every layer in
-`Dockerfile.sc` descending from it misses. MEASURED: Seurat recompiles for about
-59 minutes.
+It used to live inside `Dockerfile.sc`, above the checkout, which reused it only
+while the local build cache held. Every release also rebuilt `lraa-base`, giving
+it a new image id and invalidating every layer below `FROM` in `Dockerfile.sc`.
+Inline cache could not prevent that: `BUILDKIT_INLINE_CACHE` records only a
+build's FINAL stage, and `Dockerfile.base` is two-stage, so its `builder` stage
+re-ran every time. MEASURED on the v0.34.0 testing build: 3583 s recompiling
+Seurat on a machine that had compiled the same packages an hour earlier.
 
-`build_docker.testing.sh` closes that with two halves, which only work together:
+So the tiers are separate images with separate lifecycles:
 
-- `--build-arg BUILDKIT_INLINE_CACHE=1` on every build, so each pushed image
-  carries its own cache metadata. The `docker` driver supports INLINE cache only;
-  `type=registry` needs a `docker-container` driver, which these scripts do not use.
-- `--cache-from <the published counterpart>`, so a later build seeds from it. On an
-  image that does not exist yet this is a warning, not an error, so a first run
-  against an empty repository still builds.
+- `build_docker.deps.sh` builds and pushes `lraa-base` and `lraa-sc-base`,
+  together, when the packages in those two files change. It writes `:latest`
+  and a dated tag beside it.
+- the release scripts `docker pull` both and build `FROM` them. Set
+  `LRAA_DEPS_TAG` to a dated tag to pin a release to a specific dependency set.
+  They do not tag or push the dependency images: a release did not build them.
 
-`lraa-base` is therefore PUSHED as well, purely as a cache source. It is not in
-`${IMAGES}`: that list drives the revision-label assertion, and base carries no
-`LRAA_CO` because it holds no checkout -- which is exactly what makes it reusable
-across commits.
-
-MEASURED end to end, from 0 B of build cache and no local `lraa-sc` image:
+MEASURED end to end, after `docker builder prune -af` with no local
+`lraa-sc-base` image:
 
 | step | result |
 |---|---|
-| `lraa-base` rebuild | 12 layers CACHED, **1.4 s** |
-| `lraa-sc` rebuild | 6 layers CACHED, **26.1 s** |
-| the Seurat/BiocManager layer | CACHED, against ~59 min to compile |
+| full release build, all three images | **20 s** |
+| R/Seurat compilation | none; 0 matching lines in the build log |
 
-The resulting image runs and reports `LRAA VERSION: v0.30.0` with `Seurat 5.0.0`.
-
-The RELEASE scripts deliberately do none of this. A release should resolve its own
-apt and CRAN content rather than inherit a layer cached from whenever a devel build
-last ran; freshness is worth an hour there, and releases are rare.
+Against 3583 s for `lraa-sc` alone under the previous arrangement.
 
 Devel work is tagged `<version>-testing` or `<version>-<shortsha>`, never a bare
 version: a devel run needs an image it can name later, not a claim that the
@@ -318,13 +313,13 @@ plain name is what a pipeline that never named an image ends up pulling, and a
 pre-release commit does not belong there.
 
 A cold run takes about an hour, nearly all of it compiling Seurat from source
-for `lraa-sc` and for the combined image. A run that only moves the commit takes
+for `lraa-sc`. A run that only moves the commit takes
 a few minutes, because the checkout is the last layer of every image. That is
 what makes a per-commit testing build cheap enough to be routine.
 
 ### `docker inspect` on `:testing` is not proof that a local image is HEAD
 
-The build scripts verify each of the four images' revision labels before pushing
+The build scripts verify each of the three images' revision labels before pushing
 any of them, and that verification is sound at the moment it runs. It says
 nothing about the local tag a minute later.
 

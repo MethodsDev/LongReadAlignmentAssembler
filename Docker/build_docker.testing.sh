@@ -235,16 +235,10 @@ for name in ${IMAGES}; do
     docker push ${REGISTRY}/${name}:${COMMIT_TAG}
 done
 
-# lraa-base, pushed for one reason: to be the --cache-from source for the next
-# build on a machine whose local cache is gone.  It is NOT in ${IMAGES} because
-# that list drives the revision-label assertion above and base carries no
-# LRAA_CO -- it holds no checkout, which is exactly why it is reusable across
-# commits.  Pushed after the assertions for the same reason as the rest: a base
-# published while a later image fails its check would seed future builds from a
-# commit that never passed.
-for tag in ${VERSION} ${VERSIONED_TAG} ${COMMIT_TAG}; do
-    docker push ${REGISTRY}/lraa-base:${tag}
-done
+# The dependency images are NOT pushed here.  A release pulled them; it did not
+# build them, so it has nothing to publish and no version-tagged copy to publish
+# it under.  Re-tagging them per release is what made lraa-base look like it
+# tracked the LRAA version.  build_docker.deps.sh owns their tags.
 
 # The pin a benchmark run should record, printed rather than left to be
 # reconstructed: the tag names the commit, and the digest is what cannot be moved
