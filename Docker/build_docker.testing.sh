@@ -46,7 +46,6 @@ REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
 # reachability check below is worthless if it probes a different repository.
 GITHUB_REPO=MethodsDev/LongReadAlignmentAssembler
 
-BASE_IMAGE=lraa-base:${LRAA_VERSION}
 
 # The Dockerfiles fetch the checkout by SHA from GitHub, so an unpushed commit
 # does not build: the fetch 404s a few layers in, long after the expensive ones,
@@ -103,7 +102,8 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 # FROM it.
 #
 #   image           dockerfile
-#   lraa-base       Dockerfile.base   (build input, not published)
+#   lraa-base       Dockerfile.base      (pulled; build_docker.deps.sh)
+#   lraa-sc-base    Dockerfile.sc-base   (pulled; build_docker.deps.sh)
 #   lraa-core       Dockerfile.core
 #   lraa-sc         Dockerfile.sc
 #   lraa-orf        Dockerfile.orf
@@ -146,13 +146,19 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 #
 # --cache-from on an image that does not exist is a warning, not an error, so a
 # first run against an empty registry still builds.
-docker build -f Dockerfile.base \
-    --build-arg BUILDKIT_INLINE_CACHE=1 \
-    --cache-from ${REGISTRY}/lraa-base:${VERSION} \
-    -t ${BASE_IMAGE} \
-    -t ${REGISTRY}/lraa-base:${VERSION} \
-    -t ${REGISTRY}/lraa-base:${VERSIONED_TAG} \
-    -t ${REGISTRY}/lraa-base:${COMMIT_TAG} .
+# The dependency images are PULLED, never rebuilt here.  They hold no LRAA code,
+# so a release cannot change them, and rebuilding lraa-base gave it a new image
+# id that invalidated every layer below FROM in Dockerfile.sc -- 3583 s of
+# recompiling Seurat on the v0.34.0 build.  build_docker.deps.sh owns them.
+#
+# Pinnable: set LRAA_DEPS_TAG to a dated tag from that script to build against a
+# specific dependency set rather than whatever :latest is today.
+LRAA_DEPS_TAG=${LRAA_DEPS_TAG:-latest}
+BASE_IMAGE=${REGISTRY}/lraa-base:${LRAA_DEPS_TAG}
+SC_BASE_IMAGE=${REGISTRY}/lraa-sc-base:${LRAA_DEPS_TAG}
+
+docker pull ${BASE_IMAGE}
+docker pull ${SC_BASE_IMAGE}
 
 build_image() {
     local name=$1
@@ -160,6 +166,7 @@ build_image() {
 
     docker build -f ${dockerfile} \
         --build-arg LRAA_BASE_IMAGE=${BASE_IMAGE} \
+        --build-arg LRAA_SC_BASE_IMAGE=${SC_BASE_IMAGE} \
         --build-arg LRAA_VERSION=v${LRAA_VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
         --build-arg BUILDKIT_INLINE_CACHE=1 \

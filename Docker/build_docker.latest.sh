@@ -133,7 +133,6 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 
 REGISTRY=us-central1-docker.pkg.dev/methods-dev-lab/lraa
 
-BASE_IMAGE=lraa-base:${LRAA_VERSION}
 
 
 #docker buildx create --name terra-builder --use
@@ -148,7 +147,8 @@ BASE_IMAGE=lraa-base:${LRAA_VERSION}
 # FROM it.
 #
 #   image           dockerfile
-#   lraa-base       Dockerfile.base   (build input, not published)
+#   lraa-base       Dockerfile.base      (pulled; build_docker.deps.sh)
+#   lraa-sc-base    Dockerfile.sc-base   (pulled; build_docker.deps.sh)
 #   lraa-core       Dockerfile.core
 #   lraa-sc         Dockerfile.sc
 #   lraa-orf        Dockerfile.orf
@@ -157,7 +157,19 @@ BASE_IMAGE=lraa-base:${LRAA_VERSION}
 # by the LRAA_CO build arg, so bumping a version rebuilds one small layer rather
 # than recompiling Seurat.
 
-docker build -f Dockerfile.base -t ${BASE_IMAGE} .
+# The dependency images are PULLED, never rebuilt here.  They hold no LRAA code,
+# so a release cannot change them, and rebuilding lraa-base gave it a new image
+# id that invalidated every layer below FROM in Dockerfile.sc -- 3583 s of
+# recompiling Seurat on the v0.34.0 build.  build_docker.deps.sh owns them.
+#
+# Pinnable: set LRAA_DEPS_TAG to a dated tag from that script to build against a
+# specific dependency set rather than whatever :latest is today.
+LRAA_DEPS_TAG=${LRAA_DEPS_TAG:-latest}
+BASE_IMAGE=${REGISTRY}/lraa-base:${LRAA_DEPS_TAG}
+SC_BASE_IMAGE=${REGISTRY}/lraa-sc-base:${LRAA_DEPS_TAG}
+
+docker pull ${BASE_IMAGE}
+docker pull ${SC_BASE_IMAGE}
 
 build_image() {
     local name=$1
@@ -165,6 +177,7 @@ build_image() {
 
     docker build -f ${dockerfile} \
         --build-arg LRAA_BASE_IMAGE=${BASE_IMAGE} \
+        --build-arg LRAA_SC_BASE_IMAGE=${SC_BASE_IMAGE} \
         --build-arg LRAA_VERSION=v${LRAA_VERSION} \
         --build-arg LRAA_CO=${LRAA_CO} \
         -t ${REGISTRY}/${name}:${VERSION} .
