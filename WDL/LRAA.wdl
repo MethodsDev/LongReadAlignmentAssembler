@@ -826,7 +826,13 @@ task merge_GTFs {
     runtime {
         docker: docker
         cpu: 1
-        memory: "2 GiB"
+        # Fixed reservation, not scaled off inputs. A per-cluster shard was measured at
+        # 1.55 GiB peak against the former 2 GiB (77%) in a v0.34.0 PBMC cluster-guided
+        # run -- the only task in that run to approach its ceiling, and the reservation
+        # does not grow with GTF size. Sized to 16 GiB so larger clusters cannot OOM this
+        # (a hard, unrecoverable crash on Terra); the task is a single awk/header merge,
+        # so the headroom costs one cheap VM.
+        memory: "16 GiB"
         disks: "local-disk " + ceil(size(gtfFiles, "GB") * 2.0 + 5) + " SSD"
     }
 }
