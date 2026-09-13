@@ -286,6 +286,121 @@ config = {
     # terminus, not to any measured cleavage atlas. Off by default: a monoexonic model has
     # no intron chain corroborating it, so agreement alone is weaker evidence there.
     "spare_monoexonic_internal_priming_with_known_3prime": False,
+    # Where the internal-priming veto DELETES a read-derived PolyA candidate during
+    # site identification (Splice_graph._incorporate_PolyA_objects), rather than letting
+    # it through to be judged later at transcript filtering.
+    #
+    #   "always"       -- delete in every graph. Behaviour up to v0.34.0.
+    #   "spliced_only" -- DEFAULT. Delete in the ME (spliced) graph, KEEP in the SE
+    #                     (monoexonic) graph built separately by build_SE_transcripts.
+    #   "never"        -- keep everywhere. NOT recommended: it rewrites the ME graph
+    #                     too, spawning competing spliced 3'-variants. Measured on
+    #                     chr22 it triples FSM reference loss (46 vs 15) and inflates
+    #                     ISM 12%, for roughly twice the monoexonic reduction.
+    #
+    # Deleting the site removes a terminus the graph needs: no path can END there, so
+    # every model over the locus runs on to the next available 3' vertex. Measured at
+    # DGCR2 (chr22:19.117-19.120 Mb, two +-strand monoexonic coverage peaks antisense to
+    # the gene): all 21 +-strand candidates were rejected, and the models built then
+    # spanned BOTH peaks -- 19,117,546-19,119,735 -- across a valley where coverage falls
+    # from ~280 to ~22. The left peak was not absent from the output, it was absorbed
+    # into an over-long neighbour.
+    #
+    # The same placement error costs annotated 3' ends: spare_polyA_veto_at_known_3prime
+    # below can only spare a candidate that EXISTS, so deleting it first makes that
+    # reprieve unreachable.
+    #
+    # "spliced_only" exists because keeping the site everywhere has a measured cost on
+    # SPLICED models, which is where this rule was never needed: the terminus only has
+    # to exist for monoexonic reconstruction. On chr22, "never" moved se_antisense
+    # 100 -> 24 but also lost 46 FSM reference isoforms and raised ISM 12% -- the
+    # absorbing-vertex truncation the rejection site warns about. The SE graph is built
+    # separately (build_SE_transcripts -> Splice_graph(restrict_splice_type="SE")), so
+    # the deferral can be confined to it and the spliced graph left untouched.
+    #
+    # Judgement is deferred to TranscriptFiltering.filter_internally_primed_transcripts,
+    # which annotates every emitted 3' terminus and deletes primed monoexonic models.
+    #
+    # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
+    # Measured "spliced_only" vs "always": se_antisense 124 -> 59 (chr20) and
+    # 100 -> 51 (chr22); ALL spliced output unchanged to the model on chr22
+    # (4,252 both ways), ISM +1%, 8-15 FSM reference isoforms lost of ~1,500.
+    "reject_internally_primed_polyA_sites": "spliced_only",
+    # Whether the ME (spliced) graph may emit SINGLE-EXON models.
+    #
+    # The ME graph is fed only reads with an intron in their CIGAR
+    # (Pretty_alignment_manager partitions on has_introns()), but that is a GLOBAL
+    # property of the alignment. A read whose junction lies far outside a given window,
+    # or whose junction the graph rejected for lack of support, contributes only exonic
+    # blocks locally. Where such blocks accumulate with no validated junction at their
+    # boundaries, the ME graph grows an ISOLATED exon segment and path enumeration can
+    # only emit it as a single-exon model.
+    #
+    # Measured at chr20:35,674,748-35,676,911 (antisense to NFS1): the ME graph held one
+    # exon segment E:4928[+] with no incident intron -- nearest + introns 43 kb upstream
+    # and 15 kb downstream -- built from 47 spliced reads of which 42 had every intron
+    # outside the window. It emitted a 2,163 bp single-exon model that overran a 147-read
+    # internally primed 3' stack by 153 nt and swallowed a second 63-read primed site.
+    # 19 of 181 ME models (10%) in that region were single-exon.
+    #
+    # Those models are also load-bearing downstream: ME_transcripts becomes the
+    # SE_read_encapsulation_mask (LRAA), so an ME single-exon model masks the very
+    # monoexonic reads the SE graph would otherwise have used to place the terminus
+    # correctly. That makes the defect self-reinforcing.
+    #
+    # DEFAULT False: single-exon reconstruction is routed to the SE graph alone, which
+    # is the graph that has the monoexonic reads, the monoexonic filters, and -- under
+    # reject_internally_primed_polyA_sites="spliced_only" -- the retained PolyA termini.
+    # Reference single-exon transcripts are unaffected: the ME builder is handed only the
+    # intron-bearing reference subset, so it never carries them.
+    #
+    # Measured on chr20 on top of "spliced_only": se_antisense 59 -> 40, with FSM
+    # reference loss essentially unchanged (8 -> 9 of ~1,500). At the NFS1 locus it is
+    # what lets the SE graph see the reads at all and place termini on the two primed
+    # sites instead of one model spanning both peaks.
+    "ME_graph_emits_monoexonic_models": False,
+    # Subtract the intronic coverage floor before the SE graph is segmented.
+    #
+    # Monoexonic coverage inside introns has a substantial near-uniform floor: measured
+    # on PBMC chr20/chr22, 491k/465k monoexonic reads lie wholly outside annotated
+    # exons, ~2 reads deep at the median intronic base. Segmenting that directly fuses
+    # neighbouring real features into one smeared exon segment, which is where loose
+    # single-exon boundaries come from -- measured 20-24% of a surviving monoexonic
+    # model's span sits at or below its own host intron's background.
+    #
+    # SE graph only; the ME graph is untouched. Only bases intronic in the ME transcript
+    # set and exonic in none of them are eligible, so nothing the spliced graph called an
+    # exon is decremented. Measured with that protection: 33-35% of covered intronic
+    # bases fall below the floor, 0 protected exonic bases touched, and coverage islands
+    # RISE (3,450 -> 4,436 on chr20, ~1,100-1,400 splits per contig) as smears resolve
+    # into separate features. Model counts are not the target and barely move: the
+    # antisense monoexons sit 25-54x above their local background.
+    #
+    # ON BY DEFAULT. Measured cost, chr20, applied on top of spliced_only +
+    # ME-monoexonic suppression: novel monoexonic 170 -> 148, se_genic 50 -> 30,
+    # se_intergenic 1 -> 0, and 15 FSM reference isoforms lost against 22 gained. The
+    # FSM movement is NOT caused in the spliced graph -- __ME_isoforms.gtf is
+    # byte-identical with and without this setting (verified md5 6c0505c02b1e at
+    # chr20:19.95-20.10 Mb). It arises downstream, where ME and SE models are combined
+    # (LRAA) and quantified together: nine fewer SE models shift gene denominators and
+    # EM mass, and the threshold filters that run next -- the absolute 1.0-read floor,
+    # the weakest-first isoform-fraction filter, the degradation pruner -- are
+    # order-sensitive and grant no reference reprieve, so marginal multi-exon models
+    # flip. The models lost sit at median isoform fraction 0.031 against 0.061 overall.
+    #
+    # It removes whole low-coverage models more than it tightens boundaries: of 187
+    # matched monoexonic models only 12 shortened (median 236 bp) and 174 were
+    # unchanged, because a model peaking 25-54x above its local background does not
+    # move its edges when 2 reads are subtracted.
+    #
+    # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
+    "SE_subtract_intronic_background": True,
+    # Intron-length percentile above which the subtraction is skipped. Long introns are
+    # heterogeneous enough that a single median describes them poorly, and they hold most
+    # intronic sequence but few of the fusions this addresses: p80 is 9,720 bp on chr20
+    # and 7,558 bp on chr22, covering 80% of introns but only 22% of intronic bp.
+    # Computed per contig-strand from the ME transcripts actually present.
+    "SE_intronic_background_intron_length_pctile": 80,
     # Internal-priming veto at PolyA site identification: when a READ-DERIVED candidate
     # sits at a 3' end the supplied reference annotation also calls, the reference is
     # independent evidence that cleavage happens there, so the A-rich context veto is

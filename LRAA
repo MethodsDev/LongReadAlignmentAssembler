@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.34.0"
+VERSION = "v0.35.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -450,6 +450,7 @@ _RENAMED_CONFIG_FLAGS = {
 # setting that a chunked run accepted and ignored.
 _NEGATED_CONFIG_FLAGS = {
     "no_EM": "run_EM",
+    "no_SE_subtract_intronic_background": "SE_subtract_intronic_background",
     "no_filter_internal_priming": "filter_internal_priming",
     "no_infer_TSS": "infer_TSS",
     "no_infer_PolyA": "infer_PolyA",
@@ -1442,6 +1443,16 @@ def main():
     )
 
     config_group.add_argument(
+        "--no_SE_subtract_intronic_background",
+        action="store_true",
+        default=False,
+        help="do not subtract the local intronic coverage floor before segmenting the "
+        "single-exon splice graph (on by default; touches only bases that are intronic "
+        "in the multi-exon transcript set and exonic in none of them, and only introns "
+        "up to the configured length percentile)",
+    )
+
+    config_group.add_argument(
         "--no_filter_internal_priming",
         action="store_true",
         default=False,
@@ -1936,6 +1947,9 @@ def main():
     NO_FILTER_ISOFORMS = args.no_filter_isoforms
     LRAA_Globals.config["filter_internal_priming"] = (
         not args.no_filter_internal_priming
+    )
+    LRAA_Globals.config["SE_subtract_intronic_background"] = (
+        not args.no_SE_subtract_intronic_background
     )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
     # By default, parallelize work units; allow explicit opt-out
@@ -2729,7 +2743,7 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 5
+SPLICE_GRAPH_CACHE_VERSION = 7
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     # Ingestion rather than construction: this decides which alignments reach the
@@ -2768,6 +2782,12 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "max_dist_between_alt_polyA_sites",
     "min_alignments_define_polyA_site",
     "spare_polyA_veto_at_known_3prime",
+    # Decides whether an A-rich read-derived PolyA candidate becomes a graph vertex
+    # at all, so two runs differing only in this setting must not share a graph.
+    "reject_internally_primed_polyA_sites",
+    # Decrements the coverage array the SE graph is segmented from.
+    "SE_subtract_intronic_background",
+    "SE_intronic_background_intron_length_pctile",
     "min_frac_alignments_define_polyA_site",
     "min_PolyA_ident_length",
     "min_PolyA_iso_fraction",
@@ -7815,6 +7835,22 @@ def build_ME_transcripts(
     # Define ME isoforms
     logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
     ME_transcripts = lraa_ME_obj.reconstruct_isoforms(single_best_only)
+
+    if not LRAA_Globals.config.get("ME_graph_emits_monoexonic_models", True):
+        # Single-exon reconstruction belongs to the SE graph, which is the one holding
+        # the monoexonic reads and their PolyA termini. An isolated exon segment here
+        # carries no splicing evidence, so anything built on it is a monoexonic model
+        # reached through the wrong graph -- and, because ME_transcripts becomes the
+        # SE_read_encapsulation_mask, one that hides its own reads from the SE graph.
+        n_before = len(ME_transcripts)
+        ME_transcripts = [t for t in ME_transcripts if not t.is_monoexonic()]
+        n_dropped = n_before - len(ME_transcripts)
+        if n_dropped:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] ME graph monoexonic suppression: "
+                f"dropped {n_dropped} of {n_before} ME models; single-exon "
+                f"reconstruction deferred to the SE graph"
+            )
 
     if len(ME_transcripts) == 0:
         logger.info(

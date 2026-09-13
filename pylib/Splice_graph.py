@@ -63,6 +63,15 @@ class Splice_graph:
         self._contig_seq_str = ""
         self._contig_len = 0
 
+        # Which graph this instance is: "ME", "SE", or None for an unrestricted build.
+        # build_splice_graph_for_contig sets it from its parameter, but the attribute is
+        # established HERE so that code reached without going through that method -- a
+        # bare Splice_graph() driving _incorporate_PolyA_objects directly, as the
+        # internal-priming tests do -- sees a defined value rather than raising.
+        # _polyA_priming_rejection_applies consults it, and an unrestricted build must
+        # behave as the spliced graph does: reject.
+        self._restrict_splice_type = None
+
         self._contig_base_cov = list()
 
         self._splice_graph = None  # becomes networkx digraph TODO://rename this var as confusing when using _splice_graph as this obj in other modules
@@ -332,6 +341,19 @@ class Splice_graph:
                     SE_read_encapsulation_mask,
                 )
 
+        # Intronic background subtraction -- SE graph only, before segmentation.
+        # Runs BEFORE _integrate_input_transcript_structures so the annotation's own
+        # coverage contribution is not decremented, and before _build_draft_splice_graph
+        # so the segmentation sees the corrected array.
+        if (
+            restrict_splice_type == "SE"
+            and LRAA_Globals.config.get("SE_subtract_intronic_background", False)
+            and SE_read_encapsulation_mask
+        ):
+            self._subtract_intronic_background(
+                SE_read_encapsulation_mask, contig_acc, contig_strand
+            )
+
         # incorporate guide structures if provided
         if input_transcripts:
             self._integrate_input_transcript_structures(
@@ -467,6 +489,136 @@ class Splice_graph:
         intron_objs = sorted(intron_objs, key=lambda x: x._lend)
 
         return (exon_segment_objs, intron_objs)
+
+    def _subtract_intronic_background(
+        self, ME_transcripts, contig_acc, contig_strand
+    ):
+        """Remove the intronic coverage floor before the SE graph is segmented.
+
+        Mono-exonic coverage inside introns has a substantial, near-uniform floor:
+        measured on chr20/chr22 PBMC data, ~2 reads deep at the median intronic base,
+        with 491k/465k monoexonic reads lying wholly outside annotated exons. Segmenting
+        that directly makes neighbouring real features fuse into one smeared exon
+        segment, which is where single-exon boundaries come from.
+
+        Scope is deliberately narrow:
+          - SE graph only. The ME graph is untouched.
+          - Only bases that are INTRONIC in the ME transcript set and exonic in none of
+            them, so nothing the spliced graph called an exon is decremented. The ME
+            transcripts are already in hand here -- they arrive as the SE read
+            encapsulation mask.
+          - Only introns up to the configured length percentile. Long introns are
+            heterogeneous enough that one median is a poor description of them, and they
+            hold most intronic sequence but few of the fusions this addresses (p80 covers
+            80% of introns but 22% of intronic bp).
+
+        The estimate is the median over eligible bases INCLUDING zeros. Taking it over
+        covered bases only biases it upward -- measured 3 versus 2 -- because a real
+        feature inside the intron contributes to the estimate meant to describe the
+        floor beneath it.
+
+        Measured effect (2,500 introns/contig, both strands): ~33-35% of covered
+        intronic bases fall below the floor, 0 protected exonic bases are touched, and
+        coverage islands rise 3,450->4,436 (chr20) as smears resolve into separate
+        features -- the intended outcome is more boundaries, not fewer.
+        """
+
+        exons = list()
+        introns = list()
+        for transcript in ME_transcripts:
+            segs = sorted(transcript.get_exon_segments())
+            exons.extend(segs)
+            for i in range(len(segs) - 1):
+                a, b = segs[i][1] + 1, segs[i + 1][0] - 1
+                if b > a:
+                    introns.append((a, b))
+
+        if not introns:
+            return
+
+        pctile = LRAA_Globals.config.get(
+            "SE_intronic_background_intron_length_pctile", 80
+        )
+        lengths = sorted(b - a + 1 for a, b in introns)
+        idx = int((pctile / 100.0) * (len(lengths) - 1))
+        max_intron_len = lengths[idx]
+
+        # merge protected exonic intervals once
+        exons.sort()
+        merged_exons = list()
+        for a, b in exons:
+            if merged_exons and a <= merged_exons[-1][1] + 1:
+                merged_exons[-1][1] = max(merged_exons[-1][1], b)
+            else:
+                merged_exons.append([a, b])
+
+        cov = self._contig_base_cov
+        contig_len = self._contig_seq_len
+        n_introns = n_bases = n_decremented = 0
+
+        seen = set()
+        for a, b in introns:
+            if (a, b) in seen:
+                continue
+            seen.add((a, b))
+            if b - a + 1 > max_intron_len:
+                continue
+            a = max(1, a)
+            b = min(b, contig_len)
+            if b <= a:
+                continue
+
+            eligible = list()
+            ei = bisect.bisect_left(merged_exons, [a, -1])
+            if ei > 0:
+                ei -= 1
+            blocked = list()
+            for j in range(ei, len(merged_exons)):
+                ea, eb = merged_exons[j]
+                if ea > b:
+                    break
+                if eb >= a:
+                    blocked.append((max(ea, a), min(eb, b)))
+            pos = a
+            for ba, bb in blocked:
+                if ba > pos:
+                    eligible.append((pos, ba - 1))
+                pos = max(pos, bb + 1)
+            if pos <= b:
+                eligible.append((pos, b))
+            if not eligible:
+                continue
+
+            vals = list()
+            for ea, eb in eligible:
+                vals.extend(cov[ea : eb + 1])
+            if not vals:
+                continue
+            vals.sort()
+            background = vals[len(vals) // 2]
+            if background <= 0:
+                continue
+
+            n_introns += 1
+            for ea, eb in eligible:
+                for i in range(ea, eb + 1):
+                    if cov[i] > 0:
+                        n_bases += 1
+                        new = cov[i] - background
+                        cov[i] = new if new > 0 else 0
+                        if new <= 0:
+                            n_decremented += 1
+
+        logger.info(
+            "[%s%s] SE intronic background subtraction: %d introns <= %d bp treated, "
+            "%d covered intronic bases adjusted, %d dropped to zero",
+            contig_acc,
+            contig_strand,
+            n_introns,
+            max_intron_len,
+            n_bases,
+            n_decremented,
+        )
 
     def _initialize_contig_coverage(self):
 
@@ -972,6 +1124,32 @@ class Splice_graph:
         i = bisect.bisect_left(ends, position - tolerance)
         return i < len(ends) and ends[i] <= position + tolerance
 
+    def _polyA_priming_rejection_applies(self):
+        """Does the internal-priming veto DELETE candidates in THIS graph?
+
+        The SE (monoexonic) graph is built separately from the ME (spliced) one --
+        build_SE_transcripts constructs its own Splice_graph with
+        restrict_splice_type="SE" -- so the policy can differ between them. Under
+        "spliced_only" the monoexonic graph keeps the terminus, which is the only graph
+        that needs it in order for a single-exon model to end at the artifact and be
+        caught by TranscriptFiltering; the spliced graph keeps deleting, so spliced
+        reconstruction is unaffected.
+
+        Unrecognised values fall back to deleting, the shipped behaviour: a typo in a
+        config override must not silently loosen the filter.
+        """
+        mode = LRAA_Globals.config.get("reject_internally_primed_polyA_sites", "always")
+        # Back-compatible with the boolean this key briefly was.
+        if mode is True:
+            mode = "always"
+        elif mode is False:
+            mode = "never"
+        if mode == "never":
+            return False
+        if mode == "spliced_only":
+            return self._restrict_splice_type != "SE"
+        return True
+
     def _incorporate_PolyA_objects(
         self, contig_acc, contig_strand, polyA_position_counter, from_reads=True
     ):
@@ -993,6 +1171,7 @@ class Splice_graph:
         )
 
         n_internally_primed = 0
+        n_internally_primed_kept = 0
         n_reference_spared = 0
 
         for polyA_site_grouping in PolyA_grouped_positions:
@@ -1020,9 +1199,18 @@ class Splice_graph:
                     # A-rich, but the reference calls a 3' end here: independent
                     # evidence of cleavage outranks genomic context.
                     n_reference_spared += 1
-                else:
+                elif self._polyA_priming_rejection_applies():
                     n_internally_primed += 1
                     continue
+                else:
+                    # Deferred policy: keep the terminus so a path CAN end here, and
+                    # let TranscriptFiltering.filter_internally_primed_transcripts judge
+                    # the emitted model. Deleting the site instead leaves the locus with
+                    # no 3' vertex, so overlapping models run past it -- measured at
+                    # DGCR2, where models spanned two coverage peaks and the valley
+                    # between them. Counted separately so the log distinguishes
+                    # "rejected" from "kept but flagged".
+                    n_internally_primed_kept += 1
 
             if (
                 Splice_graph._site_within_window(self._PolyA_objs, position, window)
@@ -1046,6 +1234,7 @@ class Splice_graph:
                 f"[{contig_acc}{contig_strand}] PolyA sites: "
                 f"{len(PolyA_grouped_positions)} candidates, "
                 f"{n_internally_primed} rejected as internally primed, "
+                f"{n_internally_primed_kept} A-rich but KEPT for deferred filtering, "
                 f"{n_reference_spared} A-rich but spared on reference agreement, "
                 f"{len(PolyA_grouped_positions) - n_internally_primed} retained"
             )

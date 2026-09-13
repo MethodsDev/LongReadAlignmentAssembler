@@ -1289,11 +1289,21 @@ def filter_internally_primed_transcripts(
     """Annotate every transcript's 3' terminus for A-rich genomic context, and delete
     the models that policy says should not survive it.
 
-    Two stages now apply the same rule, deliberately and for different reasons.
+    Two stages can apply the same rule, and which of them does is policy.
     `Splice_graph._incorporate_PolyA_objects` rejects an A-rich READ-DERIVED candidate
-    before it can become a graph vertex, so the constraint is never created. This stage
-    then judges the model's own emitted 3' terminus, which reconstruction may have
-    placed somewhere no rejected candidate ever sat.
+    before it can become a graph vertex -- but only where
+    `reject_internally_primed_polyA_sites` says it should. Under "spliced_only" the
+    separately built SE (monoexonic) graph keeps the candidate and this stage becomes
+    the sole arbiter for single-exon models, while the spliced graph is untouched. This stage always judges
+    the model's own emitted 3' terminus, which reconstruction may have placed somewhere
+    no rejected candidate ever sat.
+
+    Deferring matters because deleting the site removes a terminus the graph needs: no
+    path can END there, so models run on to the next 3' vertex. Measured on chr22,
+    deferring moves 23,852 candidates from "rejected" to "kept and flagged", raises
+    PolyA vertices 14,215 -> 38,132, and raises the models this stage deletes from 124
+    to 553 -- the artifacts are now built with their real termini and caught here
+    instead of silently reshaping their neighbours.
 
     Both are wanted. On chr20 the gate alone leaves 123 monoexonic models terminating
     in A-rich context, and they are an artifact population rather than real single-exon
