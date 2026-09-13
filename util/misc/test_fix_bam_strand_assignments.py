@@ -3,11 +3,15 @@
 """What fix_bam_strand_assignments.py promises about the bam it writes.
 
 Two claims are tested, and they pull in opposite directions.  The tool must
-CHANGE the strand of every record whose introns contradict its flag, and it
+CHANGE the strand of every record whose evidence contradicts its flag, and it
 must change NOTHING ELSE: not the record count, not the order, not a
 coordinate, not a record it had no evidence about.  A fixture where no read
 flips would pass the second claim while testing nothing, so the flips are
 asserted by name.
+
+The annotation fallback is held to its rank as well as its arithmetic: a read
+whose own splice motifs decide it keeps that verdict even when the annotation
+underneath says otherwise.
 """
 
 import os
@@ -38,12 +42,13 @@ NONCANONICAL = ("AA", "CC")
 
 
 class Corpus:
-    """A contig whose splice sites are chosen rather than incidental."""
+    """A contig whose splice sites and annotation are chosen, not incidental."""
 
     def __init__(self, tmp_path):
         self.dir = tmp_path
         self.sequence = list(("ACGT" * (LENGTH // 4 + 1))[:LENGTH])
         self.reads = []  # (name, flag, blocks, tags)
+        self.transcripts = []  # (transcript_id, strand, exons)
 
     def read(self, name, flag, blocks, dinucs=(), tags=()):
         for i, dinuc_pair in enumerate(dinucs, start=1):
@@ -58,6 +63,10 @@ class Corpus:
 
     def unmapped_read(self, name):
         self.reads.append((name, 4, None, ()))
+        return self
+
+    def transcript(self, transcript_id, strand, exons):
+        self.transcripts.append((transcript_id, strand, exons))
         return self
 
     def build(self):
@@ -77,6 +86,31 @@ class Corpus:
         with pysam.AlignmentFile(self.bam, "wb", header=header) as ofh:
             for read in self.reads:
                 ofh.write(self._alignment(*read))
+
+        self.gtf = str(self.dir / "annot.gtf")
+        with open(self.gtf, "wt") as ofh:
+            for transcript_id, strand, exons in self.transcripts:
+                attrs = 'gene_id "{}"; transcript_id "{}";'.format(
+                    transcript_id, transcript_id
+                )
+                for lend, rend in exons:
+                    print(
+                        "\t".join(
+                            (
+                                CONTIG,
+                                "test",
+                                "exon",
+                                str(lend),
+                                str(rend),
+                                ".",
+                                strand,
+                                ".",
+                                attrs,
+                            )
+                        ),
+                        file=ofh,
+                    )
+
         return self
 
     def _alignment(self, name, flag, blocks, tags):
@@ -123,33 +157,50 @@ def corpus(tmp_path):
             [FORWARD],
             tags=[("ts", "+", "A")],
         )
-        # aligner and splice sites agree
+        # aligner and splice sites agree, and the annotation under it disagrees
         .read("agree_plus", 0, [(6000, 6200), (6600, 7000)], [FORWARD])
         # a secondary alignment is evidence about itself, and is corrected too
         .read("secondary_flip", 16 | 256, [(8000, 8200), (8600, 9000)], [FORWARD])
         # spliced, but the motifs are not canonical in either orientation
         .read("noncanonical", 0, [(10000, 10200), (10600, 11000)], [NONCANONICAL])
-        # one intron votes each way: no majority, so nothing moves
+        # one intron votes each way: no majority from the read itself
         .read(
             "conflicting",
             0,
             [(12000, 12200), (12600, 13000), (13400, 13600)],
             [FORWARD, REVERSE],
         )
-        # nothing spliced: no evidence at all
+        # nothing spliced and nothing annotated: no evidence at all
         .read("unspliced", 16, [(14000, 14500)])
+        # nothing spliced, but it sits in an annotated minus strand exon
+        .read("annot_to_minus", 0, [(16100, 16400)])
+        # the plus transcript has more exons here, the minus one more bases
+        .read("annot_best_by_bases", 0, [(18000, 18300)])
+        # annotated on both strands, equally: still nothing to conclude
+        .read("annot_tie", 0, [(20000, 20100)])
         .unmapped_read("never_placed")
+        # contradicts agree_plus, and must lose to it
+        .transcript("shadowM", "-", [(6000, 6200), (6600, 7000)])
+        .transcript("geneM", "-", [(16000, 16500)])
+        .transcript("manyExonP", "+", [(18000, 18010), (18100, 18110), (18200, 18210)])
+        .transcript("oneExonM", "-", [(18000, 18300)])
+        .transcript("tieP", "+", [(20000, 20100)])
+        .transcript("tieM", "-", [(20000, 20100)])
         .build()
     )
 
 
-def run_fixer(corpus, tmp_path, **kwargs):
-    out_bam = str(tmp_path / "fixed.bam")
+def run_fixer(corpus, tmp_path, gtf=False, flip_tag=fixer.DEFAULT_FLIP_TAG):
+    out_bam = str(tmp_path / ("fixed.annot.bam" if gtf else "fixed.bam"))
+    contig_to_exon_itree = (
+        fixer.build_contig_exon_itrees(corpus.gtf) if gtf else None
+    )
     counters = fixer.fix_bam_strand_assignments(
         corpus.bam,
         out_bam,
         corpus.fasta,
-        kwargs.pop("flip_tag", fixer.DEFAULT_FLIP_TAG),
+        contig_to_exon_itree,
+        flip_tag,
     )
     return out_bam, counters
 
@@ -229,18 +280,106 @@ def test_evidence_that_does_not_decide_leaves_the_record_alone(corpus, tmp_path)
     assert records["noncanonical"].is_reverse is False
     assert records["conflicting"].is_reverse is False
 
-    assert counters["num_records_unchanged_no_canonical_intron"] == 1
-    assert counters["num_records_unchanged_conflicting_introns"] == 1
-    assert counters["num_records_unchanged_unspliced"] == 1
+    assert counters["num_splice_undecided_no_canonical_intron"] == 1
+    assert counters["num_splice_undecided_conflicting_introns"] == 1
+    # unspliced, and the three reads the annotation would speak for
+    assert counters["num_splice_undecided_unspliced"] == 4
     assert counters["num_records_unchanged_unmapped"] == 1
     assert counters["num_records_spliced"] == 6
+    assert counters["num_inferred_by_annot_overlap"] == 0  # no gtf was supplied
+
+
+def test_without_a_gtf_an_unannotated_read_is_simply_uncertain(corpus, tmp_path):
+
+    _, counters = run_fixer(corpus, tmp_path)
+
+    # noncanonical, conflicting, unspliced, annot_to_minus, annot_best_by_bases,
+    # annot_tie
+    assert counters["num_records_strand_uncertain"] == 6
+
+
+# ------------------------------------------------------- the annotation fallback
+
+
+def test_annotation_orients_a_read_its_own_cigar_cannot(corpus, tmp_path):
+
+    out_bam, counters = run_fixer(corpus, tmp_path, gtf=True)
+    records = records_by_name(out_bam)
+
+    annotated = records["annot_to_minus"]
+    assert annotated.is_reverse is True  # aligned forward, geneM is on minus
+    assert annotated.get_tag("XD") == "+"
+    assert counters["num_inferred_by_annot_overlap"] == 2
+    assert counters["num_records_strand_flipped"] == 5  # 3 by motif, 2 by annotation
+
+
+def test_annotation_never_overrules_the_reads_own_splice_motifs(corpus, tmp_path):
+    """shadowM covers agree_plus exactly and is on the other strand.  The read's
+    GT..AG says forward and is direct evidence, so the annotation is not asked."""
+
+    out_bam, counters = run_fixer(corpus, tmp_path, gtf=True)
+    records = records_by_name(out_bam)
+
+    assert records["agree_plus"].is_reverse is False
+    assert not records["agree_plus"].has_tag("XD")
+    assert counters["num_inferred_by_splice_dinucs"] == 4
+
+
+def test_the_best_transcript_is_the_one_sharing_the_most_bases(corpus, tmp_path):
+    """manyExonP puts three exons under this read and oneExonM puts one, but the
+    one covers 301 bases against 33.  Counting exon records would pick plus."""
+
+    out_bam, _ = run_fixer(corpus, tmp_path, gtf=True)
+    record = records_by_name(out_bam)["annot_best_by_bases"]
+
+    assert record.is_reverse is True
+    assert record.get_tag("XD") == "+"
+
+
+def test_annotation_on_both_strands_alike_decides_nothing(corpus, tmp_path):
+
+    out_bam, counters = run_fixer(corpus, tmp_path, gtf=True)
+    record = records_by_name(out_bam)["annot_tie"]
+
+    assert record.is_reverse is False
+    assert not record.has_tag("XD")
+    # noncanonical, conflicting, unspliced, annot_tie
+    assert counters["num_records_strand_uncertain"] == 4
+
+
+def test_a_read_off_every_annotated_contig_is_not_an_error(corpus, tmp_path):
+    """The gtf need not describe the whole bam; an unannotated contig is simply
+    a contig the fallback has nothing to say about."""
+
+    itrees = fixer.build_contig_exon_itrees(corpus.gtf)
+    assert fixer.infer_orient_via_annotation([(100, 200)], itrees.get("chrOther")) == "?"
+
+
+@pytest.mark.parametrize("with_gtf", (False, True))
+def test_every_record_is_accounted_for_exactly_once(corpus, tmp_path, with_gtf):
+    """The outcome counters partition the file, so a record cannot be silently
+    counted twice or not at all."""
+
+    _, counters = run_fixer(corpus, tmp_path, gtf=with_gtf)
+
+    accounted = sum(
+        counters["num_records_{}".format(outcome)] for outcome in fixer.OUTCOMES
+    )
+    assert accounted == counters["num_records"] == len(corpus.reads)
+
+    assert (
+        counters["num_inferred_by_splice_dinucs"]
+        + counters["num_inferred_by_annot_overlap"]
+        == counters["num_records_strand_agree"]
+        + counters["num_records_strand_flipped"]
+    )
 
 
 def test_every_record_is_written_once_in_input_order(corpus, tmp_path):
     """A repair tool that dropped or reordered reads would be a silent library
     edit, so the output is held to the input record for record."""
 
-    out_bam, counters = run_fixer(corpus, tmp_path)
+    out_bam, counters = run_fixer(corpus, tmp_path, gtf=True)
 
     def identities(bam_filename):
         with pysam.AlignmentFile(bam_filename, "rb", check_sq=False) as reader:
@@ -272,6 +411,19 @@ def test_a_paired_record_is_left_alone_rather_than_half_flipped(tmp_path):
     assert counters["num_records_unchanged_paired"] == 1
 
 
+def test_a_gzipped_gtf_is_read_as_annotation(corpus, tmp_path):
+
+    import gzip
+
+    gzipped = str(tmp_path / "annot.gtf.gz")
+    with open(corpus.gtf, "rt") as fh, gzip.open(gzipped, "wt") as ofh:
+        ofh.write(fh.read())
+
+    assert fixer.build_contig_exon_itrees(gzipped) == fixer.build_contig_exon_itrees(
+        corpus.gtf
+    )
+
+
 def test_the_command_line_writes_an_indexed_bam(corpus, tmp_path):
 
     out_bam = str(tmp_path / "cli.bam")
@@ -286,6 +438,8 @@ def test_the_command_line_writes_an_indexed_bam(corpus, tmp_path):
             out_bam,
             "--genome",
             corpus.fasta,
+            "--gtf",
+            corpus.gtf,
         ]
     )
 
@@ -296,3 +450,4 @@ def test_the_command_line_writes_an_indexed_bam(corpus, tmp_path):
 
     assert fetched["flip_to_minus"].is_reverse is True
     assert fetched["flip_to_minus"].get_tag("XD") == "+"
+    assert fetched["annot_to_minus"].is_reverse is True
