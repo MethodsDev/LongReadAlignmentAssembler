@@ -180,58 +180,6 @@ def test_the_floor_preserves_order():
     assert kept == [a, c]
 
 
-# -- an input GTF's TPM attribute is not a read count -------------------------
-
-
-def _model_with_imported_tpm(tpm, read_counts, reference=False):
-    """A model parsed from a GTF carrying a TPM attribute, then quantified.
-
-    Transcript._imported_TPM_val is set by the GTF parser (Transcript.py:1054) and
-    get_read_counts_assigned() returns it in preference to the quantified count, so
-    these two numbers disagree on purpose.
-    """
-    transcript = Transcript("chr1", [[100, 150], [200, 250]], "+")
-    transcript.set_transcript_id("imported")
-    if reference:
-        transcript.set_source_reference_transcript_ids({"reference"})
-    transcript._imported_TPM_val = tpm
-    transcript.set_read_counts_assigned(read_counts)
-    return transcript
-
-
-def test_a_high_imported_tpm_does_not_satisfy_the_read_floor():
-    """A TPM is a rate against a library this run never measured.
-
-    get_read_counts_assigned() would answer 5000.0 here -- the GTF's TPM -- and let a
-    model through a floor it never cleared. The floor asks get_assigned_read_count().
-    """
-    starved = _model_with_imported_tpm(tpm=5000.0, read_counts=0.02)
-    assert starved.get_read_counts_assigned() == 5000.0  # the trap
-    assert starved.get_assigned_read_count() == 0.02  # what the floor sees
-
-    kept = TranscriptFiltering.filter_isoforms_by_min_assigned_reads([starved], 1.0)
-    assert kept == []
-
-
-def test_a_zero_imported_tpm_does_not_veto_a_supported_model():
-    """The converse: a GTF asserting TPM 0 must not delete a model reads support."""
-    supported = _model_with_imported_tpm(tpm=0.0, read_counts=42.0)
-    assert supported.get_read_counts_assigned() == 0.0  # the trap
-    assert supported.get_assigned_read_count() == 42.0
-
-    kept = TranscriptFiltering.filter_isoforms_by_min_assigned_reads([supported], 1.0)
-    assert kept == [supported]
-
-
-def test_the_reference_reprieve_also_ignores_an_imported_tpm():
-    """Same substitution, same defect, so the reprieve reads the same accessor."""
-    starved = _model_with_imported_tpm(tpm=5000.0, read_counts=0.02, reference=True)
-    supported = _model_with_imported_tpm(tpm=0.0, read_counts=42.0, reference=True)
-
-    assert TranscriptFiltering.reference_model_reprieved(starved) is False
-    assert TranscriptFiltering.reference_model_reprieved(supported) is True
-
-
 def test_an_unquantified_model_has_no_assigned_reads():
     """A floor must act on a model quant never reached, not raise or guess.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.35.0"
+VERSION = "v0.35.1"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -1532,7 +1532,7 @@ def main():
     config_group.add_argument(
         "--community_resolution",
         type=float,
-        default=LRAA_Globals.config.get("community_resolution", 1.0),
+        default=LRAA_Globals.config.get("community_resolution", 0.2),
         help="Leiden resolution parameter (higher → more communities).",
     )
     config_group.add_argument(
@@ -1545,7 +1545,7 @@ def main():
     # Storage/backend settings for disk-backed read tracking stores
     config_group.add_argument(
         "--store_backend",
-        default=LRAA_Globals.config.get("store_backend", "auto"),
+        default=LRAA_Globals.config.get("store_backend", "memory"),
         choices=["auto", "lmdb", "sqlite", "memory"],
         help=(
             "storage backend for read tracking (ReadNameStore/MpReadIdStore, default: memory):\n"
@@ -2933,11 +2933,12 @@ def _guide_structure_digest(transcripts, contig_strand):
             _guarded(transcript.has_source_annotated_PolyA),
             _guarded(transcript.get_TSS_read_count),
             _guarded(transcript.get_PolyA_read_count),
-            (
-                _guarded(transcript.get_TPM)
-                if _guarded(transcript.has_annotated_TPM, False)
-                else None
-            ),
+            # Imported-TPM element, excised. It was ever non-None only for an input GTF
+            # carrying a TPM attribute, which LRAA never writes and no longer consumes.
+            # Held as a literal None -- its value for every LRAA-produced input -- so
+            # warm splice-graph cache keys stay byte-identical and no version bump is
+            # needed.
+            None,
         ]
         structures.append([segments, [str(value) for value in boundary]])
 
@@ -3196,7 +3197,7 @@ def _normalize_bam_for_splice_graph(
     # acceptance probabilities -- and so the XW weights derived from them -- describe a
     # coverage level nothing downstream sees. The identity floor is part of that evidence
     # definition too; HiFi mode raises it to 97.
-    norm_min_per_id = LRAA_Globals.config.get("min_per_id", 0) or 0
+    norm_min_per_id = LRAA_Globals.config.get("min_per_id", 80) or 0
 
     # Mapping quality is not simply config["min_mapping_quality"] here. This runs before
     # run_quant_only, which swaps min_mapping_quality_for_final_quant into that key for the
@@ -3369,7 +3370,7 @@ def _normalize_bam_for_splice_graph(
             (
                 "the streaming first pass quantifies against this normalized BAM and the "
                 "second pass streams the full quant BAM"
-                if LRAA_Globals.config.get("stream_reads", False)
+                if LRAA_Globals.config.get("stream_reads", True)
                 else "final quantification reads the quant BAM, not this normalized BAM"
             ),
         )
@@ -4084,11 +4085,11 @@ def _unit_tmp_paths(tmp_root, unit):
 def _maybe_start_monitor(monitor_path, note):
     """Start a ResourceMonitor if enabled; return the monitor or None."""
     try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+        if LRAA_Globals.config.get("resource_monitor_enabled", True):
             mon = ResourceMonitor(
                 monitor_path,
                 interval_sec=float(
-                    LRAA_Globals.config.get("resource_monitor_interval", 2.0)
+                    LRAA_Globals.config.get("resource_monitor_interval", 15.0)
                 ),
                 include_children=bool(
                     LRAA_Globals.config.get("resource_monitor_include_children", True)
@@ -4183,7 +4184,7 @@ def _run_jobs_schedule_and_merge(
     # Start optional main resource monitor
     main_monitor = None
     try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+        if LRAA_Globals.config.get("resource_monitor_enabled", True):
             monitor_path_main = f"{output_prefix}.resources.tsv"
             main_monitor = ResourceMonitor(
                 monitor_path_main,
@@ -4621,7 +4622,7 @@ def _run_jobs_schedule_and_merge(
     # started, so a failure says so. The rescue summary is merged earlier, with
     # the other per-unit artifacts.
     try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+        if LRAA_Globals.config.get("resource_monitor_enabled", True):
             _summarize_contig_resource_logs(output_prefix, jobs)
     except Exception as exc:
         logger.warning("could not summarize per-worker resource logs: %s", exc)
@@ -4843,7 +4844,7 @@ def _contig_job_runner(job):
 
     # optional per-worker resource monitor
     try:
-        if LRAA_Globals.config.get("resource_monitor_enabled", False):
+        if LRAA_Globals.config.get("resource_monitor_enabled", True):
             tmp_root_m = f"__{job['output_prefix']}.contigtmp"
             os.makedirs(tmp_root_m, exist_ok=True)
             tmp_dir_m, tmp_prefix_m = _unit_tmp_paths(tmp_root_m, work_unit)
@@ -4853,7 +4854,7 @@ def _contig_job_runner(job):
             worker_monitor = ResourceMonitor(
                 monitor_path,
                 interval_sec=float(
-                    LRAA_Globals.config.get("resource_monitor_interval", 2.0)
+                    LRAA_Globals.config.get("resource_monitor_interval", 15.0)
                 ),
                 include_children=bool(
                     LRAA_Globals.config.get("resource_monitor_include_children", True)
@@ -5742,7 +5743,7 @@ def _summarize_contig_resource_logs(output_prefix, jobs):
     Writes: <output_prefix>.resources.summary.tsv
     """
     try:
-        if not LRAA_Globals.config.get("resource_monitor_enabled", False):
+        if not LRAA_Globals.config.get("resource_monitor_enabled", True):
             return
         summary_path = f"{output_prefix}.resources.summary.tsv"
         with open(summary_path, "wt") as out:
@@ -7836,7 +7837,7 @@ def build_ME_transcripts(
     logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
     ME_transcripts = lraa_ME_obj.reconstruct_isoforms(single_best_only)
 
-    if not LRAA_Globals.config.get("ME_graph_emits_monoexonic_models", True):
+    if not LRAA_Globals.config.get("ME_graph_emits_monoexonic_models", False):
         # Single-exon reconstruction belongs to the SE graph, which is the one holding
         # the monoexonic reads and their PolyA termini. An isolated exon segment here
         # carries no splicing evidence, so anything built on it is a monoexonic model

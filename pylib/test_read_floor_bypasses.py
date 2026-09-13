@@ -257,28 +257,6 @@ def test_quant_only_semantics_report_every_transcript_asked_about(
     assert _quant_transcript_ids(quant) == {"t_supported", "t_starved"}
 
 
-def test_oversimplify_counts_ignore_an_imported_tpm(monkeypatch):
-    """The accumulator reads assigned counts, not the GTF's TPM attribute.
-
-    _run_oversimplify_best_overlap runs on transcripts parsed straight from the input
-    GTF, so this is the path where an imported TPM is actually present. Reading the
-    running total through get_read_counts_assigned() would start the count at the TPM
-    and hand every mitochondrial model a support figure it never earned.
-    """
-    lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
-    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
-
-    transcript = Transcript("chrM", [[1, 100]], "+")
-    transcript.set_gene_id("g1")
-    transcript.set_transcript_id("t1")
-    transcript._imported_TPM_val = 5000.0
-
-    _run_oversimplify(lraa, (transcript,))
-
-    assert transcript.get_assigned_read_count() == 1.0
-
-
 # -- 2. re-EM -----------------------------------------------------------------
 
 

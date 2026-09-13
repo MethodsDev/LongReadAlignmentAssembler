@@ -347,7 +347,7 @@ class Splice_graph:
         # so the segmentation sees the corrected array.
         if (
             restrict_splice_type == "SE"
-            and LRAA_Globals.config.get("SE_subtract_intronic_background", False)
+            and LRAA_Globals.config.get("SE_subtract_intronic_background", True)
             and SE_read_encapsulation_mask
         ):
             self._subtract_intronic_background(
@@ -533,6 +533,12 @@ class Splice_graph:
                 if b > a:
                     introns.append((a, b))
 
+        # Distinct introns only. An intron shared by N isoforms was appended N
+        # times above, so counting instances would weight the length percentile
+        # -- and the docstring's "80% of introns" -- by isoform multiplicity. The
+        # subtraction below already treats each coordinate pair once.
+        introns = sorted(set(introns))
+
         if not introns:
             return
 
@@ -556,11 +562,7 @@ class Splice_graph:
         contig_len = self._contig_seq_len
         n_introns = n_bases = n_decremented = 0
 
-        seen = set()
         for a, b in introns:
-            if (a, b) in seen:
-                continue
-            seen.add((a, b))
             if b - a + 1 > max_intron_len:
                 continue
             a = max(1, a)
@@ -1058,7 +1060,7 @@ class Splice_graph:
 
         if not reference_transcripts:
             return []
-        if not LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime", False):
+        if not LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime", True):
             return []
 
         ends = set()
@@ -1138,7 +1140,9 @@ class Splice_graph:
         Unrecognised values fall back to deleting, the shipped behaviour: a typo in a
         config override must not silently loosen the filter.
         """
-        mode = LRAA_Globals.config.get("reject_internally_primed_polyA_sites", "always")
+        mode = LRAA_Globals.config.get(
+            "reject_internally_primed_polyA_sites", "spliced_only"
+        )
         # Back-compatible with the boolean this key briefly was.
         if mode is True:
             mode = "always"
@@ -1353,15 +1357,10 @@ class Splice_graph:
                     # and what it is worth is settled at the mint in
                     # _incorporate_TSS_objects.
                     #
-                    # TPM is deliberately not consulted, here or in the MERGE fallback
-                    # above. LRAA writes no TPM attribute into the gtfs these paths
-                    # consume, so has_annotated_TPM() was false for every transcript and
-                    # the branch never executed -- it read as a supported way to weight a
-                    # boundary while doing nothing at all. It was also actively unsafe:
-                    # it and the fallback beside it wrote the SAME key with different
-                    # operators, += against =, so a coordinate named by both a
-                    # TPM-bearing and a non-TPM transcript had its accumulated total
-                    # clobbered, or not, by transcript iteration order alone.
+                    # An input GTF's TPM is deliberately not consulted to weight a
+                    # boundary, here or in the MERGE fallback above: LRAA writes no TPM
+                    # attribute into the gtfs these paths consume, and an imported TPM
+                    # is a rate against a library this run never measured.
                     TSS_evidence_counter[TSS_coord] = LRAA_Globals.config[
                         "min_alignments_define_TSS_site"
                     ]
@@ -1943,7 +1942,7 @@ class Splice_graph:
                     # the default, which is exactly the legacy behaviour.
                     and alt_intron_rel_of_top
                     <= LRAA_Globals.config.get(
-                        "aggregate_splice_boundary_max_rel_support", 1.0
+                        "aggregate_splice_boundary_max_rel_support", 0.2
                     )
                 ):
                     logger.debug(

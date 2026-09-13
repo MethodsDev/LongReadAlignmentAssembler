@@ -22,6 +22,9 @@ class Transcript(GenomeFeature):
         "PolyA",
         "TSS_read_count",
         "PolyA_read_count",
+        # An input GTF's TPM is a rate against a library this run never measured.
+        # It is neither consumed nor re-exported: this run computes its own TPM.
+        "TPM",
     ]
 
     def __init__(self, contig_acc, segment_coordinates_list, orient):
@@ -59,7 +62,6 @@ class Transcript(GenomeFeature):
         self._meta = dict()
 
         # can import features from GTF feature attributes
-        self._imported_TPM_val = None
         self._imported_has_TSS = None  # if parsed info from gtf, set True/False
         self._imported_has_POLYA = None
         # Immutable source annotation provenance used by merge tracking.
@@ -490,18 +492,13 @@ class Transcript(GenomeFeature):
         self._read_counts_assigned = read_counts
 
     def get_read_counts_assigned(self):
-        """Assigned reads, OR the input GTF's TPM attribute if it carried one.
+        """Reads quantification assigned to this model, asserting quant has run.
 
-        Two units behind one name. When an input model was parsed from a GTF with a
-        `TPM` attribute (:1054) that value is returned verbatim, so a caller asking
-        "how many reads" can receive a rate against a library it never saw. Callers
-        comparing against a read COUNT must use get_assigned_read_count() instead;
-        this one is kept as-is because report and quant paths depend on the imported
-        value surfacing here.
+        Differs from get_assigned_read_count() only in the unquantified case: this
+        raises when the count is None, so its callers get a loud failure if they read
+        it before quant, whereas the floor's accessor answers 0.0 for a model quant
+        never reached.
         """
-
-        if self._imported_TPM_val is not None:
-            return self._imported_TPM_val
 
         assert (
             self._read_counts_assigned is not None
@@ -522,17 +519,8 @@ class Transcript(GenomeFeature):
             return 0.0
         return self._read_counts_assigned
 
-    def has_annotated_TPM(self):
-        if self._imported_TPM_val is not None:
-            return True
-        else:
-            return False
-
     def get_TPM(self):
-        if self._imported_TPM_val is not None:
-            return self._imported_TPM_val
-        else:
-            return self.get_expr_fraction() * 1e6
+        return self.get_expr_fraction() * 1e6
 
     def get_expr_fraction(self):
         return self.get_read_counts_assigned() / LRAA_Globals.config["num_total_reads"]
@@ -1073,9 +1061,6 @@ class GTF_contig_to_transcripts:
 
             if "TSS_read_count" in transcript_meta:
                 transcript_obj.set_TSS_read_count(int(transcript_meta["TSS_read_count"]))
-
-            if "TPM" in transcript_meta:
-                transcript_obj._imported_TPM_val = float(transcript_meta["TPM"])
 
             # import InternalPriming flag if present so it will be re-exported via to_GTF_format
             if "InternalPriming" in transcript_meta:

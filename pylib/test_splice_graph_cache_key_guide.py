@@ -150,7 +150,7 @@ def test_no_reference_differs_from_a_reference_over_the_same_structures():
 
 def _parse_guides(tmp_path, attributes, name="g.gtf"):
     """Build guides the way production does -- through the GTF parser -- so the imported
-    TSS/PolyA flags, their support counts and TPM are genuinely set. Constructing a bare
+    TSS/PolyA flags and their support counts are genuinely set. Constructing a bare
     Transcript and calling a setter does not reproduce that state: has_PolyA() reflects
     the imported annotation, not the read-count field.
     """

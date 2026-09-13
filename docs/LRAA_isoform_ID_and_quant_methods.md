@@ -168,6 +168,23 @@ are retained only if supported by ≥1% of junction coverage, distinguishing gen
 retention from unprocessed pre-mRNA. When a reference GTF is provided, known exons and introns
 are integrated to further guide graph construction.
 
+Spliced and monoexonic reconstruction use separate graph builds. The spliced (multi-exon) graph
+is fed only reads whose alignment carries an intron; by default it does not emit single-exon
+models (`ME_graph_emits_monoexonic_models`, off). An intron is a global property of an
+alignment, so a spliced read whose junctions fall outside a given window contributes only exonic
+blocks there, and allowing the spliced graph to emit single-exon models from such isolated
+segments produces over-long monoexonic artifacts that then mask the very reads a monoexonic
+reconstruction needs. Single-exon reconstruction is therefore routed to a separate monoexonic
+graph built over the same locus, which holds the monoexonic reads, the monoexonic confidence
+filters, and the retained internal-priming termini. Before that graph is segmented, a local
+intronic coverage floor is subtracted (`SE_subtract_intronic_background`, on by default):
+monoexonic reads lying wholly within introns form a near-uniform background that would otherwise
+fuse neighbouring features into a single smeared exon segment. Only bases that are intronic in
+every spliced model and exonic in none of them are eligible, so nothing the spliced graph called
+an exon is decremented, and only introns up to `SE_intronic_background_intron_length_pctile`
+(default: the 80th percentile of the locus's distinct intron lengths) are treated, since long
+introns are too heterogeneous for a single background estimate to describe.
+
 After filtering, the refined splice graph is partitioned into weakly connected components, each
 ideally representing a candidate gene locus. In HiFi mode, TSS and PolyA sites undergo
 additional filtering within each component. Sites representing less than 5% of total boundary
@@ -273,6 +290,18 @@ Isoforms with 3' termini within 10 bp of genomic A-rich sequences (≥7 consecut
 flagged as potentially internally primed—artifacts from oligo-dT priming within transcripts
 rather than at genuine polyA tails. Flagged monoexonic isoforms are removed unless they match
 known 3' ends from a provided reference annotation.
+
+Internal priming is checked at two stages. During PolyA-site identification a read-derived
+candidate whose downstream genome is itself A-rich is vetoed before it can become a graph
+vertex. Under the default `reject_internally_primed_polyA_sites` policy (`spliced_only`) this
+deletion is confined to the spliced graph; the monoexonic graph keeps the terminus, because
+deleting the only 3' vertex at a locus leaves overlapping single-exon models no place to end and
+forces them to run on to the next site, absorbing the feature that should have terminated there.
+Judgement of those retained monoexonic termini is deferred to the transcript-level step
+described above, which annotates every emitted 3' end and removes the flagged monoexonic models.
+At either stage a read-derived candidate is spared when the reference annotation independently
+calls a 3' end at that position, since independent evidence of cleavage outranks genomic
+context.
 
 Novel isoforms (those not matching reference annotation) must be supported by at least 2
 uniquely assigned reads.

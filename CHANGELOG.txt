@@ -1,3 +1,52 @@
+v0.35.1
+
+- Config `LRAA_Globals.config.get(key, DEFAULT)` fallbacks reconciled with the
+  authoritative defaults. A class of these reads carried a DEFAULT that no longer matched
+  the value the same key has in LRAA_Globals.config -- a fossilized default left behind
+  when the canonical value later moved. They are inert today, because the module-level
+  config dict is fully populated at import and the fallback is never taken; but three of
+  them -- reject_internally_primed_polyA_sites, SE_subtract_intronic_background,
+  spare_polyA_veto_at_known_3prime -- are members of _SPLICE_GRAPH_CONFIG_KEYS, and the
+  cache token reads that list with a bare `.get(k)`, so a missing key would substitute
+  None and, per that token's own contract, turn a stale splice-graph cache entry into a
+  hit. Corrected to the authoritative values: reject_internally_primed_polyA_sites
+  "always" -> "spliced_only"; SE_subtract_intronic_background False -> True;
+  spare_polyA_veto_at_known_3prime False -> True; aggregate_splice_boundary_max_rel_support
+  1.0 -> 0.2; min_per_id 0 -> 80; stream_reads False -> True;
+  ME_graph_emits_monoexonic_models True -> False; community_resolution 1.0 -> 0.2;
+  store_backend "auto" -> "memory"; resource_monitor_enabled False -> True;
+  resource_monitor_interval 2.0 -> 15.0. The progress-logging `get(key, 0) or 0` reads are
+  left as they are: there the 0 means "disabled if unconfigured", not a stale default.
+  ChunkedRun.py was already immune -- it reads config with bracket access, which raises on
+  a missing key rather than substituting one.
+
+- The SE intronic-background subtraction dedups introns before it takes the length
+  percentile. An intron shared by N monoexonic-graph input transcripts was appended once
+  per transcript, so SE_intronic_background_intron_length_pctile was weighted by isoform
+  multiplicity rather than describing distinct introns. Deduping by coordinate first makes
+  the percentile mean what its name and docstring say; the subtraction loop already
+  treated each coordinate pair once, so its result is unchanged.
+
+- The imported-TPM mechanism is removed. Transcript parsed a `TPM` attribute off an input
+  GTF into _imported_TPM_val, and get_read_counts_assigned() / get_TPM() /
+  has_annotated_TPM() returned it in preference to the quantified value -- a rate against a
+  library the run never measured, standing in for a read count. LRAA writes no TPM into any
+  GTF it emits (no caller passes to_GTF_format(include_TPM=True)), so the value could only
+  ever arrive from an external, non-LRAA GTF, and the read-count decision paths were already
+  hardened against it by the get_assigned_read_count split in v0.34.0. The parser no longer
+  reads it, the accessors no longer consult it, has_annotated_TPM() is gone, and "TPM" is
+  added to Transcript.meta_ignore so an input TPM attribute is neither consumed nor
+  re-exported. get_read_counts_assigned() and get_assigned_read_count() now differ only in
+  the unquantified case -- the former asserts, the latter answers 0.0 for the read floor.
+  The splice-graph cache token's imported-TPM element, which was None for every
+  LRAA-produced input, is held as a literal None so warm cache keys are byte-identical and
+  no SPLICE_GRAPH_CACHE_VERSION bump is needed.
+
+- docs/LRAA_isoform_ID_and_quant_methods.md and docs/methods.md now document the separate
+  spliced (ME) and monoexonic (SE) graph builds, the reject_internally_primed_polyA_sites
+  deferral to transcript filtering, and SE_subtract_intronic_background -- the v0.35.0
+  knobs that shipped without doc coverage.
+
 v0.35.0
 
 - Internal-priming PolyA sites are no longer deleted from the MONOEXONIC splice graph.

@@ -212,6 +212,13 @@ Notable keys include:
   (`pylib/Pretty_alignment.py:330,341`) and dropped the overlong intron edge from the graph
   (`pylib/Splice_graph.py:1515`) while the alignment itself still spanned the distance.
 - Graph scale: `max_path_nodes_per_component`, thresholds controlling junction/exon evidence.
+- Spliced vs. monoexonic graph: `ME_graph_emits_monoexonic_models` (off) keeps single-exon
+  reconstruction out of the spliced graph and in the separate monoexonic graph;
+  `reject_internally_primed_polyA_sites` (`spliced_only`) deletes A-rich read-derived PolyA
+  candidates only in the spliced graph and defers the monoexonic ones to the internal-priming
+  transcript filter; `SE_subtract_intronic_background` (on) subtracts the local intronic
+  coverage floor before the monoexonic graph is segmented, bounded to introns up to
+  `SE_intronic_background_intron_length_pctile`.
 - Assignment/EM: `fraction_read_align_overlap`, `weight_reads_by_3prime_agreement`, `EM_alpha`.
 - Monoexonic isoform confidence: `min_monoexonic_TPM`, plus
   `min_monoexonic_read_span_peak_frac` and `min_monoexonic_adjusted_TPM_ratio`, which require

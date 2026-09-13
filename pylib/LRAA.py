@@ -30,7 +30,6 @@ import CpuBudget
 from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
-import math
 from Quantify import Quantify
 import IsoformReadRescue
 from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
@@ -2546,15 +2545,11 @@ class LRAA:
                 except Exception:
                     pass
             else:
-                # transcript-merge mode: synthesize provenance-aware fake reads
-                # Determine weight (k) for this input transcript
-                if (
-                    input_transcript.has_annotated_TPM()
-                    and LRAA_Globals.LRAA_MODE != "MERGE"
-                ):
-                    k = math.ceil(input_transcript.get_TPM())
-                else:
-                    k = LRAA_Globals.config["min_reads_novel_isoform"]
+                # transcript-merge mode: synthesize provenance-aware fake reads.
+                # Weight (k) is the novel-isoform read floor. An input GTF's TPM is a
+                # rate against a library this run never measured, so it is no longer
+                # consulted to weight a synthesized read.
+                k = LRAA_Globals.config["min_reads_novel_isoform"]
 
                 # Extract provenance
                 try:

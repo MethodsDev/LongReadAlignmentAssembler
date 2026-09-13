@@ -11,20 +11,29 @@ the candidate set.
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "pylib") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "pylib"))
 
+import LRAA_Globals
 import TranscriptFiltering
 from Transcript import Transcript
+
+
+@pytest.fixture(autouse=True)
+def _pin_num_total_reads(monkeypatch):
+    # get_TPM() computes assigned_read_count / num_total_reads * 1e6; pinning the
+    # library size to 1e6 makes a model's TPM equal its assigned read count, so these
+    # cases can set an exact TPM the way the gate reads one.
+    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1_000_000)
 
 
 def _tx(exon_segments, tpm, tid):
     t = Transcript("chr1", exon_segments, "+")
     t.set_transcript_id(tid)
-    # the field get_TPM() honours as an override; Transcript.py sets it the same way
-    # when reading a TPM off an input GTF
-    t._imported_TPM_val = tpm
+    t.set_read_counts_assigned(tpm)
     return t
 
 
