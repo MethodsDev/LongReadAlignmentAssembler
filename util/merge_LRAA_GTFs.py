@@ -83,6 +83,52 @@ def _configure_logging(debug=False):
 _configure_logging(debug=False)
 
 
+# Boundary-support thresholds that Splice_graph applies to TSS/PolyA nodes once they exist:
+# _eliminate_low_support_TSS purges a site below min_TSS_iso_fraction of its component's total
+# boundary support and then walks neighbours purging any alt site at or below
+# max_frac_alt_TSS_from_degradation of a dominant one; _eliminate_low_support_PolyA applies
+# min_PolyA_iso_fraction the same way.
+#
+# Those tests are written for read pileups, where a minority 5' end really is likely to be a
+# degradation product. Merge inputs are annotations: a site's "support" is just how many input
+# models assert that coordinate, so a model rebuilt in a minority of clusters carries a minority
+# boundary and gets its node purged -- after which its path is indistinguishable from an
+# unannotated contained path and _validate_pairwise_incompatibilities absorbs it into any longer
+# model that spans it. That deletes exactly the cell-type-restricted models a merge exists to
+# preserve, so the thresholds are off here unless asked for.
+#
+# Not touched: min_alignments_define_TSS_site / min_alignments_define_polyA_site, which govern
+# whether a site is called at all rather than pruning one already called.
+BOUNDARY_SUPPORT_FILTERS = (
+    "min_TSS_iso_fraction",
+    "min_PolyA_iso_fraction",
+    "max_frac_alt_TSS_from_degradation",
+)
+
+
+def configure_boundary_support_filters(apply_filters):
+    """Zero the boundary-support thresholds unless the caller asked to keep them."""
+
+    if apply_filters:
+        logger.info(
+            "Boundary-support filters left at their defaults: %s",
+            ", ".join(
+                f"{key}={LRAA_Globals.config[key]}" for key in BOUNDARY_SUPPORT_FILTERS
+            ),
+        )
+        return
+
+    for key in BOUNDARY_SUPPORT_FILTERS:
+        LRAA_Globals.config[key] = 0.0
+
+    logger.info(
+        "Boundary-support filters disabled for the merge (%s = 0); "
+        "an annotated TSS/PolyA is kept however few inputs assert it. "
+        "Use --apply_boundary_support_filters to restore them.",
+        ", ".join(BOUNDARY_SUPPORT_FILTERS),
+    )
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -195,6 +241,20 @@ def main():
     )
 
     parser.add_argument(
+        "--apply_boundary_support_filters",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep the TSS/PolyA support thresholds at their defaults during the merge "
+            "(min_TSS_iso_fraction, min_PolyA_iso_fraction, "
+            "max_frac_alt_TSS_from_degradation). They are zeroed by default here because "
+            "merge support counts input models, not reads, so a boundary asserted by a "
+            "minority of inputs is purged and its model is then absorbed into any longer "
+            "model containing it."
+        ),
+    )
+
+    parser.add_argument(
         "--contig",
         type=str,
         default=None,
@@ -227,6 +287,8 @@ def main():
         LRAA_Globals.config["infer_TSS"] = False
         LRAA_Globals.config["infer_PolyA"] = False
         logger.info("LowFi/ONT mode: TSS/PolyA annotations will be ignored during merge. Use --HiFi to enable.")
+
+    configure_boundary_support_filters(args.apply_boundary_support_filters)
 
     LRAA_Globals.LRAA_MODE = "MERGE"
 
