@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 
-"""The two places "every model carries a read" could still be false.
+"""Where "every model carries a read" holds, and the one place it deliberately does not.
 
 min_reads_retain_isoform is applied at the top of run_transcript_assembly, which is
 not everywhere a model can be written:
 
   1. OVERSIMPLIFY. A ref-guided run on an oversimplified contig skips discovery
-     entirely and writes the provided annotation straight to the output GTF
-     (LRAA, the `oversimplify_enabled and not QUANT_ONLY` branch). chrM is
-     oversimplified by default in the single-cell workflow, so this is not a corner
-     case: without a floor there, every annotated chrM model is reported whatever the
-     reads did.
+     entirely and carries the provided annotation into the output GTF (LRAA, the
+     `oversimplify_enabled and not QUANT_ONLY` branch). NO floor applies there, by
+     design: those models come from the input annotation rather than from discovery,
+     so the set must be a property of the annotation and not of coverage. A
+     cluster-guided run merges one gtf per cluster, and merge_LRAA_GTFs carries an
+     oversimplified contig forward verbatim and refuses when its inputs disagree
+     about it -- so a floor here makes a sparsely covered cluster fail the merge,
+     which a 14-cluster chrM run reached with entirely correct inputs.
 
   2. RE-EM. filter_isoforms_by_min_isoform_fraction reruns EM, so the counts the floor
      checked are not the counts it produced -- dropping a competitor redistributes its
      mass and a model that cleared one read on the old abundances can hold less than
-     one on the new ones.
+     one on the new ones. This one IS floored, and the test below holds it to that.
 
 Both are asserted on read counts, not on TPM: see test_reference_retention_read_floor
 for why those are not the same number.
@@ -92,13 +95,12 @@ def oversimplify_models():
     return supported, starved
 
 
-def _run_oversimplify(lraa, models, min_reads=0, quant=None, track=None):
+def _run_oversimplify(lraa, models, quant=None, track=None):
     return lraa._run_oversimplify_best_overlap(
         "chrM", "+", "A" * 600, "unused.bam", None, None,
         list(models),
         quant if quant is not None else StringIO(),
         track if track is not None else StringIO(),
-        min_reads_retain_isoform=min_reads,
     )
 
 
@@ -136,30 +138,64 @@ def test_oversimplify_assigns_nothing_to_an_unread_model(
     assert starved.get_assigned_read_count() == 0.0
 
 
-def test_the_floor_removes_a_zero_read_model_from_quant_and_the_returned_set(
-    monkeypatch, oversimplify_models
-):
+def test_an_unread_model_is_still_carried_forward(monkeypatch, oversimplify_models):
     """chrM is oversimplified by default, so this is the default path for every
-    mitochondrial model. A missing floor here reports them all regardless of support."""
+    mitochondrial model.
+
+    The starved model must survive into both the returned set and quant.expr. Dropping
+    it would make this run's chrM disagree with that of any run whose reads happened to
+    reach it -- and in a cluster-guided pipeline those runs are merged with each other.
+    """
     lraa = _load_lraa_module()
     monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
     quant = StringIO()
-    reported = _run_oversimplify(lraa, (supported, starved), min_reads=1.0, quant=quant)
+    reported = _run_oversimplify(lraa, (supported, starved), quant=quant)
 
-    assert [t.get_transcript_id() for t in reported] == ["t_supported"]
-    assert _quant_transcript_ids(quant) == {"t_supported"}
+    assert {t.get_transcript_id() for t in reported} == {"t_supported", "t_starved"}
+    assert _quant_transcript_ids(quant) == {"t_supported", "t_starved"}
 
 
-def test_the_three_outputs_name_the_same_models(monkeypatch, oversimplify_models):
+def test_the_carried_forward_model_reports_zero_rather_than_nothing(
+    monkeypatch, oversimplify_models
+):
+    """Carried forward is not the same as fabricated support.
+
+    The row exists so the model set is stable across runs; its counts must still say
+    the reads never reached it.
+    """
+    lraa = _load_lraa_module()
+    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
+
+    supported, starved = oversimplify_models
+    quant = StringIO()
+    _run_oversimplify(lraa, (supported, starved), quant=quant)
+
+    rows = {
+        line.split("\t")[1]: line.split("\t")
+        for line in quant.getvalue().splitlines()
+        if line.strip()
+    }
+    assert float(rows["t_starved"][3]) == 0.0, "all_reads must be zero"
+    assert int(rows["t_starved"][2]) == 0, "uniq_reads must be zero"
+    assert float(rows["t_supported"][3]) == 1.0
+
+
+def test_gtf_and_quant_name_the_same_models_and_tracking_is_their_read_subset(
+    monkeypatch, oversimplify_models
+):
     """The invariant a caller-side filter cannot give you.
 
     Filtering only the GTF emission left the dropped models in quant.expr, so the two
-    outputs disagreed about which models exist. The GTF is now written from the return
-    value and quant is written from the same list, so the sets are equal by
-    construction -- this asserts they stay that way, tracking included.
+    outputs disagreed about which models exist. The GTF is written from the return
+    value and quant from the same list, so those two are equal by construction.
+
+    Tracking is keyed on READS, so it names a subset -- and exactly the subset that got
+    one. Asserting equality here would be asserting that no model can be carried
+    forward unread, which is the behaviour this path deliberately has.
     """
     lraa = _load_lraa_module()
     monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
@@ -167,74 +203,12 @@ def test_the_three_outputs_name_the_same_models(monkeypatch, oversimplify_models
 
     supported, starved = oversimplify_models
     quant, track = StringIO(), StringIO()
-    reported = _run_oversimplify(
-        lraa, (supported, starved), min_reads=1.0, quant=quant, track=track
-    )
+    reported = _run_oversimplify(lraa, (supported, starved), quant=quant, track=track)
 
     gtf_ids = {t.get_transcript_id() for t in reported}
-    assert gtf_ids == _quant_transcript_ids(quant) == {"t_supported"}
+    assert gtf_ids == _quant_transcript_ids(quant) == {"t_supported", "t_starved"}
     assert _tracking_transcript_ids(track) == {"t_supported"}
-
-
-def test_a_floor_above_one_withholds_the_tracking_of_a_dropped_model(monkeypatch):
-    """The spool path: a model can be dropped while holding tracking rows.
-
-    At a floor of 1 or less this cannot happen -- a dropped model has zero reads and so
-    wrote nothing -- which is why that path still streams. At 2 a one-read model is
-    dropped from the GTF and quant while having produced a row, and streaming would
-    leave it in tracking alone. Exercises the disk spool, which the default floor never
-    touches.
-    """
-    lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
-    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
-
-    one_read = Transcript("chrM", [[1, 100]], "+")
-    one_read.set_gene_id("g_one")
-    one_read.set_transcript_id("t_one_read")
-
-    quant, track = StringIO(), StringIO()
-    reported = _run_oversimplify(
-        lraa, (one_read,), min_reads=2.0, quant=quant, track=track
-    )
-
-    assert one_read.get_assigned_read_count() == 1.0, "fixture must give it one read"
-    assert reported == []
-    assert _quant_transcript_ids(quant) == set()
-    assert _tracking_transcript_ids(track) == set(), (
-        "a model absent from the GTF and quant must not survive in tracking"
-    )
-
-
-def test_a_floor_above_one_replays_the_tracking_of_a_retained_model(monkeypatch):
-    """The spool must REPLAY, not merely discard.
-
-    Two reads and a floor of 2, so the model is retained on the path where its rows
-    went to the spool rather than straight out. Without this a spool that dropped
-    everything would satisfy the withholding test above and lose every tracking row on
-    any run configured above the default floor.
-    """
-    lraa = _load_lraa_module()
-    monkeypatch.setattr(
-        lraa, "Pretty_alignment_manager", _manager_yielding("read-1", "read-2")
-    )
-    monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 2)
-
-    kept = Transcript("chrM", [[1, 100]], "+")
-    kept.set_gene_id("g_kept")
-    kept.set_transcript_id("t_kept")
-
-    quant, track = StringIO(), StringIO()
-    reported = _run_oversimplify(lraa, (kept,), min_reads=2.0, quant=quant, track=track)
-
-    assert kept.get_assigned_read_count() == 2.0, "fixture must give it two reads"
-    assert [t.get_transcript_id() for t in reported] == ["t_kept"]
-    assert _quant_transcript_ids(quant) == {"t_kept"}
-
-    tracking_rows = [l for l in track.getvalue().splitlines() if l.strip()]
-    assert len(tracking_rows) == 2, "both spooled rows must be replayed"
-    assert {r.split("\t")[5] for r in tracking_rows} == {"read-1", "read-2"}
-    assert {r.split("\t")[1] for r in tracking_rows} == {"t_kept"}
+    assert starved.get_assigned_read_count() == 0.0
 
 
 def test_quant_only_semantics_report_every_transcript_asked_about(
@@ -350,7 +324,11 @@ def test_the_floor_is_wired_into_both_emitting_paths():
         for i in oversimplify_calls
         if "min_reads_retain_isoform=" in "\n".join(lines[i : i + 20])
     ]
-    assert len(passes_floor) == 1, (
-        "exactly the ref-guided caller passes a floor; quant-only must keep its "
-        "row-per-requested-transcript contract. found {}".format(passes_floor)
+    # NEITHER may. An oversimplified contig carries the input annotation forward, so
+    # both callers owe a row per transcript they were handed; a floor on either turns
+    # coverage into membership and makes two runs over the same contig disagree about
+    # which models exist there.
+    assert passes_floor == [], (
+        "no oversimplify caller may apply a read floor: the model set comes from the "
+        "annotation, not from the reads. found {}".format(passes_floor)
     )

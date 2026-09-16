@@ -4997,13 +4997,10 @@ def _contig_job_runner(job):
                 input_transcripts=input_transcripts,
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
-                # This branch bypasses run_transcript_assembly, so it is the only place
-                # these models are gated. chrM is oversimplified by default, so without
-                # this every annotated mitochondrial model is reported whatever the
-                # reads did.
-                min_reads_retain_isoform=LRAA_Globals.config[
-                    "min_reads_retain_isoform"
-                ],
+                # No read floor. An oversimplified contig's models come from the input
+                # annotation and are carried forward whatever the reads did, so that
+                # every run over this contig reports the same set -- which is what
+                # merge_LRAA_GTFs requires of the per-cluster gtfs it carries forward.
             )
             # Emit exactly what was quantified, not the supplied list: the two must name
             # the same models, and taking the GTF from the return value is what makes
@@ -5212,7 +5209,6 @@ def _run_oversimplify_best_overlap(
     input_transcripts,
     ofh_quant,
     ofh_track,
-    min_reads_retain_isoform=0,
 ):
     """Assign each read to the single best-overlapping reference transcript on this contig/strand.
 
@@ -5222,14 +5218,16 @@ def _run_oversimplify_best_overlap(
     - Outputs quant.expr and quant.tracking rows directly (no EM, no multipath graph).
 
     Returns the transcripts it reported, which is what the caller must write to the
-    GTF. min_reads_retain_isoform drops models the reads did not support, and it is
-    applied HERE rather than by the caller so that the quant rows and the GTF describe
-    the same set: filtering only the emission would leave the dropped models in
-    quant.expr and make the two outputs disagree about which models exist.
+    GTF. EVERY supplied transcript is reported, whatever the reads did: on an
+    oversimplified contig the annotation is carried forward, not rediscovered, so the
+    model set is a property of the input annotation and must not vary with coverage.
+    A cluster-guided run merges one gtf per cluster and merge_LRAA_GTFs refuses to
+    carry forward an oversimplified contig whose inputs disagree about it -- so a
+    read floor here turns a sparsely covered cluster into a failed merge.
 
-    Defaults to 0, meaning report everything supplied. That is quant-only's contract --
-    a row per transcript the caller asked about -- so only the ref-guided discovery
-    caller passes a floor.
+    A model no read reached still gets its quant row, carrying zero.
+    Quant-only and ref-guided discovery therefore get the same model set here; the
+    two differ in what they do elsewhere, not in what this path reports.
     """
 
     if not input_transcripts:
@@ -5302,25 +5300,10 @@ def _run_oversimplify_best_overlap(
     # Models some read reproduces exactly, exclusivity aside; see quant_header.
     FSM_read_tids = set()
 
-    # A tracking row names a model that gets reported, and whether this one is reported
-    # is not known until every read has been counted and the floor applied.
-    #
-    # At a floor of 1 or less -- the default -- a model dropped by the floor holds zero
-    # reads and therefore contributed no row, so writing straight out is already
-    # consistent and costs nothing. Above 1 a model can be dropped while holding rows,
-    # and those rows have to be withheld or tracking disagrees with quant and the GTF.
-    #
-    # Spooled to disk rather than held in memory: chrM carries ~13.7M reads through this
-    # path, and one Python tuple per read is on the order of a gigabyte before counting
-    # the strings, on top of a pretty_alignments list already fully materialised.
-    spool_tracking = min_reads_retain_isoform > 1
-    track_spool = (
-        tempfile.TemporaryFile(
-            mode="w+", dir=os.environ.get("LRAA_TMP_DIR") or None
-        )
-        if spool_tracking
-        else None
-    )
+    # Tracking rows are written straight out. No model is withheld on this path, so a
+    # row can never name one that fails to appear in quant.expr and the GTF -- which
+    # is what the retired read floor made possible and what the disk spool here
+    # existed to compensate for.
 
     for pa in pretty_alignments or []:
         segs = pa.get_pretty_alignment_segments()
@@ -5394,42 +5377,8 @@ def _run_oversimplify_best_overlap(
                 "1" if read_is_FSM else "0",
             ]
         )
-        if track_spool is not None:
-            print(f"{tid}\t{track_row}", file=track_spool)
-        else:
-            print(track_row, file=ofh_track)
+        print(track_row, file=ofh_track)
 
-    # The floor, before anything is reported. Applied here rather than by the caller so
-    # that quant.expr and the GTF describe one set of models: filtering only the
-    # emission would leave the dropped models in the quant table and make the two
-    # outputs disagree.
-    if min_reads_retain_isoform > 0:
-        num_pre_floor = len(tx_list)
-        tx_list = [
-            t for t in tx_list if t.get_assigned_read_count() >= min_reads_retain_isoform
-        ]
-        if len(tx_list) < num_pre_floor:
-            logger.info(
-                f"[{contig_acc}{contig_strand}] oversimplify: min assigned reads filter ({min_reads_retain_isoform}) retained {len(tx_list)} / {num_pre_floor} transcripts"
-            )
-        retained_tids = {t.get_transcript_id() for t in tx_list}
-        gene_to_tx = defaultdict(
-            list,
-            {
-                gene_id: [t for t in tlist if t.get_transcript_id() in retained_tids]
-                for gene_id, tlist in gene_to_tx.items()
-            },
-        )
-
-    # Replay the spool, keeping only rows belonging to a reported model, so tracking
-    # names the same transcripts as quant.expr and the GTF.
-    if track_spool is not None:
-        track_spool.seek(0)
-        for spooled in track_spool:
-            spooled_tid, _, row = spooled.partition("\t")
-            if spooled_tid in retained_tids:
-                ofh_track.write(row)
-        track_spool.close()
 
     gene_totals = {}
     for gene_id, tlist in gene_to_tx.items():
@@ -5562,7 +5511,18 @@ def _run_oversimplify_aggregate(
 
     read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))
     if read_count <= 0:
-        # No reads: do not emit a pseudo-transcript for this strand
+        # An empty strand emits nothing, and this is load-bearing beyond the obvious:
+        # a strand-split chunk unit runs BOTH strand jobs against a bam already
+        # filtered to one of them, so "no reads" is also how the opposite-strand job
+        # learns it is out of scope. Emitting unconditionally here puts a '-'
+        # aggregator in the '+' unit's gtf and vice versa -- observed directly.
+        #
+        # The consequence is that a cluster with no reads on a strand carries no
+        # aggregator for it, so the per-cluster gtfs of a cluster-guided de novo run
+        # can disagree about which models exist on an oversimplified contig, and
+        # merge_LRAA_GTFs refuses that. Fixing it needs the unit's strand supplied
+        # rather than inferred -- see the ref-guided path, which has the model set
+        # handed to it and so does not have to guess.
         logger.info(
             f"[{contig_acc}{contig_strand}] oversimplify-aggregate: no reads; emitting nothing"
         )
