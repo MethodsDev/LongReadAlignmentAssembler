@@ -106,8 +106,10 @@ def _report(transcripts, assignment_map):
     exprs = {}
     for line in expr.getvalue().strip().split("\n"):
         f = line.split("\t")
-        # (uniq_reads, uniq_FSM_reads): col 2 and the trailing column
-        exprs[f[1]] = (int(f[2]), int(f[-1]))
+        # (uniq_reads, uniq_FSM_reads, has_FSM_read): col 2, then the last two columns
+        # in that order. Read from the end because the containment columns between them
+        # are emitted only under DEBUG.
+        exprs[f[1]] = (int(f[2]), int(f[-2]), int(f[-1]))
     tracking = []
     for line in track.getvalue().strip().split("\n"):
         if not line:
@@ -201,7 +203,7 @@ def test_uniq_FSM_never_exceeds_uniq_reads():
     """Invariant, not an observation: FSM-unique is a subset of unique."""
     transcripts, amap = _fixture()
     exprs, _ = _report(transcripts, amap)
-    for tid, (uniq, uniq_fsm) in exprs.items():
+    for tid, (uniq, uniq_fsm, _has_fsm) in exprs.items():
         assert uniq_fsm <= uniq, f"{tid}: uniq_FSM_reads {uniq_fsm} > uniq_reads {uniq}"
 
 
@@ -228,8 +230,12 @@ def test_tracking_is_FSM_aggregates_to_the_expr_column():
     # Keyed on the explicit is_unique flag, NOT on how many rows a read produced:
     # that inference is invalid on the --oversimplify paths, which emit one row for a
     # read whose best overlap tied and which is rightly not counted as unique.
-    recomputed = {tid: [0, 0] for tid in exprs}
+    recomputed = {tid: [0, 0, 0] for tid in exprs}
     for row in tracking:
+        # has_FSM_read drops the exclusivity requirement, so it aggregates over every
+        # row, not only the unique ones -- which is the whole point of the column.
+        if row["is_FSM"] == "1":
+            recomputed[row["tid"]][2] = 1
         if row["is_unique"] != "1":
             continue
         recomputed[row["tid"]][0] += 1
@@ -241,3 +247,75 @@ def test_tracking_is_FSM_aggregates_to_the_expr_column():
             f"{tid}: tracking implies {tuple(recomputed[tid])} but expr reports "
             f"{exprs[tid]} -- the aggregate and the per-read flag disagree"
         )
+
+
+def test_has_FSM_read_reports_a_shared_full_length_read():
+    """The case uniq_FSM_reads cannot express, and the reason has_FSM_read exists.
+
+    A read reproducing an isoform's chain while ALSO fitting a competitor leaves
+    uniq_FSM_reads at 0, which reads identically to an isoform assembled out of partial
+    reads that no single read ever traversed. Those are different facts and a caller
+    filtering on read support has to be able to tell them apart.
+    """
+    sg, E, I = _graph()
+    chain_multi = [E[0], I[0], E[1], I[1], E[2]]
+    chain_other = [E[0], I[0], E[1], I[2], E[3]]
+
+    t_multi = _tx(sg, chain_multi, "t_multi", "g1", 5.0)
+    t_other = _tx(sg, chain_other, "t_other", "g1", 2.0)
+
+    # one read, t_other's exact chain, claimed by both isoforms: FSM to t_other and
+    # unique to neither
+    shared_full_length = _mp(sg, chain_other, ["sf1"])
+    t_other.add_multipaths_evidence_assigned([shared_full_length])
+    t_multi.add_multipaths_evidence_assigned([shared_full_length])
+
+    intended = {
+        "t_other": {shared_full_length: 1.0},
+        "t_multi": {shared_full_length: 0.0},
+    }
+    amap = {}
+    for t in (t_multi, t_other):
+        tid = t.get_transcript_id()
+        amap[tid] = {
+            mp: intended[tid].get(mp, 0.0)
+            for mp in t.get_multipaths_evidence_assigned()
+        }
+
+    exprs, _ = _report([t_multi, t_other], amap)
+    uniq, uniq_fsm, has_fsm = exprs["t_other"]
+
+    assert uniq == 0, "the read is shared, so t_other has no exclusive read"
+    assert uniq_fsm == 0, "and therefore no exclusive full splice match either"
+    assert has_fsm == 1, (
+        "a read does reproduce t_other's chain; reporting 0 here would make a model "
+        "observed end to end indistinguishable from one assembled from fragments"
+    )
+
+
+def test_has_FSM_read_is_zero_without_a_full_length_read():
+    """The other side of it: partial reads, however many, are not a full splice match."""
+    sg, E, I = _graph()
+    chain_multi = [E[0], I[0], E[1], I[1], E[2]]
+    prefix_path = [E[0], I[0], E[1]]
+
+    t_multi = _tx(sg, chain_multi, "t_multi", "g1", 5.0)
+    partial = _mp(sg, prefix_path, ["p1", "p2", "p3"])
+    t_multi.add_multipaths_evidence_assigned([partial])
+
+    amap = {
+        "t_multi": {
+            mp: (1.0 if mp is partial else 0.0)
+            for mp in t_multi.get_multipaths_evidence_assigned()
+        }
+    }
+
+    exprs, _ = _report([t_multi], amap)
+    uniq, uniq_fsm, has_fsm = exprs["t_multi"]
+
+    assert uniq == 3, "all three partial reads are exclusively t_multi's"
+    assert uniq_fsm == 0
+    assert has_fsm == 0, (
+        "no read carries the whole chain, and the transcript's own defining multipath "
+        "must not be mistaken for one"
+    )

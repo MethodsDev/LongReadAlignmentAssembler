@@ -2151,6 +2151,12 @@ class Quantify:
 
             num_uniquely_assigned_reads = 0
             num_uniq_FSM_reads = 0
+            # Whether ANY assigned read reproduces the chain, exclusivity aside.
+            # uniq_FSM_reads answers a stricter question and cannot distinguish "no read
+            # traverses this chain" from "reads do, but each also fits another model",
+            # which are different facts about an isoform: the first says the model was
+            # assembled from partial reads, the second that it competes for whole ones.
+            has_FSM_read = False
             transcript_intron_chain = Util_funcs.intron_chain_from_simple_path(
                 transcript.get_simple_path()
             )
@@ -2170,6 +2176,11 @@ class Quantify:
                     Util_funcs.intron_chain_from_simple_path(mp.get_simple_path())
                     == transcript_intron_chain
                 )
+
+                # Set per read below, not here: a transcript's own defining multipath is
+                # registered as its evidence and reproduces its chain trivially while
+                # carrying no read names, so flagging at the multipath would report a
+                # full-length read for an isoform no read reached.
 
                 # get_read_names() returns a set of str, whose iteration order
                 # is randomised per process by PYTHONHASHSEED.  These become one
@@ -2197,6 +2208,9 @@ class Quantify:
 
                     # Always emit read tracking rows for robustness; downstream annotator filters/consumes as needed
                     print("\t".join(tracking_report_info), file=ofh_read_tracking)
+
+                    if mp_is_FSM:
+                        has_FSM_read = True
 
                     if mp_is_unique:
                         num_uniquely_assigned_reads += 1
@@ -2240,6 +2254,7 @@ class Quantify:
 
             report_vals.append(f"{rpm_total_reads:.3f}")
             report_vals.append(f"{num_uniq_FSM_reads}")
+            report_vals.append("1" if has_FSM_read else "0")
 
             report_txt = "\t".join(report_vals)
 

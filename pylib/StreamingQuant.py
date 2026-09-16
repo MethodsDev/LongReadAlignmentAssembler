@@ -499,6 +499,12 @@ class StreamingTotals:
         # whose accounted denominator is assigned plus unassignable reads and would
         # otherwise be smaller than its own numerator.
         self.uniq_FSM_reads = defaultdict(int)
+        # Exclusivity-free companion to uniq_FSM_reads: True once any assigned read
+        # reproduces the isoform's intron chain, whether or not another model accepts
+        # that read. Kept boolean rather than counted because a non-unique read is FSM
+        # to every model whose chain it reproduces, so a count would credit the same
+        # read to several isoforms and invite use as a quantification, which it is not.
+        self.any_FSM_read = defaultdict(bool)
         self.rescue_offered = defaultdict(int)
         self.rescue_assigned = defaultdict(int)
         self.rescue_unassignable = defaultdict(int)
@@ -518,6 +524,8 @@ class StreamingTotals:
             self.gene_frac_sum[gene_id] += frac
             if frac > 0.0:
                 any_positive = True
+            if is_fsm:
+                self.any_FSM_read[transcript_id] = True
             if read_is_unique:
                 self.uniq_reads[transcript_id] += 1
                 if is_fsm:
@@ -954,9 +962,10 @@ def write_expr(
                 )
             )
         vals.append(f"{rpm:.3f}")
-        # Matches quant_header's own trailing order: RPM_total_reads then
-        # uniq_FSM_reads, so this path and report_quant_results stay byte-comparable.
+        # Matches quant_header's own trailing order: RPM_total_reads, uniq_FSM_reads,
+        # has_FSM_read, so this path and report_quant_results stay byte-comparable.
         vals.append(f"{totals.uniq_FSM_reads.get(transcript_id, 0)}")
+        vals.append("1" if totals.any_FSM_read.get(transcript_id) else "0")
         print("\t".join(vals), file=ofh)
 
 

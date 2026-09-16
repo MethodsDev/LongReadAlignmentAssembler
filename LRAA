@@ -4511,6 +4511,10 @@ def _run_jobs_schedule_and_merge(
     # for consumers that read positionally (the benchmarking registry's quant_id_col
     # among them).
     quant_header_final.append("uniq_FSM_reads")
+    # Boolean companion, appended after it: whether ANY assigned read reproduces the
+    # chain. uniq_FSM_reads alone cannot separate "no read traverses this chain" from
+    # "reads do, but each also fits another model".
+    quant_header_final.append("has_FSM_read")
 
     tracking_header_final = [
         "gene_id",
@@ -4913,6 +4917,7 @@ def _contig_job_runner(job):
     # Appended last, matching quant_header_final above: the two must stay identical or
     # the chunked merge reads a header that does not describe its own rows.
     quant_header.append("uniq_FSM_reads")
+    quant_header.append("has_FSM_read")
 
     tracking_header = [
         "gene_id",
@@ -5294,6 +5299,8 @@ def _run_oversimplify_best_overlap(
 
     uniq_read_counts = {}
     uniq_FSM_read_counts = {}
+    # Models some read reproduces exactly, exclusivity aside; see quant_header.
+    FSM_read_tids = set()
 
     # A tracking row names a model that gets reported, and whether this one is reported
     # is not known until every read has been counted and the floor applied.
@@ -5359,6 +5366,8 @@ def _run_oversimplify_best_overlap(
         read_chain = Util_funcs.intron_chain_from_segments(segs)
         tx_chain = Util_funcs.intron_chain_from_segments(tx_exons[tid])
         read_is_FSM = bool(tx_chain) and read_chain == tx_chain
+        if read_is_FSM:
+            FSM_read_tids.add(tid)
         if read_is_FSM and len(candidate_tids) == 1:
             uniq_FSM_read_counts[tid] = uniq_FSM_read_counts.get(tid, 0) + 1
 
@@ -5488,6 +5497,7 @@ def _run_oversimplify_best_overlap(
         row += [
             f"{rpm_total_reads:.3f}",
             f"{int(uniq_FSM_read_counts.get(tid, 0))}",
+            "1" if tid in FSM_read_tids else "0",
         ]
         print("\t".join(row), file=ofh_quant)
 
@@ -5643,6 +5653,9 @@ def _run_oversimplify_aggregate(
         # A multi-exon aggregate here was assembled from spans without per-read chain
         # comparison, so FSM is UNMEASURED and says so rather than reporting 0 --
         # which a consumer could not tell from "measured, none matched".
+        ("0" if num_exons == 1 else "NA"),
+        # has_FSM_read answers the same question with the exclusivity requirement
+        # dropped, so it is measurable exactly where uniq_FSM_reads is.
         ("0" if num_exons == 1 else "NA"),
     ]
     print("\t".join(row), file=ofh_quant)

@@ -126,17 +126,21 @@ def test_report_quant_results_tpm_renormalizes_over_reported_transcripts():
         quant_by_transcript = {row[1]: row for row in rows}
         assert quant_by_transcript["tx1"][0] == "GENE1^gene1"
         assert quant_by_transcript["tx2"][0] == "gene2"
-        # RPM_total_reads is the SECOND-to-last column: uniq_FSM_reads is appended
-        # after it, deliberately last so that every column before it keeps its index.
-        # row[-1] would read the FSM count here.
-        rpm_total_reads_sum = sum(float(row[-2]) for row in rows)
-        uniq_FSM_sum = sum(int(row[-1]) for row in rows)
+        # The three trailing columns, in order: RPM_total_reads, uniq_FSM_reads,
+        # has_FSM_read. Each new one is appended so that every column before it keeps
+        # its index for consumers that read positionally.
+        rpm_total_reads_sum = sum(float(row[-3]) for row in rows)
+        uniq_FSM_sum = sum(int(row[-2]) for row in rows)
+        has_FSM_flags = {row[-1] for row in rows}
 
         assert round(tpm_sum, 3) == 1000000.0
         assert round(rpm_total_reads_sum, 3) == 400000.0
         # The multipath double's chain matches no transcript double's, so no row is a
-        # full splice match. Asserted so the column's presence is covered here too.
+        # full splice match. Asserted so the columns' presence is covered here too.
         assert uniq_FSM_sum == 0
+        # has_FSM_read drops the exclusivity requirement, not the chain match, so it is
+        # 0 here for the same reason -- and must stay a flag rather than a count.
+        assert has_FSM_flags == {"0"}
 
         tracking_rows = [
             line.split("\t") for line in tracking_out.getvalue().strip().splitlines()
