@@ -372,11 +372,23 @@ def split_bam_by_strand(
 
     bamfile_reader = pysam.AlignmentFile(input_bam_filename, "rb")
 
+    # Stamped, not merely implied by the records. A slice with no reads for its
+    # orientation is indistinguishable from a slice that is not about that
+    # orientation unless the file says which it is, and that ambiguity reaches
+    # anything deciding what to emit per strand.
     top_strand_bamfile_writer = pysam.AlignmentFile(
-        top_strand_bam_filename, "wb", template=bamfile_reader
+        top_strand_bam_filename,
+        "wb",
+        header=Util_funcs.stamp_strand_split_header(
+            bamfile_reader.header.to_dict(), "+"
+        ),
     )
     bottom_strand_bamfile_writer = pysam.AlignmentFile(
-        bottom_strand_bam_filename, "wb", template=bamfile_reader
+        bottom_strand_bam_filename,
+        "wb",
+        header=Util_funcs.stamp_strand_split_header(
+            bamfile_reader.header.to_dict(), "-"
+        ),
     )
 
     chrom_seq = None

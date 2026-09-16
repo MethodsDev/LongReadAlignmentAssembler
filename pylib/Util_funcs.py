@@ -928,3 +928,76 @@ def intron_chain_from_segments(segments):
     return tuple(
         (ordered[i - 1][1] + 1, ordered[i][0] - 1) for i in range(1, len(ordered))
     )
+
+
+# A strand-split bam is a bam that HOLDS one orientation, and until it says so the
+# only way to learn that is to find reads in it -- which fails on the case that
+# matters, an orientation a slice genuinely has nothing for. A reader then cannot
+# tell "this file is not about that strand" from "that strand is empty here", and
+# anything deciding what to emit per orientation has to guess.
+#
+# So the splitter stamps it. An @CO line travels with the file through samtools cat
+# (which copies BGZF blocks under the first part's header) and through any copy that
+# preserves the header, and it costs one line.
+STRAND_SPLIT_HEADER_PREFIX = "LRAA_strand_split:"
+
+
+def strand_split_header_comment(contig_strand):
+    """The @CO text stamped into a bam holding exactly one orientation."""
+
+    if contig_strand not in ("+", "-"):
+        raise ValueError(
+            "a strand-split bam is stamped '+' or '-', not {!r}".format(contig_strand)
+        )
+    return STRAND_SPLIT_HEADER_PREFIX + contig_strand
+
+
+def stamp_strand_split_header(template_header, contig_strand):
+    """``template_header`` as a dict, with this orientation's @CO appended.
+
+    Any stamp already present is replaced rather than accumulated, so re-splitting an
+    already-split bam does not leave a file claiming both orientations.
+    """
+
+    header = dict(template_header)
+    comments = [
+        comment
+        for comment in header.get("CO", [])
+        if not str(comment).startswith(STRAND_SPLIT_HEADER_PREFIX)
+    ]
+    comments.append(strand_split_header_comment(contig_strand))
+    header["CO"] = comments
+    return header
+
+
+def declared_strand_of_bam(bam_filename):
+    """The orientation a bam declares it holds, or None if it makes no claim.
+
+    None is the ordinary answer for every bam that did not come from the strand
+    splitter, so a caller treats it as "no restriction" rather than as an error.
+    Unreadable or headerless files answer None too: this informs an optimisation and
+    a scope decision that both have a safe default, and refusing here would turn a
+    stamp-reading convenience into a new way for a run to fail.
+    """
+
+    if not bam_filename:
+        return None
+    try:
+        with pysam.AlignmentFile(bam_filename, "rb", check_sq=False) as reader:
+            comments = reader.header.to_dict().get("CO", [])
+    except Exception:
+        return None
+    declared = None
+    for comment in comments:
+        text = str(comment)
+        if not text.startswith(STRAND_SPLIT_HEADER_PREFIX):
+            continue
+        value = text[len(STRAND_SPLIT_HEADER_PREFIX) :].strip()
+        if value not in ("+", "-"):
+            continue
+        if declared is not None and declared != value:
+            # Both orientations claimed. Refusing to pick is the point: acting on
+            # either would silently drop half the reads of whichever is right.
+            return None
+        declared = value
+    return declared

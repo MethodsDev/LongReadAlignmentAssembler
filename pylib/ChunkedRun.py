@@ -2311,6 +2311,88 @@ def run_extraction(plan, ckpt, outdir, rss_interval):
     return record, manifest
 
 
+def refuse_chunked_denovo_oversimplify(args, chunks):
+    """Refuse a de novo oversimplified contig that was cut into several chunks.
+
+    A de novo oversimplified contig is represented by one aggregate model per strand,
+    minted for the contig rather than discovered from reads. Cut that contig and each
+    chunk mints its own, all carrying the same id -- the extractor names a mini contig
+    after the real one -- so the merge's collision planner prefixes them with their
+    unit ids and the contig comes out as several unit-named aggregates whose identity
+    encodes the cut geometry. Sibling runs then agree only while their cut plans do,
+    and an id like ``chrM_00_plus@g:chrM:+:OVSIMP`` no longer matches the anchored
+    percent.mt pattern that ``g:<contig>:<strand>`` shape exists for.
+
+    Coalescing those back into one model per contig-strand is possible but buys
+    nothing: an oversimplified contig is one nobody wants assembled, which is the
+    opposite of a contig large enough to need cutting. So this is refused rather than
+    supported, and refused HERE -- at planning, before any chunk runs -- so the error
+    names the cause instead of surfacing later as a merge that rejects its inputs.
+
+    Ref-guided is unaffected: its models come from the annotation, which is split
+    across chunks deterministically, so cutting such a contig is sound.
+    """
+
+    wanted = getattr(args, "oversimplify", None)
+    if not wanted or not getattr(args, "discovery", False):
+        return
+    names = {n.strip() for n in re.split(r"[\s,]+", str(wanted)) if n.strip()}
+    if not names:
+        return
+
+    chunks_per_contig = collections.Counter(
+        chunk["chrom"] for chunk in chunks if chunk["chrom"] in names
+    )
+    # has_gtf is the whole run's answer, and de novo is the absence of an annotation
+    # for the contig in question. Without one there is nothing to be guided by and
+    # the aggregate path is the one that will run.
+    annotated = bool(getattr(args, "gtf", None)) and _gtf_contigs(args.gtf)
+    cut = sorted(
+        contig
+        for contig, count in chunks_per_contig.items()
+        if count > 1 and not (annotated and contig in annotated)
+    )
+    if not cut:
+        return
+
+    raise PipelineError(
+        "de novo --oversimplify is not supported for a contig that gets chunked, and "
+        "{} was cut into {}. An oversimplified contig is collapsed to one model per "
+        "strand, so cutting it produces one per chunk instead, named after the chunk. "
+        "Either raise --approx_MB_per_cut so the contig stays whole, supply an "
+        "annotation for it (ref-guided oversimplify chunks safely), or drop it from "
+        "--oversimplify.".format(
+            ", ".join(cut),
+            ", ".join(
+                "{} chunk(s) of {}".format(chunks_per_contig[c], c) for c in cut
+            ),
+        )
+    )
+
+
+def _gtf_contigs(gtf_filename):
+    """Contigs the annotation actually carries records for, or None if unreadable.
+
+    Names the contigs rather than answering "is the file non-empty": the workflow
+    hands every chunk an annotation file even when the caller supplied none, and that
+    file is 17 bytes of ``# no gtf records``. Treating its presence as "annotated"
+    is the mistake that once let chrM fall through to ordinary discovery.
+    """
+
+    try:
+        contigs = set()
+        with open(gtf_filename, "rt") as fh:
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                first, _, _ = line.partition("\t")
+                if first:
+                    contigs.add(first)
+        return contigs
+    except OSError:
+        return None
+
+
 def assemble_chunks(args, timing, sources, selections, extractions):
     """Chunk records in PLANNED order, from manifests the pool produced.
 
@@ -2748,6 +2830,7 @@ def run_prep_concurrently(
         reused_source = 0
     else:
         chunks = assemble_chunks(args, timing, sources, selections, extractions)
+        refuse_chunked_denovo_oversimplify(args, chunks)
         reused_source = sum(
             1 for c in chunks if c["manifest"].get("bam_reused_from_source")
         )

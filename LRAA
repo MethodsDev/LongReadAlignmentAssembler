@@ -2608,7 +2608,6 @@ def main():
         assert (
             restrict_region_lend < restrict_region_rend
         ), f"Error, {args.region} invalid range"
-
         print(
             "{}\t{}\t{}\t{}".format(
                 restricted_contig,
@@ -2617,6 +2616,25 @@ def main():
                 restrict_region_rend,
             )
         )
+
+    # A bam the strand splitter produced says which orientation it holds. Honour that
+    # when nothing more specific was asked for, so the opposite-orientation job is not
+    # enumerated at all against a bam that cannot contain it.
+    #
+    # Without this the job runs, finds nothing, and cannot tell whether it found
+    # nothing because the slice excludes its orientation or because that orientation
+    # is empty here. Anything emitting per orientation -- the de novo oversimplify
+    # aggregate most of all, which exists whether or not reads reached it -- has to
+    # resolve that ambiguity, and read presence cannot.
+    if restrict_to_contig_orient is None:
+        declared_strand = Util_funcs.declared_strand_of_bam(bam_file_for_quant)
+        if declared_strand is not None:
+            restrict_to_contig_orient = declared_strand
+            logger.info(
+                "-bam declares orientation {}; restricting work to that strand".format(
+                    declared_strand
+                )
+            )
 
     if LRAA_Globals.DEBUG:
         if not os.path.exists(prereconstruct_info_dir):
@@ -5510,23 +5528,17 @@ def _run_oversimplify_aggregate(
     )
 
     read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))
-    if read_count <= 0:
-        # An empty strand emits nothing, and this is load-bearing beyond the obvious:
-        # a strand-split chunk unit runs BOTH strand jobs against a bam already
-        # filtered to one of them, so "no reads" is also how the opposite-strand job
-        # learns it is out of scope. Emitting unconditionally here puts a '-'
-        # aggregator in the '+' unit's gtf and vice versa -- observed directly.
-        #
-        # The consequence is that a cluster with no reads on a strand carries no
-        # aggregator for it, so the per-cluster gtfs of a cluster-guided de novo run
-        # can disagree about which models exist on an oversimplified contig, and
-        # merge_LRAA_GTFs refuses that. Fixing it needs the unit's strand supplied
-        # rather than inferred -- see the ref-guided path, which has the model set
-        # handed to it and so does not have to guess.
-        logger.info(
-            f"[{contig_acc}{contig_strand}] oversimplify-aggregate: no reads; emitting nothing"
-        )
-        return
+    # Emitted whether or not any read reached it. The aggregate is a STRUCTURAL
+    # feature of an oversimplified contig -- one per contig and strand, named for
+    # them -- so its existence is a property of the run's scope, not of coverage.
+    # A cluster-guided run merges one gtf per cluster and merge_LRAA_GTFs refuses an
+    # oversimplified contig its inputs disagree about, so a cluster that happens to
+    # have no reads on a strand must still carry that strand's model.
+    #
+    # Safe to do unconditionally only because scope is now explicit: a strand-split
+    # bam declares its orientation in its header and the opposite-strand job is no
+    # longer enumerated against it. While that was inferred from read presence,
+    # emitting here put a '-' aggregate in the '+' unit's gtf.
 
     # Build pseudo-transcript
     from Transcript import Transcript  # local import to avoid circular
@@ -5589,7 +5601,11 @@ def _run_oversimplify_aggregate(
     uniq_reads = int(round(read_count))
     gene_total = read_count
     unique_gene_read_fraction = (uniq_reads / gene_total) if gene_total > 0 else 0.0
-    tpm = 1e6
+    # The only model on this contig and strand holds all of what was counted there,
+    # which is 1e6 parts per million of it -- unless nothing was counted, where the
+    # model exists structurally and measured zero. Reporting 1e6 on an empty strand
+    # would state the opposite of what was observed.
+    tpm = 1e6 if read_count > 0 else 0.0
     rpm_total_reads = t.get_TPM()
     introns_str = t.get_introns_string() if num_exons > 1 else ""
     row = [
