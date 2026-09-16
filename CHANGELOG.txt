@@ -1,3 +1,41 @@
+v0.36.0
+
+- quant.expr gains a `has_FSM_read` column: whether ANY assigned read reproduces the
+  isoform's intron chain, with the exclusivity requirement that `uniq_FSM_reads` carries
+  dropped. `uniq_FSM_reads` alone cannot separate "no read traverses this chain" from
+  "reads do, but each also fits another model", and those are different facts about a
+  model -- the first says it was assembled out of partial reads, the second that it
+  competes for whole ones. Measured on the PBMC cluster-guided data, 2-4% of NIC/NNIC
+  splice chains carry no exclusive full-length read, and the two explanations split
+  roughly evenly between them. Appended last, after `uniq_FSM_reads`, so every existing
+  column keeps its index. Boolean rather than a count because a non-unique read is FSM to
+  every model whose chain it reproduces, so a count would credit one read to several
+  isoforms and invite use as a quantification. Emitted by all four quant.expr writers --
+  the EM path, the streaming path, and both --oversimplify paths, the aggregate one
+  reporting NA for multi-exon models where it reports NA for uniq_FSM_reads already,
+  since that path compares no per-read chains and the value is unmeasured rather than 0.
+  The flag is set per read, not per multipath: a transcript's own defining multipath is
+  registered as its evidence and reproduces its chain trivially while carrying no read
+  names, so flagging at the multipath reports a full-length read for a model no read
+  reached.
+
+- `merge_LRAA_GTFs.py` no longer prunes annotated TSS/PolyA sites. Splice_graph's
+  boundary-support thresholds -- min_TSS_iso_fraction, min_PolyA_iso_fraction,
+  max_frac_alt_TSS_from_degradation -- are written for read pileups, where a minority 5'
+  end is plausibly a degradation product. A merge counter holds input-model assertions
+  instead, so "minority support" means the model was rebuilt in few of the inputs; its
+  boundary node is purged, its path then looks like an unannotated contained path, and
+  containment pruning absorbs it into any longer model that spans it. The thresholds are
+  zeroed before the merge builds a graph, and `--apply_boundary_support_filters` restores
+  them for reproducing earlier runs. Re-merging the PBMC cluster-guided prelim cluster
+  GTFs for chr7 recovers 12 of the 290 init FSM splice chains the stock thresholds drop.
+  The site-definition minimums (min_alignments_define_TSS_site,
+  min_alignments_define_polyA_site) are unchanged: they decide whether a site is called at
+  all rather than pruning one already called.
+
+- The merge_GTFs WDL task reserves 16 GiB rather than 2 GiB.
+
+
 v0.35.1
 
 - Config `LRAA_Globals.config.get(key, DEFAULT)` fallbacks reconciled with the
