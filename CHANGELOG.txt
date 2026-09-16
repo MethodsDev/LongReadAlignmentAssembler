@@ -1,3 +1,45 @@
+v0.36.1
+
+- An oversimplified contig now reports the same models whatever the reads did, which is
+  what `merge_LRAA_GTFs.py` has always required of it. Such a contig is not assembled:
+  ref-guided, its models are the input annotation copied through; de novo, they are one
+  aggregate per strand minted for the contig. Which of them a run emitted was
+  nevertheless decided by coverage -- `min_reads_retain_isoform` on the ref-guided path,
+  and "no reads, emit nothing" on the de novo one -- so the model set varied per run. The
+  merge carries such a contig forward verbatim and refuses inputs that disagree about it,
+  so a cluster-guided run, which merges one gtf per cluster, could fail with entirely
+  correct inputs: measured on the scattered single-cell test, whose 14 clusters emitted 0
+  to 8 chrM transcripts each. The PBMC production runs escape it only by depth -- every
+  cluster covers every chrM gene -- and a thinner library or a rarer cell type reaches the
+  same wall. Both paths now emit their full set; a model no read reached carries a zero
+  quant row rather than being dropped, and the de novo aggregate's TPM reads 0 instead of
+  1e6 on an empty strand. Verified on chrM: 1,611-read and 5-read ref-guided clusters both
+  emit 74 records for 37 transcripts, and de novo clusters with reads on both strands, one
+  strand, and none at all all emit both aggregates and merge cleanly.
+
+- `separate_bam_by_strand.py` stamps the orientation it wrote into each output bam's
+  header (`@CO LRAA_strand_split:<strand>`), and LRAA honours that stamp when nothing more
+  specific was asked for, dropping the opposite-strand job before it is enumerated. A
+  strand-split bam previously said nothing about which orientation it held, so the only
+  way to learn it was to find reads -- which fails on the case that matters, a slice with
+  nothing for its orientation. That ambiguity is why the de novo aggregate could not
+  simply be emitted unconditionally: a strand-split chunk unit runs both strand jobs
+  against a bam filtered to one of them, and emitting regardless put a '-' aggregate in
+  the '+' unit's gtf. The stamp survives `samtools cat`, which copies BGZF blocks under
+  the first part's header, and restamping replaces rather than accumulates. Scope is now
+  stated by the artifact rather than inferred from its contents.
+
+- De novo `--oversimplify` refuses a contig that gets chunked, at planning time. Each
+  chunk mints the same aggregate id -- the extractor names a mini contig after the real
+  one -- so the collision planner prefixes each with its unit id and the contig emerges as
+  several unit-named aggregates whose identity encodes the cut geometry; a prefixed
+  `chrM_00_plus@g:chrM:+:OVSIMP` also stops matching the anchored percent.mt default. A
+  contig nobody wants assembled is the opposite of one large enough to need cutting, so
+  the combination is refused with an error naming the contig and how to proceed rather
+  than supported. Ref-guided is exempt: its models come from the annotation, which splits
+  across chunks deterministically.
+
+
 v0.36.0
 
 - quant.expr gains a `has_FSM_read` column: whether ANY assigned read reproduces the
