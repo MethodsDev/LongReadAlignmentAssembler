@@ -200,6 +200,16 @@ config = {
     "max_soft_clip_at_PolyA": 0,  # max amount of softclipping allowed at the end of an alignment to mark it as a candidate boundary
     "min_soft_clip_PolyA_base_frac_for_conversion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
     #
+    # An untrimmed polyA tail can be ALIGNED rather than soft-clipped: minimap2
+    # in splice mode will happily place it on a genomic A-run kilobases away,
+    # behind a spurious terminal intron.  The soft-clip handling above never sees
+    # those bases, because by then they are an exon.  Such an alignment reports a
+    # 3' end in the wrong place and invents a junction, so the whole alignment is
+    # discarded rather than repaired -- the transcript's remaining reads, which
+    # terminate correctly, are what should define its boundary.
+    "no_exclude_polyA_terminal_segment": False,
+    "max_polyA_terminal_segment_length": 24,  # only a block this short can be a landed tail rather than an exon
+    #
     ####################
     ## Terminal boundary definition
     "terminal_boundary_method": "percentile",  # choices: "extreme" (min/max), "mean", "median", "quartile" (Q1/Q3), "percentile" - method for defining terminal coords when TSS/PolyA not annotated

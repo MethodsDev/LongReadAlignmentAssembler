@@ -404,6 +404,12 @@ def quant_discard_reason(
         return "rdna_masked"
     if has_disqualifying_long_intron(read, max_intron_length):
         return "long_intron"
+    # Cheap CIGAR shape test first; only the small minority of alignments whose
+    # terminal block sits behind a junction reach the sequence.
+    if not LRAA_Globals.config[
+        "no_exclude_polyA_terminal_segment"
+    ] and has_polyA_terminal_exon_segment(read):
+        return "polyA_terminal_segment"
 
     # Absent NM and nM there is nothing to measure, and the extractor keeps the
     # read rather than guessing; identical behaviour here.
@@ -440,6 +446,120 @@ def frac_base_composition(nuc_seq, nuc_base):
     frac_base = counter / len(nuc_seq)
 
     return frac_base
+
+def has_polyA_terminal_exon_segment(
+    read,
+    max_segment_length=None,
+    min_length=None,
+    min_base_frac=None,
+):
+    """True when this alignment's terminal exon segment is a landed polyA tail.
+
+    An untrimmed polyA tail is not always soft-clipped.  In splice mode the
+    aligner can place it on a genomic A-run far downstream, joined by a spurious
+    intron, at which point it is an aligned block and the soft-clip polyA
+    handling in Pretty_alignment never examines it.  The alignment then reports a
+    3' end kilobases past the real one and contributes a junction no transcript
+    has.
+
+    The signature is a SHORT terminal aligned block, behind an N, whose read
+    bases are almost all A -- or almost all T at the left end of a reverse
+    alignment, since SAM stores the sequence genome-forward and a polyA tail
+    reads as polyT there.  This mirrors the base convention already used for
+    soft-clipped tails in Pretty_alignment._set_read_soft_clipping_info.
+
+    Requiring the preceding op to be N is what keeps this narrow: a terminal
+    block that is simply the end of the transcript has no junction behind it and
+    is left alone, which is the large majority of alignments.
+
+    Thresholds default to the config, reusing the same two constants that define
+    "this tail is polyA" for the soft-clip path so the two cannot disagree.
+    """
+
+    if max_segment_length is None:
+        max_segment_length = LRAA_Globals.config["max_polyA_terminal_segment_length"]
+    if min_length is None:
+        min_length = LRAA_Globals.config["min_PolyA_ident_length"]
+    if min_base_frac is None:
+        min_base_frac = LRAA_Globals.config[
+            "min_soft_clip_PolyA_base_frac_for_conversion"
+        ]
+
+    cigar_tuples = read.cigartuples
+    if not cigar_tuples or len(cigar_tuples) < 3:
+        return False
+
+    read_sequence = read.query_sequence
+    if not read_sequence:
+        return False
+
+    M, I, D, N, S, H = 0, 1, 2, 3, 4, 5
+    ALIGNED = (M, 7, 8)  # M, =, X
+    QUERY_CONSUMING = (M, I, S, 7, 8)
+
+    # The terminal exon segment sits at the read's 3' end: the right end of a
+    # forward alignment, the left end of a reverse one.  SAM stores the sequence
+    # genome-forward, so a polyA tail reads as polyT at a reverse alignment's
+    # left end -- the same base convention as the soft-clip path.
+    if read.is_reverse:
+        idx, step, base = 0, 1, "T"
+    else:
+        idx, step, base = len(cigar_tuples) - 1, -1, "A"
+
+    n_ops = len(cigar_tuples)
+
+    # query offset of each cigar op, so a segment's read bases can be recovered
+    # once its op span is known
+    q_offsets = []
+    q = 0
+    for code, length in cigar_tuples:
+        q_offsets.append(q)
+        if code in QUERY_CONSUMING:
+            q += length
+
+    # skip clipping outside the terminal aligned block
+    while 0 <= idx < n_ops and cigar_tuples[idx][0] in (S, H):
+        idx += step
+    if not (0 <= idx < n_ops) or cigar_tuples[idx][0] not in ALIGNED:
+        return False
+
+    # Walk inward accumulating the terminal EXON SEGMENT.  Short indels do not
+    # end an exon, so an aligned block reached across an I or a D belongs to the
+    # same segment; only an N ends it.  Requiring N immediately inside the last
+    # aligned block missed the common `...N 1I 15M` shape entirely.
+    seg_ops = []
+    seg_len = 0
+    i = idx
+    saw_junction = False
+    while 0 <= i < n_ops:
+        code, length = cigar_tuples[i]
+        if code in ALIGNED:
+            seg_ops.append(i)
+            seg_len += length
+        elif code == N:
+            saw_junction = True
+            break
+        elif code in (I, D):
+            pass  # interior to the segment
+        else:
+            break  # S/H: reached the read end without a junction
+        i += step
+
+    # A terminal segment with no junction behind it is simply where the
+    # transcript ends; the soft-clip polyA handling already covers that case.
+    if not saw_junction or not seg_ops:
+        return False
+    if seg_len < min_length or seg_len > max_segment_length:
+        return False
+
+    seg_seq = "".join(
+        read_sequence[q_offsets[j] : q_offsets[j] + cigar_tuples[j][1]]
+        for j in sorted(seg_ops)
+    )
+    if len(seg_seq) < min_length:
+        return False
+
+    return frac_base_composition(seg_seq, base) >= min_base_frac
 
 
 def looks_internally_primed(
