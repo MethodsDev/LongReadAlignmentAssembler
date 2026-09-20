@@ -1,3 +1,54 @@
+v0.37.0
+
+- TSS and PolyA inference are on for every platform, not only HiFi. They were already
+  reachable elsewhere via `--infer_TSS`/`--infer_PolyA`, but the defaults left them off,
+  and turning them on alone changed almost nothing on ONT: the rules that decide whether
+  a read may define a terminus require the WHOLE soft clip to be accounted for, and a raw
+  ONT cDNA clip is adapter plus primer plus remnant. Measured on SGNex MCF7 (raw ONT,
+  chr1/2/12, 470,290 reads), inference alone moved 3 of 2,206 exact GENCODE matches.
+  Two companion rules make it act: `strip_polyA_on_proximal_window` scores the 20 bases
+  of the clip nearest the alignment rather than the whole clip, and
+  `min_proximal_untemplated_G_at_TSS` (3) accepts a G run TOUCHING the alignment,
+  OR'd with the pre-existing whole-clip rule rather than replacing it. Together on that
+  corpus: polyA sites within 10 bp of an annotated 3' end 0 -> 2,339 (240x over a
+  position-shifted background), TSS sites 0 -> 371 of which 109 carry FANTOM5 CAGE
+  support, exact GENCODE matches 2,009 -> 2,206 (+9.8%). All three are inert on
+  already-trimmed input -- the pychopper-processed Sequins/SIRV benchmark produces
+  byte-identical GTFs in both modes across all five datasets -- so they are support for
+  raw cDNA rather than a change in behaviour on the recommended input.
+
+- Single-exon models are gated on 3'-end evidence rather than on whether inference ran.
+  The old rule keyed off `has_TSS() or has_polyA()`, which depends on the pipeline having
+  already turned evidence into a graph vertex, so with inference off it deleted 100% of
+  monoexonic models and with inference on it still dropped models whose evidence never
+  reached a vertex. The gate is now a disjunction over three independent channels: an
+  inferred PolyA site, a genomic PAS hexamer upstream of the model's own 3' end, or a
+  supporting read carrying a polyA tail within 100 bp of the terminus. Measured on
+  MCF7 ONT at stock defaults the tail channel alone retains 23.3% of annotated-SE models
+  against 43.4% recall for the site channel on HiFi, where Kinnex strips tails before
+  alignment and the site channel carries everything -- each platform is served by
+  whichever channel its data actually has. Gate alone: monoexonic precision 23.3% ->
+  32.2% at flat sensitivity.
+
+- Containment credibility applies at both termini. A model contained within a longer one
+  is judged a degradation product by the support ratio at the feature that distinguishes
+  them, tracked per feature kind, so a 5'-truncated model and a 3'-truncated model are
+  each scored at the end that differs rather than only at the polyA side.
+
+- `--no_infer_TSS` and `--no_infer_PolyA` now work in all modes. They were applied only
+  inside the HiFi preset block, which was harmless while the library defaults were False
+  -- outside HiFi the flags had nothing to turn off -- and became a silent no-op in
+  non-HiFi mode the moment the defaults flipped.
+
+- An alignment whose terminal exon segment is entirely a polyA tail is discarded. Such a
+  segment is an alignment artifact: the tail matches genomic A-richness downstream of the
+  true 3' end, and carrying it extends the model past its own terminus.
+
+- Splice-graph cache version 7 -> 8. `max_untemplated_G_at_TSS` was absent from the cache
+  signature, so changing it silently reused a graph built under the previous value; it
+  and the new keys are now part of the signature.
+
+
 v0.36.1
 
 - An oversimplified contig now reports the same models whatever the reads did, which is
