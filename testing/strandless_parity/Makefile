@@ -97,6 +97,20 @@ test_ordering_cost:
 # together, expr and tracking byte-identical, severed symmetric difference 0.  Only
 # the control shifted, and it shifted for a named and deliberate reason.
 #
+# Re-pinned once more 540 -> 538 in the same release, when
+# min_proximal_untemplated_G_at_TSS went from 4 to 3.  That is the 5' mirror of
+# the switch above: a TSS-side clip is stripped when the G run TOUCHING the
+# alignment is at least that long, rather than requiring the whole clip to be a
+# short pure G run.  On this corpus it moves read eligibility by only ~0.02
+# points, but two tracking rows follow from it.  Bisected by config sweep like
+# the one above, and the response is not monotonic in the threshold: floor 0
+# gives 540, floor 3 gives 538, floor 4 gives 540 again.  Only the move to 3
+# shifts this corpus, which is consistent with 3 being the template-switch
+# signature itself rather than a stricter cut of the same population.
+#
+# Same caveat as before: the gate's property held, 538 against 538 with expr and
+# tracking byte-identical and severed symmetric difference 0.
+#
 # The two arms select their cuts from different evidence -- one strand's coverage
 # against both strands' union -- so their cut POSITIONS may differ and different
 # positions sever different reads.  The gate therefore does not demand byte
@@ -111,7 +125,7 @@ test_gate:
 	$(GATE) gate $(INPUTS) $(GEOMETRY) --contig minigenome --HiFi \
 	    --cpu_budget 4 --output_dir __gate --report __gate.json \
 	    --ordering_cost_region 'minigenome+:1014001-1502500' \
-	    --expect expr_rows=555,tracking_rows=540,num_total_reads=2266,baseline_excluded_severed_reads=6
+	    --expect expr_rows=555,tracking_rows=538,num_total_reads=2266,baseline_excluded_severed_reads=6
 
 
 clean:
