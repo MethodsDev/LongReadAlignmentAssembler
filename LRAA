@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.36.1"
+VERSION = "v0.37.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -668,14 +668,14 @@ def main():
           Setting / behavior                  non-HiFi default         --HiFi
           ------------------------------      -----------------------   ------------------------------
           min_per_id                          80                        97
-          infer_TSS                           disabled                  enabled (use --no_infer_TSS to disable)
-          infer_PolyA                         disabled                  enabled (use --no_infer_PolyA to disable)
+          infer_TSS                           enabled                   enabled (use --no_infer_TSS to disable)
+          infer_PolyA                         enabled                   enabled (use --no_infer_PolyA to disable)
           max_exon_spur_length                14                        13
           min_alt_splice_freq                 0.03                      0.005
           min_isoform_fraction                0.01                      0.005
           min_frac_gene_unique_reads          0.01                      0.005
           aggregate_adjacent_splice_boundaries enabled                 disabled (or enabled with --aggregate_adjacent_splice_boundaries)
-          single-exon filtering               standard rules            require TSS or PolyA annotation
+          single-exon filtering               3'-end evidence required  same (3'-end evidence required)
         """
     )
 
@@ -2232,6 +2232,19 @@ def main():
 
     _apply_hifi_config_overrides(LRAA_Globals.config, args)
 
+    # --no_infer_TSS / --no_infer_PolyA apply in BOTH modes.  They used to be read
+    # only inside the HiFi preset, which was harmless while the library defaults
+    # were False: outside HiFi the flags had nothing to turn off.  v0.37.0 turned
+    # both on by default for every platform, at which point a non-HiFi
+    # --no_infer_TSS became a silent no-op -- the flag parsed, was forwarded to
+    # chunked workers by _NEGATED_CONFIG_FLAGS, and changed nothing anywhere.
+    # Applied here, after the preset so it can override it, and before
+    # --config_update so an explicit file still has the last word.
+    if args.no_infer_TSS:
+        LRAA_Globals.config["infer_TSS"] = False
+    if args.no_infer_PolyA:
+        LRAA_Globals.config["infer_PolyA"] = False
+
     # apply generic config overrides last so they take precedence
     _apply_config_update_file(LRAA_Globals.config, args)
 
@@ -2761,7 +2774,7 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 7
+SPLICE_GRAPH_CACHE_VERSION = 8
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     # Ingestion rather than construction: this decides which alignments reach the
@@ -2793,6 +2806,12 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "max_dist_between_alt_TSS_sites",
     "min_alignments_define_TSS_site",
     "max_soft_clip_at_TSS",
+    # Both strip the 5' clip and so decide whether a read may define a TSS at
+    # all (Splice_graph.py:783 compares the residual against max_soft_clip_at_TSS
+    # above). max_untemplated_G_at_TSS was absent here, which meant changing it
+    # silently reused a graph built under the previous value.
+    "max_untemplated_G_at_TSS",
+    "min_proximal_untemplated_G_at_TSS",
     "min_TSS_iso_fraction",
     "TSS_window_read_enrich_len",
     "TSS_window_read_enrich_factor",
@@ -2811,6 +2830,11 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "min_PolyA_iso_fraction",
     "max_soft_clip_at_PolyA",
     "min_soft_clip_PolyA_base_frac_for_conversion",
+    # Tail scoring feeds soft-clip lengths, which place PolyA and TSS vertices,
+    # so these determine the graph exactly as the two entries above do.
+    "polyA_tail_proximal_window",
+    "min_proximal_tail_base_frac",
+    "strip_polyA_on_proximal_window",
 ]
 
 
@@ -7404,6 +7428,34 @@ def run_transcript_assembly(
         transcripts = TranscriptFiltering.annotate_polyA_signal(
             transcripts, contig_seq_str, contig_strand
         )
+
+        ####################################################################
+        # Single-exon models must show some evidence of a real 3' end.
+        #
+        # Placed here, last among the monoexonic gates, because it needs both of
+        # the passes above: internal priming has already removed the A-rich
+        # termini, and the PAS attribute it reads was only just computed. The
+        # three channels it accepts are independent and fail on opposite inputs,
+        # so this is one predicate rather than a platform switch.
+        num_before = len(transcripts)
+        transcripts = (
+            TranscriptFiltering.filter_monoexonic_isoforms_by_terminal_evidence(
+                transcripts,
+                lraa_all_obj._read_name_to_tail_pos,
+                LRAA_Globals.config["max_dist_tail_evidence_to_terminus"],
+            )
+        )
+        if len(transcripts) != num_before:
+            logger.info(
+                f"[{contig_acc}{contig_strand}] monoexonic 3'-end evidence: {num_before} -> {len(transcripts)} transcripts"
+            )
+        if len(transcripts) < 1:
+            logger.info(
+                "-no transcripts on contig {} {} survived monoexonic 3'-end evidence filtering".format(
+                    contig_acc, contig_strand
+                )
+            )
+            return
 
     if LRAA_Globals.DEBUG:
         report_transcript_paths_in_graph(

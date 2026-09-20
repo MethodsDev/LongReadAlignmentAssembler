@@ -26,6 +26,7 @@ class Pretty_alignment:
         "orig_right_soft_clipping",
         "left_soft_clipping",
         "right_soft_clipping",
+        "has_external_tail",
         "read_name",
         "strand",
         "_normalization_weight",
@@ -52,6 +53,9 @@ class Pretty_alignment:
         # - post-trimming
         self.left_soft_clipping = None
         self.right_soft_clipping = None
+        # Whether the clip at the read's 3' end looks like a real polyA tail.
+        # Recorded for filtering only; see _set_read_soft_clipping_info.
+        self.has_external_tail = False
 
         self.read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
         self.strand = self.get_strand(pysam_alignment)
@@ -194,6 +198,7 @@ class Pretty_alignment:
             )
             self.left_soft_clipping = left_soft_clipping
             self.right_soft_clipping = right_soft_clipping
+            self.has_external_tail = False
             return
 
         left_soft_clipped_seq = ""
@@ -207,23 +212,73 @@ class Pretty_alignment:
         ## deal with polyA
         min_PolyA_ident_length = LRAA_Globals.config["min_PolyA_ident_length"]
 
-        if (
-            pysam_alignment.is_forward
-            and right_soft_clipping >= min_PolyA_ident_length
-            and Util_funcs.frac_base_composition(right_soft_clipped_seq, "A")
-            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
-        ):
-            right_soft_clipping = 0
-            logger.debug("Stripped polyA from end of read {}".format(read_name))
+        ## external polyA tail, scored on the ALIGNMENT-PROXIMAL end of the clip
+        #
+        # An ONT cDNA soft clip is tail + adapter + barcode, so averaging A
+        # content over the whole clip dilutes a genuine tail below any useful
+        # threshold. Measured at 400 GENCODE 3' ends on SGNex MCF7 (44,605
+        # reads): the whole-clip test below fires on 1.1% of reads where this
+        # proximal window fires on 65.2%. The tail, when present, is the part of
+        # the clip touching the alignment, so that is the part worth scoring.
+        #
+        # The windows are asymmetric because a reverse alignment stores the
+        # reverse complement: the transcript 3' end is then the LEFT clip, and
+        # its alignment-proximal end is that clip's tail, not its head. Scored
+        # here, before the stripping below zeroes the lengths it depends on.
+        #
+        # Recorded, never acted on here. The stripping decisions keep their own
+        # whole-clip test so that adding this slot moves no PolyA vertex and
+        # leaves the assembly bit-identical.
+        _tail_window = LRAA_Globals.config["polyA_tail_proximal_window"]
+        _tail_min_frac = LRAA_Globals.config["min_proximal_tail_base_frac"]
 
-        elif (
-            pysam_alignment.is_reverse
-            and left_soft_clipping >= min_PolyA_ident_length
-            and Util_funcs.frac_base_composition(left_soft_clipped_seq, "T")
-            >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
-        ):
-            left_soft_clipping = 0
-            logger.debug("Stripped polyT from beginning of read {}".format(read_name))
+        if pysam_alignment.is_forward:
+            if right_soft_clipping >= min_PolyA_ident_length:
+                self.has_external_tail = (
+                    Util_funcs.frac_base_composition(
+                        right_soft_clipped_seq[:_tail_window], "A"
+                    )
+                    >= _tail_min_frac
+                )
+        else:
+            if left_soft_clipping >= min_PolyA_ident_length:
+                self.has_external_tail = (
+                    Util_funcs.frac_base_composition(
+                        left_soft_clipped_seq[-_tail_window:], "T"
+                    )
+                    >= _tail_min_frac
+                )
+
+        # Whether tail evidence is allowed to STRIP the clip, not merely be
+        # recorded. This matters far more than it looks: a read may only define a
+        # polyA site if its residual clip there is <= max_soft_clip_at_PolyA
+        # (0 by default, Splice_graph.py:804). So an unstripped tail SILENCES the
+        # very read that carries the evidence. Measured on MCF7 ONT chr1:1-4Mb,
+        # of 1,729 reads carrying a genuine proximal tail only 27 (1.6%) were
+        # permitted to contribute to a polyA site; the other 98.4% were
+        # disqualified by their own tail. Scoring the strip on the proximal
+        # window instead takes that from 1.1% to 50.7% of all reads.
+        strip_on_proximal = LRAA_Globals.config["strip_polyA_on_proximal_window"]
+
+        if pysam_alignment.is_forward and right_soft_clipping >= min_PolyA_ident_length:
+            whole_clip_polyA = (
+                Util_funcs.frac_base_composition(right_soft_clipped_seq, "A")
+                >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
+            )
+            if whole_clip_polyA or (strip_on_proximal and self.has_external_tail):
+                right_soft_clipping = 0
+                logger.debug("Stripped polyA from end of read {}".format(read_name))
+
+        elif pysam_alignment.is_reverse and left_soft_clipping >= min_PolyA_ident_length:
+            whole_clip_polyT = (
+                Util_funcs.frac_base_composition(left_soft_clipped_seq, "T")
+                >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
+            )
+            if whole_clip_polyT or (strip_on_proximal and self.has_external_tail):
+                left_soft_clipping = 0
+                logger.debug(
+                    "Stripped polyT from beginning of read {}".format(read_name)
+                )
 
         ## deal with untemplated G's at the capped 5' end
         #
@@ -265,9 +320,87 @@ class Pretty_alignment:
                     "Stripped untemplated G's from end of read {}".format(read_name)
                 )
 
+        # Second path: the untemplated G run at the ALIGNMENT-PROXIMAL end of a
+        # long clip.
+        #
+        # The rule above requires the WHOLE clip to be a short pure G run, which
+        # on ONT cDNA is almost never true: the clip is adapter + primer + the G
+        # run, median 80 bp. Measured on SGNex MCF7 chr1/chr2/chr12, only 139 of
+        # 470,290 reads (0.03%) clear it, and driving LRAA's own site caller with
+        # those 139 calls ZERO TSS sites. infer_TSS is not weak on ONT, it is
+        # inert.
+        #
+        # The fear that motivates max_soft_clip_at_TSS = 0 -- that clipped bases
+        # are genuine transcript sequence and the alignment is truncated -- does
+        # not arise here: the clip base touching the alignment matches the
+        # reference in 1 read of 5,452 (0.018%), and two bases out it is 23.6%,
+        # i.e. chance. Local alignment guarantees it; if the next base matched,
+        # minimap2 would have extended.
+        #
+        # THREE is the template-switch signature, not a free constant: reverse
+        # transcriptase adds three non-templated C's on reaching the cap and the
+        # SQK-DCS109 / PCS109 strand-switching primer's GGG anneals to them. A
+        # fourth G is the explainable variant rather than better evidence --
+        # partial annealing, two primer G's on the three C's, leaving one C to
+        # template an extra G. Read the threshold as "the primer's own G count",
+        # not as the number 3; another kit needs another value.
+        #
+        # Between this and the whole-clip rule above the requirement is that the
+        # clip be ACCOUNTED FOR: with the signature present the rest is adapter,
+        # and without it the clip must be nothing but G's.
+        #
+        # The value trades recall against terminal-vertex precision. On MCF7
+        # chr20 against FANTOM5 CAGE caps, >=3 calls 371 sites with 109 cap-backed
+        # and >=4 calls 90 with 63 -- 46 more real starts recovered, 235 more
+        # sites admitted without cap support. See LRAA_Globals for the full
+        # comparison and the background rates.
+        #
+        # OR'd with the rule above, never replacing it: this test alone takes
+        # BT474 PacBio from 1,493 TSS sites to 10.
+        min_prox_G = LRAA_Globals.config["min_proximal_untemplated_G_at_TSS"]
+
+        if min_prox_G > 0:
+            # mirror of the polyA side: for a forward read the 5' end is the LEFT
+            # clip and the bases touching the alignment are its TAIL; a reverse
+            # alignment stores the reverse complement, so the 5' end is the RIGHT
+            # clip and the proximal bases are its HEAD, as C
+            if pysam_alignment.is_forward and left_soft_clipping > 0:
+                run = len(left_soft_clipped_seq.upper()) - len(
+                    left_soft_clipped_seq.upper().rstrip("G")
+                )
+                if run >= min_prox_G:
+                    left_soft_clipping = 0
+                    logger.debug(
+                        "Stripped proximal untemplated G run ({}) from start of read {}".format(
+                            run, read_name
+                        )
+                    )
+
+            elif pysam_alignment.is_reverse and right_soft_clipping > 0:
+                run = len(right_soft_clipped_seq.upper()) - len(
+                    right_soft_clipped_seq.upper().lstrip("C")
+                )
+                if run >= min_prox_G:
+                    right_soft_clipping = 0
+                    logger.debug(
+                        "Stripped proximal untemplated C run ({}) from end of read {}".format(
+                            run, read_name
+                        )
+                    )
+
         # set obj vars (lengths only; do not store sequences to minimize memory)
         self.left_soft_clipping = left_soft_clipping
         self.right_soft_clipping = right_soft_clipping
+
+    def has_external_tail_evidence(self):
+        """Does this read's own 3' clip look like a polyA tail?
+
+        Read through getattr: alignment pickles are keyed on extraction
+        parameters and a cache predating this slot can still be loaded. Such a
+        cache was built without tail scoring, and the honest answer for it is
+        'no evidence recorded' rather than an AttributeError.
+        """
+        return getattr(self, "has_external_tail", False)
 
     def has_soft_clipping(self):
 

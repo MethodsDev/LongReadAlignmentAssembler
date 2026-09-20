@@ -362,6 +362,16 @@ class Transcript(GenomeFeature):
         self._polyA_signal_offset = offset
         self._polyA_signal_evaluated = True
 
+    def has_polyA_signal(self):
+        """Was a canonical PAS hexamer found upstream of this model's 3' end?
+
+        False also when the scan never ran, which is the honest answer for a
+        model that predates annotation rather than one measured and found bare.
+        Callers wanting to tell those apart should read the PAS attribute, which
+        distinguishes "none" from absent.
+        """
+        return getattr(self, "_polyA_signal", None) is not None
+
     def __repr__(self):
 
         text = "Transcript: {} {}-{} [{}] {} {} segs: {}".format(

@@ -134,6 +134,10 @@ class LRAA:
         # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
         # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
         self._read_name_to_span = dict()
+        # Map read_name -> genomic coord of that read's 3' terminus, present only
+        # when its own soft clip there carried polyA tail evidence. Sparse by
+        # design: absence means "no tail seen", not "not measured".
+        self._read_name_to_tail_pos = dict()
         # Rescue candidates, kept split by WHY each read is a candidate rather than as
         # one flat set. The three reasons are gated at different places and answer
         # different questions -- low_perID reads never reached graph mapping at all,
@@ -1380,6 +1384,7 @@ class LRAA:
             # print("{}\t{}".format(read_name, len(grouped_pretty_alignments)))
             paths_list = list()
             path_candidates = list()  # (path, (lend, rend), norm_weight) per pretty_alignment
+            path_tail_positions = list()  # 3' tail coord, or None, parallel to path_candidates
             read_type = None
             read_id_for_weight = None
             if use_XW_weights:
@@ -1428,14 +1433,32 @@ class LRAA:
                     except Exception:
                         aln_weight = 1.0
                     path_candidates.append((path, span, aln_weight))
+                    # Genomic coordinate of this read's own 3' terminus, recorded
+                    # only when the clip there carries polyA tail evidence. Held
+                    # as a position rather than a bare flag so a filter can ask
+                    # whether the evidence sits at a model's terminus or somewhere
+                    # else entirely along it.
+                    tail_pos = None
+                    if (
+                        span is not None
+                        and pretty_alignment.has_external_tail_evidence()
+                    ):
+                        tail_pos = (
+                            span[1]
+                            if pretty_alignment.get_strand() == "+"
+                            else span[0]
+                        )
+                    path_tail_positions.append(tail_pos)
 
             ## not allowing spacers in paths
             paths_list_no_spacers = list()
             candidates_no_spacers = list()
+            tails_no_spacers = list()
             for idx, path in enumerate(paths_list):
                 if SPACER not in path:
                     paths_list_no_spacers.append(path)
                     candidates_no_spacers.append(path_candidates[idx])
+                    tails_no_spacers.append(path_tail_positions[idx])
                 else:
                     num_discard_spacer += 1
                     if LRAA_Globals.config.get(
@@ -1464,6 +1487,9 @@ class LRAA:
                 num_kept += 1
                 if chosen_span is not None:
                     self._read_name_to_span[read_name] = chosen_span
+                chosen_tail_pos = tails_no_spacers[0]
+                if chosen_tail_pos is not None:
+                    self._read_name_to_tail_pos[read_name] = chosen_tail_pos
                 if use_XW_weights:
                     # This record is the read, so its weight is the read's weight; it
                     # supersedes the provisional one registered above.

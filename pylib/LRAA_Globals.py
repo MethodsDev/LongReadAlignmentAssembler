@@ -159,7 +159,44 @@ config = {
     #
     ############
     # TSS config
-    "infer_TSS": False,  # include TSS feature in read path assignments (HiFi enables)
+    # ON for every platform as of v0.37.0, paired with
+    # strip_polyA_on_proximal_window below. The two are coupled: a read carrying
+    # a polyA tail cannot define a polyA site while the tail is still attached,
+    # because max_soft_clip_at_PolyA is 0, so inference without the strip fix is
+    # inert on untrimmed data and the strip fix without inference has no consumer.
+    #
+    # MEASURED on SGNex MCF7 (real untrimmed human ONT, chr1/2/12), which is the
+    # authoritative substrate for ONT decisions here. Counting polyA sites that
+    # land within 10 bp of a GENCODE annotated 3' end, against a background of
+    # the same sites shifted 20-60 kb:
+    #
+    #   inference off (previous default)     0 sites   -- none are built at all
+    #   inference on, strip off            178 accurate of 206   (86.4%, bg 0.5%)
+    #   inference on, strip on           2,339 accurate of 3,222 (72.6%, bg 0.4%)
+    #
+    # 13x more correctly placed sites. The per-site rate falls only because 15x
+    # more sites are admitted; the absolute count of accurate ones rises, and at
+    # 72.6% against a 0.4% background these are overwhelmingly real cleavage
+    # sites rather than noise. Transcript level on the same runs: exact GENCODE
+    # matches 2,009 -> 2,206 (+9.8%), sensitivity flat at 7.0%, precision
+    # 32.2% -> 30.4%.
+    #
+    # The five-dataset Sequins/SIRV benchmark scores this -0.026 median F1strict
+    # and is NOT the basis for the default. Those FASTQs are pychopper-processed,
+    # so an alignment's 3' end is set by upstream trimming rather than by the
+    # molecule, the strip fix is inert on them by construction (whole-clip and
+    # proximal-window agree to within 20 reads in 20,000), and their read
+    # boundaries are dirtier than the spike-in design suggests. A whole-structure
+    # metric that requires exact termini therefore penalises any terminus change
+    # there whether or not it is an improvement.
+    #
+    # infer_TSS was previously along for the ride: with only the whole-clip rule
+    # it moved 3 of 2,206 exact matches on MCF7, because a raw ONT 5' clip is
+    # adapter plus primer and only 0.03% of reads could define a TSS at all.
+    # min_proximal_untemplated_G_at_TSS below is the 5' counterpart to the polyA
+    # strip and closes that: eligibility on raw MCF7 goes 0.02% -> 29.91% and the
+    # run calls 371 TSS sites where it previously called zero.
+    "infer_TSS": True,  # include TSS feature in read path assignments
     "max_dist_between_alt_TSS_sites": 50,
     "min_alignments_define_TSS_site": 5,
     "max_soft_clip_at_TSS": 0,
@@ -179,6 +216,42 @@ config = {
     # ends are internal. The biology justifies stripping; the chromosome-scale chain
     # count did not. 0 disables the stripping and restores the pre-0.18.3 behaviour.
     "max_untemplated_G_at_TSS": 3,
+    #
+    # Companion to the key above, for clips the key above cannot reach. That one
+    # asks whether the WHOLE clip is a short pure G run; this one asks whether the
+    # run of G's TOUCHING THE ALIGNMENT is at least this long, however much
+    # adapter and primer sits beyond it. On ONT cDNA the clip is adapter + primer
+    # + G run at a median of 80 bp, so the whole-clip form essentially never
+    # fires: 139 of 470,290 MCF7 reads, which call ZERO TSS sites.
+    #
+    # 3 because THREE is the template-switch signature, not a free constant:
+    # reverse transcriptase adds three non-templated C's on reaching the cap and
+    # the SQK-DCS109/PCS109 strand-switching primer's GGG anneals to them. A
+    # fourth G is the explainable variant rather than stronger evidence -- it
+    # arises when only two of the primer's G's anneal to the three C's, leaving
+    # one C to template an extra G.
+    #
+    # Together with the key above the rule reads: admit a read when the proximal
+    # run is >= this, whatever follows it, or when the clip is nothing but G's.
+    # One principle -- the whole clip must be ACCOUNTED FOR. With the signature
+    # present, the rest is adapter; without it, there must be no unexplained
+    # sequence at all.
+    #
+    # The threshold trades recall against terminal-vertex precision, and both
+    # ends are defensible. MEASURED on MCF7 chr20 against FANTOM5 CAGE caps
+    # (score>=100), which unlike GENCODE can credit a novel start:
+    #   >= 4  ->  90 sites, 63 cap-backed (70.0%), background 0.00%
+    #   >= 3  -> 371 sites, 109 cap-backed (29.4%), background 0.54%
+    # So 3 recovers 46 more genuine starts and admits 235 more sites without cap
+    # support. Some of those will be MCF7-specific starts FANTOM5 never sampled;
+    # the rising background says not all of them are. A wrong TSS becomes a graph
+    # terminal and truncates every model through the locus, so raise this to 4 if
+    # precision at the terminus matters more than completeness.
+    #
+    # Kit-coupled: it means "the primer's own G count", not the literal 3. A
+    # different strand-switching primer needs a different value. 0 disables it,
+    # leaving only the whole-clip rule above.
+    "min_proximal_untemplated_G_at_TSS": 3,
     "min_TSS_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of TSS-candidate gene reads assigned.
     "TSS_window_read_enrich_len": 50,
     "TSS_window_read_enrich_factor": 5,
@@ -191,7 +264,10 @@ config = {
     #
     ####################
     ## polyA site config
-    "infer_PolyA": False,  # include PolyA site feature in read path assignments (HiFi enables)
+    # ON for every platform as of v0.37.0. This is the switch the MCF7 evidence
+    # in the TSS block above actually argues for -- see there for the numbers;
+    # it must move together with strip_polyA_on_proximal_window below.
+    "infer_PolyA": True,  # include PolyA site feature in read path assignments
     "max_dist_between_alt_polyA_sites": 50,
     "min_alignments_define_polyA_site": 5,
     "min_frac_alignments_define_polyA_site": 0.1,
@@ -199,6 +275,47 @@ config = {
     "min_PolyA_iso_fraction": 0.05,  # during initial TSS definition, require for a 'gene' that a TSS has at least this fraction of polyA-candidate gene reads assigned..
     "max_soft_clip_at_PolyA": 0,  # max amount of softclipping allowed at the end of an alignment to mark it as a candidate boundary
     "min_soft_clip_PolyA_base_frac_for_conversion": 0.8,  # if soft-clipped is at least this frac polyA evidence, then removing soft clipping and marking as candidate polyA read.
+    #
+    # The two keys above decide whether to STRIP a clip and move a boundary; the
+    # two below decide whether a clip counts as EVIDENCE of a real 3' end, and
+    # they are deliberately separate because the questions differ. Stripping is
+    # scored over the whole clip, which is safe only when the clip is nothing but
+    # tail. An ONT cDNA clip is tail + adapter + barcode, so that test fires on
+    # 1.1% of reads at GENCODE 3' ends on SGNex MCF7 where scoring the 20 bases
+    # nearest the alignment fires on 65.2%. Evidence is therefore read from the
+    # proximal window.
+    "polyA_tail_proximal_window": 20,  # bases of the clip nearest the alignment scored for tail evidence
+    "min_proximal_tail_base_frac": 0.8,  # min A (fwd) / T (rev) fraction in that window to call an external tail
+    #
+    # Whether proximal tail evidence may also STRIP the clip, and not merely be
+    # recorded. A read may only define a polyA site when its residual clip there
+    # is <= max_soft_clip_at_PolyA (0 below), so a tail left in place silences
+    # the read that carries the evidence.
+    #
+    # This is SUPPORT FOR RAW cDNA, not a defect in the behaviour above. The
+    # whole-clip test is correct for the input LRAA has assumed: Pychopper and
+    # Kinnex remove adapters and primers but leave the tail, so the clip IS the
+    # tail and scoring all of it works. A raw ONT cDNA clip is tail + adapter +
+    # barcode, and the same test then fires on 1.1% of reads. MEASURED on raw
+    # MCF7: of 1,729 reads carrying a genuine proximal tail, 27 (1.6%) were
+    # allowed to contribute to a polyA site. Enabling this takes eligibility
+    # there from 1.1% to 50.7%.
+    #
+    # Unlike the evidence slot, this MOVES PolyA vertices, so it changes the
+    # assembly and invalidates both the alignment and splice-graph caches.
+    #
+    # On by default, and inert on input that was already trimmed -- which is
+    # what makes it safe to default: it only acts on clips the whole-clip test
+    # misses, and only matters at all when polyA sites are being inferred.
+    # Verified inert on
+    # adapter-trimmed input -- on the pychopper-processed Sequins/SIRV benchmark
+    # the two tests agree to within 20 reads in 20,000 and all five datasets
+    # produce byte-identical GTFs in both modes. Also inert on Kinnex/Iso-Seq,
+    # where 98.4% of reads carry a 3' clip shorter than min_PolyA_ident_length.
+    # Where it does act -- untrimmed ONT with inference on -- it recovers 187
+    # additional exactly-matching transcripts against GENCODE on SGNex MCF7
+    # (+9.3%), for 1.8 points of precision.
+    "strip_polyA_on_proximal_window": True,
     #
     # An untrimmed polyA tail can be ALIGNED rather than soft-clipped: minimap2
     # in splice mode will happily place it on a genomic A-run kilobases away,
@@ -220,6 +337,20 @@ config = {
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
+    # A contained model's terminal feature stops protecting it from absorption
+    # once that feature holds this fraction or less of the strongest feature of
+    # the same type in its gene. Consulted only by the containment decision in
+    # TranscriptFiltering.prune_likely_degradation_products; the site itself is
+    # never deleted, it just no longer confers immunity.
+    #
+    # 0.20 mirrors max_frac_alt_TSS_from_degradation, which asks the same question
+    # of the same kind of evidence. MEASURED on five Arena ONT datasets: polyA
+    # sites that appear only once infer_PolyA is on hold a median 0.06-0.14 of the
+    # gene's strongest site, against exactly 1.000 at annotated 3' ends. The
+    # expression test this sits in front of separates those two classes not at all
+    # (median 0.350 vs 0.349 on LSK109). Set 0 to require exact feature identity,
+    # which is the prior behaviour.
+    "max_frac_alt_terminal_feature_absorbable": 0.20,
     #
     ## read assignment to transcript criteria
     "fraction_read_align_overlap": 0.75,  # min fraction of read length that must overlap the compatible transcript isoform structure
@@ -254,6 +385,29 @@ config = {
     # enough for a multi-exonic model.
     "min_reads_retain_isoform": 1.0,
     "min_monoexonic_TPM": 1.0,
+    # Require a single-exon model to show some evidence of a real 3' end. A
+    # multi-exonic model is vouched for by its intron chain; a monoexonic one has
+    # nothing structural, so we ask whether anything marks where it ends, and
+    # accept ANY of three independent channels: an inferred PolyA site, a genomic
+    # PAS hexamer upstream of the terminus, or an assigned read whose own clip
+    # there looks like a tail.
+    #
+    # This replaces require_terminal_feature_for_monoexonic, which demanded one
+    # SPECIFIC channel (inferred TSS or PolyA) and so measured whether inference
+    # succeeded in that run rather than whether a model is real: it deleted
+    # 99.98% of monoexonic models on A549 ONT and 55% of all output on MCF7,
+    # while 88.7% of HiFi models clear it. The three channels fail on opposite
+    # inputs -- Kinnex strips tails, ONT rarely yields callable PolyA sites -- so
+    # the disjunction is what makes one rule portable across platforms.
+    #
+    # MUST be declared here, not merely read with config.get(): --config_update
+    # drops keys absent from this dict ("ignoring unknown config key"), so an
+    # undeclared key is silently a no-op in every chunked run.
+    "require_terminal_evidence_for_monoexonic": True,
+    # How close a read's polyA tail must sit to a model's 3' terminus to count as
+    # evidence FOR THAT MODEL. A tail further along is evidence about a different
+    # overlapping transcript.
+    "max_dist_tail_evidence_to_terminus": 100,
     # A multi-exonic model is kept only if quantification gave it expression above this
     # value. The default of 0 means "any expression at all": supplied models are
     # selectable from the trellis on their synthetic template read, and this decides

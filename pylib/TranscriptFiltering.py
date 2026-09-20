@@ -462,10 +462,17 @@ def filter_monoexonic_isoforms_by_read_span_coherence(
 def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
     transcripts_retained = list()
-    hifi_mode = LRAA_Globals.config.get("HiFi", False)
-
-    if hifi_mode:
-        logger.info("HiFi mode: single-exon transcripts must have TSS or PolyA annotation to be retained")
+    # Abundance only. Whether a single-exon model shows credible evidence of a
+    # real 3' end is asked separately by
+    # filter_monoexonic_isoforms_by_terminal_evidence, which runs after PAS
+    # annotation because it consults three channels rather than one.
+    #
+    # The rule that used to live here required a TSS or PolyA annotation and was
+    # far too harsh: on A549 ONT it deleted 9,663 of 9,665 monoexonic models
+    # (99.98%), and on MCF7 ONT it removed 55% of all output. It failed because
+    # it measured whether terminal-feature INFERENCE succeeded in that run --
+    # 88.7% of HiFi models carry a feature against ~5% of ONT models, including
+    # MULTI-exonic ones -- rather than whether a model is real.
 
     for transcript in transcripts:
         tpm = transcript.get_TPM()
@@ -477,11 +484,7 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
 
         # regular filter logic
         if transcript.is_monoexonic():
-            # In HiFi mode, require TSS or PolyA annotation for single-exon transcripts
-            if hifi_mode and not (transcript.has_TSS() or transcript.has_PolyA()):
-                # filter out: single-exon without boundary annotation in HiFi mode
-                pass
-            elif tpm < min_TPM:
+            if tpm < min_TPM:
                 # filter out: below TPM threshold
                 pass
             else:
@@ -490,6 +493,112 @@ def filter_monoexonic_isoforms_by_TPM_threshold(transcripts, min_TPM):
         else:
             # keep: multi-exonic
             transcripts_retained.append(transcript)
+
+    return transcripts_retained
+
+
+def _has_tail_bearing_read_at_terminus(transcript, read_name_to_tail_pos, max_dist):
+    """Does any read assigned to this model carry a polyA tail where it ends?
+
+    Position is load-bearing. A tail somewhere along a model is evidence about a
+    DIFFERENT transcript that happens to overlap it; only a tail at this model's
+    own 3' terminus is evidence about this model.
+    """
+
+    if not read_name_to_tail_pos:
+        return False
+
+    transcript_lend, transcript_rend = transcript.get_coords()
+    three_prime_pos = (
+        transcript_rend if transcript.get_orient() == "+" else transcript_lend
+    )
+
+    for mp in transcript.get_multipaths_evidence_assigned():
+        for read_name in mp.get_read_names():
+            tail_pos = read_name_to_tail_pos.get(read_name)
+            if tail_pos is not None and abs(tail_pos - three_prime_pos) <= max_dist:
+                return True
+
+    return False
+
+
+def filter_monoexonic_isoforms_by_terminal_evidence(
+    transcripts, read_name_to_tail_pos, max_tail_dist
+):
+    """Require a single-exon model to show some evidence of a real 3' end.
+
+    A multi-exonic model is vouched for by its intron chain; a monoexonic one has
+    no such structure, so the only question left is whether anything marks where
+    it ends. Three independent channels can answer, and a model is kept if ANY
+    of them does:
+
+      1. an inferred PolyA site on the model,
+      2. a canonical PAS hexamer in the genome upstream of its 3' terminus,
+      3. at least one assigned read whose own soft clip at that terminus looks
+         like a polyA tail.
+
+    The disjunction is the point, not a hedge. The channels fail on opposite
+    inputs, so no single one is portable: Kinnex/Iso-Seq strips tails before
+    alignment, leaving channel 3 dead on PacBio (0.1% of BT474 reads carry any
+    A-run >= 10) while channel 1 is healthy there (83.1% of models); ONT cDNA is
+    the mirror image, with tails on 51% of reads and PolyA sites inferred on
+    almost none. Demanding evidence rather than a PARTICULAR KIND of evidence is
+    what lets one rule behave the same way on both, with no platform switch.
+
+    Deliberately NOT a channel: overlap with an annotated exon, as bambu uses.
+    Measured on 4,786 restored MCF7 monoexons that predicate removes 129 of 129
+    models matching an annotated single-exon transcript while keeping 70% of the
+    antisense class -- it is anti-correlated with quality here, because it is
+    built to answer "is this redundant with the annotation" for novel-discovery
+    gating, not "is this real". It also cannot fire at all in de novo mode.
+    """
+
+    if not LRAA_Globals.config.get("require_terminal_evidence_for_monoexonic", True):
+        return transcripts
+
+    transcripts_retained = list()
+    num_filtered = 0
+    kept_by = defaultdict(int)
+
+    for transcript in transcripts:
+        if not transcript.is_monoexonic():
+            transcripts_retained.append(transcript)
+            continue
+
+        if reference_model_reprieved(transcript):
+            transcripts_retained.append(transcript)
+            continue
+
+        reason = None
+        if transcript.has_PolyA():
+            reason = "inferred_polyA_site"
+        elif transcript.has_polyA_signal():
+            reason = "genomic_PAS_motif"
+        elif _has_tail_bearing_read_at_terminus(
+            transcript, read_name_to_tail_pos, max_tail_dist
+        ):
+            reason = "read_tail_at_terminus"
+
+        if reason is not None:
+            kept_by[reason] += 1
+            transcripts_retained.append(transcript)
+            continue
+
+        num_filtered += 1
+        logger.debug(
+            "FILTERING monoexonic transcript %s: no inferred PolyA, no PAS motif, and "
+            "no supporting read with a polyA tail within %d bp of its 3' end",
+            transcript.get_transcript_id(),
+            max_tail_dist,
+        )
+
+    if num_filtered or kept_by:
+        logger.info(
+            "-monoexonic 3'-end evidence: filtered %d, kept %d (%s)",
+            num_filtered,
+            sum(kept_by.values()),
+            ", ".join(f"{k}={v}" for k, v in sorted(kept_by.items())),
+        )
 
     return transcripts_retained
 
@@ -1063,6 +1172,61 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
             ),
         )
 
+        # Is a contained model's distinguishing terminal feature CREDIBLE, or is it
+        # a degradation rung?
+        #
+        # Cases 2 and 3 below only subsume a contained model when it SHARES the
+        # container's terminal feature. Anything with a feature of its own falls
+        # through to the expression test -- which MEASURED on LSK109/RNA002/RNA004
+        # carries no information at all about whether a contained model is real
+        # (median frac 0.350 vs 0.349, 0.399 vs 0.464, 0.396 vs 0.396 for artifact
+        # vs true). So every 3'-truncation currently survives on a test that cannot
+        # see it.
+        #
+        # Dominance can. MEASURED across five ONT datasets, a polyA site that only
+        # appears once infer_PolyA is on holds a median 0.06-0.14 of the strongest
+        # called site in its gene, against exactly 1.000 for sites at an annotated
+        # 3' end. A rung that weak is not evidence that this model ends somewhere
+        # different; it is the tail of the dominant site's decay ladder.
+        #
+        # Deliberately NOT "the container lacks a feature of this type". That
+        # describes the same 26-of-34 population here, but it equally describes a
+        # genuine shorter APA isoform nested in a longer one -- and on real human
+        # data roughly half of these models sit at a canonical AATAAA/ATTAAA, so a
+        # structural absence test would delete real alternative polyadenylation.
+        # Sequins has no APA and therefore cannot show that cost.
+        #
+        # The site itself is untouched; it simply stops conferring immunity.
+        def _feature_support(feature_id):
+            if feature_id is None or splice_graph is None:
+                return None
+            try:
+                obj = splice_graph.get_node_obj_via_id(feature_id)
+            except Exception:
+                return None
+            return obj.get_read_support() if obj is not None else None
+
+        dominant_support = {}
+        for _t in transcript_list:
+            _p = _t.get_simple_path()
+            _, _tss, _pa = SPU.trim_TSS_and_PolyA(_p, contig_strand)
+            for _kind, _fid in (("TSS", _tss), ("PolyA", _pa)):
+                _s = _feature_support(_fid)
+                if _s is not None:
+                    dominant_support[_kind] = max(dominant_support.get(_kind, 0), _s)
+
+        max_frac_rung = LRAA_Globals.config["max_frac_alt_terminal_feature_absorbable"]
+
+        def _is_degradation_rung(feature_id, kind):
+            """True when this feature is too weak to distinguish a model from its container."""
+            if max_frac_rung <= 0 or feature_id is None:
+                return False
+            support = _feature_support(feature_id)
+            dom = dominant_support.get(kind, 0)
+            if support is None or dom <= 0:
+                return False
+            return (support / dom) <= max_frac_rung
+
         transcript_prune_as_degradation = set()
         for i in range(len(transcript_list)):
             transcript_i = transcript_list[i]
@@ -1144,9 +1308,11 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 ## variables of interest: (in LRAA_Globals.config[]
                 #  TSS:
                 #    - "max_frac_alt_TSS_from_degradation"
-                #    - "min_frac_gene_alignments_define_TSS_site"
+                #    - "min_TSS_iso_fraction"
                 #  PolyA:
-                #    - "min_frac_alignments_define_polyA_site"
+                #    - "min_PolyA_iso_fraction"
+                #  both ends:
+                #    - "max_frac_alt_terminal_feature_absorbable"
 
                 paths_indicate_containment = SPU.path_A_contains_path_B(
                     i_path_trimmed, j_path_trimmed
@@ -1173,27 +1339,37 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         )
                         subsume_J = True
 
-                    # no TSS on j and shares same PolyA as i - prune as redundant 5' truncation
+                    # no TSS on j, and its PolyA does not distinguish it from i --
+                    # either shared outright, or too weak to be more than a rung on
+                    # i's decay ladder. Prune as a redundant 5' truncation.
                     elif (
                         j_TSS_id is None
                         and j_polyA_id is not None
-                        and j_polyA_id == i_polyA_id
+                        and (
+                            j_polyA_id == i_polyA_id
+                            or _is_degradation_rung(j_polyA_id, "PolyA")
+                        )
                     ):
                         logger.debug(
-                            "compatible/contained {} being pruned as lacking TSS and sharing PolyA with {}".format(
+                            "compatible/contained {} being pruned as lacking TSS with no distinguishing PolyA vs {}".format(
                                 transcript_j_id, transcript_i_id
                             )
                         )
                         subsume_J = True
 
-                    # no PolyA on j and shares same TSS as i - prune as redundant 3' truncation
+                    # mirror of the above at the 5' end: no PolyA on j, and its TSS
+                    # does not distinguish it from i. Prune as a redundant 3'
+                    # truncation.
                     elif (
                         j_polyA_id is None
                         and j_TSS_id is not None
-                        and j_TSS_id == i_TSS_id
+                        and (
+                            j_TSS_id == i_TSS_id
+                            or _is_degradation_rung(j_TSS_id, "TSS")
+                        )
                     ):
                         logger.debug(
-                            "compatible/contained {} being pruned as lacking PolyA and sharing TSS with {}".format(
+                            "compatible/contained {} being pruned as lacking PolyA with no distinguishing TSS vs {}".format(
                                 transcript_j_id, transcript_i_id
                             )
                         )

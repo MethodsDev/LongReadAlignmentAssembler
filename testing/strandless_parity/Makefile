@@ -80,6 +80,23 @@ test_ordering_cost:
 # 0.  Only the absolute control was stale, and it had been since c940609b, which is to
 # say since before `make test` was last run against this target.
 #
+# Re-pinned again 544 -> 540 in v0.37.0, bisected by config sweep to
+# strip_polyA_on_proximal_window (gate run with each new default flipped in turn:
+# monoexon gate off 540, containment credibility off 540, strip off 544).  That
+# switch lets a polyA tail be stripped when the 20 bases of the clip nearest the
+# alignment are A-rich, rather than requiring the WHOLE clip to be; an unstripped
+# tail leaves residual soft clipping, and max_soft_clip_at_PolyA is 0, so the read
+# carrying the tail was barred from defining the polyA site it evidences.
+#
+# Note this corpus contradicts the convenient assumption that the switch is inert
+# on PacBio.  It is inert on Kinnex/Iso-Seq, where the tails are stripped upstream
+# and 98.4% of reads carry a 3' clip below min_PolyA_ident_length, but pacbio.PBLR
+# retains clips long enough to qualify, so four tracking rows move here.
+#
+# As with the previous re-pin, the gate's own property held: both arms moved
+# together, expr and tracking byte-identical, severed symmetric difference 0.  Only
+# the control shifted, and it shifted for a named and deliberate reason.
+#
 # The two arms select their cuts from different evidence -- one strand's coverage
 # against both strands' union -- so their cut POSITIONS may differ and different
 # positions sever different reads.  The gate therefore does not demand byte
@@ -94,7 +111,7 @@ test_gate:
 	$(GATE) gate $(INPUTS) $(GEOMETRY) --contig minigenome --HiFi \
 	    --cpu_budget 4 --output_dir __gate --report __gate.json \
 	    --ordering_cost_region 'minigenome+:1014001-1502500' \
-	    --expect expr_rows=555,tracking_rows=544,num_total_reads=2266,baseline_excluded_severed_reads=6
+	    --expect expr_rows=555,tracking_rows=540,num_total_reads=2266,baseline_excluded_severed_reads=6
 
 
 clean:

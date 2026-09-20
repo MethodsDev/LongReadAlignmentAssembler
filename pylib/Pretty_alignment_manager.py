@@ -643,7 +643,15 @@ class Pretty_alignment_manager:
             "min_soft_clip_PolyA_base_frac_for_conversion": config[
                 "min_soft_clip_PolyA_base_frac_for_conversion"
             ],
+            "polyA_tail_proximal_window": config["polyA_tail_proximal_window"],
+            "min_proximal_tail_base_frac": config["min_proximal_tail_base_frac"],
+            "strip_polyA_on_proximal_window": config[
+                "strip_polyA_on_proximal_window"
+            ],
             "max_untemplated_G_at_TSS": config["max_untemplated_G_at_TSS"],
+            "min_proximal_untemplated_G_at_TSS": config[
+                "min_proximal_untemplated_G_at_TSS"
+            ],
             "try_correct_alignments": correcting,
             "min_softclip_realign_test": (
                 config["min_softclip_realign_test"] if correcting else None

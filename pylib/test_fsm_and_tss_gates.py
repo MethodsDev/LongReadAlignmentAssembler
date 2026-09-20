@@ -182,10 +182,37 @@ def test_a_mixed_clip_is_not_the_cap_signature(restore_config):
 
 
 def test_a_run_longer_than_allowed_is_not_stripped(restore_config):
+    """The cap in isolation. min_proximal_untemplated_G_at_TSS is disabled here
+    because it would admit this clip by the other path: a 3-G run clears the
+    default floor of 3 whatever the cap says. The cap still binds on its own for
+    runs shorter than that floor, which is what this pins."""
+    LRAA_Globals.config["min_proximal_untemplated_G_at_TSS"] = 0
     LRAA_Globals.config["max_untemplated_G_at_TSS"] = 2
     assert _clips(_alignment("3S100M", "GGG" + "A" * 100))[0] == 3
     LRAA_Globals.config["max_untemplated_G_at_TSS"] = 3
     assert _clips(_alignment("3S100M", "GGG" + "A" * 100))[0] == 0
+
+
+def test_the_proximal_run_admits_past_the_cap(restore_config):
+    """The two rules are OR'd, and the second is not bounded by the first.
+
+    Three G's are the template-switch signature -- reverse transcriptase adds
+    three non-templated C's at the cap and the strand-switching primer's GGG
+    anneals to them -- so a run of at least that many is accepted however long
+    the clip is and whatever follows the run. The whole-clip cap continues to
+    govern only runs BELOW the floor, where the signature is absent and the
+    clip must therefore be nothing but G's."""
+    LRAA_Globals.config["max_untemplated_G_at_TSS"] = 2
+    LRAA_Globals.config["min_proximal_untemplated_G_at_TSS"] = 3
+
+    # past the cap, but the run carries the signature: admitted
+    assert _clips(_alignment("5S100M", "GGGGG" + "A" * 100))[0] == 0
+    # run followed by adapter, which the whole-clip rule can never reach
+    assert _clips(_alignment("8S100M", "TTCGAGGG" + "A" * 100))[0] == 0
+    # below the floor AND not a pure clip: neither rule applies
+    assert _clips(_alignment("8S100M", "TTCGATGG" + "A" * 100))[0] == 8
+    # reverse reads take the complement at the other end
+    assert _clips(_alignment("100M5S", "A" * 100 + "CCCCC", is_reverse=True))[1] == 0
 
 
 # --------------------------------------------------------------------------

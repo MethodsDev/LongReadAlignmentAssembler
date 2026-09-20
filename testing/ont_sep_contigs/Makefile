@@ -17,6 +17,14 @@ test_subdirs:
 		$(MAKE) -C $$dir test || exit $$?; \
 	done
 
+# data/gffcmp.tracking.codes.expected was re-pinned in v0.37.0, 10 '=' -> 11 '='
+# (the single 'u' is unchanged).  This corpus is ONT, and v0.37.0 turned on
+# infer_PolyA together with strip_polyA_on_proximal_window: a read carrying a
+# polyA tail can now define a polyA site, where before the unstripped tail left
+# residual soft clipping and max_soft_clip_at_PolyA (0) barred it.  The result
+# here is that all 11 reference transcripts are now recovered with exact
+# structure rather than 10, which is the intended effect of that change rather
+# than drift -- re-measure before re-pinning again if this moves.
 test_minigenome:
 	../../LRAA --genome minigenome.fa --bam ONT_sim_alignments.mm2.bam -d --verbose --no_cleanup --no_chunk --no_stream_reads 2>&1 | tee run.log
 	gffcompare -r minigenome.gtf LRAA.LRAA.ref-free.gtf

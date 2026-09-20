@@ -264,9 +264,9 @@ rather than fractions:
 They are written in units of READS while the counters hold estimated original reads, so on a
 doubly-normalized BAM they are compared against inflated values. The fractional criteria are
 immune to a uniform factor, since it cancels from a ratio: `frac_intron_support =
-min_support / max_support` (`:754`), `min_TSS_iso_fraction`, `min_PolyA_iso_fraction`,
-`min_frac_alignments_define_polyA_site`. Tests at the 0/1 boundary are also immune, because the
-minimum weight is 1 and inflation cannot turn zero coverage into nonzero.
+min_support / max_support` (`:754`), `min_TSS_iso_fraction`, `min_PolyA_iso_fraction`. Tests at
+the 0/1 boundary are also immune, because the minimum weight is 1 and inflation cannot turn zero
+coverage into nonzero.
 
 MEASURED for the intron threshold, and NOT OBSERVED in the BAM measured: **0 of 7,096** distinct
 introns in a doubly-normalized cluster-guided sg BAM (chr19 fixture, 95,513 records) clear

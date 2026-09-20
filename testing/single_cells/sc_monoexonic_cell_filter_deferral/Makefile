@@ -44,6 +44,17 @@
 # --HiFi is deliberately NOT passed: it gates monoexonic retention on inferred TSS/PolyA
 # annotation, which this fixture's exact-CIGAR, unclipped synthetic reads never produce,
 # and that gate is unrelated to what this test checks.
+#
+# As of v0.37.0 that exemption has to be stated in config rather than by withholding a
+# flag. require_terminal_evidence_for_monoexonic replaced the HiFi-only rule and defaults
+# on for every platform, so avoiding --HiFi no longer avoids it: it asks for an inferred
+# PolyA site, a genomic PAS hexamer, or a read with a polyA tail at the model's 3' end,
+# and these synthetic reads offer none of the three -- measured, it takes this fixture
+# from 2 monoexonic transcripts to 0, leaving the cell-count gate below nothing to act on
+# and the check reporting an empty table. The override is WRITTEN BY THE RECIPE rather
+# than committed beside it, because .gitignore carries `testing/**`: a new file here is
+# invisible to git, so the edited Makefile would reach other checkouts while the config
+# it depends on would not.
 
 LRAA = $(abspath ../../../LRAA)
 CHECK = python3 check_fixture.py
@@ -51,11 +62,16 @@ STAMP = $(abspath ../../../util/misc/stamp_unit_xw.py)
 
 test: test_nonstreaming test_streaming
 
-test_nonstreaming:
+# See the comment above: isolates this fixture from the v0.37.0 monoexonic 3'-end gate.
+ISOLATE = isolate_cell_gate.json
+$(ISOLATE):
+	echo '{"require_terminal_evidence_for_monoexonic": false}' > $@
+
+test_nonstreaming: $(ISOLATE)
 	rm -rf run_nonstreaming
 	mkdir run_nonstreaming
 	$(STAMP) data/chrTest.sg.bam run_nonstreaming/sg.tagged.bam
-	cd run_nonstreaming && $(LRAA) \
+	cd run_nonstreaming && $(LRAA) --config_update ../isolate_cell_gate.json \
 	    --genome ../data/chrTest.genome.fa --bam ../data/chrTest.full.bam \
 	    --bam_for_sg sg.tagged.bam --no_norm \
 	    --no_chunk --no_stream_reads \
@@ -71,11 +87,11 @@ test_nonstreaming:
 # Streaming's draft quant reads the splice-graph bam, so comp-1's cells are the 2 present
 # there rather than the 8 in the library, and it is filtered. That difference from the arm
 # above is the whole point of pinning both.
-test_streaming:
+test_streaming: $(ISOLATE)
 	rm -rf run_streaming
 	mkdir run_streaming
 	$(STAMP) data/chrTest.sg.bam run_streaming/sg.tagged.bam
-	cd run_streaming && $(LRAA) \
+	cd run_streaming && $(LRAA) --config_update ../isolate_cell_gate.json \
 	    --genome ../data/chrTest.genome.fa --bam ../data/chrTest.full.bam \
 	    --bam_for_sg sg.tagged.bam --no_norm --stream_reads \
 	    --no_rescue_unassigned_reads_via_transcriptome_alignment \
@@ -92,4 +108,4 @@ test_streaming:
 test_wdls:
 
 clean:
-	rm -rf run_nonstreaming run_streaming __*
+	rm -rf run_nonstreaming run_streaming __* $(ISOLATE)
