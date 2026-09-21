@@ -308,6 +308,11 @@ def test_illustrate_refuses_to_overlay_two_contigs():
     with pytest.raises(ValueError, match="more than one contig"):
         illustrate([chr1_model, chr2_model])
 
+    # an off-contig reference is inserted as a row of its own, so it has to be
+    # checked alongside the entries or it walks straight through the guard
+    with pytest.raises(ValueError, match="more than one contig"):
+        illustrate([chr1_model], reference=chr2_model)
+
 
 def test_cli_refuses_a_selection_spanning_contigs(tmp_path):
     gtf = _write_gtf(

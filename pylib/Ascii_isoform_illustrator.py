@@ -740,8 +740,13 @@ def illustrate(
 
     Returns the rendered text.
     """
+    # the reference counts too: when it is a Transcript not already among the
+    # entries it gets inserted as a row below, so leaving it out of this check
+    # reopens exactly the false overlay the check exists to prevent
     contigs = {
-        e.get_contig_acc() for e in entries if isinstance(e, Transcript)
+        e.get_contig_acc()
+        for e in list(entries) + ([reference] if reference is not None else [])
+        if isinstance(e, Transcript)
     }
     if len(contigs) > 1:
         raise ValueError(
