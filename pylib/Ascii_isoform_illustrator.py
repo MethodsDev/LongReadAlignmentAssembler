@@ -543,10 +543,11 @@ def compare_structures(query_exons, ref_exons):
     elif _is_contiguous_subchain(r, q):
         rel = "contains_reference_subchain"
     elif not shared:
-        # ordered before the novel-junction test on purpose: a chain sharing
-        # nothing with the reference is a different locus-level statement than a
-        # chain that differs at one junction, and every disjoint chain trivially
-        # has query-only introns, which would otherwise swallow this case whole
+        # ordered before the novel-junction test on purpose: every disjoint chain
+        # trivially has query-only introns, so the later branch would swallow this
+        # case whole and the label would never be emitted.  It says nothing about
+        # locus -- a single-exon-skip model at the same locus can share no junction
+        # with the reference; overlap_bp is what speaks to position.
         rel = "no_shared_junctions"
     elif q_only:
         rel = "novel_junctions"

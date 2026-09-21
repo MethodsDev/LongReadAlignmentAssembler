@@ -92,15 +92,23 @@ def test_query_extending_past_the_reference_is_a_superchain():
 
 def test_disjoint_chains_are_reported_as_sharing_nothing():
     # every disjoint query chain also has query-only introns, so this must be
-    # tested before the novel-junction case or the label is never emitted; a
-    # locus-level mismatch and a one-junction difference are not the same finding
-    result = compare_structures(
+    # tested before the novel-junction case or the label is never emitted
+    elsewhere = compare_structures(
         [(5000, 5100), (5300, 5400)], [(100, 200), (300, 400), (500, 600)]
     )
-    assert result.relationship == "no_shared_junctions"
-    assert result.shared_introns == []
-    assert result.query_only_introns == [(5101, 5299)]
-    assert result.overlap_bp == 0
+    assert elsewhere.relationship == "no_shared_junctions"
+    assert elsewhere.shared_introns == []
+    assert elsewhere.query_only_introns == [(5101, 5299)]
+    assert elsewhere.overlap_bp == 0
+
+    # the label is about junctions, not position: a single exon skip at the SAME
+    # locus also shares no junction, and overlap_bp is what says where it sits
+    same_locus_skip = compare_structures(
+        [(100, 200), (500, 600)], [(100, 200), (300, 400), (500, 600)]
+    )
+    assert same_locus_skip.relationship == "no_shared_junctions"
+    assert same_locus_skip.query_only_introns == [(201, 499)]
+    assert same_locus_skip.overlap_bp == 202
 
 
 def test_monoexonic_reports_overlap_rather_than_junctions():

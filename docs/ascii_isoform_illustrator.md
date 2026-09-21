@@ -129,7 +129,7 @@ Outside a live run, the multipath debug dumps are already GTF: draw
 | `contains_reference_subchain` | the reference's introns are a contiguous run of the query's |
 | `known_junctions_recombined` | every query intron is in the reference, but not as a run |
 | `novel_junctions` | at least one query intron is absent from the reference |
-| `no_shared_junctions` | both spliced, nothing in common |
+| `no_shared_junctions` | both spliced, no intron in common — a junction statement, not a locus one: a single exon skip can land here while overlapping heavily, so read `overlap_bp` for position |
 | `monoexonic_*` | one or both sides unspliced; reports overlap bp instead |
 
 Introns use the `Transcript.get_introns()` convention, `(prev_exon_rend + 1,
