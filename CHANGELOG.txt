@@ -1,4 +1,4 @@
-v0.38.0
+v0.37.1
 
 - splice-pattern-collapsed outputs are available from the pipeline rather than only
   from a utility a user remembers to run. `--include_splice_collapsed_outputs` adds
