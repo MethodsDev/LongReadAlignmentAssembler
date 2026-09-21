@@ -230,6 +230,9 @@ workflow LRAA_cell_cluster_guided {
                     oversimplify = oversimplify,
                     # single-cell: this workflow never surfaces the normalized splice-graph BAM
                     retain_normalized_splice_graph_bam = false,
+                    # These per-cluster gtfs are inputs to the cross-cluster merge
+                    # below; the collapse runs once on its result instead.
+                    emit_splice_pattern_collapse = false,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     main_chromosomes = main_chromosomes,
@@ -329,6 +332,18 @@ workflow LRAA_cell_cluster_guided {
                 oversimplify = select_first([oversimplify, ""]),
                 docker = docker,
                 memoryGB = memoryGBmergeGTFs ,
+        }
+
+        # ONE collapse for the whole sample, on the reconciled cross-cluster catalog.
+        # Collapsing per cluster instead would group by (gene_id, intron chain) within
+        # a cluster, before merge_LRAA_GTFs.py has unified gene assignments across
+        # them, so the same splice pattern could land under different gene_ids in
+        # different clusters. Same task the bulk workflow uses.
+        call LRAA.splice_pattern_collapse as sc_splice_pattern_collapse {
+            input:
+                lraaGtf = lraa_merge_gtf_task.mergedGTF,
+                outputFilePrefix = sample_id + ".LRAA.sc_merged",
+                docker = docker
         }
     }
 
@@ -460,6 +475,17 @@ workflow LRAA_cell_cluster_guided {
          # final outputs
          File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
          File? LRAA_final_gtf_tracking = lraa_merge_gtf_task.mergedTracking
+         # Derived from the final gtf above. Null in quant-only-cluster-guided mode,
+         # which reuses a supplied annotation instead of discovering a catalog to
+         # collapse. The two beds are always written when the collapse runs; the
+         # collapsed gtf and merge report are absent if a splice pattern arrived under
+         # two gene_ids, which reports itself in the conflicts file rather than
+         # failing the task and publishing nothing.
+         File? LRAA_final_splice_pattern_collapsed_gtf = sc_splice_pattern_collapse.collapsedGtf
+         File? LRAA_final_splice_pattern_collapsed_merge_report = sc_splice_pattern_collapse.mergeReport
+         File? LRAA_final_splice_pattern_collapsed_gene_conflicts = sc_splice_pattern_collapse.geneConflictsReport
+         File? LRAA_final_TSS_bed = sc_splice_pattern_collapse.tssBed
+         File? LRAA_final_PolyA_bed = sc_splice_pattern_collapse.polyaBed
          # partitioned cluster BAMs (always produced)
          File LRAA_partitioned_cluster_bams_tar = tar_partitioned_cluster_bams.tar_gz
          # cluster-level final quant outputs (per-cluster/partition) packaged

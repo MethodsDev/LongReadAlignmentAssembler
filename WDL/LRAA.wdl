@@ -152,6 +152,12 @@ workflow LRAA_wf {
         # workflows that call this one set this false; they never surface the file, and
         # delocalizing it would cost them storage for nothing.
         Boolean retain_normalized_splice_graph_bam = true
+        # The splice-pattern-collapsed gtf and the TSS/PolyA site beds. On by default,
+        # so an ordinary bulk run publishes them. Single-cell sets this false for the
+        # PER-CLUSTER discovery runs: those gtfs are inputs to a cross-cluster merge,
+        # so collapsing them would spend a task per cluster on a result nobody reads,
+        # and the answer that matters is the one taken from the merged catalog.
+        Boolean emit_splice_pattern_collapse = true
         Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
         Int min_mapping_quality = 0
         Int min_mapping_quality_for_final_quant = 0
@@ -750,7 +756,7 @@ workflow LRAA_wf {
     # make N partial answers needing their own merge; the three arms already converge on
     # a single gtf here, so this is the one place that sees the whole model set.
     # Skipped in quant-only, which produces no gtf to collapse.
-    if (!quant_only) {
+    if (!quant_only && emit_splice_pattern_collapse) {
         call splice_pattern_collapse {
             input:
                 lraaGtf = select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]),

@@ -775,6 +775,15 @@ workflow LRAA_singlecell_wf {
     File? init_quant_expr = init_quant_expr_file
     File? init_quant_tracking = init_quant_tracking_generated
     File? init_gtf = init_gtf_generated
+    # Derived from init_gtf, and the deliverable set for a BASIC run: no
+    # cluster-guided phase runs there, so the initial catalog is the final one.
+    # Absent when the initial pass was skipped for a precomputed gtf, which was
+    # collapsed by whatever run produced it.
+    File? init_splice_pattern_collapsed_gtf = LRAA_init.splicePatternCollapsedGTF
+    File? init_splice_pattern_collapsed_merge_report = LRAA_init.splicePatternCollapsedMergeReport
+    File? init_splice_pattern_collapsed_gene_conflicts = LRAA_init.splicePatternCollapsedGeneConflicts
+    File? init_TSS_bed = LRAA_init.tssBed
+    File? init_PolyA_bed = LRAA_init.polyaBed
     # This pass's read-assignment accounting. Reported SEPARATELY from the
     # cluster-phase tables below and never folded into them; see the call site for
     # why the two phases' totals are not meant to reconcile. Absent when the initial
@@ -832,6 +841,13 @@ workflow LRAA_singlecell_wf {
     # Final cluster-guided LRAA outputs (main deliverables)
     File? final_gtf = cluster_guided.LRAA_final_gtf
     File? final_gtf_tracking = cluster_guided.LRAA_final_gtf_tracking
+    # From the cross-cluster merged catalog, not from any single cluster: gene
+    # assignments are unified by that merge, and the collapse groups by gene_id.
+    File? final_splice_pattern_collapsed_gtf = cluster_guided.LRAA_final_splice_pattern_collapsed_gtf
+    File? final_splice_pattern_collapsed_merge_report = cluster_guided.LRAA_final_splice_pattern_collapsed_merge_report
+    File? final_splice_pattern_collapsed_gene_conflicts = cluster_guided.LRAA_final_splice_pattern_collapsed_gene_conflicts
+    File? final_TSS_bed = cluster_guided.LRAA_final_TSS_bed
+    File? final_PolyA_bed = cluster_guided.LRAA_final_PolyA_bed
     File? final_tracking = cluster_guided.LRAA_final_tracking
     File? final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz

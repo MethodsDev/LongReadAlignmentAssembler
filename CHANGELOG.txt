@@ -51,6 +51,16 @@ v0.38.0
   `pylib/SplicePatternCollapse.py`, which is what LRAA imports; the collapse logic has
   one implementation.
 
+- the single-cell workflows publish the same artifacts. `LRAA-singlecell.wdl` exposes
+  `init_*` for the initial pseudobulk catalog -- which is the deliverable of a BASIC
+  run, where no cluster-guided phase follows -- and `final_*` for the cluster-guided
+  one. The final set is collapsed from the cross-cluster MERGED gtf, not per cluster:
+  `merge_LRAA_GTFs.py` is what unifies gene assignments across clusters, and the
+  collapse groups by `(gene_id, intron chain)`, so collapsing before that merge could
+  put one splice pattern under a different gene_id in each cluster. The per-cluster
+  discovery runs therefore set the new `emit_splice_pattern_collapse = false` input,
+  which also stops them spending one task per cluster on a result nobody reads.
+
 
 v0.37.0
 
