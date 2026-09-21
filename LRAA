@@ -32,6 +32,7 @@ from Splice_graph import Splice_graph
 from LRAA import LRAA, _detach_rescued_reads_from_original_paths
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Quantify import Quantify
+import SplicePatternCollapse
 import IsoformReadRescue
 from IsoformReadRescue import (
     _normalize_read_identifier,
@@ -86,6 +87,7 @@ allow_spacers = False
 single_best_only = False
 prereconstruct_info_dir = "__prereconstruct"
 INCLUDE_PRELIM_TRANSCRIPTS = False
+INCLUDE_SPLICE_COLLAPSED_OUTPUTS = False
 
 
 def _add_splice_frequency_arguments(argument_group):
@@ -1115,6 +1117,17 @@ def main():
     )
 
     parser.add_argument(
+        "--include_splice_collapsed_outputs",
+        action="store_true",
+        default=False,
+        help="additionally write a gtf with isoforms sharing a gene_id and intron "
+        "chain collapsed into one model, and bed files of the distinct TSS and PolyA "
+        "sites with their support and (for PolyA) polyadenylation-signal annotation. "
+        "Discovery mode only: the collapse reads the final gtf, which quant-only does "
+        "not produce",
+    )
+
+    parser.add_argument(
         "--version",
         action="store_true",
         default=False,
@@ -1888,6 +1901,7 @@ def main():
     bam_filename = args.bam
     # ensure global vars used by helper functions are updated
     global single_best_only, CPU_BUDGET, COMPONENT_WORKERS, INCLUDE_PRELIM_TRANSCRIPTS, TOTAL_THREADS_FOR_SINGLETON_STAGE
+    global INCLUDE_SPLICE_COLLAPSED_OUTPUTS
     single_best_only = args.single_best_only
     if args.cpu_budget is None:
         CPU_BUDGET = CpuBudget.default_budget()
@@ -1952,6 +1966,7 @@ def main():
         not args.no_SE_subtract_intronic_background
     )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
+    INCLUDE_SPLICE_COLLAPSED_OUTPUTS = args.include_splice_collapsed_outputs
     # By default, parallelize work units; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
 
@@ -4067,6 +4082,14 @@ def _run_chunked_mode(args):
         shutil.copyfile(summary_src, summary_dest)
         logger.info("wrote %s", summary_dest)
 
+    # Derived from the published gtf, so the chunked and unchunked paths run the same
+    # code on the same kind of input. Nothing per-unit is needed: the chunk merge has
+    # already translated coordinates and resolved id collisions by this point.
+    if args.include_splice_collapsed_outputs and not args.quant_only:
+        _write_splice_collapsed_outputs(
+            output_prefix, "{}.gtf".format(output_prefix)
+        )
+
     return 0
 
 
@@ -4088,6 +4111,45 @@ def _append_lraa_output_mode_suffix(output_prefix, quant_only, input_gtf):
         return output_prefix
     return f"{output_prefix}.{suffix}"
 
+
+def _write_splice_collapsed_outputs(output_prefix, gtf_output_filename):
+    """Derive the splice-pattern-collapsed gtf and the TSS/PolyA site beds.
+
+    Runs ONCE, on the final merged gtf, from whichever path produced it. Collapse groups
+    isoforms by (gene_id, intron chain), so doing it per contig or per chunk would make
+    N partial answers that then need merging; doing it here makes one.
+
+    Conflicts are non-fatal here, unlike in the standalone utility. The primary outputs
+    of this run are already written and valid, a cross-gene splice pattern means an
+    upstream clustering invariant broke rather than that these models are unusable, and
+    exiting nonzero from a WDL task would discard the run along with the conflicts
+    report naming the problem.
+    """
+    collapsed_gtf = f"{output_prefix}.splice_pattern_collapsed.gtf"
+    logger.info(f"-making splice-pattern collapsed outputs from: {gtf_output_filename}")
+    # A SiteSupportConflictError propagates deliberately: every transcript at a boundary
+    # copies one splice-graph node's support, so a disagreement means the models and the
+    # graph they came from no longer describe the same thing, and no output derived from
+    # them can be trusted.
+    written = SplicePatternCollapse.collapse_gtf(
+        gtf_output_filename,
+        collapsed_gtf,
+        TSS_bed=f"{output_prefix}.TSS.bed",
+        PolyA_bed=f"{output_prefix}.PolyA.bed",
+        nonfatal_gene_conflicts=True,
+    )
+
+    if "collapsed_gtf" not in written:
+        logger.error(
+            "-cross-gene splice patterns found; see %s. The TSS/PolyA beds were "
+            "written, the collapsed gtf was not.",
+            written["gene_conflicts_report"],
+        )
+
+    for label, path in sorted(written.items()):
+        logger.info(f"-wrote {label}: {path}")
+
+    return written
 
 
 def _parse_input_transcripts_for_cs(
@@ -4643,6 +4705,9 @@ def _run_jobs_schedule_and_merge(
         logger.info(f"-making bed output file: {bed_output_file}")
         subprocess.check_call(cmd, shell=True)
         _ensure_lraa_version_comment(bed_output_file)
+
+        if INCLUDE_SPLICE_COLLAPSED_OUTPUTS:
+            _write_splice_collapsed_outputs(output_prefix, gtf_output_filename)
 
         if INCLUDE_PRELIM_TRANSCRIPTS or LRAA_Globals.DEBUG:
             prelim_gtf = "__PRE-Tx-Filtering.transcripts.gtf"

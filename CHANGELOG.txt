@@ -1,3 +1,57 @@
+v0.38.0
+
+- splice-pattern-collapsed outputs are available from the pipeline rather than only
+  from a utility a user remembers to run. `--include_splice_collapsed_outputs` adds
+  `<prefix>.splice_pattern_collapsed.gtf` (isoforms sharing a gene_id AND an intron
+  chain merged into one model, plus the merge and gene-conflicts reports) and
+  `<prefix>.TSS.bed` / `<prefix>.PolyA.bed`, one row per distinct boundary site. The
+  PolyA bed carries the polyadenylation signal, its offset, and the internal-priming
+  call, so a site can be told apart from an oligo-dT artifact. Discovery only: the
+  collapse reads the final gtf, and quant-only produces none. The derivation runs ONCE
+  on the merged gtf, from both the chunked and unchunked paths, so nothing per-unit is
+  staged and no chunk-coordinate translation is involved.
+
+  The beds are derived from the UNCOLLAPSED models, deliberately. A collapsed model
+  spans several terminal variants, so no single boundary count describes it -- and
+  `merge_isoforms` never copied `TSS_read_count`/`PolyA_read_count` onto merged models
+  anyway, so the evidence would have been gone by then. Merged models now instead carry
+  it as index-aligned per-site lists: `PolyA_sites "1700,1900,2100"` beside
+  `PolyA_site_support "25,60,8"`, `PolyA_site_PAS`, `PolyA_site_PAS_offset`, and
+  `PolyA_site_internal_priming`, every list generated from one pass over the same
+  sorted coordinates so index i always describes site i. Previously the coordinate list
+  was all that survived a merge: three PolyA sites and no way to tell which carried 60
+  reads or which was internally primed. Single-member groups are untouched and keep
+  their scalar attributes, since there is nothing to attribute.
+
+  Support is deduplicated per site, NOT summed: every transcript ending at a site
+  copies the support of one splice-graph node, so summing would multiply a site by the
+  number of isoforms sharing it. A genuine disagreement is refused, naming the
+  transcripts. PAS annotation is attached to PolyA sites only -- MEASURED on
+  testing/single_contig, sixteen transcripts share the TSS at minigenome:2031 with
+  identical support and split 10/6 on PAS_offset purely because their 3' ends differ,
+  so a TSS "motif" would have been another transcript's.
+
+  The column is named `reported_boundary_support` rather than a read count: it is the
+  graph's clustered sum of per-read XW normalization weights, already truncated to an
+  integer by `Transcript.set_TSS_read_count`, and a synthetic seed rather than observed
+  reads for annotation-derived boundaries.
+
+- cross-gene splice-pattern conflicts are non-fatal for integrated callers, via
+  `--nonfatal_gene_conflicts`. The standalone utility still refuses and exits nonzero,
+  writing only the conflicts report, so its no-partial-output guarantee is unchanged.
+  LRAA and the WDL task instead log the error, write the conflicts report AND both
+  beds, and skip the collapsed gtf. A failed WDL task delocalizes nothing, so refusing
+  there would discard a completed whole-genome run's outputs along with the report
+  naming the conflict. The two contracts are selected per caller, never blended.
+
+- `WDL/LRAA.wdl` publishes the collapsed gtf, its two reports, and both site beds. One
+  `splice_pattern_collapse` task, called once on the final gtf, so the direct,
+  by-chromosome, and by-chunk producers all reach it through the single selection they
+  already converge on. `collapse_LRAA_GTF_by_splice_pattern.py` is now a thin CLI over
+  `pylib/SplicePatternCollapse.py`, which is what LRAA imports; the collapse logic has
+  one implementation.
+
+
 v0.37.0
 
 - TSS and PolyA inference are on for every platform, not only HiFi. They were already

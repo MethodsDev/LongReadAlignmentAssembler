@@ -291,6 +291,28 @@ path removes per-read state from quantification altogether (`docs/streaming_quan
   against 0.05 TB compressed (measured 5.57x on ONT chr20). There is no option to disable it:
   a run that could emit either form would leave consumers guessing which of two filenames is
   current, and every in-repo reader already selects its decompressor from the suffix.
+- Splice-pattern collapse (optional, `--include_splice_collapsed_outputs`, discovery only):
+  `LRAA.splice_pattern_collapsed.gtf`, where isoforms sharing BOTH a `gene_id` and an intron
+  chain become one model spanning their outermost termini, plus
+  `.isoform_merge_report.tsv` (what merged into what) and `.gene_conflicts.tsv` (intron
+  patterns carried by two `gene_id`s, which are reported rather than collapsed since the
+  collapsed id is minted from the pattern and would duplicate). A merged model records
+  every terminus it absorbed as index-aligned lists: `PolyA_sites` beside
+  `PolyA_site_support`, `PolyA_site_PAS`, `PolyA_site_PAS_offset`, and
+  `PolyA_site_internal_priming`, so index *i* of each describes the same site. Coordinates
+  are genomic ascending, which on the minus strand puts the 3'-most TSS first. Single-member
+  groups keep their ordinary scalar attributes.
+- Boundary sites (same flag): `LRAA.TSS.bed` and `LRAA.PolyA.bed`, one row per distinct
+  `(contig, position, strand)` site of the reported models, as BED6 plus
+  `reported_boundary_support`, `num_transcripts`, and `transcript_ids`; the PolyA file adds
+  `pas`, `pas_offset`, and `internal_priming`. Support is deduplicated per site, never summed:
+  every transcript ending at a site copies the support of one splice-graph node.
+  `reported_boundary_support` is that node's clustered sum of per-read `XW` normalization
+  weights as the GTF reports it — already truncated to an integer, and a synthetic seed
+  (`min_alignments_define_TSS_site`) rather than observed reads for annotation-derived
+  boundaries — so it equals a literal read count only for a read-derived site in a BAM with no
+  `XW` tag. These describe the sites of reported isoforms; splice-graph calls that no surviving
+  model used are not included.
 - Debug (optional): `__*` files including component descriptions and intermediate GTF/BEDs of
   MultiPath graphs and trellis selections.
 

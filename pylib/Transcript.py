@@ -372,6 +372,40 @@ class Transcript(GenomeFeature):
         """
         return getattr(self, "_polyA_signal", None) is not None
 
+    def get_polyA_signal(self):
+        """The PAS hexamer in the terms the GTF reports it, or None if unknown.
+
+        "none" means the scan ran and found nothing; None means it never ran and no
+        value was imported, which is why those two cases must not be folded together.
+        A measured value wins over an imported one: the import exists so a value
+        written by an earlier run survives a pass that did not re-evaluate it.
+        """
+        if getattr(self, "_polyA_signal_evaluated", False):
+            return self._polyA_signal if self._polyA_signal is not None else "none"
+        if self._meta and "PAS" in self._meta:
+            return str(self._meta["PAS"])
+        return None
+
+    def get_polyA_signal_offset(self):
+        """Offset of the PAS hexamer from the 3' end, or None when there is no hexamer.
+
+        Follows get_polyA_signal's precedence, so the offset can never come from a
+        different source than the motif it describes.
+        """
+        if getattr(self, "_polyA_signal_evaluated", False):
+            return self._polyA_signal_offset
+        if self._meta and "PAS" in self._meta and "PAS_offset" in self._meta:
+            return self._meta["PAS_offset"]
+        return None
+
+    def get_likely_internal_primed(self):
+        """Does this model's 3' end look like an oligo-dT artifact? None if unassessed."""
+        if self._likely_internal_primed is not None:
+            return self._likely_internal_primed
+        if self._meta and "InternalPriming" in self._meta:
+            return self._meta["InternalPriming"]
+        return None
+
     def __repr__(self):
 
         text = "Transcript: {} {}-{} [{}] {} {} segs: {}".format(
@@ -591,31 +625,22 @@ class Transcript(GenomeFeature):
         if self.get_TSS_read_count() is not None:
             misc_transcript_features["TSS_read_count"] = str(self.get_TSS_read_count())
 
-        # Internal priming annotation: prefer internal flag, else fallback to imported meta if present
-        if self._likely_internal_primed is not None:
-            misc_transcript_features["InternalPriming"] = str(
-                self._likely_internal_primed
-            )
-        elif self._meta and "InternalPriming" in self._meta:
-            # ensure we still propagate an imported value even if the internal flag wasn't explicitly set
-            misc_transcript_features["InternalPriming"] = str(
-                self._meta["InternalPriming"]
-            )
+        # Internal priming annotation, and the canonical PAS upstream of the 3' end.
+        # The two are independent: InternalPriming asks whether the genome DOWNSTREAM
+        # looks like an oligo-dT template, PAS asks whether the signal a real cleavage
+        # site needs is present UPSTREAM.  A terminus can carry both.  The measured-then-
+        # imported precedence lives in the accessors so every reader resolves it the
+        # same way; duplicating it here is how the two drift apart.
+        internal_primed = self.get_likely_internal_primed()
+        if internal_primed is not None:
+            misc_transcript_features["InternalPriming"] = str(internal_primed)
 
-        # Canonical PAS upstream of the 3' end.  Independent of InternalPriming: that
-        # asks whether the genome DOWNSTREAM looks like an oligo-dT template, this asks
-        # whether the signal a real cleavage site needs is present UPSTREAM.  A terminus
-        # can carry both.
-        if getattr(self, "_polyA_signal_evaluated", False):
-            misc_transcript_features["PAS"] = (
-                self._polyA_signal if self._polyA_signal is not None else "none"
-            )
-            if self._polyA_signal_offset is not None:
-                misc_transcript_features["PAS_offset"] = str(self._polyA_signal_offset)
-        elif self._meta and "PAS" in self._meta:
-            misc_transcript_features["PAS"] = str(self._meta["PAS"])
-            if "PAS_offset" in self._meta:
-                misc_transcript_features["PAS_offset"] = str(self._meta["PAS_offset"])
+        polyA_signal = self.get_polyA_signal()
+        if polyA_signal is not None:
+            misc_transcript_features["PAS"] = str(polyA_signal)
+            polyA_signal_offset = self.get_polyA_signal_offset()
+            if polyA_signal_offset is not None:
+                misc_transcript_features["PAS_offset"] = str(polyA_signal_offset)
 
         for misc_feature, misc_val in misc_transcript_features.items():
             gtf_text += ' {} "{}";'.format(misc_feature, misc_val)

@@ -746,6 +746,19 @@ workflow LRAA_wf {
         }
     }
 
+    # ONE collapse, on whichever producer made the final gtf. Doing it per shard would
+    # make N partial answers needing their own merge; the three arms already converge on
+    # a single gtf here, so this is the one place that sees the whole model set.
+    # Skipped in quant-only, which produces no gtf to collapse.
+    if (!quant_only) {
+        call splice_pattern_collapse {
+            input:
+                lraaGtf = select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]),
+                outputFilePrefix = LRAA_output_prefix,
+                docker = docker
+        }
+    }
+
     output {
     # Three producers now, so each output names all of them. by_chunk merges
     # inside its subworkflow, by_chromosome merges here, off produces directly.
@@ -785,6 +798,17 @@ workflow LRAA_wf {
     # so the caller already holds the geometry, or no_chunk=true, so no cut was
     # placed. See the gather above.
     File? gatheredChunkPlan = gather_shard_cut_plans.gatheredChunkPlan
+
+    # All optional because the collapse call is conditional: quant-only has no gtf to
+    # collapse. Within a discovery run the two beds are always produced, while the
+    # collapsed gtf and its merge report are absent if the input carried a splice
+    # pattern under two gene_ids -- that case reports itself in geneConflicts rather
+    # than failing the task, which would publish nothing at all.
+    File? splicePatternCollapsedGTF = splice_pattern_collapse.collapsedGtf
+    File? splicePatternCollapsedMergeReport = splice_pattern_collapse.mergeReport
+    File? splicePatternCollapsedGeneConflicts = splice_pattern_collapse.geneConflictsReport
+    File? tssBed = splice_pattern_collapse.tssBed
+    File? polyaBed = splice_pattern_collapse.polyaBed
     }
 }
 
@@ -834,6 +858,55 @@ task merge_GTFs {
         # so the headroom costs one cheap VM.
         memory: "16 GiB"
         disks: "local-disk " + ceil(size(gtfFiles, "GB") * 2.0 + 5) + " SSD"
+    }
+}
+
+task splice_pattern_collapse {
+    # Isoforms sharing a gene_id and an intron chain become one model, and the distinct
+    # TSS/PolyA sites of the INPUT models are reported with their support. The beds read
+    # the uncollapsed gtf on purpose: a collapsed model spans several terminal variants,
+    # so no single boundary count describes it.
+    input {
+        File lraaGtf
+        String outputFilePrefix
+        String docker
+    }
+
+    command <<<
+        set -eo pipefail
+
+        # --nonfatal_gene_conflicts, unlike the standalone default. A cross-gene splice
+        # pattern means an upstream clustering invariant broke, not that this run's
+        # models are unusable; failing here would delocalize nothing, discarding both
+        # the completed run's artifacts and the report that names the conflict.
+        collapse_LRAA_GTF_by_splice_pattern.py \
+            --gtf ~{lraaGtf} \
+            --output_gtf ~{outputFilePrefix}.splice_pattern_collapsed.gtf \
+            --TSS_bed ~{outputFilePrefix}.TSS.bed \
+            --PolyA_bed ~{outputFilePrefix}.PolyA.bed \
+            --nonfatal_gene_conflicts
+    >>>
+
+    output {
+        # Optional: absent exactly when the conflicts report below is non-empty.
+        File? collapsedGtf = "~{outputFilePrefix}.splice_pattern_collapsed.gtf"
+        File? mergeReport = "~{outputFilePrefix}.splice_pattern_collapsed.gtf.isoform_merge_report.tsv"
+        # Required: written on every run, conflicts or not, so a missing file is never
+        # confused with a run that did not check.
+        File geneConflictsReport = "~{outputFilePrefix}.splice_pattern_collapsed.gtf.gene_conflicts.tsv"
+        # Required: derived from the input gtf, so they do not depend on the collapse
+        # succeeding. A run with no boundary calls still writes both, header only.
+        File tssBed = "~{outputFilePrefix}.TSS.bed"
+        File polyaBed = "~{outputFilePrefix}.PolyA.bed"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        # Whole-gtf in memory, like merge_GTFs above, and sized to match it: the parse
+        # materializes every transcript and its exon list at once.
+        memory: "16 GiB"
+        disks: "local-disk " + ceil(size(lraaGtf, "GB") * 3.0 + 5) + " SSD"
     }
 }
 
