@@ -35,6 +35,7 @@ import traceback
 import argparse
 from collections import Counter, defaultdict
 import Util_funcs  # type: ignore
+import TranscriptFiltering  # type: ignore
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -454,6 +455,34 @@ def main():
             logger.warning(
                 f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
             )
+
+        # 3'-end annotation, RECOMPUTED rather than carried over from the inputs.
+        # reconstruct_isoforms builds new Transcript objects out of multipaths, so an
+        # input's PAS/InternalPriming metadata is gone by here -- every merged model
+        # was emitted without them, and a single-cell catalog is produced by this
+        # script, so its consumers had no polyadenylation-signal or internal-priming
+        # annotation at all.
+        #
+        # Recomputing is not merely the easier repair, it is the correct one: these
+        # describe the genome around a model's OWN 3' terminus, and a merged model's
+        # terminus need not coincide with any single input's. Copying by coordinate
+        # would leave models whose end moved during the merge either unannotated or,
+        # worse, labelled with a neighbour's motif.
+        #
+        # Annotation only. delete=False, and no reference is supplied for the
+        # known-3'-end reprieve, because a merge reconciles catalogs and is not where
+        # models are filtered; the sources already applied their own policy.
+        transcripts = TranscriptFiltering.annotate_polyA_signal(
+            transcripts, contig_seq_str, contig_strand
+        )
+        transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
+            transcripts,
+            contig_seq_str,
+            contig_strand,
+            known_transcripts=None,
+            restrict_filter_to_monoexonic=False,
+            delete=False,
+        )
 
         ## report transcripts in GTF format
         logger.info(

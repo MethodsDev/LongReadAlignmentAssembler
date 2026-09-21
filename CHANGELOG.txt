@@ -61,6 +61,24 @@ v0.37.1
   discovery runs therefore set the new `emit_splice_pattern_collapse = false` input,
   which also stops them spending one task per cluster on a result nobody reads.
 
+- `merge_LRAA_GTFs.py` annotates the 3' ends of the models it emits. `reconstruct_isoforms`
+  builds new `Transcript` objects out of multipaths, so nothing an input carried in
+  `_meta` reached the merged model: `PAS`, `PAS_offset` and `InternalPriming` were all
+  dropped. Boundary READ COUNTS survived, because `MultiPath` copies them off the graph's
+  boundary nodes, which is what made the loss easy to miss -- the merged models looked
+  annotated. MEASURED on the single-cell cluster-guided test run: per-cluster inputs
+  carried `PAS` on 192 of 192 transcripts, the merged catalog on 0 of 860. Single-cell
+  catalogs come from this script, so every consumer of one -- including the new PolyA
+  site bed -- had no polyadenylation signal and no internal-priming call at all.
+
+  Recomputed from the genome rather than copied from the inputs. Both describe the
+  sequence around the model's OWN 3' terminus, and a merged model's terminus need not
+  coincide with any input's: in the regression fixture the merge emits a model ending
+  where no input ended, so a copy would have attached a neighbour's motif or nothing.
+  Annotation only -- `delete=False`, no reference for the known-3'-end reprieve -- since
+  a merge reconciles catalogs and the source runs already applied their filtering policy.
+  On that same run the repaired merge annotates 860 of 860 and deletes none.
+
 
 v0.37.0
 
