@@ -109,9 +109,13 @@ transcript_path = self._retrieve_best_transcript(vertices)
     - Read paths are clustered based on common paths.
     - Quantify.prune_likely_degradation_products:
     	various rules based on comparing two paths i,j where path_j is contained and compatible with path_i
-    		- frac_gene_express_j_TSS < LRAA_Globals.config['min_frac_gene_alignments_define_TSS_site']
-    		- frac_i_TSS =  j_TSS_read_count/i_TSS_read_count & frac_i_TSS < LRAA_Globals.config['max_frac_alt_TSS_from_degradation']:
-            - various polyA-based logic in case polyA sites differ
+    		- j has neither a TSS nor a polyA -> prune
+    		- j has no TSS, and its polyA does not distinguish it from i -- either shared
+    		  outright, or a degradation rung by _is_degradation_rung(j_polyA_id, "PolyA")
+    		  -> prune as a redundant 5' truncation
+    		- mirror at the other end: j has no polyA, and its TSS does not distinguish it
+    		  from i -> prune as a redundant 3' truncation
+    		- frac_gene_expression_j_of_i_and_j < LRAA_Globals.config['max_rel_frac_expr_alt_compat_contained']
 
     -  Quantify.filter_isoforms_by_min_isoform_fraction
 		- basic logic on filtering lowly supported isoforms, not exactly alt-TSS specific
