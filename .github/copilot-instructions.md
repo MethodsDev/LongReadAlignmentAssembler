@@ -30,6 +30,7 @@ This repo implements LRAA: isoform discovery and/or quantification from long-rea
 - `pylib/MultiPathGraph.py`: Converts read-supported multipaths into a DAG of `MultiPathGraphNode` with boundary flags (TSS/PolyA). Prunes large components using `config['max_path_nodes_per_component']`.
 - `pylib/Quantify.py`: Assigns reads to transcripts (exact/compatible tests) and runs EM. See `_assign_path_to_transcript` and `_estimate_isoform_read_support` for assignment logic.
 - `pylib/Transcript.py`: Transcript feature container with simple-path representation, TSS/PolyA helpers, and quant fields.
+- `pylib/Ascii_isoform_illustrator.py` + `util/ascii_isoform_view.py`: ASCII drawings of transcript structures, one row per model, for inspecting isoform comparisons (reference GTF vs `LRAA.gtf`, or a simple path through the splice graph). Reach for this instead of eyeballing exon coordinate lists. See `docs/ascii_isoform_illustrator.md`.
 
 ## Project-specific patterns and gotchas
 - Boundary nodes: TSS/PolyA affect sorting and compatibility checks; see `Transcript.get_left/right_boundary_sort_weight` and checks in `MultiPathGraph` and `Quantify`.

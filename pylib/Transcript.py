@@ -890,7 +890,14 @@ class GTF_contig_to_transcripts:
         strand_restrict=None,
         lend_restrict=None,
         rend_restrict=None,
+        strand_default=None,
     ):
+        # strand_default supplies a strand for records whose GTF strand field is
+        # neither '+' nor '-'.  Left None, such a record raises, which is the right
+        # default for anything that feeds assembly or quant.  The LRAA multipath
+        # debug dumps (__mpgns.*.gtf) write '?' because the dump has no strand to
+        # write, and visual inspection of those is the one case where supplying it
+        # externally is legitimate.
 
         gene_id_to_meta = defaultdict(dict)
         transcript_id_to_meta = defaultdict(dict)
@@ -1033,6 +1040,8 @@ class GTF_contig_to_transcripts:
             transcript_info_dict = transcript_id_to_genome_info[transcript_id]
             contig = transcript_info_dict["contig"]
             strand = transcript_info_dict["strand"]
+            if strand not in ("+", "-") and strand_default is not None:
+                strand = strand_default
             coords_list = transcript_info_dict["coords"]
 
             transcript_meta = transcript_id_to_meta[transcript_id]
