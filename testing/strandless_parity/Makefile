@@ -111,6 +111,21 @@ test_ordering_cost:
 # Same caveat as before: the gate's property held, 538 against 538 with expr and
 # tracking byte-identical and severed symmetric difference 0.
 #
+# Re-pinned 538 -> 975 in v0.39.0, bisected to 27f9d79d, "assign read strand from the
+# transcribed orientation (ts tag)": 538 at its parent, 983 at the commit itself, and
+# 975 once a ts flip was made conditional on the read's own junctions carrying a
+# canonical motif on the strand being flipped to.  By far the largest re-pin this gate
+# has taken -- the earlier ones moved 2 to 4 rows -- and the size is the point rather
+# than a worry: tracking holds one row per (read, compatible isoform), so moving reads
+# onto the strand they were transcribed from puts them on a graph where more isoforms
+# are compatible, and rows rise much faster than reads do.
+#
+# What did NOT move is num_total_reads, 2266 before and after, nor expr_rows at 555,
+# nor the severed counts.  Reads were REASSIGNED, not gained or lost; contrast the
+# SIRV corpus, where trusting an uncorroborated ts cost SIRV107 all 11 of its reads
+# outright.  As with every re-pin above, the gate's own property held: 975 against 975,
+# expr and tracking byte-identical, severed symmetric difference 0.
+#
 # The two arms select their cuts from different evidence -- one strand's coverage
 # against both strands' union -- so their cut POSITIONS may differ and different
 # positions sever different reads.  The gate therefore does not demand byte
@@ -125,7 +140,7 @@ test_gate:
 	$(GATE) gate $(INPUTS) $(GEOMETRY) --contig minigenome --HiFi \
 	    --cpu_budget 4 --output_dir __gate --report __gate.json \
 	    --ordering_cost_region 'minigenome+:1014001-1502500' \
-	    --expect expr_rows=555,tracking_rows=538,num_total_reads=2266,baseline_excluded_severed_reads=6
+	    --expect expr_rows=555,tracking_rows=975,num_total_reads=2266,baseline_excluded_severed_reads=6
 
 
 clean:
