@@ -1089,6 +1089,27 @@ def test_an_input_declaring_a_non_coordinate_sort_order_is_refused(tmp_path):
 # --------------------------------------------- transcribed strand (ts tag) routing
 
 
+def _canonical_plus_genome(tmp_path, introns):
+    """A contig whose `introns` read GT..AG, i.e. canonical on the PLUS strand.
+
+    `introns` are (lend, rend) 1-based inclusive genomic intervals.
+    """
+    seq = ["T"] * CONTIG_LENGTH
+    for lend, rend in introns:
+        seq[lend - 1 : lend + 1] = list("GT")
+        seq[rend - 2 : rend] = list("AG")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "genome.fa"
+    body = "".join(seq)
+    with open(path, "wt") as fh:
+        fh.write(">{}\n".format(CONTIG))
+        for i in range(0, len(body), 60):
+            fh.write(body[i : i + 60] + "\n")
+    with open(str(path) + ".fai", "wt") as fh:
+        fh.write("{}\t{}\t{}\t60\t61\n".format(CONTIG, CONTIG_LENGTH, len(CONTIG) + 2))
+    return str(path)
+
+
 def test_transcribed_strand_prefers_ts_then_falls_back_to_the_flag():
     import Util_funcs
 
@@ -1103,12 +1124,45 @@ def test_transcribed_strand_prefers_ts_then_falls_back_to_the_flag():
     # no ts -> the aligned flag, unchanged behavior
     assert Util_funcs.transcribed_strand(mk(0)) == "+"
     assert Util_funcs.transcribed_strand(mk(16)) == "-"
-    # ts is read-relative: '+' agrees with the alignment, '-' is opposite
-    assert Util_funcs.transcribed_strand(mk(16, "-")) == "+"  # antisense read of a + transcript
+    # ts:A:+ agrees with the alignment and moves nothing, so it needs no corroboration
     assert Util_funcs.transcribed_strand(mk(0, "+")) == "+"
     assert Util_funcs.transcribed_strand(mk(16, "+")) == "-"  # genuine - transcript
     # ts:A:? is undetermined -> fall back to the flag
     assert Util_funcs.transcribed_strand(mk(16, "?")) == "-"
+    # ts:A:- WOULD flip, but these reads are unspliced and no contig sequence is
+    # registered, so there is nothing to corroborate it with and the flip is refused.
+    assert Util_funcs.transcribed_strand(mk(16, "-")) == "-"
+
+
+def test_a_ts_flip_needs_every_junction_to_be_canonical_on_the_new_strand(tmp_path):
+    """minimap2 scores motifs to pick ts and can pick backwards; LRAA checks.
+
+    MEASURED on SIRVs: SIRV107 is annotated minus, its junctions read GT..AG
+    (canonical PLUS) and CT..AG (canonical in neither), and trusting ts moved all 11
+    of its reads to + where they matched nothing.
+    """
+    import Util_funcs
+
+    header = _header()
+    # one intron, 1100..1149 inclusive, from _spliced(50) at reference_start 1000
+    aln = _alignment(header, "r", _spliced(50), flag=16)
+    aln.set_tag("ts", "-", "A")
+
+    # corroborated: the junction is GT..AG, canonical on the + strand being flipped to
+    Util_funcs.retrieve_contig_seq_from_fasta_file(
+        CONTIG, _canonical_plus_genome(tmp_path / "ok", [(1101, 1150)])
+    )
+    assert Util_funcs.transcribed_strand(aln) == "+"
+
+    # not corroborated: no canonical motif anywhere, so the aligned strand stands
+    Util_funcs.retrieve_contig_seq_from_fasta_file(
+        CONTIG, _canonical_plus_genome(tmp_path / "bare", [])
+    )
+    assert Util_funcs.transcribed_strand(aln) == "-"
+
+    # and a sequence registered for a DIFFERENT contig cannot corroborate this read
+    Util_funcs.register_contig_seq_for_strand_check("other_contig", "A" * 100)
+    assert Util_funcs.transcribed_strand(aln) == "-"
 
 
 def test_split_partitions_by_transcribed_strand_not_the_aligned_flag(tmp_path):
@@ -1131,7 +1185,15 @@ def test_split_partitions_by_transcribed_strand_not_the_aligned_flag(tmp_path):
     )
     top_bam = tmp_path / "out.+.bam"
     bottom_bam = tmp_path / "out.-.bam"
-    sbs.split_bam_by_strand(str(input_bam), str(top_bam), str(bottom_bam), MAX_INTRON)
+    # WITH a genome: the ts:- read's junction is canonical on +, so its flip is
+    # corroborated and it partitions to the + bam.
+    sbs.split_bam_by_strand(
+        str(input_bam),
+        str(top_bam),
+        str(bottom_bam),
+        MAX_INTRON,
+        genome_fasta=_canonical_plus_genome(tmp_path / "g", [(1101, 1150)]),
+    )
 
     def names(bam):
         with pysam.AlignmentFile(str(bam), "rb") as reader:
@@ -1139,3 +1201,31 @@ def test_split_partitions_by_transcribed_strand_not_the_aligned_flag(tmp_path):
 
     assert names(top_bam) == {"antisense_of_plus", "sense_of_plus"}
     assert names(bottom_bam) == {"minus"}
+
+
+def test_split_without_a_genome_cannot_flip_and_says_so(tmp_path):
+    """No sequence means no corroboration, so the aligned strand stands.
+
+    Not a silent difference: the pipeline always passes --genome (ChunkedRun's
+    stage3b), and a split that flipped uncorroborated would disagree with the strand
+    LRAA itself assigns the same read.
+    """
+    import Util_funcs
+
+    # The registry is module state and an earlier test in this process may have left
+    # a sequence for this same contig in it. Cleared so the case under test is
+    # genuinely "no sequence available" rather than "whatever ran before".
+    Util_funcs.register_contig_seq_for_strand_check(None, None)
+
+    def make(header):
+        aln = _alignment(header, "antisense_of_plus", _spliced(50), flag=16)
+        aln.set_tag("ts", "-", "A")
+        return aln
+
+    input_bam = _write_bam(tmp_path / "input.bam", [make])
+    top_bam = tmp_path / "out.+.bam"
+    bottom_bam = tmp_path / "out.-.bam"
+    sbs.split_bam_by_strand(str(input_bam), str(top_bam), str(bottom_bam), MAX_INTRON)
+
+    with pysam.AlignmentFile(str(bottom_bam), "rb") as reader:
+        assert {read.query_name for read in reader} == {"antisense_of_plus"}

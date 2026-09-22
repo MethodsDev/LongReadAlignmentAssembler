@@ -246,7 +246,75 @@ def retrieve_contig_seq_from_fasta_file(contig_acc, fasta_filename):
 
     contig_seq_str = re.sub("\\s", "", contig_seq_str)  # just in case
 
+    register_contig_seq_for_strand_check(contig_acc, contig_seq_str)
+
     return contig_seq_str
+
+
+# The contig sequence the ts corroboration check reads, registered by whoever loaded
+# it rather than threaded through every Pretty_alignment and utility that asks a read
+# for its strand. ONE entry: callers process a contig at a time, and holding every
+# contig of a genome would cost gigabytes for a check that only ever looks at the
+# read in hand.
+_contig_seq_for_strand_check = (None, None)
+
+
+def register_contig_seq_for_strand_check(contig_acc, contig_seq_str):
+    global _contig_seq_for_strand_check
+    _contig_seq_for_strand_check = (contig_acc, contig_seq_str)
+
+
+def contig_seq_for_strand_check(contig_acc):
+    """The registered sequence for `contig_acc`, or None if a different one is held.
+
+    None means the flip cannot be corroborated, NOT that it is corroborated: see
+    transcribed_strand.
+    """
+    held_acc, held_seq = _contig_seq_for_strand_check
+    return held_seq if held_acc is not None and held_acc == contig_acc else None
+
+
+def ts_flip_is_corroborated(read, flipped_strand, contig_seq_str):
+    """Does EVERY junction of this read carry a canonical motif on `flipped_strand`?
+
+    minimap2 picks `ts` by SCORING splice motifs (`-u b` tries both orientations and
+    keeps the better), so it reports a preference even where neither orientation is
+    canonical, and that preference can be backwards. This asks the stricter question
+    the graph itself asks -- Intron.check_canonical_splicing, exact GT-AG/GC-AG/AT-AC
+    pairs.
+
+    EVERY junction must resolve, and all must resolve to `flipped_strand`. A junction
+    canonical in NEITHER orientation is not neutral here, it is missing evidence, and
+    the question being answered is whether to move a read off the strand it aligned to.
+    MEASURED: SIRV107 is annotated on the minus strand yet its two junctions read
+    GT..AG (canonical on PLUS) and CT..AG (canonical in neither) -- so "some junction
+    agrees and none disagrees" endorses exactly the flip that loses all 11 of its
+    reads. Requiring the unresolvable junction to resolve is what keeps them.
+
+    An unspliced read has no junctions and so cannot corroborate anything; minimap2
+    emits `ts` in splice mode only, so that case does not normally arise.
+    """
+    from GenomeFeature import Intron
+
+    cigartuples = read.cigartuples
+    if not cigartuples:
+        return False
+
+    n_junctions = 0
+    ref_pos = read.reference_start  # 0-based
+    for op, length in cigartuples:
+        if op in (0, 2, 7, 8):  # M, D, =, X consume the reference
+            ref_pos += length
+        elif op == 3:  # N, an intron
+            n_junctions += 1
+            motif_strand = Intron.check_canonical_splicing(
+                ref_pos + 1, ref_pos + length, contig_seq_str
+            )
+            if motif_strand != flipped_strand:
+                return False
+            ref_pos += length
+
+    return n_junctions > 0
 
 
 def coordpairs_overlap(coordset_A, coordset_B):
@@ -344,6 +412,21 @@ def transcribed_strand(read):
     library (dRNA, oriented cDNA) ``ts`` agrees with the flag, so this is a no-op
     there; only unstranded cDNA changes.
 
+    A FLIP IS CORROBORATED BEFORE IT IS APPLIED. ``ts:A:-`` moves a read to the other
+    strand, and minimap2 picks ``ts`` by scoring splice motifs (``-u b`` tries both
+    orientations and keeps the better), so it states a preference even where neither
+    orientation is canonical -- and that preference is sometimes backwards. MEASURED on
+    the SIRV benchmark: of 71 reads on SIRV1, 11 carry ``ts:A:-`` while aligning
+    reverse, all 11 are simulated from SIRV107 which is a MINUS strand transcript, and
+    trusting the tag moved every one of them to ``+`` where they matched nothing --
+    SIRV107 fell from 11 reads to 0 and the quant correlation from 1.000 to 0.951.
+    So a flip additionally requires the read's own junctions to carry a canonical
+    motif on the strand being flipped TO. Without that agreement, or without a
+    registered contig sequence to check against, the aligned strand stands: an
+    unverifiable flip is the case that loses reads outright.
+
+    ``ts:A:+`` needs no corroboration -- it moves nothing.
+
     This is the TRANSCRIPT orientation, distinct from ``read.is_reverse`` (the
     aligned/sequenced orientation, left untouched). Since SAM stores SEQ in the
     forward-genomic frame, every transcript-geometry decision -- which strand-graph
@@ -354,11 +437,14 @@ def transcribed_strand(read):
         ts = read.get_tag("ts") if read.has_tag("ts") else None
     except Exception:
         ts = None
-    if ts == "+":
+    if ts != "-":
         return aligned
-    if ts == "-":
-        return "+" if aligned == "-" else "-"
-    return aligned
+
+    flipped = "+" if aligned == "-" else "-"
+    contig_seq_str = contig_seq_for_strand_check(read.reference_name)
+    if contig_seq_str is None:
+        return aligned
+    return flipped if ts_flip_is_corroborated(read, flipped, contig_seq_str) else aligned
 
 
 def quant_discard_reason(

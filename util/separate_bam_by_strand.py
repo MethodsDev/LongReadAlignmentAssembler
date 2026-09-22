@@ -196,7 +196,11 @@ def main():
         "--genome",
         type=str,
         required=False,
-        help="genome fasta file, required if --infer_read_orient",
+        help="genome fasta file. Required with --infer_read_orient, and needed for "
+        "a ts:A:- tag to move a read to the other strand at all: that flip is only "
+        "applied when the read's own junctions carry a canonical motif on the strand "
+        "being flipped to, which cannot be checked without the sequence. Without it "
+        "every read partitions on its aligned strand",
     )
 
     parser.add_argument(
@@ -408,6 +412,18 @@ def split_bam_by_strand(
 
         chrom = bamfile_reader.get_reference_name(read.reference_id)
 
+        # The contig sequence, loaded on contig change, for whoever needs it below.
+        # retrieve_contig_seq_from_fasta_file registers it as the sequence
+        # Util_funcs.transcribed_strand checks a ts flip against, so this must run
+        # BEFORE that call: without it no flip can be corroborated and every read
+        # would fall back to its aligned strand, silently partitioning this bam on a
+        # different rule than LRAA itself uses.
+        if genome_fasta is not None and (prev_chrom is None or prev_chrom != chrom):
+            prev_chrom = chrom
+            chrom_seq = Util_funcs.retrieve_contig_seq_from_fasta_file(
+                chrom, genome_fasta
+            )
+
         # Partition by the TRANSCRIBED strand (ts tag, fallback aligned flag), so an
         # antisense-sequenced cDNA read lands in its transcript's bam rather than the
         # one its flag aligned to. is_reverse is NOT rewritten here -- the read keeps
@@ -419,12 +435,6 @@ def split_bam_by_strand(
         init_strand = strand
 
         if infer_read_orient_flag:
-
-            if prev_chrom is None or prev_chrom != chrom:
-                prev_chrom = chrom
-                chrom_seq = Util_funcs.retrieve_contig_seq_from_fasta_file(
-                    chrom, genome_fasta
-                )
 
             pretty_alignment = Pretty_alignment.get_pretty_alignment(read)
 

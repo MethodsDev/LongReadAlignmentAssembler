@@ -3891,6 +3891,13 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
         ),
         chunk["upstream_token"],
     )
+    # Not decoration: a ts:A:- flip is applied only where the read's junctions carry a
+    # canonical motif on the strand being flipped to, and that check needs the
+    # sequence. Without --genome this split would partition on ALIGNED strand while
+    # LRAA itself assigns corroborated transcribed strand, and a read would land in the
+    # bam for a strand graph that never looks for it.
+    genome_fa = getattr(args, "genome_fa", None)
+    genome_args = ["--genome", os.path.abspath(genome_fa)] if genome_fa else []
     cmd = [
         sys.executable,
         SEPARATE_BAM,
@@ -3900,7 +3907,7 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
         split_prefix,
         "--max_intron_length",
         str(args.max_intron_length),
-    ]
+    ] + genome_args
     if reused:
         cmd += ["--contig", chunk["chrom"]]
     for entry in aux:
@@ -3913,7 +3920,9 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
             entry["split_prefix"],
             "--max_intron_length",
             str(args.max_intron_length),
-        ]
+            # Same rule as the primary split above: these bams feed the same strand
+            # graphs, so they must partition by the same corroborated strand.
+        ] + genome_args
         if entry["reused"]:
             entry["cmd"] += ["--contig", chunk["chrom"]]
     if ckpt.done(token):

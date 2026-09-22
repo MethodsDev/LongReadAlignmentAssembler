@@ -1,5 +1,34 @@
 v0.39.0
 
+- a `ts:A:-` tag no longer moves a read to the other strand on its own. minimap2
+  picks `ts` by SCORING splice motifs (`-u b` tries both orientations and keeps
+  the better), so it states a preference even where neither orientation is canonical,
+  and that preference is sometimes backwards. A flip now additionally requires EVERY
+  junction of the read to carry a canonical motif (`Intron.check_canonical_splicing`:
+  exact GT-AG/GC-AG/AT-AC) on the strand being flipped TO. Without that agreement, or
+  without a contig sequence to check against, the aligned strand stands. `ts:A:+`
+  needs no corroboration since it moves nothing.
+
+  MEASURED on the SIRV benchmark, which is how this was found: of 71 reads on SIRV1,
+  11 carry `ts:A:-` while aligning reverse, and all 11 are simulated from SIRV107, a
+  MINUS strand transcript. Trusting the tag moved every one of them to `+`, where they
+  matched no model, failed genome alignment as `long_indel`, were offered to rescue
+  and all came back unrescued: SIRV107 fell from 11 reads to 0, the library from 551
+  reads to 540, and the quant correlation from 1.000 to 0.951. Restored to 1.000 with
+  every read retained.
+
+  "Some junction agrees and none disagrees" is NOT enough, and SIRV107 is why: its two
+  junctions read GT..AG (canonical on PLUS) and CT..AG (canonical in neither), so a
+  partial rule endorses exactly the flip that loses the reads. A junction canonical in
+  neither orientation is missing evidence rather than neutral, and the question being
+  answered is whether to move a read off the strand it aligned to.
+
+  `util/separate_bam_by_strand.py` therefore takes `--genome`, and ChunkedRun's stage
+  3b passes it: that split feeds the strand graphs, so partitioning it on a different
+  rule than LRAA's own assignment would leave reads in the bam for a graph that never
+  looks for them. Without a genome the splitter partitions on aligned strand, which is
+  the pre-`ts` behaviour.
+
 - the splice-pattern-collapsed gtf and the TSS/PolyA site beds are STANDARD
   deliverables. They were opt-in via `--include_splice_collapsed_outputs` in v0.37.1;
   that flag is REMOVED, and they are now written whenever `infer_TSS` or `infer_PolyA`
