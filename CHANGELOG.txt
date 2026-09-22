@@ -1,4 +1,4 @@
-v0.38.0
+v0.39.0
 
 - the splice-pattern-collapsed gtf and the TSS/PolyA site beds are STANDARD
   deliverables. They were opt-in via `--include_splice_collapsed_outputs` in v0.37.1;
