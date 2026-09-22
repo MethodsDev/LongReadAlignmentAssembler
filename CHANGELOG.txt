@@ -1,5 +1,26 @@
 v0.38.0
 
+- the splice-pattern-collapsed gtf and the TSS/PolyA site beds are STANDARD
+  deliverables. They were opt-in via `--include_splice_collapsed_outputs` in v0.37.1;
+  that flag is REMOVED, and they are now written whenever `infer_TSS` or `infer_PolyA`
+  is active and the run reconstructs isoforms -- those are the runs whose models carry
+  the boundary evidence the beds report. `--no_splice_collapsed_outputs` suppresses
+  them. With both inferences off the beds would hold a header and nothing else, and
+  quant-only emits no final gtf to collapse, so neither case writes anything either
+  way. Resolved once, AFTER `--config_update`, since that file can still turn
+  inference off, so the chunked and unchunked emit points cannot disagree about what
+  the run promised.
+
+  Two callers now opt OUT explicitly, both places where a default reaching a
+  sub-invocation is silent rather than loud. Chunk workers: `lraa_cmd` builds a
+  worker's argv from an allowlist, so the worker resolves its own defaults and would
+  otherwise collapse the single chunk it holds, leaving a `<unit>.TSS.bed` in the work
+  directory that describes a fragment and looks like the run's answer -- the same trap
+  `--no_chunk` already documents at that call site. And `LRAA_runner_task`, since
+  `LRAA.wdl` runs one `splice_pattern_collapse` task on the FINAL gtf while the runner
+  is normally one chromosome shard of it; passed in the unscattered case too, where
+  that gtf IS final, so exactly one producer exists in every mode.
+
 - Read strand is assigned from the TRANSCRIBED orientation (minimap2's `ts` tag)
   instead of the aligned-flag orientation. For unstranded cDNA the aligner flag
   records which cDNA strand was sequenced, not which strand was transcribed, so an
@@ -25,28 +46,16 @@ v0.38.0
 
 v0.37.1
 
-- splice-pattern-collapsed outputs are STANDARD DELIVERABLES rather than something
-  produced by a utility a user remembers to run. A run writes
+- splice-pattern-collapsed outputs are available from the pipeline rather than only
+  from a utility a user remembers to run. `--include_splice_collapsed_outputs` adds
   `<prefix>.splice_pattern_collapsed.gtf` (isoforms sharing a gene_id AND an intron
   chain merged into one model, plus the merge and gene-conflicts reports) and
   `<prefix>.TSS.bed` / `<prefix>.PolyA.bed`, one row per distinct boundary site. The
   PolyA bed carries the polyadenylation signal, its offset, and the internal-priming
-  call, so a site can be told apart from an oligo-dT artifact.
-
-  On by default whenever `infer_TSS` or `infer_PolyA` is active and the run
-  reconstructs isoforms -- those are the runs whose models carry the boundary evidence
-  the beds report -- and `--no_splice_collapsed_outputs` suppresses them. With both
-  inferences off there is nothing to report beyond a header, and quant-only emits no
-  final gtf to collapse, so neither writes anything either way. Resolved once, AFTER
-  `--config_update`, since that file can still turn inference off.
-
-  The derivation runs ONCE on the merged gtf, from both the chunked and unchunked
-  paths, so nothing per-unit is staged and no chunk-coordinate translation is involved.
-  Chunk workers are passed `--no_splice_collapsed_outputs` EXPLICITLY, for the reason
-  `--no_chunk` is already explicit there: `lraa_cmd` builds a worker's argv from an
-  allowlist, so a worker resolves its own defaults and would otherwise collapse the one
-  chunk it holds, leaving a `<unit>.TSS.bed` in the work directory that describes a
-  fragment and looks like the run's answer.
+  call, so a site can be told apart from an oligo-dT artifact. Discovery only: the
+  collapse reads the final gtf, and quant-only produces none. The derivation runs ONCE
+  on the merged gtf, from both the chunked and unchunked paths, so nothing per-unit is
+  staged and no chunk-coordinate translation is involved.
 
   The beds are derived from the UNCOLLAPSED models, deliberately. A collapsed model
   spans several terminal variants, so no single boundary count describes it -- and
@@ -87,12 +96,6 @@ v0.37.1
   already converge on. `collapse_LRAA_GTF_by_splice_pattern.py` is now a thin CLI over
   `pylib/SplicePatternCollapse.py`, which is what LRAA imports; the collapse logic has
   one implementation.
-
-  `LRAA_runner_task` passes `--no_splice_collapsed_outputs` for the same reason the
-  chunk workers do: with the outputs now default-on, each chromosome shard would
-  otherwise collapse its own per-chromosome gtf. Passed in the unscattered case too,
-  where that gtf IS the final one, so exactly one producer of these files exists in
-  every mode.
 
 - the single-cell workflows publish the same artifacts. `LRAA-singlecell.wdl` exposes
   `init_*` for the initial pseudobulk catalog -- which is the deliverable of a BASIC
