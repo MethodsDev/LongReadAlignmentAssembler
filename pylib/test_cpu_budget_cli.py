@@ -214,7 +214,11 @@ def test_one_eligible_component_is_refused_a_grant(tmp_path):
         tmp_path, "--component_workers", "4", "--no_parallelize_contigs",
         "--config_update", str(config), budget=8, quant_only=False,
     )
-    assert "only one eligible component outstanding" in log
+    if sys.platform.startswith("linux"):
+        assert "only one eligible component outstanding" in log
+    else:
+        # component workers are forked only on Linux, so the grant is never asked for
+        assert "component workers are forked only on Linux" in log
     assert "-Component assembly granted" not in log
 
 

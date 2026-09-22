@@ -23,7 +23,7 @@ from Pretty_alignment_manager import Pretty_alignment_manager
 from Scored_path import Scored_path
 from shutil import rmtree
 import time
-from multiprocessing import Process
+import multiprocessing
 import traceback
 from MultiProcessManager import MultiProcessManager, ShardStore
 import CpuBudget
@@ -31,6 +31,17 @@ from collections import defaultdict
 import Util_funcs
 import Simple_path_utils as SPU
 from Quantify import Quantify
+
+# Component workers are forked, and only forked: they read module state that the
+# contig worker set at runtime (LRAA_Globals.config, DEBUG, LRAA_MODE,
+# SYNTHETIC_READ_IDS, READ_WEIGHT_REGISTRY, the open read-tracking stores), which a
+# fork inherits and a spawn or forkserver child re-imports as defaults. Asked for
+# explicitly rather than taken from the platform default, which is spawn on macOS
+# and becomes forkserver on Linux from Python 3.14. Off Linux there is no fork
+# context and every component is assembled in-process.
+COMPONENT_FORK_CONTEXT = (
+    multiprocessing.get_context("fork") if sys.platform.startswith("linux") else None
+)
 import IsoformReadRescue
 from IsoformReadRescue import rescue_unassigned_reads_to_transcriptome
 
@@ -394,7 +405,7 @@ class LRAA:
 
         component_workers_granted = 0
         release_component_workers = lambda: None
-        if eligible_component_exists:
+        if eligible_component_exists and COMPONENT_FORK_CONTEXT is not None:
             component_workers_granted, release_component_workers = (
                 CpuBudget.component_worker_grant(
                     self._core_lease,
@@ -443,6 +454,14 @@ class LRAA:
             # The granted workers are the pool width AND the permits held from the core
             # lease: every component worker is charged to the budget for its lifetime.
             mpm = MultiProcessManager(component_workers_granted, shard_store)
+        elif eligible_component_exists and COMPONENT_FORK_CONTEXT is None:
+            logger.info(
+                "[%s%s] -An eligible component exists (largest %d mpgn nodes, hint %d) but component workers are forked only on Linux; assembling every component in-process",
+                self._contig_acc,
+                self._contig_strand,
+                largest_component_size,
+                min_component_size_for_spawn,
+            )
         elif eligible_component_exists:
             logger.info(
                 "[%s%s] -An eligible component exists (largest %d mpgn nodes, hint %d) but no core is free to fork onto; assembling every component in-process",
@@ -524,7 +543,7 @@ class LRAA:
                     USE_MULTIPROCESSOR
                     and mpg_component_size >= min_component_size_for_spawn
                 ):
-                    p = Process(
+                    p = COMPONENT_FORK_CONTEXT.Process(
                         target=self._reconstruct_isoforms_single_component,
                         name=mpg_token,
                         args=(

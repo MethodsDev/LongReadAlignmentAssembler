@@ -38,6 +38,8 @@ if str(REPO_ROOT / "pylib") not in sys.path:
 import CpuBudget
 import LRAA_Globals
 from LRAA import LRAA
+
+LRAA_module = sys.modules["LRAA"]
 from MultiProcessManager import WorkUnitAccountingError
 
 # Generous next to the work each test does -- the longest sleeps 0.6s -- and far
@@ -134,7 +136,22 @@ def _component_worker(
     if plan.sleep_sec:
         time.sleep(plan.sleep_sec)
 
-    if plan.role == "publish":
+    if plan.role == "report_state":
+        # What this worker sees of the module state its contig worker set at runtime.
+        state = (
+            LRAA_Globals.config["min_path_score"],
+            LRAA_Globals.LRAA_MODE,
+            sorted(LRAA_Globals.SYNTHETIC_READ_IDS),
+        )
+        if shard_store is None:  # assembled in-process
+            return [state]
+        shard_store.publish(component_counter, [state], token=mpg_token)
+
+    elif shard_store is None:
+        # assembled in-process: return what the forked path would have published
+        return ["tx-{}".format(component_counter)]
+
+    elif plan.role == "publish":
         shard_store.publish(
             component_counter,
             ["tx-{}".format(component_counter)],
@@ -182,10 +199,27 @@ def _shard_dirs(tmp_path):
 
 
 def _build_round(
-    tmp_path, monkeypatch, roles, budget, ceiling, sleeps=None, measure_index=None
+    tmp_path,
+    monkeypatch,
+    roles,
+    budget,
+    ceiling,
+    sleeps=None,
+    measure_index=None,
+    fork_context="fork",
 ):
-    """A real LRAA instance whose components fork into `_component_worker`."""
+    """A real LRAA instance whose components fork into `_component_worker`.
 
+    `fork_context` is the start method component workers are launched with, forced
+    so the fork path is exercised on every platform (production forks only on
+    Linux); None stands for a platform with no fork context.
+    """
+
+    monkeypatch.setattr(
+        LRAA_module,
+        "COMPONENT_FORK_CONTEXT",
+        multiprocessing.get_context(fork_context) if fork_context else None,
+    )
     monkeypatch.setenv("LRAA_TMP_DIR", str(tmp_path))
     monkeypatch.setattr(LRAA_Globals, "DEBUG", False)
     monkeypatch.setitem(LRAA_Globals.config, "min_transcript_length", 0)
@@ -385,4 +419,88 @@ def test_a_core_lease_permit_is_released_when_the_shard_accounting_raises(
         lraa.reconstruct_isoforms()
 
     assert observed_free.value == 2
+    assert _free_permits(lease, 4) == 4
+
+
+# ---------------------------------------------------------------------------
+# component workers are forked, and only where fork is asked for explicitly
+# ---------------------------------------------------------------------------
+
+
+def test_the_component_fork_context_is_fork_on_linux_and_absent_elsewhere():
+    """Explicit, not the platform default: spawn on macOS, forkserver on Linux from
+    Python 3.14, and neither carries the contig worker's runtime state."""
+
+    if sys.platform.startswith("linux"):
+        assert LRAA_module.COMPONENT_FORK_CONTEXT.get_start_method() == "fork"
+    else:
+        assert LRAA_module.COMPONENT_FORK_CONTEXT is None
+
+
+@pytest.mark.parametrize(
+    "fork_context, inherited", [("fork", True), ("spawn", False)]
+)
+def test_a_forked_component_worker_sees_state_its_contig_worker_set_at_runtime(
+    tmp_path, monkeypatch, fork_context, inherited
+):
+    """The reason component workers are forked only.
+
+    The contig worker sets config, LRAA_MODE and SYNTHETIC_READ_IDS at runtime, and
+    a component worker reads all three. A fork inherits them; the spawn arm is the
+    control showing a spawned worker would get the module defaults instead, so this
+    test can tell the two apart.
+    """
+
+    monkeypatch.setitem(LRAA_Globals.config, "min_path_score", 12345)
+    monkeypatch.setattr(LRAA_Globals, "LRAA_MODE", "ID-test")
+    monkeypatch.setattr(LRAA_Globals, "SYNTHETIC_READ_IDS", {42})
+
+    lraa, lease, _observed = _build_round(
+        tmp_path,
+        monkeypatch,
+        roles=["report_state", "report_state"],
+        budget=4,
+        ceiling=2,
+        fork_context=fork_context,
+    )
+
+    # reconstruct_isoforms clears SYNTHETIC_READ_IDS only when a graph is built,
+    # which the stand-in graph skips, so the parent's set reaches the fork intact.
+    states = lraa.reconstruct_isoforms()
+
+    runtime_state = (12345, "ID-test", [42])
+    assert len(states) == 2
+    if inherited:
+        assert states == [runtime_state, runtime_state]
+    else:
+        assert all(state != runtime_state for state in states)
+        assert all(state[0] == 1 for state in states), "spawn re-imports the default"
+    assert _free_permits(lease, 4) == 4
+
+
+def test_without_a_fork_context_every_component_is_assembled_in_process(
+    tmp_path, monkeypatch, caplog
+):
+    """Off Linux: eligible components and free cores, yet no grant is taken, nothing
+    forks, results keep unit order, and the log names the reason."""
+
+    lraa, lease, observed_free = _build_round(
+        tmp_path,
+        monkeypatch,
+        roles=["publish", "publish", "publish"],
+        budget=4,
+        ceiling=3,
+        measure_index=1,
+        fork_context=None,
+    )
+
+    with caplog.at_level(logging.INFO):
+        transcripts = lraa.reconstruct_isoforms()
+
+    assert transcripts == ["tx-1", "tx-2", "tx-3"]
+    # Measured from inside the (in-process) component: no permit was held.
+    assert observed_free.value == 4
+    assert "component workers are forked only on Linux" in caplog.text
+    assert "Component assembly granted" not in caplog.text
+    assert _shard_dirs(tmp_path) == []
     assert _free_permits(lease, 4) == 4
