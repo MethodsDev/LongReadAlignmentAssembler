@@ -36,6 +36,10 @@ from ResourceMonitor import ResourceMonitor  # noqa: E402
 
 psutil = pytest.importorskip("psutil")
 
+# These measure real CPU use, which contends with parallel test workers; the
+# testing Makefile runs them in their own serial pass.
+pytestmark = pytest.mark.serial
+
 
 def _load_summarizer():
     path = (

@@ -287,10 +287,42 @@ def _ppid_map():
     return parents
 
 
+def _ps_table():
+    """(pid -> ppid, pid -> rss KB) from ``ps``, for hosts without /proc (macOS)."""
+
+    parents, rss = {}, {}
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,rss="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            universal_newlines=True,
+            check=False,
+        ).stdout
+    except OSError:
+        return parents, rss
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) != 3:
+            continue
+        try:
+            pid, ppid, kb = (int(x) for x in fields)
+        except ValueError:
+            continue
+        parents[pid] = ppid
+        rss[pid] = kb
+    return parents, rss
+
+
 def _tree_rss_kb(root_pid):
     """Summed RSS of root_pid and every descendant, in KB."""
 
-    parents = _ppid_map()
+    if os.path.isdir("/proc"):
+        parents = _ppid_map()
+        rss_kb = _proc_rss_kb
+    else:
+        parents, rss_table = _ps_table()
+        rss_kb = lambda pid: rss_table.get(pid, 0)
     children = collections.defaultdict(list)
     for pid, ppid in parents.items():
         children[ppid].append(pid)
@@ -302,7 +334,7 @@ def _tree_rss_kb(root_pid):
         if pid in seen:
             continue
         seen.add(pid)
-        total += _proc_rss_kb(pid)
+        total += rss_kb(pid)
         stack.extend(children.get(pid, ()))
     return total
 
@@ -6354,8 +6386,7 @@ def run_baseline(
 
 
 def loadavg():
-    with open("/proc/loadavg", "rt") as fh:
-        return [float(x) for x in fh.read().split()[:3]]
+    return list(os.getloadavg())
 
 
 def build_parser():

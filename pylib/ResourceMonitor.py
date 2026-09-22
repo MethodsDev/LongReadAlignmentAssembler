@@ -2,6 +2,7 @@
 # Lightweight process resource monitor
 
 import os
+import resource
 import time
 import threading
 import logging
@@ -34,12 +35,16 @@ def _tree_cpu_seconds(proc):
 
     def _own(p):
         t = p.cpu_times()
-        return (
-            t.user
-            + t.system
-            + getattr(t, "children_user", 0.0)
-            + getattr(t, "children_system", 0.0)
-        )
+        if p.pid == os.getpid():
+            # psutil reports children_user/children_system as 0 on macOS; getrusage
+            # gives this process's reaped-children time on every POSIX platform.
+            ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+            reaped = ru.ru_utime + ru.ru_stime
+        else:
+            reaped = getattr(t, "children_user", 0.0) + getattr(
+                t, "children_system", 0.0
+            )
+        return t.user + t.system + reaped
 
     total = _own(proc)
     for child in proc.children(recursive=True):

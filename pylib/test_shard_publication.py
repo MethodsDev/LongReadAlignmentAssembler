@@ -540,6 +540,9 @@ def test_payloads_are_not_read_until_the_caller_asks(store):
 # ---------------------------------------------------------------------------
 
 
+# Serial: the 0.2 s staggers only force reverse completion when workers get CPU
+# promptly, which parallel test workers (and slow spawn start-up) can defeat.
+@pytest.mark.serial
 def test_results_concatenate_in_unit_order_whatever_the_completion_order(store):
     """Staggered so the units finish in reverse.  The payload is the completion
     rank, so this shows submission order was recovered rather than echoed."""

@@ -45,12 +45,21 @@ test: test_pytest
 # Several modules carry state at module scope or write outputs relative to cwd (see
 # above), and both are safe within a worker and not across them.
 #
+# Tests marked `serial` (real CPU measurement, e.g. test_resource_monitor.py) run in a
+# second pass after the parallel one: loadfile keeps them on one worker, but the other
+# workers still starve them of cores and they fail on a busy box.
+#
 # Override the width with `make test_pytest PYTEST_JOBS=4`; PYTEST_JOBS=0 forces serial.
 PYTEST_JOBS ?= auto
 PYTEST_PARALLEL := $(shell python3 -c 'import importlib.util as u, sys; sys.stdout.write("-n $(PYTEST_JOBS) --dist loadfile" if u.find_spec("xdist") and "$(PYTEST_JOBS)" != "0" else "")' 2>/dev/null)
 
 test_pytest:
-	cd .. && python3 -m pytest -q $(PYTEST_PARALLEL) pylib
+ifneq ($(strip $(PYTEST_PARALLEL)),)
+	cd .. && python3 -m pytest -q $(PYTEST_PARALLEL) -m "not serial" pylib
+	cd .. && python3 -m pytest -q -m serial pylib
+else
+	cd .. && python3 -m pytest -q pylib
+endif
 
 
 all: test test_QC test_wdls test_DTU 

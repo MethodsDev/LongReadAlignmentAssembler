@@ -4830,6 +4830,13 @@ def _contig_job_runner(job):
         LRAA_Globals.DEBUG = bool(job.get("DEBUG", False))
     except Exception:
         pass
+    # Under spawn (macOS default) the worker re-imports this module and gets the
+    # INFO-level basicConfig, not the parent's --debug level; fork inherits it.
+    if LRAA_Globals.DEBUG:
+        _root_logger = logging.getLogger()
+        _root_logger.setLevel(logging.DEBUG)
+        for _h in _root_logger.handlers:
+            _h.setLevel(logging.DEBUG)
     try:
         LRAA_Globals.config["no_cleanup"] = bool(job.get("NO_CLEANUP", False))
     except Exception:
