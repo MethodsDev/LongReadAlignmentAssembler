@@ -35,8 +35,22 @@ test: test_pytest
 # (e.g. test_alignment_per_id_mixed_cigar.py's `from pylib.Util_funcs import ...`), which
 # needs the repo root on sys.path. `python -m` puts cwd there; the bare console script
 # does not, so bare pytest fails at COLLECTION and takes the whole suite with it.
+# Parallel when pytest-xdist is installed, serial when it is not, decided by asking
+# the interpreter rather than by assuming: the published images do not all ship xdist,
+# and a hard -n would turn a missing dev dependency into "unrecognized arguments" that
+# takes the whole suite with it. MEASURED on 16 cores: 1780 tests in 100s against 447s
+# serial, same result.
+#
+# --dist loadfile, not the default: it keeps every test of one FILE on one worker.
+# Several modules carry state at module scope or write outputs relative to cwd (see
+# above), and both are safe within a worker and not across them.
+#
+# Override the width with `make test_pytest PYTEST_JOBS=4`; PYTEST_JOBS=0 forces serial.
+PYTEST_JOBS ?= auto
+PYTEST_PARALLEL := $(shell python3 -c 'import importlib.util as u, sys; sys.stdout.write("-n $(PYTEST_JOBS) --dist loadfile" if u.find_spec("xdist") and "$(PYTEST_JOBS)" != "0" else "")' 2>/dev/null)
+
 test_pytest:
-	cd .. && python3 -m pytest -q pylib
+	cd .. && python3 -m pytest -q $(PYTEST_PARALLEL) pylib
 
 
 all: test test_QC test_wdls test_DTU 

@@ -3894,10 +3894,20 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
     # Not decoration: a ts:A:- flip is applied only where the read's junctions carry a
     # canonical motif on the strand being flipped to, and that check needs the
     # sequence. Without --genome this split would partition on ALIGNED strand while
-    # LRAA itself assigns corroborated transcribed strand, and a read would land in the
-    # bam for a strand graph that never looks for it.
-    genome_fa = getattr(args, "genome_fa", None)
-    genome_args = ["--genome", os.path.abspath(genome_fa)] if genome_fa else []
+    # extraction -- which fills the forward/reverse counters this chunk is checked
+    # against -- partitions on the corroborated strand.
+    #
+    # WHICH fasta is load-bearing. A non-reused chunk's bam is REBASED onto the mini
+    # contig written beside it, so its coordinates index that sequence and not the
+    # genome's: handing it the real genome reads junction dinucleotides at the wrong
+    # offsets and corroborates nothing, or worse, the wrong thing. A reused chunk's
+    # bam is the source bam, whole-contig, so it takes the genome itself.
+    source_genome_fa = getattr(args, "genome_fa", None)
+
+    def _genome_args(is_reused):
+        fa = source_genome_fa if is_reused else "{}.fa".format(chunk["prefix"])
+        return ["--genome", os.path.abspath(fa)] if fa else []
+
     cmd = [
         sys.executable,
         SEPARATE_BAM,
@@ -3907,7 +3917,7 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
         split_prefix,
         "--max_intron_length",
         str(args.max_intron_length),
-    ] + genome_args
+    ] + _genome_args(reused)
     if reused:
         cmd += ["--contig", chunk["chrom"]]
     for entry in aux:
@@ -3922,7 +3932,7 @@ def split_chunk_by_strand(args, ckpt, chunk, rss_interval):
             str(args.max_intron_length),
             # Same rule as the primary split above: these bams feed the same strand
             # graphs, so they must partition by the same corroborated strand.
-        ] + genome_args
+        ] + _genome_args(entry["reused"])
         if entry["reused"]:
             entry["cmd"] += ["--contig", chunk["chrom"]]
     if ckpt.done(token):

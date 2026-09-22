@@ -1442,6 +1442,17 @@ def extract_partition(
                 "contig {} is absent from {}".format(region.chrom, genome_fa)
             )
         contig_length = fasta.get_reference_length(region.chrom)
+        # Registered for Util_funcs.transcribed_strand, which this module calls to
+        # decide which orientation a record is emitted as and to fill the
+        # alignments_emitted_forward/reverse counters. A ts:A:- flip is applied only
+        # where the read's junctions corroborate it, and that check needs the
+        # sequence: without it extraction would partition on aligned strand while the
+        # in-chunk strand split, which is handed --genome, partitions on the
+        # corroborated strand -- and ChunkedRun's own accounting check compares those
+        # two numbers and fails the chunk.
+        Util_funcs.register_contig_seq_for_strand_check(
+            region.chrom, fasta.fetch(region.chrom).upper()
+        )
         if region.rend > contig_length:
             raise ExtractionError(
                 "requested partition {}:{}-{} runs past the end of {} ({} bp)".format(
