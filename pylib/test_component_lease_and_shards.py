@@ -437,18 +437,35 @@ def test_the_component_fork_context_is_fork_on_linux_and_absent_elsewhere():
         assert LRAA_module.COMPONENT_FORK_CONTEXT is None
 
 
-@pytest.mark.parametrize(
-    "fork_context, inherited", [("fork", True), ("spawn", False)]
-)
 def test_a_forked_component_worker_sees_state_its_contig_worker_set_at_runtime(
-    tmp_path, monkeypatch, fork_context, inherited
+    tmp_path, monkeypatch
 ):
-    """The reason component workers are forked only.
+    """The state a component worker has to inherit, carried end to end.
 
-    The contig worker sets config, LRAA_MODE and SYNTHETIC_READ_IDS at runtime, and
-    a component worker reads all three. A fork inherits them; the spawn arm is the
-    control showing a spawned worker would get the module defaults instead, so this
-    test can tell the two apart.
+    The contig worker sets config, LRAA_MODE and SYNTHETIC_READ_IDS at runtime and a
+    component worker reads all three, so what this covers is the whole path: the
+    worker really reads them, `_reconstruct_isoforms_single_component` acts on them,
+    and the shard round-trip through MultiProcessManager brings the result back. A
+    worker that reset config, or a shard layer that dropped what it carried, fails
+    here.
+
+    WHAT IT DOES NOT COVER, measured rather than assumed: swapping
+    COMPONENT_FORK_CONTEXT.Process for multiprocessing.Process in LRAA.py leaves this
+    green. CPython's default context on Linux IS fork through 3.13, so the two are
+    indistinguishable on this interpreter, and `_build_round` monkeypatches the
+    context anyway -- the production constant is pinned by
+    test_the_component_fork_context_is_fork_on_linux_and_absent_elsewhere, not here.
+    The distinction starts to matter on 3.14, where forkserver becomes the Linux
+    default and an implicit context stops inheriting.
+
+    Not parametrized over a spawn arm, though one was tried. It asserted CPython's
+    documented behaviour rather than any decision of ours, over a configuration no
+    build reaches -- off Linux COMPONENT_FORK_CONTEXT is None and every component is
+    assembled in-process, on Linux it is fork, so a component worker is spawned
+    nowhere. It could not pass on Linux either: CoreLease builds its BoundedSemaphore
+    in the default (fork) context, which cannot be pickled to a spawn child. Its only
+    structural job was to show this assertion is not vacuous, and the three specific
+    non-default values below already do that.
     """
 
     monkeypatch.setitem(LRAA_Globals.config, "min_path_score", 12345)
@@ -461,20 +478,19 @@ def test_a_forked_component_worker_sees_state_its_contig_worker_set_at_runtime(
         roles=["report_state", "report_state"],
         budget=4,
         ceiling=2,
-        fork_context=fork_context,
+        fork_context="fork",
     )
 
     # reconstruct_isoforms clears SYNTHETIC_READ_IDS only when a graph is built,
     # which the stand-in graph skips, so the parent's set reaches the fork intact.
     states = lraa.reconstruct_isoforms()
 
+    # Every field differs from the module default, so an uninherited worker cannot
+    # match this by accident: min_path_score defaults to 1 (LRAA_Globals.py:359),
+    # LRAA_MODE and SYNTHETIC_READ_IDS to neither "ID-test" nor {42}.
     runtime_state = (12345, "ID-test", [42])
     assert len(states) == 2
-    if inherited:
-        assert states == [runtime_state, runtime_state]
-    else:
-        assert all(state != runtime_state for state in states)
-        assert all(state[0] == 1 for state in states), "spawn re-imports the default"
+    assert states == [runtime_state, runtime_state]
     assert _free_permits(lease, 4) == 4
 
 
