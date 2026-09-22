@@ -274,6 +274,12 @@ task LRAA_runner_task {
         progress_reporter &
         progress_pid=$!
 
+        # --no_splice_collapsed_outputs below: the WORKFLOW owns those artifacts.
+        # LRAA.wdl runs one splice_pattern_collapse task on the FINAL gtf, while this
+        # task is normally one chromosome shard of it, so letting each shard collapse
+        # its own gtf would spend a pass per shard on a per-chromosome answer nothing
+        # reads. Passed in the unscattered case too, where this gtf IS the final one,
+        # so exactly one producer of these files exists in every mode.
         set +e
         (        
         LRAA --genome ~{genome_fasta} \
@@ -310,6 +316,7 @@ task LRAA_runner_task {
                                  ~{if defined(approx_MB_per_cut_wiggle_window) then "--approx_MB_per_cut_wiggle_window " + approx_MB_per_cut_wiggle_window else ""} \
                                  ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
                                  ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
+                                 --no_splice_collapsed_outputs \
                   > command_output.log 2>&1
         )
         cmd_status=$?

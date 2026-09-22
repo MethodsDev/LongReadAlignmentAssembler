@@ -1117,14 +1117,14 @@ def main():
     )
 
     parser.add_argument(
-        "--include_splice_collapsed_outputs",
+        "--no_splice_collapsed_outputs",
         action="store_true",
         default=False,
-        help="additionally write a gtf with isoforms sharing a gene_id and intron "
-        "chain collapsed into one model, and bed files of the distinct TSS and PolyA "
-        "sites with their support and (for PolyA) polyadenylation-signal annotation. "
-        "Discovery mode only: the collapse reads the final gtf, which quant-only does "
-        "not produce",
+        help="do not write the splice-pattern-collapsed gtf and the TSS/PolyA site "
+        "bed files. They are written by default whenever TSS or PolyA inference is "
+        "active and the run reconstructs isoforms, since those are the runs whose "
+        "models carry the boundary evidence the beds report. Quant-only produces no "
+        "final gtf to collapse, so nothing is written there either way",
     )
 
     parser.add_argument(
@@ -1966,7 +1966,6 @@ def main():
         not args.no_SE_subtract_intronic_background
     )
     INCLUDE_PRELIM_TRANSCRIPTS = args.include_prelim_transcripts
-    INCLUDE_SPLICE_COLLAPSED_OUTPUTS = args.include_splice_collapsed_outputs
     # By default, parallelize work units; allow explicit opt-out
     CONTIG_PARALLEL = not args.no_parallelize_contigs
 
@@ -2276,6 +2275,20 @@ def main():
     if not LRAA_Globals.config["rescue_unassigned_reads_via_transcriptome_alignment"]:
         LRAA_Globals.config["stream_reads_rescue_unassigned"] = False
         LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"] = False
+
+    # AFTER --config_update, because that file can still turn boundary inference off,
+    # and these outputs exist to report boundary evidence: a run that inferred no TSS
+    # and no PolyA site has nothing to put in the beds beyond a header, and the
+    # collapsed gtf it would emit is obtainable from the gtf it already wrote.
+    # Resolved once here rather than re-derived at each of the two emit points, so
+    # the chunked and unchunked paths cannot disagree about what a run promised.
+    INCLUDE_SPLICE_COLLAPSED_OUTPUTS = (
+        not args.no_splice_collapsed_outputs
+        and not args.quant_only
+        and bool(
+            LRAA_Globals.config["infer_TSS"] or LRAA_Globals.config["infer_PolyA"]
+        )
+    )
 
     # A --config_update file naming num_total_reads is the caller PROVIDING the
     # denominator, so it has to reach the same resolution the flag reaches. It was
@@ -4085,7 +4098,7 @@ def _run_chunked_mode(args):
     # Derived from the published gtf, so the chunked and unchunked paths run the same
     # code on the same kind of input. Nothing per-unit is needed: the chunk merge has
     # already translated coordinates and resolved id collisions by this point.
-    if args.include_splice_collapsed_outputs and not args.quant_only:
+    if INCLUDE_SPLICE_COLLAPSED_OUTPUTS:
         _write_splice_collapsed_outputs(
             output_prefix, "{}.gtf".format(output_prefix)
         )

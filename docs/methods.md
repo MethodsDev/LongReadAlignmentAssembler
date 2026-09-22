@@ -291,7 +291,8 @@ path removes per-read state from quantification altogether (`docs/streaming_quan
   against 0.05 TB compressed (measured 5.57x on ONT chr20). There is no option to disable it:
   a run that could emit either form would leave consumers guessing which of two filenames is
   current, and every in-repo reader already selects its decompressor from the suffix.
-- Splice-pattern collapse (optional, `--include_splice_collapsed_outputs`, discovery only):
+- Splice-pattern collapse (default whenever TSS or PolyA inference is active and the run
+  reconstructs isoforms; `--no_splice_collapsed_outputs` to suppress):
   `LRAA.splice_pattern_collapsed.gtf`, where isoforms sharing BOTH a `gene_id` and an intron
   chain become one model spanning their outermost termini, plus
   `.isoform_merge_report.tsv` (what merged into what) and `.gene_conflicts.tsv` (intron
@@ -302,7 +303,7 @@ path removes per-read state from quantification altogether (`docs/streaming_quan
   `PolyA_site_internal_priming`, so index *i* of each describes the same site. Coordinates
   are genomic ascending, which on the minus strand puts the 3'-most TSS first. Single-member
   groups keep their ordinary scalar attributes.
-- Boundary sites (same flag): `LRAA.TSS.bed` and `LRAA.PolyA.bed`, one row per distinct
+- Boundary sites (same condition): `LRAA.TSS.bed` and `LRAA.PolyA.bed`, one row per distinct
   `(contig, position, strand)` site of the reported models, as BED6 plus
   `reported_boundary_support`, `num_transcripts`, and `transcript_ids`; the PolyA file adds
   `pas`, `pas_offset`, and `internal_priming`. Support is deduplicated per site, never summed:

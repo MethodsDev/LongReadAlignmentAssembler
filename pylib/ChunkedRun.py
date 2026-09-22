@@ -3673,6 +3673,12 @@ def lraa_cmd(
         # _run_chunked_mode's re-entry guard), killing every chunked run at its
         # first worker. Omission stopped being safe the moment the default did.
         "--no_chunk",
+        # Explicit for the same reason as --no_chunk above: these outputs now default
+        # ON whenever boundary inference is active, and a worker holds ONE chunk. Its
+        # models are not the run's models, so a collapse here would describe a
+        # fragment, and the root derives the real one from the merged gtf. Omission
+        # stopped being safe the moment the default did.
+        "--no_splice_collapsed_outputs",
     ]
     if gtf:
         cmd += ["--gtf", gtf]
