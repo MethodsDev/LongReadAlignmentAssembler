@@ -1084,3 +1084,58 @@ def test_an_input_declaring_a_non_coordinate_sort_order_is_refused(tmp_path):
 
     assert "queryname" in str(raised.value)
     assert "--num_workers 1" in str(raised.value)
+
+
+# --------------------------------------------- transcribed strand (ts tag) routing
+
+
+def test_transcribed_strand_prefers_ts_then_falls_back_to_the_flag():
+    import Util_funcs
+
+    header = _header()
+
+    def mk(flag, ts=None):
+        aln = _alignment(header, "r", ((MATCH, 100),), flag=flag)
+        if ts is not None:
+            aln.set_tag("ts", ts, "A")
+        return aln
+
+    # no ts -> the aligned flag, unchanged behavior
+    assert Util_funcs.transcribed_strand(mk(0)) == "+"
+    assert Util_funcs.transcribed_strand(mk(16)) == "-"
+    # ts is read-relative: '+' agrees with the alignment, '-' is opposite
+    assert Util_funcs.transcribed_strand(mk(16, "-")) == "+"  # antisense read of a + transcript
+    assert Util_funcs.transcribed_strand(mk(0, "+")) == "+"
+    assert Util_funcs.transcribed_strand(mk(16, "+")) == "-"  # genuine - transcript
+    # ts:A:? is undetermined -> fall back to the flag
+    assert Util_funcs.transcribed_strand(mk(16, "?")) == "-"
+
+
+def test_split_partitions_by_transcribed_strand_not_the_aligned_flag(tmp_path):
+    """A reverse-ALIGNED read whose ts says its transcript is + goes to the + bam."""
+
+    def _with_ts(name, flag, ts):
+        def make(header):
+            aln = _alignment(header, name, _spliced(50), flag=flag)
+            aln.set_tag("ts", ts, "A")
+            return aln
+        return make
+
+    input_bam = _write_bam(
+        tmp_path / "input.bam",
+        [
+            _with_ts("antisense_of_plus", 16, "-"),  # rev flag, ts:- => transcript +
+            _with_ts("sense_of_plus", 0, "+"),       # fwd flag, ts:+ => transcript +
+            _with_ts("minus", 16, "+"),              # rev flag, ts:+ => transcript -
+        ],
+    )
+    top_bam = tmp_path / "out.+.bam"
+    bottom_bam = tmp_path / "out.-.bam"
+    sbs.split_bam_by_strand(str(input_bam), str(top_bam), str(bottom_bam), MAX_INTRON)
+
+    def names(bam):
+        with pysam.AlignmentFile(str(bam), "rb") as reader:
+            return {read.query_name for read in reader}
+
+    assert names(top_bam) == {"antisense_of_plus", "sense_of_plus"}
+    assert names(bottom_bam) == {"minus"}

@@ -740,7 +740,9 @@ def count_retained_primary_by_orientation(bam, chrom, strand, max_intron_length=
         if not extractor.retained_for_extraction(aln, strand, max_intron_length):
             continue
         total += 1
-        if aln.is_forward:
+        # TRANSCRIBED strand (ts, fallback flag) so the per-strand coverage that
+        # places cuts matches how separate_bam_by_strand partitions the reads.
+        if Util_funcs.transcribed_strand(aln) == "+":
             forward += 1
         else:
             reverse += 1

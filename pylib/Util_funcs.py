@@ -328,6 +328,39 @@ def has_disqualifying_long_intron(read, max_intron_length):
     return get_longest_intron_length(read) > max_intron_length
 
 
+def transcribed_strand(read):
+    """Transcribed strand of a read, '+' or '-'.
+
+    minimap2 (splice mode) reports the transcribed orientation in the read-relative
+    ``ts`` tag: ``ts:A:+`` means the transcript runs the same direction the read
+    aligned, ``ts:A:-`` the opposite. Combined with the aligner's own strand that
+    gives the ABSOLUTE transcribed strand -- which is what LRAA assigns reads by,
+    and which for UNSTRANDED cDNA is NOT the aligned strand: the flag reports which
+    cDNA strand was sequenced, not which strand was transcribed, so an antisense
+    read of a + gene aligns reverse yet carries ``ts:A:-`` (transcript = +).
+
+    Reads with no usable ``ts`` (unspliced, ``ts:A:?``, or a non-minimap2 bam) fall
+    back to the aligned strand -- the historical behavior. For a genuinely stranded
+    library (dRNA, oriented cDNA) ``ts`` agrees with the flag, so this is a no-op
+    there; only unstranded cDNA changes.
+
+    This is the TRANSCRIPT orientation, distinct from ``read.is_reverse`` (the
+    aligned/sequenced orientation, left untouched). Since SAM stores SEQ in the
+    forward-genomic frame, every transcript-geometry decision -- which strand-graph
+    a read joins, and which end carries the polyA/TSS -- keys on THIS, not the flag.
+    """
+    aligned = "-" if read.is_reverse else "+"
+    try:
+        ts = read.get_tag("ts") if read.has_tag("ts") else None
+    except Exception:
+        ts = None
+    if ts == "+":
+        return aligned
+    if ts == "-":
+        return "+" if aligned == "-" else "-"
+    return aligned
+
+
 def quant_discard_reason(
     read,
     contig_strand=None,
@@ -384,9 +417,10 @@ def quant_discard_reason(
     # empty one, and it silently emptied the severed-alignment bam for every run
     # of the chunked pipeline, which omits --strand by design.
     if contig_strand:
-        if read.is_forward and contig_strand != "+":
-            return "wrong_strand"
-        if read.is_reverse and contig_strand != "-":
+        # By the TRANSCRIBED strand (ts tag, fallback aligned flag), not the raw
+        # flag: an antisense-sequenced cDNA read of a contig_strand transcript must
+        # be kept for it, not rejected as wrong_strand for how it happened to align.
+        if transcribed_strand(read) != contig_strand:
             return "wrong_strand"
     if read.mapping_quality < min_mapping_quality:
         return "min_mapping_quality"

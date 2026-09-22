@@ -15,6 +15,7 @@ sys.path.insert(
 
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Pretty_alignment import Pretty_alignment
+import Util_funcs
 from SQANTI_like_annotator import SQANTI_like_annotator
 
 FORMAT = (
@@ -208,7 +209,9 @@ def classify_read(read, bamfile_reader, sqanti_classifier):
     chrom = bamfile_reader.get_reference_name(read.reference_id)
 
     read_name = read.query_name
-    read_strand = "+" if read.is_forward else "-"
+    # TRANSCRIBED strand (ts, fallback flag), so an antisense-sequenced cDNA read
+    # is categorized against its transcript's strand, not how it aligned.
+    read_strand = Util_funcs.transcribed_strand(read)
 
     stranded_chrom = "{}:{}".format(chrom, read_strand)
 

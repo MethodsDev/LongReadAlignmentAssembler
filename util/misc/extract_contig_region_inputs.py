@@ -748,7 +748,7 @@ def _is_nonprimary(aln):
 def _strand_matches(aln, strand):
     if not strand:
         return True
-    return aln.is_forward if strand == "+" else aln.is_reverse
+    return Util_funcs.transcribed_strand(aln) == strand
 
 
 def retained_for_extraction(aln, strand, max_intron_length=None):
@@ -1233,7 +1233,10 @@ def _extract_aux_slice(
                     dropped.append(aln.query_name)
                     continue
                 counts[role + "_alignments_emitted"] += 1
-                if aln.is_forward:
+                # By TRANSCRIBED strand (ts, fallback flag) so this per-orientation
+                # tally matches how separate_bam_by_strand now partitions -- keeping
+                # the verify_chunk_split accounting consistent under unstranded cDNA.
+                if Util_funcs.transcribed_strand(aln) == "+":
                     counts[role + "_alignments_emitted_forward"] += 1
                 else:
                     counts[role + "_alignments_emitted_reverse"] += 1
@@ -1631,7 +1634,9 @@ def extract_partition(
                 # Per orientation as well as in total, because for a strandless
                 # chunk "both strands are in here" is the property the downstream
                 # split depends on, and a single total cannot state it.
-                if aln.is_forward:
+                # TRANSCRIBED strand (ts, fallback flag): matches the partition
+                # separate_bam_by_strand performs, so split +/- equals this tally.
+                if Util_funcs.transcribed_strand(aln) == "+":
                     counts["alignments_emitted_forward"] += 1
                 else:
                     counts["alignments_emitted_reverse"] += 1

@@ -270,9 +270,11 @@ def _collect_read_sequences(
                 # hard-clipped supplementary records would supply a truncated one.
                 continue
             if target_strand is not None:
-                if read.is_forward and target_strand != "+":
-                    continue
-                if read.is_reverse and target_strand != "-":
+                # By TRANSCRIBED strand (ts, fallback flag): an antisense-sequenced
+                # cDNA read of target_strand must still be rescued onto it. (The
+                # is_reverse below is a DIFFERENT question -- recovering the read's
+                # sequenced orientation to realign -- and stays the aligned flag.)
+                if Util_funcs.transcribed_strand(read) != target_strand:
                     continue
             read_name = Util_funcs.get_read_name_include_sc_encoding(read)
             if remaining is not None and read_name not in remaining:

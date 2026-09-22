@@ -408,7 +408,14 @@ def split_bam_by_strand(
 
         chrom = bamfile_reader.get_reference_name(read.reference_id)
 
-        strand = "+" if read.is_forward else "-"
+        # Partition by the TRANSCRIBED strand (ts tag, fallback aligned flag), so an
+        # antisense-sequenced cDNA read lands in its transcript's bam rather than the
+        # one its flag aligned to. is_reverse is NOT rewritten here -- the read keeps
+        # its aligned orientation for sequence-frame logic; only which bam it is
+        # written to changes. For stranded data ts agrees with the flag, so this is
+        # the same partition as before. --infer_read_orient below still exists as a
+        # genome-motif fallback for bams that carry no ts tag.
+        strand = Util_funcs.transcribed_strand(read)
         init_strand = strand
 
         if infer_read_orient_flag:

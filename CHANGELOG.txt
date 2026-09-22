@@ -1,3 +1,28 @@
+v0.38.0
+
+- Read strand is assigned from the TRANSCRIBED orientation (minimap2's `ts` tag)
+  instead of the aligned-flag orientation. For unstranded cDNA the aligner flag
+  records which cDNA strand was sequenced, not which strand was transcribed, so an
+  antisense-sequenced read of a gene was assigned to the opposite strand's splice
+  graph and dropped -- fragmenting or losing isoforms at loci with an antisense read
+  population (a 43 kb 18-exon Sequin that fragmented into three models reconstructs
+  whole once the reads reach the right strand). `Util_funcs.transcribed_strand`
+  combines the read-relative `ts` tag with the aligned flag to recover the absolute
+  transcribed strand, falling back to the flag when `ts` is absent (unspliced reads,
+  `ts:A:?`, or a non-minimap2 bam). It drives every transcript-geometry decision: the
+  strand split (util/separate_bam_by_strand.py), the read-assignment filter
+  (Util_funcs.quant_discard_reason), per-orientation chunk accounting
+  (extract_contig_region_inputs), Pretty_alignment.get_strand, the polyA / TSS /
+  untemplated-G soft-clip branches (which key on the transcript's 3'/5' ends, so this
+  also corrects end detection for antisense-sequenced reads), isoform-read rescue, cut
+  selection, and SQANTI-like read categorization. `read.is_reverse` is left as the
+  SEQUENCED orientation for sequence-frame logic (reverse-complementing a read to
+  realign it). No new flag and no bam rewrite. For genuinely stranded data (dRNA,
+  oriented cDNA) `ts` agrees with the flag, so this is a near-noop there (~0.5-1.6% of
+  spliced reads differ); only unstranded cDNA is materially affected.
+  SPLICE_GRAPH_CACHE_VERSION is bumped to 9, since which reads reach each strand's
+  graph now differs for the same inputs.
+
 v0.37.1
 
 - splice-pattern-collapsed outputs are available from the pipeline rather than only

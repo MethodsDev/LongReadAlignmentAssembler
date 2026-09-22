@@ -111,13 +111,11 @@ class Pretty_alignment:
     def get_strand(self, pysam_alignment=None):
 
         if pysam_alignment is not None:
-
-            if pysam_alignment.is_forward:
-                return "+"
-            elif pysam_alignment.is_reverse:
-                return "-"
-            else:
-                return "?"
+            # TRANSCRIBED strand (ts tag, fallback aligned flag) -- the strand the
+            # read's transcript is on, which is what a read is assigned by. Not the
+            # aligned flag: for unstranded cDNA those differ. is_reverse stays the
+            # aligned orientation for sequence-frame logic elsewhere.
+            return Util_funcs.transcribed_strand(pysam_alignment)
 
         assert self.strand is not None
         return self.strand
@@ -179,6 +177,17 @@ class Pretty_alignment:
         if pysam_alignment is None:
             pysam_alignment = self._pysam_alignment
 
+        # PolyA and untemplated-G sit at the TRANSCRIPT's 3'/5' ends. SAM stores
+        # SEQ in the forward-genomic frame, so which soft clip (left vs right) and
+        # base (A/T, G/C) carries the signal is fixed by the TRANSCRIBED strand,
+        # not by how the read happened to align. Keying on transcribed_strand (ts
+        # tag, fallback aligned flag) is identical to the aligned flag for stranded
+        # data, and corrects antisense-sequenced reads of unstranded cDNA, whose
+        # polyA/TSS the raw-flag branches otherwise looked for at the wrong end.
+        # (The end/base reasoning in the comments below is unchanged; only the
+        # predicate that selects it moves from the flag to the transcribed strand.)
+        tx_forward = Util_funcs.transcribed_strand(pysam_alignment) == "+"
+
         cigar_tuples = pysam_alignment.cigartuples
 
         S = 4  # soft clipping cigar code in pysam
@@ -232,7 +241,7 @@ class Pretty_alignment:
         _tail_window = LRAA_Globals.config["polyA_tail_proximal_window"]
         _tail_min_frac = LRAA_Globals.config["min_proximal_tail_base_frac"]
 
-        if pysam_alignment.is_forward:
+        if tx_forward:
             if right_soft_clipping >= min_PolyA_ident_length:
                 self.has_external_tail = (
                     Util_funcs.frac_base_composition(
@@ -260,7 +269,7 @@ class Pretty_alignment:
         # window instead takes that from 1.1% to 50.7% of all reads.
         strip_on_proximal = LRAA_Globals.config["strip_polyA_on_proximal_window"]
 
-        if pysam_alignment.is_forward and right_soft_clipping >= min_PolyA_ident_length:
+        if tx_forward and right_soft_clipping >= min_PolyA_ident_length:
             whole_clip_polyA = (
                 Util_funcs.frac_base_composition(right_soft_clipped_seq, "A")
                 >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
@@ -269,7 +278,7 @@ class Pretty_alignment:
                 right_soft_clipping = 0
                 logger.debug("Stripped polyA from end of read {}".format(read_name))
 
-        elif pysam_alignment.is_reverse and left_soft_clipping >= min_PolyA_ident_length:
+        elif (not tx_forward) and left_soft_clipping >= min_PolyA_ident_length:
             whole_clip_polyT = (
                 Util_funcs.frac_base_composition(left_soft_clipped_seq, "T")
                 >= LRAA_Globals.config["min_soft_clip_PolyA_base_frac_for_conversion"]
@@ -301,7 +310,7 @@ class Pretty_alignment:
             # a reverse-strand alignment stores the reverse complement, so the
             # 5' G run sits at the right end as its complement
             if (
-                pysam_alignment.is_forward
+                tx_forward
                 and 0 < left_soft_clipping <= max_untemplated_G
                 and set(left_soft_clipped_seq.upper()) == {"G"}
             ):
@@ -311,7 +320,7 @@ class Pretty_alignment:
                 )
 
             elif (
-                pysam_alignment.is_reverse
+                (not tx_forward)
                 and 0 < right_soft_clipping <= max_untemplated_G
                 and set(right_soft_clipped_seq.upper()) == {"C"}
             ):
@@ -364,7 +373,7 @@ class Pretty_alignment:
             # clip and the bases touching the alignment are its TAIL; a reverse
             # alignment stores the reverse complement, so the 5' end is the RIGHT
             # clip and the proximal bases are its HEAD, as C
-            if pysam_alignment.is_forward and left_soft_clipping > 0:
+            if tx_forward and left_soft_clipping > 0:
                 run = len(left_soft_clipped_seq.upper()) - len(
                     left_soft_clipped_seq.upper().rstrip("G")
                 )
@@ -376,7 +385,7 @@ class Pretty_alignment:
                         )
                     )
 
-            elif pysam_alignment.is_reverse and right_soft_clipping > 0:
+            elif (not tx_forward) and right_soft_clipping > 0:
                 run = len(right_soft_clipped_seq.upper()) - len(
                     right_soft_clipped_seq.upper().lstrip("C")
                 )

@@ -57,16 +57,19 @@ FASTA, one mini GTF, one pass over the region -- and the split runs on that
 mini bam as the chunk's own first step. Stages 4 and 5 are untouched: they
 still each receive one orientation-pure bam of one chunk.
 
-ORDER IS LOAD-BEARING HERE. ``separate_bam_by_strand`` REWRITES
-``read.is_reverse`` when the orientation it infers disagrees with the aligner,
-and the extractor's strand filter reads the RAW flag. So a chunk is extracted
-STRANDLESSLY and split AFTERWARDS; extracting ``chr1+:...`` from a bam that has
-not been split would assign every flipped read to the wrong chunk and still
-produce output that looks entirely normal. Three things stop that reordering:
-the extractor refuses a strand-suffixed region over a mixed-orientation bam,
+ORDER IS LOAD-BEARING HERE. ``separate_bam_by_strand`` partitions by the
+TRANSCRIBED strand (Util_funcs.transcribed_strand: minimap2's ``ts`` tag, which
+for unstranded cDNA differs from the aligned flag), and the extractor's strand
+filter and per-orientation tally read that SAME transcribed strand. So a chunk
+is extracted STRANDLESSLY and split AFTERWARDS; extracting ``chr1+:...`` from a
+bam that has not been split would assign every read whose transcribed strand
+differs from its aligned flag to the wrong chunk and still produce output that
+looks entirely normal. Three things stop that reordering: the extractor refuses
+a strand-suffixed region over a mixed-orientation bam,
 ``assert_extracted_strandlessly`` refuses to split a chunk that was extracted
 for one orientation, and the post-split record counts are checked against the
-extractor's own per-orientation tallies.
+extractor's own per-orientation tallies (which count the same transcribed
+strand, so the identity still holds).
 
 DISCOVERY CHUNKING, ``--discovery``. Off by default, and quant-only is unchanged
 in every particular while it is off. With it, stage 5 drops ``--quant_only``,
@@ -3759,12 +3762,12 @@ def lraa_cmd(
 def assert_extracted_strandlessly(chunk):
     """Refuse to split a chunk that was not extracted with both orientations.
 
-    ``separate_bam_by_strand`` REWRITES ``read.is_reverse`` when the orientation
-    it infers disagrees with the aligner, and the extractor's strand filter
-    reads the RAW flag. Extract-then-split is therefore the only correct order:
-    extracting ``chr1+:...`` from a bam that has not been split puts every
-    flipped read in the wrong chunk and produces output that looks entirely
-    normal.
+    ``separate_bam_by_strand`` partitions by the TRANSCRIBED strand (the ``ts``
+    tag, which for unstranded cDNA differs from the aligned flag). Extract-then-
+    split is therefore the only correct order: extracting ``chr1+:...`` from a
+    bam that has not been split puts every read whose transcribed strand differs
+    from its aligned flag in the wrong chunk and produces output that looks
+    entirely normal.
 
     Checked here rather than at the call site because this is the one place the
     order cannot be got wrong by accident -- the chunk in hand either was
