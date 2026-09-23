@@ -1178,7 +1178,9 @@ class LRAA:
         # Terminal adjustment mutates exon coordinates but leaves the pre-adjustment
         # simple path in place. Refresh transcript paths against the current splice
         # graph so downstream filtering uses the adjusted terminal structure.
-        transcripts = self.assign_transcripts_paths_in_graph(transcripts)
+        transcripts = self.assign_transcripts_paths_in_graph(
+            transcripts, snap_terminals_for=transcripts
+        )
 
         #
         ###################
@@ -1644,12 +1646,81 @@ class LRAA:
 
         return mp_counter
 
-    def assign_transcripts_paths_in_graph(self, transcripts):
+    def _snap_terminals_to_boundary_nodes(self, transcript, path):
+        """
+        Make a model's coordinates agree with the TSS/POLYA node its path ends on.
+
+        has_TSS()/has_PolyA() read the path, but everything downstream that asks
+        where the model ends -- the internal-priming test, the PAS scan, the GTF --
+        reads the exon coordinates. refine_{TSS,PolyA}_simple_path trims the path to
+        a boundary node lying up to max_dist_between_alt_{TSS,polyA}_sites/2 inside
+        the terminal exon, and nothing wrote that node's position back, so a model
+        could report PolyA "True" for a site that is not its 3' end. Measured: a
+        model on the read-end stack in front of a genomic A-run kept that end while
+        its path ended on a POLYA node 17 bp upstream, and came out both PolyA and
+        InternalPriming.
+
+        Moves an end only inward, onto a node lying within that terminal exon; a
+        node outside it is left alone rather than extended to.
+        """
+        exons = [list(seg) for seg in transcript.get_exon_segments()]
+        splice_graph = self.get_splice_graph()
+
+        def boundary_pos(node_id, side):
+            if not isinstance(node_id, str) or not node_id.startswith(
+                ("TSS:", "POLYA:")
+            ):
+                return None
+            lend, rend = splice_graph.get_node_obj_via_id(node_id).get_coords()
+            return lend if side == "left" else rend
+
+        new_lend, new_rend = exons[0][0], exons[-1][1]
+
+        pos = boundary_pos(path[0], "left")
+        if pos is not None and exons[0][0] < pos <= exons[0][1]:
+            new_lend = pos
+
+        pos = boundary_pos(path[-1], "right")
+        if pos is not None and exons[-1][0] <= pos < exons[-1][1]:
+            new_rend = pos
+
+        if (new_lend, new_rend) == (exons[0][0], exons[-1][1]):
+            return
+        if new_lend > new_rend:
+            # single-exon model whose two boundary nodes cross: leave it unchanged
+            return
+
+        logger.debug(
+            "snap %s to boundary nodes: [%d-%d] -> [%d-%d]",
+            transcript.get_transcript_id(),
+            exons[0][0],
+            exons[-1][1],
+            new_lend,
+            new_rend,
+        )
+        exons[0][0] = new_lend
+        exons[-1][1] = new_rend
+        transcript._exon_segments = exons
+        transcript._lend = new_lend
+        transcript._rend = new_rend
+        transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
+
+    def assign_transcripts_paths_in_graph(
+        self, transcripts, snap_terminals_for=None
+    ):
         """
         Assigns paths in the splice graph to input transcripts.
         Returns a filtered list containing only transcripts that were successfully mapped.
         Transcripts that cannot be mapped are logged as warnings and excluded from the result.
+
+        snap_terminals_for: optional collection of transcripts (matched by identity)
+        whose terminal exon ends are moved onto the TSS/POLYA node their remapped path
+        ends on -- see _snap_terminals_to_boundary_nodes. Pass only models this run
+        assembled; reference/imported models keep their coordinates.
         """
+        snap_ids = (
+            {id(t) for t in snap_terminals_for} if snap_terminals_for else set()
+        )
 
         splice_graph = self.get_splice_graph()
         contig_acc = splice_graph.get_contig_acc() if splice_graph else "?"
@@ -1763,6 +1834,8 @@ class LRAA:
 
             transcript.set_simple_path(path)
             transcript.refresh_boundary_annotations_from_simple_path()
+            if id(transcript) in snap_ids:
+                self._snap_terminals_to_boundary_nodes(transcript, path)
 
             # Keep boundary counts synchronized with remapped graph paths.
             # During quant-only / final-quant passes, a transcript can gain a

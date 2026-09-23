@@ -7053,8 +7053,9 @@ def run_transcript_assembly(
 
     lraa_all_obj = LRAA(sg_all, component_workers, core_lease=CORE_LEASE)
 
+    # Snap only this run's assembled models; reference models keep their coordinates.
     mapped_transcripts = lraa_all_obj.assign_transcripts_paths_in_graph(
-        transcripts_incl_in_graph
+        transcripts_incl_in_graph, snap_terminals_for=all_transcripts
     )
     mapped_transcript_object_ids = {id(transcript) for transcript in mapped_transcripts}
     all_transcripts = [

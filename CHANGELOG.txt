@@ -1,5 +1,26 @@
 v0.39.0
 
+- FIXED: a de novo model could report `PolyA "True"` for a site that is not its 3'
+  end. `has_PolyA()`/`has_TSS()` read the simple path, while the internal-priming
+  test, the PAS scan and the GTF read the exon coordinates, and
+  `refine_{TSS,PolyA}_simple_path` trims the path onto a boundary node lying up to
+  25 bp inside the terminal exon without moving the model's end. A remapped
+  assembled model now has its terminal exon end moved onto the TSS/POLYA node its
+  path ends on (`LRAA._snap_terminals_to_boundary_nodes`); inward only, and only
+  for models this run assembled -- reference/imported models (quant-only, ref-guided
+  inputs) keep their coordinates.
+
+  MEASURED on 10x 3' SBX (XP132120) de novo, 7 chromosomes: 94 of 65,796 models
+  carried both `PolyA "True"` and `InternalPriming "True"`, all multi-exon, all
+  `PAS "none"`, and only 1% of their 3' ends fell in a PolyASite 2.0 cluster
+  (background). E.g. chr10 comp-531: path ended on a POLYA node at 32,351,635
+  (downstream CAATAAGAGCGAAACTCCAT, not A-rich) while the model ended at
+  32,351,652 (downstream CATCTTAAAAAAAGAAAAAA). Rerun on that locus: 4 -> 0 such
+  models; the model now ends at 32,351,635 with InternalPriming False; 5 of 47
+  structures shift an end by 2-19 bp (4 PolyA, 1 TSS); read assignment identical.
+  Expect de novo/ref-guided model ends to move by a few bp relative to earlier
+  outputs; quantification is unaffected.
+
 - a `ts:A:-` tag no longer moves a read to the other strand on its own. minimap2
   picks `ts` by SCORING splice motifs (`-u b` tries both orientations and keeps
   the better), so it states a preference even where neither orientation is canonical,
