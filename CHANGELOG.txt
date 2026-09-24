@@ -1,3 +1,35 @@
+v0.40.0
+
+- new whole-genome alignment-mismapping filter, ON BY DEFAULT (disable with
+  --no_filter_mismappings). It runs ONCE after the per-contig models are merged
+  -- a post-merge, whole-genome stage in both chunked and --no_chunk modes, never
+  per chunk -- and removes isoforms that are alignment/strand-mismapping artifacts
+  of a much-higher-expressed transcript. Two detectors are unioned:
+    * MIRROR (coordinate): a multi-exon model on the strand OPPOSITE a
+      higher-expressed model, with high exonic base overlap and every splice site
+      within mismap_junction_tolerance bp of that model's exon boundaries. Catches
+      wrong-strand near-mirror artifacts (e.g. cryptic opposite-strand splices a
+      few bp from a real junction, the failure mode v0.39.0's ts-tag fix reduced
+      but does not eliminate at depth).
+    * SEQUENCE (minimap2 cDNA all-vs-all): a model whose spliced cDNA is
+      >= mismap_min_seq_identity% identical over >= mismap_min_seq_coverage of its
+      length to a DIFFERENT-gene, higher-expressed model. Catches run-ons,
+      chimeras and same-strand mismappings.
+  Both gate on mismap_max_expr_fraction (default 1%): a model is removed only when
+  it carries less than that fraction of the matched model's expression. That
+  low-expression gate keeps well-expressed paralogs, and the cross-gene
+  requirement keeps genuine minor same-gene isoforms. Because what is removed is
+  negligible (validated: ~0.07% of reads on a deep ONT Sequin run), the quant is
+  repaired by dropping the removed rows and renormalizing TPM to 1e6 rather than
+  requantifying; isoform_fraction/unique_gene_read_fraction are recomputed only
+  for genes that lost a member. Requires the genome fasta (for cDNA extraction);
+  skipped under --quant_only. Emits <gtf>.mismapping_filter.log naming every
+  removed model, its matched partner, and why. New pylib module
+  AlignmentMismappingFilter.py and standalone util
+  filter_LRAA_isoforms_by_mismapping.py (used by the WDL); thresholds are tunable
+  via LRAA_Globals.config (mismap_*).
+
+
 v0.39.0
 
 - FIXED: a de novo model could report `PolyA "True"` for a site that is not its 3'

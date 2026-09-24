@@ -362,6 +362,31 @@ config = {
     "min_transcript_length": 200,
     "min_isoform_fraction": 0.01,
     "min_frac_gene_unique_reads": 0.01,  # minimum fraction of all uniquely assigned reads per gene
+    #########################################################################
+    # Whole-genome alignment-mismapping filter (v0.40.0). A POST-MERGE stage --
+    # it runs once on the merged genome-wide gtf + quant.expr, never per chunk --
+    # that removes isoforms which are alignment/strand-mismapping artifacts of a
+    # much-higher-expressed transcript. Two independent detectors, unioned:
+    #   (1) MIRROR (coordinate): a multi-exon model on the opposite strand to a
+    #       higher-expressed model, with high exonic base overlap and every splice
+    #       site within mismap_junction_tolerance bp of that model's exon
+    #       boundaries. Catches wrong-strand ("s") near-mirrors and needs no genome.
+    #   (2) SEQUENCE (minimap2 cDNA all-vs-all): a model whose spliced cDNA is
+    #       >= mismap_min_seq_identity%% identical over >= mismap_min_seq_coverage of
+    #       its length to a DIFFERENT-gene, higher-expressed model. Catches run-ons
+    #       ("x"), chimeras, and same-strand mismappings.
+    # Both gate on mismap_max_expr_fraction: only removed when the model carries
+    # < that fraction of the matched model's expression. That low-expression gate
+    # is what makes it safe (well-expressed paralogs are retained) and lets the
+    # quant be repaired by dropping the rows and renormalizing TPM rather than
+    # requantifying. The cross-gene requirement (sequence detector) keeps genuine
+    # minor same-gene isoforms. Requires the genome fasta (for cDNA extraction).
+    "filter_mismappings": True,  # master switch; --no_filter_mismappings sets False
+    "mismap_min_seq_identity": 99.0,  # percent identity of the cDNA-vs-cDNA match
+    "mismap_min_seq_coverage": 0.85,  # fraction of the query cDNA the match must cover
+    "mismap_max_expr_fraction": 0.01,  # remove only if expr < this fraction of the match's expr
+    "mismap_junction_tolerance": 20,  # bp tolerance, mirror splice site vs opp-strand exon boundary
+    "mismap_min_base_overlap": 0.5,  # mirror: min exonic base overlap fraction with the opp-strand model
     # No model survives assembly/discovery filtering that quantification could not put a
     # whole read on. A COUNT of assigned reads, applied to every model -- novel and
     # reference-containing, monoexonic and spliced -- before any other filter runs, and

@@ -121,6 +121,14 @@ task LRAA_runner_task {
         # neither means anything for a run that places no cuts.
         Boolean no_chunk = false
 
+        # Disable LRAA's own whole-genome alignment-mismapping filter in this shard.
+        # DEFAULT true: that filter is a genome-wide, post-merge step, so it must
+        # NOT run per shard (a by_chromosome shard passes --chunk and would filter
+        # that one chromosome's models at the wrong scale). LRAA.wdl runs the filter
+        # once, on the merged genome-wide gtf+quant, as the alignment_mismapping_filter
+        # task. LRAA's in-binary filter is for a direct `LRAA` run outside WDL.
+        Boolean no_filter_mismappings = true
+
         # Two-pass streaming quantification. ON by default, matching LRAA's own
         # v0.25.0 default. Both true and false are emitted explicitly below
         # (--stream_reads / --no_stream_reads), same reasoning as chunk above.
@@ -300,6 +308,7 @@ task LRAA_runner_task {
                                  ~{if defined(min_isoform_fraction) then "--min_isoform_fraction " + min_isoform_fraction else ""} \
                                  ~{if defined(min_monoexonic_TPM) then "--min_monoexonic_TPM " + min_monoexonic_TPM else ""} \
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
+                                 ~{true="--no_filter_mismappings" false='' no_filter_mismappings} \
                                  ~{true="--no_weight_reads_by_3prime_agreement" false='' no_weight_reads_by_3prime_agreement} \
                                  ~{if defined(min_alt_splice_freq) then "--min_alt_splice_freq " + min_alt_splice_freq else ""} \
                                  ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \

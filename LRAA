@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.39.0"
+VERSION = "v0.40.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -1475,6 +1475,20 @@ def main():
     )
 
     config_group.add_argument(
+        "--no_filter_mismappings",
+        action="store_true",
+        default=False,
+        help="disable the whole-genome alignment-mismapping filter (ON BY DEFAULT). "
+        "That filter runs once after the per-contig models are merged, and removes "
+        "isoforms that are alignment/strand-mismapping artifacts of a "
+        "much-higher-expressed transcript: a wrong-strand near-mirror (opposite "
+        "strand, shared exon boundaries) or a cDNA that is near-identical over most "
+        "of its length to a different-gene, higher-expressed model, in either case "
+        "carrying < mismap_max_expr_fraction of that model's expression. Requires "
+        "the genome fasta; skipped under --quant_only",
+    )
+
+    config_group.add_argument(
         "--no_spare_polyA_veto_at_known_3prime",
         action="store_true",
         default=False,
@@ -1962,6 +1976,7 @@ def main():
     LRAA_Globals.config["filter_internal_priming"] = (
         not args.no_filter_internal_priming
     )
+    LRAA_Globals.config["filter_mismappings"] = not args.no_filter_mismappings
     LRAA_Globals.config["SE_subtract_intronic_background"] = (
         not args.no_SE_subtract_intronic_background
     )
@@ -2762,6 +2777,7 @@ def main():
         jobs=jobs,
         output_prefix=output_prefix,
         quant_only=QUANT_ONLY,
+        genome_fasta=genome_fasta_filename,
         tag_bam_path=(bam_file_for_quant if TAG_BAM else None),
         CONTIG_PARALLEL=CONTIG_PARALLEL,
         CPU_BUDGET=CPU_BUDGET,
@@ -4095,6 +4111,18 @@ def _run_chunked_mode(args):
         shutil.copyfile(summary_src, summary_dest)
         logger.info("wrote %s", summary_dest)
 
+    # Whole-genome alignment-mismapping filter on the merged genome-wide outputs,
+    # before splice collapse so it describes the filtered model set. The chunk
+    # merge has already translated coordinates and namespaced ids by this point,
+    # and this is the top-level driver (chunk workers run "LRAA --no_chunk"), so
+    # no worker guard is needed here.
+    if not args.quant_only:
+        _maybe_filter_mismappings(
+            "{}.gtf".format(output_prefix),
+            "{}.quant.expr".format(output_prefix),
+            args.genome,
+        )
+
     # Derived from the published gtf, so the chunked and unchunked paths run the same
     # code on the same kind of input. Nothing per-unit is needed: the chunk merge has
     # already translated coordinates and resolved id collisions by this point.
@@ -4265,10 +4293,77 @@ def _maybe_stop_monitor(monitor_obj):
         pass
 
 
+def _maybe_filter_mismappings(gtf_path, quant_path, genome_fasta):
+    """Post-merge, whole-genome alignment-mismapping filter (v0.40.0).
+
+    Rewrites the merged gtf + quant.expr IN PLACE, removing isoforms that are
+    alignment/strand-mismapping artifacts of a much-higher-expressed transcript
+    (a wrong-strand near-mirror, or a cDNA near-identical over most of its length
+    to a different-gene higher-expressed model, in either case carrying
+    < mismap_max_expr_fraction of that model's expression). Also writes
+    <gtf>.mismapping_filter.log naming every removed model and why.
+
+    ON BY DEFAULT (see --no_filter_mismappings). It requires the genome fasta and
+    is a no-op under --quant_only (the callers only invoke it in discovery). A
+    failure here leaves the unfiltered merged outputs intact rather than
+    discarding a completed run, and is logged loudly.
+    """
+    if not LRAA_Globals.config.get("filter_mismappings", True):
+        return
+    if not (gtf_path and os.path.exists(gtf_path)):
+        return
+    if not (quant_path and os.path.exists(quant_path)):
+        return
+    if not (genome_fasta and os.path.exists(genome_fasta)):
+        logger.error(
+            "alignment-mismapping filter is enabled but genome fasta '%s' is not "
+            "available; leaving merged outputs unfiltered",
+            genome_fasta,
+        )
+        return
+
+    import AlignmentMismappingFilter
+
+    gtf_tmp = gtf_path + ".mismap_filtered.tmp"
+    quant_tmp = quant_path + ".mismap_filtered.tmp"
+    log_out = gtf_path + ".mismapping_filter.log"
+    out_dir = os.path.dirname(os.path.abspath(gtf_path))
+    try:
+        with tempfile.TemporaryDirectory(prefix="lraa_mismap_", dir=out_dir) as wd:
+            drop = AlignmentMismappingFilter.run_mismapping_filter(
+                gtf_in=gtf_path,
+                quant_in=quant_path,
+                genome_fasta=genome_fasta,
+                gtf_out=gtf_tmp,
+                quant_out=quant_tmp,
+                log_out=log_out,
+                workdir=wd,
+                threads=LRAA_Globals.config.get("tool_threads", 1),
+            )
+        os.replace(gtf_tmp, gtf_path)
+        os.replace(quant_tmp, quant_path)
+        _ensure_lraa_version_comment(gtf_path)
+        _ensure_lraa_version_comment(quant_path)
+        logger.info(
+            "alignment-mismapping filter removed %d models; see %s", len(drop), log_out
+        )
+    except Exception:
+        logger.exception(
+            "alignment-mismapping filter FAILED; merged outputs left unfiltered"
+        )
+        for p in (gtf_tmp, quant_tmp):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+
 def _run_jobs_schedule_and_merge(
     jobs,
     output_prefix,
     quant_only,
+    genome_fasta,
     tag_bam_path,
     CONTIG_PARALLEL,
     CPU_BUDGET,
@@ -4704,6 +4799,18 @@ def _run_jobs_schedule_and_merge(
                 if os.path.exists(gtf_tmp):
                     with open(gtf_tmp, "rt") as fh:
                         shutil.copyfileobj(fh, gtf_out)
+
+        # Whole-genome alignment-mismapping filter, before BED/collapse so those
+        # describe the filtered model set. TOP-LEVEL ONLY: a chunk worker runs
+        # plain "LRAA --no_chunk" on one mini-contig (WORKER_ENV set) and must not
+        # run a genome-scale filter on its slice -- the chunked top-level runs it
+        # in _run_chunked_mode instead.
+        import ChunkedRun
+
+        if not os.environ.get(ChunkedRun.WORKER_ENV):
+            _maybe_filter_mismappings(
+                gtf_output_filename, quant_out_fn, genome_fasta
+            )
 
         # BED for final GTF
         bed_output_file = f"{output_prefix}.bed"

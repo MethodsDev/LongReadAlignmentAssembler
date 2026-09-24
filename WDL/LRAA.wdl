@@ -148,6 +148,13 @@ workflow LRAA_wf {
         # not map the pair.
         Boolean no_weight_reads_by_3prime_agreement = false
         Boolean quant_only = false
+        # Whole-genome alignment-mismapping filter, ON BY DEFAULT. Runs once as a
+        # dedicated post-merge task (alignment_mismapping_filter) on the merged
+        # genome-wide gtf + quant, never per shard -- the per-shard LRAA runs pass
+        # --no_filter_mismappings. Removes isoforms that are alignment/strand-
+        # mismapping artifacts of a much-higher-expressed transcript. No-op under
+        # quant_only. Requires referenceGenome (always available here).
+        Boolean filter_mismappings = true
         # Return the depth-normalized BAM(s) the splice graph was built from. Single-cell
         # workflows that call this one set this false; they never surface the file, and
         # delocalizing it would cost them storage for nothing.
@@ -752,14 +759,33 @@ workflow LRAA_wf {
         }
     }
 
+    # Whole-genome alignment-mismapping filter (v0.40.0). ONE post-merge task on
+    # the merged genome-wide gtf + quant -- the three scattering arms have already
+    # converged on a single gtf + quant here, which is the whole-genome scale this
+    # filter requires and cannot get per shard (the per-shard LRAA runs pass
+    # --no_filter_mismappings). Runs before splice collapse so the collapse and the
+    # mergedGTF/mergedQuantExpr outputs describe the FILTERED model set. Discovery
+    # only; requires referenceGenome for cDNA extraction.
+    if (!quant_only && filter_mismappings) {
+        call alignment_mismapping_filter {
+            input:
+                lraaGtf = select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]),
+                lraaQuantExpr = select_first([chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]),
+                referenceGenome = referenceGenome,
+                outputFilePrefix = LRAA_output_prefix,
+                docker = docker
+        }
+    }
+
     # ONE collapse, on whichever producer made the final gtf. Doing it per shard would
     # make N partial answers needing their own merge; the three arms already converge on
     # a single gtf here, so this is the one place that sees the whole model set.
-    # Skipped in quant-only, which produces no gtf to collapse.
+    # Skipped in quant-only, which produces no gtf to collapse. Prefers the
+    # mismapping-filtered gtf when the filter ran.
     if (!quant_only && emit_splice_pattern_collapse) {
         call splice_pattern_collapse {
             input:
-                lraaGtf = select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]),
+                lraaGtf = select_first([alignment_mismapping_filter.filteredGtf, chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]),
                 outputFilePrefix = LRAA_output_prefix,
                 docker = docker
         }
@@ -768,9 +794,13 @@ workflow LRAA_wf {
     output {
     # Three producers now, so each output names all of them. by_chunk merges
     # inside its subworkflow, by_chromosome merges here, off produces directly.
-    File mergedQuantExpr = select_first([chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr])
+    # mergedQuantExpr/mergedGTF prefer the mismapping-filtered outputs when the
+    # filter ran (it drops the removed rows and renormalizes TPM to 1e6, so it is a
+    # complete replacement for the merged quant -- no requant needed).
+    File mergedQuantExpr = select_first([alignment_mismapping_filter.filteredQuantExpr, chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr])
     File mergedQuantTracking = select_first([chunk_scatter.mergedQuantTracking, mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
-    File? mergedGTF = if (!quant_only) then select_first([chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf
+    File? mergedGTF = if (!quant_only) then select_first([alignment_mismapping_filter.filteredGtf, chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf
+    File? mismappingFilterLog = alignment_mismapping_filter.filterLog
     # by_chunk has no per-SHARD summaries to surface: its units are chunks, and
     # stage 6 merges them inside the subworkflow. The merged table is the one
     # below, and it is the artifact single-cell consumes.
@@ -913,6 +943,59 @@ task splice_pattern_collapse {
         # materializes every transcript and its exon list at once.
         memory: "16 GiB"
         disks: "local-disk " + ceil(size(lraaGtf, "GB") * 3.0 + 5) + " SSD"
+    }
+}
+
+task alignment_mismapping_filter {
+    # Whole-genome alignment-mismapping filter (v0.40.0). Removes isoforms that are
+    # alignment/strand-mismapping artifacts of a much-higher-expressed transcript
+    # (wrong-strand near-mirrors, and cDNAs near-identical over most of their length
+    # to a different-gene higher-expressed model, in either case carrying < 1% of
+    # that model's expression). Outputs the filtered gtf and a filtered +
+    # TPM-renormalized quant.expr (rows dropped, no requant needed), plus a log
+    # naming every removed model. Whole-genome scale: it consumes the MERGED
+    # genome-wide gtf + quant, never a per-shard slice.
+    input {
+        File lraaGtf
+        File lraaQuantExpr
+        File referenceGenome
+        String outputFilePrefix
+        String docker
+        Int cpu = 4
+        Int memoryGB = 32
+    }
+
+    command <<<
+        set -eo pipefail
+
+        # pysam.FastaFile needs a .fai beside the fasta; the localized input dir may
+        # be read-only, so index a local symlink.
+        ln -s ~{referenceGenome} genome.fa
+        samtools faidx genome.fa
+
+        filter_LRAA_isoforms_by_mismapping.py \
+            --gtf ~{lraaGtf} \
+            --quant_expr ~{lraaQuantExpr} \
+            --genome genome.fa \
+            --output_gtf ~{outputFilePrefix}.gtf \
+            --output_quant_expr ~{outputFilePrefix}.quant.expr \
+            --output_log ~{outputFilePrefix}.mismapping_filter.log \
+            --threads ~{cpu}
+    >>>
+
+    output {
+        File filteredGtf = "~{outputFilePrefix}.gtf"
+        File filteredQuantExpr = "~{outputFilePrefix}.quant.expr"
+        File filterLog = "~{outputFilePrefix}.mismapping_filter.log"
+    }
+
+    runtime {
+        docker: docker
+        cpu: cpu
+        # Whole-gtf + all cDNA sequences in memory alongside a minimap2 all-vs-all,
+        # sized to the whole-genome (direct) memory profile.
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk " + ceil(size(lraaGtf, "GB") * 3.0 + size(referenceGenome, "GB") * 2.0 + 10) + " SSD"
     }
 }
 
