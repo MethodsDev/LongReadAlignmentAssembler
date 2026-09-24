@@ -164,3 +164,62 @@ def test_a_wrong_strand_reference_transcript_is_not_reported_as_unusable(caplog)
         )
     assert ends == []
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+# --- v0.41.0: a guide must not endorse its own internal-priming terminus ---------
+
+
+def _ip_guide(transcript_id, exons, strand):
+    t = _guide(transcript_id, exons, strand)
+    t.set_likely_internal_primed(True)
+    return t
+
+
+def test_internal_primed_reference_terminus_is_excluded():
+    """A guide 3' end flagged InternalPriming does NOT endorse a cleavage site.
+
+    The self-referential case: a de-novo guide (e.g. the cluster-guided init GTF) carries
+    its own internal-priming termini. Without this exclusion the guided build would waive
+    the veto on exactly the artifacts a plain de-novo run rejects.
+    """
+    sg = Splice_graph.Splice_graph()
+    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
+    plain = _guide("plain", [[500, 1000]], "+")
+    flagged = _ip_guide("ip", [[500, 1000]], "+")
+    assert sg._collect_reference_three_prime_ends([plain], "+") == [1000]
+    assert sg._collect_reference_three_prime_ends([flagged], "+") == []
+
+
+def test_internal_primed_guide_does_not_spare_the_A_rich_candidate():
+    """End to end through the veto: the flagged guide's A-rich site stays rejected."""
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=[_guide("p", [[500, 1000]], "+")]) == [1000]
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=[_ip_guide("ip", [[500, 1000]], "+")]) == []
+
+
+def test_polyA_known_file_overrides_reference_termini(tmp_path):
+    """--polyA_known replaces the reference termini as the endorsement source.
+
+    A trusted list endorses its sites even with no reference transcripts, is taken at
+    face value (no InternalPriming filtering), and stays strand-specific.
+    """
+    bed = tmp_path / "known.bed"
+    bed.write_text("chr1\t999\t1000\tk:1000:+\t.\t+\nchr1\t1999\t2000\tk:2000:-\t.\t-\n")
+    original = LRAA_Globals.config.get("polyA_known")
+    LRAA_Globals.config["polyA_known"] = str(bed)
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
+    try:
+        sg = Splice_graph.Splice_graph()
+        sg._contig_acc = "chr1"
+        LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
+        # endorses the '+' site with NO reference transcripts, and ignores the '-' one
+        assert sg._collect_reference_three_prime_ends(None, "+") == [1000]
+        assert sg._collect_reference_three_prime_ends(None, "-") == [2000]
+        # a guide ending elsewhere is overridden by the file, not merged with it
+        assert sg._collect_reference_three_prime_ends(
+            [_guide("elsewhere", [[100, 300]], "+")], "+"
+        ) == [1000]
+    finally:
+        LRAA_Globals.config["polyA_known"] = original
+        LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
+        LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None

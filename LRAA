@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.40.0"
+VERSION = "v0.41.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -114,6 +114,13 @@ def _seed_authoritative_config_from_args(config, args):
     config["min_isoform_fraction"] = args.min_isoform_fraction
     config["run_EM"] = not args.no_EM
     config["EM_alpha"] = args.EM_alpha
+    if getattr(args, "polyA_known", None) is not None:
+        # absolute path: chunk workers run from their own dirs and resolve it via
+        # the forwarded config, so a relative path would not be found there.
+        polyA_known_abspath = os.path.abspath(args.polyA_known)
+        if not os.path.exists(polyA_known_abspath):
+            sys.exit(f"Error, --polyA_known file not found: {args.polyA_known}")
+        config["polyA_known"] = polyA_known_abspath
     for key in ("min_alt_splice_freq", "min_alt_unspliced_freq"):
         if hasattr(args, key):
             config[key] = getattr(args, key)
@@ -713,6 +720,16 @@ def main():
             help="reference transcripts GTF (required with --quant_only)",
         )
         lite_primary.add_argument(
+            "--polyA_known",
+            type=str,
+            default=None,
+            help="BED or GTF of trusted cleavage 3' ends that waive the internal-priming "
+            "veto. Replaces the --gtf reference termini as the endorsement source. "
+            "Default (unset): --gtf termini excluding InternalPriming-flagged ones. For "
+            "cluster-guided runs, point at the init phase's PolyA bed (already "
+            "veto-filtered); a curated atlas (e.g. PolyASite 2.0) also works.",
+        )
+        lite_primary.add_argument(
             "--output_prefix",
             "-o",
             type=str,
@@ -906,6 +923,16 @@ def main():
         type=str,
         default=None,
         help="reference transcripts GTF (required with --quant_only; optional to guide discovery)",
+    )
+    primary.add_argument(
+        "--polyA_known",
+        type=str,
+        default=None,
+        help="BED or GTF of trusted cleavage 3' ends that waive the internal-priming "
+        "veto. Replaces the --gtf reference termini as the endorsement source. "
+        "Default (unset): --gtf termini excluding InternalPriming-flagged ones. For "
+        "cluster-guided runs, point at the init phase's PolyA bed (already "
+        "veto-filtered); a curated atlas (e.g. PolyASite 2.0) also works.",
     )
     primary.add_argument(
         "--output_prefix",
@@ -2819,7 +2846,7 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 9
+SPLICE_GRAPH_CACHE_VERSION = 10
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     # Ingestion rather than construction: this decides which alignments reach the
@@ -2864,6 +2891,9 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "max_dist_between_alt_polyA_sites",
     "min_alignments_define_polyA_site",
     "spare_polyA_veto_at_known_3prime",
+    # Path to the trusted cleavage-site file that supplies the veto reprieve; different
+    # files (or its absence) endorse different 3' ends and so build different graphs.
+    "polyA_known",
     # Decides whether an A-rich read-derived PolyA candidate becomes a graph vertex
     # at all, so two runs differing only in this setting must not share a graph.
     "reject_internally_primed_polyA_sites",

@@ -1045,11 +1045,20 @@ class Splice_graph:
         return
 
     def _collect_reference_three_prime_ends(self, reference_transcripts, contig_strand):
-        """Sorted 3' end coordinates of the USER-SUPPLIED annotation on this strand.
+        """Sorted 3' end coordinates that ENDORSE a cleavage site on this strand.
 
-        Must be given the reference set explicitly.  Empty when there is none or the
-        exemption is off, which makes every downstream check a cheap no-op and leaves
-        ref-free behaviour bit-identical.
+        Source, in order:
+          1. --polyA_known (a trusted BED/GTF of cleavage sites), when configured. It
+             REPLACES the reference termini, and is taken at face value.
+          2. otherwise the USER-SUPPLIED --gtf annotation's transcript 3' ends,
+             EXCLUDING any transcript flagged InternalPriming. That exclusion is
+             deliberate: a de-novo guide (e.g. the cluster-guided init GTF) carries its
+             own A-rich internal-priming termini, and without the skip it would endorse
+             them "on reference agreement" and re-bless them as PolyA vertices in the
+             guided build -- exactly the artifacts a plain de-novo run vetoes.
+
+        Empty when there is no source or the exemption is off, which makes every
+        downstream check a cheap no-op and leaves ref-free behaviour bit-identical.
 
         A reference transcript that yields no usable 3' end is COUNTED and reported at
         WARNING.  Dropping it silently shrinks the exemption -- sites the annotation
@@ -1058,13 +1067,23 @@ class Splice_graph:
         not calling an end there.
         """
 
-        if not reference_transcripts:
-            return []
         if not LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime", True):
+            return []
+
+        # (1) explicit --polyA_known trusted list overrides the reference termini.
+        known = LRAA_Globals.known_polyA_three_prime_ends(
+            getattr(self, "_contig_acc", None), contig_strand
+        )
+        if known is not None:
+            return sorted(set(known))
+
+        # (2) fall back to --gtf reference transcript 3' ends, skipping IP-flagged ones.
+        if not reference_transcripts:
             return []
 
         ends = set()
         unusable = []
+        n_internal_primed_skipped = 0
         for transcript in reference_transcripts:
             try:
                 strand = transcript.get_strand()
@@ -1076,7 +1095,23 @@ class Splice_graph:
             # to say about this strand's candidates.
             if strand != contig_strand:
                 continue
+            # A guide transcript already judged internally primed must not endorse its
+            # own A-rich terminus (self-referential reprieve).
+            ip = transcript.get_likely_internal_primed()
+            if ip is True or ip == "True":
+                n_internal_primed_skipped += 1
+                continue
             ends.add(transcript_rend if contig_strand == "+" else transcript_lend)
+
+        if n_internal_primed_skipped:
+            logger.info(
+                "[%s%s] spare_polyA_veto_at_known_3prime: skipped %d reference "
+                "transcript 3' end(s) flagged InternalPriming (they do not endorse "
+                "cleavage).",
+                getattr(self, "_contig_acc", "?"),
+                contig_strand,
+                n_internal_primed_skipped,
+            )
 
         if unusable:
             logger.warning(

@@ -1516,10 +1516,21 @@ def filter_internally_primed_transcripts(
     known_polyA_dist_ok_window = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
     known_polyA_dist_ok_window_half = int(known_polyA_dist_ok_window / 2)
 
+    # Endorsement source for the monoexonic reprieve, kept consistent with
+    # Splice_graph._collect_reference_three_prime_ends: an explicit --polyA_known list
+    # overrides the reference termini, and otherwise the reference termini are used but
+    # InternalPriming-flagged ones are skipped so a de-novo guide cannot endorse its own
+    # A-rich artifact ends.
     known_ok_3prime_ends = set()
-    if known_transcripts is not None:
+    known_polyA_from_file = LRAA_Globals.known_polyA_three_prime_ends(_ca, contig_strand)
+    if known_polyA_from_file is not None:
+        known_ok_3prime_ends.update(known_polyA_from_file)
+    elif known_transcripts is not None:
         for known_transcript in known_transcripts:
             if known_transcript.get_strand() == contig_strand:
+                ip = known_transcript.get_likely_internal_primed()
+                if ip is True or ip == "True":
+                    continue
                 transcript_lend, transcript_rend = known_transcript.get_coords()
                 known_3prime_end = (
                     transcript_rend if contig_strand == "+" else transcript_lend

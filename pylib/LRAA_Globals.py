@@ -607,6 +607,18 @@ config = {
     #
     # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
     "spare_polyA_veto_at_known_3prime": True,
+    # File of TRUSTED cleavage 3' ends whose proximity waives the internal-priming
+    # veto (--polyA_known; BED or GTF). When set, it REPLACES the reference-annotation
+    # 3' ends as the endorsement source for spare_polyA_veto_at_known_3prime. None =>
+    # fall back to the --gtf reference termini, EXCLUDING any flagged InternalPriming.
+    # The exclusion is what stops a de-novo guide (e.g. the cluster-guided init GTF)
+    # from endorsing its own A-rich internal-priming termini and re-blessing them as
+    # PolyA sites -- a single de-novo run vetoes them, but a guided run keyed on the
+    # init GTF's transcript ends would otherwise spare them "on reference agreement".
+    # Point it at the init phase's *PolyA bed* (already veto-filtered) for scg runs, or
+    # at a curated atlas (e.g. PolyASite 2.0, converted to matching contig naming).
+    # Affects graph construction, hence registered in _SPLICE_GRAPH_CONFIG_KEYS.
+    "polyA_known": None,
     "ref_trans_filter_mode": "retain_expressed",  # choices ["retain_expressed", "retain_filtered"]
     # What retain_expressed demands of a reference-containing model before it is
     # exempted from the discovery filters. A COUNT of assigned reads, not a rate:
@@ -986,6 +998,65 @@ config = {
     "polyA_signal_motifs": ["AATAAA", "ATTAAA"],
     "polyA_signal_window": [-40, -10],
 }
+
+
+# --- trusted known-polyA endorsement source (--polyA_known) -------------------
+# Lazily parse the --polyA_known file (BED or GTF) into {(contig, strand): sorted[pos]}
+# of 3' cleavage coordinates, cached by path. These are TRUSTED external assertions of
+# cleavage, taken at face value -- unlike the --gtf-derived default, no InternalPriming
+# filtering is applied here (that filtering lives in the reference-termini fallback in
+# Splice_graph._collect_reference_three_prime_ends). Consumed by the internal-priming
+# veto reprieve in Splice_graph and TranscriptFiltering.
+_KNOWN_POLYA_ENDS_CACHE = None
+_KNOWN_POLYA_ENDS_CACHE_PATH = None
+
+
+def _parse_known_polyA_file(path):
+    ends = {}  # (contig, strand) -> set(positions)
+
+    def _add(contig, strand, pos):
+        if strand not in ("+", "-") or pos is None:
+            return
+        ends.setdefault((contig, strand), set()).add(int(pos))
+
+    is_gtf = path.lower().endswith((".gtf", ".gff", ".gff3"))
+    with open(path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#") or line.startswith("track"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if is_gtf:
+                # transcript lines only: 3' end = end on '+', start on '-'. Exon lines
+                # would endorse internal exon boundaries, which are not cleavage sites.
+                if len(f) < 8 or f[2] != "transcript":
+                    continue
+                contig, strand = f[0], f[6]
+                pos = int(f[4]) if strand == "+" else int(f[3])
+                _add(contig, strand, pos)
+            else:
+                # BED: chrom start end name score strand ... ; the cleavage site is the
+                # 1-based end coordinate (matches LRAA's own *.PolyA.bed convention,
+                # start=pos-1, end=pos), and strand is column 6.
+                if len(f) < 6:
+                    continue
+                _add(f[0], f[5], int(f[2]))
+    return {k: sorted(v) for k, v in ends.items()}
+
+
+def known_polyA_three_prime_ends(contig_acc, strand):
+    """Trusted cleavage 3' ends from --polyA_known for (contig_acc, strand).
+
+    Returns None when --polyA_known is unset (caller then uses its reference-termini
+    fallback), or a sorted list (possibly empty) when the file is configured.
+    """
+    global _KNOWN_POLYA_ENDS_CACHE, _KNOWN_POLYA_ENDS_CACHE_PATH
+    path = config.get("polyA_known")
+    if not path:
+        return None
+    if _KNOWN_POLYA_ENDS_CACHE is None or _KNOWN_POLYA_ENDS_CACHE_PATH != path:
+        _KNOWN_POLYA_ENDS_CACHE = _parse_known_polyA_file(path)
+        _KNOWN_POLYA_ENDS_CACHE_PATH = path
+    return _KNOWN_POLYA_ENDS_CACHE.get((contig_acc, strand), [])
 
 
 def resolve_min_polya_iso_fraction(
