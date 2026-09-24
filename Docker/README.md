@@ -103,12 +103,15 @@ which names the core, sc and orf images and the tag they share.
 | `latest` | `build_docker.latest.sh` | `git rev-parse HEAD`, refused unless it equals `origin/main` | defaults written inside the `.wdl` files, and every public caller |
 | `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `git rev-parse HEAD` | release pins -- a BARE version asserts a published release |
 | `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | local WDL test targets, through `testing/lraa_test_docker.mk` |
-| `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving tag, e.g. runs dispatched to VMs |
-| `<version>-<shortsha>` | by hand, from a devel build | a specific commit | identifying a devel image later without claiming it is a release |
+| `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving `testing` tag, e.g. runs dispatched to VMs |
+| `<version>-<shortsha>` | `build_docker.testing.sh` (the `COMMIT_TAG`; never reused, since the commit is in the name) | `git rev-parse HEAD` | pinning a specific devel image for a benchmark, reattributable later; nothing moves it |
 
-Neither testing tag is a release artifact. Both come out of the same build, so
-they cannot drift apart, and only the release scripts write `latest` or a bare
-version.
+`build_docker.testing.sh` writes all three of the tags above in one build --
+`testing`, `<version>-testing` and `<version>-<shortsha>` -- for each of
+`lraa-core`, `lraa-sc` and `lraa-orf`. None is a release artifact, and because
+they come out of the same build they cannot drift apart; only the release scripts
+write `latest` or a bare version, and neither testing script touches the plain
+`lraa` alias.
 
 ### The dependency images are pulled, not rebuilt
 
