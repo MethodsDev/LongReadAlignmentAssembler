@@ -454,6 +454,7 @@ _NEGATED_CONFIG_FLAGS = {
     "no_EM": "run_EM",
     "no_SE_subtract_intronic_background": "SE_subtract_intronic_background",
     "no_filter_internal_priming": "filter_internal_priming",
+    "no_filter_mismappings": "filter_mismappings",
     "no_infer_TSS": "infer_TSS",
     "no_infer_PolyA": "infer_PolyA",
     "no_use_community_clustering": "use_community_clustering",

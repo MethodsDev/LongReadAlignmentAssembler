@@ -1,0 +1,9 @@
+chrIS	Sequin	gene	2001	8770	.	-	.	gene_id "R1_11"; gene_type "synthetic";
+chrIS	Sequin	exon	2001	2471	.	-	.	gene_id "R1_11"; transcript_id "R1_11_1";
+chrIS	Sequin	transcript	2001	8770	.	-	.	gene_id "R1_11"; transcript_id "R1_11_1"; gene_type "synthetic"; transcript_type "synthetic";
+chrIS	Sequin	exon	8539	8770	.	-	.	gene_id "R1_11"; transcript_id "R1_11_1";
+chrIS	Sequin	exon	2001	2471	.	-	.	gene_id "R1_11"; transcript_id "R1_11_2";
+chrIS	Sequin	transcript	2001	8576	.	-	.	gene_id "R1_11"; transcript_id "R1_11_2"; gene_type "synthetic"; transcript_type "synthetic";
+chrIS	Sequin	exon	5849	6044	.	-	.	gene_id "R1_11"; transcript_id "R1_11_2";
+chrIS	Sequin	exon	8168	8247	.	-	.	gene_id "R1_11"; transcript_id "R1_11_2";
+chrIS	Sequin	exon	8539	8576	.	-	.	gene_id "R1_11"; transcript_id "R1_11_2";

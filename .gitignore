@@ -20,6 +20,16 @@ testing/multigene_secondary_quant/data/**
 !testing/multigene_secondary_quant/data/annot.gtf
 !testing/multigene_secondary_quant/data/genome.fa
 !testing/multigene_secondary_quant/data/multigene_secondary.sam
+!testing/mismapping_filter/
+testing/mismapping_filter/**
+!testing/mismapping_filter/Makefile
+!testing/mismapping_filter/README.md
+!testing/mismapping_filter/test_mismapping_filter.py
+!testing/mismapping_filter/*.bam
+!testing/mismapping_filter/*.bam.bai
+!testing/mismapping_filter/*.fa
+!testing/mismapping_filter/*.fa.fai
+!testing/mismapping_filter/*.gtf
 !testing/txalign_path_rescue/
 !testing/txalign_path_rescue/Makefile
 !testing/txalign_path_rescue/validate_txalign_path_rescue.py

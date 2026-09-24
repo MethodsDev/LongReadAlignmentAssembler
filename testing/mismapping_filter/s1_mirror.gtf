@@ -1,0 +1,13 @@
+chrIS	Sequin	gene	2001	28849	.	-	.	gene_id "R2_7"; gene_type "synthetic";
+chrIS	Sequin	exon	2001	2623	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	transcript	2001	28849	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2"; gene_type "synthetic"; transcript_type "synthetic";
+chrIS	Sequin	exon	13558	13658	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	16355	16525	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	18077	18156	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	20130	20318	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	27286	27412	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	28413	28849	.	-	.	gene_id "R2_7"; transcript_id "R2_7_2";
+chrIS	Sequin	exon	25640	25710	.	-	.	gene_id "R2_7"; transcript_id "R2_7_1";
+chrIS	Sequin	transcript	25640	28849	.	-	.	gene_id "R2_7"; transcript_id "R2_7_1"; gene_type "synthetic"; transcript_type "synthetic";
+chrIS	Sequin	exon	27286	27412	.	-	.	gene_id "R2_7"; transcript_id "R2_7_1";
+chrIS	Sequin	exon	28413	28849	.	-	.	gene_id "R2_7"; transcript_id "R2_7_1";
