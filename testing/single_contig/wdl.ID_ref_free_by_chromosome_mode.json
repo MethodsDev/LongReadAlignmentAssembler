@@ -1,0 +1,7 @@
+{
+    "LRAA_wf.scattering" : "by_chromosome",
+    "LRAA_wf.sample_id" : "test.ID_ref_free_by_chromosome",
+    "LRAA_wf.inputBAM" : "pacbio.PBLR.small.bam",
+    "LRAA_wf.referenceGenome" : "ref_genome.fa",
+    "LRAA_wf.main_chromosomes" : "minigenome"
+}

@@ -169,10 +169,20 @@ include ../lraa_test_docker.mk
 
 # MINIWDL_CFG, MINIWDL_RUN and MINIWDL_RUN_UNCACHED come from the include above.
 
-test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_chunked_strandless test_wdl_ORF_prediction
+test_wdls: check_test_image_revision test_wdl_ID_ref_free test_wdl_ID_ref_free_by_chromosome test_wdl_ID_ref_guided test_wdl_Quant_only test_wdl_chunked test_wdl_chunked_strandless test_wdl_ORF_prediction
 
 test_wdl_ID_ref_free:
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
+
+# De novo DISCOVERY under scattering (not quant_only), so the whole-genome
+# alignment-mismapping filter task runs on the SCATTERED merge outputs
+# (merge_GTFs.mergedGtfFile feeds the filter). Uncached + own --dir like the
+# other chunked WDL targets, since chunked runs must not replay a cache entry
+# across an image rebuild. (scattering=by_chunk is not currently selectable --
+# validate_scattering allows only off/by_chromosome -- so only by_chromosome is
+# tested here; the off arm is covered by test_wdl_ID_ref_free.)
+test_wdl_ID_ref_free_by_chromosome:
+	$(MINIWDL_RUN_UNCACHED) ../../WDL/LRAA.wdl -i wdl.ID_ref_free_by_chromosome_mode.json $(LRAA_WDL_DOCKER) --dir __wdl_id_bychr/. --verbose
 
 test_wdl_ID_ref_guided:
 	$(MINIWDL_RUN) ../../WDL/LRAA.wdl -i wdl.ID_ref_guided_Quant_mode.json $(LRAA_WDL_DOCKER) --verbose
