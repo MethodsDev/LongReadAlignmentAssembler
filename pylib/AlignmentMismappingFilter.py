@@ -32,6 +32,7 @@ prefix); the same-gene test uses the GTF's own gene_id attribute.
 """
 
 import os
+import re
 import csv
 import logging
 import subprocess
@@ -332,17 +333,26 @@ def _detect_sequence(info, expr, genome_fasta, min_identity, min_cov,
 # ---------------------------------------------------------------------------
 # output writing
 # ---------------------------------------------------------------------------
+_TRANSCRIPT_ID_RE = re.compile(r'transcript_id "([^"]+)"')
+
+
 def _write_filtered_gtf(gtf_in, gtf_out, drop_set):
-    comments = _leading_comment_lines(gtf_in)
-    contig_to_transcripts = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(gtf_in)
-    with open(gtf_out, "wt") as ofh:
-        for c in comments:
-            ofh.write(c + "\n")
-        for contig in contig_to_transcripts:
-            for t in contig_to_transcripts[contig]:
-                if t.get_transcript_id() in drop_set:
-                    continue
-                ofh.write(t.to_GTF_format(include_TPM=False) + "\n")
+    """Stream the input GTF through unchanged, emitting every line except those
+    of transcripts in drop_set.
+
+    Byte-preserving for every surviving line: no round-trip through Transcript
+    objects. That keeps exon coordinates and the attribute string identical to
+    the input (a reserialize both duplicated attributes and inserted blank
+    lines) and makes it structurally impossible for the filter to alter a model
+    it did not remove -- only the dropped models disappear. Any line without a
+    transcript_id (e.g. leading comments, blank lines) is passed through as-is.
+    """
+    with open(gtf_in, "rt") as ifh, open(gtf_out, "wt") as ofh:
+        for line in ifh:
+            m = _TRANSCRIPT_ID_RE.search(line)
+            if m is not None and m.group(1) in drop_set:
+                continue
+            ofh.write(line)
 
 
 def _write_filtered_quant(comments, fieldnames, rows, drop_set, info, quant_out):

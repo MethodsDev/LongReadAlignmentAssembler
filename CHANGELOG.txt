@@ -28,6 +28,11 @@ v0.40.0
   AlignmentMismappingFilter.py and standalone util
   filter_LRAA_isoforms_by_mismapping.py (used by the WDL); thresholds are tunable
   via LRAA_Globals.config (mismap_*).
+  The filtered GTF is written by streaming the input line-by-line and dropping
+  only the lines of removed models, so every surviving line is byte-identical to
+  the input -- the filter cannot alter a model it did not remove. (An earlier
+  reserialize through Transcript objects duplicated per-transcript attributes and
+  inserted a blank line between models; both are gone.)
 
 
 v0.39.0
