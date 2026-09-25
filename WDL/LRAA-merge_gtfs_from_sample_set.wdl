@@ -9,7 +9,9 @@ workflow LRAA_merge_gtfs_from_sample_set {
         Array[File] sample_gtfs
         File referenceGenome
 
-        Boolean HiFi = false
+        # Default: respect TSS/PolyA annotations on the input gtfs. Set true for the
+        # former non-HiFi merge that ignores them.
+        Boolean ignore_TSS_POLYA = false
         Int memoryGB = 32
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
@@ -19,7 +21,7 @@ workflow LRAA_merge_gtfs_from_sample_set {
             sample_id = sample_set_id,
             LRAA_cell_cluster_gtfs = sample_gtfs,
             referenceGenome = referenceGenome,
-            HiFi = HiFi,
+            ignore_TSS_POLYA = ignore_TSS_POLYA,
             docker = docker,
             memoryGB = memoryGB
     }

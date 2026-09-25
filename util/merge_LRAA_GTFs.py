@@ -10,9 +10,11 @@ This script merges LRAA GTF files by:
 4. Optionally applying Leiden community clustering for gene assignment
 
 Important modes:
-  --HiFi: Enables TSS/PolyA boundary recognition during merge. Use this when
-          merging GTFs from HiFi/PacBio data that have TSS/PolyA annotations.
-          Without this flag, TSS/PolyA boundaries are ignored (LowFi/ONT mode).
+  TSS/PolyA boundary annotations on the input GTFs are respected by DEFAULT (LRAA
+  models TSS/PolyA in both HiFi and non-HiFi modes, so this is no longer gated on a
+  --HiFi flag).
+  --ignore_TSS_POLYA: ignore those annotations when merging (the former non-HiFi /
+          LowFi merge behavior).
 
 The output includes:
   - <output>.gtf: Merged transcript annotations
@@ -232,12 +234,14 @@ def main():
     )
 
     parser.add_argument(
-        "--HiFi",
+        "--ignore_TSS_POLYA",
         action="store_true",
         default=False,
         help=(
-            "Enable HiFi mode: respect TSS/PolyA annotations from input GTFs during merge. "
-            "Without this flag, TSS/PolyA boundaries are ignored (LowFi/ONT mode)."
+            "Ignore the TSS/PolyA annotations on the input GTFs when merging (the former "
+            "non-HiFi / LowFi merge behavior). By DEFAULT the merge now RESPECTS TSS/PolyA "
+            "boundaries from the inputs -- LRAA models TSS/PolyA in both HiFi and non-HiFi "
+            "modes, so there is no longer a reason to gate it on a --HiFi flag."
         ),
     )
 
@@ -278,16 +282,17 @@ def main():
     # window. Disable it for the merge tool regardless of mode.
     LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
 
-    # Apply HiFi mode if requested (enables TSS/PolyA boundary recognition during merge)
-    if args.HiFi:
-        LRAA_Globals.config["infer_TSS"] = True
-        LRAA_Globals.config["infer_PolyA"] = True
-        logger.info("HiFi mode enabled: TSS/PolyA annotations from input GTFs will be respected during merge.")
-    else:
-        # Explicitly set to False to ensure LowFi/ONT behavior (ignore TSS/PolyA)
+    # TSS/PolyA boundaries from the input GTFs are respected by DEFAULT now: LRAA models
+    # them in both HiFi and non-HiFi modes, so the merge no longer gates this on --HiFi.
+    # --ignore_TSS_POLYA restores the former non-HiFi behavior of ignoring them.
+    if args.ignore_TSS_POLYA:
         LRAA_Globals.config["infer_TSS"] = False
         LRAA_Globals.config["infer_PolyA"] = False
-        logger.info("LowFi/ONT mode: TSS/PolyA annotations will be ignored during merge. Use --HiFi to enable.")
+        logger.info("--ignore_TSS_POLYA: TSS/PolyA annotations from input GTFs will be IGNORED during merge.")
+    else:
+        LRAA_Globals.config["infer_TSS"] = True
+        LRAA_Globals.config["infer_PolyA"] = True
+        logger.info("TSS/PolyA annotations from input GTFs will be respected during merge (default).")
 
     configure_boundary_support_filters(args.apply_boundary_support_filters)
 

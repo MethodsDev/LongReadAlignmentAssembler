@@ -477,9 +477,18 @@ def _write_log(log_out, mirror, sequence, info, expr, total_models, n_survivors)
 # entry point
 # ---------------------------------------------------------------------------
 def run_mismapping_filter(
-    gtf_in, quant_in, genome_fasta, gtf_out, quant_out, log_out, workdir, threads=1
+    gtf_in, quant_in, genome_fasta, gtf_out, quant_out, log_out, workdir, threads=1,
+    exempt_contigs=None,
 ):
-    """Filter a merged whole-genome GTF + quant.expr. Returns the drop-set."""
+    """Filter a merged whole-genome GTF + quant.expr. Returns the drop-set.
+
+    exempt_contigs: contigs whose models are carried forward untouched. Oversimplify
+    contigs (e.g. chrM) hold reference models copied forward regardless of the reads,
+    so a coverage-driven filter must not touch them: doing so removes DIFFERENT models
+    in different cluster-guided inputs, and merge_LRAA_GTFs then refuses to merge an
+    oversimplified contig whose per-input record sets disagree. Same reasoning as the
+    read floor _run_oversimplify_best_overlap already declines to apply.
+    """
     cfg = LRAA_Globals.config
     tol = int(cfg["mismap_junction_tolerance"])
     min_base_overlap = float(cfg["mismap_min_base_overlap"])
@@ -503,6 +512,25 @@ def run_mismapping_filter(
     logger.info("Sequence detector flagged %d models", len(sequence))
 
     drop_set = set(mirror) | set(sequence)
+
+    if exempt_contigs:
+        exempt_contigs = set(exempt_contigs)
+        exempted = {
+            tid for tid in drop_set
+            if info.get(tid, {}).get("contig") in exempt_contigs
+        }
+        if exempted:
+            logger.info(
+                "Exempting %d flagged model(s) on carried-forward (oversimplify) "
+                "contig(s) %s from removal",
+                len(exempted), ",".join(sorted(exempt_contigs)),
+            )
+            drop_set -= exempted
+            # keep the log's per-detector lists consistent with what was removed
+            for tid in exempted:
+                mirror.pop(tid, None)
+                sequence.pop(tid, None)
+
     n_survivors = len(info) - len(drop_set)
     logger.info(
         "Removing %d of %d models (%d survive)", len(drop_set), len(info), n_survivors

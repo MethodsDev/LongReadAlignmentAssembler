@@ -25,8 +25,12 @@ workflow LRAA_cell_cluster_guided {
         # at identical positions. Unset -- this workflow driven directly -- and the
         # emission below produces it instead.
         File? internal_chunk_plan
-        
+
         Boolean HiFi = false
+        # Merge-only: ignore the TSS/PolyA annotations on the per-cluster gtfs when
+        # merging them (the former non-HiFi merge). Default false = respect them, since
+        # LRAA models TSS/PolyA in both modes; independent of the HiFi run flag above.
+        Boolean ignore_TSS_POLYA = false
         # Chunk geometry, forwarded to every per-cluster LRAA run. Unset means
         # LRAA's own defaults (10 Mb spacing, 1 Mb window), under which a contig
         # shorter than 10 Mb is never cut.
@@ -324,7 +328,7 @@ workflow LRAA_cell_cluster_guided {
                 sample_id = sample_id,
                 LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
                 referenceGenome = referenceGenome,
-                HiFi = HiFi,
+                ignore_TSS_POLYA = ignore_TSS_POLYA,
                 # Same list the per-cluster runs were given, so the contigs the
                 # merge carries forward are exactly the ones those runs collapsed.
                 # select_first because the workflow input is String? (:43) while the
@@ -663,7 +667,10 @@ task lraa_merge_gtf_task {
         String sample_id
         Array[File] LRAA_cell_cluster_gtfs
         File referenceGenome
-        Boolean HiFi = false
+        # TSS/PolyA annotations on the input gtfs are respected by default; set true to
+        # ignore them (the former non-HiFi merge). No longer gated on --HiFi, since LRAA
+        # models TSS/PolyA in both modes.
+        Boolean ignore_TSS_POLYA = false
         # An oversimplified contig was never assembled, so there is nothing across
         # the per-cluster gtfs to reconcile. Without this, the merge rebuilds a
         # splice graph over its aggregate models and reconstructs them, which moved
@@ -687,7 +694,7 @@ task lraa_merge_gtf_task {
       (
       
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
-                           ~{if HiFi then "--HiFi" else ""} \
+                           ~{if ignore_TSS_POLYA then "--ignore_TSS_POLYA" else ""} \
                            ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1

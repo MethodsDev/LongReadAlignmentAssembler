@@ -14,6 +14,7 @@ invoked in-process by the LRAA driver as a post-merge step.
 
 import sys
 import os
+import re
 import argparse
 import logging
 import tempfile
@@ -59,6 +60,13 @@ def main():
     )
     parser.add_argument("--work_dir", default=None, help="scratch dir for cDNA fasta")
     parser.add_argument("--threads", type=int, default=4, help="minimap2 threads")
+    parser.add_argument(
+        "--oversimplify",
+        default=None,
+        help="comma/space-separated contig(s) carried forward verbatim (oversimplified, "
+        "e.g. 'chrM'); their models are reference-derived and exempt from this filter, so "
+        "cluster-guided per-input record sets stay identical for merge_LRAA_GTFs.",
+    )
 
     # Threshold overrides (default from LRAA_Globals.config).
     parser.add_argument("--min_seq_identity", type=float, default=None)
@@ -85,6 +93,10 @@ def main():
         if v is not None:
             LRAA_Globals.config[k] = v
 
+    exempt_contigs = set()
+    if args.oversimplify:
+        exempt_contigs = {t for t in re.split(r"[\s,]+", args.oversimplify.strip()) if t}
+
     log_out = args.output_log or (args.output_gtf + ".mismapping_filter.log")
 
     workdir = args.work_dir
@@ -103,6 +115,7 @@ def main():
             log_out=log_out,
             workdir=workdir,
             threads=args.threads,
+            exempt_contigs=exempt_contigs,
         )
     finally:
         if tmp is not None:

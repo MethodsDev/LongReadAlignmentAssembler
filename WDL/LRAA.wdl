@@ -773,6 +773,7 @@ workflow LRAA_wf {
                 lraaQuantExpr = select_first([chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr]),
                 referenceGenome = referenceGenome,
                 outputFilePrefix = LRAA_output_prefix,
+                oversimplify = oversimplify,
                 docker = docker
         }
     }
@@ -961,6 +962,7 @@ task alignment_mismapping_filter {
         File referenceGenome
         String outputFilePrefix
         String docker
+        String? oversimplify
         Int cpu = 4
         Int memoryGB = 32
     }
@@ -973,6 +975,10 @@ task alignment_mismapping_filter {
         ln -s ~{referenceGenome} genome.fa
         samtools faidx genome.fa
 
+        # Oversimplify contigs (e.g. chrM) are reference models carried forward whatever
+        # the reads did; a coverage-driven filter must leave them untouched, or a
+        # sparsely covered cluster-guided input loses different models than a dense one
+        # and merge_LRAA_GTFs refuses the disagreeing per-input record sets.
         filter_LRAA_isoforms_by_mismapping.py \
             --gtf ~{lraaGtf} \
             --quant_expr ~{lraaQuantExpr} \
@@ -980,6 +986,7 @@ task alignment_mismapping_filter {
             --output_gtf ~{outputFilePrefix}.gtf \
             --output_quant_expr ~{outputFilePrefix}.quant.expr \
             --output_log ~{outputFilePrefix}.mismapping_filter.log \
+            ~{if defined(oversimplify) then "--oversimplify '" + oversimplify + "'" else ""} \
             --threads ~{cpu}
     >>>
 
