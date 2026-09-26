@@ -133,6 +133,11 @@ workflow LRAA_singlecell_wf {
     # Platform/options
     Boolean HiFi = false
     String oversimplify = "chrM"   # e.g., "chrM" or "chrM,M"
+    # --polyA_known: trusted cleavage-site BED/GTF (v0.43.0) forwarded to BOTH the init
+    # pass and the per-cluster discovery runs so they waive the internal-priming veto at
+    # the same trusted 3' ends. Default unset => the veto applies to every A-rich read
+    # candidate (a future run may point this at PolyASite 2.0 or the init phase's bed).
+    File? polyA_known
     String main_chromosomes = ""  # if empty, runs without partitioning
 
     # Contigs the ONE initial full-library partition extracts concurrently. Defaulted
@@ -500,6 +505,7 @@ workflow LRAA_singlecell_wf {
         annot_gtf = initial_annot_gtf,
         HiFi = HiFi,
         oversimplify = oversimplify,
+        polyA_known = polyA_known,
         main_chromosomes = main_chromosomes,
         region = region,
         # THE one full-library chromosome partition in a single-cell run, and the only
@@ -692,6 +698,7 @@ workflow LRAA_singlecell_wf {
         annot_gtf = if quant_only then initial_annot_gtf else init_gtf_file,
         HiFi = HiFi,
         oversimplify = oversimplify,
+        polyA_known = polyA_known,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         main_chromosomes = main_chromosomes,
         # Backend-dependent, and separate from the initial phase's value on purpose:

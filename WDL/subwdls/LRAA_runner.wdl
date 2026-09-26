@@ -33,6 +33,9 @@ task LRAA_runner_task {
         Boolean HiFi = false
         String? region
         String? oversimplify
+        # --polyA_known: trusted cleavage-site BED/GTF that waives the internal-priming
+        # veto (v0.43.0). Default unset => the veto applies to every A-rich read candidate.
+        File? polyA_known
         # Optional: disable contig-level parallelization inside LRAA.
         # Keep default = false for non-scattered runs; set to true in scatter contexts to avoid oversubscription.
         Boolean no_parallelize_contigs = false
@@ -298,6 +301,7 @@ task LRAA_runner_task {
                                  ~{if defined(contig) then "--contig " + contig else ""} \
                                  ~{if defined(region) then "--region " + region else ""} \
                                  ~{if defined(oversimplify) then "--oversimplify " + oversimplify else ""} \
+                                 ~{if defined(polyA_known) then "--polyA_known " + polyA_known else ""} \
                                  ~{if defined(min_per_id) then "--min_per_id " + min_per_id else ""} \
                                  ~{no_norm_flag} \
                                  ~{no_EM_flag} \
@@ -486,6 +490,7 @@ workflow LRAA_runner {
         Boolean HiFi = false
         String? region
         String? oversimplify
+        File? polyA_known
         # Expose toggle to workflow as well; default on to match current LRAA quant defaults.
         Boolean no_parallelize_contigs = false
         String? contig
@@ -543,6 +548,7 @@ workflow LRAA_runner {
             quant_only=quant_only,
             HiFi = HiFi,
             oversimplify = oversimplify,
+            polyA_known = polyA_known,
             no_parallelize_contigs = no_parallelize_contigs,
             contig = contig,
             num_total_reads=num_total_reads,

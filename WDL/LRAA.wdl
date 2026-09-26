@@ -70,6 +70,9 @@ workflow LRAA_wf {
         # and supplying one there is refused in validate_scattering rather than dropped.
         File? internal_chunk_plan
         File? annot_gtf
+        # --polyA_known: trusted cleavage-site BED/GTF that waives the internal-priming
+        # veto (v0.43.0). Default unset => the veto applies to every A-rich read candidate.
+        File? polyA_known
         Boolean HiFi = false
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
@@ -429,6 +432,7 @@ workflow LRAA_wf {
                 chunk_plan = internal_chunk_plan,
                 main_chromosomes = main_chromosomes,
                 oversimplify = oversimplify,
+                polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 quant_only = quant_only,
                 HiFi = HiFi,
@@ -588,6 +592,7 @@ workflow LRAA_wf {
                                 then splitByChr.chromosomeGTFs[contig_index]
                                 else annot_gtf,
                     oversimplify = oversimplify,
+                    polyA_known = polyA_known,
                     contig = contig_name,
                     num_total_reads = scatter_num_total_reads,
                     cell_list = cell_list,
@@ -691,6 +696,7 @@ workflow LRAA_wf {
                 region = region,
                 contig = direct_contig,
                 oversimplify = oversimplify,
+                polyA_known = polyA_known,
                 min_per_id = min_per_id,
                 quant_only = quant_only,
                 HiFi = HiFi,

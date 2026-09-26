@@ -70,6 +70,9 @@ workflow LRAA_chunk_scatter {
         # fasta. ChunkedRun resolves it per chunk and rewrites the name to the
         # mini contig, so a caller writes the ORIGINAL name here.
         String? oversimplify
+        # --polyA_known: trusted cleavage-site BED/GTF that waives the internal-priming
+        # veto (v0.43.0). Default unset => the veto applies to every A-rich read candidate.
+        File? polyA_known
         # Apportion an ambiguous read by 3'-end agreement, or split it flat. True
         # replaces the computed weight with 1.0 (pylib/EM.py), so it changes
         # reported numbers. Reaches the leaf as a config override rather than a
@@ -297,6 +300,7 @@ workflow LRAA_chunk_scatter {
                 stream_reads = stream_reads,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 oversimplify = oversimplify,
+                polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 chunkCpu = chunkCpu_use,
                 chunkMemoryGB = chunkMemoryGB_use,
@@ -540,6 +544,7 @@ task process_chunk {
         Boolean stream_reads
         Boolean rescue_unassigned_reads_via_transcriptome_alignment
         String? oversimplify
+        File? polyA_known
         Boolean no_weight_reads_by_3prime_agreement = false
         Int chunkCpu
         Int chunkMemoryGB
@@ -583,6 +588,7 @@ task process_chunk {
         ~{true="--stream_reads" false="--no_stream_reads" stream_reads} \
         ~{true="" false="--no_rescue_unassigned_reads_via_transcriptome_alignment" rescue_unassigned_reads_via_transcriptome_alignment} \
         ~{if defined(oversimplify) then "--oversimplify " + oversimplify else ""} \
+        ~{if defined(polyA_known) then "--polyA_known " + polyA_known else ""} \
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
         ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \

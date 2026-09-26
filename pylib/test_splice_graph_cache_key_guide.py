@@ -3,10 +3,11 @@
 """The guide annotation is an input to graph construction, so it must be in the cache key.
 
 It was not. The cache root is per-output-prefix only, so two ref-guided runs sharing a
-prefix but supplying different GTFs could reuse each other's graphs. That matters more
-since `spare_polyA_veto_at_known_3prime`, because a reference 3' coordinate now decides
-whether an A-rich PolyA candidate becomes a vertex at all -- so the same BAM and config
-can legitimately produce different graphs from different guides.
+prefix but supplying different GTFs could reuse each other's graphs -- and different
+guides legitimately produce different graphs from the same BAM (fracturing, introns,
+and, in merge/quant_mode, boundary seeding). The veto reprieve is a separate axis: as
+of v0.43.0 it rides on --polyA_known (in config_digest), not the reference-transcript
+subset, so that file -- not the guide provenance split -- is what steers the veto.
 """
 
 import importlib.machinery
@@ -120,29 +121,47 @@ def test_the_transcript_id_alone_does_not_change_the_key():
     assert _key([_guide("nameA", [[500, 1000]])]) == _key([_guide("nameB", [[500, 1000]])])
 
 
-# ------------------------------------------------ provenance, not just structure
+# ----------------------- reference-transcript provenance no longer enters the key
+# v0.43.0: the internal-priming veto reprieve reads --polyA_known (carried in
+# config_digest), NOT the reference-transcript subset. Which models are tagged
+# "reference" is therefore inert in graph construction, so it must NOT split the
+# cache key -- keying it would separate runs that build identical graphs.
 
 
-def test_the_same_structures_with_a_different_provenance_split_change_the_key():
-    """The decisive case for spare_polyA_veto_at_known_3prime.
-
-    The integrated set decides graph structure; the genuine reference subset decides
-    which A-rich PolyA candidates keep their vertex. Identical combined structures can
-    arise with different provenance -- one run where a model is reconstructed, another
-    where the same coordinates come from the annotation -- and those build DIFFERENT
-    graphs. A single digest over the mixture cannot tell them apart.
-    """
+def test_reference_provenance_split_does_not_change_the_key():
+    """Same integrated structures, different reference/reconstruction split. Before
+    v0.43.0 the split changed which A-rich PolyA candidates kept a vertex and so
+    changed the key; now the reprieve comes only from --polyA_known, so the split is
+    inert and the key is stable."""
     combined = [_guide("t1", [[500, 1000]]), _guide("t2", [[2000, 2500]])]
     reference_is_t1 = _key(combined, reference_transcripts=[combined[0]])
     reference_is_t2 = _key(combined, reference_transcripts=[combined[1]])
-    assert reference_is_t1 != reference_is_t2
+    assert reference_is_t1 == reference_is_t2
 
 
-def test_no_reference_differs_from_a_reference_over_the_same_structures():
+def test_presence_of_a_reference_subset_does_not_change_the_key():
     combined = [_guide("t1", [[500, 1000]])]
-    assert _key(combined, reference_transcripts=None) != _key(
+    assert _key(combined, reference_transcripts=None) == _key(
         combined, reference_transcripts=combined
     )
+
+
+def test_changing_polyA_known_changes_the_key(tmp_path, monkeypatch):
+    """The reprieve source moved from the reference subset to --polyA_known, so the key
+    must now respond to that file (via config_digest) -- the coverage the removed
+    reference_digest used to give."""
+    combined = [_guide("t1", [[500, 1000]])]
+    bed_a = tmp_path / "a.bed"
+    bed_a.write_text("chr1\t999\t1000\tk\t.\t+\n")
+    bed_b = tmp_path / "b.bed"
+    bed_b.write_text("chr1\t1999\t2000\tk\t.\t+\n")
+    monkeypatch.setitem(LRAA_Globals.config, "polyA_known", None)
+    key_none = _key(combined)
+    monkeypatch.setitem(LRAA_Globals.config, "polyA_known", str(bed_a))
+    key_a = _key(combined)
+    monkeypatch.setitem(LRAA_Globals.config, "polyA_known", str(bed_b))
+    key_b = _key(combined)
+    assert len({key_none, key_a, key_b}) == 3
 
 
 # --------------------------------- boundary metadata also steers graph construction

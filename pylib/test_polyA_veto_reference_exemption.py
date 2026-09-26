@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 
-"""The internal-priming veto waives itself where the reference calls a 3' end.
+"""The internal-priming veto waives itself ONLY where a trusted polyA reference calls a
+cleavage site.
 
 A read-derived PolyA candidate in A-rich genomic context is normally rejected before it
-can become a graph vertex. But if the supplied reference annotation also calls a 3' end
-at that position, the reference is evidence about cleavage that is independent of the
-genomic context the veto inspects, so the veto is waived.
+can become a graph vertex. As of v0.43.0 the only thing that waives that veto is an
+explicit --polyA_known trusted cleavage set (Splice_graph._reference_three_prime_ends,
+populated from LRAA_Globals.known_polyA_three_prime_ends). The veto is NO LONGER waived by
+the --gtf structural annotation's transcript termini: a structural guide (GENCODE, or the
+cluster-guided de-novo init GTF) is not cleavage-validated, and trusting its ends let
+A-rich internal-priming termini within +/-25 nt be re-blessed as PolyA sites (the "halo").
 
-This is the DCT case from chr13: the veto discarded a site GENCODE calls to the base,
-because 15 of the 20 bases downstream in transcript sense were T.
+"At that position" means within max_dist_between_alt_polyA_sites / 2, i.e. +/-25 nt, not an
+exact coordinate match; see Splice_graph._reference_endorses_polyA_site.
 
-"At that position" means within max_dist_between_alt_polyA_sites / 2, i.e. +/-25 nt, not
-an exact coordinate match; see Splice_graph._reference_endorses_polyA_site.
-
-Inert without a reference, so ref-free behaviour is unchanged.
+Inert without --polyA_known, so the default vetoes every A-rich read candidate.
 """
-
-import logging
 
 import pytest
 
@@ -32,13 +31,12 @@ def _guide(transcript_id, exons, strand):
     return transcript
 
 
-def _polyA_sites(contig_seq_str, counter, strand="+", guides=None, spare=True):
+def _polyA_sites(contig_seq_str, counter, strand="+", known=None, spare=True):
+    # `known` mimics the --polyA_known set that populates _reference_three_prime_ends.
     sg = Splice_graph.Splice_graph()
     sg._contig_seq_str = contig_seq_str
     LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = spare
-    sg._reference_three_prime_ends = sg._collect_reference_three_prime_ends(
-        guides, strand
-    )
+    sg._reference_three_prime_ends = sorted(set(known)) if (known and spare) else []
     sg._incorporate_PolyA_objects("chr1", strand, counter, from_reads=True)
     return sorted(obj.get_coords()[0] for obj in sg._PolyA_objs)
 
@@ -48,178 +46,94 @@ A_RICH_AT_1000 = "C" * 1000 + "A" * 20 + "C" * 1980
 
 @pytest.fixture(autouse=True)
 def _restore_config():
-    original = LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime")
+    keys = ("spare_polyA_veto_at_known_3prime", "polyA_known",
+            "max_dist_between_alt_polyA_sites")
+    saved = {k: LRAA_Globals.config.get(k) for k in keys}
     yield
-    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = original
+    for k, v in saved.items():
+        LRAA_Globals.config[k] = v
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
 
 
-def test_without_a_reference_the_veto_still_fires():
-    """Ref-free behaviour must be untouched: no reference, no exemption."""
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=None) == []
+# --- the veto reprieve, now driven by the --polyA_known set --------------------------
 
 
-def test_a_reference_3prime_end_at_the_same_position_waives_the_veto():
-    guides = [_guide("known.1", [[500, 1000]], "+")]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=guides) == [1000]
+def test_without_a_known_set_the_veto_still_fires():
+    """Default (no --polyA_known): every A-rich read candidate is vetoed."""
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=None) == []
 
 
-def test_a_reference_end_elsewhere_does_not_waive_it():
-    guides = [_guide("known.far", [[500, 2500]], "+")]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=guides) == []
+def test_a_known_polyA_at_the_same_position_waives_the_veto():
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1000]) == [1000]
+
+
+def test_a_known_site_elsewhere_does_not_waive_it():
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[2500]) == []
 
 
 def test_the_exemption_can_be_switched_off():
-    guides = [_guide("known.1", [[500, 1000]], "+")]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=guides, spare=False) == []
-
-
-def test_only_same_strand_reference_ends_count():
-    """A minus-strand annotation end must not waive a plus-strand candidate's veto."""
-    guides = [_guide("known.minus", [[1000, 1500]], "-")]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=guides) == []
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1000], spare=False) == []
 
 
 def test_the_tolerance_is_the_alt_polyA_window_half():
-    """+/-25 (max_dist_between_alt_polyA_sites / 2), inclusive, on both sides.
-
-    Not an exact coordinate match: `position` reaches the veto from
-    aggregate_sites_within_window, which names the single most-supported read end in a
-    50 nt window, so it is not base-precise the way the annotation is.
-    """
-    tolerance = int(LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2)
-    for offset in (tolerance, -tolerance):
-        inside = [_guide("k", [[500, 1000 + offset]], "+")]
-        assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=inside) == [1000], offset
-    for offset in (tolerance + 1, -(tolerance + 1)):
-        outside = [_guide("k", [[500, 1000 + offset]], "+")]
-        assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=outside) == [], offset
+    """+/-25 (max_dist_between_alt_polyA_sites / 2), inclusive, both sides."""
+    tol = int(LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2)
+    for offset in (tol, -tol):
+        assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1000 + offset]) == [1000], offset
+    for offset in (tol + 1, -(tol + 1)):
+        assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1000 + offset]) == [], offset
 
 
 def test_the_tolerance_tracks_the_configured_window(monkeypatch):
-    """The window is derived, not a literal, so the two cannot drift apart."""
     monkeypatch.setitem(LRAA_Globals.config, "max_dist_between_alt_polyA_sites", 4)
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40},
-                        guides=[_guide("k", [[500, 1002]], "+")]) == [1000]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40},
-                        guides=[_guide("k", [[500, 1003]], "+")]) == []
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1002]) == [1000]
+    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, known=[1003]) == []
 
 
 def test_a_clean_context_candidate_is_unaffected_either_way():
-    """The exemption must only ever loosen the veto, never tighten anything."""
+    """The reprieve only ever loosens the veto, never tightens anything."""
     clean = "C" * 3000
-    assert _polyA_sites(clean, {1000: 40}, guides=None) == [1000]
-    guides = [_guide("k", [[500, 1000]], "+")]
-    assert _polyA_sites(clean, {1000: 40}, guides=guides) == [1000]
+    assert _polyA_sites(clean, {1000: 40}, known=None) == [1000]
+    assert _polyA_sites(clean, {1000: 40}, known=[1000]) == [1000]
 
 
-def test_reference_ends_are_collected_on_the_transcript_three_prime_side():
-    """On '-' a transcript's 3' end is its lend, not its rend."""
+# --- the reprieve SOURCE is --polyA_known only; --gtf guides no longer endorse --------
+
+
+def test_gtf_guides_do_not_endorse_without_polyA_known():
+    """v0.43.0: a structural --gtf guide's transcript termini no longer waive the veto."""
     sg = Splice_graph.Splice_graph()
+    sg._contig_acc = "chr1"
     LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
-    minus = [_guide("k", [[400, 900]], "-")]
-    assert sg._collect_reference_three_prime_ends(minus, "-") == [400]
-    plus = [_guide("k", [[400, 900]], "+")]
-    assert sg._collect_reference_three_prime_ends(plus, "+") == [900]
+    LRAA_Globals.config["polyA_known"] = None
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
+    assert sg._collect_reference_three_prime_ends([_guide("g", [[500, 1000]], "+")], "+") == []
 
 
-class _Unusable:
-    """A reference transcript whose 3' end cannot be read."""
-
-    def get_transcript_id(self):
-        return "broken.1"
-
-    def get_strand(self):
-        return "+"
-
-    def get_coords(self):
-        raise ValueError("no exon segments")
-
-
-def test_an_unusable_reference_transcript_is_reported_not_dropped_silently(caplog):
-    """Losing one shrinks the exemption: sites the annotation endorses get vetoed as
-    internal priming instead, and that is indistinguishable from the annotation not
-    calling an end there unless it is said out loud."""
-    sg = Splice_graph.Splice_graph()
-    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
-    with caplog.at_level(logging.WARNING, logger="Splice_graph"):
-        ends = sg._collect_reference_three_prime_ends(
-            [_guide("good", [[400, 900]], "+"), _Unusable()], "+"
-        )
-    assert ends == [900], "the usable transcript must still contribute its 3' end"
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    message = warnings[0].getMessage()
-    assert "1 of 2 reference transcripts" in message
-    assert "broken.1" in message
-    assert "no exon segments" in message
-
-
-def test_a_wrong_strand_reference_transcript_is_not_reported_as_unusable(caplog):
-    """Nothing is wrong with it; it just has nothing to say about this strand."""
-    sg = Splice_graph.Splice_graph()
-    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
-    with caplog.at_level(logging.WARNING, logger="Splice_graph"):
-        ends = sg._collect_reference_three_prime_ends(
-            [_guide("minus", [[400, 900]], "-")], "+"
-        )
-    assert ends == []
-    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
-
-
-# --- v0.41.0: a guide must not endorse its own internal-priming terminus ---------
-
-
-def _ip_guide(transcript_id, exons, strand):
-    t = _guide(transcript_id, exons, strand)
-    t.set_likely_internal_primed(True)
-    return t
-
-
-def test_internal_primed_reference_terminus_is_excluded():
-    """A guide 3' end flagged InternalPriming does NOT endorse a cleavage site.
-
-    The self-referential case: a de-novo guide (e.g. the cluster-guided init GTF) carries
-    its own internal-priming termini. Without this exclusion the guided build would waive
-    the veto on exactly the artifacts a plain de-novo run rejects.
-    """
-    sg = Splice_graph.Splice_graph()
-    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
-    plain = _guide("plain", [[500, 1000]], "+")
-    flagged = _ip_guide("ip", [[500, 1000]], "+")
-    assert sg._collect_reference_three_prime_ends([plain], "+") == [1000]
-    assert sg._collect_reference_three_prime_ends([flagged], "+") == []
-
-
-def test_internal_primed_guide_does_not_spare_the_A_rich_candidate():
-    """End to end through the veto: the flagged guide's A-rich site stays rejected."""
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=[_guide("p", [[500, 1000]], "+")]) == [1000]
-    assert _polyA_sites(A_RICH_AT_1000, {1000: 40}, guides=[_ip_guide("ip", [[500, 1000]], "+")]) == []
-
-
-def test_polyA_known_file_overrides_reference_termini(tmp_path):
-    """--polyA_known replaces the reference termini as the endorsement source.
-
-    A trusted list endorses its sites even with no reference transcripts, is taken at
-    face value (no InternalPriming filtering), and stays strand-specific.
-    """
+def test_polyA_known_supplies_the_reprieve_set(tmp_path):
     bed = tmp_path / "known.bed"
     bed.write_text("chr1\t999\t1000\tk:1000:+\t.\t+\nchr1\t1999\t2000\tk:2000:-\t.\t-\n")
-    original = LRAA_Globals.config.get("polyA_known")
     LRAA_Globals.config["polyA_known"] = str(bed)
     LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
     LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
-    try:
-        sg = Splice_graph.Splice_graph()
-        sg._contig_acc = "chr1"
-        LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
-        # endorses the '+' site with NO reference transcripts, and ignores the '-' one
-        assert sg._collect_reference_three_prime_ends(None, "+") == [1000]
-        assert sg._collect_reference_three_prime_ends(None, "-") == [2000]
-        # a guide ending elsewhere is overridden by the file, not merged with it
-        assert sg._collect_reference_three_prime_ends(
-            [_guide("elsewhere", [[100, 300]], "+")], "+"
-        ) == [1000]
-    finally:
-        LRAA_Globals.config["polyA_known"] = original
-        LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
-        LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
+    sg = Splice_graph.Splice_graph()
+    sg._contig_acc = "chr1"
+    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = True
+    assert sg._collect_reference_three_prime_ends(None, "+") == [1000]
+    assert sg._collect_reference_three_prime_ends(None, "-") == [2000]  # strand-specific
+    # guides passed alongside are ignored; only the known file counts
+    assert sg._collect_reference_three_prime_ends([_guide("g", [[100, 300]], "+")], "+") == [1000]
+
+
+def test_exemption_off_returns_empty_even_with_known(tmp_path):
+    bed = tmp_path / "known.bed"
+    bed.write_text("chr1\t999\t1000\tk\t.\t+\n")
+    LRAA_Globals.config["polyA_known"] = str(bed)
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE = None
+    LRAA_Globals._KNOWN_POLYA_ENDS_CACHE_PATH = None
+    sg = Splice_graph.Splice_graph()
+    sg._contig_acc = "chr1"
+    LRAA_Globals.config["spare_polyA_veto_at_known_3prime"] = False
+    assert sg._collect_reference_three_prime_ends(None, "+") == []

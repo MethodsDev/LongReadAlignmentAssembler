@@ -314,15 +314,16 @@ class Splice_graph:
         # - base coverage incremented under self._contig_base_cov
         # - defines and stores TSS and PolyA objects
 
-        # Reference 3' ends must be known BEFORE reads are processed, because the
+        # Trusted 3' ends must be known BEFORE reads are processed, because the
         # internal-priming veto fires during read-derived PolyA identification inside
         # _populate_exon_coverage_and_extract_introns -- which runs before
-        # _integrate_input_transcript_structures folds the annotation in.
-        # reference_transcripts, NOT input_transcripts: the final build is handed
-        # all_transcripts + reference_transcripts, so input_transcripts is a MIXTURE of
-        # LRAA's own reconstructions and the annotation.  Letting a reconstruction
-        # endorse a site is circular -- a model whose terminus came from an A-rich vertex
-        # would waive the veto on that vertex at the next build.
+        # _integrate_input_transcript_structures folds the annotation in.  As of v0.43.0
+        # the reprieve set comes ONLY from --polyA_known (a trusted cleavage-site file),
+        # never from the --gtf structural guide: a guide terminus is not cleavage-
+        # validated, and letting one endorse itself was circular -- an A-rich vertex whose
+        # coordinate reached a reconstruction's terminus would waive the veto on that same
+        # vertex at the next build.  reference_transcripts is passed for signature
+        # stability but ignored (see _collect_reference_three_prime_ends).
         self._reference_three_prime_ends = self._collect_reference_three_prime_ends(
             reference_transcripts, contig_strand
         )
@@ -357,7 +358,7 @@ class Splice_graph:
         # incorporate guide structures if provided
         if input_transcripts:
             self._integrate_input_transcript_structures(
-                input_transcripts, contig_acc, contig_strand
+                input_transcripts, contig_acc, contig_strand, quant_mode
             )
 
         ##--------------------------------------------------------------------------------
@@ -1045,88 +1046,30 @@ class Splice_graph:
         return
 
     def _collect_reference_three_prime_ends(self, reference_transcripts, contig_strand):
-        """Sorted 3' end coordinates that ENDORSE a cleavage site on this strand.
+        """Sorted 3' cleavage coordinates that ENDORSE (waive) the internal-priming veto.
 
-        Source, in order:
-          1. --polyA_known (a trusted BED/GTF of cleavage sites), when configured. It
-             REPLACES the reference termini, and is taken at face value.
-          2. otherwise the USER-SUPPLIED --gtf annotation's transcript 3' ends,
-             EXCLUDING any transcript flagged InternalPriming. That exclusion is
-             deliberate: a de-novo guide (e.g. the cluster-guided init GTF) carries its
-             own A-rich internal-priming termini, and without the skip it would endorse
-             them "on reference agreement" and re-bless them as PolyA vertices in the
-             guided build -- exactly the artifacts a plain de-novo run vetoes.
+        Source is ONLY the explicit --polyA_known trusted cleavage set. As of v0.43.0 the
+        reprieve no longer derives from the --gtf annotation's transcript termini: a
+        structural guide (GENCODE, or the cluster-guided de-novo init GTF) is not
+        cleavage-validated evidence, and trusting its termini let A-rich internal-priming
+        ends within +/-25 nt be re-blessed as PolyA sites (the "halo"). Seeding boundaries
+        from an input GTF now happens only where it belongs -- the merge and quant-only --
+        not via this veto reprieve.
 
-        Empty when there is no source or the exemption is off, which makes every
-        downstream check a cheap no-op and leaves ref-free behaviour bit-identical.
-
-        A reference transcript that yields no usable 3' end is COUNTED and reported at
-        WARNING.  Dropping it silently shrinks the exemption -- sites the annotation
-        does endorse get vetoed as internal priming instead -- and that is a behaviour
-        change with no trace in the log, indistinguishable from the annotation simply
-        not calling an end there.
+        `reference_transcripts` is ignored, kept only for call/signature stability. Empty
+        when --polyA_known is unset or the exemption is off, which makes every downstream
+        check a cheap no-op and leaves ref-free behaviour bit-identical.
         """
 
         if not LRAA_Globals.config.get("spare_polyA_veto_at_known_3prime", True):
             return []
 
-        # (1) explicit --polyA_known trusted list overrides the reference termini.
         known = LRAA_Globals.known_polyA_three_prime_ends(
             getattr(self, "_contig_acc", None), contig_strand
         )
-        if known is not None:
-            return sorted(set(known))
-
-        # (2) fall back to --gtf reference transcript 3' ends, skipping IP-flagged ones.
-        if not reference_transcripts:
+        if not known:
             return []
-
-        ends = set()
-        unusable = []
-        n_internal_primed_skipped = 0
-        for transcript in reference_transcripts:
-            try:
-                strand = transcript.get_strand()
-                transcript_lend, transcript_rend = transcript.get_coords()
-            except Exception as exc:
-                unusable.append("{}: {}".format(_describe_transcript(transcript), exc))
-                continue
-            # Wrong strand is not malformed: the annotation is fine, it just has nothing
-            # to say about this strand's candidates.
-            if strand != contig_strand:
-                continue
-            # A guide transcript already judged internally primed must not endorse its
-            # own A-rich terminus (self-referential reprieve).
-            ip = transcript.get_likely_internal_primed()
-            if ip is True or ip == "True":
-                n_internal_primed_skipped += 1
-                continue
-            ends.add(transcript_rend if contig_strand == "+" else transcript_lend)
-
-        if n_internal_primed_skipped:
-            logger.info(
-                "[%s%s] spare_polyA_veto_at_known_3prime: skipped %d reference "
-                "transcript 3' end(s) flagged InternalPriming (they do not endorse "
-                "cleavage).",
-                getattr(self, "_contig_acc", "?"),
-                contig_strand,
-                n_internal_primed_skipped,
-            )
-
-        if unusable:
-            logger.warning(
-                "[%s%s] spare_polyA_veto_at_known_3prime: %d of %d reference "
-                "transcripts yielded no usable 3' end and therefore endorse nothing; "
-                "A-rich candidates at those ends will be vetoed. First %d: %s",
-                getattr(self, "_contig_acc", "?"),
-                contig_strand,
-                len(unusable),
-                len(reference_transcripts),
-                min(len(unusable), 10),
-                "; ".join(unusable[:10]),
-            )
-
-        return sorted(ends)
+        return sorted(set(known))
 
     def _reference_endorses_polyA_site(self, position):
         """True when the reference annotation calls a 3' end within +/-25 nt.
@@ -1284,7 +1227,7 @@ class Splice_graph:
         return
 
     def _integrate_input_transcript_structures(
-        self, transcripts, contig_acc, contig_strand
+        self, transcripts, contig_acc, contig_strand, quant_mode=False
     ):
         """
         Fold in the reference annotations:
@@ -1479,12 +1422,30 @@ class Splice_graph:
 
                 last_rend = rend
 
-        if LRAA_Globals.config["infer_TSS"] and len(TSS_evidence_counter) > 0:
+        # Seed TSS/PolyA vertices from the input GTF's own boundaries ONLY where that is
+        # what the input is for: the merge (reconciling constituent boundaries) and
+        # quant-only (the GTF is the fixed model set reads are assigned to). In DISCOVERY
+        # (quant_mode=False, non-merge) the input GTF is a structural GUIDE only -- its
+        # termini are not cleavage-validated, so seeding them re-introduced A-rich
+        # internal-priming ends. Structure (fracturing, introns, coverage above) is
+        # applied regardless; only boundary seeding is gated here. In discovery, PolyA
+        # comes from reads (+ the --polyA_known veto reprieve) and TSS from reads.
+        seed_input_boundaries = quant_mode or (LRAA_Globals.LRAA_MODE == "MERGE")
+
+        if (
+            seed_input_boundaries
+            and LRAA_Globals.config["infer_TSS"]
+            and len(TSS_evidence_counter) > 0
+        ):
             self._incorporate_TSS_objects(
                 contig_acc, contig_strand, TSS_evidence_counter, from_reads=False
             )
 
-        if LRAA_Globals.config["infer_PolyA"] and len(PolyA_evidence_counter) > 0:
+        if (
+            seed_input_boundaries
+            and LRAA_Globals.config["infer_PolyA"]
+            and len(PolyA_evidence_counter) > 0
+        ):
             self._incorporate_PolyA_objects(
                 contig_acc, contig_strand, PolyA_evidence_counter, from_reads=False
             )

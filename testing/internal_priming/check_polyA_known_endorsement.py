@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 
-"""End-to-end exercise of the internal-priming veto's ENDORSEMENT SOURCE (v0.41.0).
+"""End-to-end exercise of the internal-priming veto's ENDORSEMENT SOURCE (v0.43.0).
 
 The veto rejects a read-derived PolyA candidate whose downstream genome is A-rich, unless
-a trusted 3' end endorses cleavage there (spare_polyA_veto_at_known_3prime). Before
-v0.41.0 the endorsement source was every --gtf transcript terminus, which let a de-novo
-guide (e.g. the cluster-guided init GTF) endorse its OWN A-rich internal-priming termini
-and re-bless them as PolyA vertices in the guided build -- exactly the artifacts a plain
-de-novo run rejects. v0.41.0: (a) a --gtf terminus flagged InternalPriming no longer
-endorses, and (b) a --polyA_known BED/GTF can supply the endorsement set explicitly.
+a trusted 3' end endorses cleavage there (spare_polyA_veto_at_known_3prime). History:
+before v0.41.0 the endorsement source was every --gtf transcript terminus, which let a
+de-novo guide (e.g. the cluster-guided init GTF) endorse its OWN A-rich internal-priming
+termini and re-bless them as PolyA vertices in the guided build -- exactly the artifacts a
+plain de-novo run rejects. v0.41.0 stopped an InternalPriming-flagged --gtf terminus from
+endorsing; v0.43.0 goes the rest of the way: the --gtf structural annotation NEVER
+endorses (a guide terminus is not cleavage-validated), and the ONLY endorsement source is
+an explicit --polyA_known BED/GTF (a trusted atlas, or the init phase's veto-filtered
+PolyA bed for cluster-guided runs).
 
 One synthetic locus: monoexonic reads ending where a 20 nt genomic A-run begins, so the
 candidate there is internal priming. Arms differ ONLY in the endorsement source:
 
   ref-free                    -> vetoed (no PolyA vertex at the A-rich locus)   [baseline]
-  --gtf guide (clean 3' end)  -> SPARED  (vertex survives)      [mechanism still fires]
+  --gtf guide (clean 3' end)  -> vetoed  (vertex gone)          [THE v0.43.0 CHANGE:
+                                 a structural guide no longer endorses, clean or not]
   --gtf guide (InternalPriming "True" on the same 3' end)
-                              -> vetoed  (vertex gone)          [THE v0.41.0 FIX]
-  --polyA_known bed @ locus   -> SPARED  (vertex survives)      [the new knob]
+                              -> vetoed  (vertex gone)          [was the v0.41.0 fix]
+  --polyA_known bed @ locus   -> SPARED  (vertex survives)      [the ONLY source now]
 
 A clean control locus (ordinary downstream sequence) must carry a PolyA vertex in every
 arm, so "no vertex at the A-rich locus" means "vetoed" and not "nothing assembled".
@@ -180,9 +184,10 @@ def main():
     # SPARED means a PolyA vertex survives at the A-rich locus; vetoed means none does.
     expected_spared = {
         "reffree": False,
-        "guide_clean": True,    # a clean guide terminus endorses -> mechanism fires
-        "guide_ip": False,      # v0.41.0: an InternalPriming-flagged guide must NOT endorse
-        "polyA_known": True,    # the explicit trusted list endorses
+        "guide_clean": False,   # v0.43.0: a --gtf structural terminus NEVER endorses,
+                                # clean or not (it is not cleavage-validated)
+        "guide_ip": False,      # (was already so; an IP-flagged guide never endorsed)
+        "polyA_known": True,    # v0.43.0: the explicit trusted list is the ONLY source
     }
 
     failures = []
@@ -211,7 +216,7 @@ def main():
         sys.exit(1)
 
     print("\nPASS: endorsement source behaves as specified "
-          "(clean guide & --polyA_known spare; InternalPriming-flagged guide does not).")
+          "(only --polyA_known spares; no --gtf guide does, clean or InternalPriming-flagged).")
     if not args.keep:
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)

@@ -15,8 +15,14 @@ workflow LRAA_cell_cluster_guided {
 
         File inputBAM
         File cell_clusters_info
-        
+
         File? annot_gtf
+
+        # --polyA_known: trusted cleavage-site BED/GTF (v0.43.0) forwarded to the
+        # per-cluster discovery runs so they leverage the same trusted 3' ends as the
+        # init pass (see LRAA-singlecell.wdl, which threads it here from init). Default
+        # unset => the internal-priming veto applies to every A-rich read candidate.
+        File? polyA_known
 
         # INTERNAL PLUMBING, not a user knob: the ONE cut plan for the WHOLE run,
         # emitted by a caller that starts even earlier than this workflow does.
@@ -232,6 +238,7 @@ workflow LRAA_cell_cluster_guided {
                     cell_list = partition_bam_by_cell_cluster.partitioned_cell_lists[i],
                     HiFi = HiFi,
                     oversimplify = oversimplify,
+                    polyA_known = polyA_known,
                     # single-cell: this workflow never surfaces the normalized splice-graph BAM
                     retain_normalized_splice_graph_bam = false,
                     # These per-cluster gtfs are inputs to the cross-cluster merge

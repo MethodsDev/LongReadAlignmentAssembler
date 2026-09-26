@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.42.0"
+VERSION = "v0.43.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -724,10 +724,12 @@ def main():
             type=str,
             default=None,
             help="BED or GTF of trusted cleavage 3' ends that waive the internal-priming "
-            "veto. Replaces the --gtf reference termini as the endorsement source. "
-            "Default (unset): --gtf termini excluding InternalPriming-flagged ones. For "
-            "cluster-guided runs, point at the init phase's PolyA bed (already "
-            "veto-filtered); a curated atlas (e.g. PolyASite 2.0) also works.",
+            "veto for read-derived PolyA candidates within +/-(max_dist_between_alt_polyA_sites/2). "
+            "This is the ONLY reprieve source; --gtf structural termini do NOT waive the veto. "
+            "Default (unset): every A-rich read candidate is vetoed (no reprieve). Point "
+            "this at a curated cleavage-site atlas (e.g. PolyASite 2.0) or a curated "
+            "reference GTF; do NOT point it at LRAA's own init output -- a nearby clean "
+            "site would endorse an A-rich candidate within the window (the halo).",
         )
         lite_primary.add_argument(
             "--output_prefix",
@@ -929,10 +931,12 @@ def main():
         type=str,
         default=None,
         help="BED or GTF of trusted cleavage 3' ends that waive the internal-priming "
-        "veto. Replaces the --gtf reference termini as the endorsement source. "
-        "Default (unset): --gtf termini excluding InternalPriming-flagged ones. For "
-        "cluster-guided runs, point at the init phase's PolyA bed (already "
-        "veto-filtered); a curated atlas (e.g. PolyASite 2.0) also works.",
+        "veto for read-derived PolyA candidates within +/-(max_dist_between_alt_polyA_sites/2). "
+        "This is the ONLY reprieve source; --gtf structural termini do NOT waive the veto. "
+        "Default (unset): every A-rich read candidate is vetoed (no reprieve). Point "
+        "this at a curated cleavage-site atlas (e.g. PolyASite 2.0) or a curated "
+        "reference GTF; do NOT point it at LRAA's own init output -- a nearby clean "
+        "site would endorse an A-rich candidate within the window (the halo).",
     )
     primary.add_argument(
         "--output_prefix",
@@ -2846,7 +2850,7 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 10
+SPLICE_GRAPH_CACHE_VERSION = 11
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     # Ingestion rather than construction: this decides which alignments reach the
@@ -3111,15 +3115,14 @@ def _compute_splice_graph_cache_entry(
         # SPACER path.  guide_digest incidentally separated them for ref-guided runs once it
         # existed; this makes the separation intentional rather than a side effect.
         "quant_mode": bool(quant_mode),
-        # Two digests, because two different things are decided.  The integrated set
-        # determines graph STRUCTURE; the genuine reference subset determines which
-        # A-rich PolyA candidates have their veto waived.  Identical combined structures
-        # can arise with different provenance splits and then build different graphs, so
-        # one digest over the mixture cannot stand in for both.
+        # The integrated guide set determines graph STRUCTURE (fracturing, introns, and
+        # -- in merge/quant_mode -- boundary seeding).  As of v0.43.0 there is no second
+        # digest: the veto reprieve no longer reads the reference-transcript subset (a
+        # structural guide's termini are not cleavage-validated and could be circular),
+        # only the --polyA_known file, which already lives in config_digest.  So
+        # reference_transcripts is inert in construction and keying it would separate
+        # runs that build identical graphs -- as defective as omitting a determining one.
         "guide_digest": _guide_structure_digest(transcripts, contig_strand),
-        "reference_digest": _guide_structure_digest(
-            reference_transcripts, contig_strand
-        ),
     }
     cache_key = hashlib.sha256(
         json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
