@@ -953,6 +953,48 @@ task splice_pattern_collapse {
     }
 }
 
+task integrate_TSS_PolyA_sites {
+    # One TSS and one PolyA bed for a cluster-guided run: every cluster-guided site, plus
+    # each basic (initial-catalog) site lying farther than int(window/2) from every
+    # cluster-guided site of the same type, contig and strand. Rows carry a `source`
+    # column (cluster_guided | basic). The window is the LRAA config default
+    # (max_dist_between_alt_{TSS,polyA}_sites); a run that overrode those via a config
+    # file is not reflected here.
+    input {
+        File primary_TSS_bed
+        File primary_PolyA_bed
+        File supplement_TSS_bed
+        File supplement_PolyA_bed
+        String outputFilePrefix
+        String docker
+    }
+
+    command <<<
+        set -eo pipefail
+
+        integrate_TSS_PolyA_sites.py \
+            --primary_TSS_bed ~{primary_TSS_bed} \
+            --primary_PolyA_bed ~{primary_PolyA_bed} \
+            --supplement_TSS_bed ~{supplement_TSS_bed} \
+            --supplement_PolyA_bed ~{supplement_PolyA_bed} \
+            --output_prefix ~{outputFilePrefix}
+    >>>
+
+    output {
+        File integratedTssBed = "~{outputFilePrefix}.integrated.TSS.bed"
+        File integratedPolyaBed = "~{outputFilePrefix}.integrated.PolyA.bed"
+        File summary = "~{outputFilePrefix}.integrated_sites.summary.tsv"
+    }
+
+    runtime {
+        docker: docker
+        cpu: 1
+        # Four beds of tens of thousands of rows each, held as lists of fields.
+        memory: "4 GiB"
+        disks: "local-disk " + ceil(size([primary_TSS_bed, primary_PolyA_bed, supplement_TSS_bed, supplement_PolyA_bed], "GB") * 3.0 + 5) + " SSD"
+    }
+}
+
 task alignment_mismapping_filter {
     # Whole-genome alignment-mismapping filter (v0.40.0). Removes isoforms that are
     # alignment/strand-mismapping artifacts of a much-higher-expressed transcript
