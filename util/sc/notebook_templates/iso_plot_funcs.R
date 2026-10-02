@@ -1507,23 +1507,29 @@ confirm_alt_termini_by_reads = function(support_w_reads,
 }
 
 
-# The most significant confirmed comparison per gene, most significant genes first.
-select_best_alt_termini_examples = function(confirmed) {
+# Showcase examples among the read-confirmed comparisons: those whose reads shift by at
+# least min_showcase_read_share_delta between the two clusters, one per gene (its largest
+# shift), genes ordered by that shift. Ranked by the read shift rather than the p-value,
+# since the p-value grows with depth while the shift is what a usage-fraction umap shows.
+select_best_alt_termini_examples = function(confirmed, min_showcase_read_share_delta = 0.25) {
     confirmed %>%
         filter(read_confirmed) %>%
         group_by(gene_symbol) %>%
         mutate(n_confirmed_comparisons = n()) %>%
-        arrange(pvalue, desc(abs(delta_pi))) %>% slice(1) %>% ungroup() %>%
-        arrange(pvalue, desc(abs(delta_pi))) %>%
+        filter(abs(read_share_delta) >= min_showcase_read_share_delta) %>%
+        arrange(desc(abs(read_share_delta)), pvalue) %>% slice(1) %>% ungroup() %>%
+        arrange(desc(abs(read_share_delta))) %>%
         transmute(alt_terminus, gene_symbol, dominant_transcript_ids, alternate_transcript_ids,
-                  cluster_A, cluster_B, delta_pi, alternate_delta_pi, pvalue, n_confirmed_comparisons,
+                  cluster_A, cluster_B,
+                  read_share_delta = round(read_share_delta, 2),
+                  read_dom_share_A, read_dom_share_B,
+                  model_dom_share_A = round(model_dom_share_A, 2), model_dom_share_B = round(model_dom_share_B, 2),
+                  delta_pi, alternate_delta_pi, pvalue, n_confirmed_comparisons,
                   TSS_separation, PolyA_separation,
                   dom_uniq_FSM_reads, alt_uniq_FSM_reads,
                   dom_uniq_read_frac = round(dom_uniq_read_frac, 2),
                   alt_uniq_read_frac = round(alt_uniq_read_frac, 2),
-                  dom_terminus_reads, alt_terminus_reads, dom_PAS, alt_PAS,
-                  model_dom_share_A = round(model_dom_share_A, 2), model_dom_share_B = round(model_dom_share_B, 2),
-                  read_dom_share_A, read_dom_share_B, read_frac_elsewhere)
+                  dom_terminus_reads, alt_terminus_reads, dom_PAS, alt_PAS, read_frac_elsewhere)
 }
 
 
