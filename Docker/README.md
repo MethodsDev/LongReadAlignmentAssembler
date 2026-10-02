@@ -81,14 +81,10 @@ which names the core, sc and orf images and the tag they share.
 > number anywhere, because a second copy of the release state goes stale the first
 > time someone releases without updating it.
 >
-> The public guarantee is on **`lraa:latest`** -- the one repository public users
-> and the released wdls resolve. The four split repositories
-> (`lraa-core`, `lraa-sc`, `lraa-orf`) postdate the last release, so
-> their `:latest` tags are a LEGACY EXCEPTION holding pre-release 0.18.3-era digests
-> that no release backs; see the registry-state table below. That makes them stale,
-> not free: the rule still applies, so they are neither moved to a devel build nor
-> repointed until a release closes the gap. Nothing should depend on them -- name a
-> `<version>-<shortsha>` tag instead.
+> The guarantee covers all four repositories: **`lraa:latest`** (the plain alias
+> for `lraa-core`, which public users pull) and `lraa-core`, `lraa-sc` and
+> `lraa-orf`, which the wdl defaults name. `build_docker.latest.sh` writes all four
+> from one build, so they always name the same release.
 >
 > `build_docker.latest.sh` enforces this: it refuses unless `HEAD` equals
 > `origin/main`, the released branch. **Do not hand-retag `:latest`** -- a
@@ -161,28 +157,18 @@ against each other. The suffix is the point: a bare version tag promises a
 published release, and someone pulling `0.19.0` has no way to tell it was cut
 mid-development. Production work uses a release tag, never either of these.
 
-### What the registry actually holds, as of v0.20.0
+### What the registry actually holds, as of v0.44.1
 
-The table above says what each tag means. What is published diverges from it in
-two places, deliberately, and both are easy to misread:
+The table above says what each tag means. What is published matches it, with the
+exceptions below.
 
 | repository | `:latest` serves | backed by a release? |
 |---|---|---|
-| `lraa` | **v0.17.7** | yes -- `origin/main` is v0.17.7, and its wdls hardcode `lraa:latest` in twenty places |
-| `lraa-core`, `lraa-sc`, `lraa-orf` | 0.18.3-era digests | **no** |
+| `lraa`, `lraa-core`, `lraa-sc`, `lraa-orf` | the release on `origin/main` | yes |
 
-`lraa:latest` is the one public users resolve, and it is correct: it points at
-the image built for the last published GitHub release. Nothing on `main`
-references the four split repositories.
-
-Their `:latest` tags therefore assert something no release backs. They are left
-in place rather than deleted or moved, because only devel-branch wdls name them
-and those runs override the tag anyway through `testing/lraa_test_docker.mk`.
-Moving them to a development version would re-assert the same false claim about
-a newer commit; deleting them would break any internal caller that has quietly
-come to depend on them. Neither is worth doing until the release that closes the
-0.17.7-to-devel gap, which is when they should be pointed at that release and
-the claim becomes true again.
+Until v0.44.1 the three split repositories' `:latest` held 0.18.3-era digests
+that no release backed, left in place until a release closed the 0.17.7-to-devel
+gap. v0.44.1 was that release, and `build_docker.latest.sh` repointed all four.
 
 A bare `0.30.0` also exists in all five repositories, and is the same kind of
 exception. `build_docker.versioned.sh` was run from devel before it had a release
