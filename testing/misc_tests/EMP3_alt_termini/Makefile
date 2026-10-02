@@ -1,7 +1,7 @@
 test: check_merged_coords check_merged_3prime_attributes
 
 LRAA.merged.gtf:
-	../../../util/merge_LRAA_GTFs.py --HiFi --genome data/EMP3.genome.fa --gtf data/EMP3.*gtf
+	../../../util/merge_LRAA_GTFs.py --genome data/EMP3.genome.fa --gtf data/EMP3.*gtf
 
 check_merged_coords: LRAA.merged.gtf
 	sort LRAA.merged.gtf | cut -f1-7 > LRAA.merged.gtf.sorted

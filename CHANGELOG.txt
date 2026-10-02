@@ -1,3 +1,81 @@
+v0.44.1
+
+- FIXED: a GTF read back in and re-exported (collapse_LRAA_GTF_by_splice_pattern.py,
+  segment_LRAA_GTF_by_shared_exon_intervals.py, ...) wrote InternalPriming, PAS and
+  PAS_offset twice on every transcript line, once from the imported attributes and
+  again through their accessors. R's unnest_wider rejects the duplicate names, so
+  downstream Rmds failed to parse these GTFs. Each key is now written once, and a
+  rescanned value replaces the imported one rather than appearing next to it.
+- util/sc/notebook_templates/iso_plot_funcs.R: per-cell isoform usage-fraction UMAPs
+  (optionally smoothed over the Seurat SNN graph), top DTU pair selection by cell
+  support, and an alt-termini DTU check (get_alt_termini_support,
+  confirm_alt_termini_by_reads, ...). New arguments default to the old behavior, so
+  sc_diff_SplicePattern_usage_analysis.Rmd runs unchanged.
+- new util/sc/diff_iso_usage/alt_termini_read_check.py: for isoform pairs that differ
+  only at one terminus, reports per cell cluster where the reads' 5' (alt TSS) or 3'
+  (alt PolyA) ends actually land, so a DTU call that rests on how the EM apportioned
+  ambiguous reads can be checked against the reads.
+
+
+v0.44.0
+
+- cluster-guided single-cell runs now emit integrated TSS/PolyA site beds
+  (integrated_TSS_bed, integrated_PolyA_bed, integrated_sites_summary). Previously
+  the boundary sites were reported twice, from the initial (basic) catalog and from
+  the cluster-guided catalog, with nothing combining them. The integrated beds keep
+  every cluster-guided site and add each basic site lying farther than int(window/2)
+  nt from every cluster-guided site of the same type, contig and strand (window =
+  max_dist_between_alt_{TSS,polyA}_sites). Rows gain a `source` column
+  (cluster_guided | basic). New pylib/SiteIntegration.py and
+  util/integrate_TSS_PolyA_sites.py; WDL task integrate_TSS_PolyA_sites.
+
+
+v0.43.0
+
+- CHANGED: the internal-priming veto's reprieve now comes ONLY from --polyA_known.
+  A structural --gtf guide (GENCODE, or the cluster-guided de novo init GTF) is not
+  cleavage-validated evidence, and letting its A-rich termini endorse cleavage
+  re-blessed internal-priming ends within +/-25 nt as PolyA vertices. With
+  --polyA_known unset, the veto applies to every A-rich read candidate.
+- CHANGED: discovery runs (de novo or reference-guided) no longer seed the splice
+  graph with the guide's TSS/PolyA boundaries. Merge and --quant_only still do.
+  Fracturing, introns and coverage from the guide are unaffected.
+- --polyA_known is threaded through the WDLs (LRAA-singlecell init pass and
+  cluster-guided discovery, LRAA, LRAA_chunk_scatter, LRAA_runner); default unset.
+- splice-graph cache version bumped 10 -> 11; cached graphs from earlier versions are
+  rebuilt.
+
+
+v0.42.0
+
+- the alignment-mismapping filter now leaves --oversimplify contigs (default chrM,M)
+  untouched. It removed models coverage-dependently, so cluster-guided inputs lost
+  different chrM models and merge_LRAA_GTFs refused the disagreeing oversimplify
+  record sets, failing the scattered single-cell pipeline at the final merge.
+  filter_LRAA_isoforms_by_mismapping.py gains --oversimplify.
+- CHANGED: merge_LRAA_GTFs.py drops --HiFi and respects input TSS/PolyA annotations
+  by default, since LRAA models TSS/PolyA in both HiFi and non-HiFi modes. The new
+  --ignore_TSS_POLYA restores the former non-HiFi merge. In the WDLs
+  (lraa_merge_gtf_task, LRAA-cell_cluster_guided.wdl,
+  LRAA-merge_gtfs_from_sample_set.wdl) the merge's HiFi input is replaced by
+  ignore_TSS_POLYA; the LRAA --HiFi flag itself is unchanged.
+
+
+v0.41.0
+
+- FIXED: a de novo guide could endorse its own internal-priming 3' ends. The
+  internal-priming veto waives itself where a reference 3' end endorses cleavage, and
+  every --gtf terminus counted, so the cluster-guided init GTF re-blessed its A-rich
+  termini as PolyA vertices in the guided build (on PBMC single-cell cluster runs,
+  ~11k PolyA calls flagged InternalPriming, ~97% atlas-discordant). A --gtf terminus
+  flagged InternalPriming no longer endorses cleavage. (Superseded in v0.43.0, where
+  --gtf termini no longer endorse at all.)
+- new --polyA_known (BED or GTF): an explicit trusted cleavage-site set for the veto's
+  reprieve, e.g. the init phase's veto-filtered PolyA bed for cluster-guided runs, or
+  a curated atlas such as PolyASite 2.0.
+- splice-graph cache version bumped 9 -> 10.
+
+
 v0.40.0
 
 - new whole-genome alignment-mismapping filter, ON BY DEFAULT (disable with
