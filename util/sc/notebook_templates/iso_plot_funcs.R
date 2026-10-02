@@ -25,7 +25,8 @@ parse_inputs = function(sample_name,
                         umap_cluster_file,
                         cluster_pseudobulk_matrix_filename,
                         gtf_filename,
-                        diff_iso_usage_stats_filename) {
+                        diff_iso_usage_stats_filename,
+                        cell_fractions_matrix_filename = NULL) {
     
     
     message("-loading sparse matrix data: ", sparse_matrix_data_dir)
@@ -46,6 +47,22 @@ parse_inputs = function(sample_name,
     
     message("-making CPM matrix")
     cluster_CPM_matrix <<- sweep(cluster_counts_matrix, 2, colSums(cluster_counts_matrix), "/") * 1e6
+
+    # Cells per cluster, used to turn cell FRACTIONS into cell COUNTS. Needed because a
+    # fraction-of-cells threshold is biased toward small clusters in exactly the same way
+    # the isoform fraction is: 2 cells of 92 (2.2%) outranks 7 cells of 1248 (0.56%).
+    cluster_cell_counts <<- umap_df %>% count(seurat_clusters) %>%
+        { setNames(.$n, paste0("Cluster_", .$seurat_clusters)) }
+
+    # Fraction of cells per cluster in which each feature is detected. Optional: when
+    # absent, the cell-support filter in
+    # get_expression_ggplot2_heatmap_w_exon_structures is unavailable and is skipped.
+    cluster_cell_fraction_matrix <<- NULL
+    if (! is.null(cell_fractions_matrix_filename)) {
+        message("-parsing cell fractions expressed matrix: ", cell_fractions_matrix_filename)
+        cluster_cell_fraction_matrix <<- read.csv(cell_fractions_matrix_filename,
+                                                  header=T, row.names=1, sep="\t")
+    }
     
     
     message("-parsing diff iso usage stats: ", diff_iso_usage_stats_filename)
@@ -157,6 +174,526 @@ plot_isoform_umap = function(gene_of_interest, restrict_to_transcript_ids = NULL
 }
 
 
+#####################################
+# Per-cell isoform USAGE FRACTION on the UMAP
+#####################################
+
+# Transcript ids belonging to a gene. Exact gene_id match first, then an ANCHORED
+# pattern so that asking for "EIF1" cannot pull in "EIF1AX" / "EIF1B".
+get_gene_transcript_ids = function(gene_of_interest) {
+    
+    ids = gtf_parsed %>%
+        filter(gene_id == gene_of_interest, feature == "transcript") %>%
+        pull(transcript_id) %>% unique()
+    
+    if (length(ids) == 0) {
+        ids = gtf_parsed %>%
+            filter(grepl(paste0("^", gene_of_interest, "($|[^A-Za-z0-9_])"), gene_id),
+                   feature == "transcript") %>%
+            pull(transcript_id) %>% unique()
+    }
+    
+    return(ids)
+}
+
+
+# Load the cell-cell neighbor graph that Seurat built alongside the clustering and UMAP,
+# so smoothing uses the SAME neighborhood structure the embedding came from rather than
+# a fresh kNN computed on 2-D UMAP coordinates (which are a lossy projection).
+#   "RNA_snn"  shared-nearest-neighbor, edge weight = neighbor overlap, ~68 neighbors/cell
+#   "RNA_nn"   plain kNN, binary, k = 20
+load_cell_neighbor_graph = function(seurat_obj_rds, graph_name = "RNA_snn") {
+    
+    message("-loading neighbor graph ", graph_name, " from ", seurat_obj_rds)
+    obj = readRDS(seurat_obj_rds)
+    
+    if (! graph_name %in% Graphs(obj)) {
+        stop("graph '", graph_name, "' not in object; available: ",
+             paste(Graphs(obj), collapse=", "))
+    }
+    
+    G = obj[[graph_name]]
+    cell_neighbor_graph <<- G
+    
+    message("  ", nrow(G), " cells, median ", median(diff(G@p)), " neighbors/cell")
+    
+    invisible(G)
+}
+
+
+# Per-CELL isoform usage fraction: reads on an isoform divided by reads on the
+# denominator set in that same cell.
+#
+#   denominator = "gene"     all isoforms of the gene. Matches how pi (and therefore
+#                            delta_pi in the DTU results) is defined when the DTU test
+#                            is run with --group_by_feature gene_symbol. Default.
+#   denominator = "selected" only the transcripts being plotted, so a pair's fractions
+#                            are complementary and sum to 1. Use when the question is
+#                            strictly "which of these two", e.g. alt-termini pairs.
+#
+# min_reads_per_cell is a floor on the cell's OWN denominator reads for the unsmoothed
+# view. It defaults to 0, meaning any cell with nonzero reads: cells with no reads carry
+# no fraction and are always excluded (a 0/0 has no value), but nothing above that is
+# required.
+#
+# A floor of 2 reads was the earlier default and it cost far too much. It discarded 86%
+# of TARDBP's expressing cells (227 of 1,676), 66% of STMN2's and 27% of GPM6A's, and it
+# silently dropped every cell whose EM assignment is a FRACTION below the floor -- 460
+# cells for TARDBP alone sit in (0,1). Those cells hold real evidence.
+#
+# The cost of 0 is granularity, not correctness: a cell holding one read can only report
+# a fraction of exactly 0 or 1, so the unsmoothed panel is coarse where coverage is thin
+# (TARDBP: 48% at exactly 0, 20% at exactly 1). That is what the per-cell data actually
+# says, and the smoothed panel beneath it is what resolves it. Raise the floor if you
+# want the raw panel restricted to better-covered cells, at the price of hiding most of
+# the expressing ones.
+#
+# 0 also puts the unsmoothed panel on the SAME cell set as the smoothed panel under
+# cell_evidence = "gene", so the two differ in their values rather than in which cells
+# they draw.
+# smooth_graph: NULL for the raw per-cell view, or a cell-cell graph (see
+# load_cell_neighbor_graph) to pool each cell with its neighbors.
+#
+# Smoothing POOLS COUNTS over the neighborhood and divides once:
+#
+#     sum_n w_cn * reads_isoform(n)  /  sum_n w_cn * reads_denominator(n)
+#
+# rather than averaging the neighbors' individual usage fractions. The distinction
+# matters: averaging fractions gives a neighbor holding one read the same say as one
+# holding fifty, which reintroduces exactly the 0/1 noise min_reads_per_cell exists to
+# suppress. Pooling weights every neighbor by its depth automatically, is defined for a
+# cell with no reads of its own, and is the same quantity as the cluster-level pi -- just
+# measured over a neighborhood instead of a cluster. It is also invariant to row-scaling
+# of the graph, so normalized and unnormalized weights give identical answers.
+# cell_evidence controls WHICH cells may receive a smoothed value. Smoothing can either
+# adjust cells that carry their own evidence, or paint cells that carry none at all --
+# these are different claims and the choice should be explicit.
+#
+#   "gene"    (default) only cells with > 0 reads of the denominator in that cell. The
+#             neighborhood refines a measurement the cell actually contributed to.
+#   "any"     every cell whose NEIGHBORHOOD clears min_neighborhood_reads, including
+#             cells with no reads of the gene at all. Smoothest field, but much of it is
+#             pure imputation: for EIF1 that is 3,454 of 6,524 painted cells (53%) with
+#             zero reads of the gene. Legitimate for showing where usage would be
+#             expected, not for claiming the gene was observed there.
+#   "isoform" only cells with > 0 reads of THAT isoform. Looks stricter and is actually
+#             BIASED: it drops precisely the cells whose observed usage of the isoform
+#             is zero, so the surviving field is shifted upward. Provided for
+#             completeness; prefer "gene".
+#
+# min_neighborhood_reads interacts with cell_evidence, and the two must be set together:
+#
+#   With cell_evidence = "any" it is the ONLY guard against a value computed from almost
+#   nothing, so it should be positive.
+#
+#   With cell_evidence = "gene" it mostly deletes real cells. Every displayed cell
+#   already holds its own reads, and a cell in a thinly-covered region is sparse biology,
+#   not noise. Hence the default of 0. A floor of 10 discarded 433 of STMN2's 713
+#   expressing cells (median 1 own read, median neighborhood total 5) and 1,375 of EIF1's
+#   3,070, while changing the spread of the retained values hardly at all -- EIF1 sd
+#   0.134 at a floor of 10 against 0.145 at 0. It was gating display, not improving
+#   estimates.
+get_isoform_usage_fraction_umap = function(gene_of_interest,
+                                           transcript_ids,
+                                           denominator = c("gene", "selected"),
+                                           min_reads_per_cell = 0,
+                                           smooth_graph = NULL,
+                                           min_neighborhood_reads = 0,
+                                           weighted = TRUE,
+                                           cell_evidence = c("gene", "any", "isoform"),
+                                           ignore_unspliced = FALSE) {
+    
+    denominator   = match.arg(denominator)
+    cell_evidence = match.arg(cell_evidence)
+    
+    denom_ids = if (denominator == "gene") get_gene_transcript_ids(gene_of_interest) else transcript_ids
+    
+    # Same convention as get_expression_ggplot2_heatmap_w_exon_structures: unspliced
+    # models are identified by the ":iso-" naming. This matters on a splice-pattern
+    # matrix, where the unspliced entries are a separate slice of the gene's signal
+    # (~15% for STMN2) and the DTU test that produced delta_pi ran with
+    # --ignore_unspliced. Leaving them in the denominator makes these fractions
+    # disagree with the delta_pi values shown alongside them.
+    if (ignore_unspliced && denominator == "gene") {
+        denom_ids = denom_ids[! grepl(":iso-", denom_ids)]
+    }
+    
+    denom_ids = union(denom_ids, transcript_ids)   # numerator must be inside the denominator
+    
+    present = rownames(isoform_expr_data) %in% denom_ids
+    if (! any(present)) {
+        stop("No transcripts of ", gene_of_interest, " found in the sparse matrix.")
+    }
+    
+    mat = isoform_expr_data[present, , drop = FALSE]     # drop=FALSE: a single isoform must stay a matrix
+    
+    if (! is.null(smooth_graph)) {
+        
+        # Align cells: the graph and the isoform matrix must be on the same barcodes,
+        # in the same order, before any matrix product.
+        common = intersect(colnames(mat), rownames(smooth_graph))
+        if (length(common) == 0) {
+            stop("No cell barcodes shared between the isoform matrix and the graph.")
+        }
+        if (length(common) < ncol(mat)) {
+            message("  smoothing over ", length(common), " of ", ncol(mat),
+                    " cells present in both the matrix and the graph")
+        }
+        
+        G = smooth_graph[common, common, drop = FALSE]
+        if (! weighted) {
+            G@x = rep(1, length(G@x))                   # binary neighborhood
+        }
+        
+        mat_c = mat[, common, drop = FALSE]
+        den_vec = Matrix::colSums(mat_c)                # denominator reads per cell
+        
+        sm_den = as.vector(G %*% den_vec)
+        
+        sm = lapply(transcript_ids, function(tid) {
+            if (! tid %in% rownames(mat_c)) return(NULL)
+            own_iso = as.vector(mat_c[tid, ])
+            sm_num  = as.vector(G %*% own_iso)
+            data.frame(transcript_id = tid,
+                       cell_barcode  = common,
+                       read_count    = own_iso,
+                       own_denominator_reads = den_vec,
+                       neighborhood_reads = sm_den,
+                       usage_fraction = ifelse(sm_den > 0, sm_num / sm_den, NA_real_),
+                       stringsAsFactors = FALSE)
+        })
+        
+        usage_df = bind_rows(sm) %>%
+            filter(!is.na(usage_fraction), neighborhood_reads >= min_neighborhood_reads)
+        
+        n_before = n_distinct(usage_df$cell_barcode)
+        
+        usage_df = switch(cell_evidence,
+            any     = usage_df,
+            gene    = usage_df %>% filter(own_denominator_reads > 0),
+            isoform = usage_df %>% filter(read_count > 0))
+        
+        n_after = n_distinct(usage_df$cell_barcode)
+        if (n_after < n_before) {
+            message("  cell_evidence='", cell_evidence, "': ", n_before - n_after, " of ",
+                    n_before, " cells dropped for carrying no qualifying reads of their own")
+        }
+        
+        usage_df = usage_df %>% inner_join(umap_df, by = "cell_barcode")
+        
+        return(usage_df)
+    }
+    
+    expr = as.data.frame(as.matrix(mat), check.names = FALSE)
+    expr$transcript_id = rownames(expr)
+    
+    expr_long = expr %>%
+        gather(key = "cell_barcode", value = "read_count", -transcript_id)
+    
+    per_cell = expr_long %>%
+        group_by(cell_barcode) %>%
+        summarise(denominator_reads = sum(read_count), .groups = "drop")
+    
+    usage_df = expr_long %>%
+        filter(transcript_id %in% transcript_ids) %>%
+        left_join(per_cell, by = "cell_barcode") %>%
+        filter(denominator_reads > 0, denominator_reads >= min_reads_per_cell) %>%
+        mutate(usage_fraction = read_count / denominator_reads) %>%
+        inner_join(umap_df, by = "cell_barcode")
+    
+    return(usage_df)
+}
+
+
+# One UMAP panel per transcript, coloured by per-cell usage fraction on a shared 0..1
+# scale so the panels are directly comparable.
+plot_isoform_usage_fraction_umap = function(gene_of_interest,
+                                            transcript_ids,
+                                            denominator = c("gene", "selected"),
+                                            min_reads_per_cell = 0,
+                                            point_size = 0.8,
+                                            label_clusters = TRUE,
+                                            ncol = NULL,
+                                            smooth_graph = NULL,
+                                            min_neighborhood_reads = 0,
+                                            weighted = TRUE,
+                                            cell_evidence = c("gene", "any", "isoform"),
+                                            ignore_unspliced = FALSE) {
+    
+    denominator   = match.arg(denominator)
+    cell_evidence = match.arg(cell_evidence)
+    
+    usage_df = get_isoform_usage_fraction_umap(gene_of_interest, transcript_ids,
+                                               denominator, min_reads_per_cell,
+                                               smooth_graph, min_neighborhood_reads,
+                                               weighted, cell_evidence, ignore_unspliced)
+    
+    n_cells = usage_df %>% distinct(cell_barcode) %>% nrow()
+    if (n_cells == 0) {
+        stop("No cells pass the read floor for ", gene_of_interest, "; nothing to plot.")
+    }
+    
+    # Draw low usage first so high-usage cells are not hidden under overplotting.
+    usage_df = usage_df %>% arrange(usage_fraction)
+    
+    denom_label = if (denominator == "gene") "all isoforms of the gene" else "the plotted isoforms"
+    
+    evidence_label = switch(cell_evidence,
+        gene    = "cells with their own reads of the gene",
+        any     = "all covered cells, INCLUDING cells with no reads of the gene",
+        isoform = "cells with their own reads of that isoform (upward biased)")
+    
+    subtitle = if (is.null(smooth_graph)) {
+        if (min_reads_per_cell > 0) {
+            paste0(n_cells, " cells with >= ", min_reads_per_cell, " reads over ", denom_label)
+        } else {
+            paste0(n_cells, " cells with any reads over ", denom_label)
+        }
+    } else {
+        paste0("SNN-smoothed: ", n_cells, " ", evidence_label,
+               "; neighborhood >= ", min_neighborhood_reads, " reads over ", denom_label,
+               if (weighted) " (edge-weighted)" else " (unweighted)")
+    }
+    
+    p = base_umap +
+        geom_point(data = usage_df, aes(color = usage_fraction), size = point_size) +
+        facet_wrap(~ transcript_id, ncol = ncol) +
+        scale_color_viridis_c(limits = c(0, 1), name = "isoform\nusage fraction") +
+        ggtitle(gene_of_interest, subtitle = subtitle)
+    
+    if (label_clusters) {
+        p = p + geom_text(data = umap_df %>%
+                              group_by(seurat_clusters) %>%
+                              summarise(umap_1 = mean(umap_1),
+                                        umap_2 = mean(umap_2), .groups = "drop"),
+                          aes(label = seurat_clusters),
+                          size = 4, color = 'purple', fontface = "bold")
+    }
+    
+    p = p + theme_void()
+    
+    return(p)
+}
+
+
+# How much two transcripts occupy the same locus, as
+#   span   : overlap of their outermost coordinates
+#   exonic : shared EXONIC bases
+# both expressed as a fraction of the SHORTER transcript, so a short isoform nested
+# inside a long one scores 1 rather than being penalised for its length.
+#
+# Both numbers are needed. Span overlap alone accepts a transcript sitting inside
+# another's INTRON -- real case in this data: GPM6A's c9c63b4f nests entirely within
+# 92af509f's span (span 1.00) while sharing no exonic base with it (exonic 0.00).
+# Returns NA when either transcript is absent from gtf_parsed.
+transcript_pair_overlap = function(tx_a, tx_b, exons = NULL) {
+    
+    if (is.null(exons)) {
+        exons = gtf_parsed %>% filter(feature == "exon") %>%
+            transmute(transcript_id, seqname,
+                      start = as.integer(start), end = as.integer(end))
+    }
+    
+    A = exons %>% filter(transcript_id == tx_a)
+    B = exons %>% filter(transcript_id == tx_b)
+    if (nrow(A) == 0 || nrow(B) == 0) return(c(span = NA_real_, exonic = NA_real_))
+    if (A$seqname[1] != B$seqname[1])  return(c(span = 0, exonic = 0))
+    
+    span_a = c(min(A$start), max(A$end)); span_b = c(min(B$start), max(B$end))
+    span_hit = max(0, min(span_a[2], span_b[2]) - max(span_a[1], span_b[1]) + 1)
+    span_frac = span_hit / min(diff(span_a) + 1, diff(span_b) + 1)
+    
+    # interval intersection, not coordinate expansion: exon counts are small and the
+    # spans here reach 370 kb.
+    exonic_hit = 0
+    for (i in seq_len(nrow(A))) {
+        exonic_hit = exonic_hit +
+            sum(pmax(0, pmin(A$end[i], B$end) - pmax(A$start[i], B$start) + 1))
+    }
+    len_a = sum(A$end - A$start + 1); len_b = sum(B$end - B$start + 1)
+    exonic_frac = exonic_hit / min(len_a, len_b)
+    
+    return(c(span = span_frac, exonic = exonic_frac))
+}
+
+
+# The two transcripts showing the strongest differential usage for a gene, taken from a
+# SINGLE DTU row so the pair is one measured comparison rather than two ids collected
+# across different cluster pairs.
+#
+# by = "reciprocal" (default) ranks on min(|delta_pi|, |alternate_delta_pi|). The DTU
+#      test here runs with --reciprocal_delta_pi, so a pair is only convincingly trading
+#      share when BOTH transcripts move; the weaker of the two shifts is the honest
+#      measure of that. A large delta_pi paired with a negligible reciprocal is usually
+#      one transcript moving against the rest of the locus, not a swap.
+# by = "delta_pi" ranks on |delta_pi| alone, i.e. the dominant transcript's shift.
+# by = "pvalue"   ranks on significance instead of effect size.
+#
+# Rows failing `significant` are excluded when that column exists; if a gene has none,
+# all its rows are ranked and a message says so, because an insignificant top pair is a
+# legitimate thing to look at and a silent empty plot is not.
+#
+# The pair must also share EXONIC sequence, so that the two transcripts are structural
+# alternatives at one locus rather than separate transcription units that a shared gene
+# symbol happens to group. Because the DTU test groups by gene_symbol, nothing upstream
+# enforces this: GPM6A's strongest-scoring pair is 167 kb apart with no shared base, and
+# a usage fraction between two disjoint units is not an isoform choice at all.
+#
+# min_exonic_overlap is the gate that matters and is the only one on by default. Nonzero
+# exonic overlap implies the spans overlap, so it subsumes a span test while also
+# rejecting a transcript nested inside another's INTRON (GPM6A c9c63b4f inside 92af509f:
+# span 1.00, exonic 0.00). Keep it low. It is a "same locus?" test, not a similarity
+# test, and staggered alternatives legitimately share little: TARDBP's pair shares 508
+# exonic bases for a fraction of 0.38, and an earlier span-based bar of 0.5 wrongly
+# rejected it at 0.31.
+#
+# min_span_overlap defaults to 0, i.e. off. Raise it to demand roughly co-extensive
+# transcripts, which is a narrower question than sharing a locus.
+#
+# If no pair clears the bars, the best-scoring pair is returned with a WARNING rather
+# than an error: a fragmented locus is worth seeing, but it must not pass silently.
+get_top_dtu_pair = function(gene_of_interest,
+                            stats = diff_iso_usage_stats,
+                            by = c("reciprocal", "delta_pi", "pvalue"),
+                            require_significant = TRUE,
+                            min_span_overlap = 0,
+                            min_exonic_overlap = 0.05) {
+    
+    by = match.arg(by)
+    
+    rows = stats %>% filter(gene_symbol == gene_of_interest)
+    if (nrow(rows) == 0) {
+        stop("No DTU rows for ", gene_of_interest)
+    }
+    
+    if (require_significant && "significant" %in% colnames(rows)) {
+        sig = rows %>% filter(significant == "True")
+        if (nrow(sig) > 0) {
+            rows = sig
+        } else {
+            message("  ", gene_of_interest, ": no significant DTU rows; ranking all ",
+                    nrow(rows), " comparisons")
+        }
+    }
+    
+    # A side can carry TWO transcripts, comma-joined. The DTU code sums the top movers
+    # per direction over a hard-coded [:2] slice, which --top_isoforms_each does not
+    # constrain (it limits the candidate pool, not the slice). 168 of the 21,197 rows in
+    # this dataset are like that, across 68 genes with significant rows, GPM6A included.
+    # Such a row has no single pair to plot, and passing the joined string on would look
+    # up a transcript id that cannot exist, so drop those rows rather than emit a panel
+    # for a feature absent from the matrix.
+    n_multi = sum(grepl(",", rows$dominant_transcript_ids) |
+                  grepl(",", rows$alternate_transcript_ids))
+    if (n_multi > 0) {
+        message("  ", gene_of_interest, ": ", n_multi, " of ", nrow(rows),
+                " comparisons dropped for carrying multiple transcripts on one side")
+        rows = rows %>% filter(! grepl(",", dominant_transcript_ids),
+                               ! grepl(",", alternate_transcript_ids))
+        if (nrow(rows) == 0) {
+            stop(gene_of_interest, ": every comparison pairs transcript SETS rather than ",
+                 "single transcripts; no pair to plot")
+        }
+    }
+    
+    rows = rows %>% mutate(.dtu_score = switch(by,
+        # equals abs(alternate_delta_pi): dominant is by definition the larger-magnitude
+        # side, verified on all 21,197 rows. Written as pmin to stay correct if that
+        # convention ever changes upstream.
+        reciprocal = pmin(abs(delta_pi), abs(alternate_delta_pi)),
+        delta_pi   = abs(delta_pi),
+        pvalue     = -pvalue)) %>%
+        arrange(desc(.dtu_score), pvalue)
+    
+    keep = rows
+    if (min_span_overlap > 0 || min_exonic_overlap > 0) {
+        
+        exons = gtf_parsed %>% filter(feature == "exon") %>%
+            transmute(transcript_id, seqname,
+                      start = as.integer(start), end = as.integer(end))
+        
+        # one overlap computation per distinct pair, not per row
+        pairs = rows %>% distinct(dominant_transcript_ids, alternate_transcript_ids)
+        ov = t(mapply(transcript_pair_overlap,
+                      pairs$dominant_transcript_ids, pairs$alternate_transcript_ids,
+                      MoreArgs = list(exons = exons)))
+        pairs$.span = ov[, "span"]; pairs$.exonic = ov[, "exonic"]
+        
+        keep = rows %>%
+            left_join(pairs, by = c("dominant_transcript_ids", "alternate_transcript_ids")) %>%
+            filter(!is.na(.span), !is.na(.exonic),
+                   .span >= min_span_overlap, .exonic >= min_exonic_overlap)
+        
+        n_drop = nrow(rows) - nrow(keep)
+        if (n_drop > 0) {
+            message("  ", gene_of_interest, ": ", n_drop, " of ", nrow(rows),
+                    " comparisons dropped for insufficient genomic overlap")
+        }
+        
+        if (nrow(keep) == 0) {
+            warning(gene_of_interest, ": no DTU pair clears the overlap bars (span >= ",
+                    min_span_overlap, ", exonic >= ", min_exonic_overlap,
+                    "); returning the top-scoring pair, which does NOT share the locus.",
+                    call. = FALSE)
+            keep = rows
+        }
+    }
+    
+    top = keep %>% slice(1)
+    
+    message("  ", gene_of_interest, " top pair: ", top$cluster_A, " vs ", top$cluster_B,
+            "  delta_pi=", round(top$delta_pi, 3),
+            "  alternate_delta_pi=", round(top$alternate_delta_pi, 3),
+            "  p=", signif(top$pvalue, 3),
+            if (!is.null(top$.span)) paste0("  span_overlap=", round(top$.span, 2),
+                                            "  exonic_overlap=", round(top$.exonic, 2)) else "")
+    
+    return(c(top$dominant_transcript_ids, top$alternate_transcript_ids))
+}
+
+
+# Per-cell usage fraction for a gene's strongest DTU pair, as the raw view and -- when a
+# graph is supplied -- the SNN-smoothed view stacked beneath it, so the two are read
+# against each other on the same colour scale.
+plot_top_dtu_pair_usage_umaps = function(gene_of_interest,
+                                         stats = diff_iso_usage_stats,
+                                         smooth_graph = NULL,
+                                         denominator = c("gene", "selected"),
+                                         ignore_unspliced = FALSE,
+                                         min_reads_per_cell = 0,
+                                         cell_evidence = c("gene", "any", "isoform"),
+                                         by = c("reciprocal", "delta_pi", "pvalue"),
+                                         require_significant = TRUE,
+                                         min_span_overlap = 0,
+                                         min_exonic_overlap = 0.05,
+                                         point_size = 0.8) {
+    
+    denominator   = match.arg(denominator)
+    cell_evidence = match.arg(cell_evidence)
+    by            = match.arg(by)
+    
+    pair = get_top_dtu_pair(gene_of_interest, stats, by, require_significant,
+                            min_span_overlap, min_exonic_overlap)
+    
+    p_raw = plot_isoform_usage_fraction_umap(gene_of_interest, pair,
+                                             denominator = denominator,
+                                             ignore_unspliced = ignore_unspliced,
+                                             min_reads_per_cell = min_reads_per_cell,
+                                             point_size = point_size)
+    
+    if (is.null(smooth_graph)) {
+        return(p_raw)
+    }
+    
+    p_smooth = plot_isoform_usage_fraction_umap(gene_of_interest, pair,
+                                                denominator = denominator,
+                                                ignore_unspliced = ignore_unspliced,
+                                                smooth_graph = smooth_graph,
+                                                cell_evidence = cell_evidence,
+                                                point_size = point_size)
+    
+    return(plot_grid(p_raw, p_smooth, ncol = 1))
+}
 
 #####################################
 # Gene structure and heatmap display
@@ -332,7 +869,9 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
         gene_of_interest, 
         min_isoform_frac_expr_any_cluster = 0,
         ignore_unspliced = FALSE,
-        transcript_ids = NULL) {
+        transcript_ids = NULL,
+        min_cells_expressed = 0,
+        min_cell_frac_expressed = 0) {
     
     library(patchwork)
     library(ggdendro)
@@ -375,12 +914,52 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
     isoform_frac_expr <- all_isoform_frac_expr[rownames(all_isoform_frac_expr) %in% transcript_ids, ]
     isoform_frac_expr[is.na(isoform_frac_expr)] = 0
     
-    if (min_isoform_frac_expr_any_cluster > 0) {
-        
-        transcript_ids = names(which(rowSums(isoform_frac_expr >= min_isoform_frac_expr_any_cluster) > 0))
+    # Two INDEPENDENT criteria, because they ask different questions.
+    #
+    # min_cells_expressed / min_cell_frac_expressed is an ABUNDANCE test: is this isoform
+    # actually detected in a decent number of cells somewhere? That is the right basis for
+    # a DTU view, where the isoforms of interest are the ones TRADING share between
+    # clusters. They need not ever dominate: STMN2's cryptic isoform sits in 53 of 299
+    # cells in Cluster_8 and peaks at an isoform fraction of only 0.39.
+    #
+    # min_isoform_frac_expr_any_cluster is a DOMINANCE test: does this isoform win its
+    # locus in some cluster? Useful for trimming a long tail, but it is depth-blind on its
+    # own -- a cluster holding 2 assigned read-equivalents lets 1.0/2.0 = 0.50 outrank an
+    # isoform carrying 62 in a deep cluster -- so when both are set, a cluster must clear
+    # the cell bar before its isoform fraction is allowed to count.
+
+    cell_ok = NULL
+    if (min_cells_expressed > 0 || min_cell_frac_expressed > 0) {
+        if (is.null(cluster_cell_fraction_matrix)) {
+            stop("min_cells_expressed / min_cell_frac_expressed require parse_inputs() ",
+                 "to have been given cell_fractions_matrix_filename")
+        }
+        cell_frac = cluster_cell_fraction_matrix[rownames(isoform_frac_expr),
+                                                 colnames(isoform_frac_expr), drop=FALSE]
+        cell_frac[is.na(cell_frac)] = 0
+        n_cells = cluster_cell_counts[colnames(isoform_frac_expr)]
+        cells_expressed = sweep(as.matrix(cell_frac), 2, n_cells, "*")
+        # stricter of the absolute and the proportional bar, per cluster
+        bar = pmax(min_cells_expressed,
+                   matrix(rep(min_cell_frac_expressed * n_cells, each=nrow(cell_frac)),
+                          nrow=nrow(cell_frac)))
+        cell_ok = cells_expressed >= bar
+    }
+
+    if (min_isoform_frac_expr_any_cluster > 0 || ! is.null(cell_ok)) {
+
+        qualifies = if (is.null(cell_ok)) {
+            isoform_frac_expr >= min_isoform_frac_expr_any_cluster
+        } else if (min_isoform_frac_expr_any_cluster > 0) {
+            (isoform_frac_expr >= min_isoform_frac_expr_any_cluster) & cell_ok
+        } else {
+            cell_ok
+        }
+
+        transcript_ids = rownames(isoform_frac_expr)[rowSums(qualifies) > 0]
         
         if (length(transcript_ids) < 2) {
-            stop("Too few isoforms left after filtering based on min isoform fraction") 
+            stop("Too few isoforms left after filtering on isoform fraction / cell support") 
         }
         
         isoform_expr = isoform_expr[rownames(isoform_expr) %in% transcript_ids,]
@@ -580,15 +1159,32 @@ get_expression_ggplot2_heatmap_w_exon_structures = function(
 
 library(cowplot)
 
+# usage_fraction_umap = TRUE swaps the read-count umap for per-cell usage fractions of the
+# same transcripts (see plot_isoform_usage_fraction_umap), smoothed when smooth_graph is given.
 make_diff_iso_usage_compound_plot = function(gene_of_interest, min_iso_fraction = 0, ignore_unspliced=FALSE,
-                                             transcript_ids=NULL) {
+                                             transcript_ids=NULL,
+                                             min_cells_expressed = 0,
+                                             min_cell_frac_expressed = 0,
+                                             usage_fraction_umap = FALSE,
+                                             denominator = c("selected", "gene"),
+                                             smooth_graph = NULL) {
     
     p_exon_expr_info = get_expression_ggplot2_heatmap_w_exon_structures(gene_of_interest, min_iso_fraction, 
-                                                                        ignore_unspliced, transcript_ids)
+                                                                        ignore_unspliced, transcript_ids,
+                                                                        min_cells_expressed,
+                                                                        min_cell_frac_expressed)
     
     p_exon_expr = p_exon_expr_info$plot
     
-    p_umap = plot_isoform_umap(gene_of_interest, p_exon_expr_info$transcript_ids)
+    if (usage_fraction_umap) {
+        p_umap = plot_isoform_usage_fraction_umap(gene_of_interest, p_exon_expr_info$transcript_ids,
+                                                  denominator = match.arg(denominator),
+                                                  smooth_graph = smooth_graph,
+                                                  cell_evidence = "gene",
+                                                  ignore_unspliced = ignore_unspliced)
+    } else {
+        p_umap = plot_isoform_umap(gene_of_interest, p_exon_expr_info$transcript_ids)
+    }
     
     p_both = plot_grid(p_exon_expr, p_umap, ncol=1)
     
@@ -669,16 +1265,23 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
   
   # In these rows, cluster_A is for tx_alt, cluster_B is for tx_dom.
   # We still want x = clusters for tx_dom, y = clusters for tx_alt.
+  #
+  # Each row contributes TWO mirror tiles, exactly as the forward branch does: the
+  # tx_dom-perspective value at (cluster_A, cluster_B) and the tx_alt-perspective value
+  # at (cluster_B, cluster_A). In a reverse row the roles of the two delta columns are
+  # swapped, because `dominant_*` there refers to tx_alt.
+  # Previously BOTH reverse tiles were emitted at (cluster_B, cluster_A), so one silently
+  # overplotted the other and its mirror cell was left empty.
   
-  # A->B (tx_dom -> tx_alt) here is alternate_delta_pi at (cluster_B, cluster_A)
+  # A->B (tx_dom -> tx_alt) here is alternate_delta_pi
   ab_reverse <- reverse %>%
     transmute(
-      cluster_x = cluster_B,
-      cluster_y = cluster_A,
+      cluster_x = cluster_A,
+      cluster_y = cluster_B,
       value     = alternate_delta_pi
     )
   
-  # B->A (tx_alt -> tx_dom) here is delta_pi at (cluster_B, cluster_A)
+  # B->A (tx_alt -> tx_dom) here is delta_pi
   ba_reverse <- reverse %>%
     transmute(
       cluster_x = cluster_B,
@@ -689,15 +1292,20 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
   # 4) Combine everything
   heat_df <- bind_rows(ab_forward, ba_forward, ab_reverse, ba_reverse)
   
-  # 5) Build unified cluster ordering (numeric order)
+  # 5) Build one unified cluster ordering, used for BOTH axes.
+  # Numeric where the names allow it ("Cluster_10" after "Cluster_9", not after
+  # "Cluster_1"), falling back to plain sorting otherwise. The fallback matters: with
+  # as.integer() alone, any non-numeric cluster name becomes NA and sort() silently
+  # DROPS it, which would delete that cluster's tiles from the plot without warning.
   all_clusters <- unique(c(as.character(heat_df$cluster_x),
                            as.character(heat_df$cluster_y)))
   
-  cluster_levels <- all_clusters %>%
-    gsub("^Cluster_", "", .) %>%   # strip prefix
-    as.integer() %>%
-    sort() %>%
-    paste0("Cluster_", .)          # rebuild ordered names
+  cluster_nums <- suppressWarnings(as.integer(gsub("^Cluster_", "", all_clusters)))
+  cluster_levels <- if (any(is.na(cluster_nums))) {
+    sort(all_clusters)
+  } else {
+    all_clusters[order(cluster_nums)]
+  }
   
   heat_df <- heat_df %>%
     mutate(
@@ -722,6 +1330,12 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
       linewidth = 1.2,
       lineend = "round"
     ) +
+    # Both axes are pinned to the SAME complete level set. Without drop = FALSE ggplot
+    # drops levels unused on a given axis, so a cluster that only ever appears as a y
+    # value vanishes from x and then gets re-appended at the end by the diagonal layer --
+    # which is how the rows and columns ended up in different orders.
+    scale_x_discrete(limits = cluster_levels, drop = FALSE) +
+    scale_y_discrete(limits = cluster_levels, drop = FALSE) +
     coord_fixed() +
     scale_fill_gradient2(
       low = "purple",
