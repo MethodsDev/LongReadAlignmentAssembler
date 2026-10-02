@@ -22,6 +22,11 @@ class Transcript(GenomeFeature):
         "PolyA",
         "TSS_read_count",
         "PolyA_read_count",
+        # Re-emitted by to_GTF_format via their accessors, which already fall back
+        # to an imported _meta value; writing _meta too would duplicate the key.
+        "InternalPriming",
+        "PAS",
+        "PAS_offset",
         # An input GTF's TPM is a rate against a library this run never measured.
         # It is neither consumed nor re-exported: this run computes its own TPM.
         "TPM",
