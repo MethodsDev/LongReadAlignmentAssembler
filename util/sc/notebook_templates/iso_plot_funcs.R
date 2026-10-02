@@ -1356,3 +1356,186 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
   
   return(p)
 }
+
+
+#####################################
+# Well-supported alt-termini DTU examples
+#####################################
+
+# Two isoforms that share a splice pattern and differ only at one terminus are told apart
+# by the EM mostly through reads compatible with both, so a significant DTU call can rest
+# on how those reads were apportioned. These helpers keep the alt-termini calls whose
+# isoforms are each measured rather than apportioned, then check the survivors against
+# where the reads actually start or end.
+#
+# Model-level support, required of BOTH isoforms of a pair:
+#   min_uniq_FSM_reads      uniquely assigned FSM reads, summed over the per-cluster quant runs
+#   min_uniq_read_frac      share of the isoform's assigned reads that were assigned uniquely
+#   min_terminus_reads      reads supporting the terminus that differs (TSS_read_count / PolyA_read_count)
+#   PolyA sites             a PAS hexamer and no internal-priming flag
+# and the differing termini at least min_termini_separation bp apart, so that one broad
+# site called as two does not count as a switch.
+#
+# Expects gtf_parsed from parse_inputs, and dtu_results as read by parse_inputs (any
+# gene_id / gene_symbol grouping; cross-gene rows should already be excluded).
+get_alt_termini_support = function(dtu_results,
+                                   cluster_quant_expr_tarball,
+                                   transcript_id_mapping_tsv,
+                                   min_uniq_FSM_reads = 5,
+                                   min_uniq_read_frac = 0.1,
+                                   min_terminus_reads = 20,
+                                   min_termini_separation = 100) {
+
+    quant_expr_dir = file.path(tempdir(), basename(cluster_quant_expr_tarball))
+    untar(cluster_quant_expr_tarball, exdir = quant_expr_dir)
+
+    # quant.expr ids lack the gene-symbol prefix; map them onto the ids used everywhere else
+    transcript_id_to_symbol_id = read_tsv(transcript_id_mapping_tsv, col_types = cols(.default = "c")) %>%
+        select(transcript_id, new_transcript_id) %>% distinct()
+
+    isoform_read_support = list.files(quant_expr_dir, pattern = "quant.expr$", recursive = TRUE, full.names = TRUE) %>%
+        map_dfr(~ read_tsv(.x, comment = "#", col_types = cols(.default = "c"))) %>%
+        mutate(across(c(uniq_reads, all_reads, uniq_FSM_reads), as.numeric)) %>%
+        group_by(transcript_id) %>%
+        summarize(uniq_reads = sum(uniq_reads), all_reads = sum(all_reads),
+                  uniq_FSM_reads = sum(uniq_FSM_reads), .groups = "drop") %>%
+        inner_join(transcript_id_to_symbol_id, by = "transcript_id") %>%
+        select(transcript_id = new_transcript_id, uniq_reads, all_reads, uniq_FSM_reads)
+
+    isoform_termini = gtf_parsed %>% filter(feature == "transcript") %>%
+        transmute(transcript_id,
+                  TSS_pos = if_else(strand == "+", as.integer(start), as.integer(end)),
+                  PolyA_pos = if_else(strand == "+", as.integer(end), as.integer(start)),
+                  TSS_read_count = coalesce(as.numeric(TSS_read_count), 0),
+                  PolyA_read_count = coalesce(as.numeric(PolyA_read_count), 0),
+                  PolyA_called = coalesce(PolyA == "True", FALSE),
+                  PAS = coalesce(PAS, "none"),
+                  internal_priming = coalesce(InternalPriming == "True", FALSE)) %>%
+        left_join(isoform_read_support, by = "transcript_id") %>%
+        mutate(across(c(uniq_reads, all_reads, uniq_FSM_reads), ~ coalesce(.x, 0)),
+               uniq_read_frac = uniq_reads / pmax(all_reads, 1),
+               PolyA_ok = ! PolyA_called | (PAS != "none" & ! internal_priming))
+
+    dtu_results %>%
+        filter(as.character(significant) %in% c("True", "TRUE"),
+               dominant_splice_hashcodes == alternate_splice_hashcodes,
+               ! grepl(",", dominant_transcript_ids), ! grepl(",", alternate_transcript_ids)) %>%
+        mutate(across(c(dominant_pi_A, dominant_pi_B, alternate_pi_A, alternate_pi_B),
+                      ~ suppressWarnings(as.numeric(.x)))) %>%
+        select(gene_symbol, cluster_A, cluster_B, pvalue, delta_pi, alternate_delta_pi,
+               dominant_transcript_ids, alternate_transcript_ids,
+               dominant_pi_A, dominant_pi_B, alternate_pi_A, alternate_pi_B) %>%
+        inner_join(isoform_termini %>% rename_with(~ paste0("dom_", .x)), by = c("dominant_transcript_ids" = "dom_transcript_id")) %>%
+        inner_join(isoform_termini %>% rename_with(~ paste0("alt_", .x)), by = c("alternate_transcript_ids" = "alt_transcript_id")) %>%
+        mutate(TSS_separation = abs(dom_TSS_pos - alt_TSS_pos),
+               PolyA_separation = abs(dom_PolyA_pos - alt_PolyA_pos),
+               alt_terminus = case_when(TSS_separation >= min_termini_separation & PolyA_separation < min_termini_separation ~ "TSS",
+                                        PolyA_separation >= min_termini_separation & TSS_separation < min_termini_separation ~ "PolyA",
+                                        TSS_separation >= min_termini_separation ~ "both",
+                                        TRUE ~ "neither"),
+               dom_terminus_reads = if_else(alt_terminus == "TSS", dom_TSS_read_count, dom_PolyA_read_count),
+               alt_terminus_reads = if_else(alt_terminus == "TSS", alt_TSS_read_count, alt_PolyA_read_count),
+               # the model's within-pair share of the dominant isoform, comparable to the read-level share
+               model_dom_share_A = dominant_pi_A / (dominant_pi_A + alternate_pi_A),
+               model_dom_share_B = dominant_pi_B / (dominant_pi_B + alternate_pi_B),
+               well_supported = alt_terminus %in% c("TSS", "PolyA") &
+                   dom_uniq_FSM_reads >= min_uniq_FSM_reads & alt_uniq_FSM_reads >= min_uniq_FSM_reads &
+                   dom_uniq_read_frac >= min_uniq_read_frac & alt_uniq_read_frac >= min_uniq_read_frac &
+                   dom_terminus_reads >= min_terminus_reads & alt_terminus_reads >= min_terminus_reads &
+                   dom_PolyA_ok & alt_PolyA_ok)
+}
+
+
+# Runs util/sc/diff_iso_usage/alt_termini_read_check.py over the candidate pairs and returns
+# its table. The result is cached in output_tsv and recomputed only when the candidate set
+# changes, since it reads the full BAM.
+run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genome_fa, output_tsv,
+                                      site_window = 50,
+                                      lraa_root = Sys.getenv("LRAA_ROOT", "~/GITHUB/MDL/LongReadAlignmentAssembler")) {
+
+    candidate_cols = c("gene_symbol", "alt_terminus", "dominant_transcript_ids", "alternate_transcript_ids",
+                       "cluster_A", "cluster_B")
+
+    candidates_tsv = paste0(output_tsv, ".candidates.tsv")
+    new_candidates_tsv = tempfile(fileext = ".tsv")
+    write_tsv(candidates %>% select(all_of(candidate_cols)) %>% distinct(), new_candidates_tsv)
+
+    if (file.exists(output_tsv) && file.exists(candidates_tsv) &&
+        unname(tools::md5sum(candidates_tsv)) == unname(tools::md5sum(new_candidates_tsv))) {
+        message("-reusing read check in ", output_tsv)
+    } else {
+        file.copy(new_candidates_tsv, candidates_tsv, overwrite = TRUE)
+        script = file.path(path.expand(lraa_root), "util/sc/diff_iso_usage/alt_termini_read_check.py")
+        status = system2(script, c("--candidates", candidates_tsv, "--gtf", gtf, "--bam", bam,
+                                   "--cell_clusters", cell_clusters, "--genome_fa", genome_fa,
+                                   "--site_window", site_window, "--output", output_tsv))
+        if (status != 0) {
+            stop("alt_termini_read_check.py failed with status ", status)
+        }
+    }
+
+    read_tsv(output_tsv, show_col_types = FALSE) %>%
+        select(all_of(candidate_cols), dom_terminus_pos, alt_terminus_pos, n_reads,
+               read_frac_at_dom, read_frac_at_alt, read_frac_elsewhere,
+               reads_dom_A, reads_alt_A, read_dom_share_A, reads_dom_B, reads_alt_B, read_dom_share_B,
+               top_read_end_peaks, dom_downstream_A_of_20, alt_downstream_A_of_20)
+}
+
+
+# A call is borne out by the reads when the share of reads ending at the dominant terminus
+# moves between the pair's clusters in the model's direction, by at least
+# min_read_share_delta and by at least min_read_vs_model_delta_ratio of the model's own
+# shift (the EM must not be inflating it), with min_reads_per_cluster reads at either
+# terminus in each cluster and no more than max_read_frac_elsewhere of the reads ending
+# away from both termini (a smear there means the termini are not where the reads are).
+confirm_alt_termini_by_reads = function(support_w_reads,
+                                        min_read_share_delta = 0.15,
+                                        min_read_vs_model_delta_ratio = 0.5,
+                                        min_reads_per_cluster = 20,
+                                        max_read_frac_elsewhere = 0.3) {
+    support_w_reads %>%
+        mutate(read_share_delta = read_dom_share_A - read_dom_share_B,
+               model_share_delta = model_dom_share_A - model_dom_share_B,
+               read_confirmed = coalesce(
+                   sign(read_share_delta) == sign(model_share_delta) &
+                   abs(read_share_delta) >= min_read_share_delta &
+                   abs(read_share_delta) >= min_read_vs_model_delta_ratio * abs(model_share_delta) &
+                   reads_dom_A + reads_alt_A >= min_reads_per_cluster &
+                   reads_dom_B + reads_alt_B >= min_reads_per_cluster &
+                   read_frac_elsewhere <= max_read_frac_elsewhere,
+                   FALSE))
+}
+
+
+# The most significant confirmed comparison per gene, most significant genes first.
+select_best_alt_termini_examples = function(confirmed) {
+    confirmed %>%
+        filter(read_confirmed) %>%
+        group_by(gene_symbol) %>%
+        mutate(n_confirmed_comparisons = n()) %>%
+        arrange(pvalue, desc(abs(delta_pi))) %>% slice(1) %>% ungroup() %>%
+        arrange(pvalue, desc(abs(delta_pi))) %>%
+        transmute(alt_terminus, gene_symbol, dominant_transcript_ids, alternate_transcript_ids,
+                  cluster_A, cluster_B, delta_pi, alternate_delta_pi, pvalue, n_confirmed_comparisons,
+                  TSS_separation, PolyA_separation,
+                  dom_uniq_FSM_reads, alt_uniq_FSM_reads,
+                  dom_uniq_read_frac = round(dom_uniq_read_frac, 2),
+                  alt_uniq_read_frac = round(alt_uniq_read_frac, 2),
+                  dom_terminus_reads, alt_terminus_reads, dom_PAS, alt_PAS,
+                  model_dom_share_A = round(model_dom_share_A, 2), model_dom_share_B = round(model_dom_share_B, 2),
+                  read_dom_share_A, read_dom_share_B, read_frac_elsewhere)
+}
+
+
+plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL) {
+
+    p = make_diff_iso_usage_compound_plot(example$gene_symbol, 0,
+                                          ignore_unspliced = FALSE,
+                                          transcript_ids = c(example$dominant_transcript_ids, example$alternate_transcript_ids),
+                                          usage_fraction_umap = TRUE, denominator = "selected",
+                                          smooth_graph = smooth_graph)
+
+    ggsave(p, file = paste0(example$gene_symbol, ".", file_prefix, ".pdf"), width = 11, height = 8)
+
+    p
+}
