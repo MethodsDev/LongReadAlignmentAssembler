@@ -1369,6 +1369,44 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
 # Well-supported alt-termini DTU examples
 #####################################
 
+# Per-isoform read support from the cluster-guided quantification (one quant.expr per
+# cluster, in cluster_quant_expr_tarball), summed over clusters and keyed by the
+# gene-symbol-prefixed ids used elsewhere, with each isoform's splice-pattern id:
+#   uniq_reads      reads assigned uniquely to the isoform
+#   all_reads       all reads assigned, including the EM's share of multi-isoform reads
+#   uniq_FSM_reads  uniquely assigned reads that are full splice matches to it
+get_isoform_read_support = function(cluster_quant_expr_tarball, transcript_id_mapping_tsv) {
+
+    quant_expr_dir = file.path(tempdir(), basename(cluster_quant_expr_tarball))
+    untar(cluster_quant_expr_tarball, exdir = quant_expr_dir)
+
+    # quant.expr ids lack the gene-symbol prefix; map them onto the ids used everywhere else
+    id_mapping = read_tsv(transcript_id_mapping_tsv, col_types = cols(.default = "c")) %>%
+        select(transcript_id, new_transcript_id, splice_pattern_id = new_transcript_splice_hash_code) %>%
+        distinct()
+
+    list.files(quant_expr_dir, pattern = "quant.expr$", recursive = TRUE, full.names = TRUE) %>%
+        map_dfr(~ read_tsv(.x, comment = "#", col_types = cols(.default = "c"))) %>%
+        mutate(across(c(uniq_reads, all_reads, uniq_FSM_reads), as.numeric)) %>%
+        group_by(transcript_id) %>%
+        summarize(uniq_reads = sum(uniq_reads), all_reads = sum(all_reads),
+                  uniq_FSM_reads = sum(uniq_FSM_reads), .groups = "drop") %>%
+        inner_join(id_mapping, by = "transcript_id") %>%
+        select(transcript_id = new_transcript_id, splice_pattern_id, uniq_reads, all_reads, uniq_FSM_reads)
+}
+
+
+# The same, summed over the isoforms of each splice pattern. Conservative for the unique
+# counts: a read shared only among isoforms of one pattern is unique to the pattern but not
+# to any of its isoforms, so it is not counted.
+get_splice_pattern_read_support = function(cluster_quant_expr_tarball, transcript_id_mapping_tsv) {
+    get_isoform_read_support(cluster_quant_expr_tarball, transcript_id_mapping_tsv) %>%
+        group_by(splice_pattern_id) %>%
+        summarize(n_isoforms = n(), uniq_reads = sum(uniq_reads), all_reads = sum(all_reads),
+                  uniq_FSM_reads = sum(uniq_FSM_reads), .groups = "drop")
+}
+
+
 # Two isoforms that share a splice pattern and differ only at one terminus are told apart
 # by the EM mostly through reads compatible with both, so a significant DTU call can rest
 # on how those reads were apportioned. These helpers keep the alt-termini calls whose
@@ -1393,21 +1431,8 @@ get_alt_termini_support = function(dtu_results,
                                    min_terminus_reads = 20,
                                    min_termini_separation = 100) {
 
-    quant_expr_dir = file.path(tempdir(), basename(cluster_quant_expr_tarball))
-    untar(cluster_quant_expr_tarball, exdir = quant_expr_dir)
-
-    # quant.expr ids lack the gene-symbol prefix; map them onto the ids used everywhere else
-    transcript_id_to_symbol_id = read_tsv(transcript_id_mapping_tsv, col_types = cols(.default = "c")) %>%
-        select(transcript_id, new_transcript_id) %>% distinct()
-
-    isoform_read_support = list.files(quant_expr_dir, pattern = "quant.expr$", recursive = TRUE, full.names = TRUE) %>%
-        map_dfr(~ read_tsv(.x, comment = "#", col_types = cols(.default = "c"))) %>%
-        mutate(across(c(uniq_reads, all_reads, uniq_FSM_reads), as.numeric)) %>%
-        group_by(transcript_id) %>%
-        summarize(uniq_reads = sum(uniq_reads), all_reads = sum(all_reads),
-                  uniq_FSM_reads = sum(uniq_FSM_reads), .groups = "drop") %>%
-        inner_join(transcript_id_to_symbol_id, by = "transcript_id") %>%
-        select(transcript_id = new_transcript_id, uniq_reads, all_reads, uniq_FSM_reads)
+    isoform_read_support = get_isoform_read_support(cluster_quant_expr_tarball, transcript_id_mapping_tsv) %>%
+        select(transcript_id, uniq_reads, all_reads, uniq_FSM_reads)
 
     isoform_termini = gtf_parsed %>% filter(feature == "transcript") %>%
         transmute(transcript_id,
@@ -1465,7 +1490,9 @@ run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genom
 
     candidates_tsv = paste0(output_tsv, ".candidates.tsv")
     new_candidates_tsv = tempfile(fileext = ".tsv")
-    write_tsv(candidates %>% select(all_of(candidate_cols)) %>% distinct(), new_candidates_tsv)
+    # sorted, so the cache key depends on the candidate set and not on the order a notebook built it in
+    write_tsv(candidates %>% select(all_of(candidate_cols)) %>% distinct() %>% arrange(across(all_of(candidate_cols))),
+              new_candidates_tsv)
 
     if (file.exists(output_tsv) && file.exists(candidates_tsv) &&
         unname(tools::md5sum(candidates_tsv)) == unname(tools::md5sum(new_candidates_tsv))) {
