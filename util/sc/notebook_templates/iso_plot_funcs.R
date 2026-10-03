@@ -1595,30 +1595,129 @@ get_cluster_labels = function(max_chars = 24) {
 }
 
 
-# A DTU pair's top significant comparisons (largest |delta_pi|), one panel each: the two
-# clusters on the x axis, each a stacked bar of the pair's isoforms as percentages of the
-# gene's reads (pi, as tested) with the gene's other isoforms in gray on top; a band joins
-# each isoform's segments across the two clusters and is labelled with its shift in
-# percentage points. example needs gene_symbol, dominant_transcript_ids and
-# alternate_transcript_ids; works for transcript or splice-pattern ids, alt termini or alt
-# splicing. isoform_names (named by id) label the isoforms and set their order, bottom up.
-plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL) {
-
+# Shared setup for the DTU-pair share plots: isoform ids in stacking order (bottom up; as
+# given in isoform_names, else dominant first), their display labels, and fill colors.
+dtu_pair_isoform_setup = function(example, isoform_names = NULL) {
     dom_id = example$dominant_transcript_ids
     alt_id = example$alternate_transcript_ids
     iso_label = function(id) if (! is.null(isoform_names) && id %in% names(isoform_names)) isoform_names[[id]] else short_isoform_label(id)
-
-    # stacking order, bottom up: as given in isoform_names (matching the umap panels), else dominant first
     isoform_ids = if (! is.null(isoform_names) && all(c(dom_id, alt_id) %in% names(isoform_names))) {
         names(isoform_names)[names(isoform_names) %in% c(dom_id, alt_id)]
     } else {
         c(dom_id, alt_id)
     }
-    isoform_levels = c(sapply(isoform_ids, iso_label), "other isoforms")
-    fill_values = setNames(c(ISOFORM_PAIR_COLORS, OTHER_ISOFORMS_COLOR), isoform_levels)
+    isoform_levels = c(unname(sapply(isoform_ids, iso_label)), "other isoforms")
+    list(isoform_ids = isoform_ids, isoform_levels = isoform_levels,
+         fill_values = setNames(c(ISOFORM_PAIR_COLORS, OTHER_ISOFORMS_COLOR), isoform_levels))
+}
+
+
+# The DTU row testing this isoform pair between two clusters, in either orientation, or NULL.
+find_dtu_pair_row = function(dtu_results, dom_id, alt_id, cluster_x, cluster_y) {
+    rows = dtu_results %>%
+        filter((dominant_transcript_ids == dom_id & alternate_transcript_ids == alt_id) |
+               (dominant_transcript_ids == alt_id & alternate_transcript_ids == dom_id),
+               (cluster_A == cluster_x & cluster_B == cluster_y) | (cluster_A == cluster_y & cluster_B == cluster_x)) %>%
+        mutate(across(c(dominant_pi_A, dominant_pi_B, alternate_pi_A, alternate_pi_B), ~ suppressWarnings(as.numeric(.x))))
+    if (nrow(rows) == 0) NULL else rows[1, ]
+}
+
+
+# pi of each isoform id in one cluster of a DTU row
+dtu_row_cluster_pi = function(row, isoform_ids, cluster) {
+    side = if (row$cluster_A == cluster) "A" else "B"
+    sapply(isoform_ids, function(id) {
+        if (id == row$dominant_transcript_ids) row[[paste0("dominant_pi_", side)]] else row[[paste0("alternate_pi_", side)]]
+    })
+}
+
+
+format_adj_pvalue = function(p) {
+    # p-values below double precision underflow to 0
+    if (p > 0) paste0("adj. p = ", signif(p, 2)) else "adj. p < 1e-300"
+}
+
+
+# Draws stacked bars of the pair's isoforms (as shares of the gene's reads, with the gene's
+# other isoforms in gray on top), one bar per cluster in the order given, and between each
+# adjacent pair of bars a band per isoform labelled with its shift (in percentage points, shown as "%") and
+# the comparison's adjusted p above it.
+#   cluster_pi:   tibble(cluster, isoform_id, pi) for the clusters, in order
+#   band_pvalues: adjusted p of each adjacent comparison, length(clusters) - 1
+draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues) {
+
+    bar_half_width = 0.3
+    n = length(clusters)
 
     cluster_labels = get_cluster_labels() %>%
         mutate(axis_label = paste0(str_wrap(cell_type, 18), "\n(cluster ", seurat_clusters, "; ", n_cells, " cells)"))
+
+    segs = bind_rows(lapply(seq_len(n), function(k) {
+        pis = cluster_pi %>% filter(cluster == clusters[k])
+        pis = pis$pi[match(setup$isoform_ids, pis$isoform_id)]
+        tibble(x = k, isoform = setup$isoform_levels, pi = c(pis, max(0, 1 - sum(pis)))) %>%
+            mutate(ymax = cumsum(pi), ymin = ymax - pi)
+    })) %>%
+        mutate(isoform = factor(isoform, levels = setup$isoform_levels))
+
+    pair_segs = segs %>% filter(isoform != "other isoforms")
+
+    bands = bind_rows(lapply(seq_len(n - 1), function(k) {
+        pair_segs %>% filter(x %in% c(k, k + 1)) %>%
+            group_by(isoform) %>%
+            reframe(band = k,
+                    bx = c(k + bar_half_width, k + bar_half_width, k + 1 - bar_half_width, k + 1 - bar_half_width),
+                    by = c(ymin[x == k], ymax[x == k], ymax[x == k + 1], ymin[x == k + 1]))
+    }))
+
+    shifts = bind_rows(lapply(seq_len(n - 1), function(k) {
+        pair_segs %>% filter(x %in% c(k, k + 1)) %>%
+            group_by(isoform) %>%
+            summarize(shift = pi[x == k + 1] - pi[x == k],
+                      y = (mean(c(ymin[x == k], ymax[x == k])) + mean(c(ymin[x == k + 1], ymax[x == k + 1]))) / 2,
+                      .groups = "drop") %>%
+            mutate(x = k + 0.5)
+    })) %>%
+        mutate(label = paste0(if_else(shift >= 0, "+", "−"), round(abs(shift) * 100), "%"))
+
+    pvalue_labels = tibble(x = seq_len(n - 1) + 0.5, label = sapply(band_pvalues, format_adj_pvalue))
+
+    x_labels = cluster_labels$axis_label[match(clusters, cluster_labels$cluster)]
+
+    ggplot() +
+        geom_polygon(data = bands, aes(x = bx, y = by, fill = isoform, group = interaction(isoform, band)), alpha = 0.25) +
+        geom_rect(data = segs, aes(xmin = x - bar_half_width, xmax = x + bar_half_width,
+                                   ymin = ymin, ymax = ymax, fill = isoform),
+                  color = "white", linewidth = 0.6) +
+        geom_text(data = pair_segs %>% filter(pi >= 0.06),
+                  aes(x = x, y = (ymin + ymax) / 2, label = paste0(round(pi * 100), "%")),
+                  size = 3.2, color = "#0b0b0b") +
+        geom_label(data = shifts, aes(x = x, y = y, label = label),
+                   size = 3.2, fill = "white", color = "#0b0b0b", label.size = 0, label.padding = unit(0.12, "lines")) +
+        geom_text(data = pvalue_labels, aes(x = x, y = 1.05, label = label), size = 2.9, color = "#52514c") +
+        scale_fill_manual(values = setup$fill_values, drop = FALSE, name = NULL) +
+        scale_x_continuous(breaks = seq_len(n), labels = x_labels, expand = expansion(add = 0.45)) +
+        scale_y_continuous(labels = function(v) paste0(v * 100, "%"), breaks = seq(0, 1, 0.25),
+                           limits = c(0, 1.09), expand = expansion(mult = c(0, 0))) +
+        labs(x = NULL, y = "share of gene reads") +
+        theme_minimal(base_size = 10) +
+        theme(panel.grid.major.x = element_blank(), panel.grid.minor = element_blank(),
+              legend.position = "bottom")
+}
+
+
+# A DTU pair's top significant comparisons (largest |delta_pi|), one panel each: the two
+# clusters as stacked bars of the pair's isoforms as percentages of the gene's reads (pi, as
+# tested), the gene's other isoforms in gray on top, a band joining each isoform's segments
+# labelled with its shift in percentage points. example needs gene_symbol,
+# dominant_transcript_ids and alternate_transcript_ids; works for transcript or
+# splice-pattern ids, alt termini or alt splicing. isoform_names (named by id) label the
+# isoforms and set their order, bottom up.
+plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL) {
+
+    setup = dtu_pair_isoform_setup(example, isoform_names)
+    dom_id = example$dominant_transcript_ids
+    alt_id = example$alternate_transcript_ids
 
     comparisons = dtu_results %>%
         filter(as.character(significant) %in% c("True", "TRUE"),
@@ -1632,66 +1731,64 @@ plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2,
         stop("no significant comparisons for ", example$gene_symbol, " ", dom_id, " / ", alt_id)
     }
 
-    bar_half_width = 0.3
+    panels = lapply(seq_len(nrow(comparisons)), function(k) {
+        row = comparisons[k, ]
+        clusters = c(row$cluster_A, row$cluster_B)
+        cluster_pi = bind_rows(lapply(clusters, function(cl) {
+            tibble(cluster = cl, isoform_id = setup$isoform_ids, pi = dtu_row_cluster_pi(row, setup$isoform_ids, cl))
+        }))
+        draw_isoform_share_series(cluster_pi, clusters, setup, row$adj_pvalue)
+    })
 
-    make_panel = function(row) {
-        # pi of each isoform in each cluster, oriented to isoform_ids
-        pi_of = function(id, side) {
-            if (id == row$dominant_transcript_ids) row[[paste0("dominant_pi_", side)]] else row[[paste0("alternate_pi_", side)]]
-        }
-        segs = bind_rows(lapply(c("A", "B"), function(side) {
-            pis = sapply(isoform_ids, pi_of, side = side)
-            tibble(side = side, x = if (side == "A") 1 else 2,
-                   isoform = isoform_levels,
-                   pi = c(pis, max(0, 1 - sum(pis)))) %>%
-                mutate(ymax = cumsum(pi), ymin = ymax - pi)
-        })) %>%
-            mutate(isoform = factor(isoform, levels = isoform_levels))
-
-        # bands joining each of the pair's isoforms across the two clusters
-        bands = segs %>% filter(isoform != "other isoforms") %>%
-            group_by(isoform) %>%
-            reframe(x = c(1 + bar_half_width, 1 + bar_half_width, 2 - bar_half_width, 2 - bar_half_width),
-                    y = c(ymin[side == "A"], ymax[side == "A"], ymax[side == "B"], ymin[side == "B"]))
-
-        shifts = segs %>% filter(isoform != "other isoforms") %>%
-            group_by(isoform) %>%
-            summarize(shift = pi[side == "B"] - pi[side == "A"],
-                      y = (mean(c(ymin[side == "A"], ymax[side == "A"])) + mean(c(ymin[side == "B"], ymax[side == "B"]))) / 2,
-                      .groups = "drop") %>%
-            mutate(label = paste0(if_else(shift >= 0, "+", "−"), round(abs(shift) * 100), " pp"))
-
-        x_labels = cluster_labels$axis_label[match(c(row$cluster_A, row$cluster_B), cluster_labels$cluster)]
-
-        ggplot() +
-            geom_polygon(data = bands, aes(x = x, y = y, fill = isoform, group = isoform), alpha = 0.25) +
-            geom_rect(data = segs, aes(xmin = x - bar_half_width, xmax = x + bar_half_width,
-                                       ymin = ymin, ymax = ymax, fill = isoform),
-                      color = "white", linewidth = 0.6) +
-            geom_text(data = segs %>% filter(isoform != "other isoforms", pi >= 0.06),
-                      aes(x = x, y = (ymin + ymax) / 2, label = paste0(round(pi * 100), "%")),
-                      size = 3.2, color = "#0b0b0b") +
-            geom_label(data = shifts, aes(x = 1.5, y = y, label = label),
-                       size = 3.2, fill = "white", color = "#0b0b0b", label.size = 0, label.padding = unit(0.12, "lines")) +
-            scale_fill_manual(values = fill_values, drop = FALSE, name = NULL) +
-            scale_x_continuous(breaks = c(1, 2), labels = x_labels, expand = expansion(add = 0.45)) +
-            scale_y_continuous(labels = function(v) paste0(v * 100, "%"), breaks = seq(0, 1, 0.25),
-                               expand = expansion(mult = c(0, 0.01))) +
-            labs(x = NULL, y = "share of gene reads", subtitle = paste0("adj. p = ", signif(row$adj_pvalue, 2))) +
-            theme_minimal(base_size = 10) +
-            theme(panel.grid.major.x = element_blank(), panel.grid.minor = element_blank(),
-                  legend.position = "bottom")
-    }
-
-    panels = lapply(seq_len(nrow(comparisons)), function(k) make_panel(comparisons[k, ]))
     legend = get_legend(panels[[1]])
     panels = lapply(panels, function(p) p + theme(legend.position = "none"))
 
-    title = ggdraw() + draw_label(paste0(example$gene_symbol, ": top significant cluster comparisons (shifts in percentage points, pp)"),
+    title = ggdraw() + draw_label(paste0(example$gene_symbol, ": top significant cluster comparisons"),
                                   x = 0.04, hjust = 0, size = 12)   # clear of an A / B panel letter
 
     plot_grid(title, plot_grid(plotlist = panels, nrow = 1), legend,
               ncol = 1, rel_heights = c(0.1, 1, 0.12))
+}
+
+
+# The pair's isoform shares across a chosen series of clusters, as stacked bars in the order
+# given, with bands between adjacent bars labelled with each isoform's shift and the adjacent
+# comparison's adjusted p. Every adjacent pair of clusters must have been tested for this
+# isoform pair (a row in dtu_results, significant or not); pi comes from those rows.
+plot_dtu_pair_cluster_series = function(example, dtu_results, clusters, isoform_names = NULL, title = NULL) {
+
+    setup = dtu_pair_isoform_setup(example, isoform_names)
+    dom_id = example$dominant_transcript_ids
+    alt_id = example$alternate_transcript_ids
+
+    rows = lapply(seq_len(length(clusters) - 1), function(k) {
+        row = find_dtu_pair_row(dtu_results, dom_id, alt_id, clusters[k], clusters[k + 1])
+        if (is.null(row)) {
+            stop("no DTU row for ", example$gene_symbol, " between ", clusters[k], " and ", clusters[k + 1])
+        }
+        row
+    })
+
+    cluster_pi = bind_rows(lapply(seq_along(rows), function(k) {
+        bind_rows(lapply(clusters[c(k, k + 1)], function(cl) {
+            tibble(cluster = cl, isoform_id = setup$isoform_ids, pi = dtu_row_cluster_pi(rows[[k]], setup$isoform_ids, cl))
+        }))
+    }))
+
+    # a cluster in two adjacent comparisons must carry the same pi in both rows
+    inconsistent = cluster_pi %>% group_by(cluster, isoform_id) %>% filter(max(pi) - min(pi) > 1e-6)
+    if (nrow(inconsistent) > 0) {
+        stop("pi differs between DTU rows for ", paste(unique(inconsistent$cluster), collapse = ", "))
+    }
+    cluster_pi = cluster_pi %>% distinct(cluster, isoform_id, .keep_all = TRUE)
+
+    p = draw_isoform_share_series(cluster_pi, clusters, setup, sapply(rows, function(r) r$adj_pvalue))
+
+    if (is.null(title)) {
+        title = paste0(example$gene_symbol, ": isoform shares across clusters")
+    }
+
+    p + labs(title = title)
 }
 
 
