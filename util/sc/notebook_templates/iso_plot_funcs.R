@@ -418,7 +418,8 @@ plot_isoform_usage_fraction_umap = function(gene_of_interest,
                                             min_neighborhood_reads = 0,
                                             weighted = TRUE,
                                             cell_evidence = c("gene", "any", "isoform"),
-                                            ignore_unspliced = FALSE) {
+                                            ignore_unspliced = FALSE,
+                                            transcript_labels = NULL) {
     
     denominator   = match.arg(denominator)
     cell_evidence = match.arg(cell_evidence)
@@ -435,6 +436,12 @@ plot_isoform_usage_fraction_umap = function(gene_of_interest,
     
     # Draw low usage first so high-usage cells are not hidden under overplotting.
     usage_df = usage_df %>% arrange(usage_fraction)
+
+    # transcript_labels: named by transcript id; relabels the panels and orders them as given
+    if (! is.null(transcript_labels)) {
+        usage_df = usage_df %>%
+            mutate(transcript_id = factor(transcript_labels[transcript_id], levels = unname(transcript_labels)))
+    }
     
     denom_label = if (denominator == "gene") "all isoforms of the gene" else "the plotted isoforms"
     
@@ -1533,15 +1540,160 @@ select_best_alt_termini_examples = function(confirmed, min_showcase_read_share_d
 }
 
 
-plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL) {
+# Cluster colors for the comparison barplots: the first four categorical slots of the dataviz
+# reference palette (colorblind-separable; aqua and yellow fall under 3:1 contrast on white,
+# so every bar also carries its value as a label).
+COMPARISON_CLUSTER_COLORS = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+
+
+# Cell-type label per cluster, from whichever annotation column umap_df carries.
+get_cluster_labels = function(max_chars = 24) {
+    label_col = intersect(c("cell_type_simplified", "top_cell_type_annot", "cell_type_annot", "cas_cell_type_label_1"),
+                          colnames(umap_df))[1]
+    umap_df %>%
+        count(seurat_clusters, cell_type = .data[[label_col]]) %>%
+        group_by(seurat_clusters) %>%
+        summarize(cell_type = cell_type[which.max(n)], n_cells = sum(n), .groups = "drop") %>%
+        mutate(cluster = paste0("Cluster_", seurat_clusters),
+               cluster_label = paste0(str_trunc(cell_type, max_chars), " (", seurat_clusters, "; ", n_cells, " cells)"))
+}
+
+
+# The pair's top significant DTU comparisons (largest |delta_pi|), one panel each: the two
+# isoforms on the x axis, dodged bars for the two clusters, height = the isoform's fraction
+# of the gene's reads in that cluster (pi, as tested).
+plot_alt_termini_cluster_shifts = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL) {
+
+    dom_id = example$dominant_transcript_ids
+    alt_id = example$alternate_transcript_ids
+    iso_label = function(id) if (! is.null(isoform_names) && id %in% names(isoform_names)) isoform_names[[id]] else sub("^.*:", "", id)
+
+    cluster_labels = get_cluster_labels()
+
+    comparisons = dtu_results %>%
+        filter(as.character(significant) %in% c("True", "TRUE"),
+               (dominant_transcript_ids == dom_id & alternate_transcript_ids == alt_id) |
+               (dominant_transcript_ids == alt_id & alternate_transcript_ids == dom_id)) %>%
+        mutate(across(c(dominant_pi_A, dominant_pi_B, alternate_pi_A, alternate_pi_B), ~ suppressWarnings(as.numeric(.x)))) %>%
+        arrange(desc(abs(delta_pi)), pvalue) %>%
+        head(n_comparisons) %>%
+        left_join(cluster_labels %>% transmute(cluster, short_A = paste0(str_trunc(cell_type, 22), " (", seurat_clusters, ")")),
+                  by = c("cluster_A" = "cluster")) %>%
+        left_join(cluster_labels %>% transmute(cluster, short_B = paste0(str_trunc(cell_type, 22), " (", seurat_clusters, ")")),
+                  by = c("cluster_B" = "cluster")) %>%
+        mutate(comparison = paste0(short_A, " vs ", short_B, "\nadj. p = ", signif(adj_pvalue, 2)),
+               comparison = factor(comparison, levels = comparison))
+
+    # one row per comparison x cluster x isoform, oriented to the showcased pair's isoforms
+    bars = comparisons %>%
+        mutate(same_orientation = dominant_transcript_ids == dom_id) %>%
+        transmute(comparison, cluster_A, cluster_B,
+                  dom_pi_A = if_else(same_orientation, dominant_pi_A, alternate_pi_A),
+                  dom_pi_B = if_else(same_orientation, dominant_pi_B, alternate_pi_B),
+                  alt_pi_A = if_else(same_orientation, alternate_pi_A, dominant_pi_A),
+                  alt_pi_B = if_else(same_orientation, alternate_pi_B, dominant_pi_B)) %>%
+        pivot_longer(c(dom_pi_A, dom_pi_B, alt_pi_A, alt_pi_B), names_to = "which", values_to = "pi") %>%
+        mutate(cluster = if_else(str_ends(which, "_A"), cluster_A, cluster_B),
+               isoform = factor(if_else(str_starts(which, "dom"), iso_label(dom_id), iso_label(alt_id)),
+                                levels = c(iso_label(dom_id), iso_label(alt_id)))) %>%
+        inner_join(cluster_labels %>% select(cluster, cluster_label), by = "cluster")
+
+    # color follows the cluster, in order of first appearance, across both panels
+    cluster_levels = unique(bars$cluster_label)
+    bars = bars %>% mutate(cluster_label = factor(cluster_label, levels = cluster_levels))
+
+    dodge = position_dodge(width = 0.8)
+
+    ggplot(bars, aes(x = isoform, y = pi, fill = cluster_label)) +
+        geom_col(position = dodge, width = 0.75, color = "white", linewidth = 0.5) +
+        geom_text(aes(label = sprintf("%.2f", pi)), position = dodge, vjust = -0.4, size = 3, color = "#0b0b0b") +
+        facet_wrap(~ comparison, nrow = 1) +
+        scale_fill_manual(values = setNames(COMPARISON_CLUSTER_COLORS[seq_along(cluster_levels)], cluster_levels),
+                          name = NULL) +
+        scale_y_continuous(limits = c(0, 1.08), breaks = seq(0, 1, 0.25), expand = expansion(mult = c(0, 0))) +
+        labs(x = NULL, y = "isoform fraction of gene reads (pi)",
+             title = paste0(example$gene_symbol, ": top significant cluster comparisons")) +
+        guides(fill = guide_legend(ncol = 2)) +
+        theme_minimal(base_size = 10) +
+        theme(legend.position = "bottom", panel.grid.major.x = element_blank(), panel.grid.minor = element_blank(),
+              strip.text = element_text(face = "bold"))
+}
+
+
+# Names an alt-termini pair's isoforms by the terminus that tells them apart, e.g.
+# "iso-8: distal PolyA" / "iso-4: proximal PolyA", or "upstream TSS" / "downstream TSS".
+get_alt_termini_isoform_names = function(example) {
+    ids = c(example$dominant_transcript_ids, example$alternate_transcript_ids)
+    tx = gtf_parsed %>% filter(feature == "transcript", transcript_id %in% ids) %>%
+        distinct(transcript_id, .keep_all = TRUE) %>%
+        mutate(start = as.integer(start), end = as.integer(end),
+               TSS_pos = if_else(strand == "+", start, end), PolyA_pos = if_else(strand == "+", end, start))
+    tx = tx[match(ids, tx$transcript_id), ]
+    plus = tx$strand[1] == "+"
+    # position along the transcript's direction: larger = further downstream
+    downstream_rank = function(pos) rank(if (plus) pos else -pos)
+    if (example$alt_terminus == "TSS") {
+        where = if_else(downstream_rank(tx$TSS_pos) == 2, "downstream TSS", "upstream TSS")
+    } else {
+        where = if_else(downstream_rank(tx$PolyA_pos) == 2, "distal PolyA", "proximal PolyA")
+    }
+    setNames(paste0(sub("^.*:", "", ids), ": ", where), ids)
+}
+
+
+# A compact figure for one alt-termini example: the SNN-smoothed usage-fraction umaps of
+# the pair (each isoform's share of the pair's reads per cell) over the barplots of its
+# top significant cluster comparisons.
+plot_alt_termini_umaps_and_shifts = function(example, dtu_results, smooth_graph, file = NULL,
+                                             width = 10, height = 9) {
+
+    isoform_names = get_alt_termini_isoform_names(example)
+
+    p_umap = plot_isoform_usage_fraction_umap(example$gene_symbol, names(isoform_names),
+                                              denominator = "selected",
+                                              smooth_graph = smooth_graph,
+                                              cell_evidence = "gene",
+                                              transcript_labels = isoform_names,
+                                              ncol = 2)
+
+    n_cells = n_distinct(p_umap$layers[[2]]$data$cell_barcode)
+    terminus = if (example$alt_terminus == "TSS") "TSS" else "PolyA"
+    panel_margin = margin(t = 18, r = 6, b = 6, l = 18)   # room for the A / B panel letters
+
+    p_umap = p_umap +
+        labs(title = paste0(example$gene_symbol, ": alternative ", terminus, " usage per cell"),
+             subtitle = paste0("share of the pair's reads per cell, SNN-smoothed (", format(n_cells, big.mark = ","), " cells)")) +
+        theme(plot.margin = panel_margin)
+
+    p_bars = plot_alt_termini_cluster_shifts(example, dtu_results, isoform_names = isoform_names) +
+        labs(title = "Top significant cluster comparisons") +
+        theme(plot.margin = panel_margin)
+
+    p = plot_grid(p_umap, p_bars, ncol = 1, rel_heights = c(1.15, 1), labels = c("A", "B"))
+
+    if (! is.null(file)) {
+        ggsave(p, file = file, width = width, height = height)
+    }
+
+    p
+}
+
+
+plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL, dtu_results = NULL) {
 
     p = make_diff_iso_usage_compound_plot(example$gene_symbol, 0,
                                           ignore_unspliced = FALSE,
                                           transcript_ids = c(example$dominant_transcript_ids, example$alternate_transcript_ids),
                                           usage_fraction_umap = TRUE, denominator = "selected",
                                           smooth_graph = smooth_graph)
+    height = 8
 
-    ggsave(p, file = paste0(example$gene_symbol, ".", file_prefix, ".pdf"), width = 11, height = 8)
+    if (! is.null(dtu_results)) {
+        p = plot_grid(p, plot_alt_termini_cluster_shifts(example, dtu_results), ncol = 1, rel_heights = c(2, 1.1))
+        height = 12
+    }
+
+    ggsave(p, file = paste0(example$gene_symbol, ".", file_prefix, ".pdf"), width = 11, height = height)
 
     p
 }
