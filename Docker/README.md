@@ -83,11 +83,14 @@ which names the core, sc and orf images and the tag they share.
 >
 > The guarantee covers all four repositories: **`lraa:latest`** (the plain alias
 > for `lraa-core`, which public users pull) and `lraa-core`, `lraa-sc` and
-> `lraa-orf`, which the wdl defaults name. `build_docker.latest.sh` writes all four
-> from one build, so they always name the same release.
+> `lraa-orf`, which the wdl defaults name. `release_docker.OFFICIAL.sh` writes all
+> four, and their `<version>` tags, from one build, so they always name the same release.
 >
-> `build_docker.latest.sh` enforces this: it refuses unless `HEAD` equals
-> `origin/main`, the released branch. **Do not hand-retag `:latest`** -- a
+> `release_docker.OFFICIAL.sh` enforces this: it refuses unless `HEAD` equals
+> `origin/main`, the released branch, AND `LRAA_v<version>` is a published GitHub
+> release whose tag resolves to `HEAD`. The GitHub release is the decision; the
+> images follow it. Never move `main` or publish a GitHub release just to get past
+> these checks. **Do not hand-retag `:latest`** -- a
 > `docker tag`/`docker push` pair bypasses that guard, which is exactly how it was
 > moved by mistake once (see the note at the end of this section).
 >
@@ -96,8 +99,8 @@ which names the core, sc and orf images and the tag they share.
 
 | tag | set by | built from | used by |
 |---|---|---|---|
-| `latest` | `build_docker.latest.sh` | `git rev-parse HEAD`, refused unless it equals `origin/main` | defaults written inside the `.wdl` files, and every public caller |
-| `<version>` from `VERSION.txt` | `build_docker.versioned.sh` | `git rev-parse HEAD` | release pins -- a BARE version asserts a published release |
+| `latest` | `release_docker.OFFICIAL.sh` | `git rev-parse HEAD`, refused unless it equals `origin/main` and is the published GitHub release `LRAA_v<version>` | defaults written inside the `.wdl` files, and every public caller |
+| `<version>` from `VERSION.txt` | `release_docker.OFFICIAL.sh` | same build, same checks as `latest` | release pins -- a BARE version asserts a published release |
 | `testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | local WDL test targets, through `testing/lraa_test_docker.mk` |
 | `<version>-testing` | `build_docker.testing.sh` | `git rev-parse HEAD` | testing that outlives the moving `testing` tag, e.g. runs dispatched to VMs |
 | `<version>-<shortsha>` | `build_docker.testing.sh` (the `COMMIT_TAG`; never reused, since the commit is in the name) | `git rev-parse HEAD` | pinning a specific devel image for a benchmark, reattributable later; nothing moves it |
@@ -168,7 +171,7 @@ exceptions below.
 
 Until v0.44.1 the three split repositories' `:latest` held 0.18.3-era digests
 that no release backed, left in place until a release closed the 0.17.7-to-devel
-gap. v0.44.1 was that release, and `build_docker.latest.sh` repointed all four.
+gap. v0.44.1 was that release, and its `:latest` build repointed all four.
 
 A bare `0.30.0` also exists in all five repositories, and is the same kind of
 exception. `build_docker.versioned.sh` was run from devel before it had a release
@@ -210,7 +213,7 @@ Restored the same day with `gcloud artifacts docker tags add`, server-side:
 The bare `0.30.0` tags created by the release script were converted to
 `0.30.0-testing` and `0.30.0-<shortsha>` and the bare name deleted, since a bare
 version asserts a published release. Two lessons are now enforced rather than
-written down: `build_docker.latest.sh` refuses any commit that is not
+written down: `build_docker.latest.sh` (now `release_docker.OFFICIAL.sh`) refuses any commit that is not
 `origin/main`, and the rule at the top of this section states what `:latest` is
 for. Neither stops a hand-retag -- nothing can -- so the prohibition on
 hand-retagging `:latest` is the part that has to be read.
@@ -257,21 +260,27 @@ docker inspect <image> --format '{{index .Config.Labels "org.opencontainers.imag
 
 ## Building
 
-Three paths. All three build the commit you are sitting on; they differ only in
-the tag they write:
+Two paths. Both build the commit you are sitting on; they differ in the tags
+they write and in what they require:
 
 ```bash
 cd Docker
-bash build_docker.testing.sh     # testing,   from git HEAD
-bash build_docker.versioned.sh   # <version>, from git HEAD
-bash build_docker.latest.sh      # latest,    from git HEAD
+bash build_docker.testing.sh      # testing, <version>-testing, <version>-<shortsha>
+bash release_docker.OFFICIAL.sh   # <version> and latest -- official releases ONLY
 ```
 
-Use `build_docker.testing.sh` to validate the commit you are on before it is
-released -- running the WDLs against `latest` tests the last release, so it
-cannot fail on anything you have changed since. Use the versioned script for a
-release someone can pin, and the latest script for the release the `.wdl`
-defaults resolve to; a release normally runs both.
+**Default to `build_docker.testing.sh`.** Every build that is not an official
+public release uses it -- including a version bump, a patch you want to try on
+Terra, or "rebuild the dockers". Running the WDLs against `latest` tests the last
+release, so it cannot fail on anything you have changed since.
+
+`release_docker.OFFICIAL.sh` is for an official public release, and runs only
+after `main` has been fast-forwarded to the release commit and the GitHub release
+`LRAA_v<version>` has been published for it. It replaces `build_docker.versioned.sh`
+and `build_docker.latest.sh`, which are now stubs that refuse and point here. On
+2026-10-05 a version bump (0.44.2) was published as `:0.44.2` and `:latest` by
+moving `main` to get past the older, main-only check; the GitHub-release check
+exists so that cannot happen again.
 
 All three build `lraa-base` first and pass it to the other builds as
 `--build-arg LRAA_BASE_IMAGE=`, so the three published images are built against
