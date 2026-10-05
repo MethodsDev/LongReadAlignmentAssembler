@@ -1,3 +1,14 @@
+v0.44.2
+
+- FIXED: util/SQANTI-like_cats_for_reads_or_isoforms.py, and so the sqanti-like
+  WDLs, failed on lraa-core (and lraa:latest) with "ModuleNotFoundError: No module
+  named 'pytest'". pylib/SQANTI_like_annotator.py and pylib/MockTranscript.py
+  imported pytest and unittest.mock at module level without using them, and
+  lraa-core ships without pytest. The imports are removed, and
+  pylib/test_sqanti_like_annotator_no_pytest.py imports both modules with pytest
+  blocked.
+
+
 v0.44.1
 
 - FIXED: a GTF read back in and re-exported (collapse_LRAA_GTF_by_splice_pattern.py,
