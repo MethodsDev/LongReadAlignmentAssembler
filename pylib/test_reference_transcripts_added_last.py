@@ -69,11 +69,13 @@ _EXPECTED_TAIL = {
     ),
     # bam_file_for_priors is the pass-1 theta bam: in cluster-guided single-cell
     # the splice graph comes from the shared sg bam while priors must come from
-    # this cluster's own reads. Appended, never inserted.
+    # this cluster's own reads. Appended, never inserted. keep_boundary_annotations_for
+    # (the final quant leaves the reported models' TSS / PolyA claims as assembled) is
+    # appended after it, likewise keyword-only in practice.
     "run_quant_only": (
-        "rescue_summary_path",
         "reference_transcripts",
         "bam_file_for_priors",
+        "keep_boundary_annotations_for",
     ),
 }
 

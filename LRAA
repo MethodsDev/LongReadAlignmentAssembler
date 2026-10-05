@@ -6536,6 +6536,11 @@ def run_quant_only(
     # every caller passes the first thirteen positionally, and pass 1 falls back
     # to today's resolution when this is absent.
     bam_file_for_priors=None,
+    # Transcripts whose TSS / PolyA flags and read counts the remap below must leave as
+    # they are (LRAA.assign_transcripts_paths_in_graph). The final quant after assembly
+    # passes the models it is about to report: quantification assigns reads to them, it
+    # does not change what is written to the gtf.
+    keep_boundary_annotations_for=None,
 ):
 
     # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
@@ -6656,7 +6661,9 @@ def run_quant_only(
 
     lraa_obj = LRAA(sg, component_workers, core_lease=CORE_LEASE)
     logger.info("\n//SECTION QUANT: Assigning input transcript paths in graph")
-    input_transcripts = lraa_obj.assign_transcripts_paths_in_graph(input_transcripts)
+    input_transcripts = lraa_obj.assign_transcripts_paths_in_graph(
+        input_transcripts, keep_boundary_annotations_for=keep_boundary_annotations_for
+    )
 
     if not input_transcripts:
         logger.info(
@@ -7725,6 +7732,14 @@ def run_transcript_assembly(
         # is the reference subset, and only it may waive the internal-priming veto.
         reference_transcripts=reference_transcripts_incl_in_graph,
         bam_file_for_priors=bam_file_for_priors,
+        # The final quant rebuilds the splice graph and remaps the models onto it; left
+        # alone, that remap would reset their TSS / PolyA flags and counts from the new
+        # graph's boundary nodes -- nodes up to 25 bp inside a model's end, whose
+        # coordinates quantification does not move. Measured: DDAH2 (chr6, PBMC Kinnex
+        # ref-guided v0.44.0), five models with no TSS at assembly came out TSS "True"
+        # on one node at 31,730,260 while ending at 31,730,260-263 and 268, and the TSS
+        # bed listed that site five times. The models reported are the ones assembled.
+        keep_boundary_annotations_for=transcripts,
     )
 
     # reset

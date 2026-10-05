@@ -1706,7 +1706,7 @@ class LRAA:
         transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
 
     def assign_transcripts_paths_in_graph(
-        self, transcripts, snap_terminals_for=None
+        self, transcripts, snap_terminals_for=None, keep_boundary_annotations_for=None
     ):
         """
         Assigns paths in the splice graph to input transcripts.
@@ -1717,6 +1717,16 @@ class LRAA:
         whose terminal exon ends are moved onto the TSS/POLYA node their remapped path
         ends on -- see _snap_terminals_to_boundary_nodes. Pass only models this run
         assembled; reference/imported models keep their coordinates.
+
+        keep_boundary_annotations_for: optional collection of transcripts (matched by
+        identity) whose TSS / PolyA flags and read counts are kept as they were on
+        entry. The remap sets these from the path's end nodes, which is right when the
+        graph is the one the model was built on and wrong when it is not: the final
+        quant rebuilds the graph, and refine_{TSS,PolyA}_simple_path there can trim a
+        path onto a boundary node up to max_dist_between_alt_*_sites / 2 inside the
+        terminal exon, so the model would claim that node's site and support while its
+        coordinates -- which quantification does not change -- still end elsewhere. The
+        path itself is still replaced, since reads are assigned against it.
         """
         snap_ids = (
             {id(t) for t in snap_terminals_for} if snap_terminals_for else set()
@@ -1777,7 +1787,18 @@ class LRAA:
         skipped_transcript_ids = []  # track IDs of transcripts that failed to map
         successfully_mapped = []  # track transcripts that were successfully mapped
 
+        keep_ids = (
+            {id(t) for t in keep_boundary_annotations_for}
+            if keep_boundary_annotations_for
+            else set()
+        )
+
         for idx, transcript in enumerate(transcripts, 1):
+            kept_boundary = (
+                transcript.get_boundary_annotations()
+                if id(transcript) in keep_ids
+                else None
+            )
             # A path is valid only for the splice graph that produced it. Clear
             # paths inherited from earlier ME/SE graph instances before remapping.
             transcript.clear_simple_path()
@@ -1857,6 +1878,9 @@ class LRAA:
                     transcript.set_PolyA_read_count(
                         splice_graph.get_node_obj_via_id(node_id).get_read_support()
                     )
+
+            if kept_boundary is not None:
+                transcript.set_boundary_annotations(kept_boundary)
 
             successfully_mapped.append(transcript)  # Add to successfully mapped list
 

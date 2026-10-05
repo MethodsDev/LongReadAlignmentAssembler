@@ -99,3 +99,48 @@ def test_path_without_boundary_nodes_is_untouched():
 
     assert not t.has_PolyA()
     assert t.get_exon_segments() == [[100, 150], [200, 260]]
+
+
+def test_kept_boundary_annotations_survive_a_remap_onto_another_node():
+    # The final quant remaps onto a rebuilt graph whose TSS node lies inside the model's
+    # first exon. Without keep_boundary_annotations_for the remap would make the model
+    # claim that node (TSS "True", its read count) while its end, which quantification
+    # does not move, stays where it was -- the DDAH2 case.
+    tss = TSS("chr1", 255, 255, "-", 405)
+    lraa = _lraa_with_nodes("-", [tss], ["E:1", "I:1", "E:2", tss.get_id()])
+    t = _transcript([[100, 150], [200, 260]], "-")
+    t.set_simple_path(["E:1", "I:1", "E:2"])  # as assembled: no TSS
+    assert not t.has_TSS()
+
+    lraa.assign_transcripts_paths_in_graph([t], keep_boundary_annotations_for=[t])
+
+    assert not t.has_TSS()
+    assert t.get_TSS_read_count() is None
+    assert t.get_exon_segments() == [[100, 150], [200, 260]]
+    # the path is still the new graph's, for read assignment
+    assert t.get_simple_path()[-1] == tss.get_id()
+
+
+def test_kept_boundary_annotations_keep_an_assembled_claim_and_count():
+    polyA = PolyAsite("chr1", 243, 243, "+", 5)
+    lraa = _lraa_with_nodes("+", [polyA], ["E:1", "I:1", "E:2"])  # rebuilt graph: no PolyA node
+    t = _transcript([[100, 150], [200, 243]], "+")
+    t.set_simple_path(["E:1", "I:1", "E:2", "POLYA:old"])
+    t.set_PolyA_read_count(17)
+    assert t.has_PolyA()
+
+    lraa.assign_transcripts_paths_in_graph([t], keep_boundary_annotations_for=[t])
+
+    assert t.has_PolyA()
+    assert t.get_PolyA_read_count() == 17
+
+
+def test_without_keep_the_remap_sets_claims_from_the_path():
+    tss = TSS("chr1", 255, 255, "-", 405)
+    lraa = _lraa_with_nodes("-", [tss], ["E:1", "I:1", "E:2", tss.get_id()])
+    t = _transcript([[100, 150], [200, 260]], "-")
+
+    lraa.assign_transcripts_paths_in_graph([t])
+
+    assert t.has_TSS()
+    assert t.get_TSS_read_count() == 405

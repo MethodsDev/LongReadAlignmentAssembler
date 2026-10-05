@@ -337,7 +337,7 @@ def test_transcripts_filtered_out_of_the_graph_report_the_reads_they_saw(
     monkeypatch.setattr(
         LRAA_module.LRAA,
         "assign_transcripts_paths_in_graph",
-        lambda self, transcripts: [],
+        lambda self, transcripts, **kwargs: [],
     )
 
     summary = tmp_path / "case3.tsv"

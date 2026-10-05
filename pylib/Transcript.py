@@ -331,6 +331,27 @@ class Transcript(GenomeFeature):
 
         return None
 
+    def get_boundary_annotations(self):
+        """The model's TSS / PolyA claims as they stand: (has_TSS, has_PolyA,
+        TSS_read_count, PolyA_read_count), for set_boundary_annotations to put back
+        after a remap that must not change them."""
+        return (
+            self.has_TSS(),
+            self.has_PolyA(),
+            self.get_TSS_read_count(),
+            self.get_PolyA_read_count(),
+        )
+
+    def set_boundary_annotations(self, boundary):
+        """Pin the TSS / PolyA claims to `boundary` (from get_boundary_annotations),
+        whatever the current simple path ends on. Held in the imported-flag slots,
+        which has_TSS / has_PolyA consult before the path."""
+        has_TSS, has_PolyA, TSS_read_count, PolyA_read_count = boundary
+        self._imported_has_TSS = has_TSS
+        self._imported_has_POLYA = has_PolyA
+        self._TSS_read_count = TSS_read_count if has_TSS else None
+        self._PolyA_read_count = PolyA_read_count if has_PolyA else None
+
     def refresh_boundary_annotations_from_simple_path(self):
         """
         After remapping a transcript onto the current splice graph, boundary
