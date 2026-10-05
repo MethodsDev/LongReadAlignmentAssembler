@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-import pytest
-from unittest.mock import MagicMock, patch
-
 
 # --- Minimal Transcript/Feature class for testing --- #
 class MockTranscript:

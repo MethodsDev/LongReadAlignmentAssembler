@@ -4,9 +4,6 @@ import sys, os, re
 import logging
 from collections import defaultdict
 import intervaltree as itree
-import pytest
-import unittest
-from unittest.mock import MagicMock
 from MockTranscript import MockTranscript
 
 from Transcript import Transcript, GTF_contig_to_transcripts
