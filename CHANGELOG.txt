@@ -1,3 +1,35 @@
+Unreleased (devel)
+
+- SQANTI-like_cats_for_reads_or_isoforms.py --CPU N classifies a bam one contig per
+  worker. Each worker loads only its contig's reference transcripts (the parent
+  splits the reference GTF in one pass), so per-worker memory stays small and the
+  whole reference is never loaded in one process (whole-genome mouse GENCODE: 62 s
+  and 1.7 GB; one chromosome: 7 s and 157 MB). The parts are concatenated in bam
+  header order with unplaced reads last, so the tsv, summary counts and bam records
+  match a serial run exactly. Needs a bam index; --CPU 1 (the default) is the
+  unchanged serial path. testing/read_to_isoform_class_assignments
+  test_parallel_parity checks serial against --CPU 4, including unplaced reads and
+  a contig with reads but no annotation.
+  MEASURED on a simulated mouse bam (33.8M records, 19.8M primary alignments, 44
+  contigs, 22 GB) against whole-genome GENCODE vM32 with --CPU 16: 10.4 min (9.3 min
+  classifying, ~1 min concatenating the 22 GB output bam), largest worker 231 MB.
+  The serial run, extrapolated from a 615k-read chr19 slice, is ~58 min. The
+  largest contigs and bam I/O set the floor; splitting large contigs into regions
+  would balance it further.
+- WDL/LRAA-sqanti-like-reads-eval.wdl: new `cpu` input (default 8) passed as --CPU
+  and as the task's runtime cpu; the bam and bai are linked side by side in the
+  task, and the bam is indexed there if no bai is given.
+- CHANGED: the SQANTI-like WDLs' image input is now `docker_sc` (was `docker`). A
+  Terra config saved under the v0.17.7 WDL kept `docker = lraa:latest` (lraa-core,
+  no R), so the summary plot failed after every read had been classified. With the
+  rename the stale value no longer applies and the lraa-sc default is used.
+- SQANTI-like_cats_for_reads_or_isoforms.py exits at startup if Rscript is not on
+  PATH, instead of after classifying everything.
+- make test_wdls now runs both SQANTI-like WDLs against the :testing lraa-sc image
+  and checks their outputs; the multi-sample inputs JSON named files removed in
+  7389bbe0 and could not start.
+
+
 v0.44.2
 
 - FIXED: util/SQANTI-like_cats_for_reads_or_isoforms.py, and so the sqanti-like

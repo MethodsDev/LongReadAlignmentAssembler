@@ -14,6 +14,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         # default) cannot carry over and run this on lraa-core, which has no R.
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int? min_disk_GB
+
+        # --input_BAM only: contigs classified in parallel.
+        Int cpu = 8
     }
 
 
@@ -25,7 +28,8 @@ workflow LRAA_sqanti_like_reads_eval_wf {
           input_BAI = input_BAI,
           input_GTF = input_GTF,
           docker = docker_sc,
-          min_disk_GB = min_disk_GB
+          min_disk_GB = min_disk_GB,
+          cpu = cpu
     }
 
     output {
@@ -51,6 +55,7 @@ task LRAA_sqanti_like_reads_eval_task {
 
         String docker
         Int? min_disk_GB
+        Int cpu
     }
 
     
@@ -59,7 +64,17 @@ task LRAA_sqanti_like_reads_eval_task {
  
         if [[ "~{input_BAM}" != "" ]]; then
 
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam ~{input_BAM}
+             # The parallel mode reads the bam by contig, so it needs the index beside
+             # it; the bam and bai can be localized to different directories. Link
+             # both here, and index only if no bai was given.
+             ln -s ~{input_BAM} input.bam
+             if [[ "~{input_BAI}" != "" ]]; then
+                 ln -s ~{input_BAI} input.bam.bai
+             else
+                 samtools index -@ ~{cpu} input.bam
+             fi
+
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU ~{cpu}
 
         elif [[ "~{input_GTF}" != "" ]]; then
  
@@ -85,6 +100,7 @@ task LRAA_sqanti_like_reads_eval_task {
     docker: docker
     disks: "local-disk " + (if defined(min_disk_GB) && ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 ) < select_first([min_disk_GB]) then select_first([min_disk_GB]) else ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 )) + " HDD"
     memory: "32G"
+    cpu: cpu
   }
 
 

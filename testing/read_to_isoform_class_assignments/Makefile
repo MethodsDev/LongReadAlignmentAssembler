@@ -1,4 +1,4 @@
-test: test_single test_multi test_code
+test: test_single test_multi test_code test_parallel_parity
 
 
 test_single:
@@ -12,6 +12,19 @@ test_multi:
 
 test_code:
 	pytest ./sqanti-like_code_test.py 
+
+# --CPU classifies one contig per worker and concatenates the parts; it must
+# reproduce the serial run exactly: rows, summary order, and every bam record.
+test_parallel_parity:
+	python3 make_parallel_parity_fixture.py data/sim.fasta.mm2.bam test.par.fixture.bam data/SIRVs1-7.annot.gtf test.par.ref_noSIRV7.gtf
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.fixture.bam --output_prefix test.par.cpu1 --CPU 1
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.fixture.bam --output_prefix test.par.cpu4 --CPU 4
+	cmp test.par.cpu1.iso_cats.tsv test.par.cpu4.iso_cats.tsv
+	cmp test.par.cpu1.iso_cats.summary_counts.tsv test.par.cpu4.iso_cats.summary_counts.tsv
+	samtools view -h --no-PG test.par.cpu1.iso_cats.bam > test.par.cpu1.sam
+	samtools view -h --no-PG test.par.cpu4.iso_cats.bam > test.par.cpu4.sam
+	cmp test.par.cpu1.sam test.par.cpu4.sam
+	@echo "ok: --CPU 4 matches the serial run"
 
 include ../lraa_test_docker.mk
 
