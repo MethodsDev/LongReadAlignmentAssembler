@@ -16,6 +16,19 @@ library(cowplot)
 
 SITE_KINDS = c("TSS", "PolyA")
 
+
+# Write a figure to `file` (pdf), unless it already exists: re-knitting a notebook
+# then leaves existing figure files untouched (cairo_pdf output differs byte-wise from
+# run to run even when the figure does not). options(site_usage.overwrite_figures = TRUE)
+# rewrites them.
+save_figure = function(p, file, width, height) {
+    if (is.null(file)) return(invisible(FALSE))
+    if (file.exists(file) && ! isTRUE(getOption("site_usage.overwrite_figures", FALSE))) return(invisible(FALSE))
+    ggsave(p, file = file, width = width, height = height,
+           device = if (capabilities("cairo")) cairo_pdf else "pdf")
+    invisible(TRUE)
+}
+
 # classify_site_pairs_by_splicing.py's classes, in reporting order, with display names
 SPLICING_CLASSES = c("alt_terminal_usage" = "alternative terminal usage",
                      "alt_splicing:terminal_exon" = "alt splicing: terminal exon",
@@ -320,10 +333,7 @@ plot_site_event = function(event, kind, res, site_counts, smooth_graph = NULL, c
                   plot_site_event_expression(event, kind, res, clusters) + theme(plot.margin = margin(t = 18, r = 6, b = 6, l = 18)),
                   ncol = 1, rel_heights = c(1.15, 1, 0.95), labels = c("A", "B", "C"))
 
-    if (! is.null(file)) {
-        ggsave(p, file = file, width = width, height = height,
-               device = if (capabilities("cairo")) cairo_pdf else "pdf")
-    }
+    save_figure(p, file, width, height)
     p
 }
 
@@ -516,10 +526,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
     if (! is.null(title)) {
         p = plot_grid(ggdraw() + draw_label(title, x = 0.01, hjust = 0, size = 12), p, ncol = 1, rel_heights = c(0.04, 1))
     }
-    if (! is.null(file)) {
-        ggsave(p, file = file, width = if (length(zooms) > 1) width * 1.15 else width, height = height,
-               device = if (capabilities("cairo")) cairo_pdf else "pdf")
-    }
+    save_figure(p, file, if (length(zooms) > 1) width * 1.15 else width, height)
     p
 }
 
