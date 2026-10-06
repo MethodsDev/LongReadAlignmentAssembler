@@ -538,15 +538,29 @@ count_isoform_reads_by_cluster = function(tracking, cell_clusters, unique_FSM_on
 }
 
 
+# Path of a file in the LRAA checkout: under $LRAA_HOME if set; else found through this
+# helper's own symlink in the working directory (notebooks link site_usage_funcs.R from
+# LRAA's util/sc/notebook_templates/), which holds whichever user runs R -- RStudio may
+# run as a different user, whose ~ is not the checkout owner's; else ~/GITHUB/MDL/.
+lraa_util_path = function(rel) {
+    home = Sys.getenv("LRAA_HOME")
+    if (home == "") {
+        link = Sys.readlink("site_usage_funcs.R")
+        home = if (! is.na(link) && nzchar(link)) normalizePath(file.path(dirname(link), "../../.."), mustWork = FALSE)
+               else path.expand("~/GITHUB/MDL/LongReadAlignmentAssembler")
+    }
+    file.path(home, rel)
+}
+
+
 # Read-track data for a set of site-switch events (util/sc/site_usage/
 # build_site_event_read_tracks.py), cached in `outdir`: rerun only when the events or the
 # script change. `events`: tag, gene_symbol, kind, gained_site, lost_site, cluster_A,
 # cluster_B. Returns the manifest (one row per event).
 build_site_event_read_tracks = function(events, outdir, sites, gtf, cluster_quant_tar, tracking, bam,
                                         cell_clusters, max_reads = 30,
-                                        script = file.path(Sys.getenv("LRAA_HOME", "~/GITHUB/MDL/LongReadAlignmentAssembler"),
-                                                           "util/sc/site_usage/build_site_event_read_tracks.py")) {
-    script = path.expand(script)
+                                        script = lraa_util_path("util/sc/site_usage/build_site_event_read_tracks.py")) {
+    if (! file.exists(script)) stop("cannot find ", script, "; set LRAA_HOME to the LRAA checkout")
     dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
     events_tsv = file.path(outdir, "events.tsv")
     new_tsv = file.path(outdir, "events.tsv.new")
