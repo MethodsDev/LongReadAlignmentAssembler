@@ -1,28 +1,15 @@
 {
-    "LRAA_sqanti_like_multi_sample_summary_wf.output_prefix" : "test.multi.byWdl",
-    "LRAA_sqanti_like_multi_sample_summary_wf.iso_cats_summary_counts_tsv_files" : [
-        "data/example_summaries/SM-NMFY3.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NMFYG.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NMLL2.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NS26G.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NS26X.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NSUX7.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-NSUXA.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-OCU2O.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-OCU2P.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-OCW8X.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-ODCV8.iso_cats.summary_counts.tsv",
-        "data/example_summaries/SM-OF5TA.iso_cats.summary_counts.tsv"
+    "LRAA_sqanti_like_multi_sample_summary_wf.output_prefix": "test.multi.byWdl",
+    "LRAA_sqanti_like_multi_sample_summary_wf.iso_cats_summary_counts_tsv_files": [
+        "data/example_summaries/CL_BT474_E0_sirv.iso_cats.summary_counts.tsv.gz",
+        "data/example_summaries/CL_HG002_E0_sirv.iso_cats.summary_counts.tsv.gz",
+        "data/example_summaries/CL_K562_E0_sirv.iso_cats.summary_counts.tsv.gz",
+        "data/example_summaries/CL_UHRR_E0_sirv.iso_cats.summary_counts.tsv.gz"
     ],
-    "LRAA_sqanti_like_multi_sample_summary_wf.iso_cats_raw_counts_tsv_files" : [
-        "data/example_iso_cats/SIRV1.iso_cats.tsv",
-        "data/example_iso_cats/SIRV2.iso_cats.tsv",
-        "data/example_iso_cats/SIRV3.iso_cats.tsv",
-        "data/example_iso_cats/SIRV4.iso_cats.tsv",
-        "data/example_iso_cats/SIRV5.iso_cats.tsv",
-        "data/example_iso_cats/SIRV6.iso_cats.tsv",
-        "data/example_iso_cats/SIRV7.iso_cats.tsv"
+    "LRAA_sqanti_like_multi_sample_summary_wf.iso_cats_raw_counts_tsv_files": [
+        "data/example_summaries/indiv_cats/CL_BT474_E0_sirv.iso_cats.tsv.gz",
+        "data/example_summaries/indiv_cats/CL_HG002_E0_sirv.iso_cats.tsv.gz",
+        "data/example_summaries/indiv_cats/CL_K562_E0_sirv.iso_cats.tsv.gz",
+        "data/example_summaries/indiv_cats/CL_UHRR_E0_sirv.iso_cats.tsv.gz"
     ]
 }
-
-

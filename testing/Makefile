@@ -84,6 +84,7 @@ test_wdls:
 	cd sep_contigs && $(MAKE) test_wdls
 	cd single_contig && $(MAKE) test_wdls
 	cd single_cells && $(MAKE) test_wdls
+	cd read_to_isoform_class_assignments && $(MAKE) test_wdls
 
 
 # The whole wdl suite under Apptainer/Singularity rather than Docker.  One
