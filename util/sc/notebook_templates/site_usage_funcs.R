@@ -599,6 +599,7 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     gained_pos = as.numeric(m$gained_pos)
     lost_pos = as.numeric(m$lost_pos)
     ev = tibble(gene_key = paste(m$gene_symbol, m$chrom, m$strand, sep = "|"),
+                gained_site = m$gained_site, lost_site = m$lost_site,
                 gained_pos = gained_pos, lost_pos = lost_pos)
     site_lab = unname(site_event_labels(ev, kind))
     iso = function(x) sub(".*:", "", x)

@@ -150,7 +150,18 @@ run_dexseq <- function(cm, sample_clusters) {
     dxd <- DEXSeqDataSet(cm, sample_data, design=~sample + exon + cluster:exon,
                          featureID=sites$feature_tag[match(rownames(cm), sites$site_id)],
                          groupID=sites$group_tag[match(rownames(cm), sites$site_id)])
-    estimateSizeFactors(dxd)
+    # The default median-of-ratios size factors need at least one site with no zero
+    # count in any pseudo-replicate. Genome-wide there always is; with only a few genes
+    # (a small test set, a --max_genes trial) there may be none, so fall back to DESeq2's
+    # "poscounts" geometric means (zeros left out), which DESeq2 recommends for sparse
+    # counts. Untouched whenever the default works.
+    tryCatch(estimateSizeFactors(dxd), error = function(e) {
+        cts <- featureCounts(dxd)
+        geo_means <- apply(cts, 1, function(x) if (all(x == 0)) 0 else exp(sum(log(x[x > 0])) / length(x)))
+        msg("size factors: every site has a zero in some pseudo-replicate; using poscounts geometric means")
+        sizeFactors(dxd) <- DESeq2::estimateSizeFactorsForMatrix(cts, geoMeans = geo_means)
+        dxd
+    })
 }
 
 seed_results <- list()

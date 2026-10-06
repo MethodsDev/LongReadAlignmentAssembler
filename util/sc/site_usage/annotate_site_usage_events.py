@@ -81,10 +81,13 @@ def main():
     sites = pd.read_csv(args.sites, sep="\t", low_memory=False, keep_default_na=False).set_index("site_id")
 
     events = call_events(pw, args.fdr, args.min_delta, args.min_gene_reads)
-    logger.info("%s: %d events in %d genes", kind, len(events), events.gene_key.nunique())
     if events.empty:
-        events.to_csv(args.output, sep="\t", index=False)
+        logger.info("%s: no events", kind)
+        pd.DataFrame(columns=["gene_key", "cluster_A", "cluster_B", "gained_site", "lost_site", "abs_delta",
+                              "gene_symbol", "high_confidence", "switch_class", "event_type", "flags"]).to_csv(
+            args.output, sep="\t", index=False)
         return
+    logger.info("%s: %d events in %d genes", kind, len(events), events.gene_key.nunique())
 
     events = events.merge(genes[["gene_key", "gene_symbol", "n_seeds_significant", "median_q"]], on="gene_key")
 
