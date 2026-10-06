@@ -1369,6 +1369,71 @@ plot_dtu_pair_heatmap <- function(DTU_results, tx_dom, tx_alt) {
 # Well-supported alt-termini DTU examples
 #####################################
 
+#####################################
+# Isoform switch class of a DTU comparison
+#####################################
+
+# A significant change in isoform fractions need not be a switch: the fractions also move
+# when only one isoform's expression changes, or when both fall (or rise) unevenly. This
+# adds each comparison's per-isoform expression changes, from the cluster pseudobulk counts
+# as CPM (library size = the cluster's column sum), oriented to the isoform gaining share
+# (the sign of delta_pi):
+#   gainer_log2FC, loser_log2FC  log2((CPM_B + 1) / (CPM_A + 1)) of the isoform gaining /
+#                                losing share, sign-flipped when it gains share in cluster A
+#   switch_class                 at min_fold_change, the same read from either cluster:
+#                                "reciprocal"          the two isoforms move in opposite
+#                                                      directions (gainer up, loser down)
+#                                "one isoform changes" one moves, the other stays within
+#                                                      the threshold
+#                                "concordant"          both move the same way (both up or
+#                                                      both down), the fractions shifting
+#                                                      only because they move unevenly
+#                                "neither"             neither moves past the threshold
+#                                Which isoform "gains" depends on reading the comparison
+#                                from A to B or B to A (a gainer rising in one direction is
+#                                a loser falling in the other), so the classes do not
+#                                distinguish gainer from loser or up from down.
+#   switch_strength              min(gainer_log2FC, -loser_log2FC): how far both move the
+#                                switch's way
+# Rows with comma-joined multi-isoform ids, or ids / clusters absent from counts_matrix, get
+# NA. counts_matrix must be the matrix the DTU test ran on: the isoform pseudobulk for an
+# isoform-level table, the splice-pattern pseudobulk for a splice-pattern one.
+annotate_dtu_switch_class = function(dtu_results, counts_matrix = cluster_counts_matrix, min_fold_change = 1.5) {
+
+    counts = as.matrix(counts_matrix)
+    lib_size = colSums(counts)
+    threshold = log2(min_fold_change)
+
+    dom_row = match(dtu_results$dominant_transcript_ids, rownames(counts))
+    alt_row = match(dtu_results$alternate_transcript_ids, rownames(counts))
+    col_A = match(dtu_results$cluster_A, colnames(counts))
+    col_B = match(dtu_results$cluster_B, colnames(counts))
+
+    cpm = function(r, cl) counts[cbind(r, cl)] / lib_size[cl] * 1e6
+    lfc = function(r) log2((cpm(r, col_B) + 1) / (cpm(r, col_A) + 1))
+
+    usable = ! grepl(",", dtu_results$dominant_transcript_ids) & ! grepl(",", dtu_results$alternate_transcript_ids) &
+        ! is.na(dom_row) & ! is.na(alt_row) & ! is.na(col_A) & ! is.na(col_B)
+
+    orientation = sign(as.numeric(dtu_results$delta_pi))
+    gainer = ifelse(usable, lfc(dom_row) * orientation, NA_real_)
+    loser = ifelse(usable, lfc(alt_row) * orientation, NA_real_)
+
+    dtu_results %>%
+        mutate(gainer_log2FC = gainer,
+               loser_log2FC = loser,
+               switch_class = case_when(
+                   ! usable ~ NA_character_,
+                   gainer >= threshold & loser <= -threshold ~ "reciprocal",
+                   (gainer >= threshold & loser >= threshold) | (gainer <= -threshold & loser <= -threshold) ~ "concordant",
+                   abs(gainer) >= threshold | abs(loser) >= threshold ~ "one isoform changes",
+                   TRUE ~ "neither"),
+               switch_strength = pmin(gainer, -loser))
+}
+
+SWITCH_CLASS_LEVELS = c("reciprocal", "one isoform changes", "concordant", "neither")
+
+
 # Per-isoform read support from the cluster-guided quantification (one quant.expr per
 # cluster, in cluster_quant_expr_tarball), summed over clusters and keyed by the
 # gene-symbol-prefixed ids used elsewhere, with each isoform's splice-pattern id:
@@ -1418,8 +1483,11 @@ get_splice_pattern_read_support = function(cluster_quant_expr_tarball, transcrip
 #   min_uniq_read_frac      share of the isoform's assigned reads that were assigned uniquely
 #   min_terminus_reads      reads supporting the terminus that differs (TSS_read_count / PolyA_read_count)
 #   PolyA sites             a PAS hexamer and no internal-priming flag
-# and the differing termini at least min_termini_separation bp apart, so that one broad
-# site called as two does not count as a switch.
+# and the differing termini at least min_TSS_separation (TSS) or min_PolyA_separation
+# (PolyA) bp apart, so that one broad
+# site called as two does not count as a switch. supported_relaxed: all of these but the
+# unique FSM reads and the PAS hexamer (internal priming still excluded), for the showcase
+# back-fill; relaxed_checks names what a comparison lacks of the full set.
 #
 # Expects gtf_parsed from parse_inputs, and dtu_results as read by parse_inputs (any
 # gene_id / gene_symbol grouping; cross-gene rows should already be excluded).
@@ -1429,7 +1497,8 @@ get_alt_termini_support = function(dtu_results,
                                    min_uniq_FSM_reads = 5,
                                    min_uniq_read_frac = 0.1,
                                    min_terminus_reads = 20,
-                                   min_termini_separation = 100) {
+                                   min_TSS_separation = 100,
+                                   min_PolyA_separation = 30) {
 
     isoform_read_support = get_isoform_read_support(cluster_quant_expr_tarball, transcript_id_mapping_tsv) %>%
         select(transcript_id, uniq_reads, all_reads, uniq_FSM_reads)
@@ -1446,7 +1515,9 @@ get_alt_termini_support = function(dtu_results,
         left_join(isoform_read_support, by = "transcript_id") %>%
         mutate(across(c(uniq_reads, all_reads, uniq_FSM_reads), ~ coalesce(.x, 0)),
                uniq_read_frac = uniq_reads / pmax(all_reads, 1),
-               PolyA_ok = ! PolyA_called | (PAS != "none" & ! internal_priming))
+               PAS_ok = ! PolyA_called | PAS != "none",
+               not_internally_primed = ! PolyA_called | ! internal_priming,
+               PolyA_ok = PAS_ok & not_internally_primed)
 
     dtu_results %>%
         filter(as.character(significant) %in% c("True", "TRUE"),
@@ -1461,20 +1532,38 @@ get_alt_termini_support = function(dtu_results,
         inner_join(isoform_termini %>% rename_with(~ paste0("alt_", .x)), by = c("alternate_transcript_ids" = "alt_transcript_id")) %>%
         mutate(TSS_separation = abs(dom_TSS_pos - alt_TSS_pos),
                PolyA_separation = abs(dom_PolyA_pos - alt_PolyA_pos),
-               alt_terminus = case_when(TSS_separation >= min_termini_separation & PolyA_separation < min_termini_separation ~ "TSS",
-                                        PolyA_separation >= min_termini_separation & TSS_separation < min_termini_separation ~ "PolyA",
-                                        TSS_separation >= min_termini_separation ~ "both",
+               # polyA sites closer than 100 bp are often distinct, well-used sites (LRAA merges
+               # within 25 bp); closely spaced TSS calls are more often one broad promoter split
+               alt_terminus = case_when(TSS_separation >= min_TSS_separation & PolyA_separation < min_PolyA_separation ~ "TSS",
+                                        PolyA_separation >= min_PolyA_separation & TSS_separation < min_TSS_separation ~ "PolyA",
+                                        TSS_separation >= min_TSS_separation ~ "both",
                                         TRUE ~ "neither"),
                dom_terminus_reads = if_else(alt_terminus == "TSS", dom_TSS_read_count, dom_PolyA_read_count),
                alt_terminus_reads = if_else(alt_terminus == "TSS", alt_TSS_read_count, alt_PolyA_read_count),
                # the model's within-pair share of the dominant isoform, comparable to the read-level share
                model_dom_share_A = dominant_pi_A / (dominant_pi_A + alternate_pi_A),
                model_dom_share_B = dominant_pi_B / (dominant_pi_B + alternate_pi_B),
-               well_supported = alt_terminus %in% c("TSS", "PolyA") &
-                   dom_uniq_FSM_reads >= min_uniq_FSM_reads & alt_uniq_FSM_reads >= min_uniq_FSM_reads &
+               FSM_ok = dom_uniq_FSM_reads >= min_uniq_FSM_reads & alt_uniq_FSM_reads >= min_uniq_FSM_reads,
+               PAS_ok = dom_PAS_ok & alt_PAS_ok,
+               # every model-level check but the unique FSM reads and the PAS hexamer
+               supported_relaxed = alt_terminus %in% c("TSS", "PolyA") &
                    dom_uniq_read_frac >= min_uniq_read_frac & alt_uniq_read_frac >= min_uniq_read_frac &
                    dom_terminus_reads >= min_terminus_reads & alt_terminus_reads >= min_terminus_reads &
-                   dom_PolyA_ok & alt_PolyA_ok)
+                   dom_not_internally_primed & alt_not_internally_primed,
+               well_supported = supported_relaxed & FSM_ok & PAS_ok,
+               relaxed_checks = case_when(! supported_relaxed | well_supported ~ NA_character_,
+                                          ! FSM_ok & ! PAS_ok ~ "no FSM support, no PAS hexamer",
+                                          ! FSM_ok ~ "no FSM support",
+                                          TRUE ~ "no PAS hexamer"))
+}
+
+
+# The comparisons to check against the reads: those with model-level support, with or
+# without the unique-FSM and PAS requirements (the showcase back-fill draws on both). Every
+# notebook sharing a read-check cache must use this same set, or each would invalidate the
+# other's.
+alt_termini_read_check_candidates = function(alt_termini_support) {
+    alt_termini_support %>% filter(well_supported | supported_relaxed)
 }
 
 
@@ -1494,23 +1583,29 @@ run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genom
     write_tsv(candidates %>% select(all_of(candidate_cols)) %>% distinct() %>% arrange(across(all_of(candidate_cols))),
               new_candidates_tsv)
 
+    # the cache is also keyed on the script, so a change in how reads are counted reruns it
+    script = file.path(path.expand(lraa_root), "util/sc/diff_iso_usage/alt_termini_read_check.py")
+    script_md5_file = paste0(output_tsv, ".script_md5")
+    script_md5 = unname(tools::md5sum(script))
+
     if (file.exists(output_tsv) && file.exists(candidates_tsv) &&
-        unname(tools::md5sum(candidates_tsv)) == unname(tools::md5sum(new_candidates_tsv))) {
+        unname(tools::md5sum(candidates_tsv)) == unname(tools::md5sum(new_candidates_tsv)) &&
+        file.exists(script_md5_file) && readLines(script_md5_file, n = 1) == script_md5) {
         message("-reusing read check in ", output_tsv)
     } else {
         file.copy(new_candidates_tsv, candidates_tsv, overwrite = TRUE)
-        script = file.path(path.expand(lraa_root), "util/sc/diff_iso_usage/alt_termini_read_check.py")
         status = system2(script, c("--candidates", candidates_tsv, "--gtf", gtf, "--bam", bam,
                                    "--cell_clusters", cell_clusters, "--genome_fa", genome_fa,
                                    "--site_window", site_window, "--output", output_tsv))
         if (status != 0) {
             stop("alt_termini_read_check.py failed with status ", status)
         }
+        writeLines(script_md5, script_md5_file)
     }
 
     read_tsv(output_tsv, show_col_types = FALSE) %>%
-        select(all_of(candidate_cols), dom_terminus_pos, alt_terminus_pos, n_reads,
-               read_frac_at_dom, read_frac_at_alt, read_frac_elsewhere,
+        select(all_of(candidate_cols), dom_terminus_pos, alt_terminus_pos, n_reads, n_reads_with_key_intron,
+               read_frac_at_dom, read_frac_at_alt, read_frac_elsewhere, read_frac_elsewhere_all_reads,
                reads_dom_A, reads_alt_A, read_dom_share_A, reads_dom_B, reads_alt_B, read_dom_share_B,
                top_read_end_peaks, dom_downstream_A_of_20, alt_downstream_A_of_20)
 }
@@ -1520,8 +1615,9 @@ run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genom
 # moves between the pair's clusters in the model's direction, by at least
 # min_read_share_delta and by at least min_read_vs_model_delta_ratio of the model's own
 # shift (the EM must not be inflating it), with min_reads_per_cluster reads at either
-# terminus in each cluster and no more than max_read_frac_elsewhere of the reads ending
-# away from both termini (a smear there means the termini are not where the reads are).
+# terminus in each cluster and no more than max_read_frac_elsewhere of the intron-carrying
+# reads ending away from both termini (a smear there means the termini are not where the
+# pair's reads are).
 confirm_alt_termini_by_reads = function(support_w_reads,
                                         min_read_share_delta = 0.15,
                                         min_read_vs_model_delta_ratio = 0.5,
@@ -1541,21 +1637,50 @@ confirm_alt_termini_by_reads = function(support_w_reads,
 }
 
 
-# Showcase examples among the read-confirmed comparisons: those whose reads shift by at
-# least min_showcase_read_share_delta between the two clusters, one per gene (its largest
-# shift), genes ordered by that shift. Ranked by the read shift rather than the p-value,
-# since the p-value grows with depth while the shift is what a usage-fraction umap shows.
-select_best_alt_termini_examples = function(confirmed, min_showcase_read_share_delta = 0.25) {
+# Cells per cluster, from the umap_df that parse_inputs loaded, as tibble(cluster, n_cells)
+# with clusters named as in the DTU results ("Cluster_<n>").
+get_cluster_sizes = function() {
+    umap_df %>% count(seurat_clusters, name = "n_cells") %>%
+        transmute(cluster = paste0("Cluster_", seurat_clusters), n_cells)
+}
+
+
+# Keeps the comparisons whose two clusters both hold at least min_cluster_cells cells.
+filter_comparisons_by_cluster_size = function(comparisons, min_cluster_cells) {
+    sizes = get_cluster_sizes()
+    comparisons %>%
+        filter(cluster_A %in% sizes$cluster[sizes$n_cells >= min_cluster_cells],
+               cluster_B %in% sizes$cluster[sizes$n_cells >= min_cluster_cells])
+}
+
+
+# Showcase examples among the read-confirmed comparisons: those that are reciprocal switches
+# (the isoform gaining share goes up in expression, the one losing it goes down; see
+# annotate_dtu_switch_class) and whose reads shift by at least min_showcase_read_share_delta
+# between two clusters that each hold at least min_cluster_cells cells (a shift between a
+# small cluster and a large one rests on few cells), one per gene (its largest shift), genes
+# ordered by that shift.
+# Ranked by the read shift rather than the p-value, since the p-value grows with depth while
+# the shift is what a usage-fraction umap shows. Comparisons without a switch_class are
+# annotated from cluster_counts_matrix.
+select_best_alt_termini_examples = function(confirmed, min_showcase_read_share_delta = 0.25,
+                                            require_reciprocal = TRUE, min_cluster_cells = 200) {
+    if (! "switch_class" %in% colnames(confirmed)) {
+        confirmed = annotate_dtu_switch_class(confirmed)
+    }
     confirmed %>%
-        filter(read_confirmed) %>%
+        filter(well_supported, read_confirmed) %>%
+        filter_comparisons_by_cluster_size(min_cluster_cells) %>%
         group_by(gene_symbol) %>%
         mutate(n_confirmed_comparisons = n()) %>%
-        filter(abs(read_share_delta) >= min_showcase_read_share_delta) %>%
+        filter(abs(read_share_delta) >= min_showcase_read_share_delta,
+               ! require_reciprocal | switch_class %in% "reciprocal") %>%
         arrange(desc(abs(read_share_delta)), pvalue) %>% slice(1) %>% ungroup() %>%
         arrange(desc(abs(read_share_delta))) %>%
         transmute(alt_terminus, gene_symbol, dominant_transcript_ids, alternate_transcript_ids,
                   cluster_A, cluster_B,
                   read_share_delta = round(read_share_delta, 2),
+                  switch_class, gainer_log2FC = round(gainer_log2FC, 2), loser_log2FC = round(loser_log2FC, 2),
                   read_dom_share_A, read_dom_share_B,
                   model_dom_share_A = round(model_dom_share_A, 2), model_dom_share_B = round(model_dom_share_B, 2),
                   delta_pi, alternate_delta_pi, pvalue, n_confirmed_comparisons,
@@ -1564,6 +1689,116 @@ select_best_alt_termini_examples = function(confirmed, min_showcase_read_share_d
                   dom_uniq_read_frac = round(dom_uniq_read_frac, 2),
                   alt_uniq_read_frac = round(alt_uniq_read_frac, 2),
                   dom_terminus_reads, alt_terminus_reads, dom_PAS, alt_PAS, read_frac_elsewhere)
+}
+
+
+# Showcase examples per alt-termini type, back-filled when fewer than n_per_type genes meet
+# every criterion: the criteria are relaxed one at a time from the last one in, and each gene
+# is taken at the strictest tier it reaches, by its largest read shift there. Tiers:
+#   1 "showcase-eligible"       all criteria (select_best_alt_termini_examples)
+#   2 "no FSM support" / "no PAS hexamer"
+#                               all criteria but the unique FSM reads and/or the PAS hexamer
+#                               (supported_relaxed; internal priming still excluded)
+#   3 "read shift < 0.25"       reciprocal, both clusters >= min_cluster_cells, read-confirmed
+#   4 "small cluster"           reciprocal, read-confirmed
+#   5 "not reciprocal"          read-confirmed
+#   6 "not read-confirmed"      model-level support only
+# Tiers 3-6 keep the full model-level support.
+# confirmed: the model-supported comparisons joined to the read check and passed through
+# confirm_alt_termini_by_reads, as for select_best_alt_termini_examples.
+select_alt_termini_showcase = function(confirmed, n_per_type = 10, min_showcase_read_share_delta = 0.25,
+                                       min_cluster_cells = 200) {
+
+    if (! "switch_class" %in% colnames(confirmed)) {
+        confirmed = annotate_dtu_switch_class(confirmed)
+    }
+    sizes = get_cluster_sizes()
+    big = sizes$cluster[sizes$n_cells >= min_cluster_cells]
+
+    candidates = confirmed %>%
+        mutate(read_shift = abs(coalesce(read_share_delta, 0)),
+               reciprocal = switch_class %in% "reciprocal",
+               big_clusters = cluster_A %in% big & cluster_B %in% big,
+               full_criteria = read_confirmed & reciprocal & big_clusters & read_shift >= min_showcase_read_share_delta,
+               tier = case_when(well_supported & full_criteria ~ 1L,
+                                supported_relaxed & full_criteria ~ 2L,
+                                well_supported & read_confirmed & reciprocal & big_clusters ~ 3L,
+                                well_supported & read_confirmed & reciprocal ~ 4L,
+                                well_supported & read_confirmed ~ 5L,
+                                well_supported ~ 6L,
+                                TRUE ~ NA_integer_))
+
+    tier_names = c("showcase-eligible", "relaxed", "read shift < 0.25", "small cluster", "not reciprocal",
+                   "not read-confirmed")
+
+    candidates %>%
+        filter(alt_terminus %in% c("TSS", "PolyA"), ! is.na(tier)) %>%
+        # each gene at the strictest tier it reaches, by its largest read shift there
+        arrange(tier, desc(read_shift), pvalue) %>%
+        group_by(alt_terminus, gene_symbol) %>% slice(1) %>% ungroup() %>%
+        arrange(alt_terminus, tier, desc(read_shift)) %>%
+        group_by(alt_terminus) %>% slice_head(n = n_per_type) %>% ungroup() %>%
+        # tier 2 is named by what it lacks
+        mutate(showcase_tier = if_else(tier == 2L, relaxed_checks, tier_names[tier])) %>%
+        transmute(alt_terminus, showcase_tier, gene_symbol, dominant_transcript_ids, alternate_transcript_ids,
+                  cluster_A, cluster_B, read_share_delta = round(read_share_delta, 2), switch_class,
+                  gainer_log2FC = round(gainer_log2FC, 2), loser_log2FC = round(loser_log2FC, 2),
+                  delta_pi = round(delta_pi, 2), pvalue = signif(pvalue, 2))
+}
+
+
+# How many alt-termini candidates survive each step of the showcase selection, as
+# comparisons (gene x cluster pair) and genes, for alt TSS and alt PolyA. Steps are
+# cumulative: significant with the differing ends far enough apart (TSS >= 100 bp, PolyA >= 30 bp; pairs
+# differing at both ends, or at neither, are counted separately in "set aside"), model-level
+# support (get_alt_termini_support), read-confirmed (confirm_alt_termini_by_reads), a
+# reciprocal expression switch (annotate_dtu_switch_class), both clusters holding at least
+# min_cluster_cells cells, and a read shift of at least min_showcase_read_share_delta
+# (select_best_alt_termini_examples). The last row is the set
+# the showcases are drawn from.
+alt_termini_candidate_funnel = function(alt_termini_support, alt_termini_confirmed,
+                                        min_showcase_read_share_delta = 0.25, min_cluster_cells = 200) {
+
+    if (! "switch_class" %in% colnames(alt_termini_confirmed)) {
+        alt_termini_confirmed = annotate_dtu_switch_class(alt_termini_confirmed)
+    }
+    confirmed = alt_termini_confirmed %>% filter(well_supported, read_confirmed)
+    reciprocal = confirmed %>% filter(switch_class %in% "reciprocal")
+    # the same checks without the unique-FSM and PAS requirements, for the showcase back-fill
+    relaxed = alt_termini_confirmed %>%
+        filter(supported_relaxed, ! well_supported, read_confirmed, switch_class %in% "reciprocal") %>%
+        filter_comparisons_by_cluster_size(min_cluster_cells) %>%
+        filter(abs(read_share_delta) >= min_showcase_read_share_delta)
+
+    steps = list(
+        "significant, differing ends apart (TSS >= 100 bp, PolyA >= 30 bp)" = alt_termini_support %>% filter(alt_terminus %in% c("TSS", "PolyA")),
+        "+ model-level support (FSM, unique reads, termini reads, PAS)" = alt_termini_support %>% filter(well_supported),
+        "+ read-confirmed" = confirmed,
+        "+ reciprocal expression switch" = reciprocal,
+        "+ both clusters >= 200 cells" = filter_comparisons_by_cluster_size(reciprocal, min_cluster_cells),
+        "+ read shift >= 0.25 (showcase-eligible)" = filter_comparisons_by_cluster_size(reciprocal, min_cluster_cells) %>%
+            filter(abs(read_share_delta) >= min_showcase_read_share_delta),
+        "(all checks but unique FSM reads and/or PAS hexamer: back-fill tier 2)" = relaxed)
+
+    funnel = bind_rows(lapply(names(steps), function(step) {
+        steps[[step]] %>%
+            group_by(alt_terminus) %>%
+            summarize(comparisons = n(), genes = n_distinct(gene_symbol), .groups = "drop") %>%
+            mutate(step = step)
+    })) %>%
+        complete(step = names(steps), alt_terminus = c("TSS", "PolyA"), fill = list(comparisons = 0L, genes = 0L)) %>%
+        mutate(step = factor(step, levels = names(steps))) %>%
+        pivot_wider(names_from = alt_terminus, values_from = c(comparisons, genes)) %>%
+        transmute(step,
+                  alt_TSS_genes = genes_TSS, alt_TSS_comparisons = comparisons_TSS,
+                  alt_PolyA_genes = genes_PolyA, alt_PolyA_comparisons = comparisons_PolyA) %>%
+        arrange(step)
+
+    set_aside = alt_termini_support %>% filter(! alt_terminus %in% c("TSS", "PolyA")) %>% count(alt_terminus)
+    message("set aside: ", paste0(set_aside$n, " comparisons differing at ", set_aside$alt_terminus, collapse = "; "),
+            " (ends differing past the separation thresholds at both ends, or at neither)")
+
+    funnel
 }
 
 
@@ -1644,7 +1879,7 @@ format_adj_pvalue = function(p) {
 # the comparison's adjusted p above it.
 #   cluster_pi:   tibble(cluster, isoform_id, pi) for the clusters, in order
 #   band_pvalues: adjusted p of each adjacent comparison, length(clusters) - 1
-draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues) {
+draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues, band_classes = NULL) {
 
     bar_half_width = 0.3
     n = length(clusters)
@@ -1681,6 +1916,9 @@ draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues) 
         mutate(label = paste0(if_else(shift >= 0, "+", "−"), round(abs(shift) * 100), "%"))
 
     pvalue_labels = tibble(x = seq_len(n - 1) + 0.5, label = sapply(band_pvalues, format_adj_pvalue))
+    if (! is.null(band_classes)) {
+        pvalue_labels$label = paste0(pvalue_labels$label, if_else(is.na(band_classes), "", paste0("\n", band_classes)))
+    }
 
     x_labels = cluster_labels$axis_label[match(clusters, cluster_labels$cluster)]
 
@@ -1694,11 +1932,11 @@ draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues) 
                   size = 3.2, color = "#0b0b0b") +
         geom_label(data = shifts, aes(x = x, y = y, label = label),
                    size = 3.2, fill = "white", color = "#0b0b0b", label.size = 0, label.padding = unit(0.12, "lines")) +
-        geom_text(data = pvalue_labels, aes(x = x, y = 1.05, label = label), size = 2.9, color = "#52514c") +
+        geom_text(data = pvalue_labels, aes(x = x, y = 1.06, label = label), size = 2.9, color = "#52514c", lineheight = 0.9) +
         scale_fill_manual(values = setup$fill_values, drop = FALSE, name = NULL) +
         scale_x_continuous(breaks = seq_len(n), labels = x_labels, expand = expansion(add = 0.45)) +
         scale_y_continuous(labels = function(v) paste0(v * 100, "%"), breaks = seq(0, 1, 0.25),
-                           limits = c(0, 1.09), expand = expansion(mult = c(0, 0))) +
+                           limits = c(0, 1.12), expand = expansion(mult = c(0, 0))) +
         labs(x = NULL, y = "share of gene reads") +
         theme_minimal(base_size = 10) +
         theme(panel.grid.major.x = element_blank(), panel.grid.minor = element_blank(),
@@ -1706,16 +1944,14 @@ draw_isoform_share_series = function(cluster_pi, clusters, setup, band_pvalues) 
 }
 
 
-# A DTU pair's top significant comparisons (largest |delta_pi|), one panel each: the two
-# clusters as stacked bars of the pair's isoforms as percentages of the gene's reads (pi, as
-# tested), the gene's other isoforms in gray on top, a band joining each isoform's segments
-# labelled with its shift in percentage points. example needs gene_symbol,
-# dominant_transcript_ids and alternate_transcript_ids; works for transcript or
-# splice-pattern ids, alt termini or alt splicing. isoform_names (named by id) label the
-# isoforms and set their order, bottom up.
-plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL) {
+# The pair's significant comparisons to show, annotated with their switch class: reciprocal
+# switches first (strongest first), then, if there are fewer than n of those, the strongest
+# others by |delta_pi|, shown as context and labelled with their class (reciprocal_only:
+# no context). Only comparisons between clusters of at least min_cluster_cells cells, unless
+# the pair has none; n_comparisons = Inf returns all.
+select_dtu_pair_comparisons = function(example, dtu_results, n_comparisons = 2, counts_matrix = cluster_counts_matrix,
+                                       min_cluster_cells = 200, reciprocal_only = FALSE) {
 
-    setup = dtu_pair_isoform_setup(example, isoform_names)
     dom_id = example$dominant_transcript_ids
     alt_id = example$alternate_transcript_ids
 
@@ -1724,11 +1960,53 @@ plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2,
                (dominant_transcript_ids == dom_id & alternate_transcript_ids == alt_id) |
                (dominant_transcript_ids == alt_id & alternate_transcript_ids == dom_id)) %>%
         mutate(across(c(dominant_pi_A, dominant_pi_B, alternate_pi_A, alternate_pi_B), ~ suppressWarnings(as.numeric(.x)))) %>%
-        arrange(desc(abs(delta_pi)), pvalue) %>%
-        head(n_comparisons)
+        annotate_dtu_switch_class(counts_matrix)
 
     if (nrow(comparisons) == 0) {
         stop("no significant comparisons for ", example$gene_symbol, " ", dom_id, " / ", alt_id)
+    }
+
+    sized = filter_comparisons_by_cluster_size(comparisons, min_cluster_cells)
+    if (nrow(sized) > 0) {
+        comparisons = sized
+    } else {
+        message("  ", example$gene_symbol, ": no significant comparison between clusters of >= ", min_cluster_cells,
+                " cells; showing comparisons with smaller clusters")
+    }
+
+    reciprocal = comparisons %>% filter(switch_class %in% "reciprocal") %>% arrange(desc(switch_strength), pvalue)
+    others = comparisons %>% filter(! switch_class %in% "reciprocal") %>% arrange(desc(abs(delta_pi)), pvalue)
+
+    if (reciprocal_only) {
+        return(reciprocal %>% head(n_comparisons))
+    }
+
+    if (nrow(reciprocal) < n_comparisons) {
+        message("  ", example$gene_symbol, ": ", nrow(reciprocal), " reciprocal switch(es) among its significant comparisons; ",
+                "filling with the largest |delta_pi| as context")
+    }
+
+    bind_rows(reciprocal, others) %>% head(n_comparisons)
+}
+
+
+# A DTU pair's top significant comparisons, one panel each, chosen by
+# select_dtu_pair_comparisons unless given: reciprocal switches first, by switch_strength
+# (see annotate_dtu_switch_class; counts from counts_matrix, by default the
+# cluster_counts_matrix the notebook loaded), then others by |delta_pi| as context. Each
+# panel: the two clusters as stacked bars of the pair's isoforms as percentages of the
+# gene's reads (pi, as tested), the gene's other isoforms in gray on top, a band joining each
+# isoform's segments labelled with its shift in percentage points, and the comparison's
+# adjusted p and switch class above. example needs gene_symbol, dominant_transcript_ids and
+# alternate_transcript_ids; works for transcript or splice-pattern ids, alt termini or alt
+# splicing. isoform_names (named by id) label the isoforms and set their order, bottom up.
+plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL,
+                                        counts_matrix = cluster_counts_matrix, comparisons = NULL) {
+
+    setup = dtu_pair_isoform_setup(example, isoform_names)
+
+    if (is.null(comparisons)) {
+        comparisons = select_dtu_pair_comparisons(example, dtu_results, n_comparisons, counts_matrix)
     }
 
     panels = lapply(seq_len(nrow(comparisons)), function(k) {
@@ -1737,7 +2015,7 @@ plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2,
         cluster_pi = bind_rows(lapply(clusters, function(cl) {
             tibble(cluster = cl, isoform_id = setup$isoform_ids, pi = dtu_row_cluster_pi(row, setup$isoform_ids, cl))
         }))
-        draw_isoform_share_series(cluster_pi, clusters, setup, row$adj_pvalue)
+        draw_isoform_share_series(cluster_pi, clusters, setup, row$adj_pvalue, row$switch_class)
     })
 
     legend = get_legend(panels[[1]])
@@ -1748,6 +2026,91 @@ plot_dtu_pair_cluster_shifts = function(example, dtu_results, n_comparisons = 2,
 
     plot_grid(title, plot_grid(plotlist = panels, nrow = 1), legend,
               ncol = 1, rel_heights = c(0.1, 1, 0.12))
+}
+
+
+# Expression of the pair's two isoforms in a set of clusters, in the order given: CPM bars
+# (pseudobulk reads per million of the cluster's reads), with a line joining each isoform's
+# bars between adjacent clusters labelled with its fold change. Shows whether a share shift
+# comes from the two isoforms moving in opposite directions.
+draw_isoform_expression_series = function(clusters, setup, counts_matrix = cluster_counts_matrix) {
+
+    lib_size = colSums(counts_matrix)
+    offset = 0.18
+    pair_levels = head(setup$isoform_levels, 2)
+
+    expr = expand_grid(cluster = clusters, k = 1:2) %>%
+        mutate(transcript_id = setup$isoform_ids[k],
+               isoform = factor(pair_levels[k], levels = pair_levels),
+               cpm = map2_dbl(transcript_id, cluster, ~ counts_matrix[.x, .y] / lib_size[[.y]] * 1e6),
+               x = match(cluster, clusters),
+               xd = x + if_else(k == 1, -offset, offset))
+
+    fold = expr %>% arrange(isoform, x) %>% group_by(isoform) %>%
+        mutate(next_cpm = lead(cpm), next_xd = lead(xd)) %>% filter(! is.na(next_cpm)) %>% ungroup() %>%
+        mutate(fc = (next_cpm + 1) / (cpm + 1),   # same +1 offset as annotate_dtu_switch_class
+               label = if_else(fc >= 1, paste0(sprintf("%.1f", fc), "× up"), paste0(sprintf("%.1f", 1 / fc), "× down")),
+               lx = (xd + next_xd) / 2, ly = (cpm + next_cpm) / 2)
+
+    cluster_labels = get_cluster_labels() %>%
+        mutate(axis_label = paste0(str_wrap(cell_type, 18), "\n(cluster ", seurat_clusters, "; ", n_cells, " cells)"))
+
+    pair_colors = setNames(ISOFORM_PAIR_COLORS, pair_levels)
+
+    ggplot(expr) +
+        geom_col(aes(x = xd, y = cpm, fill = isoform), width = 2 * offset - 0.02, color = "white", linewidth = 0.5) +
+        geom_segment(data = fold, aes(x = xd, xend = next_xd, y = cpm, yend = next_cpm, color = isoform),
+                     linewidth = 0.6, show.legend = FALSE) +
+        geom_text(aes(x = xd, y = cpm, label = round(cpm)), vjust = -0.4, size = 3, color = "#0b0b0b") +
+        geom_label(data = fold, aes(x = lx, y = ly, label = label), size = 3, fill = "white", color = "#0b0b0b",
+                   label.size = 0, label.padding = unit(0.12, "lines")) +
+        scale_fill_manual(values = pair_colors, name = NULL) +
+        scale_color_manual(values = pair_colors) +
+        scale_x_continuous(breaks = seq_along(clusters), labels = cluster_labels$axis_label[match(clusters, cluster_labels$cluster)],
+                           expand = expansion(add = 0.45)) +
+        scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+        labs(x = NULL, y = "expression (CPM, pseudobulk)") +
+        theme_minimal(base_size = 10) +
+        theme(panel.grid.major.x = element_blank(), panel.grid.minor = element_blank(), legend.position = "bottom")
+}
+
+
+# One expression panel per set of clusters (e.g. the clusters of each comparison shown in the
+# share panels, or a single series), sharing a legend and a title.
+plot_dtu_pair_cluster_expression = function(example, cluster_sets, isoform_names = NULL,
+                                            counts_matrix = cluster_counts_matrix, title = NULL) {
+
+    setup = dtu_pair_isoform_setup(example, isoform_names)
+    panels = lapply(cluster_sets, function(cl) draw_isoform_expression_series(cl, setup, counts_matrix))
+    legend = get_legend(panels[[1]])
+    panels = lapply(panels, function(p) p + theme(legend.position = "none"))
+
+    if (is.null(title)) {
+        title = paste0(example$gene_symbol, ": isoform expression in the same clusters")
+    }
+    title = ggdraw() + draw_label(title, x = 0.04, hjust = 0, size = 12)   # clear of a panel letter
+
+    plot_grid(title, plot_grid(plotlist = panels, nrow = 1), legend,
+              ncol = 1, rel_heights = c(0.1, 1, 0.12))
+}
+
+
+# The pair's top significant comparisons as isoform shares (plot_dtu_pair_cluster_shifts)
+# over the two isoforms' expression in the same clusters (plot_dtu_pair_cluster_expression),
+# so a share shift can be read against what each isoform's expression did.
+plot_dtu_pair_shares_and_expression = function(example, dtu_results, n_comparisons = 2, isoform_names = NULL,
+                                               counts_matrix = cluster_counts_matrix, comparisons = NULL) {
+
+    if (is.null(comparisons)) {
+        comparisons = select_dtu_pair_comparisons(example, dtu_results, n_comparisons, counts_matrix)
+    }
+    cluster_sets = lapply(seq_len(nrow(comparisons)), function(k) c(comparisons$cluster_A[k], comparisons$cluster_B[k]))
+
+    plot_grid(plot_dtu_pair_cluster_shifts(example, dtu_results, isoform_names = isoform_names,
+                                           counts_matrix = counts_matrix, comparisons = comparisons),
+              plot_dtu_pair_cluster_expression(example, cluster_sets, isoform_names = isoform_names,
+                                               counts_matrix = counts_matrix),
+              ncol = 1, rel_heights = c(1, 0.9))
 }
 
 
@@ -1782,7 +2145,8 @@ plot_dtu_pair_cluster_series = function(example, dtu_results, clusters, isoform_
     }
     cluster_pi = cluster_pi %>% distinct(cluster, isoform_id, .keep_all = TRUE)
 
-    p = draw_isoform_share_series(cluster_pi, clusters, setup, sapply(rows, function(r) r$adj_pvalue))
+    band_classes = sapply(rows, function(r) annotate_dtu_switch_class(r)$switch_class)
+    p = draw_isoform_share_series(cluster_pi, clusters, setup, sapply(rows, function(r) r$adj_pvalue), band_classes)
 
     if (is.null(title)) {
         title = paste0(example$gene_symbol, ": isoform shares across clusters")
@@ -1816,14 +2180,17 @@ get_alt_termini_isoform_names = function(example) {
 }
 
 
-# A compact figure for one DTU pair: the SNN-smoothed usage-fraction umaps of the pair over
-# the barplots of its top significant cluster comparisons. isoform_names (named by id)
-# label and order the panels; denominator "selected" colours cells by each isoform's share
-# of the pair's reads, "gene" by its share of the gene's (spliced, if ignore_unspliced) reads.
+# A compact figure for one DTU pair: (A) the SNN-smoothed usage-fraction umaps of the pair,
+# (B) its isoform shares in its top significant cluster comparisons, or across a chosen
+# series of clusters when clusters is given, and (C) the two isoforms' expression in the same
+# clusters. isoform_names (named by id) label and order the panels; denominator "selected"
+# colours cells by each isoform's share of the pair's reads, "gene" by its share of the
+# gene's (spliced, if ignore_unspliced) reads.
 plot_dtu_pair_umaps_and_shifts = function(example, dtu_results, smooth_graph,
                                           isoform_names = NULL, title = NULL,
                                           denominator = c("selected", "gene"), ignore_unspliced = FALSE,
-                                          file = NULL, width = 10, height = 9) {
+                                          clusters = NULL, expression = TRUE,
+                                          file = NULL, width = 10, height = NULL) {
 
     denominator = match.arg(denominator)
     ids = c(example$dominant_transcript_ids, example$alternate_transcript_ids)
@@ -1844,36 +2211,56 @@ plot_dtu_pair_umaps_and_shifts = function(example, dtu_results, smooth_graph,
 
     n_cells = n_distinct(p_umap$layers[[2]]$data$cell_barcode)
     share_of = if (denominator == "selected") "the pair's reads" else "the gene's reads"
-    panel_margin = margin(t = 18, r = 6, b = 6, l = 18)   # room for the A / B panel letters
+    panel_margin = margin(t = 18, r = 6, b = 6, l = 18)   # room for the panel letters
 
     p_umap = p_umap +
         labs(title = title,
              subtitle = paste0("share of ", share_of, " per cell, SNN-smoothed (", format(n_cells, big.mark = ","), " cells)")) +
         theme(plot.margin = panel_margin)
 
-    p_bars = plot_dtu_pair_cluster_shifts(example, dtu_results, isoform_names = isoform_names)
+    if (is.null(clusters)) {
+        comparisons = select_dtu_pair_comparisons(example, dtu_results)
+        p_shares = plot_dtu_pair_cluster_shifts(example, dtu_results, isoform_names = isoform_names, comparisons = comparisons)
+        cluster_sets = lapply(seq_len(nrow(comparisons)), function(k) c(comparisons$cluster_A[k], comparisons$cluster_B[k]))
+    } else {
+        p_shares = plot_dtu_pair_cluster_series(example, dtu_results, clusters, isoform_names = isoform_names) +
+            labs(title = paste0(example$gene_symbol, ": isoform shares across clusters")) +
+            theme(plot.margin = panel_margin)
+        cluster_sets = list(clusters)
+    }
 
-    p = plot_grid(p_umap, p_bars, ncol = 1, rel_heights = c(1.15, 1), labels = c("A", "B"))
+    if (expression) {
+        p_expr = plot_dtu_pair_cluster_expression(example, cluster_sets, isoform_names = isoform_names)
+        p = plot_grid(p_umap, p_shares, p_expr, ncol = 1, rel_heights = c(1.15, 1, 0.95), labels = c("A", "B", "C"))
+    } else {
+        p = plot_grid(p_umap, p_shares, ncol = 1, rel_heights = c(1.15, 1), labels = c("A", "B"))
+    }
 
     if (! is.null(file)) {
-        ggsave(p, file = file, width = width, height = height)
+        if (is.null(height)) {
+            height = if (expression) 13.5 else 9
+        }
+        # cairo renders the minus signs and multiplication signs in the labels
+        ggsave(p, file = file, width = width, height = height,
+               device = if (capabilities("cairo")) cairo_pdf else "pdf")
     }
 
     p
 }
 
 
-plot_alt_termini_umaps_and_shifts = function(example, dtu_results, smooth_graph, file = NULL,
-                                             width = 10, height = 9) {
+plot_alt_termini_umaps_and_shifts = function(example, dtu_results, smooth_graph, clusters = NULL, expression = TRUE,
+                                             file = NULL, width = 10, height = NULL) {
     terminus = if (example$alt_terminus == "TSS") "TSS" else "PolyA"
     plot_dtu_pair_umaps_and_shifts(example, dtu_results, smooth_graph,
                                    isoform_names = get_alt_termini_isoform_names(example),
                                    title = paste0(example$gene_symbol, ": alternative ", terminus, " usage per cell"),
+                                   clusters = clusters, expression = expression,
                                    file = file, width = width, height = height)
 }
 
 
-plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL, dtu_results = NULL) {
+plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL, dtu_results = NULL, label = NULL) {
 
     p = make_diff_iso_usage_compound_plot(example$gene_symbol, 0,
                                           ignore_unspliced = FALSE,
@@ -1883,11 +2270,17 @@ plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL, d
     height = 8
 
     if (! is.null(dtu_results)) {
-        p = plot_grid(p, plot_dtu_pair_cluster_shifts(example, dtu_results), ncol = 1, rel_heights = c(2, 1.1))
-        height = 12
+        p = plot_grid(p, plot_dtu_pair_shares_and_expression(example, dtu_results), ncol = 1, rel_heights = c(2, 2))
+        height = 16
     }
 
-    ggsave(p, file = paste0(example$gene_symbol, ".", file_prefix, ".pdf"), width = 11, height = height)
+    if (! is.null(label)) {
+        p = plot_grid(ggdraw() + draw_label(label, x = 0.01, hjust = 0, size = 12, fontface = "bold"), p,
+                      ncol = 1, rel_heights = c(0.03, 1))
+    }
+
+    ggsave(p, file = paste0(example$gene_symbol, ".", file_prefix, ".pdf"), width = 11, height = height,
+           device = if (capabilities("cairo")) cairo_pdf else "pdf")
 
     p
 }
