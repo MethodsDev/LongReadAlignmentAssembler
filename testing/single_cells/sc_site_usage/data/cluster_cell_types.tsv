@@ -1,0 +1,15 @@
+cluster	cell_type
+0	central memory CD4-positive, alpha-beta T cell
+1	classical monocyte
+2	effector memory CD8-positive, alpha-beta T cell
+3	naive thymus-derived CD4-positive, alpha-beta T cell
+4	effector memory CD8-positive, alpha-beta T cell
+5	CD4-positive, alpha-beta T cell | central memory CD4-positive, alpha-beta T cell
+6	naive B cell
+7	naive thymus-derived CD4-positive, alpha-beta T cell | CD4-positive, alpha-beta T cell
+8	effector memory CD8-positive, alpha-beta T cell | natural killer cell
+9	naive B cell | memory B cell
+10	natural killer cell
+11	non-classical monocyte | CD14-low, CD16-positive monocyte
+12	CD4-positive, alpha-beta T cell
+13	conventional dendritic cell

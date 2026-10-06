@@ -20,6 +20,16 @@ testing/multigene_secondary_quant/data/**
 !testing/multigene_secondary_quant/data/annot.gtf
 !testing/multigene_secondary_quant/data/genome.fa
 !testing/multigene_secondary_quant/data/multigene_secondary.sam
+!testing/single_cells/
+testing/single_cells/**
+!testing/single_cells/sc_site_usage/
+testing/single_cells/sc_site_usage/**
+!testing/single_cells/sc_site_usage/Makefile
+!testing/single_cells/sc_site_usage/README.md
+!testing/single_cells/sc_site_usage/check_results.py
+!testing/single_cells/sc_site_usage/figures.R
+!testing/single_cells/sc_site_usage/data/
+!testing/single_cells/sc_site_usage/data/*
 !testing/mismapping_filter/
 testing/mismapping_filter/**
 !testing/mismapping_filter/Makefile
