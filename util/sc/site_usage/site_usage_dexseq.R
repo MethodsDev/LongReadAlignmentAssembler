@@ -3,6 +3,19 @@
 # Differential TSS or PolyA site usage across cell clusters with DEXSeq on
 # pseudo-replicates.
 #
+# The statistical approach is not new here: testing differential usage of
+# polyA sites (peaks) between single-cell populations with DEXSeq on pseudo-bulk
+# replicates formed by aggregating each population's cells is the approach of
+# Sierra (Patrick et al. 2020, Genome Biology 21:167,
+# doi:10.1186/s13059-020-02071-7; its DUTest) and SCAPE (Zhou et al. 2022,
+# Nucleic Acids Research 50:e66, doi:10.1093/nar/gkac167; cells shuffled into
+# six pseudo-replicates for DEXSeq). This script applies it to LRAA's TSS and
+# PolyA sites, with per-cell counts from long-read read ends
+# (util/sc/site_read_support_to_sparse_matrix.py), and adds stageR site
+# confirmation and seed-stability. DEXSeq: Anders, Reyes & Huber 2012, Genome
+# Research 22:2008, doi:10.1101/gr.133744.111. stageR: Van den Berge et al.
+# 2017, Genome Biology 18:151, doi:10.1186/s13059-017-1277-0.
+#
 # Each cluster's cells are dealt at random into K pseudo-replicates and each
 # replicate's read ends are summed per site (sites play the part of DEXSeq's
 # exon bins, genes its groups). Per gene, DEXSeq compares

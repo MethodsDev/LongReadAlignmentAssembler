@@ -120,6 +120,19 @@ zero rows), and writes `test.site_counts.mtx.gz`, `test.barcodes.tsv.gz`,
 DEXSeq, with a gene's sites standing in for exon bins and genes for groups, run
 separately for TSS and PolyA sites.
 
+**Attribution.** Testing differential site usage between single-cell populations with
+DEXSeq on pseudo-bulk replicates is not new here. It is the approach of Sierra (Patrick
+et al. 2020, *Genome Biology* 21:167, doi:10.1186/s13059-020-02071-7), which aggregates
+each cell population's cells into pseudo-bulk profiles used as DEXSeq replicates to call
+differential polyA-peak usage, and of SCAPE (Zhou et al. 2022, *Nucleic Acids Research*
+50:e66, doi:10.1093/nar/gkac167), which shuffles cells into six pseudo-replicates for
+DEXSeq. We follow that approach. What differs is the input (LRAA's TSS and PolyA sites
+and per-cell counts from long-read ends, rather than peaks called from short-read 3'-tag
+coverage), the inclusion of TSS sites, and two additions (stageR site confirmation,
+stability over several random dealings of cells). DEXSeq: Anders, Reyes & Huber 2012,
+*Genome Research* 22:2008, doi:10.1101/gr.133744.111. stageR: Van den Berge et al. 2017,
+*Genome Biology* 18:151, doi:10.1186/s13059-017-1277-0.
+
 - **Sites tested:** a site must take >= 10% of its gene's read ends in at least one
   cluster with >= 20 gene read ends there, and have >= 10 read ends overall; a gene
   needs >= 2 such sites (and cross-gene / unassigned sites are excluded).
