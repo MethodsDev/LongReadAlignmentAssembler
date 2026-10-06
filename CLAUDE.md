@@ -13,6 +13,10 @@
   release for HEAD), **stop and ask**. Never move `main`, create a tag or publish a GitHub
   release to get past the check; that check is the release decision.
 - Never hand-retag `:latest` or bare version tags. See `Docker/README.md`, "Tags".
+- `:latest` is reserved for official releases in EVERY repository, including the dependency
+  images `lraa-base` and `lraa-sc-base`. `Docker/build_docker.deps.sh` writes only a dated
+  tag and records it in `Docker/DEPS_TAG.txt`, which the testing and release builds read;
+  commit that file to move devel onto a new dependency set.
 
 ## Branches
 

@@ -151,9 +151,11 @@ echo "staged checkout `du -h lraa_checkout.tar.gz | cut -f1` for ${LRAA_CO} (tes
 # id that invalidated every layer below FROM in Dockerfile.sc -- 3583 s of
 # recompiling Seurat on the v0.34.0 build.  build_docker.deps.sh owns them.
 #
-# Pinnable: set LRAA_DEPS_TAG to a dated tag from that script to build against a
-# specific dependency set rather than whatever :latest is today.
-LRAA_DEPS_TAG=${LRAA_DEPS_TAG:-latest}
+# The dated set named in DEPS_TAG.txt, so a commit builds against the dependency
+# set it was tested with. Dependency images have no :latest in use: that tag is
+# reserved for official releases and build_docker.deps.sh does not write it.
+# Override with LRAA_DEPS_TAG=<YYYYMMDD> to try another set.
+LRAA_DEPS_TAG=${LRAA_DEPS_TAG:-`cat DEPS_TAG.txt`}
 BASE_IMAGE=${REGISTRY}/lraa-base:${LRAA_DEPS_TAG}
 SC_BASE_IMAGE=${REGISTRY}/lraa-sc-base:${LRAA_DEPS_TAG}
 

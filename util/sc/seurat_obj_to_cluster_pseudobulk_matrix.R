@@ -18,8 +18,14 @@ library(Matrix)
 
 seurat_obj = readRDS(seurat_obj_rds_filename)
 
-# Extract the raw counts matrix
-counts <- GetAssayData(seurat_obj, slot = "counts")
+# Extract the raw counts matrix.
+# SeuratObject >= 5 requires `layer` (`slot` is now defunct), while older versions still use `slot`.
+counts <- tryCatch(
+  GetAssayData(seurat_obj, layer = "counts"),
+  error = function(e) {
+    GetAssayData(seurat_obj, slot = "counts")
+  }
+)
 
 # Get cluster assignments
 clusters <- Idents(seurat_obj)

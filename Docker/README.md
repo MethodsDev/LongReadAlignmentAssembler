@@ -8,7 +8,7 @@ dependencies: they hold no LRAA code, are published on their own cadence by
 | image | Dockerfile | built by | contents |
 |---|---|---|---|
 | `lraa-base` | `Dockerfile.base` | `build_docker.deps.sh` | Python with pysam, networkx, intervaltree, tqdm, lmdb, psutil, numpy, igraph and leidenalg; samtools; htslib; minimap2; gffcompare; perl |
-| `lraa-sc-base` | `Dockerfile.sc-base` | `build_docker.deps.sh` | `FROM lraa-base`, plus R with Seurat, DropletUtils, tidyverse, edgeR and limma, and pandas, scipy, matplotlib, seaborn, statsmodels, scikit-learn, pytest |
+| `lraa-sc-base` | `Dockerfile.sc-base` | `build_docker.deps.sh` | `FROM lraa-base`, plus R with Seurat (CRAN) and presto, DropletUtils, tidyverse, edgeR, limma, DEXSeq and stageR, and pandas, scipy, matplotlib, seaborn, statsmodels, scikit-learn, pytest |
 | `lraa-core` | `Dockerfile.core` | release scripts | `FROM lraa-base`, plus the LRAA checkout |
 | `lraa-orf` | `Dockerfile.orf` | release scripts | `FROM lraa-base`, plus TransDecoder, diamond, the `blastp`/`makeblastdb` pair TransDecoder's `--blast_tool blastp` path runs, and the LRAA checkout |
 | `lraa-sc` | `Dockerfile.sc` | release scripts | `FROM lraa-sc-base`, plus the LRAA checkout. 37 lines |
@@ -129,11 +129,16 @@ Seurat on a machine that had compiled the same packages an hour earlier.
 So the tiers are separate images with separate lifecycles:
 
 - `build_docker.deps.sh` builds and pushes `lraa-base` and `lraa-sc-base`,
-  together, when the packages in those two files change. It writes `:latest`
-  and a dated tag beside it.
-- the release scripts `docker pull` both and build `FROM` them. Set
-  `LRAA_DEPS_TAG` to a dated tag to pin a release to a specific dependency set.
-  They do not tag or push the dependency images: a release did not build them.
+  together, when the packages in those two files change. It writes ONLY a dated
+  tag (`YYYYMMDD`), never `:latest` -- that tag is reserved for official releases
+  -- and then records the new tag in `DEPS_TAG.txt`. Commit that file to move
+  devel onto the new set.
+- `build_docker.testing.sh` and `release_docker.OFFICIAL.sh` `docker pull` the
+  set named in `DEPS_TAG.txt` and build `FROM` it, so a commit is built against
+  the dependency set it was tested with. Set `LRAA_DEPS_TAG=<YYYYMMDD>` to try
+  another. They do not tag or push the dependency images: they did not build
+  them. The dependency images' own `:latest` (the 20260909 set) is no longer read
+  by any script.
 
 MEASURED end to end, after `docker builder prune -af` with no local
 `lraa-sc-base` image:
