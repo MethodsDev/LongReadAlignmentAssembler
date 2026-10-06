@@ -292,11 +292,25 @@ workflow LRAA_wf {
         # ignores it. 16 matches the fleet-standard n2-standard-16 box this pipeline was
         # benchmarked on.
         Int max_cpu_per_chunked_shard = 16
+        # OVERRIDE (unset = computed per shard below), like cpuScattered: any concrete
+        # value is applied to every shard and the read-based sizing never runs.
         Int? memoryGBPerWorkerScattered
-        # The box every chromosome shard gets. Uniform across shards on purpose: a shard's
-        # peak follows its chunk concurrency, which max_cpu_per_chunked_shard already caps,
-        # not the length of the contig it was handed.
+        # FLOOR of the computed per-shard box. A shard's peak follows the reads it holds
+        # at once -- chunks running concurrently x reads per chunk -- not the length of
+        # the contig it was handed, so a normal chunked shard stays well under this.
         Int memoryGB_per_chromosome_shard = 16
+        # The computed box grows past the floor only when a shard holds many reads at
+        # once, which in practice means a short contig that cannot be cut: chrM, as one
+        # 16.5 kb chunk, carried 28% of a 10x 3' PacBio library (50.7 M reads, 7.0 GB of
+        # shard BAM) and peaked at 22.4 GiB in its 16 GiB box. MEASURED (Neomet_pool021,
+        # v0.44.2, quant-only, 2026-10-06): chrM 7.0 GB in flight -> 22.4 GiB; chr1
+        # ~0.32 GB in flight (1.97 GB / ~25 chunks x 4 concurrent) -> 3.6 GiB, i.e.
+        # ~3 GiB + 2.8 GiB per in-flight GB. The defaults below (8 + 4 x GB) keep ~1.5x
+        # headroom over that line. Two points only: recalibrate on discovery-mode shards.
+        Float memoryGB_base_per_chromosome_shard = 8.0
+        Float memoryGB_per_inflight_bam_GB = 4.0
+        # Ceiling on the computed value only; an explicit memoryGBPerWorkerScattered wins.
+        Int max_memoryGB_per_chromosome_shard = 128
         
         
         Int diskSizeGB = 256
@@ -335,12 +349,15 @@ workflow LRAA_wf {
         
     }
 
-    # Memory: two fixed numbers, one per shape of run.
+    # Memory, one rule per shape of run.
     #
     #   whole genome, non-scattered  -> memoryGB_whole_genome,           32 GiB
-    #   one chromosome shard         -> memoryGB_per_chromosome_shard,   16 GiB
+    #   one chromosome shard         -> max(memoryGB_per_chromosome_shard (16 GiB),
+    #                                       8 + 4 x GB of shard BAM held at once),
+    #                                   capped at max_memoryGB_per_chromosome_shard;
+    #                                   computed per shard inside the scatter below
     #
-    # Fixed, and stated HERE rather than derived downstream, because both of the formulas
+    # Stated HERE rather than derived downstream, because both of the formulas
     # this replaces got the relative sizing wrong. LRAA_runner_task self-sizes at 2
     # GiB/core, which is proportional to cpu and therefore INVERTED the two: the
     # whole-genome run asks for 5 cores and got 16 GiB while the largest shards ask for
@@ -349,11 +366,12 @@ workflow LRAA_wf {
     # that used to sit here (1.5x the full BAM, floor 64) sized a chunked run off an input
     # whose size does not predict its peak. Both are gone from this workflow's calls; the
     # task keeps its own formula as the fallback for anyone calling
-    # subwdls/LRAA_runner.wdl directly at an arbitrary cpu.
+    # subwdls/LRAA_runner.wdl directly at an arbitrary cpu. The shard rule sizes from
+    # the SHARD's BAM spread over its chunks instead -- what one shard holds at once,
+    # which does track its peak.
     #
     # memoryGB and memoryGBPerWorkerScattered override the respective number.
     Int direct_memoryGB = select_first([memoryGB, memoryGB_whole_genome])
-    Int scattered_memoryGB = select_first([memoryGBPerWorkerScattered, memoryGB_per_chromosome_shard])
 
     # DERIVED, never asked for. The only caller-supplied splice-graph evidence this
     # workflow accepts is internal_bam_for_sg, which is already depth-normalized by
@@ -539,10 +557,8 @@ workflow LRAA_wf {
             # added, so a request sized off this ceiling never under-provisions a shard that
             # turns out to need more cores than guessed.
             #
-            # Only the CPU REQUEST is computed here, not memory: every shard gets the same
-            # memoryGB_per_chromosome_shard box whatever its contig length, since what a
-            # chunked shard holds follows its chunk concurrency -- capped just below --
-            # rather than the size of the chromosome it was handed.
+            # Memory is computed further below, from this shard's BAM size and chunk
+            # concurrency rather than its contig length.
             Float shard_contig_length_bp = size(splitByChr.chromosomeFASTAs[contig_index], "B")
             # MUST read the RESOLVED optional, not the raw input: the raw input is
             # now a non-optional sentinel, so select_first would hand back 0 and
@@ -553,6 +569,27 @@ workflow LRAA_wf {
             Int shard_cpu_computed = if shard_chunks_estimate_floored > max_cpu_per_chunked_shard
                 then max_cpu_per_chunked_shard
                 else shard_chunks_estimate_floored
+            Int shard_cpu = select_first([cpuScattered, shard_cpu_computed])
+
+            # MEMORY from the reads this shard holds at once: its BAM bytes, spread over
+            # its estimated chunks, times how many chunks run concurrently (bounded by
+            # its cpu). A one-chunk contig (chrM) therefore holds its whole BAM. The
+            # chunk count is the same ceiling estimate as above, so a shard whose cuts
+            # are declined holds MORE per chunk than this assumes; the floor and the
+            # ~1.4x-over-measured slope absorb that for ordinary contigs, and the one-chunk
+            # case is exact. Reads are assumed evenly spread across chunks.
+            Float shard_bam_gb = size(splitByChr.chromosomeBAMs[contig_index], "GB")
+            Int shard_concurrent_chunks = if shard_cpu < shard_chunks_estimate_floored
+                then shard_cpu
+                else shard_chunks_estimate_floored
+            Float shard_inflight_bam_gb = shard_bam_gb * shard_concurrent_chunks / shard_chunks_estimate_floored
+            Int shard_memoryGB_by_reads = ceil(memoryGB_base_per_chromosome_shard + memoryGB_per_inflight_bam_GB * shard_inflight_bam_gb)
+            Int shard_memoryGB_floored = if shard_memoryGB_by_reads < memoryGB_per_chromosome_shard
+                then memoryGB_per_chromosome_shard
+                else shard_memoryGB_by_reads
+            Int shard_memoryGB_computed = if shard_memoryGB_floored > max_memoryGB_per_chromosome_shard
+                then max_memoryGB_per_chromosome_shard
+                else shard_memoryGB_floored
             # Run LRAA separately per chromosome  
             call LRAA_runner.LRAA_runner as LRAA_scatter {
                 input:
@@ -611,11 +648,11 @@ workflow LRAA_wf {
                     chunk_by_strand = chunk_by_strand,
                     no_chunk = no_chunk,
                     stream_reads = stream_reads,
-                    cpu = select_first([cpuScattered, shard_cpu_computed]),  # explicit override, else per-shard estimate above
+                    cpu = shard_cpu,  # explicit cpuScattered, else per-shard estimate above
                     min_mapping_quality = min_mapping_quality,
                     min_mapping_quality_for_final_quant = min_mapping_quality_for_final_quant,
                     docker = docker,
-                    memoryGB = scattered_memoryGB,  # memoryGB_per_chromosome_shard, 16 GiB
+                    memoryGB = select_first([memoryGBPerWorkerScattered, shard_memoryGB_computed]),  # explicit override, else read-based estimate above
                     diskSizeGB = diskSizeGB
             }
 
