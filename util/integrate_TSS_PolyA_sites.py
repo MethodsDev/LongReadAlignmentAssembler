@@ -23,9 +23,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Integrate the cluster-guided TSS/PolyA site beds with the basic "
         "(initial-catalog) ones. Every cluster-guided site is kept; a basic site is "
-        "added only when it lies farther than int(window/2) nt from every "
-        "cluster-guided site of the same type, contig and strand -- the tolerance LRAA "
-        "uses to decide two ends are the same site. Inputs are the site beds "
+        "added only when it lies farther than the window from every "
+        "cluster-guided site of the same type, contig and strand -- the distance over "
+        "which LRAA's site definition absorbs read ends into one site, so no two sites "
+        "of one run are closer. Inputs are the site beds "
         "collapse_LRAA_GTF_by_splice_pattern.py writes; outputs keep their columns and "
         "append 'source' (cluster_guided | basic). Writes "
         "<prefix>.integrated.TSS.bed, <prefix>.integrated.PolyA.bed and "
@@ -66,7 +67,7 @@ def main():
         logger.info(
             "%s: %d cluster_guided + %d basic supplement (%d basic dropped within %d nt) -> %s",
             site_type, counts["primary"], counts["supplement_kept"],
-            counts["supplement_dropped"], counts["half_window"], out,
+            counts["supplement_dropped"], counts["window"], out,
         )
         all_counts.append(counts)
 

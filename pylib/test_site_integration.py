@@ -1,10 +1,11 @@
 """Integrated TSS/PolyA sites: every cluster-guided site, plus basic sites it misses.
 
 A basic site is only a supplement when no cluster-guided site of the same type on the
-same contig and strand lies within int(window/2) -- the inclusive tolerance LRAA uses to
-call two ends the same site. The edges of that rule are what these tests pin: 25 nt is
-covered and 26 nt is not at the default window of 50, and strand, contig and site type
-each separate otherwise-coincident sites.
+same contig and strand lies within the window -- max_dist_between_alt_{TSS,polyA}_sites,
+inclusive, the distance over which LRAA's site definition absorbs ends into one site. The
+edges of that rule are what these tests pin: 50 nt is covered and 51 nt is not at the
+default window of 50, and strand, contig and site type each separate otherwise-coincident
+sites.
 """
 import os
 import subprocess
@@ -65,15 +66,15 @@ def _integrate(tmp_path, site_type, primary, supplement, window=50):
     return counts, _data_rows(out)
 
 
-def test_half_window_edge_is_inclusive(tmp_path):
+def test_window_edge_is_inclusive(tmp_path):
     counts, rows = _integrate(
         tmp_path,
         "PolyA",
         [_row("PolyA", 1000)],
-        [_row("PolyA", 1025), _row("PolyA", 975), _row("PolyA", 1026), _row("PolyA", 974)],
+        [_row("PolyA", 1050), _row("PolyA", 950), _row("PolyA", 1051), _row("PolyA", 949)],
     )
     kept = sorted((int(r[2]), r[-1]) for r in rows)
-    assert kept == [(974, "basic"), (1000, "cluster_guided"), (1026, "basic")]
+    assert kept == [(949, "basic"), (1000, "cluster_guided"), (1051, "basic")]
     assert counts["supplement_dropped"] == 2
     assert counts["supplement_kept"] == 2
 
@@ -99,13 +100,23 @@ def test_strand_and_contig_separate_sites(tmp_path):
     assert counts["supplement_dropped"] == 0
 
 
-def test_window_scales_half_window(tmp_path):
-    # window 20 -> half 10: 10 nt covered, 11 nt kept.
+def test_window_scales(tmp_path):
+    # window 20: 20 nt covered, 21 nt kept.
     counts, rows = _integrate(
-        tmp_path, "TSS", [_row("TSS", 100)], [_row("TSS", 110), _row("TSS", 111)], window=20
+        tmp_path, "TSS", [_row("TSS", 100)], [_row("TSS", 120), _row("TSS", 121)], window=20
     )
-    assert sorted(int(r[2]) for r in rows if r[-1] == "basic") == [111]
-    assert counts["half_window"] == 10
+    assert sorted(int(r[2]) for r in rows if r[-1] == "basic") == [121]
+    assert counts["window"] == 20
+
+
+def test_half_window_gap_no_longer_kept(tmp_path):
+    # 26-50 nt from a cluster-guided site: closer than LRAA ever calls two sites, so the
+    # same site called twice, not a supplement.
+    counts, rows = _integrate(
+        tmp_path, "TSS", [_row("TSS", 1000)], [_row("TSS", 1026), _row("TSS", 1040), _row("TSS", 960)]
+    )
+    assert [r[-1] for r in rows] == ["cluster_guided"]
+    assert counts["supplement_dropped"] == 3
 
 
 def test_supplements_not_reaggregated_among_themselves(tmp_path):
@@ -148,8 +159,8 @@ def test_cli_writes_both_beds_and_summary(tmp_path):
     assert [r[-1] for r in _data_rows(prefix + ".integrated.TSS.bed")] == ["cluster_guided", "basic"]
     assert [r[-1] for r in _data_rows(prefix + ".integrated.PolyA.bed")] == ["cluster_guided"]
     summary = [l.rstrip("\n").split("\t") for l in open(prefix + ".integrated_sites.summary.tsv")]
-    assert summary[0] == ["site_type", "window", "half_window", "cluster_guided_sites",
+    assert summary[0] == ["site_type", "window", "cluster_guided_sites",
                           "basic_sites", "basic_supplement_kept",
                           "basic_within_window_dropped", "integrated_sites"]
-    assert summary[1] == ["TSS", "50", "25", "1", "2", "1", "1", "2"]
-    assert summary[2] == ["PolyA", "50", "25", "1", "1", "0", "1", "1"]
+    assert summary[1] == ["TSS", "50", "1", "2", "1", "1", "2"]
+    assert summary[2] == ["PolyA", "50", "1", "1", "0", "1", "1"]

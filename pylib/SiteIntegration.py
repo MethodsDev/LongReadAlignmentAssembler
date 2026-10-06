@@ -6,11 +6,18 @@ The single-cell pipeline reports boundary sites twice: from the initial (basic) 
 and from the cluster-guided (scg) catalog. The cluster-guided calls are the deliverable,
 but a basic call that no scg call reproduces is still evidence of a site, so the
 integrated view keeps every primary (scg) site and supplements it with each basic site
-that lies farther than the site-aggregation tolerance from every primary site of the
+that lies farther than the site-aggregation distance from every primary site of the
 same type on the same contig and strand.
 
-The tolerance is the one LRAA applies everywhere it asks whether two ends are the same
-site: int(max_dist_between_alt_{TSS,polyA}_sites / 2), inclusive (Splice_graph.py).
+The distance is max_dist_between_alt_{TSS,polyA}_sites itself, inclusive: the window
+over which LRAA's site definition (Splice_graph.aggregate_sites_within_window) absorbs
+read ends into one site, so two sites called by one run are never closer than that. A
+basic site within that distance of a scg site is the same site called twice, and keeping
+it would put two sites closer together than either run would. (The half window,
+max_dist / 2, is a different tolerance: how far a single read end may lie from a site
+and still count as ending there. Using it here let basic sites 26-50 nt from a scg site
+through as separate sites.)
+
 Surviving supplement sites are NOT re-aggregated against each other; they are the basic
 run's own distinct calls and already went through that run's site clustering.
 
@@ -91,8 +98,6 @@ def integrate_sites(primary_rows, supplement_rows, window):
     integrated_rows carry the source label appended and are sorted by
     (contig, position, strand), matching write_site_bed's order.
     """
-    half_window = int(window / 2)
-
     primary_positions = defaultdict(list)
     for row in primary_rows:
         primary_positions[(row[0], row[5])].append(_position(row))
@@ -104,8 +109,8 @@ def integrate_sites(primary_rows, supplement_rows, window):
     for row in supplement_rows:
         positions = primary_positions.get((row[0], row[5]), [])
         pos = _position(row)
-        i = bisect.bisect_left(positions, pos - half_window)
-        if i < len(positions) and positions[i] <= pos + half_window:
+        i = bisect.bisect_left(positions, pos - window)
+        if i < len(positions) and positions[i] <= pos + window:
             dropped += 1
             continue
         integrated.append(row + [SUPPLEMENT_SOURCE])
@@ -117,18 +122,16 @@ def integrate_sites(primary_rows, supplement_rows, window):
 def write_integrated_bed(
     path, site_type, integrated, counts, window, primary_path, supplement_path
 ):
-    half_window = int(window / 2)
     with open(path, "wt") as ofh:
         ofh.write(
             "# integrated {} sites: all {} sites from {}, plus each {} site from {} "
-            "farther than {} nt (int({}/2), config {}) from every {} site of the same "
+            "farther than {} nt (config {}) from every {} site of the same "
             "contig and strand\n".format(
                 site_type,
                 PRIMARY_SOURCE,
                 primary_path,
                 SUPPLEMENT_SOURCE,
                 supplement_path,
-                half_window,
                 window,
                 _WINDOW_CONFIG_KEY[site_type],
                 PRIMARY_SOURCE,
@@ -142,7 +145,7 @@ def write_integrated_bed(
                 p=counts["primary"],
                 sk=counts["supplement_kept"],
                 sd=counts["supplement_dropped"],
-                hw=half_window,
+                hw=window,
             )
         )
         ofh.write(
@@ -168,7 +171,6 @@ def integrate_site_beds(
     counts = {
         "site_type": site_type,
         "window": window,
-        "half_window": int(window / 2),
         "primary": len(primary_rows),
         "supplement_total": len(supplement_rows),
         "supplement_kept": len(supplement_rows) - dropped,
@@ -185,7 +187,6 @@ def integrate_site_beds(
 SUMMARY_COLUMNS = [
     ("site_type", "site_type"),
     ("window", "window"),
-    ("half_window", "half_window"),
     ("primary", PRIMARY_SOURCE + "_sites"),
     ("supplement_total", SUPPLEMENT_SOURCE + "_sites"),
     ("supplement_kept", SUPPLEMENT_SOURCE + "_supplement_kept"),
