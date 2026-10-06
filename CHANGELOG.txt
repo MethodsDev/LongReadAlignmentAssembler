@@ -1,4 +1,4 @@
-Unreleased (devel)
+v0.44.3
 
 - SQANTI-like_cats_for_reads_or_isoforms.py --CPU N classifies a bam one contig per
   worker. Each worker loads only its contig's reference transcripts (the parent
