@@ -346,3 +346,254 @@ event_table_view = function(events, kind) {
                   seeds = n_seeds_significant,
                   iso_DTU_same_pair = isoform_alt_termini_DTU_same_pair)
 }
+
+
+# ---------------------------------------------------------------------------------
+# Read tracks: isoform structures over a sample of the reads supporting them, per
+# cell cluster (reads from util/sc/site_usage/extract_isoform_read_tracks.py).
+# ---------------------------------------------------------------------------------
+
+# exons of the given transcripts (ids as in the gtf, e.g. "SELENOH^t:chr11:+:comp-569:iso-10")
+read_transcript_exons = function(gtf, transcript_ids) {
+    pattern = paste(sprintf('transcript_id "%s"', transcript_ids), collapse = "|")
+    lines = system2("grep", c("-E", shQuote(paste0("\t(exon)\t.*(", gsub("([\\^.+])", "\\\\\\1", pattern), ")")), gtf),
+                    stdout = TRUE)
+    tibble(raw = lines) %>%
+        separate(raw, into = c("chrom", "src", "feature", "start", "end", "score", "strand", "frame", "attr"),
+                 sep = "\t") %>%
+        transmute(transcript_id = str_match(attr, 'transcript_id "([^"]+)"')[, 2],
+                  start = as.integer(start), end = as.integer(end), strand)
+}
+
+
+# One read-track panel. `transcripts`: named vector, names = labels, values = gtf
+# transcript ids, in drawing order; `track_ids` maps them to the tracking-file ids used
+# in `reads` (default: the part after "^"). `clusters`: named vector, names = labels,
+# values = cluster numbers, in drawing order. `sites`: named positions to mark (e.g. the
+# two TSSs). `xlim`: region shown.
+#
+# `read_totals` (optional): cluster, transcript_id (tracking id), n -- all reads of each
+# isoform in each cluster, shown in the cluster's header so the sample can be read
+# against them (count_isoform_reads_by_cluster()).
+plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NULL, xlim = NULL,
+                                 colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
+                                 read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL) {
+
+    tx_label = setNames(names(transcripts), transcripts)
+    tx_col = setNames(colors[seq_along(transcripts)], names(transcripts))
+    track_id = sub("^[^^]*\\^", "", transcripts)
+    reads = reads %>% mutate(isoform = names(transcripts)[match(transcript_id, track_id)],
+                             cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
+        filter(! is.na(isoform), ! is.na(cluster_label))
+
+    # rows: isoform models on top, then each cluster's reads, grouped by isoform and 5' start
+    plus = exons$strand[1] == "+"
+    read_order = reads %>% distinct(cluster_label, read_name, isoform, read_start, read_end) %>%
+        mutate(cluster_label = factor(cluster_label, levels = names(clusters)),
+               isoform = factor(isoform, levels = names(transcripts)),
+               five_prime = if (plus) read_start else -read_end) %>%
+        arrange(cluster_label, isoform, five_prime)
+    gap = 3
+    model_rows = tibble(isoform = names(transcripts), y = -(seq_along(transcripts)))
+    y = min(model_rows$y) - gap
+    row_y = numeric(nrow(read_order))
+    header = list()
+    for (cl in names(clusters)) {
+        idx = which(read_order$cluster_label == cl)
+        header[[cl]] = y
+        row_y[idx] = y - seq_along(idx)
+        y = y - length(idx) - gap
+    }
+    read_order$y = row_y
+    header = tibble(cluster_label = names(header), y = unlist(header))
+    if (! is.null(read_totals)) {
+        tot = read_totals %>% mutate(isoform = names(transcripts)[match(transcript_id, track_id)],
+                                     cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
+            filter(! is.na(isoform), ! is.na(cluster_label)) %>%
+            mutate(isoform = factor(isoform, levels = names(transcripts))) %>% arrange(isoform) %>%
+            group_by(cluster_label) %>%
+            summarize(totals = paste0(sub(" .*", "", isoform), " ", format(n, big.mark = ","), collapse = " / "), .groups = "drop")
+        header = header %>% left_join(tot, by = "cluster_label") %>%
+            mutate(cluster_label = if_else(is.na(totals), cluster_label, paste0(cluster_label, "   (reads: ", totals, ")")))
+    }
+
+    blocks = reads %>% left_join(read_order %>% select(read_name, y), by = "read_name")
+    spans = read_order
+    model_ex = exons %>% mutate(isoform = tx_label[transcript_id]) %>% left_join(model_rows, by = "isoform")
+    model_span = model_ex %>% group_by(isoform, y) %>% summarize(start = min(start), end = max(end), .groups = "drop")
+
+    p = ggplot() +
+        geom_segment(data = spans, aes(x = read_start, xend = read_end, y = y, yend = y), color = "#b8b7b1", linewidth = 0.25) +
+        geom_rect(data = blocks, aes(xmin = block_start, xmax = block_end, ymin = y - read_height / 2, ymax = y + read_height / 2,
+                                     fill = isoform), color = NA) +
+        geom_segment(data = model_span, aes(x = start, xend = end, y = y, yend = y), color = "#0b0b0b", linewidth = 0.4) +
+        geom_rect(data = model_ex, aes(xmin = start, xmax = end, ymin = y - 0.38, ymax = y + 0.38, fill = isoform),
+                  color = "#0b0b0b", linewidth = 0.2) +
+        geom_text(data = header, aes(x = -Inf, y = y - 0.2, label = cluster_label), hjust = -0.02, vjust = 0,
+                  size = 3, color = "#0b0b0b") +
+        scale_fill_manual(values = tx_col, name = NULL) +
+        scale_y_continuous(breaks = NULL) +
+        labs(x = NULL, y = NULL, title = title) +
+        theme_minimal(base_size = 10) +
+        theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+              legend.position = if (show_legend) "bottom" else "none",
+              legend.key.size = unit(9, "pt"), legend.spacing.x = unit(4, "pt"),
+              legend.text = element_text(margin = margin(r = 14)))
+    if (! is.null(sites)) {
+        p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+    }
+    if (! is.null(xlim)) {
+        p = p + coord_cartesian(xlim = xlim, expand = FALSE, clip = "off")
+    }
+    p + scale_x_continuous(labels = function(x) format(x, big.mark = ",", scientific = FALSE),
+                           n.breaks = if (! is.null(xlim) && diff(xlim) < 1000) 3 else 5)
+}
+
+
+# Read-end density per cluster: each cluster's read 5' (TSS) or 3' (PolyA) ends in
+# `binwidth`-bp bins, as a share of that cluster's ends in the region, one row per
+# cluster. `ends`: cluster, pos, reads (extract_isoform_read_tracks.py --ends_output).
+plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
+                                 fill = "#5a5954") {
+    d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
+        filter(! is.na(cluster_label)) %>%
+        group_by(cluster_label) %>% mutate(share = reads / sum(reads)) %>% ungroup() %>%
+        filter(pos >= xlim[1], pos <= xlim[2]) %>%
+        mutate(bin = floor((pos - xlim[1]) / binwidth) * binwidth + xlim[1] + binwidth / 2) %>%
+        group_by(cluster_label, bin) %>% summarize(share = sum(share), .groups = "drop") %>%
+        mutate(cluster_label = factor(cluster_label, levels = names(clusters)))
+    labels = tibble(cluster_label = factor(names(clusters), levels = names(clusters)))
+    p = ggplot(d, aes(x = bin, y = share)) +
+        geom_col(width = binwidth * 0.9, fill = fill) +
+        geom_text(data = labels, aes(x = -Inf, y = Inf, label = cluster_label), inherit.aes = FALSE,
+                  hjust = -0.03, vjust = 1.3, size = 2.7, color = "#0b0b0b") +
+        facet_grid(cluster_label ~ .) +
+        scale_y_continuous(labels = scales::percent_format(accuracy = 1), n.breaks = 3,
+                           position = "right", expand = expansion(mult = c(0, 0.35))) +
+        labs(x = NULL, y = NULL,
+             subtitle = paste0("read ", if (kind == "TSS") "5'" else "3'", " ends per ", binwidth, " bp")) +
+        theme_minimal(base_size = 9) +
+        theme(panel.grid.minor = element_blank(), strip.text = element_blank(),
+              axis.text.x = element_blank(), plot.subtitle = element_text(size = 8.5))
+    if (! is.null(sites)) {
+        p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+    }
+    p + coord_cartesian(xlim = xlim, expand = FALSE)
+}
+
+
+# Full-gene view beside a zoom on the varying terminus (TSS: 5' end; PolyA: 3' end),
+# optionally with the read-end density of each cluster above the reads (`ends`). Sites
+# up to `max_joint_zoom` apart share one zoom; farther apart (alternative first / last
+# exons) each site gets its own. The whole-gene density bins scale with the region.
+plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, kind = c("TSS", "PolyA"),
+                                    zoom_flank = 120, title = NULL, file = NULL, width = 11, height = 8,
+                                    read_totals = NULL, ends = NULL, zoom_bin = 4,
+                                    density_height = 0.28, max_joint_zoom = 400) {
+    kind = match.arg(kind)
+    full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end)) + c(-20, 20)
+    full_bin = max(10, round(diff(full_xlim) / 250))
+    zooms = if (diff(range(sites)) <= max_joint_zoom) {
+        list(c(min(sites) - zoom_flank, max(sites) + zoom_flank))
+    } else {
+        lapply(sort(sites), function(p) c(p - zoom_flank, p + zoom_flank))
+    }
+
+    column = function(xlim, bin, title, legend, totals) {
+        tracks = plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlim,
+                                       title = if (is.null(ends)) title else NULL, show_legend = legend,
+                                       read_totals = totals)
+        if (is.null(ends)) return(tracks)
+        dens = plot_read_end_density(ends, clusters, sites, xlim, binwidth = bin, kind = kind) + labs(title = title)
+        plot_grid(dens, tracks, ncol = 1, rel_heights = c(density_height, 1), align = "v", axis = "lr")
+    }
+    full = column(full_xlim, full_bin, "whole gene", TRUE, read_totals)
+    zoom_titles = if (length(zooms) == 1) paste0(kind, " region") else
+        paste0(kind, " at ", format(sort(sites), big.mark = ","))
+    zcols = lapply(seq_along(zooms), function(i) column(zooms[[i]], zoom_bin, zoom_titles[i], FALSE, NULL))
+    p = plot_grid(plotlist = c(list(full), zcols), nrow = 1,
+                  rel_widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms))))
+    if (! is.null(title)) {
+        p = plot_grid(ggdraw() + draw_label(title, x = 0.01, hjust = 0, size = 12), p, ncol = 1, rel_heights = c(0.04, 1))
+    }
+    if (! is.null(file)) {
+        ggsave(p, file = file, width = if (length(zooms) > 1) width * 1.15 else width, height = height,
+               device = if (capabilities("cairo")) cairo_pdf else "pdf")
+    }
+    p
+}
+
+
+# reads per isoform and cluster from an LRAA quant.tracking file (optionally only unique
+# full-splice-match reads), for plot_isoform_read_tracks(read_totals = ...)
+count_isoform_reads_by_cluster = function(tracking, cell_clusters, unique_FSM_only = TRUE) {
+    tr = read_tsv(tracking, comment = "#", show_col_types = FALSE,
+                  col_types = cols(.default = "c")) %>% filter(transcript_id != "transcript_id")
+    if (unique_FSM_only) tr = tr %>% filter(is_unique == "1", is_FSM == "1")
+    # cell_barcode <tab> cluster; any header line (with or without a tab) is dropped
+    f = str_split_fixed(readLines(cell_clusters), "\t", 3)
+    cl = tibble(cell_barcode = f[, 1], cluster = str_trim(f[, 2])) %>% filter(str_detect(cluster, "^-?[0-9]+$"))
+    tr %>% transmute(transcript_id = sub(".*@", "", transcript_id), cell_barcode = sub("\\^.*", "", read_name)) %>%
+        inner_join(cl, by = "cell_barcode") %>% count(cluster, transcript_id)
+}
+
+
+# Read-track data for a set of site-switch events (util/sc/site_usage/
+# build_site_event_read_tracks.py), cached in `outdir`: rerun only when the events or the
+# script change. `events`: tag, gene_symbol, kind, gained_site, lost_site, cluster_A,
+# cluster_B. Returns the manifest (one row per event).
+build_site_event_read_tracks = function(events, outdir, sites, gtf, cluster_quant_tar, tracking, bam,
+                                        cell_clusters, max_reads = 30,
+                                        script = file.path(Sys.getenv("LRAA_HOME", "~/GITHUB/MDL/LongReadAlignmentAssembler"),
+                                                           "util/sc/site_usage/build_site_event_read_tracks.py")) {
+    script = path.expand(script)
+    dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+    events_tsv = file.path(outdir, "events.tsv")
+    new_tsv = file.path(outdir, "events.tsv.new")
+    write_tsv(events %>% select(tag, gene_symbol, kind, gained_site, lost_site, cluster_A, cluster_B), new_tsv)
+    key = paste(unname(tools::md5sum(new_tsv)), unname(tools::md5sum(script)), max_reads)
+    key_file = file.path(outdir, "cache_key")
+    manifest = file.path(outdir, "manifest.tsv")
+    if (! (file.exists(manifest) && file.exists(key_file) && readLines(key_file, n = 1) == key)) {
+        file.rename(new_tsv, events_tsv)
+        status = system2("python3", c(script, "--events", events_tsv, "--sites", sites, "--gtf", gtf,
+                                      "--cluster_quant_tar", cluster_quant_tar, "--tracking", tracking,
+                                      "--bam", bam, "--cell_clusters", cell_clusters,
+                                      "--max_reads", max_reads, "--outdir", outdir),
+                         stdout = file.path(outdir, "build.log"), stderr = file.path(outdir, "build.log"))
+        if (status != 0) stop("build_site_event_read_tracks.py failed; see ", file.path(outdir, "build.log"))
+        writeLines(key, key_file)
+    } else {
+        unlink(new_tsv)
+    }
+    read_tsv(manifest, show_col_types = FALSE, col_types = cols(.default = "c"))
+}
+
+
+# One event's read-track figure from a manifest row: the gained-site isoform (blue) and
+# the lost-site isoform (orange) over each cluster's sampled unique-FSM reads, with each
+# cluster's read-end density above; labelled as in plot_site_event.
+plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 34, ...) {
+    kind = m$kind
+    gained_pos = as.numeric(m$gained_pos)
+    lost_pos = as.numeric(m$lost_pos)
+    ev = tibble(gene_key = paste(m$gene_symbol, m$chrom, m$strand, sep = "|"),
+                gained_pos = gained_pos, lost_pos = lost_pos)
+    site_lab = unname(site_event_labels(ev, kind))
+    iso = function(x) sub(".*:", "", x)
+    transcripts = setNames(c(m$gained_gtf_id, m$lost_gtf_id),
+                           c(paste0(site_lab[1], ", ", iso(m$gained_tx)), paste0(site_lab[2], ", ", iso(m$lost_tx))))
+    cl_labels = get_cluster_labels(max_chars = max_chars)
+    cl = c(m$cluster_A, m$cluster_B)
+    clusters = setNames(cl, cl_labels$cluster_label[match(paste0("Cluster_", cl), cl_labels$cluster)])
+    exons = read_transcript_exons(gtf, unname(transcripts))
+    reads = read_tsv(file.path(outdir, paste0(m$tag, ".reads.tsv")), show_col_types = FALSE)
+    ends = read_tsv(file.path(outdir, paste0(m$tag, ".ends.tsv")), show_col_types = FALSE)
+    totals = read_tsv(file.path(outdir, paste0(m$tag, ".totals.tsv")), show_col_types = FALSE)
+    plot_isoform_read_tracks(exons, reads, transcripts, clusters, sites = c(gained_pos, lost_pos), kind = kind,
+                             read_totals = totals, ends = ends,
+                             title = paste0(m$gene_symbol, ": alternative ", kind,
+                                            ", unique FSM reads (", max(table(reads$cluster[!duplicated(reads$read_name)])),
+                                            " sampled per cluster)"),
+                             file = file, height = 10, ...)
+}
