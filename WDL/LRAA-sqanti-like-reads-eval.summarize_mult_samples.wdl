@@ -12,7 +12,10 @@ workflow LRAA_sqanti_like_multi_sample_summary_wf {
         Int width = 12
         Int height = 12
     
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
+        # Named docker_sc, not docker: the R plotting step needs lraa-sc. Renamed 2026-10-06
+        # so a saved Terra value for the old `docker` input (lraa:latest, the v0.17.7
+        # default) cannot carry over and run this on lraa-core, which has no R.
+        String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     
     }
 
@@ -22,7 +25,7 @@ workflow LRAA_sqanti_like_multi_sample_summary_wf {
             iso_cats_summary_counts_tsv_files = iso_cats_summary_counts_tsv_files,
             width=width,
             height=height,
-            docker=docker
+            docker=docker_sc
     }
 
 
@@ -33,7 +36,7 @@ workflow LRAA_sqanti_like_multi_sample_summary_wf {
             lengths_sample_n = lengths_sample_n,
             width=width,
             height=height,
-            docker=docker
+            docker=docker_sc
     }
         
     output {

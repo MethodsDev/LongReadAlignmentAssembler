@@ -7,6 +7,7 @@ from collections import defaultdict
 import intervaltree as itree
 import pysam
 import csv
+import shutil
 import subprocess
 
 sys.path.insert(
@@ -73,6 +74,15 @@ def main():
 
     if input_gtf is not None and input_bam is not None:
         exit("Error, must specify --input_gtf or --input_bam, not both together")
+
+    # The summary barplot is drawn by an Rscript at the very end. Check for R now
+    # rather than after classifying every read: lraa-core ships without R, and a
+    # run there used to fail only once all the work was done.
+    if shutil.which("Rscript") is None:
+        exit(
+            "Error, Rscript not found on PATH; it is needed for the summary plot. "
+            "Run in the lraa-sc image, which includes R."
+        )
 
     sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf)
 

@@ -9,7 +9,10 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         File? input_BAI
         File? input_GTF
         
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
+        # Named docker_sc, not docker: the R plotting step needs lraa-sc. Renamed 2026-10-06
+        # so a saved Terra value for the old `docker` input (lraa:latest, the v0.17.7
+        # default) cannot carry over and run this on lraa-core, which has no R.
+        String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int? min_disk_GB
     }
 
@@ -21,7 +24,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
           input_BAM = input_BAM,
           input_BAI = input_BAI,
           input_GTF = input_GTF,
-          docker = docker,
+          docker = docker_sc,
           min_disk_GB = min_disk_GB
     }
 
