@@ -76,9 +76,11 @@ def main():
 
     parser.add_argument(
         "--CPU",
-        type=int,
-        default=1,
-        help="with --input_bam: number of contigs to classify in parallel (needs a .bai)",
+        type=str,
+        default="auto",
+        help="with --input_bam: number of contigs to classify in parallel (needs a "
+        ".bai), or 'auto' for the cores this process is granted (affinity and cgroup "
+        "quota); auto runs serially if the bam has no index",
     )
 
     args = parser.parse_args()
@@ -103,12 +105,11 @@ def main():
             "Run in the lraa-sc image, which includes R."
         )
 
-    if args.CPU < 1:
-        exit("Error, --CPU must be at least 1")
+    num_workers = resolve_num_workers(args.CPU, input_bam)
 
-    if input_bam is not None and args.CPU > 1:
+    if input_bam is not None and num_workers > 1:
         feature_category_counter = classify_bam_by_contig(
-            ref_annot_gtf, input_bam, output_prefix, args.CPU
+            ref_annot_gtf, input_bam, output_prefix, num_workers
         )
         write_summary_and_plot(output_prefix, feature_category_counter)
         sys.exit(0)
@@ -199,6 +200,35 @@ def main():
     write_summary_and_plot(output_prefix, feature_category_counter)
 
     sys.exit(0)
+
+
+def resolve_num_workers(cpu_arg, input_bam):
+    # 'auto' takes the cores actually granted (Util_funcs.granted_cpus), and falls
+    # back to serial, with a warning, when the bam has no index; an explicit count is
+    # honored as given, and classify_bam_by_contig refuses an unindexed bam for it.
+    if cpu_arg != "auto":
+        try:
+            num_workers = int(cpu_arg)
+        except ValueError:
+            exit(
+                "Error, --CPU must be a whole number or 'auto', not {}".format(cpu_arg)
+            )
+        if num_workers < 1:
+            exit("Error, --CPU must be at least 1")
+        return num_workers
+
+    if input_bam is None:
+        return 1  # --input_gtf is classified serially
+
+    num_workers = Util_funcs.granted_cpus()
+    if num_workers > 1 and not pysam.AlignmentFile(input_bam, "rb").has_index():
+        logger.warning(
+            "--CPU auto: {} has no index, so classifying serially; "
+            "samtools index it to use {} cores".format(input_bam, num_workers)
+        )
+        return 1
+    logger.info("--CPU auto: {} core(s) granted".format(num_workers))
+    return num_workers
 
 
 def write_summary_and_plot(output_prefix, feature_category_counter):

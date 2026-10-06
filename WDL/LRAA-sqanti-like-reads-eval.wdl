@@ -15,7 +15,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int? min_disk_GB
 
-        # --input_BAM only: contigs classified in parallel.
+        # Cores requested for the task. The script runs with --CPU auto, so with
+        # --input_BAM it classifies contigs on as many cores as the backend actually
+        # grants (which can be fewer than requested).
         Int cpu = 8
     }
 
@@ -74,7 +76,7 @@ task LRAA_sqanti_like_reads_eval_task {
                  samtools index -@ ~{cpu} input.bam
              fi
 
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU ~{cpu}
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU auto
 
         elif [[ "~{input_GTF}" != "" ]]; then
  

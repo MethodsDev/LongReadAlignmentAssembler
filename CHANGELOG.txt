@@ -16,9 +16,19 @@ v0.44.3
   The serial run, extrapolated from a 615k-read chr19 slice, is ~58 min. The
   largest contigs and bam I/O set the floor; splitting large contigs into regions
   would balance it further.
-- WDL/LRAA-sqanti-like-reads-eval.wdl: new `cpu` input (default 8) passed as --CPU
-  and as the task's runtime cpu; the bam and bai are linked side by side in the
-  task, and the bam is indexed there if no bai is given.
+- --CPU defaults to `auto`: the cores this process is granted, the smaller of the
+  affinity count and the cgroup quota (new Util_funcs.granted_cpus /
+  cgroup_cpu_quota). The quota is what docker --cpus and Terra enforce, and it is
+  invisible to affinity: inside `docker run --cpus=4` on a 16-core host, affinity
+  reports 16 and auto picks 4. With auto, an unindexed bam is classified serially
+  with a warning; an explicit --CPU above 1 still refuses one. MEASURED on an
+  8-contig mouse slice: --CPU 1 188 s wall at 100% of one core; --CPU 8 54 s wall,
+  159 s total CPU, 303% average utilization (one contig held 30% of the reads, which
+  caps that slice at ~3.4x).
+- WDL/LRAA-sqanti-like-reads-eval.wdl: new `cpu` input (default 8) for the task's
+  runtime cpu; the task runs the script with --CPU auto, so it uses the cores the
+  backend actually grants. The bam and bai are linked side by side in the task, and
+  the bam is indexed there if no bai is given.
 - CHANGED: the SQANTI-like WDLs' image input is now `docker_sc` (was `docker`). A
   Terra config saved under the v0.17.7 WDL kept `docker = lraa:latest` (lraa-core,
   no R), so the summary plot failed after every read had been classified. With the

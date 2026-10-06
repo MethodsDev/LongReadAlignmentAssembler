@@ -24,7 +24,12 @@ test_parallel_parity:
 	samtools view -h --no-PG test.par.cpu1.iso_cats.bam > test.par.cpu1.sam
 	samtools view -h --no-PG test.par.cpu4.iso_cats.bam > test.par.cpu4.sam
 	cmp test.par.cpu1.sam test.par.cpu4.sam
-	@echo "ok: --CPU 4 matches the serial run"
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.fixture.bam --output_prefix test.par.auto
+	cmp test.par.cpu1.iso_cats.tsv test.par.auto.iso_cats.tsv
+	cp test.par.fixture.bam test.par.noindex.bam
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.noindex.bam --output_prefix test.par.auto_noindex
+	cmp test.par.cpu1.iso_cats.tsv test.par.auto_noindex.iso_cats.tsv
+	@echo "ok: --CPU 4 and --CPU auto (indexed and not) match the serial run"
 
 include ../lraa_test_docker.mk
 

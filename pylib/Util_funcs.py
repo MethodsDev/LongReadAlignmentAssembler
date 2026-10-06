@@ -917,6 +917,51 @@ def available_cpus():
     return max(1, os.cpu_count() or 1)
 
 
+def cgroup_cpu_quota(root="/sys/fs/cgroup"):
+    """Whole cores granted by this process's cgroup CPU quota, or None if unlimited.
+
+    A container's --cpus limit, miniwdl's --limit-cpu and Terra's per-VM quota all
+    land here (cpu.max under cgroup v2, cpu.cfs_quota_us / cpu.cfs_period_us under v1)
+    and NOT in the affinity mask: inside `docker run --cpus=8` on a 16-core host,
+    sched_getaffinity still reports 16. Rounded down, floored at 1. Same reading as
+    partition_data_by_chromosome._cgroup_cpu_quota.
+    """
+
+    try:
+        with open(os.path.join(root, "cpu.max"), "rt") as fh:
+            quota_s, period_s = fh.read().split()[:2]
+        if quota_s != "max" and int(period_s) > 0:
+            return max(1, int(quota_s) // int(period_s))
+        return None
+    except (OSError, ValueError):
+        pass
+
+    try:
+        with open(os.path.join(root, "cpu", "cpu.cfs_quota_us"), "rt") as fh:
+            quota = int(fh.read().strip())
+        with open(os.path.join(root, "cpu", "cpu.cfs_period_us"), "rt") as fh:
+            period = int(fh.read().strip())
+        if quota > 0 and period > 0:
+            return max(1, quota // period)
+    except (OSError, ValueError):
+        pass
+
+    return None
+
+
+def granted_cpus():
+    """CPUs this process may run on AND is allowed to keep busy.
+
+    The smaller of the affinity count (available_cpus: cpusets, taskset, Slurm) and
+    the cgroup quota (cgroup_cpu_quota: docker --cpus, Terra), since either can be the
+    binding limit.
+    """
+
+    quota = cgroup_cpu_quota()
+    affinity = available_cpus()
+    return min(affinity, quota) if quota is not None else affinity
+
+
 # Canonical polyadenylation signal hexamers, in transcript sense.  These two account
 # for the large majority of characterised human cleavage sites; the many
 # single-substitution variants are deliberately excluded, so a positive call means the
