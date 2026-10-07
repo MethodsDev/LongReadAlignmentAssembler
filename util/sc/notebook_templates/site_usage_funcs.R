@@ -431,6 +431,18 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
     spans = read_order
     model_ex = exons %>% mutate(isoform = tx_label[transcript_id]) %>% left_join(model_rows, by = "isoform")
     model_span = model_ex %>% group_by(isoform, y) %>% summarize(start = min(start), end = max(end), .groups = "drop")
+    if (! is.null(xlim)) {
+        # the panel is unclipped (so the cluster headers can run past it): trim the reads
+        # and models to the window here instead, or a zoom's exons spill into the next panel
+        trim = function(d, s, e) {
+            d %>% filter(.data[[e]] >= xlim[1], .data[[s]] <= xlim[2]) %>%
+                mutate("{s}" := pmax(.data[[s]], xlim[1]), "{e}" := pmin(.data[[e]], xlim[2]))
+        }
+        blocks = trim(blocks, "block_start", "block_end")
+        spans = trim(spans, "read_start", "read_end")
+        model_ex = trim(model_ex, "start", "end")
+        model_span = trim(model_span, "start", "end")
+    }
 
     p = ggplot() +
         geom_segment(data = spans, aes(x = read_start, xend = read_end, y = y, yend = y), color = "#b8b7b1", linewidth = 0.25) +
@@ -501,7 +513,9 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                                     read_totals = NULL, ends = NULL, zoom_bin = 4,
                                     density_height = 0.28, max_joint_zoom = 400) {
     kind = match.arg(kind)
-    full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end)) + c(-20, 20)
+    full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end))
+    # pad by 2% so a read-end peak at the gene's terminus isn't drawn on the panel edge
+    full_xlim = full_xlim + c(-1, 1) * max(20, round(0.02 * diff(full_xlim)))
     full_bin = max(10, round(diff(full_xlim) / 250))
     zooms = if (diff(range(sites)) <= max_joint_zoom) {
         list(c(min(sites) - zoom_flank, max(sites) + zoom_flank))
@@ -509,20 +523,28 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
         lapply(sort(sites), function(p) c(p - zoom_flank, p + zoom_flank))
     }
 
-    column = function(xlim, bin, title, legend, totals) {
-        tracks = plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlim,
-                                       title = if (is.null(ends)) title else NULL, show_legend = legend,
-                                       read_totals = totals)
-        if (is.null(ends)) return(tracks)
-        dens = plot_read_end_density(ends, clusters, sites, xlim, binwidth = bin, kind = kind) + labs(title = title)
-        plot_grid(dens, tracks, ncol = 1, rel_heights = c(density_height, 1), align = "v", axis = "lr")
+    xlims = c(list(full_xlim), zooms)
+    bins = c(full_bin, rep(zoom_bin, length(zooms)))
+    col_titles = c("whole gene", if (length(zooms) == 1) paste0(kind, " region") else
+        paste0(kind, " at ", format(sort(sites), big.mark = ",")))
+    tracks = lapply(seq_along(xlims), function(i)
+        plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlims[[i]],
+                              title = if (is.null(ends)) col_titles[i] else NULL, show_legend = FALSE,
+                              read_totals = if (i == 1) read_totals else NULL))
+    # one grid, so every column's read rows share the same height and line up across
+    # panels; the legend goes under the whole figure, not under one column
+    widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms)))
+    p = if (is.null(ends)) {
+        plot_grid(plotlist = tracks, nrow = 1, rel_widths = widths, align = "h", axis = "tb")
+    } else {
+        dens = lapply(seq_along(xlims), function(i)
+            plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind) +
+                labs(title = col_titles[i]))
+        plot_grid(plotlist = c(dens, tracks), nrow = 2, rel_widths = widths,
+                  rel_heights = c(density_height, 1), align = "hv", axis = "tblr")
     }
-    full = column(full_xlim, full_bin, "whole gene", TRUE, read_totals)
-    zoom_titles = if (length(zooms) == 1) paste0(kind, " region") else
-        paste0(kind, " at ", format(sort(sites), big.mark = ","))
-    zcols = lapply(seq_along(zooms), function(i) column(zooms[[i]], zoom_bin, zoom_titles[i], FALSE, NULL))
-    p = plot_grid(plotlist = c(list(full), zcols), nrow = 1,
-                  rel_widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms))))
+    legend = get_plot_component(tracks[[1]] + theme(legend.position = "bottom"), "guide-box-bottom")
+    p = plot_grid(p, legend, ncol = 1, rel_heights = c(1, 0.03))
     if (! is.null(title)) {
         p = plot_grid(ggdraw() + draw_label(title, x = 0.01, hjust = 0, size = 12), p, ncol = 1, rel_heights = c(0.04, 1))
     }
