@@ -1,5 +1,40 @@
 v0.44.3
 
+- merge_LRAA_GTFs.py --CPU (default `auto`, the cores granted, as in the SQANTI-like
+  util) merges contig/strand units in forked worker processes. Each unit was
+  already merged independently: its own splice graph, its own comp-N:iso-N ids, gene
+  reclustering within the unit. Workers get only the unit key (the parsed inputs are
+  shared copy-on-write), units are submitted largest first, and the gtf and tracking
+  rows are written in the serial order, so --CPU N output is byte-identical to
+  --CPU 1. --oversimplify contigs are still copied after the merged units.
+  MEASURED on 14 whole-genome PBMC per-cluster gtfs (876 MiB, 48 units, 298k
+  merged transcripts): --CPU 1 1992 s wall at 99% of one core; --CPU 4 600 s wall
+  (3.3x), 2110 s CPU, 351% utilization (the chr1/chr2 units set the floor). Memory
+  scales with workers: the parsed inputs take 4.9 GB and each worker ~5 GB on the
+  largest chromosomes, for a peak summed PSS of 25.6 GB at --CPU 4 (--CPU 1: 14.9
+  GB; 16.2 GB before this change). On a many-core machine, set --CPU to what memory
+  allows rather than leaving it at auto.
+- CHANGED: a unit's merged output no longer depends on which units were merged
+  before it in the same process. The class-level id counters (Exon, Intron, TSS,
+  PolyAsite, MultiPath, MultiPathGraphNode, Transcript) and the read-name store kept
+  counting across units, and those ids break ties in sorts, compared as strings
+  ("mp99x" > "mp100x"). They are now reset at the start of every unit, which is what
+  lets a worker reproduce the serial run. Effect on the 14-cluster PBMC merge: the
+  same merged structures in every unit, and 16 of 298,395 transcripts swap iso-N
+  numbers with another isoform of the same gene. A unit merged on its own with
+  --contig now matches the same unit in a full run (it did not before). Serial peak
+  memory also drops, since read-name stores no longer accumulate across units.
+- The tracking tsv's rows for each merged transcript are sorted by source gtf and
+  source transcript id. They came from iterating sets of strings, so their order
+  changed with every run's hash seed, even serially.
+- WDL: lraa_merge_gtf_task takes `cpu` (default 4) for runtime cpu and runs the
+  merge with --CPU auto; LRAA-cell_cluster_guided.wdl exposes it as
+  `cpu_mergeGTFs`, LRAA-merge_gtfs_from_sample_set.wdl as `cpu`. Memory defaults
+  (32 GB) are unchanged.
+- testing/misc_tests/merge_LRAA_GTFs test_parallel_parity: --CPU 1 twice, --CPU 4
+  and --CPU auto must match byte for byte (gtf and tracking), and chr19+ merged
+  alone must equal chr19+ in the full run.
+
 - SQANTI-like_cats_for_reads_or_isoforms.py --CPU N classifies a bam one contig per
   worker. Each worker loads only its contig's reference transcripts (the parent
   splits the reference GTF in one pass), so per-worker memory stays small and the

@@ -85,6 +85,12 @@ workflow LRAA_cell_cluster_guided {
         Int? chunkMergeCpu
         Int? chunkMergeMemoryGB
         Int memoryGBmergeGTFs = 32
+        # merge_LRAA_GTFs.py merges each contig/strand in its own worker process
+        # (--CPU auto uses the cores the task is granted); output is identical to
+        # a serial run. Memory grows with it: peak ~ parsed inputs + cpu x ~5 GB on
+        # human chromosomes. MEASURED, 14 whole-genome PBMC cluster gtfs: 4.9 GB
+        # parsed, 25.6 GB peak at cpu 4. Raise memoryGBmergeGTFs with cpu.
+        Int cpu_mergeGTFs = 4
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16
         Int memoryGBquantMerge = 16
@@ -342,7 +348,8 @@ workflow LRAA_cell_cluster_guided {
                 # task takes String; "" is the task's own "no contigs" value.
                 oversimplify = select_first([oversimplify, ""]),
                 docker = docker,
-                memoryGB = memoryGBmergeGTFs ,
+                memoryGB = memoryGBmergeGTFs,
+                cpu = cpu_mergeGTFs,
         }
 
         # ONE collapse for the whole sample, on the reconciled cross-cluster catalog.
@@ -688,6 +695,9 @@ task lraa_merge_gtf_task {
         String oversimplify = ""
         String docker
         Int memoryGB
+        # Contig/strand units are merged in parallel worker processes. The script
+        # runs --CPU auto, so it uses the cores the backend actually grants.
+        Int cpu = 4
     }
 
     
@@ -703,6 +713,7 @@ task lraa_merge_gtf_task {
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
                            ~{if ignore_TSS_POLYA then "--ignore_TSS_POLYA" else ""} \
                            ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
+                           --CPU auto \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
       ) || {
@@ -743,7 +754,7 @@ task lraa_merge_gtf_task {
 
     runtime {
         docker: docker
-        cpu: 1
+        cpu: cpu
         memory: "~{memoryGB} GiB"
         disks: "local-disk 200 HDD"
     }

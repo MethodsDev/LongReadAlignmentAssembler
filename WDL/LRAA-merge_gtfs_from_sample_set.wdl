@@ -13,6 +13,7 @@ workflow LRAA_merge_gtfs_from_sample_set {
         # former non-HiFi merge that ignores them.
         Boolean ignore_TSS_POLYA = false
         Int memoryGB = 32
+        Int cpu = 4
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
 
@@ -23,7 +24,8 @@ workflow LRAA_merge_gtfs_from_sample_set {
             referenceGenome = referenceGenome,
             ignore_TSS_POLYA = ignore_TSS_POLYA,
             docker = docker,
-            memoryGB = memoryGB
+            memoryGB = memoryGB,
+            cpu = cpu
     }
 
     output {
