@@ -16,6 +16,11 @@ reciprocal delta-π testing to identify symmetric isoform switches, cell detecti
 filtering to ensure isoforms are broadly expressed within clusters, and additional quality
 control criteria for read depth and effect size thresholds.
 
+See also [differential_site_usage_methods.md](differential_site_usage_methods.md): a
+site-first test of alternative TSS / PolyA usage from the reads' own 5' and 3' ends at
+LRAA's sites, which avoids relying on how the EM apportions reads shared by isoforms that
+differ only at a terminus.
+
 ## Pseudobulk Aggregation
 
 Read counts for each isoform are aggregated across all cells within each cluster to generate
