@@ -86,6 +86,7 @@ test_chunked_route_parity: test_chunked_entry_point
 # first time a caller had no .bai, which was the WDL layer. Testing against the
 # indexed corpus copy would restore that blind spot.
 test_chunked_strandless:
+	rm -f __strandless_input.bam.bai
 	cp pacbio.PBLR.bam __strandless_input.bam
 	test ! -f __strandless_input.bam.bai
 	../../LRAA --chunk --strandless_chunks --quant_only \
