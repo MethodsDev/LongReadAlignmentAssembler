@@ -349,7 +349,7 @@ workflow LRAA_singlecell_wf {
     Int memoryGBbuildSparseMatrices = 64
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
-    Int memoryGBmergeGTFs = 32
+    Int memoryGBmergeGTFs = 64
     Int memoryGBquantFinal = 32
     Int memoryGBscSparseMatrices = 32
     # Build the single-cell matrices per contig shard, alongside quantification,
