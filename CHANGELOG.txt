@@ -12,8 +12,11 @@ v0.44.3
   (3.3x), 2110 s CPU, 351% utilization (the chr1/chr2 units set the floor). Memory
   scales with workers: the parsed inputs take 4.9 GB and each worker ~5 GB on the
   largest chromosomes, for a peak summed PSS of 25.6 GB at --CPU 4 (--CPU 1: 14.9
-  GB; 16.2 GB before this change). On a many-core machine, set --CPU to what memory
-  allows rather than leaving it at auto.
+  GB; 16.2 GB before this change). `auto` is also capped by the memory granted
+  (cgroup limit, else the host's MemTotal; new Util_funcs.granted_memory): after
+  parsing, workers = min(cores, (90% of granted - parent RSS) / --worker_mem_GB,
+  default 6). MEASURED in docker --cpus=8: --memory=16g gives 2 workers, 64g gives 8.
+  An explicit --CPU is honored, with a warning when it looks too big.
 - CHANGED: a unit's merged output no longer depends on which units were merged
   before it in the same process. The class-level id counters (Exon, Intron, TSS,
   PolyAsite, MultiPath, MultiPathGraphNode, Transcript) and the read-name store kept
@@ -21,16 +24,28 @@ v0.44.3
   ("mp99x" > "mp100x"). They are now reset at the start of every unit, which is what
   lets a worker reproduce the serial run. Effect on the 14-cluster PBMC merge: the
   same merged structures in every unit, and 16 of 298,395 transcripts swap iso-N
-  numbers with another isoform of the same gene. A unit merged on its own with
+  numbers with another isoform of the same gene (before the sort-key change below).
+  The reset is safe only because units never share a process at the same time:
+  workers are processes, each running its units one after another. A unit merged
+  on its own with
   --contig now matches the same unit in a full run (it did not before). Serial peak
   memory also drops, since read-name stores no longer accumulate across units.
+- CHANGED: Transcript.structural_sort_key, which numbers isoforms within a gene and
+  breaks ties in transcript filtering and read assignment, ranks the exon
+  coordinates (as numbers) ahead of the simple path. The path is node ids from
+  those class-level counters, compared as text ("E:1000" < "E:999"), so two
+  isoforms of a gene with equal span and cDNA length were numbered by processing
+  history rather than structure. The path now breaks ties only between identical
+  exon structures. Expect some iso-N numbers to differ from earlier outputs, in
+  merges and in LRAA runs.
 - The tracking tsv's rows for each merged transcript are sorted by source gtf and
   source transcript id. They came from iterating sets of strings, so their order
   changed with every run's hash seed, even serially.
-- WDL: lraa_merge_gtf_task takes `cpu` (default 4) for runtime cpu and runs the
-  merge with --CPU auto; LRAA-cell_cluster_guided.wdl exposes it as
-  `cpu_mergeGTFs`, LRAA-merge_gtfs_from_sample_set.wdl as `cpu`. Memory defaults
-  (32 GB) are unchanged.
+- WDL: lraa_merge_gtf_task takes `cpu` for runtime cpu and runs the merge with --CPU
+  auto; LRAA-cell_cluster_guided.wdl exposes it as `cpu_mergeGTFs`,
+  LRAA-merge_gtfs_from_sample_set.wdl as `cpu`. Defaults raised to 8 cpu and 64 GB
+  (memoryGBmergeGTFs in LRAA-cell_cluster_guided.wdl and LRAA-singlecell.wdl,
+  memoryGB in the sample-set workflow; were 32 GB).
 - testing/misc_tests/merge_LRAA_GTFs test_parallel_parity: --CPU 1 twice, --CPU 4
   and --CPU auto must match byte for byte (gtf and tracking), and chr19+ merged
   alone must equal chr19+ in the full run.

@@ -16,8 +16,8 @@ Important modes:
   --ignore_TSS_POLYA: ignore those annotations when merging (the former non-HiFi /
           LowFi merge behavior).
   --CPU: each contig/strand is merged independently, so units run in parallel
-          forked workers (default 'auto': the cores granted); output is identical
-          to --CPU 1.
+          forked workers (default 'auto': the cores granted, capped by the memory
+          granted); output is identical to --CPU 1.
 
 The output includes:
   - <output>.gtf: Merged transcript annotations
@@ -161,6 +161,51 @@ def resolve_num_workers(cpu_arg):
     return num_workers
 
 
+def cap_workers_by_memory(num_workers, worker_mem_GB, is_auto):
+    """Fit the worker count to the memory this process is granted.
+
+    Called after parsing, when the parent's own footprint is known: the parsed
+    inputs (~4.9 GB for 14 whole-genome PBMC cluster gtfs) are shared with forked
+    workers, and each worker adds its unit's splice graph and contig sequence on
+    top (~5 GB for chr1/chr2-size units; worker_mem_GB budgets for it). 'auto'
+    is capped to what fits in 90% of the granted memory (cgroup limit, else the
+    host's MemTotal); an explicit --CPU is kept, with a warning if it looks too big.
+    """
+    granted = Util_funcs.granted_memory()
+    parent = Util_funcs.current_rss() or 0
+    if granted is None or num_workers <= 1:
+        return num_workers
+
+    per_worker = worker_mem_GB * 2**30
+    fits = max(1, int((0.9 * granted - parent) // per_worker))
+    GiB = 2**30
+    if is_auto:
+        if fits < num_workers:
+            logger.info(
+                "--CPU auto: {} worker(s), not {}: {:.1f} GiB granted, {:.1f} GiB "
+                "held by the parsed inputs, ~{:.1f} GiB per worker "
+                "(--worker_mem_GB)".format(
+                    fits, num_workers, granted / GiB, parent / GiB, worker_mem_GB
+                )
+            )
+        return min(num_workers, fits)
+
+    if fits < num_workers:
+        logger.warning(
+            "--CPU {}: estimated to need ~{:.1f} GiB ({:.1f} GiB parsed inputs + "
+            "{} x {:.1f} GiB) of {:.1f} GiB granted; --CPU auto would use {}".format(
+                num_workers,
+                (parent + num_workers * per_worker) / GiB,
+                parent / GiB,
+                num_workers,
+                worker_mem_GB,
+                granted / GiB,
+                fits,
+            )
+        )
+    return num_workers
+
+
 # Units are merged in forked workers, never spawned: a worker relies on the module
 # state main() set up (LRAA_Globals.config, LRAA_MODE, DEBUG, the parsed input
 # transcripts below), which a fork inherits and a spawn or forkserver child would
@@ -194,17 +239,25 @@ def reset_unit_state():
     Each unit (one contig and strand) is merged from its own splice graph, but the
     objects built for it take ids from class-level counters (E:n, I:n, TSS:n,
     POLYA:n, MPn, mpnx) and read ids from the process's read-name store, and both
-    keep counting across units. Those values reach the output: node ids sit in the
-    simple paths that Transcript.structural_sort_key orders by (hence gene
-    assignment), multipath-graph nodes are sorted with their id as a tie-break, and
-    compared as STRINGS ("mp99x" > "mp100x"), so where a counter starts changes
-    order. A unit would then depend on which units its process merged before it,
-    which differs between the serial run and every worker. Resetting here, at the
-    top of every unit on both paths, makes a unit's output a function of its own
-    inputs only.
+    keep counting across units. Those values can reach the output: multipath-graph
+    nodes are sorted with their id as a last tie-break, compared as STRINGS
+    ("mp99x" > "mp100x"), so where a counter starts changes order. (Transcript.
+    structural_sort_key, which numbers isoforms, now ranks exon coordinates ahead of
+    the node-id path, so the ids no longer decide isoform numbers.) A unit would
+    otherwise depend on which units its process merged before it, which differs
+    between the serial run and every worker. Resetting here, at the top of every
+    unit on both paths, makes a unit's output a function of its own inputs only.
 
     The Transcript counter goes back to its post-parse value, not 0, so transcripts
     built here never share an internal id with a parsed input transcript.
+
+    SAFE ONLY BECAUSE UNITS NEVER SHARE A PROCESS AT THE SAME TIME. The counters
+    are class attributes, one copy per process. Workers are separate processes
+    (ProcessPoolExecutor, fork), each with its own copy, and each runs its units one
+    after another, so this reset only ever lands between two units of the same
+    process. Under threads it would restart numbering underneath a unit still in
+    progress in another thread, handing out ids that unit already uses. Do not move
+    this merge onto threads without first moving these counters off the classes.
     """
 
     for cls, attr in _ID_COUNTER_CLASSES:
@@ -610,14 +663,26 @@ def main():
             "'auto' for the cores this process is granted (affinity and cgroup quota). "
             "1 merges serially. Output is identical either way. Each worker holds one "
             "unit's splice graph and contig sequence, several GB for the largest human "
-            "chromosomes, on top of the parsed inputs it shares with the parent: on a "
-            "many-core machine, set --CPU to what memory allows."
+            "chromosomes, on top of the parsed inputs it shares with the parent, so "
+            "'auto' is also capped by the memory granted (see --worker_mem_GB)."
+        ),
+    )
+
+    parser.add_argument(
+        "--worker_mem_GB",
+        type=float,
+        default=6.0,
+        help=(
+            "memory budgeted per worker when --CPU auto sizes the pool against the "
+            "memory granted. MEASURED ~5 GB per worker on chr1/chr2-size units of 14 "
+            "whole-genome PBMC cluster gtfs."
         ),
     )
 
     args = parser.parse_args()
 
     num_workers = resolve_num_workers(args.CPU)
+    cpu_is_auto = args.CPU == "auto"
 
     if args.debug:
         LRAA_Globals.DEBUG = True
@@ -760,6 +825,8 @@ def main():
 
     global _POST_PARSE_TRANSCRIPT_COUNTER
     _POST_PARSE_TRANSCRIPT_COUNTER = Transcript.trans_id_counter
+
+    num_workers = cap_workers_by_memory(num_workers, args.worker_mem_GB, cpu_is_auto)
 
     for stranded_contig, gtf_text, unit_tracking_records in iter_merged_units(
         contig_strand_to_input_transcripts, genome_fasta_file, num_workers

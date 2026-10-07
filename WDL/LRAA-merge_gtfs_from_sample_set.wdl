@@ -12,8 +12,8 @@ workflow LRAA_merge_gtfs_from_sample_set {
         # Default: respect TSS/PolyA annotations on the input gtfs. Set true for the
         # former non-HiFi merge that ignores them.
         Boolean ignore_TSS_POLYA = false
-        Int memoryGB = 32
-        Int cpu = 4
+        Int memoryGB = 64
+        Int cpu = 8
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     }
 

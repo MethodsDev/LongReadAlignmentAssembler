@@ -84,13 +84,14 @@ workflow LRAA_cell_cluster_guided {
         Int? chunkMemoryGB
         Int? chunkMergeCpu
         Int? chunkMergeMemoryGB
-        Int memoryGBmergeGTFs = 32
-        # merge_LRAA_GTFs.py merges each contig/strand in its own worker process
-        # (--CPU auto uses the cores the task is granted); output is identical to
-        # a serial run. Memory grows with it: peak ~ parsed inputs + cpu x ~5 GB on
-        # human chromosomes. MEASURED, 14 whole-genome PBMC cluster gtfs: 4.9 GB
-        # parsed, 25.6 GB peak at cpu 4. Raise memoryGBmergeGTFs with cpu.
-        Int cpu_mergeGTFs = 4
+        Int memoryGBmergeGTFs = 64
+        # merge_LRAA_GTFs.py merges each contig/strand in its own worker process.
+        # --CPU auto uses the cores the task is granted, capped by its memory:
+        # peak ~ parsed inputs + workers x ~5 GB on human chromosomes, and auto
+        # budgets 6 GB per worker within 90% of the granted memory. MEASURED, 14
+        # whole-genome PBMC cluster gtfs: 4.9 GB parsed, 25.6 GB peak at 4 workers.
+        # At 64 GB and 8 cpus that is ~8 workers. Output is identical to serial.
+        Int cpu_mergeGTFs = 8
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16
         Int memoryGBquantMerge = 16
@@ -696,8 +697,9 @@ task lraa_merge_gtf_task {
         String docker
         Int memoryGB
         # Contig/strand units are merged in parallel worker processes. The script
-        # runs --CPU auto, so it uses the cores the backend actually grants.
-        Int cpu = 4
+        # runs --CPU auto: the cores the backend actually grants, capped by the
+        # memory granted (6 GB budgeted per worker).
+        Int cpu = 8
     }
 
     

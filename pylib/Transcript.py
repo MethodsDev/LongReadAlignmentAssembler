@@ -719,7 +719,15 @@ class Transcript(GenomeFeature):
 
         Used wherever output identifiers or grouping must not depend on the order in
         which transcripts happen to arrive; splice-graph node objects hash by identity,
-        so upstream set iteration order varies between processes."""
+        so upstream set iteration order varies between processes.
+
+        The exon coordinates, compared as numbers, decide ties on span and length.
+        The simple path comes last, only for identical exon structures: its node ids
+        ("E:4021", "I:3377", ...) come from class-level counters that keep counting
+        across every contig a process handles, so they record processing history, not
+        structure -- and as text "E:1000" sorts before "E:999". With the path ahead of
+        the exons, the same contig merged alone and after other contigs numbered two
+        equal-span, equal-length isoforms of a gene in opposite orders."""
         lend, rend = transcript.get_coords()
         try:
             simple_path = transcript.get_simple_path()
@@ -728,12 +736,16 @@ class Transcript(GenomeFeature):
         simple_path_str = (
             ",".join(str(node_id) for node_id in simple_path) if simple_path else ""
         )
+        exon_coords = tuple(
+            (int(seg_lend), int(seg_rend))
+            for seg_lend, seg_rend in transcript.get_exon_segments()
+        )
         return (
             lend,
             rend,
             transcript.get_cdna_len(),
+            exon_coords,
             simple_path_str,
-            transcript.get_exons_string(),
         )
 
     @classmethod

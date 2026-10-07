@@ -57,3 +57,30 @@ def test_no_quota_uses_affinity(monkeypatch):
     monkeypatch.setattr(Util_funcs, "available_cpus", lambda: 12)
     monkeypatch.setattr(Util_funcs, "cgroup_cpu_quota", lambda root=None: None)
     assert Util_funcs.granted_cpus() == 12
+
+
+def test_cgroup_v2_memory_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(Util_funcs, "host_memory_total", lambda: 64 * 2**30)
+    _write(str(tmp_path / "memory.max"), str(32 * 2**30) + "\n")
+    assert Util_funcs.cgroup_memory_limit(str(tmp_path)) == 32 * 2**30
+
+
+def test_cgroup_v2_memory_unlimited(tmp_path):
+    _write(str(tmp_path / "memory.max"), "max\n")
+    assert Util_funcs.cgroup_memory_limit(str(tmp_path)) is None
+
+
+def test_cgroup_v1_huge_memory_limit_means_unlimited(tmp_path, monkeypatch):
+    monkeypatch.setattr(Util_funcs, "host_memory_total", lambda: 64 * 2**30)
+    _write(str(tmp_path / "memory" / "memory.limit_in_bytes"), "9223372036854771712\n")
+    assert Util_funcs.cgroup_memory_limit(str(tmp_path)) is None
+
+
+def test_cgroup_v1_memory_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(Util_funcs, "host_memory_total", lambda: 64 * 2**30)
+    _write(str(tmp_path / "memory" / "memory.limit_in_bytes"), str(16 * 2**30) + "\n")
+    assert Util_funcs.cgroup_memory_limit(str(tmp_path)) == 16 * 2**30
+
+
+def test_no_memory_cgroup(tmp_path):
+    assert Util_funcs.cgroup_memory_limit(str(tmp_path)) is None

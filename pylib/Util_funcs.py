@@ -962,6 +962,68 @@ def granted_cpus():
     return min(affinity, quota) if quota is not None else affinity
 
 
+def cgroup_memory_limit(root="/sys/fs/cgroup"):
+    """Bytes this process's cgroup may use, or None if unlimited.
+
+    A container's --memory, miniwdl's task memory and Terra's VM size land here
+    (memory.max under cgroup v2, memory/memory.limit_in_bytes under v1) and are
+    invisible to /proc/meminfo, which reports the host. v1 reports "unlimited" as a
+    huge number, so anything at or above the host's MemTotal counts as no limit.
+    """
+
+    for path in (
+        os.path.join(root, "memory.max"),
+        os.path.join(root, "memory", "memory.limit_in_bytes"),
+    ):
+        try:
+            with open(path, "rt") as fh:
+                value = fh.read().strip()
+        except OSError:
+            continue
+        if value == "max":
+            return None
+        try:
+            limit = int(value)
+        except ValueError:
+            continue
+        total = host_memory_total()
+        if total is not None and limit >= total:
+            return None
+        return limit
+    return None
+
+
+def host_memory_total():
+    """MemTotal from /proc/meminfo in bytes, or None where it cannot be read."""
+    try:
+        with open("/proc/meminfo", "rt") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def granted_memory():
+    """Bytes of memory this process is allowed: the cgroup limit if one is set,
+    else the host's MemTotal; None if neither can be read."""
+    limit = cgroup_memory_limit()
+    return limit if limit is not None else host_memory_total()
+
+
+def current_rss():
+    """This process's resident memory in bytes (VmRSS), or None."""
+    try:
+        with open("/proc/self/status", "rt") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 # Canonical polyadenylation signal hexamers, in transcript sense.  These two account
 # for the large majority of characterised human cleavage sites; the many
 # single-substitution variants are deliberately excluded, so a positive call means the
