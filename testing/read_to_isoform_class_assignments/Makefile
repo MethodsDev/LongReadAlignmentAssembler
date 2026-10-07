@@ -29,7 +29,12 @@ test_parallel_parity:
 	cp test.par.fixture.bam test.par.noindex.bam
 	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.noindex.bam --output_prefix test.par.auto_noindex
 	cmp test.par.cpu1.iso_cats.tsv test.par.auto_noindex.iso_cats.tsv
-	@echo "ok: --CPU 4 and --CPU auto (indexed and not) match the serial run"
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.fixture.bam --output_prefix test.par.gz4 --CPU 4 --gzip_tsv
+	gzip -t test.par.gz4.iso_cats.tsv.gz
+	zcat test.par.gz4.iso_cats.tsv.gz | cmp - test.par.cpu1.iso_cats.tsv
+	../../util/SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf test.par.ref_noSIRV7.gtf --input_bam test.par.fixture.bam --output_prefix test.par.gz1 --CPU 1 --gzip_tsv
+	zcat test.par.gz1.iso_cats.tsv.gz | cmp - test.par.cpu1.iso_cats.tsv
+	@echo "ok: --CPU 4, --CPU auto (indexed and not) and --gzip_tsv (serial and parallel) match the serial run"
 
 include ../lraa_test_docker.mk
 

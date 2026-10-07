@@ -19,6 +19,11 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         # --input_BAM it classifies contigs on as many cores as the backend actually
         # grants (which can be fewer than requested).
         Int cpu = 8
+
+        # SSD by default: the run is I/O-bound once classification ends (writing the
+        # tagged bam), and Terra's standard HDD throughput scales with disk size, so a
+        # few hundred GB of HDD gives only tens of MB/s.
+        String disk_type = "SSD"
     }
 
 
@@ -31,7 +36,8 @@ workflow LRAA_sqanti_like_reads_eval_wf {
           input_GTF = input_GTF,
           docker = docker_sc,
           min_disk_GB = min_disk_GB,
-          cpu = cpu
+          cpu = cpu,
+          disk_type = disk_type
     }
 
     output {
@@ -58,6 +64,7 @@ task LRAA_sqanti_like_reads_eval_task {
         String docker
         Int? min_disk_GB
         Int cpu
+        String disk_type
     }
 
     
@@ -76,16 +83,17 @@ task LRAA_sqanti_like_reads_eval_task {
                  samtools index -@ ~{cpu} input.bam
              fi
 
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU auto
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU auto --gzip_tsv
 
         elif [[ "~{input_GTF}" != "" ]]; then
  
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF}
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF} --gzip_tsv
 
        fi
 
 
-       gzip *.tsv
+       # the per-feature table is already gzipped (--gzip_tsv); only the summary is left
+       gzip ~{sample_id}.iso_cats.summary_counts.tsv
 
     >>>
 
@@ -100,7 +108,7 @@ task LRAA_sqanti_like_reads_eval_task {
 
   runtime {
     docker: docker
-    disks: "local-disk " + (if defined(min_disk_GB) && ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 ) < select_first([min_disk_GB]) then select_first([min_disk_GB]) else ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 )) + " HDD"
+    disks: "local-disk " + (if defined(min_disk_GB) && ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 ) < select_first([min_disk_GB]) then select_first([min_disk_GB]) else ceil( (4 * size(input_BAM, "GB")) + (4 * size(input_GTF, "GB")) + (4 * size(ref_annot_GTF, "GB")) + 50 )) + " " + disk_type
     memory: "32G"
     cpu: cpu
   }

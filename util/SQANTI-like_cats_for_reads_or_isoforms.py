@@ -75,6 +75,13 @@ def main():
     )
 
     parser.add_argument(
+        "--gzip_tsv",
+        action="store_true",
+        default=False,
+        help="write the per-feature table gzipped, as <output_prefix>.iso_cats.tsv.gz",
+    )
+
+    parser.add_argument(
         "--CPU",
         type=str,
         default="auto",
@@ -109,7 +116,7 @@ def main():
 
     if input_bam is not None and num_workers > 1:
         feature_category_counter = classify_bam_by_contig(
-            ref_annot_gtf, input_bam, output_prefix, num_workers
+            ref_annot_gtf, input_bam, output_prefix, num_workers, args.gzip_tsv
         )
         write_summary_and_plot(output_prefix, feature_category_counter)
         sys.exit(0)
@@ -117,7 +124,9 @@ def main():
     sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf)
 
     tsv_output_filename = output_prefix + ".iso_cats.tsv"
-    tsv_ofh = open(tsv_output_filename, "wt")
+    if args.gzip_tsv:
+        tsv_output_filename += ".gz"
+    tsv_ofh = open_tsv(tsv_output_filename, args.gzip_tsv)
 
     feature_counter = 0
     feature_category_counter = defaultdict(int)
@@ -254,6 +263,16 @@ def write_summary_and_plot(output_prefix, feature_category_counter):
     logger.info("\nDone. See files: {}.*".format(output_prefix))
 
 
+def open_tsv(filename, gzip_tsv):
+    # The per-feature table can be larger than the bam: real reads carry long exon
+    # structure strings. MEASURED on a 26 GB bam: ~50 GB of table, gzipped afterwards
+    # by a separate 20 min single-core pass. Gzipping as it is written spreads that
+    # over the workers and never puts the uncompressed table on disk.
+    if gzip_tsv:
+        return gzip.open(filename, "wt", compresslevel=6)
+    return open(filename, "wt")
+
+
 def get_aligned_length(read):
     aligned_length = 0
     for operation, length in read.cigartuples:
@@ -283,7 +302,9 @@ def process_bam_record(
     bamwriter.write(read)
 
 
-def classify_bam_by_contig(ref_annot_gtf, input_bam, output_prefix, num_workers):
+def classify_bam_by_contig(
+    ref_annot_gtf, input_bam, output_prefix, num_workers, gzip_tsv=False
+):
     """Classify a coordinate-sorted, indexed bam one contig per worker.
 
     Each worker loads only its contig's reference transcripts, so per-worker memory
@@ -339,7 +360,7 @@ def classify_bam_by_contig(ref_annot_gtf, input_bam, output_prefix, num_workers)
     part_counters = [None] * len(jobs)
     with ProcessPoolExecutor(max_workers=min(num_workers, len(jobs))) as executor:
         futures = {
-            executor.submit(classify_bam_contig, input_bam, *jobs[j]): j
+            executor.submit(classify_bam_contig, input_bam, *jobs[j], gzip_tsv): j
             for j in submit_order
         }
         for num_done, future in enumerate(as_completed(futures), start=1):
@@ -356,14 +377,21 @@ def classify_bam_by_contig(ref_annot_gtf, input_bam, output_prefix, num_workers)
         for category, count in part_counter.items():
             feature_category_counter[category] += count
 
-    tsv_output_filename = output_prefix + ".iso_cats.tsv"
-    with open(tsv_output_filename, "wt") as ofh:
+    # Header, then each part's bytes appended as they are. For gzip that yields a
+    # multi-member file, which is valid gzip (zcat, Python and R read it as one
+    # stream), so the parts are never decompressed. Each part is deleted once
+    # appended, so the table is not on disk twice.
+    tsv_suffix = ".tsv.gz" if gzip_tsv else ".tsv"
+    tsv_output_filename = output_prefix + ".iso_cats" + tsv_suffix
+    with open_tsv(tsv_output_filename, gzip_tsv) as ofh:
         csv.DictWriter(
             ofh, fieldnames=BAM_TSV_FIELDNAMES, delimiter="\t", lineterminator="\n"
         ).writeheader()
+    with open(tsv_output_filename, "ab") as ofh:
         for _, _, part in jobs:
-            with open(part + ".tsv", "rt") as fh:
+            with open(part + tsv_suffix, "rb") as fh:
                 shutil.copyfileobj(fh, ofh)
+            os.remove(part + tsv_suffix)
 
     bam_output_filename = output_prefix + ".iso_cats.bam"
     pysam.cat(
@@ -396,7 +424,7 @@ def split_gtf_by_contig(gtf_filename, contigs, tmpdir):
     return contig_gtfs
 
 
-def classify_bam_contig(input_bam, contig, contig_gtf, part_prefix):
+def classify_bam_contig(input_bam, contig, contig_gtf, part_prefix, gzip_tsv=False):
     # Worker: takes only paths and strings, so it runs under any start method.
     if contig_gtf is not None:
         sqanti_classifier = SQANTI_like_annotator(contig_gtf)
@@ -407,7 +435,8 @@ def classify_bam_contig(input_bam, contig, contig_gtf, part_prefix):
     bamwriter = pysam.AlignmentFile(part_prefix + ".bam", "wb", template=bamfile_reader)
     category_counter = defaultdict(int)
 
-    with open(part_prefix + ".tsv", "wt") as tsv_ofh:
+    tsv_suffix = ".tsv.gz" if gzip_tsv else ".tsv"
+    with open_tsv(part_prefix + tsv_suffix, gzip_tsv) as tsv_ofh:
         tsv_writer = csv.DictWriter(
             tsv_ofh,
             fieldnames=BAM_TSV_FIELDNAMES,

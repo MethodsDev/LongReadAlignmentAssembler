@@ -25,6 +25,18 @@ v0.44.3
   8-contig mouse slice: --CPU 1 188 s wall at 100% of one core; --CPU 8 54 s wall,
   159 s total CPU, 303% average utilization (one contig held 30% of the reads, which
   caps that slice at ~3.4x).
+- SQANTI-like --gzip_tsv writes the per-feature table gzipped as it is written; under
+  --CPU each worker compresses its own part and the parts are appended as gzip
+  members (a valid multi-member file: zcat, Python, and R read.table/fread/readr read
+  it whole), each part deleted once appended. A 26 GB bam on Terra (2026-10) produced
+  ~50 GB of uncompressed table, then gzipped it in a separate 20 min single-core
+  pass; disk peaked at 177 GB while the parts, the combined table and bam, and the
+  input were all on disk. MEASURED on a 2.4 GB mouse slice: table 0.46 GB -> 0.02 GB,
+  peak extra disk 5.84 -> 4.93 GB (the bam parts plus the final bam are the rest).
+- WDL/LRAA-sqanti-like-reads-eval.wdl passes --gzip_tsv and gzips only the summary
+  counts; new `disk_type` input, default "SSD" (was a fixed HDD): after
+  classification the task is I/O-bound, and standard HDD throughput on Terra scales
+  with disk size.
 - WDL/LRAA-sqanti-like-reads-eval.wdl: new `cpu` input (default 8) for the task's
   runtime cpu; the task runs the script with --CPU auto, so it uses the cores the
   backend actually grants. The bam and bai are linked side by side in the task, and
