@@ -387,7 +387,8 @@ read_transcript_exons = function(gtf, transcript_ids) {
 # against them (count_isoform_reads_by_cluster()).
 plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NULL, xlim = NULL,
                                  colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
-                                 read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL) {
+                                 read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL,
+                                 highlight = NULL) {
 
     tx_label = setNames(names(transcripts), transcripts)
     tx_col = setNames(colors[seq_along(transcripts)], names(transcripts))
@@ -444,7 +445,7 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         model_span = trim(model_span, "start", "end")
     }
 
-    p = ggplot() +
+    p = ggplot() + highlight_layer(highlight) +
         geom_segment(data = spans, aes(x = read_start, xend = read_end, y = y, yend = y), color = "#b8b7b1", linewidth = 0.25) +
         geom_rect(data = blocks, aes(xmin = block_start, xmax = block_end, ymin = y - read_height / 2, ymax = y + read_height / 2,
                                      fill = isoform), color = NA) +
@@ -472,11 +473,19 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
 }
 
 
+# light band behind the data marking the windows (list of c(start, end)) shown zoomed
+highlight_layer = function(highlight, fill = "#e4e3dc") {
+    if (is.null(highlight)) return(NULL)
+    annotate("rect", xmin = sapply(highlight, `[`, 1), xmax = sapply(highlight, `[`, 2),
+             ymin = -Inf, ymax = Inf, fill = fill)
+}
+
+
 # Read-end density per cluster: each cluster's read 5' (TSS) or 3' (PolyA) ends in
 # `binwidth`-bp bins, as a share of that cluster's ends in the region, one row per
 # cluster. `ends`: cluster, pos, reads (extract_isoform_read_tracks.py --ends_output).
 plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
-                                 fill = "#5a5954") {
+                                 fill = "#5a5954", highlight = NULL, axis_side = "right") {
     d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
         filter(! is.na(cluster_label)) %>%
         group_by(cluster_label) %>% mutate(share = reads / sum(reads)) %>% ungroup() %>%
@@ -485,17 +494,17 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
         group_by(cluster_label, bin) %>% summarize(share = sum(share), .groups = "drop") %>%
         mutate(cluster_label = factor(cluster_label, levels = names(clusters)))
     labels = tibble(cluster_label = factor(names(clusters), levels = names(clusters)))
-    p = ggplot(d, aes(x = bin, y = share)) +
+    p = ggplot(d, aes(x = bin, y = share)) + highlight_layer(highlight) +
         geom_col(width = binwidth * 0.9, fill = fill) +
         geom_text(data = labels, aes(x = -Inf, y = Inf, label = cluster_label), inherit.aes = FALSE,
                   hjust = -0.03, vjust = 1.3, size = 2.7, color = "#0b0b0b") +
         facet_grid(cluster_label ~ .) +
         scale_y_continuous(labels = scales::percent_format(accuracy = 1), n.breaks = 3,
-                           position = "right", expand = expansion(mult = c(0, 0.35))) +
+                           position = axis_side, expand = expansion(mult = c(0, 0.35))) +
         labs(x = NULL, y = NULL,
              subtitle = paste0("read ", if (kind == "TSS") "5'" else "3'", " ends per ", binwidth, " bp")) +
         theme_minimal(base_size = 9) +
-        theme(panel.grid.minor = element_blank(), strip.text = element_blank(),
+        theme(panel.grid.minor = element_blank(), strip.text = element_blank(), panel.spacing.y = unit(8, "pt"),
               axis.text.x = element_blank(), plot.subtitle = element_text(size = 8.5))
     if (! is.null(sites)) {
         p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
@@ -527,10 +536,14 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
     bins = c(full_bin, rep(zoom_bin, length(zooms)))
     col_titles = c("whole gene", if (length(zooms) == 1) paste0(kind, " region") else
         paste0(kind, " at ", format(sort(sites), big.mark = ",")))
+    # the whole-gene column shades the zoomed windows and keeps its density axis on its
+    # outer (left) side, with some space before the zooms, so the column boundary is clear
+    gap = function(i) if (i > 1) theme(plot.margin = margin(5.5, 5.5, 5.5, 16)) else NULL
     tracks = lapply(seq_along(xlims), function(i)
         plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlims[[i]],
                               title = if (is.null(ends)) col_titles[i] else NULL, show_legend = FALSE,
-                              read_totals = if (i == 1) read_totals else NULL))
+                              read_totals = if (i == 1) read_totals else NULL,
+                              highlight = if (i == 1) zooms else NULL) + gap(i))
     # one grid, so every column's read rows share the same height and line up across
     # panels; the legend goes under the whole figure, not under one column
     widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms)))
@@ -538,8 +551,10 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
         plot_grid(plotlist = tracks, nrow = 1, rel_widths = widths, align = "h", axis = "tb")
     } else {
         dens = lapply(seq_along(xlims), function(i)
-            plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind) +
-                labs(title = col_titles[i]))
+            plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind,
+                                  highlight = if (i == 1) zooms else NULL,
+                                  axis_side = if (i == 1) "left" else "right") +
+                labs(title = col_titles[i]) + gap(i))
         plot_grid(plotlist = c(dens, tracks), nrow = 2, rel_widths = widths,
                   rel_heights = c(density_height, 1), align = "hv", axis = "tblr")
     }
