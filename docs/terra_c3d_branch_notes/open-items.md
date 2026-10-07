@@ -52,3 +52,11 @@ Chunks are cut at ~equal genomic span (median 10.0 Mb, p10-p90 9.6-10.4 Mb; anno
 Why it would help: the chunk tool already knows each chunk's region, record count (split_counts.records_total) and transcript count (gtf_transcripts_emitted) at cut time, so it could emit a predicted
 wall/work score per chunk and per shard. Uses: (a) choose `preemptible_tries` per shard (0 for shards holding the known-dense loci, 2 otherwise), (b) pick cores/memory per shard,
 (c) cut dense regions finer (equal work instead of equal span), (d) order/schedule the long chunks first. Data: perf/chunk_index.tsv + chunkReports in each real run's perf/ folder.
+
+## Cromwell read_map vs miniwdl (found on the first Terra run, basic quant-only mode)
+Run 8afbf712 failed AFTER partition_by_chromosome_task succeeded: `Bad output 'chromosomeBAMsForSGByName': Failed to read_map("sg_bams_by_name.tsv"): TSV must be 2 columns`.
+No splice-graph bam in basic mode -> empty sg_bams_by_name.tsv; Cromwell rejects an empty TSV in read_map, miniwdl returns {} (so every miniwdl smoke test passed).
+Fix: each of the three by-name TSVs gets a placeholder `none<TAB><file itself>` row when empty (Partition_data_by_chromosome.wdl). Verified under Cromwell 92 locally (Local backend, lraa-core image,
+chr21+chrM slice, no gtf, no sg bam): Succeeded. LESSON: miniwdl is NOT enough to validate WDL output expressions for Terra; run Cromwell (a local cromwell-92 jar
+was used) for anything that reads files into typed values. Also seen: Cromwell logs "Unrecognized machine type: c3d-highcpu-N" for its VM cost estimate (cosmetic; tasks ran).
+Failure details for any Terra run come from: GET https://api.firecloud.org/api/workspaces/<ns>/<ws>/submissions/<sub>/workflows/<wf> with `gcloud auth print-access-token` -> `failures`.

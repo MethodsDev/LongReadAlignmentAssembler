@@ -166,6 +166,15 @@ task partition_by_chromosome_task {
         name_map split_fastas .genome.fasta > fastas_by_name.tsv
         name_map split_gtfs .annot.gtf > gtfs_by_name.tsv
         ~{if defined(bam_for_sg) then "name_map split_bams_for_sg .bam > sg_bams_by_name.tsv" else ": > sg_bams_by_name.tsv"}
+        # A map with nothing to say (no annotation, or no splice-graph bam) must still be a
+        # readable map: Cromwell's read_map rejects an EMPTY file ("TSV must be 2 columns to
+        # convert to a Map") where miniwdl returns {}, and that failed a whole run after the
+        # partition itself had succeeded. The placeholder row points at the file itself so it
+        # is a real File to delocalize; nothing looks it up, because every consumer reads
+        # these maps only when the matching input (annot_gtf, bam_for_sg) was given.
+        for f in fastas_by_name.tsv gtfs_by_name.tsv sg_bams_by_name.tsv; do
+            [ -s "$f" ] || printf 'none\t%s\n' "$f" > "$f"
+        done
     >>>
 
     output {

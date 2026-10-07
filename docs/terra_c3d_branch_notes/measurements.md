@@ -72,3 +72,7 @@ Input: a merged BAM (+.bai) from a Terra workspace, copied locally.
 ## Incorporate_gene_symbols
 gffcompare v0.12.6 cannot read .gz GTFs (parse error) and has no threading option; its real-data run is ~21 s. incorporate_gene_symbols_in_sc_features.py
 takes 9 s on the real run; gunzip of the 1.4 GB reference ~5 s. Change: plain inputs are symlinked (not copied), the two gunzips run concurrently; outputs identical.
+
+## Cromwell 92 (Local backend, Docker) end-to-end on testing/single_cells/sc_full_pipe_scattered fixture, images lraa-core/lraa-sc :cg-terra-testing (commit 5870393 + partition read_map fix)
+cluster-guided scattered: Succeeded, 639 s, 59 workflow outputs (empty ones = features this fixture disables). basic + quant_only (same fixture): Succeeded, 163 s, 13 non-empty outputs
+(no gtf outputs, as expected for quant-only). Only ERROR lines: Cromwell's cost estimate not knowing C3D machine types. Not covered locally: GCP Batch machine types, preemption, real data size.
