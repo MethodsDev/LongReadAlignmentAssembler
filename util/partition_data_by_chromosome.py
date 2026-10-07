@@ -146,7 +146,7 @@ def _collect_chromosomes_from_gtf(gtf_path: str) -> List[str]:
     return chroms
 
 
-def _extract_one_contig(bam_path, chrom, out_path, threads, chrom_lengths, mapped):
+def _extract_one_contig(bam_path, chrom, out_path, threads, chrom_lengths, mapped, level=None):
     """One contig's extraction: its own output file, nothing shared with any other.
 
     Split out of the loop so it can run in a worker. Everything it needs is passed in,
@@ -176,12 +176,20 @@ def _extract_one_contig(bam_path, chrom, out_path, threads, chrom_lengths, mappe
         # times per cluster: a chrY.bam holding only 26,725 alignments measured 87.9 MB
         # on disk, and across the 325 per-chromosome SG outputs roughly 27 GB of the
         # 44 GB total was duplicated header rather than alignment data.
+        # level: these per-contig BAMs are intermediates that the shards read once, so
+        # the default (6) buys a smaller file at a cost the pipeline pays in CPU.
+        # Measured on a 518 MB cluster bam over all 25 contigs at -@ 4 (output size, wall):
+        #   default 518 MB 22 s  |  1 620 MB 11 s  |  4 543 MB 14 s  |  6 518 MB 21 s
+        # so 4 keeps 95% of the compression for 64% of the time. None leaves samtools'
+        # default alone.
+        level_args = ["--output-fmt-option", "level={}".format(level)] if level is not None else []
         pysam.view(
             "--no-PG",
             "-@",
             str(threads),
             "-h",
             "-b",
+            *level_args,
             "-o",
             out_path,
             bam_path,
@@ -214,6 +222,7 @@ def _plan_bam_partition(
     out_dir: str,
     label: str,
     samtools_threads: Optional[int] = None,
+    compression_level: Optional[int] = None,
 ):
     """Prepare `out_dir` and return the contig extractions that still need running.
 
@@ -262,7 +271,7 @@ def _plan_bam_partition(
             )
             _write_empty_bam(out_path, [chrom], chrom_lengths)
             continue
-        work.append((bam_path, chrom, out_path, threads, chrom_lengths, mapped))
+        work.append((bam_path, chrom, out_path, threads, chrom_lengths, mapped, compression_level))
 
     LOGGER.info(
         "%s partition: %d contig(s) to extract at %d additional samtools thread(s) each",
@@ -410,6 +419,14 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--fasta-out-dir", default="split_fastas")
     parser.add_argument("--gtf-out-dir", default="split_gtfs")
     parser.add_argument(
+        "--bam-compression-level",
+        dest="bam_compression_level",
+        type=int,
+        choices=range(0, 10),
+        default=None,
+        help="BGZF compression level for the per-contig BAMs (default: samtools' own)",
+    )
+    parser.add_argument(
         "--samtools-threads",
         type=int,
         default=None,
@@ -552,10 +569,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # threads_each, not args.samtools_threads: the value resolved against the grant
     # above is the one each unit must carry into its samtools invocation.
     bam_work += _plan_bam_partition(
-        input_bam, chromosomes, args.bam_out_dir, "BAM", threads_each
+        input_bam, chromosomes, args.bam_out_dir, "BAM", threads_each,
+        args.bam_compression_level,
     )
     bam_work += _plan_bam_partition(
-        bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", threads_each
+        bam_for_sg, chromosomes, args.bam_for_sg_out_dir, "BAM_FOR_SG", threads_each,
+        args.bam_compression_level,
     )
 
     # Longest first, ACROSS both kinds, by the mapped count already read from each

@@ -6,6 +6,7 @@ version 1.0
 
 task partition_bam_by_cell_cluster {
     input {
+        Int preemptible_tries = 3
         String sample_id
         File cell_clusters_info
         File inputBAM
@@ -37,6 +38,41 @@ task partition_bam_by_cell_cluster {
     Int computed_memoryGB = if mem_raw_cluster > 16.0 then ceil(mem_raw_cluster) else 16
     Int effective_memoryGB = select_first([memoryGB, computed_memoryGB])
     
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = cpu
+    Int c3d_mem = effective_memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
         set -ex
 
@@ -55,7 +91,7 @@ task partition_bam_by_cell_cluster {
             if [ -f "~{inputBAM}.bai" ]; then
                 ln -s "~{inputBAM}.bai" restrict_input.bam.bai
             else
-                samtools index -@ ~{cpu} restrict_input.bam
+                samtools index -@ ~{c3d_effective_cpu} restrict_input.bam
             fi
             BAM="$(pwd)/restrict_input.bam"
         fi
@@ -88,7 +124,7 @@ task partition_bam_by_cell_cluster {
                                              --output_prefix ~{sample_id} \
                                              --cell_barcode_tag ~{cell_barcode_tag} \
                                              ~{if main_chromosomes != "" then "--restrict_to_chromosomes '" + main_chromosomes + "'" else ""} \
-                                             --threads ~{cpu} > command_output.log 2>&1
+                                             --threads ~{c3d_effective_cpu} > command_output.log 2>&1
         ) || {
             echo "Command failed with exit code $?" >&2
             echo "Last 100 lines of output:" >&2
@@ -112,9 +148,10 @@ task partition_bam_by_cell_cluster {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: cpu
-        memory: "~{effective_memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
+        predefinedMachineType: c3d_machine_type
+        disks: "local-disk ~{disksize} SSD"
     }
 }

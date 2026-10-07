@@ -4,6 +4,7 @@ import "LRAA.wdl" as LRAA
 import "LRAA_quant_by_cluster.wdl" as LRAA_quant_by_cluster
 import "subwdls/partition_bam_by_cell_cluster.wdl" as PartitionBam
 import "subwdls/LRAA-build_sparse_matrices_from_tracking.wdl" as BuildMatrices
+import "subwdls/Partition_data_by_chromosome.wdl" as PartByChr
 
 
 
@@ -56,10 +57,15 @@ workflow LRAA_cell_cluster_guided {
 
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
 
-        # Contigs each per-cluster partition extracts concurrently. 1 locally, where
-        # these jobs share one host; 4 on Terra, where each is its own VM and the
-        # 2.19x measured for the fan-out is available on every one of them.
-        Int cluster_partition_workers = 1
+        # Each per-cluster partition now splits only that cluster's own bam (0.5 to 1.8 GB
+        # measured), because the genome fasta, the annotation and the shared splice-graph
+        # bam are split ONCE below and handed in. The cores below size that call's VM;
+        # contigs extracted at once fill it, unless a worker count is given.
+        Int cluster_partition_cpu = 4
+        Int? cluster_partition_workers
+        # Cores for the one call that splits the shared inputs (the genome fasta and the
+        # annotation, plus the splice-graph bam in the final quant).
+        Int shared_partition_cpu = 16
         
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -85,6 +91,8 @@ workflow LRAA_cell_cluster_guided {
         Int? chunkMergeCpu
         Int? chunkMergeMemoryGB
         Int memoryGBmergeGTFs = 32
+        # Cores for the merge of the per-cluster gtfs; see lraa_merge_gtf_task for the measurement.
+        Int cpuMergeGTFs = 8
         Int memoryGBquantFinal = 32
         Int memoryGBquantNormalize = 16
         Int memoryGBquantMerge = 16
@@ -221,6 +229,34 @@ workflow LRAA_cell_cluster_guided {
     }
 
 
+    # The genome fasta and the reference annotation do not depend on the cluster, so
+    # split them ONCE for every cluster's discovery instead of once per cluster. Each
+    # per-cluster partition otherwise re-read the 3.1 GB fasta and 1.4 GB gtf and wrote
+    # them back out (4.4 GB per call, 26 s measured on a 7-core call), 14 to 32 times.
+    # Only by_chromosome discovery partitions at all.
+    if (quant_only_cluster_guided == false && scattering == "by_chromosome") {
+        if (main_chromosomes == "") {
+            call LRAA.derive_contigs as derive_discovery_contigs {
+                input:
+                    referenceGenome = referenceGenome,
+                    inputBAM = inputBAM,
+                    docker = docker
+            }
+        }
+        String discovery_chromosomes = if (main_chromosomes != "")
+            then main_chromosomes
+            else select_first([derive_discovery_contigs.contigs])
+
+        call PartByChr.partition_by_chromosome as split_discovery_shared_inputs {
+            input:
+                genome_fasta = referenceGenome,
+                annot_gtf = annot_gtf,
+                chromosomes_want_partitioned = discovery_chromosomes,
+                cpu = shared_partition_cpu,
+                docker = docker
+        }
+    }
+
     if (quant_only_cluster_guided == false) {
 
         scatter (i in range(length(partition_bam_by_cell_cluster.partitioned_bams))) {
@@ -247,7 +283,10 @@ workflow LRAA_cell_cluster_guided {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     main_chromosomes = main_chromosomes,
+                    partition_cpu = cluster_partition_cpu,
                     partition_workers = cluster_partition_workers,
+                    internal_presplit_fastas = split_discovery_shared_inputs.chromosomeFASTAsByName,
+                    internal_presplit_gtfs = split_discovery_shared_inputs.chromosomeGTFsByName,
                     quant_only = false,
                     cell_barcode_tag = cell_barcode_tag,
                     read_umi_tag = read_umi_tag,
@@ -342,6 +381,7 @@ workflow LRAA_cell_cluster_guided {
                 # task takes String; "" is the task's own "no contigs" value.
                 oversimplify = select_first([oversimplify, ""]),
                 docker = docker,
+                cpu = cpuMergeGTFs,
                 memoryGB = memoryGBmergeGTFs ,
         }
 
@@ -367,7 +407,9 @@ workflow LRAA_cell_cluster_guided {
             scattering = scattering_final_quant,
             build_sc_sparse_shards = use_sc_sparse_from_shards,
             docker_sc = docker_sc,
+            cluster_partition_cpu = cluster_partition_cpu,
             cluster_partition_workers = cluster_partition_workers,
+            shared_partition_cpu = shared_partition_cpu,
             approx_MB_per_cut = approx_MB_per_cut,
             approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
             annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
@@ -553,25 +595,60 @@ workflow LRAA_cell_cluster_guided {
 
 task LRAA_tar_outputs {
     input {
+        Int preemptible_tries = 3
         String tar_directory_name
         Array[File] input_files
         String docker
     }
 
     Int memoryGB = 8
-    Int disksize = 20 + ceil(5 * size(input_files, "GiB"))
+    Int disksize = 20 + ceil(2 * size(input_files, "GiB"))
     
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = 1
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
 
         set -ex
 
-        mkdir ~{tar_directory_name}
-
-        for file in "~{sep=' ' input_files}"; do
-           cp $file ~{tar_directory_name}/
-        done
-        
-        tar -zcvf ~{tar_directory_name}.tar.gz ~{tar_directory_name}/
+        # Tar the inputs where they are, renamed into <tar_directory_name>/ by --transform,
+        # rather than copying them into a staging directory first. -h stores the file behind
+        # a symlink, so this also holds on backends that localize inputs as symlinks.
+        tar -zcvhf ~{tar_directory_name}.tar.gz \
+            --transform 's,^.*/,~{tar_directory_name}/,' \
+            --files-from=~{write_lines(input_files)}
 
     >>>
 
@@ -581,26 +658,67 @@ task LRAA_tar_outputs {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
+        predefinedMachineType: c3d_machine_type
+        disks: "local-disk ~{disksize} SSD"
     }
 }
 
 
 task LRAA_merge_trackings {
     input {
+        Int preemptible_tries = 3
         String sample_id
         Array[File] tracking_files
         String docker
+        # Inputs are processed in parallel, up to this many at a time; the output is
+        # compressed per input and joined, so a single gzip stream is never the bottleneck.
+        Int cpu = 4
     }
 
-    Int memoryGB = 8
+    # Peak measured at ~0.1 GiB with 8 parallel jobs; this is only headroom.
+    Int memoryGB = 4
     Int disksize = 20 + ceil(10 * length(tracking_files))
         
     String outputfile = "~{sample_id}.cluster_merged.quant.tracking.gz"
     
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = cpu
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
         set -ex
 
@@ -612,43 +730,55 @@ task LRAA_merge_trackings {
             --inputs ~{sep=' ' tracking_files} \
             --output merge_header.txt
 
-        python <<CODE
-import json
-import gzip
+        # Equivalent of: write the header once, then every input's rows with '#' lines and
+        # each repeated column-header line removed. Done per input in parallel with the
+        # outputs concatenated in input order (concatenated gzip members are one valid
+        # gzip stream). Measured on 3 x 30M-line tracking files: 8m39s -> 28s, identical
+        # decompressed output.
+        mkdir parts
+        mapfile -t inputs < ~{write_lines(tracking_files)}
+        n=${#inputs[@]}
 
-tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
-tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
-header_lines = open("merge_header.txt", "rt").read()
+        # Schema check: the column-header line (first non-'#' line) of every input must
+        # match the first input that has one.
+        first=-1
+        for i in "${!inputs[@]}"; do
+            { gzip -dcf "${inputs[$i]}" | grep -m1 -v '^#' > parts/hdr.$i || true; }
+            if [ -s parts/hdr.$i ]; then
+                if [ $first -lt 0 ]; then
+                    first=$i
+                elif ! cmp -s parts/hdr.$first parts/hdr.$i; then
+                    echo "Cannot merge tracking files with different schemas: ${inputs[$i]} differs from the first input" >&2
+                    exit 1
+                fi
+            fi
+        done
 
-with gzip.open("~{outputfile}", "wt") as ofh:
-    ofh.write(header_lines)
-    wrote_header = False
-    expected_header = None
-    for i, tracking_file in enumerate(tracking_files_list):
-        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-        with openf(tracking_file, "rt") as fh:
-            header = None
-            for line in fh:
-                if line.startswith("#"):
-                    continue
-                if header is None:
-                    header = line
-                    if expected_header is None:
-                        expected_header = header
-                    elif header != expected_header:
-                        raise RuntimeError(
-                            "Cannot merge tracking files with different schemas: {} differs from the first input".format(
-                                tracking_file
-                            )
-                        )
-                    if not wrote_header:
-                        print(header, file=ofh, end='')
-                        wrote_header = True
-                    continue
-                print(line, file=ofh, end='')
+        # Each job is a decompress | filter | compress pipeline, so cpu jobs at a time
+        # keeps the cores busy; spare cores go to the compressors when inputs are few.
+        threads_per_job=$(( ~{cpu} / n ))
+        if [ $threads_per_job -lt 1 ]; then threads_per_job=1; fi
+        for i in "${!inputs[@]}"; do
+            while [ "$(jobs -rp | wc -l)" -ge ~{cpu} ]; do wait -n; done
+            (
+                set -o pipefail
+                gzip -dcf "${inputs[$i]}" | { grep -v '^#' || true; } \
+                    | { if [ $i -eq $first ]; then cat; else tail -n +2; fi; } \
+                    | pigz -p $threads_per_job > parts/part.$i.gz
+                touch parts/ok.$i
+            ) &
+        done
+        wait
+        # A failed background job does not fail 'wait', so check each one finished.
+        for i in "${!inputs[@]}"; do
+            if [ ! -e parts/ok.$i ]; then echo "Failed to process ${inputs[$i]}" >&2; exit 1; fi
+        done
 
-
-CODE
+        pigz -c merge_header.txt > ~{outputfile}
+        for i in "${!inputs[@]}"; do
+            cat parts/part.$i.gz >> ~{outputfile}
+            rm parts/part.$i.gz
+        done
 
        
     
@@ -659,10 +789,11 @@ CODE
      }
     
      runtime {
+    
+         preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
+        predefinedMachineType: c3d_machine_type
+        disks: "local-disk ~{disksize} SSD"
      }
 } 
 
@@ -688,9 +819,60 @@ task lraa_merge_gtf_task {
         String oversimplify = ""
         String docker
         Int memoryGB
+        # Contig/strand groups merged concurrently, in forked workers, and the cores of the
+        # VM this runs on (rounded up to the next C3D size). The groups are independent, so
+        # this is the whole speedup: MEASURED on the 15 per-cluster gtfs of a real de novo run
+        # (1.08 M output lines), 1,418 s serial, 334 s at 4 workers and 200 s at 8, with the
+        # parse of the inputs, which stays serial, about 43 s of that. Peak memory (PSS, which
+        # counts the pages the workers share once) was 17.6 GB at 4 workers and 22.7 GB at 8,
+        # against about 17 GB serial, because the workers inherit the parsed inputs
+        # copy-on-write.
+        Int cpu = 8
+        # Spot attempts before falling back to a standard VM; the merge is minutes long at 8
+        # workers (200 s on the measured run), so a preemption costs little.
+        Int preemptible_tries = 3
     }
 
     
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    # At the defaults (8 cores, 32 GB) this is c3d-standard-8. The alternative with the same
+    # RAM, c3d-highmem-4, runs 4 workers in 334 s against 200 s for 8, and the longer run
+    # costs more than the extra 4 vCPUs save (about 2.6 against 2.3 cents a run at an
+    # illustrative 7:1 vCPU-to-GB price ratio), so the cores are worth having.
+    Int c3d_cpu = cpu
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
         set -ex
 
@@ -703,6 +885,7 @@ task lraa_merge_gtf_task {
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
                            ~{if ignore_TSS_POLYA then "--ignore_TSS_POLYA" else ""} \
                            ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
+                           --cpu ~{c3d_effective_cpu} \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
       ) || {
@@ -743,9 +926,9 @@ task lraa_merge_gtf_task {
 
     runtime {
         docker: docker
-        cpu: 1
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk 200 HDD"
+        predefinedMachineType: c3d_machine_type
+        preemptible: preemptible_tries
+        disks: "local-disk 200 SSD"
     }
 
 }
@@ -753,6 +936,7 @@ task lraa_merge_gtf_task {
 
 task build_cluster_pseudobulk_matrices {
     input {
+        Int preemptible_tries = 3
         String sample_id
         Array[File] quant_expr_files
         String docker
@@ -780,16 +964,18 @@ task build_cluster_pseudobulk_matrices {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
+        predefinedMachineType: "n2d-standard-2"
+        disks: "local-disk ~{disksize} SSD"
     }
 }
 
 
 task sc_build_sparse_matrices {
     input {
+        Int preemptible_tries = 3
         String sample_id
         File tracking_file
         String docker
@@ -803,6 +989,41 @@ task sc_build_sparse_matrices {
     Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
 
     String output_prefix = "~{sample_id}.LRAA.sc"
+
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = 3
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
 
     command <<<
         set -ex
@@ -844,16 +1065,18 @@ task sc_build_sparse_matrices {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 3
-        memory: "~{memoryGB} GiB"
-        disks: "local-disk ~{disksize} HDD"
+        predefinedMachineType: c3d_machine_type
+        disks: "local-disk ~{disksize} SSD"
     }
 }
 
 
 task require_annot_gtf {
     input {
+        Int preemptible_tries = 3
         File annot_gtf
         # REQUIRED, and the omission of this input was a real Terra failure:
         # GCP Batch rejects any task with no image ("No container image found in
@@ -876,10 +1099,11 @@ task require_annot_gtf {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "1 GiB"
-        disks: "local-disk 10 HDD"
+        predefinedMachineType: "n2d-highcpu-2"
+        disks: "local-disk 10 SSD"
     }
 }
 

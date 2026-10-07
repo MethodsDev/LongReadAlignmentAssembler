@@ -34,17 +34,62 @@ task normalize_bam_by_strand {
     # is roughly 2.6x under a true cgroup peak -- so 8 GiB stays, unchanged: the
     # measurement says this stage got cheaper, not that the request can shrink.
     Int memoryGB = 8
+    # BGZF level of the strand bams and per-contig parts, which are read once and deleted;
+    # the final bam is never written at it. MEASURED on a 6.6 GB merged bam over 34.5 M
+    # records at 8 workers: 545 s at the default against 377 s with this at 1 plus the
+    # collapse's scan threaded, records and header identical. See
+    # util/normalize_bam_by_strand.py.
+    Int intermediate_compression_level = 1
+    # Spot attempts before falling back to a standard VM. MEASURED 353 s at 8 workers on a
+    # 6.6 GB merged bam (the real merged-bam normalize took 544 s before the speedups), so a
+    # preemption costs minutes.
+    Int preemptible_tries = 3
   }
 
   # derive a safe base name in WDL (avoid putting conditional logic inside the command string)
   String base = if label == "" then basename(input_bam) else label
 
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = cpu
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
   command <<<
 set -euo pipefail
 
 # Run normalization script (script is expected in PATH inside the docker image) and index output
-normalize_bam_by_strand.py --input_bam "~{input_bam}" --normalize_max_cov_level ~{normalize_max_cov_level} --output_bam "~{base}.norm_~{normalize_max_cov_level}.bam" --num_workers ~{cpu}
-samtools index -@ ~{cpu} "~{base}.norm_~{normalize_max_cov_level}.bam"
+normalize_bam_by_strand.py --input_bam "~{input_bam}" --normalize_max_cov_level ~{normalize_max_cov_level} --output_bam "~{base}.norm_~{normalize_max_cov_level}.bam" --num_workers ~{c3d_effective_cpu} --intermediate_compression_level ~{intermediate_compression_level}
+samtools index -@ ~{c3d_effective_cpu} "~{base}.norm_~{normalize_max_cov_level}.bam"
 
 echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm_~{normalize_max_cov_level}.bam.bai"
 >>>
@@ -68,9 +113,9 @@ echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm
 
   runtime {
     docker: docker
+    predefinedMachineType: c3d_machine_type
     bootDiskSizeGb: 30
-    cpu: "~{cpu}"
-    memory: "~{memoryGB} GiB"
+    preemptible: preemptible_tries
     disks: "local-disk ~{disksize} SSD"
   }
 }

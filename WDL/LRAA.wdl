@@ -77,13 +77,29 @@ workflow LRAA_wf {
          
         String main_chromosomes = "" # ex. "chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
 
-        # Contigs the whole-genome partition extracts concurrently. 1 is the
-        # historical serial pass and stays the default because the same subworkflow
-        # serves the per-cluster partitions, where a wide cpu reservation cannot be
-        # placed; see the call site below for the measurement and the tradeoff. Set 4
-        # for a whole-genome single-cell run, where this step is dead time at the head
-        # of the pipeline on an otherwise idle box.
-        Int partition_workers = 1
+        # Cores of the VM the per-chromosome partition runs on, rounded up to the next
+        # C3D size. The task owns its VM, so the partition uses all of them: contigs are
+        # extracted concurrently up to what the cores hold. The default fits a per-cluster
+        # call, which splits one cluster bam (0.5 to 1.8 GB measured); a call that splits
+        # a whole library, or the shared inputs below, wants 16.
+        Int partition_cpu = 4
+
+        # Contigs the partition extracts at once. Unset fills the machine; see
+        # subwdls/Partition_data_by_chromosome.wdl.
+        Int? partition_workers
+
+        # INTERNAL PLUMBING, same shape and reason as internal_bam_for_sg. The calling
+        # workflow already split these shared inputs ONCE, so a per-cluster run would
+        # otherwise repeat identical work per cluster: the genome fasta and the
+        # annotation gtf, which do not depend on the cluster at all, and the shared
+        # splice-graph bam, which is one file for every cluster. Keyed by contig NAME
+        # (not position) so a per-cluster contig list that is a subset of the caller's
+        # still finds its file. When set, the matching input is not handed to splitByChr
+        # at all -- localizing and re-splitting it is the cost being removed -- and the
+        # shard reads the pre-split file for its own contig instead.
+        Map[String, File]? internal_presplit_fastas
+        Map[String, File]? internal_presplit_gtfs
+        Map[String, File]? internal_presplit_sg_bams
 
         # HOW the work is divided across tasks. Chunking itself is unconditional in
         # all three; what differs is where the chunks run.
@@ -339,12 +355,6 @@ workflow LRAA_wf {
         Boolean build_sc_sparse_shards = false
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Int memoryGBscShardSparse = 8
-        # Core budget for the one-off count_bam task, forwarded as its
-        # samtools_threads at the call below. MUST stay in step with the task's own
-        # default: this call input wins, so leaving it at 16 would keep the cpu:16
-        # reservation and cap only the thread count. The task's comment carries the
-        # measurement that puts the knee at 5.
-        Int countBamThreads = 5
         
         
     }
@@ -490,7 +500,6 @@ workflow LRAA_wf {
             call count_bam {
                 input:
                     bam = inputBAM,
-                    samtools_threads = countBamThreads,
                     docker = docker
             }
         }
@@ -515,29 +524,29 @@ workflow LRAA_wf {
         
         ## Split inputs by main chromosomes
         
+        # What this call still has to split. A shared input the caller already split is
+        # left out entirely (not just ignored) so it is not localized here either. An
+        # optional that is skipped is simply undefined, which is how a File? is left
+        # unset without a None literal.
+        if (!defined(internal_presplit_fastas)) {
+            File fasta_to_split = referenceGenome
+        }
+        if (!defined(internal_presplit_gtfs) && defined(annot_gtf)) {
+            File gtf_to_split = select_first([annot_gtf])
+        }
+        if (!defined(internal_presplit_sg_bams) && defined(internal_bam_for_sg)) {
+            File sg_bam_to_split = select_first([internal_bam_for_sg])
+        }
+
         call PartByChr.partition_by_chromosome as splitByChr {
             input:
                 inputBAM = inputBAM,
-                bam_for_sg = internal_bam_for_sg,
-                genome_fasta = referenceGenome,
-                annot_gtf = annot_gtf,
+                bam_for_sg = sg_bam_to_split,
+                genome_fasta = fasta_to_split,
+                annot_gtf = gtf_to_split,
                 chromosomes_want_partitioned = chromosomes_to_partition,
                 docker = docker,
-                # MEASURED on 58.3 M mapped reads across 12 contigs at -@ 4: wall
-                # 2:02 at 1 worker, 1:13 at 2, 0:56 at 4, 0:57 at 6 -- so 2.19x and
-                # the knee is 4. Peak RSS was flat across all of them.
-                #
-                # Left at 1 anyway, deliberately. cpu is derived from this
-                # (workers * (samtools_extra_threads + 1) + 2), so 4 reserves 22
-                # cores, and this same subworkflow runs once per cluster -- 14 to 32
-                # times in a single-cell run, seconds of work each -- where a
-                # 22-core reservation cannot be placed until the box drains. That is
-                # the exact regression that cut this task's cpu to 5.
-                #
-                # Raise it for the ONE whole-genome partition that precedes all shard
-                # work: on a 188 GB library that step ran 27+ minutes single-cored on
-                # an idle 28-core box. 4 is the measured knee; going past it buys
-                # nothing.
+                cpu = partition_cpu,
                 partition_workers = partition_workers,
             }
      
@@ -546,6 +555,24 @@ workflow LRAA_wf {
 
         scatter (contig_index in range(num_chromosomes)) {
             String contig_name = basename(splitByChr.chromosomeBAMs[contig_index], ".bam")
+
+            # This contig's fasta, gtf and splice-graph bam: from the caller's one-time
+            # split when it supplied one, looked up by NAME, otherwise from this run's
+            # own partition, by position (both arrays come out of one glob over one
+            # contig list).
+            File shard_fasta = if defined(internal_presplit_fastas)
+                               then select_first([internal_presplit_fastas])[contig_name]
+                               else splitByChr.chromosomeFASTAs[contig_index]
+            File? shard_gtf = if defined(annot_gtf)
+                              then (if defined(internal_presplit_gtfs)
+                                    then select_first([internal_presplit_gtfs])[contig_name]
+                                    else splitByChr.chromosomeGTFs[contig_index])
+                              else annot_gtf
+            File? shard_sg_bam = if defined(internal_bam_for_sg)
+                                 then (if defined(internal_presplit_sg_bams)
+                                       then select_first([internal_presplit_sg_bams])[contig_name]
+                                       else select_first([splitByChr.chromosomeBAMsForSG])[contig_index])
+                                 else internal_bam_for_sg
 
             # Chunk-count ESTIMATE for THIS shard, from its own contig length -- not a
             # second scatter, not a re-read of the BAM. chromosomeFASTAs is already
@@ -559,7 +586,7 @@ workflow LRAA_wf {
             #
             # Memory is computed further below, from this shard's BAM size and chunk
             # concurrency rather than its contig length.
-            Float shard_contig_length_bp = size(splitByChr.chromosomeFASTAs[contig_index], "B")
+            Float shard_contig_length_bp = size(shard_fasta, "B")
             # MUST read the RESOLVED optional, not the raw input: the raw input is
             # now a non-optional sentinel, so select_first would hand back 0 and
             # the division below would be by zero.
@@ -596,7 +623,7 @@ workflow LRAA_wf {
                     sample_id = sample_id,
                     shardno = contig_index,
                     inputBAM = splitByChr.chromosomeBAMs[contig_index],
-                    bam_for_sg = if defined(internal_bam_for_sg) then select_first([splitByChr.chromosomeBAMsForSG])[contig_index] else internal_bam_for_sg,
+                    bam_for_sg = shard_sg_bam,
                     # NOT partitioned per contig, unlike bam_for_sg above:
                     # subwdls/Partition_data_by_chromosome.wdl slices --bam and the sg
                     # bam, and this shard is a full LRAA invocation restricted with
@@ -612,7 +639,7 @@ workflow LRAA_wf {
                     # boundaries -- per-cluster geometry, which is the defect the plan
                     # removes.
                     chunk_plan = internal_chunk_plan,
-                    genome_fasta = splitByChr.chromosomeFASTAs[contig_index],
+                    genome_fasta = shard_fasta,
                     # Only when an annotation was actually supplied. splitByChr
                     # emits a per-contig gtf for EVERY contig regardless: with no
                     # annotation, partition_data_by_chromosome still opens one file
@@ -625,9 +652,7 @@ workflow LRAA_wf {
                     # half of that fix: stop sending an argument that means nothing.
                     # The else branch is the workflow's own undefined File?, which is
                     # how an optional is left unset without a None literal.
-                    annot_gtf = if defined(annot_gtf)
-                                then splitByChr.chromosomeGTFs[contig_index]
-                                else annot_gtf,
+                    annot_gtf = shard_gtf,
                     oversimplify = oversimplify,
                     polyA_known = polyA_known,
                     contig = contig_name,
@@ -898,6 +923,7 @@ workflow LRAA_wf {
 
 task merge_GTFs {
     input {
+        Int preemptible_tries = 3
         Array[File] gtfFiles
         String outputFilePrefix
         String docker
@@ -928,15 +954,16 @@ task merge_GTFs {
     }
     
     runtime {
+    
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
         # Fixed reservation, not scaled off inputs. A per-cluster shard was measured at
         # 1.55 GiB peak against the former 2 GiB (77%) in a v0.34.0 PBMC cluster-guided
         # run -- the only task in that run to approach its ceiling, and the reservation
         # does not grow with GTF size. Sized to 16 GiB so larger clusters cannot OOM this
         # (a hard, unrecoverable crash on Terra); the task is a single awk/header merge,
-        # so the headroom costs one cheap VM.
-        memory: "16 GiB"
+        # so the headroom costs one cheap VM. n2d-highmem-2 is 2 vCPU / 16 GB.
+        predefinedMachineType: "n2d-highmem-2"
         disks: "local-disk " + ceil(size(gtfFiles, "GB") * 2.0 + 5) + " SSD"
     }
 }
@@ -1102,6 +1129,7 @@ task gather_shard_cut_plans {
     # Tiny by construction -- one JSON object per contig, no reads -- so this is
     # sized at the floor rather than off its inputs.
     input {
+        Int preemptible_tries = 3
         Array[File] shardCutPlans
         String outputFilePrefix
         String docker
@@ -1120,6 +1148,8 @@ task gather_shard_cut_plans {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "2 GiB"
@@ -1130,11 +1160,16 @@ task gather_shard_cut_plans {
 
 task mergeQuantResults {
     input {
+        Int preemptible_tries = 3
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
         String outputFilePrefix
         String docker
     }
+
+    # Fixed c3d-highcpu-4: the tracking merge is a parallel gzip pipeline and peaks well
+    # under 1 GiB (the old single-stream python peaked at 0.4 GiB).
+    Int cpu = 4
 
     Float quantExprGB = size(quantExprFiles, "GB")
     Float quantTrackingGB = size(quantTrackingFiles, "GB")
@@ -1169,41 +1204,54 @@ task mergeQuantResults {
 
     prepend_lraa_merge_header "~{outputFilePrefix}.quant.expr"
 
-    python <<CODE
-import json
-import gzip
+    # Equivalent of: write the merge header once, then every shard's rows with '#' lines
+    # and each repeated column-header line removed. Done per shard in parallel, parts
+    # concatenated in input order (concatenated gzip members are one valid gzip stream),
+    # so one level-9 python gzip stream is no longer the bottleneck (it was up to
+    # 514 s on a real run).
+    mkdir parts
+    mapfile -t inputs < ~{write_lines(quantTrackingFiles)}
+    n=${#inputs[@]}
 
-tracking_files_json = '["' + '~{sep='","' quantTrackingFiles}' + '"]'
-tracking_files_list = json.loads(tracking_files_json)
-header_lines = open("merge_header.txt", "rt").read()
+    # Schema check: the column-header line (first non-'#' line) of every shard must match
+    # the first shard that has one.
+    first=-1
+    for i in "${!inputs[@]}"; do
+        { gzip -dcf "${inputs[$i]}" | grep -a -m1 -v '^#' > parts/hdr.$i || true; }
+        if [ -s parts/hdr.$i ]; then
+            if [ $first -lt 0 ]; then
+                first=$i
+            elif ! cmp -s parts/hdr.$first parts/hdr.$i; then
+                echo "Cannot merge tracking files with different schemas: ${inputs[$i]} differs from the first input" >&2
+                exit 1
+            fi
+        fi
+    done
 
-with gzip.open("~{outputFilePrefix}.quant.tracking.gz", "wt") as ofh:
-    ofh.write(header_lines)
-    wrote_header = False
-    expected_header = None
-    for i, tracking_file in enumerate(tracking_files_list):
-        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-        with openf(tracking_file, "rt") as fh:
-            header = None
-            for line in fh:
-                if line.startswith("#"):
-                    continue
-                if header is None:
-                    header = line
-                    if expected_header is None:
-                        expected_header = header
-                    elif header != expected_header:
-                        raise RuntimeError(
-                            "Cannot merge tracking files with different schemas: {} differs from the first input".format(
-                                tracking_file
-                            )
-                        )
-                    if not wrote_header:
-                        print(header, file=ofh, end='')
-                        wrote_header = True
-                    continue
-                print(line, file=ofh, end='')
-CODE
+    # cpu jobs at a time; spare cores go to the compressors when shards are few.
+    threads_per_job=$(( ~{cpu} / n ))
+    if [ $threads_per_job -lt 1 ]; then threads_per_job=1; fi
+    for i in "${!inputs[@]}"; do
+        while [ "$(jobs -rp | wc -l)" -ge ~{cpu} ]; do wait -n; done
+        (
+            set -o pipefail
+            gzip -dcf "${inputs[$i]}" | { grep -a -v '^#' || true; } \
+                | { if [ $i -eq $first ]; then cat; else tail -n +2; fi; } \
+                | pigz -p $threads_per_job > parts/part.$i.gz
+            touch parts/ok.$i
+        ) &
+    done
+    wait
+    # A failed background job does not fail 'wait', so check each one finished.
+    for i in "${!inputs[@]}"; do
+        if [ ! -e parts/ok.$i ]; then echo "Failed to process ${inputs[$i]}" >&2; exit 1; fi
+    done
+
+    pigz -c merge_header.txt > "~{outputFilePrefix}.quant.tracking.gz"
+    for i in "${!inputs[@]}"; do
+        cat parts/part.$i.gz >> "~{outputFilePrefix}.quant.tracking.gz"
+        rm parts/part.$i.gz
+    done
 
     >>>
 
@@ -1213,15 +1261,17 @@ CODE
     }
     
     runtime {
+    
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "4 GiB"
+        predefinedMachineType: "c3d-highcpu-4"
         disks: "local-disk " + ceil(mergeDiskRawGB) + " SSD"
     }
 }
 
 task mergeReadAssignmentSummaries {
     input {
+        Int preemptible_tries = 3
         Array[File] summaryFiles
         String outputFilePrefix
         String docker
@@ -1347,6 +1397,8 @@ with out_path.open("wt", newline="") as ofh:
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "2 GiB"
@@ -1359,6 +1411,7 @@ task validate_scattering {
     # whose command exits non-zero. One place, named values in the message, and it
     # runs before anything expensive.
     input {
+        Int preemptible_tries = 3
         String scattering
         String main_chromosomes
         Boolean region_given
@@ -1448,6 +1501,8 @@ task validate_scattering {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "1 GiB"
@@ -1458,30 +1513,19 @@ task validate_scattering {
 
 task count_bam {
   input {
+      Int preemptible_tries = 3
     File bam
-        # CORE BUDGET, not a thread count -- samtools_extra_threads below is derived
-        # from it. Name kept for callers that already bind it.
-        #
-        # Was 16, which is a whole-swarm reservation on a 16-core single-worker
-        # swarm: nothing else can be placed while it runs, and this task runs once
-        # per per-cluster LRAA_wf -- 14 to 32 times in a single-cell run -- to do one
-        # `samtools view -c`. See the derivation below for why 5 rather than 4.
-        Int samtools_threads = 5
-        String docker
+    String docker
   }
 
-    # samtools' -@ is ADDITIONAL threads, so N there means N+1 running, and a
-    # reservation equal to N under-declares by one. Spend the budget minus the main
-    # thread, capped at 4 additional because `samtools view` stops scaling there.
-    #
-    # Measured, 1.30 GiB slice of a real library, best of two, cache warm, wall s:
-    #   -@ 2 -> 3.81   -@ 3 -> 2.58   -@ 4 -> 1.97   -@ 5 -> 1.63   -@ 8 -> 1.67
-    # Fraction of linear speedup per RESERVED core (N+1): 0.66 / 0.77 / 0.81 / 0.81
-    # / 0.53. Budget 5 (-@ 4) is the knee; budget 4 would mean -@ 3, 31% slower.
-    #
-    # WDL 1.0 has no min() -- 1.1 builtin, rejected by both miniwdl and womtool --
-    # hence the conditional.
-    Int samtools_extra_threads = if samtools_threads - 1 < 4 then samtools_threads - 1 else 4
+    # Fixed c3d-highcpu-4: one `samtools view -c` needs no more than 4 cores and
+    # ~nothing in RAM, and C3D steps go 4 -> 8, so there is nothing to size
+    # dynamically. This task runs once per per-cluster LRAA_wf in a single-cell run.
+    # samtools' -@ is ADDITIONAL threads, so -@ 3 is 4 running threads on the 4 vCPUs.
+    # Measured pinned to 4 cores, 1.5 GB cluster BAM (7.5 M records), wall s, best of 2:
+    #   -@ 2 -> 3.79   -@ 3 -> 2.61   -@ 4 -> 2.82   -@ 5 -> 2.59
+    # Past -@ 3 there is nothing to gain, and -@ 4 oversubscribes slightly.
+    Int samtools_threads = 3
 
     Float bam_size_gb = size(bam, "GB")
     Float estimated_disk = ceil(bam_size_gb * 2.2 + 20.0)
@@ -1493,15 +1537,16 @@ task count_bam {
         # -F 0x904 drops unmapped/secondary/supplementary so this matches
         # count_reads_from_bam() in the LRAA driver: one count per genome-mapped
         # read. Both paths must agree or TPM depends on which one ran.
-        samtools view -@ ~{samtools_extra_threads} -c -F 0x904 ~{bam}
+        samtools view -@ ~{samtools_threads} -c -F 0x904 ~{bam}
 
   >>>
 
   runtime {
+
+      preemptible: preemptible_tries
         docker: docker
+        predefinedMachineType: "c3d-highcpu-4"
         disks: "local-disk " + disk_gb_int + " SSD"
-        cpu: samtools_threads
-        memory: "8G"
   }
   output {
     Int count = read_int(stdout())
@@ -1519,6 +1564,7 @@ task derive_contigs {
     # a whole-genome fasta carries enough unplaced scaffolds to turn that into
     # hundreds of them.
     input {
+        Int preemptible_tries = 3
         File referenceGenome
         File inputBAM
         String docker
@@ -1556,6 +1602,8 @@ task derive_contigs {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "2 GiB"

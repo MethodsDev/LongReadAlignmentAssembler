@@ -384,6 +384,41 @@ task make_chunks {
     Int diskGB = if diskRawGB > 200.0 then ceil(diskRawGB) else 200
     String numTotalReadsStr = if defined(num_total_reads) then "~{select_first([num_total_reads])}" else ""
 
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = makeChunksCpu
+    Int c3d_mem = makeChunksMemoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
     set -euo pipefail
 
@@ -393,19 +428,19 @@ task make_chunks {
     ln -s ~{inputBAM} inputs/input.bam
     ~{if defined(inputBAMindex) then "ln -s " + select_first([inputBAMindex]) + " inputs/input.bam.bai" else ""}
     if [[ ! -e inputs/input.bam.bai && ! -e inputs/input.bam.csi ]]; then
-        samtools index -@ ~{makeChunksCpu} inputs/input.bam
+        samtools index -@ ~{c3d_effective_cpu} inputs/input.bam
     fi
     ln -s ~{referenceGenome} inputs/genome.fa
     samtools faidx inputs/genome.fa
     ~{if defined(bam_for_sg) then "ln -s " + select_first([bam_for_sg]) + " inputs/sg.bam" else ""}
     ~{if defined(bam_for_sg_index) then "ln -s " + select_first([bam_for_sg_index]) + " inputs/sg.bam.bai" else ""}
     if [[ -e inputs/sg.bam && ! -e inputs/sg.bam.bai && ! -e inputs/sg.bam.csi ]]; then
-        samtools index -@ ~{makeChunksCpu} inputs/sg.bam
+        samtools index -@ ~{c3d_effective_cpu} inputs/sg.bam
     fi
     ~{if defined(bam_for_priors) then "ln -s " + select_first([bam_for_priors]) + " inputs/priors.bam" else ""}
     ~{if defined(bam_for_priors_index) then "ln -s " + select_first([bam_for_priors_index]) + " inputs/priors.bam.bai" else ""}
     if [[ -e inputs/priors.bam && ! -e inputs/priors.bam.bai && ! -e inputs/priors.bam.csi ]]; then
-        samtools index -@ ~{makeChunksCpu} inputs/priors.bam
+        samtools index -@ ~{c3d_effective_cpu} inputs/priors.bam
     fi
     # Localized OUTSIDE work/: --stop_after_make_chunks writes this run's OWN
     # leaf plan at work/chunk_plan.json, which would clobber the shared plan
@@ -419,7 +454,7 @@ task make_chunks {
     if [[ -n "${N_OVERRIDE}" ]]; then
         N="${N_OVERRIDE}"
     else
-        N=$(samtools view -@ ~{makeChunksCpu} -c -F 0x904 inputs/input.bam)
+        N=$(samtools view -@ ~{c3d_effective_cpu} -c -F 0x904 inputs/input.bam)
     fi
     echo "num_total_reads=${N}" >&2
     echo "${N}" > work/num_total_reads.txt
@@ -433,7 +468,7 @@ task make_chunks {
         ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
         ~{true="--discovery" false="" discovery} \
         --output_dir work \
-        --cpu_budget ~{makeChunksCpu} \
+        --cpu_budget ~{c3d_effective_cpu} \
         --num_total_reads "${N}" \
         --no_reuse_source_bam \
         --stop_after_make_chunks \
@@ -521,8 +556,7 @@ PY
 
     runtime {
         docker: docker
-        cpu: makeChunksCpu
-        memory: "~{makeChunksMemoryGB} GiB"
+        predefinedMachineType: c3d_machine_type
         preemptible: 0
         bootDiskSizeGb: 30
         disks: "local-disk ~{diskGB} SSD"
@@ -558,6 +592,41 @@ task process_chunk {
     Float chunkDiskRawGB = 12.0 * size(chunkTar, "GB") + 20.0
     Int chunkDiskGB = if chunkDiskRawGB > 50.0 then ceil(chunkDiskRawGB) else 50
 
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = chunkCpu
+    Int c3d_mem = chunkMemoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
     set -euo pipefail
 
@@ -580,7 +649,7 @@ task process_chunk {
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --output_dir work \
         --only_chunk ~{chunkId} \
-        --cpu_budget ~{chunkCpu} \
+        --cpu_budget ~{c3d_effective_cpu} \
         ~{true="--discovery" false="" discovery} \
         ~{true="--HiFi" false="" HiFi} \
         --min_mapping_quality ~{min_mapping_quality} \
@@ -674,16 +743,16 @@ PY
 
     runtime {
         docker: docker
-        cpu: chunkCpu
-        memory: "~{chunkMemoryGB} GiB"
+        predefinedMachineType: c3d_machine_type
         preemptible: chunkPreemptible
-        disks: "local-disk ~{chunkDiskGB} HDD"
+        disks: "local-disk ~{chunkDiskGB} SSD"
     }
 }
 
 
 task merge_chunks {
     input {
+        Int preemptible_tries = 3
         Array[File] unitsJsons
         Array[File] quantExprFiles
         Array[File] quantTrackingFiles
@@ -700,12 +769,25 @@ task merge_chunks {
     Float mergeDiskRawGB = 3.0 * mergeInputsGB + 20.0
     Int mergeDiskGB = if mergeDiskRawGB > 100.0 then ceil(mergeDiskRawGB) else 100
 
+    # The merge is single-threaded Python (mergeCpu is only recorded in the resources
+    # file, never used), and a per-shard merge took 2-62 s in the real runs, so this stays
+    # on a 2-vCPU N2D machine; mergeMemoryGB picks the flavour (standard 8 GB, highmem 16 GB).
+    String n2d_machine_type = if mergeMemoryGB <= 8 then "n2d-standard-2"
+        else if mergeMemoryGB <= 16 then "n2d-highmem-2"
+        else if mergeMemoryGB <= 32 then "n2d-highmem-4"
+        else "n2d-highmem-8"
+
     command <<<
     set -euo pipefail
 
+    # The merge finds each unit's files by one shared prefix (staged/<unit_id>), but
+    # Cromwell localizes every input into its own directory, so they are gathered here.
+    # Linked under their own names, not copied: the merge only reads them, and the link
+    # target is the path exactly as given, so it holds on any backend that gives the
+    # task a readable path (same as the input links in make_chunks).
     mkdir -p staged work
     for f in ~{sep=' ' quantExprFiles} ~{sep=' ' quantTrackingFiles} ~{sep=' ' gtfFiles} ~{sep=' ' readAssignmentSummaries}; do
-        cp "$f" "staged/$(basename "$f")"
+        ln -s "$f" "staged/$(basename "$f")"
     done
 
     # Manifest order must reproduce ChunkedRun.ordered_units exactly:
@@ -799,9 +881,8 @@ PY
 
     runtime {
         docker: docker
-        cpu: mergeCpu
-        memory: "~{mergeMemoryGB} GiB"
-        preemptible: 0
+        predefinedMachineType: n2d_machine_type
+        preemptible: preemptible_tries
         disks: "local-disk ~{mergeDiskGB} SSD"
     }
 }

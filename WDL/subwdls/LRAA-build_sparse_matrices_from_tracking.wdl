@@ -40,6 +40,7 @@ workflow BuildSparseMatricesFromTracking {
 
 task sc_build_sparse_matrices_from_tracking {
   input {
+      Int preemptible_tries = 3
     String sample_id
     File tracking_file
     String docker
@@ -63,6 +64,41 @@ task sc_build_sparse_matrices_from_tracking {
   Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
 
   String output_prefix = "~{sample_id}.LRAA.sc"
+
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = 2
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
 
   command <<<
     set -ex
@@ -103,12 +139,11 @@ task sc_build_sparse_matrices_from_tracking {
   }
 
   runtime {
+
+      preemptible: preemptible_tries
     docker: docker
-    # The script is single-threaded; only pigz uses more, and only for the
-    # output compression at the end.
-    cpu: 2
-    memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    predefinedMachineType: c3d_machine_type
+    disks: "local-disk ~{disksize} SSD"
   }
 }
 
@@ -146,8 +181,15 @@ task sc_build_shard_sparse {
     # Non-zeros drive it, not rows -- chrM has 83.5 M rows but oversimplified
     # collapses to 3.1 M non-zeros and 0.61 GiB.
     Int memoryGB = 8
-    Int cpu = 1
+    Int preemptible_tries = 3
   }
+
+  # Neither of these can use more than a core or two and both are short, so they stay on
+  # 2-vCPU N2D machines; memoryGB picks the flavour (standard 8 GB, highmem 16 GB).
+  String n2d_machine_type = if memoryGB <= 8 then "n2d-standard-2"
+      else if memoryGB <= 16 then "n2d-highmem-2"
+      else if memoryGB <= 32 then "n2d-highmem-4"
+      else "n2d-highmem-8"
 
   Int disksize = 20 + ceil(3 * size(tracking_file, "GB"))
 
@@ -167,9 +209,9 @@ task sc_build_shard_sparse {
 
   runtime {
     docker: docker
-    cpu: cpu
-    memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    predefinedMachineType: n2d_machine_type
+    preemptible: preemptible_tries
+    disks: "local-disk ~{disksize} SSD"
   }
 }
 
@@ -189,7 +231,15 @@ task merge_sc_shard_sparse {
     # several shards (the clusters) carrying disjoint cells. Left false in basic
     # mode so that a feature appearing twice is reported as the error it is.
     Boolean shared_features = false
+    Int preemptible_tries = 3
   }
+
+  # Neither of these can use more than a core or two and both are short, so they stay on
+  # 2-vCPU N2D machines; memoryGB picks the flavour (standard 8 GB, highmem 16 GB).
+  String n2d_machine_type = if memoryGB <= 8 then "n2d-standard-2"
+      else if memoryGB <= 16 then "n2d-highmem-2"
+      else if memoryGB <= 32 then "n2d-highmem-4"
+      else "n2d-highmem-8"
 
   Int disksize = 100 + ceil(8 * size(shard_sparse_tars, "GB"))
 
@@ -235,8 +285,8 @@ task merge_sc_shard_sparse {
 
   runtime {
     docker: docker
-    cpu: 1
-    memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    predefinedMachineType: n2d_machine_type
+    preemptible: preemptible_tries
+    disks: "local-disk ~{disksize} SSD"
   }
 }

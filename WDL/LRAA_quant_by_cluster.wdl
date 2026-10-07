@@ -2,6 +2,7 @@ version 1.0
 
 import "subwdls/Normalize_bam.wdl" as NormBam
 import "subwdls/partition_bam_by_cell_cluster.wdl" as PartitionBam
+import "subwdls/Partition_data_by_chromosome.wdl" as PartByChr
 import "LRAA.wdl" as LRAA
 
 # LRAA_quant_by_cluster.wdl
@@ -55,9 +56,12 @@ workflow LRAA_quant_by_cluster {
         
         # Chromosome splitting parameters for LRAA quantification
         String main_chromosomes = "" # Set to split by chromosomes, leave empty to run without splitting
-        # Contigs each per-cluster partition extracts concurrently. 1 locally, where
-        # these jobs share one host; 4 on Terra, where each is its own VM.
-        Int cluster_partition_workers = 1
+        # The per-cluster partition splits only that cluster's own bam; the genome fasta,
+        # the annotation and the shared splice-graph bam are split once below. See
+        # LRAA-cell_cluster_guided.wdl for the numbers.
+        Int cluster_partition_cpu = 4
+        Int? cluster_partition_workers
+        Int shared_partition_cpu = 16
         
         # Cores per LRAA task: the task's cpu request AND the --cpu_budget it divides
         # across work units. There is no second knob to multiply it by.
@@ -257,6 +261,34 @@ workflow LRAA_quant_by_cluster {
     # pre-partition BAM was available to select from.
     File? shared_chunk_plan_use = if defined(internal_chunk_plan) then internal_chunk_plan else emit_shared_chunk_plan.chunk_plan
 
+    # Step 3c: split the SHARED inputs once. Every cluster below is handed the same
+    # splice-graph bam, the same consolidated annotation and the same genome, and its own
+    # per-chromosome partition used to re-split all three: identical work and a few GB of
+    # output per cluster, 14 to 32 times over. Only by_chromosome partitions at all.
+    if (scattering == "by_chromosome") {
+        if (main_chromosomes == "") {
+            call LRAA.derive_contigs as derive_shared_contigs {
+                input:
+                    referenceGenome = referenceGenome,
+                    inputBAM = normalize_merged_bam.normalized_bam,
+                    docker = docker
+            }
+        }
+        String shared_chromosomes = if (main_chromosomes != "")
+            then main_chromosomes
+            else select_first([derive_shared_contigs.contigs])
+
+        call PartByChr.partition_by_chromosome as split_shared_inputs {
+            input:
+                bam_for_sg = normalize_merged_bam.normalized_bam,
+                genome_fasta = referenceGenome,
+                annot_gtf = annot_gtf,
+                chromosomes_want_partitioned = shared_chromosomes,
+                cpu = shared_partition_cpu,
+                docker = docker
+        }
+    }
+
     # Step 4: Quantify each original BAM in parallel using normalized merged BAM for splice graph
     scatter (i in range(length(cluster_bams))) {
         String cluster_sample_id = basename(cluster_bams[i], ".bam")
@@ -266,9 +298,11 @@ workflow LRAA_quant_by_cluster {
                 sample_id = cluster_sample_id,
                 referenceGenome = referenceGenome,
                 inputBAM = cluster_bams[i],
-                # Per-cluster, so backend-dependent: 1 locally where these jobs share a
-                # host, 4 on Terra where each is its own VM.
+                partition_cpu = cluster_partition_cpu,
                 partition_workers = cluster_partition_workers,
+                internal_presplit_fastas = split_shared_inputs.chromosomeFASTAsByName,
+                internal_presplit_gtfs = split_shared_inputs.chromosomeGTFsByName,
+                internal_presplit_sg_bams = split_shared_inputs.chromosomeBAMsForSGByName,
                 # THREE bams, three roles, and they must be three different files:
                 #
                 #   inputBAM                 = this cluster's FULL reads. Pass 2
@@ -417,6 +451,7 @@ workflow LRAA_quant_by_cluster {
 
 task validate_pre_normalized_inputs {
     input {
+        Int preemptible_tries = 3
         Array[File] cluster_bams
         Array[File] normalized_bams
         Array[File]? normalized_bais
@@ -437,9 +472,10 @@ task validate_pre_normalized_inputs {
     >>>
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "1 GiB"
+        predefinedMachineType: "n2d-highcpu-2"
         disks: "local-disk 20 SSD"
     }
 }
@@ -447,6 +483,7 @@ task validate_pre_normalized_inputs {
 
 task merge_bams {
     input {
+        Int preemptible_tries = 3
         Array[File] normalized_bams
         String output_basename
         String docker
@@ -455,6 +492,41 @@ task merge_bams {
     }
 
     Int disksize = 100 + ceil(3 * size(normalized_bams, "GB"))
+
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = cpu
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
 
     command <<<
         set -euo pipefail
@@ -495,7 +567,7 @@ task merge_bams {
         # the two are out of step. `reheader -c` + `-d` verified present in the
         # pinned samtools 1.13.
         samtools merge --no-PG \
-            -@ ~{cpu} \
+            -@ ~{c3d_effective_cpu} \
             -o ~{output_basename}.bam \
             ~{sep=' ' normalized_bams}
 
@@ -556,7 +628,7 @@ print(total)
             # end -- the remedy is named in the message, and
             # util/misc/collapse_bam_pg_header.py --force exists for a caller
             # who has decided the tags are expendable.
-            n_pg_tagged=$(samtools view -@ ~{cpu} -c -d PG ~{output_basename}.bam)
+            n_pg_tagged=$(samtools view -@ ~{c3d_effective_cpu} -c -d PG ~{output_basename}.bam)
             if [ "$n_pg_tagged" -ne 0 ]; then
                 echo "ERROR: $n_pg_tagged alignment records in ~{output_basename}.bam" \
                      "carry a PG:Z: tag, so the accumulated @PG header chain ($n_pg" \
@@ -584,7 +656,7 @@ print(total)
         # Index AFTER any collapse: rewriting the header shifts every BGZF
         # virtual offset, so an index built before it is invalid against the
         # result and region queries fail with "Invalid BGZF header at offset N".
-        samtools index -@ ~{cpu} ~{output_basename}.bam
+        samtools index -@ ~{c3d_effective_cpu} ~{output_basename}.bam
 
         echo "Merged ~{length(normalized_bams)} BAMs into ~{output_basename}.bam"
     >>>
@@ -595,9 +667,10 @@ print(total)
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: "~{cpu}"
-        memory: "~{memoryGB} GiB"
+        predefinedMachineType: c3d_machine_type
         disks: "local-disk ~{disksize} SSD"
     }
 }
@@ -616,6 +689,7 @@ task emit_shared_chunk_plan {
     # because those two already import this file, and the task belongs beside the
     # workflow whose comparability argument it exists to serve.
     input {
+        Int preemptible_tries = 3
         File inputBAM
         File referenceGenome
         # The gtf whose models placement must not cut through. OPTIONAL: de novo
@@ -660,6 +734,41 @@ task emit_shared_chunk_plan {
     Float diskRawGB = 2.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 100.0 then ceil(diskRawGB) else 100
 
+    # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
+    Int c3d_cpu = cpu
+    Int c3d_mem = memoryGB
+    Int c3d_cpu_tier = if c3d_cpu <= 4 then 4
+        else if c3d_cpu <= 8 then 8
+        else if c3d_cpu <= 16 then 16
+        else if c3d_cpu <= 30 then 30
+        else if c3d_cpu <= 60 then 60
+        else if c3d_cpu <= 90 then 90
+        else if c3d_cpu <= 180 then 180
+        else 360
+    Int c3d_mem_tier = if c3d_mem <= 32 then 4
+        else if c3d_mem <= 64 then 8
+        else if c3d_mem <= 128 then 16
+        else if c3d_mem <= 240 then 30
+        else if c3d_mem <= 480 then 60
+        else if c3d_mem <= 720 then 90
+        else if c3d_mem <= 1440 then 180
+        else 360
+    Int c3d_effective_cpu = if c3d_cpu_tier >= c3d_mem_tier then c3d_cpu_tier else c3d_mem_tier
+    # c3d-highcpu RAM is non-uniform per tier; use exact values.
+    Int c3d_highcpu_ram = if c3d_effective_cpu == 4 then 8
+        else if c3d_effective_cpu == 8 then 16
+        else if c3d_effective_cpu == 16 then 32
+        else if c3d_effective_cpu == 30 then 59
+        else if c3d_effective_cpu == 60 then 118
+        else if c3d_effective_cpu == 90 then 177
+        else if c3d_effective_cpu == 180 then 354
+        else 708
+    String c3d_machine_type = if c3d_mem <= c3d_highcpu_ram
+        then "c3d-highcpu-${c3d_effective_cpu}"
+        else if c3d_mem <= c3d_effective_cpu * 4
+        then "c3d-standard-${c3d_effective_cpu}"
+        else "c3d-highmem-${c3d_effective_cpu}"
+
     command <<<
     set -euo pipefail
 
@@ -669,7 +778,7 @@ task emit_shared_chunk_plan {
     mkdir -p inputs work
     ln -s ~{inputBAM} inputs/input.bam
     if [[ ! -e inputs/input.bam.bai && ! -e inputs/input.bam.csi ]]; then
-        samtools index -@ ~{cpu} inputs/input.bam
+        samtools index -@ ~{c3d_effective_cpu} inputs/input.bam
     fi
     ln -s ~{referenceGenome} inputs/genome.fa
     samtools faidx inputs/genome.fa
@@ -721,7 +830,7 @@ task emit_shared_chunk_plan {
         --output_prefix shared_plan \
         --chunk \
         --chunk_work_dir work \
-        --cpu_budget ~{cpu} \
+        --cpu_budget ~{c3d_effective_cpu} \
         --emit_cut_plan shared_cut_plan.json \
         ~{if main_chromosomes != "" then "--restrict_to_chromosomes '" + main_chromosomes + "'" else ""} \
         ~{true="--HiFi" false="" HiFi} \
@@ -739,13 +848,10 @@ task emit_shared_chunk_plan {
 
     runtime {
         docker: docker
-        cpu: cpu
-        memory: "~{memoryGB} GiB"
-        # Non-preemptible unlike the per-chunk leaves: this is the one task every
-        # cluster job waits on, and a preemption restarts cut selection over the whole
-        # pre-partition BAM. Same reasoning as make_chunks in
-        # subwdls/LRAA_chunk_scatter.wdl.
-        preemptible: 0
+        predefinedMachineType: c3d_machine_type
+        # Preemptible (was 0): the real run took ~125 s, so a preemption costs a couple of
+        # minutes of cut selection; the task retries on a regular VM once the tries run out.
+        preemptible: preemptible_tries
         disks: "local-disk ~{diskGB} SSD"
     }
 }
@@ -759,6 +865,7 @@ task collate_read_assignment_summaries {
     # so their totals legitimately disagree and one table holding both would invite a
     # false reconciliation.
     input {
+        Int preemptible_tries = 3
         # One merged read_assignment.summary.tsv per LRAA invocation, chunked or not.
         Array[File] summaryFiles
         # Paired BY POSITION with summaryFiles; the util exits 2 naming both counts if
@@ -802,9 +909,10 @@ task collate_read_assignment_summaries {
     }
 
     runtime {
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: 1
-        memory: "2 GiB"
+        predefinedMachineType: "n2d-highcpu-2"
         disks: "local-disk ~{diskGB} SSD"
     }
 }

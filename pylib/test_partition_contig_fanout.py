@@ -71,7 +71,7 @@ def _make_fasta(path, contigs):
     return path
 
 
-def _run(tmp, bam, fasta, workers, out_root, bam_for_sg=None):
+def _run(tmp, bam, fasta, workers, out_root, bam_for_sg=None, extra=None):
     out_root.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
@@ -91,6 +91,7 @@ def _run(tmp, bam, fasta, workers, out_root, bam_for_sg=None):
     ]
     if bam_for_sg is not None:
         cmd += ["--bam-for-sg", str(bam_for_sg), "--bam-for-sg-out-dir", str(out_root / "sg")]
+    cmd += list(extra or [])
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr[-3000:]
     return res
@@ -177,70 +178,95 @@ def test_emitted_bams_are_readable_and_carry_their_contig(inputs, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "workers,extra_threads,expected_cpu",
-    [(1, 4, 7), (2, 4, 12), (4, 4, 22), (1, 0, 3)],
+    "machine_cores,extra_threads,expected_workers",
+    [(4, 0, 2), (8, 0, 6), (16, 0, 14), (30, 0, 28), (16, 4, 2), (4, 1, 1), (4, 4, 1)],
 )
-def test_the_reservation_covers_what_the_script_can_run(workers, extra_threads, expected_cpu):
-    """The formula the WDL reserves against, checked against its own definition.
+def test_the_workers_fill_the_machine_the_task_runs_on(
+    machine_cores, extra_threads, expected_workers
+):
+    """The WDL derives the worker count from the cores of the machine it picked.
 
-    samtools' -@ is ADDITIONAL threads, so a worker needs extra_threads + 1 runnable
-    threads, and the two single-threaded FASTA/GTF jobs run alongside the bam pool.
-    Reserving less oversubscribes a task that has no cgroup to cap it; reserving more
-    repeats the regression that cut this task's cpu to 5, because cpu nobody uses
-    cannot be placed until the box drains.
+    The task owns its VM, so every core it is given is a core it can use. A worker
+    needs extra_threads + 1 runnable threads (samtools' -@ is ADDITIONAL threads) and
+    the two single-threaded FASTA/GTF jobs run alongside the bam pool, so the pool is
+    (cores - 2) // (extra_threads + 1), never below 1. The script is handed the same
+    cores as its reservation and holds itself inside them, so a worker count above
+    this is capped rather than oversubscribed.
     """
 
-    assert workers * (extra_threads + 1) + 2 == expected_cpu
+    workers = max(1, (machine_cores - 2) // (extra_threads + 1))
+    assert workers == expected_workers
+    # what the WDL reserves for exactly this many workers never exceeds the machine
+    assert workers * (extra_threads + 1) + 2 <= max(machine_cores, 3 + extra_threads)
 
     wdl = (REPO / "WDL" / "subwdls" / "Partition_data_by_chromosome.wdl").read_text()
-    assert "effective_partition_workers * (samtools_extra_threads + 1) + 2" in wdl
-    # clamped, because the reservation is derived from it and the script floors at 1
-    assert "if partition_workers < 1 then 1 else partition_workers" in wdl
+    assert "(c3d_effective_cpu - 2) / (samtools_extra_threads + 1)" in wdl
+    # clamped, because the script floors its pool at 1 regardless
+    assert "if workers_that_fit_raw < 1 then 1 else workers_that_fit_raw" in wdl
+    # unset fills the machine; a given value still wins
+    assert "Int? partition_workers" in wdl
+    assert "if defined(partition_workers)" in wdl
     assert "--num-workers ~{effective_partition_workers}" in wdl
+    # helper threads give way first on a small machine, or the script refuses the
+    # reservation (one worker plus the light jobs needs extra_threads + 3 cores)
+    assert "extra_threads_that_fit" in wdl
 
 
+def test_the_single_cell_workflow_sizes_each_partition_to_its_work():
+    """Each partition is sized to what it splits, and the shared inputs are split once.
 
-def test_the_single_cell_workflow_widens_only_its_initial_partition():
-    """The fan-out has to REACH the workflow that motivated it, and only there.
-
-    A knob on LRAA.wdl alone ships nothing: the reported case is a single-cell run,
-    and LRAA-singlecell.wdl calls LRAA_wf three ways -- once for the initial
-    full-library phase, then once per cluster from LRAA-cell_cluster_guided.wdl and
-    LRAA_quant_by_cluster.wdl. Only the first should widen. The per-cluster calls run
-    14 to 32 times for seconds each, and a 22-core reservation there cannot be placed
-    until the box drains, which is the regression that cut this task's cpu to 5.
-
-    Asserted on the wiring rather than on a run, because reaching this in a real
-    invocation costs a whole-library partition -- but the failure mode is silent
-    (default 1 everywhere, no error, no slower-than-before), so it needs pinning.
+    The initial call splits the whole library plus the genome fasta and the annotation
+    and is the wide one. A per-cluster call now splits only that cluster's own bam,
+    because the fasta, the annotation and the shared splice-graph bam are split ONCE
+    by the parent and handed in by contig name. The failure mode of getting any of
+    this wrong is silent (it still runs, just repeating the work), so the wiring is
+    pinned rather than inferred from a run.
     """
 
     sc = (REPO / "WDL" / "LRAA-singlecell.wdl").read_text()
     top = (REPO / "WDL" / "LRAA.wdl").read_text()
 
-    # the single-cell workflow declares it and forwards it to the initial call. 2, not
-    # the measured knee of 4: cpu is workers * (-@ + 1) + 2, so 2 asks 12 and fits a
-    # 16-core machine while 4 asks 22 and forces a 32-core instance to be billed for
-    # the whole task, buying the 18 s between 1:13.8 and 0:55.8. Pinned because either
-    # number is defensible and the reason for choosing between them is not recoverable
-    # from the value.
-    assert "Int initial_partition_workers = 2" in sc
-    assert "partition_workers = initial_partition_workers" in sc
+    # the single-cell workflow declares the three sizes and forwards each
+    assert "Int initial_partition_cpu = 16" in sc
+    assert "partition_cpu = initial_partition_cpu" in sc
+    assert "Int cluster_partition_cpu = 4" in sc
+    assert "cluster_partition_cpu = cluster_partition_cpu" in sc
+    assert "Int shared_partition_cpu = 16" in sc
+    assert "shared_partition_cpu = shared_partition_cpu" in sc
+    # worker counts are overrides now, unset by default, not a tuned default
+    assert "Int? initial_partition_workers" in sc
+    assert "Int? cluster_partition_workers" in sc
 
-    # LRAA.wdl accepts it and hands it to the partition subworkflow
-    assert "Int partition_workers = 1" in top
-    assert "partition_workers = partition_workers" in top
+    # LRAA.wdl accepts the cores and the worker override, hands both to the partition,
+    # and takes the pre-split shared inputs by name
+    assert "Int partition_cpu = 4" in top
+    assert "Int? partition_workers" in top
+    assert "cpu = partition_cpu" in top
+    for name in ("fastas", "gtfs", "sg_bams"):
+        assert "Map[String, File]? internal_presplit_{}".format(name) in top, name
 
-    # the per-cluster paths take a SEPARATE knob, because the cost differs: the initial
-    # partition is one task widened once, while this one is billed 14 to 32 times over,
-    # and locally miniwdl puts all of them on ONE host where the multiplied reservation
-    # cannot be placed until the box drains.
-    assert "Int cluster_partition_workers = 1" in sc
-    assert "cluster_partition_workers = cluster_partition_workers" in sc
+    # a shared input that was pre-split is not handed to the per-cluster partition at
+    # all: it would be localized and re-split otherwise, which is the cost removed
+    assert "if (!defined(internal_presplit_fastas))" in top
+    assert "if (!defined(internal_presplit_gtfs) && defined(annot_gtf))" in top
+    assert "if (!defined(internal_presplit_sg_bams) && defined(internal_bam_for_sg))" in top
+    # and the shard reads its contig's file by NAME from the pre-split map
+    assert "select_first([internal_presplit_fastas])[contig_name]" in top
+
     for name in ("LRAA-cell_cluster_guided.wdl", "LRAA_quant_by_cluster.wdl"):
         text = (REPO / "WDL" / name).read_text()
-        assert "Int cluster_partition_workers = 1" in text, name
+        assert "Int cluster_partition_cpu = 4" in text, name
+        assert "Int? cluster_partition_workers" in text, name
+        assert "Int shared_partition_cpu = 16" in text, name
+        assert "partition_cpu = cluster_partition_cpu" in text, name
         assert "partition_workers = cluster_partition_workers" in text, name
+        assert "cpu = shared_partition_cpu" in text, name
+        assert "internal_presplit_fastas =" in text, name
+        assert "internal_presplit_gtfs =" in text, name
+    # only the final quant has a shared splice-graph bam to split
+    qc = (REPO / "WDL" / "LRAA_quant_by_cluster.wdl").read_text()
+    assert "internal_presplit_sg_bams = split_shared_inputs.chromosomeBAMsForSGByName" in qc
+
 
 def test_the_pool_is_held_inside_the_reservation(inputs, tmp_path):
     """A cpu declaration is a promise to the scheduler; the pool must fit inside it.
@@ -293,7 +319,8 @@ def test_the_wdl_passes_its_reservation_to_the_script():
 
     wdl = (REPO / "WDL" / "subwdls" / "Partition_data_by_chromosome.wdl").read_text()
     assert "--num-workers ~{effective_partition_workers}" in wdl
-    assert "--reserved-cpu ~{partition_cpu}" in wdl
+    # the cores of the machine the tier picked, not the number that was asked for
+    assert "--reserved-cpu ~{c3d_effective_cpu}" in wdl
 
 
 @pytest.mark.parametrize("reserved", [1, 3, 6])
@@ -333,15 +360,19 @@ def test_a_reservation_below_the_floor_is_refused(inputs, tmp_path, reserved):
     assert "the floor is 7" in res.stderr
 
 
-def test_the_default_reservation_is_exactly_the_floor():
-    """cpu at one worker is 7, which is the smallest this script can run inside.
+def test_the_default_configuration_fits_its_own_machine():
+    """The WDL defaults must fit the machine they select, or the script refuses to start.
 
-    Not a coincidence worth losing: if the WDL default and the script's floor ever
-    drift apart, the default configuration either refuses to start or overruns.
+    One worker plus the two FASTA/GTF jobs needs extra_threads + 3 cores. The default is
+    cpu 4 (a C3D tier) with one core per extraction, so 3 <= 4. If either default is
+    raised without the other the task would be refused its own reservation.
     """
 
-    threads_each = 4  # samtools_extra_threads at the WDL default of samtools_threads 5
-    assert 1 * (threads_each + 1) + 2 == threads_each + 3 == 7
+    wdl = (REPO / "WDL" / "subwdls" / "Partition_data_by_chromosome.wdl").read_text()
+    assert "Int cpu = 4" in wdl
+    assert "Int samtools_threads = 1" in wdl
+    extra_threads, cpu = 0, 4
+    assert extra_threads + 3 <= cpu
 
 
 @pytest.mark.parametrize(
@@ -501,3 +532,40 @@ def test_a_grant_below_the_floor_lowers_the_threads_that_actually_run(inputs, tm
     assert "using 0 additional thread(s)" in res.stderr, res.stderr[-3000:]
     # 1 worker + 2 light jobs == 3 processes, exactly the grant
     assert "1 at a time" in res.stderr, res.stderr[-3000:]
+
+
+@pytest.mark.parametrize("level", [1, 4, 9])
+def test_the_compression_level_reaches_samtools_and_the_output_is_still_readable(
+    inputs, tmp_path, level
+):
+    """--bam-compression-level must be applied, not accepted and ignored.
+
+    Per-contig BAMs are intermediates a shard reads once, so the script lets the caller
+    lower the BGZF level. The planned units carry it, and the emitted BAMs must be
+    readable with the same records at any level.
+    """
+
+    sys.path.insert(0, str(REPO / "util"))
+    from partition_data_by_chromosome import _plan_bam_partition
+
+    _d, bam, _sg, _fasta = inputs
+    work = _plan_bam_partition(
+        str(bam), [c[0] for c in CONTIGS], str(tmp_path / "planned"), "BAM", 1, level
+    )
+    assert work, "fixture should plan work"
+    assert {unit[6] for unit in work} == {level}
+
+    out = tmp_path / "out"
+    _run(tmp_path, bam, _fasta, 1, out, extra=["--bam-compression-level", str(level)])
+    assert _counts(out / "bams") == {"{}.bam".format(c[0]): c[2] for c in CONTIGS}
+
+
+def test_the_default_leaves_the_compression_level_to_samtools():
+    """Unset means unset: no --output-fmt-option is passed, so existing callers are unchanged."""
+
+    sys.path.insert(0, str(REPO / "util"))
+    import inspect
+
+    from partition_data_by_chromosome import _extract_one_contig
+
+    assert inspect.signature(_extract_one_contig).parameters["level"].default is None

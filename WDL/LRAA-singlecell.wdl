@@ -140,39 +140,23 @@ workflow LRAA_singlecell_wf {
     File? polyA_known
     String main_chromosomes = ""  # if empty, runs without partitioning
 
-    # Contigs the ONE initial full-library partition extracts concurrently. Defaulted
-    # above 1 because in a single-cell run this step is dead time at the head of the
-    # pipeline on an otherwise idle box: REPORTED on a 188 GB library (1.51 B mapped
-    # reads, 25 contigs, 28-core host), partition_by_chromosome_task ran 27+ minutes
-    # with ONE core busy before any shard started.
-    #
-    # MEASURED on 58.3 M mapped reads across 12 contigs at -@ 4: wall 2:02 at 1 worker,
-    # 1:13.8 at 2, 0:55.8 at 4, 0:56.5 at 6. The KNEE is 4, but the default is 2, on
-    # cost: cpu is derived as workers * (samtools -@ + 1) + 2, so 2 asks for 12 and 4
-    # asks for 22. Twelve fits a 16-core machine, while 22 forces the next instance
-    # size up -- a 32-core VM billed for the whole task to save the 18 s between
-    # 1:13.8 and 0:55.8. Two captures 1.65x of the available 2.19x for half the
-    # reservation, which is the better trade at every scale measured.
-    #
-    # Raise it to 4 only where the cores are already paid for and idle. Lower it on a
-    # host with fewer than ~14 usable cores, where a 12-core reservation would wait.
-    Int initial_partition_workers = 2
+    # Cores for the ONE full-library chromosome partition at the head of a single-cell
+    # run: the whole library, the genome fasta and the annotation, all split once before
+    # any shard starts. The task owns its VM, so every core is used: contigs are
+    # extracted concurrently up to what the VM holds. Measured on a 188 GB library (1.51 B
+    # mapped reads, 25 contigs) this step ran 27+ minutes with one core busy before the
+    # fan-out existed, and the fan-out reached 2.19x on 4 workers at -@ 4 (58.3 M mapped
+    # reads, 12 contigs: 2:02 at 1 worker, 1:13.8 at 2, 0:55.8 at 4, 0:56.5 at 6).
+    Int initial_partition_cpu = 16
+    Int? initial_partition_workers
 
-    # Contigs each PER-CLUSTER partition extracts concurrently, and the answer differs
-    # by backend, which is why it is separate from initial_partition_workers above.
-    #
-    # 1 is right for LOCAL execution: miniwdl runs the 14-to-32 per-cluster jobs on ONE
-    # host, so widening each one multiplies its reservation by the cluster count and
-    # none of them can be placed until the box drains. That is the regression that cut
-    # this task's cpu to 5 (Partition_data_by_chromosome.wdl:16-21).
-    #
-    # On TERRA each per-cluster job is its own VM, so they are not competing for cores
-    # at all. It stays 1 anyway BY DEFAULT, and this is where the two knobs genuinely
-    # part company: the initial partition is one task whose widening is paid once,
-    # while this one is billed 14 to 32 times over. At 2 that is 14-32 VMs at cpu 12
-    # instead of 7 to shave seconds off jobs that already run in seconds. Raise it only
-    # if a per-cluster partition is measured as a real share of wall time.
-    Int cluster_partition_workers = 1
+    # The per-cluster partitions split only that cluster's own bam, because the genome
+    # fasta, the annotation and the shared splice-graph bam are split once and handed in
+    # (shared_partition_cpu). A cluster bam is 0.5 to 1.8 GB measured, so the default
+    # fits a small VM.
+    Int cluster_partition_cpu = 4
+    Int? cluster_partition_workers
+    Int shared_partition_cpu = 16
     String? region                 # e.g., "chr1:100000-200000"; forces direct mode
     Boolean rescue_unassigned_reads_via_transcriptome_alignment = true
 
@@ -350,6 +334,7 @@ workflow LRAA_singlecell_wf {
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
     Int memoryGBmergeGTFs = 32
+    Int cpuMergeGTFs = 8
     Int memoryGBquantFinal = 32
     Int memoryGBscSparseMatrices = 32
     # Build the single-cell matrices per contig shard, alongside quantification,
@@ -508,12 +493,11 @@ workflow LRAA_singlecell_wf {
         polyA_known = polyA_known,
         main_chromosomes = main_chromosomes,
         region = region,
-        # THE one full-library chromosome partition in a single-cell run, and the only
-        # place this is raised. The per-cluster LRAA_wf calls in
-        # LRAA-cell_cluster_guided.wdl and LRAA_quant_by_cluster.wdl deliberately do
-        # NOT pass it, so they keep LRAA.wdl's default of 1: they run 14 to 32 times
-        # for seconds each, and a wide cpu reservation there cannot be placed until
-        # the box drains.
+        # THE one full-library chromosome partition in a single-cell run: the whole library,
+        # the genome fasta and the annotation, split once before any shard starts. Sized by
+        # initial_partition_cpu; the per-cluster partitions that follow are small (one
+        # cluster bam each, the shared inputs having been split once for them).
+        partition_cpu = initial_partition_cpu,
         partition_workers = initial_partition_workers,
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
@@ -704,7 +688,9 @@ workflow LRAA_singlecell_wf {
         # Backend-dependent, and separate from the initial phase's value on purpose:
         # these partitions run once per cluster, which is 14-32 jobs sharing ONE host
         # locally and 14-32 independent VMs on Terra.
+        cluster_partition_cpu = cluster_partition_cpu,
         cluster_partition_workers = cluster_partition_workers,
+        shared_partition_cpu = shared_partition_cpu,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         scattering = scattering_per_cluster,
@@ -732,6 +718,7 @@ workflow LRAA_singlecell_wf {
         chunkMergeCpu = chunkMergeCpu,
         chunkMergeMemoryGB = chunkMergeMemoryGB,
         memoryGBmergeGTFs = memoryGBmergeGTFs,
+        cpuMergeGTFs = cpuMergeGTFs,
         memoryGBquantFinal = memoryGBquantFinal,
         memoryGBscSparseMatrices = memoryGBscSparseMatrices,
         sparseMatrixCsvEngine = sparseMatrixCsvEngine,

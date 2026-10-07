@@ -54,6 +54,7 @@ workflow Incorporate_gene_symbols {
 
 task run_gffcompare {
   input {
+      Int preemptible_tries = 3
     String sample_id
     File reference_gtf
     File query_gtf
@@ -64,22 +65,33 @@ task run_gffcompare {
   Int disksize = 20 + ceil(2 * (size(reference_gtf, "GB") + size(query_gtf, "GB")))
   String output_prefix = "~{sample_id}.gffcmp"
 
+    # Neither task can use more than a couple of cores and both are short, so they stay
+    # on 2-vCPU N2D machines; memoryGB picks the flavour (highcpu 2, standard 8, highmem 16 GB).
+    String n2d_machine_type = if memoryGB <= 2 then "n2d-highcpu-2"
+        else if memoryGB <= 8 then "n2d-standard-2"
+        else if memoryGB <= 16 then "n2d-highmem-2"
+        else if memoryGB <= 32 then "n2d-highmem-4"
+        else "n2d-highmem-8"
+
   command <<<
     set -euo pipefail
 
-    # Prepare reference annotation (ensure uncompressed)
-    if [[ "~{reference_gtf}" == *.gz ]]; then
-      gunzip -c ~{reference_gtf} > reference.gtf
-    else
-      cp ~{reference_gtf} reference.gtf
-    fi
-
-    # Prepare query GTF (ensure uncompressed)
-    if [[ "~{query_gtf}" == *.gz ]]; then
-      gunzip -c ~{query_gtf} > query.gtf
-    else
-      cp ~{query_gtf} query.gtf
-    fi
+    # gffcompare (v0.12.6) cannot read gzipped GTFs, so decompress; a plain-text input
+    # is just linked under the working name (no copy). The two decompressions run at
+    # the same time.
+    prep_gtf() {
+      if [[ "$1" == *.gz ]]; then
+        gunzip -c "$1" > "$2"
+      else
+        ln -s "$1" "$2"
+      fi
+    }
+    prep_gtf ~{reference_gtf} reference.gtf &
+    ref_pid=$!
+    prep_gtf ~{query_gtf} query.gtf &
+    query_pid=$!
+    wait $ref_pid
+    wait $query_pid
 
     gffcompare -r reference.gtf -o ~{output_prefix} query.gtf > gffcompare.log 2>&1 || {
       echo "gffcompare failed; tailing log" >&2
@@ -99,16 +111,18 @@ task run_gffcompare {
   }
 
   runtime {
+
+      preemptible: preemptible_tries
     docker: docker
-    cpu: 2
-    memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    predefinedMachineType: n2d_machine_type
+    disks: "local-disk ~{disksize} SSD"
   }
 }
 
 
 task incorporate_gene_symbols_sc {
   input {
+      Int preemptible_tries = 3
     String sample_id
     File reference_gtf
     File? final_gtf
@@ -131,25 +145,36 @@ task incorporate_gene_symbols_sc {
   String updated_gtf_out = "~{sample_id}.withGeneSymbols.gtf"
   String updated_mapping_out = "~{sample_id}.gene_transcript_splicehashcode.withGeneSymbols.tsv"
 
+    # Neither task can use more than a couple of cores and both are short, so they stay
+    # on 2-vCPU N2D machines; memoryGB picks the flavour (highcpu 2, standard 8, highmem 16 GB).
+    String n2d_machine_type = if memoryGB <= 2 then "n2d-highcpu-2"
+        else if memoryGB <= 8 then "n2d-standard-2"
+        else if memoryGB <= 16 then "n2d-highmem-2"
+        else if memoryGB <= 32 then "n2d-highmem-4"
+        else "n2d-highmem-8"
+
   command <<<
   set -euo pipefail
   set -x
 
-    # Ensure reference GTF is plain text
-    if [[ "~{reference_gtf}" == *.gz ]]; then
-      gunzip -c ~{reference_gtf} > reference.gtf
-    else
-      cp ~{reference_gtf} reference.gtf
+    # The scripts below read plain-text GTFs: decompress a .gz input, or just link a
+    # plain one under the working name (no copy). Both decompressions run at the same time.
+    prep_gtf() {
+      if [[ "$1" == *.gz ]]; then
+        gunzip -c "$1" > "$2"
+      else
+        ln -s "$1" "$2"
+      fi
+    }
+    prep_gtf ~{reference_gtf} reference.gtf &
+    ref_pid=$!
+    final_gtf_path="~{default="" final_gtf}"
+    if [[ -n "${final_gtf_path}" ]]; then
+      prep_gtf "${final_gtf_path}" final.gtf &
+      final_pid=$!
     fi
-
-    ~{if defined(final_gtf) then 
-      "# Ensure final GTF is plain text and work on a local copy\n" +
-      "    if [[ \"~{final_gtf}\" == *.gz ]]; then\n" +
-      "      gunzip -c ~{final_gtf} > final.gtf\n" +
-      "    else\n" +
-      "      cp ~{final_gtf} final.gtf\n" +
-      "    fi"
-      else ""}
+    wait $ref_pid
+    if [[ -n "${final_gtf_path}" ]]; then wait $final_pid; fi
 
     cp ~{id_mappings_tsv} id_mappings.tsv
     cp ~{gene_sparse_tar_gz} gene_sparse.tar.gz
@@ -200,9 +225,10 @@ task incorporate_gene_symbols_sc {
   }
 
   runtime {
+
+      preemptible: preemptible_tries
     docker: docker
-    cpu: 2
-    memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    predefinedMachineType: n2d_machine_type
+    disks: "local-disk ~{disksize} SSD"
   }
 }

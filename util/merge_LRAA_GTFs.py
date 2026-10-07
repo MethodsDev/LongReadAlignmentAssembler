@@ -35,6 +35,7 @@ import LRAA_Globals  # type: ignore
 import logging
 import traceback
 import argparse
+import multiprocessing
 from collections import Counter, defaultdict
 import Util_funcs  # type: ignore
 import TranscriptFiltering  # type: ignore
@@ -130,6 +131,214 @@ def configure_boundary_support_filters(apply_filters):
         "Use --apply_boundary_support_filters to restore them.",
         ", ".join(BOUNDARY_SUPPORT_FILTERS),
     )
+
+
+def _merge_one_group(stranded_contig, transcript_list, genome_fasta_file):
+    """Merge ONE (contig, strand) group of input transcripts.
+
+    Returns (gtf_lines, tracking_rows) instead of writing, so the same body serves the
+    serial loop and a pool worker, and the caller alone decides the order things are
+    written in. A group reads nothing but its own transcripts and its contig's
+    sequence, which is what makes the groups independent.
+    """
+
+    gtf_lines = []
+    tracking_rows = []
+
+
+    contig_acc, contig_strand = stranded_contig.split("^")
+
+    contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
+        contig_acc, genome_fasta_file
+    )
+
+    ## Build Splice Graph
+    logger.info(f"\n// -building splice graph for {contig_acc}")
+    sg = Splice_graph()
+    sg.build_splice_graph_for_contig(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        alignments_bam_file=None,
+        region_lend=None,
+        region_rend=None,
+        input_transcripts=transcript_list,
+        quant_mode=False,
+    )
+
+    lraa_obj = LRAA(sg)
+
+    # Assign paths and filter out transcripts that couldn't be mapped
+    transcript_list = lraa_obj.assign_transcripts_paths_in_graph(transcript_list)
+
+    lraa_obj.build_multipath_graph(
+        contig_acc,
+        contig_strand,
+        contig_seq_str,
+        bam_file=None,
+        input_transcripts=transcript_list,
+    )
+
+    # Define merged isoforms
+    logger.info(f"\n// -begin merge of isoforms for {contig_acc}")
+    transcripts = lraa_obj.reconstruct_isoforms()
+
+    # Optional final reclustering/refinement + reporting
+    # This will also trigger neighbor-Jaccard pair reporting if configured
+    try:
+        transcripts = Transcript.recluster_transcripts_to_genes(
+            transcripts, contig_acc, contig_strand
+        )
+    except Exception as e:
+        # fallback to original transcripts if reclustering fails for any reason
+        logger.warning(
+            f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
+        )
+
+    # 3'-end annotation, RECOMPUTED rather than carried over from the inputs.
+    # reconstruct_isoforms builds new Transcript objects out of multipaths, so an
+    # input's PAS/InternalPriming metadata is gone by here -- every merged model
+    # was emitted without them, and a single-cell catalog is produced by this
+    # script, so its consumers had no polyadenylation-signal or internal-priming
+    # annotation at all.
+    #
+    # Recomputing is not merely the easier repair, it is the correct one: these
+    # describe the genome around a model's OWN 3' terminus, and a merged model's
+    # terminus need not coincide with any single input's. Copying by coordinate
+    # would leave models whose end moved during the merge either unannotated or,
+    # worse, labelled with a neighbour's motif.
+    #
+    # Annotation only. delete=False, and no reference is supplied for the
+    # known-3'-end reprieve, because a merge reconciles catalogs and is not where
+    # models are filtered; the sources already applied their own policy.
+    transcripts = TranscriptFiltering.annotate_polyA_signal(
+        transcripts, contig_seq_str, contig_strand
+    )
+    transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
+        transcripts,
+        contig_seq_str,
+        contig_strand,
+        known_transcripts=None,
+        restrict_filter_to_monoexonic=False,
+        delete=False,
+    )
+
+    ## report transcripts in GTF format
+    logger.info(
+        "writing gtf output for {} [{}] containing {} transcripts".format(
+            contig_acc, contig_strand, len(transcripts)
+        )
+    )
+
+    for transcript in transcripts:
+        gtf_lines.append(transcript.to_GTF_format(include_TPM=False))
+
+        # Build tracking provenance rows from synthetic read names supporting this transcript
+        try:
+            # gather all names across assigned multipath evidences (usually one)
+            name_to_weight = dict()  # key: (src, tid) -> { 'TSS':bool, 'PolyA':bool, 'n':int }
+            for mp in transcript.get_multipaths_evidence_assigned():
+                for rn in mp.get_read_names():
+                    if not isinstance(rn, str):
+                        continue
+                    if not rn.startswith("fake_for_merge|"):
+                        continue
+                    # parse tokens like key=value separated by |
+                    try:
+                        parts = rn.split("|")
+                        kv = {}
+                        for p in parts[1:]:  # skip prefix
+                            if "=" in p:
+                                k, v = p.split("=", 1)
+                                kv[k] = v
+                        src = kv.get("src", "unknown")
+                        tid = kv.get("tid", "unknown")
+                        flags_str = kv.get("flags", "-")
+                        n_str = kv.get("n", "1")
+                        has_TSS = 1 if ("TSS" in flags_str.split(",")) else 0
+                        has_PolyA = 1 if ("PolyA" in flags_str.split(",")) else 0
+                        n = int(n_str) if n_str.isdigit() else 1
+                        key = (src, tid)
+                        prev = name_to_weight.get(key)
+                        if prev is None:
+                            name_to_weight[key] = {
+                                "TSS": has_TSS,
+                                "PolyA": has_PolyA,
+                                "n": n,
+                            }
+                        else:
+                            # ensure flags reflect any True seen; keep n as the maximum encountered
+                            prev["TSS"] = 1 if (prev["TSS"] or has_TSS) else 0
+                            prev["PolyA"] = 1 if (prev["PolyA"] or has_PolyA) else 0
+                            prev["n"] = max(prev["n"], n)
+                    except Exception:
+                        continue
+
+            for (src, tid), info in name_to_weight.items():
+                tracking_rows.append(
+                    {
+                        "merged_transcript_id": transcript.get_transcript_id(),
+                        "merged_gene_id": transcript.get_gene_id(),
+                        "contig": contig_acc,
+                        "strand": contig_strand,
+                        "source_gtf": src,
+                        "source_transcript_id": tid,
+                        "source_has_TSS": info["TSS"],
+                        "source_has_PolyA": info["PolyA"],
+                        # contribution_count intentionally omitted from output (was info["n"]) as it's configuration-dependent
+                    }
+                )
+        except Exception:
+            pass
+
+    return gtf_lines, tracking_rows
+
+
+# Set by the parent just before it forks, so workers inherit the parsed input
+# transcripts copy-on-write instead of receiving them pickled.
+_GROUPS = None
+_GENOME_FASTA = None
+
+
+def _pool_worker(stranded_contig):
+    return stranded_contig, _merge_one_group(
+        stranded_contig, _GROUPS[stranded_contig], _GENOME_FASTA
+    )
+
+
+def _iter_group_results(groups, genome_fasta_file, workers):
+    """Yield (stranded_contig, (gtf_lines, tracking_rows)) in ``groups`` order.
+
+    With one worker this is the historical serial loop. With more, the groups are
+    submitted largest first, so the longest job starts at the beginning rather than
+    running alone at the tail, but results are released strictly in the original
+    order, so the output does not depend on which worker finished first.
+
+    Each group gets a fresh forked process (maxtasksperchild=1): the fork cost is
+    nothing next to a group's work, its memory is returned when it finishes, and no
+    group inherits state left behind by another.
+    """
+
+    global _GROUPS, _GENOME_FASTA
+
+    keys = list(groups)
+    if workers <= 1 or len(keys) <= 1:
+        for key in keys:
+            yield key, _merge_one_group(key, groups[key], genome_fasta_file)
+        return
+
+    _GROUPS, _GENOME_FASTA = groups, genome_fasta_file
+    submit_order = sorted(keys, key=lambda key: len(groups[key]), reverse=True)
+
+    finished = dict()
+    next_index = 0
+    context = multiprocessing.get_context("fork")
+    with context.Pool(processes=min(workers, len(keys)), maxtasksperchild=1) as pool:
+        for key, result in pool.imap_unordered(_pool_worker, submit_order):
+            finished[key] = result
+            while next_index < len(keys) and keys[next_index] in finished:
+                yield keys[next_index], finished.pop(keys[next_index])
+                next_index += 1
 
 
 def main():
@@ -230,6 +439,18 @@ def main():
         help=(
             "Storage backend for read tracking stores (ReadNameStore/MpReadIdStore). "
             "Choices: auto (prefer lmdb, fallback sqlite), lmdb, sqlite, memory."
+        ),
+    )
+
+    parser.add_argument(
+        "--cpu",
+        type=int,
+        default=1,
+        help=(
+            "Contig/strand groups to merge concurrently, in forked workers. Groups are "
+            "independent, and the output is written in the same order whatever the "
+            "value. Each worker holds one group's splice graph, so memory grows with "
+            "this. 1 is the serial pass."
         ),
     )
 
@@ -410,152 +631,12 @@ def main():
                     transcript
                 )
 
-    for stranded_contig, transcript_list in contig_strand_to_input_transcripts.items():
-
-        contig_acc, contig_strand = stranded_contig.split("^")
-
-        contig_seq_str = Util_funcs.retrieve_contig_seq_from_fasta_file(
-            contig_acc, genome_fasta_file
-        )
-
-        ## Build Splice Graph
-        logger.info(f"\n// -building splice graph for {contig_acc}")
-        sg = Splice_graph()
-        sg.build_splice_graph_for_contig(
-            contig_acc,
-            contig_strand,
-            contig_seq_str,
-            alignments_bam_file=None,
-            region_lend=None,
-            region_rend=None,
-            input_transcripts=transcript_list,
-            quant_mode=False,
-        )
-
-        lraa_obj = LRAA(sg)
-
-        # Assign paths and filter out transcripts that couldn't be mapped
-        transcript_list = lraa_obj.assign_transcripts_paths_in_graph(transcript_list)
-
-        lraa_obj.build_multipath_graph(
-            contig_acc,
-            contig_strand,
-            contig_seq_str,
-            bam_file=None,
-            input_transcripts=transcript_list,
-        )
-
-        # Define merged isoforms
-        logger.info(f"\n// -begin merge of isoforms for {contig_acc}")
-        transcripts = lraa_obj.reconstruct_isoforms()
-
-        # Optional final reclustering/refinement + reporting
-        # This will also trigger neighbor-Jaccard pair reporting if configured
-        try:
-            transcripts = Transcript.recluster_transcripts_to_genes(
-                transcripts, contig_acc, contig_strand
-            )
-        except Exception as e:
-            # fallback to original transcripts if reclustering fails for any reason
-            logger.warning(
-                f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
-            )
-
-        # 3'-end annotation, RECOMPUTED rather than carried over from the inputs.
-        # reconstruct_isoforms builds new Transcript objects out of multipaths, so an
-        # input's PAS/InternalPriming metadata is gone by here -- every merged model
-        # was emitted without them, and a single-cell catalog is produced by this
-        # script, so its consumers had no polyadenylation-signal or internal-priming
-        # annotation at all.
-        #
-        # Recomputing is not merely the easier repair, it is the correct one: these
-        # describe the genome around a model's OWN 3' terminus, and a merged model's
-        # terminus need not coincide with any single input's. Copying by coordinate
-        # would leave models whose end moved during the merge either unannotated or,
-        # worse, labelled with a neighbour's motif.
-        #
-        # Annotation only. delete=False, and no reference is supplied for the
-        # known-3'-end reprieve, because a merge reconciles catalogs and is not where
-        # models are filtered; the sources already applied their own policy.
-        transcripts = TranscriptFiltering.annotate_polyA_signal(
-            transcripts, contig_seq_str, contig_strand
-        )
-        transcripts = TranscriptFiltering.filter_internally_primed_transcripts(
-            transcripts,
-            contig_seq_str,
-            contig_strand,
-            known_transcripts=None,
-            restrict_filter_to_monoexonic=False,
-            delete=False,
-        )
-
-        ## report transcripts in GTF format
-        logger.info(
-            "writing gtf output for {} [{}] containing {} transcripts".format(
-                contig_acc, contig_strand, len(transcripts)
-            )
-        )
-
-        for transcript in transcripts:
-            ofh.write(transcript.to_GTF_format(include_TPM=False) + "\n")
-
-            # Build tracking provenance rows from synthetic read names supporting this transcript
-            try:
-                # gather all names across assigned multipath evidences (usually one)
-                name_to_weight = dict()  # key: (src, tid) -> { 'TSS':bool, 'PolyA':bool, 'n':int }
-                for mp in transcript.get_multipaths_evidence_assigned():
-                    for rn in mp.get_read_names():
-                        if not isinstance(rn, str):
-                            continue
-                        if not rn.startswith("fake_for_merge|"):
-                            continue
-                        # parse tokens like key=value separated by |
-                        try:
-                            parts = rn.split("|")
-                            kv = {}
-                            for p in parts[1:]:  # skip prefix
-                                if "=" in p:
-                                    k, v = p.split("=", 1)
-                                    kv[k] = v
-                            src = kv.get("src", "unknown")
-                            tid = kv.get("tid", "unknown")
-                            flags_str = kv.get("flags", "-")
-                            n_str = kv.get("n", "1")
-                            has_TSS = 1 if ("TSS" in flags_str.split(",")) else 0
-                            has_PolyA = 1 if ("PolyA" in flags_str.split(",")) else 0
-                            n = int(n_str) if n_str.isdigit() else 1
-                            key = (src, tid)
-                            prev = name_to_weight.get(key)
-                            if prev is None:
-                                name_to_weight[key] = {
-                                    "TSS": has_TSS,
-                                    "PolyA": has_PolyA,
-                                    "n": n,
-                                }
-                            else:
-                                # ensure flags reflect any True seen; keep n as the maximum encountered
-                                prev["TSS"] = 1 if (prev["TSS"] or has_TSS) else 0
-                                prev["PolyA"] = 1 if (prev["PolyA"] or has_PolyA) else 0
-                                prev["n"] = max(prev["n"], n)
-                        except Exception:
-                            continue
-
-                for (src, tid), info in name_to_weight.items():
-                    tracking_records.append(
-                        {
-                            "merged_transcript_id": transcript.get_transcript_id(),
-                            "merged_gene_id": transcript.get_gene_id(),
-                            "contig": contig_acc,
-                            "strand": contig_strand,
-                            "source_gtf": src,
-                            "source_transcript_id": tid,
-                            "source_has_TSS": info["TSS"],
-                            "source_has_PolyA": info["PolyA"],
-                            # contribution_count intentionally omitted from output (was info["n"]) as it's configuration-dependent
-                        }
-                    )
-            except Exception:
-                pass
+    for stranded_contig, (gtf_lines, tracking_rows) in _iter_group_results(
+        contig_strand_to_input_transcripts, genome_fasta_file, max(1, args.cpu)
+    ):
+        for gtf_line in gtf_lines:
+            ofh.write(gtf_line + "\n")
+        tracking_records.extend(tracking_rows)
 
     # Copied as RAW LINES, not parsed into Transcript objects and re-emitted. That
     # round trip is what corrupts these records -- it is how a model spanning
