@@ -22,9 +22,6 @@ import sys
 
 import scanpy as sc
 from cellarium.cas.client import CASClient
-from cellarium.cas.postprocessing import insert_cas_ontology_aware_response_into_adata
-import cellarium.cas.postprocessing.ontology_aware as pp
-from cellarium.cas.postprocessing.cell_ontology import CellOntologyCache
 
 
 def parse_args():
@@ -395,18 +392,15 @@ def main():
     )
     logging.info("CAS response received with %d entries.", len(cas_response.data))
 
-    # 4) Ontology
-    logging.info("Loading Cell Ontology Cache...")
-    cl = CellOntologyCache()
-
-    # 5) Insert CAS response into AnnData
+    # 4) Insert CAS response into AnnData; the client fetches the model's
+    #    cell ontology from the CAS backend and caches it for step 5.
     logging.info("Integrating CAS response into AnnData...")
-    insert_cas_ontology_aware_response_into_adata(cas_response, adata, cl)
+    cas.insert_ontology_aware_response(cas_response, adata)
 
+    # 5) Most granular calls per cell
     logging.info("Computing most granular top-%d calls...", args.top_k)
-    pp.compute_most_granular_top_k_calls_single(
+    cas.compute_most_granular_top_k_calls_single(
         adata=adata,
-        cl=cl,
         min_acceptable_score=args.min_acceptable_score,
         top_k=args.top_k,
         obs_prefix=args.obs_prefix,

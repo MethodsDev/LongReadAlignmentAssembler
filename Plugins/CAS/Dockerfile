@@ -13,11 +13,13 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python libraries:
-# - cellarium-cas: CAS client library. The CAS server rejects clients older than
-#   its minimum version, so keep this pin at or above that minimum.
+# - cellarium-cas: CAS client library, pinned exactly. The CAS server rejects
+#   clients older than its minimum version, and client releases change the API
+#   (1.8.0 moved the cell ontology to the server), so bump this deliberately and
+#   recheck run_CellAnnotationService.py against the new version.
 # - scanpy: for read_10x_mtx and AnnData handling
 RUN pip install --no-cache-dir \
-    "cellarium-cas>=1.8.0" \
+    "cellarium-cas==1.8.0" \
     scanpy
 
 # Create a working directory (where you'll typically mount your data)
