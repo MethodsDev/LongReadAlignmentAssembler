@@ -385,6 +385,9 @@ read_transcript_exons = function(gtf, transcript_ids) {
 # `read_totals` (optional): cluster, transcript_id (tracking id), n -- all reads of each
 # isoform in each cluster, shown in the cluster's header so the sample can be read
 # against them (count_isoform_reads_by_cluster()).
+#
+# If `reads` has a `read_class` column, reads other than "uniq_FSM" (e.g. "compatible":
+# partial reads sharing the isoform's terminus) are drawn lighter.
 plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NULL, xlim = NULL,
                                  colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
                                  read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL,
@@ -428,7 +431,8 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
             mutate(cluster_label = if_else(is.na(totals), cluster_label, paste0(cluster_label, "   (reads: ", totals, ")")))
     }
 
-    blocks = reads %>% left_join(read_order %>% select(read_name, y), by = "read_name")
+    blocks = reads %>% left_join(read_order %>% select(read_name, y), by = "read_name") %>%
+        mutate(fsm = if ("read_class" %in% names(.)) read_class == "uniq_FSM" else TRUE)
     spans = read_order
     model_ex = exons %>% mutate(isoform = tx_label[transcript_id]) %>% left_join(model_rows, by = "isoform")
     model_span = model_ex %>% group_by(isoform, y) %>% summarize(start = min(start), end = max(end), .groups = "drop")
@@ -448,7 +452,8 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
     p = ggplot() + highlight_layer(highlight) +
         geom_segment(data = spans, aes(x = read_start, xend = read_end, y = y, yend = y), color = "#b8b7b1", linewidth = 0.25) +
         geom_rect(data = blocks, aes(xmin = block_start, xmax = block_end, ymin = y - read_height / 2, ymax = y + read_height / 2,
-                                     fill = isoform), color = NA) +
+                                     fill = isoform, alpha = fsm), color = NA) +
+        scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.45), guide = "none") +
         geom_segment(data = model_span, aes(x = start, xend = end, y = y, yend = y), color = "#0b0b0b", linewidth = 0.4) +
         geom_rect(data = model_ex, aes(xmin = start, xmax = end, ymin = y - 0.38, ymax = y + 0.38, fill = isoform),
                   color = "#0b0b0b", linewidth = 0.2) +
@@ -629,8 +634,10 @@ build_site_event_read_tracks = function(events, outdir, sites, gtf, cluster_quan
 
 
 # One event's read-track figure from a manifest row: the gained-site isoform (blue) and
-# the lost-site isoform (orange) over each cluster's sampled unique-FSM reads, with each
-# cluster's read-end density above; labelled as in plot_site_event.
+# the lost-site isoform (orange) over a sample of each cluster's reads -- unique FSM
+# reads first, then (lighter) partial reads compatible with the isoform that share its
+# terminus (build_site_event_read_tracks.py) -- with each cluster's read-end density
+# above; labelled as in plot_site_event.
 plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 34, ...) {
     kind = m$kind
     gained_pos = as.numeric(m$gained_pos)
@@ -651,8 +658,10 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     totals = read_tsv(file.path(outdir, paste0(m$tag, ".totals.tsv")), show_col_types = FALSE)
     plot_isoform_read_tracks(exons, reads, transcripts, clusters, sites = c(gained_pos, lost_pos), kind = kind,
                              read_totals = totals, ends = ends,
-                             title = paste0(m$gene_symbol, ": alternative ", kind,
-                                            ", unique FSM reads (", max(table(reads$cluster[!duplicated(reads$read_name)])),
-                                            " sampled per cluster)"),
+                             title = paste0(m$gene_symbol, ": alternative ", kind, ", ",
+                                            if (any(reads$read_class %in% "compatible"))
+                                                paste0("unique FSM reads (solid) and partial reads sharing the ", kind, " (light), ")
+                                            else "unique FSM reads, ",
+                                            max(table(reads$cluster[!duplicated(reads$read_name)])), " sampled per cluster"),
                              file = file, height = 10, ...)
 }

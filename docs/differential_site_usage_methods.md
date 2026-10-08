@@ -391,15 +391,27 @@ event per gene (largest |delta|, ties by gene); ranked by |delta|; the top 6
 
 **6b. Read-track data (`build_site_event_read_tracks.py`)**, per event:
 
-1. the isoform drawn for each site: of those carrying it, the one with the most unique
-   FSM reads (SELENOH: iso-10, 3,394; iso-17, 3,287);
-2. sampled reads: from the event's two clusters, reads assigned uniquely and as full-splice
-   matches to either isoform (per-cluster `quant.tracking`), 30 per cluster sampled from the
-   two isoforms together, so each isoform's share of the cluster's reads is kept; their
-   aligned blocks from the BAM;
+1. the isoform drawn for each site: of those carrying it with >= 5 unique FSM reads
+   (`--min_uniq_FSM`; all of them if none has that many), the one with the most reads
+   assigned in the cluster favouring the site -- cluster B for the gained site, cluster A
+   for the lost one -- so the pair drawn is the pair carrying the switch (SELENOH: iso-10
+   / iso-17). Ranking by unique FSM reads alone picked short fragment models (CRTAM,
+   FGR): full-length reads are shared among near-identical full-length models, so few of
+   them are unique to any one. The manifest gives each isoform's reads in the two
+   clusters and the gained isoform's share of the pair there (`gained_pair_frac_A/B`):
+   whether the isoform pair itself switches, not only the sites;
+2. sampled reads: 30 per cluster from the event's two clusters, split between the two
+   isoforms in proportion to their reads there, each share filled first from the
+   isoform's unique FSM reads (per-cluster `quant.tracking`), then from **compatible**
+   reads: any read whose 5' (TSS) or 3' (PolyA) end is within 25 bp (`--site_tolerance`,
+   LRAA's half site window) of the isoform's site and whose alignment fits the model
+   (introns a consecutive run of the model's introns, +- 3 bp; no block reaching into a
+   model intron or past the model's far end). Compatible reads are drawn lighter; their
+   aligned blocks come from the BAM;
 3. read-end density: each cluster's 5' (TSS) or 3' (PolyA) ends of **all** its reads in
    the region, on the gene's strand;
-4. totals: unique FSM reads per isoform and cluster.
+4. totals: reads per isoform and cluster (FSM + compatible, as in the cluster headers;
+   and unique FSM alone).
 
 The tracking file is read once for all events. Outputs: `manifest.tsv` and per event
 `<tag>.reads.tsv`, `<tag>.ends.tsv`, `<tag>.totals.tsv`.

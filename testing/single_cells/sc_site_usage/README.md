@@ -221,10 +221,18 @@ ends, scaled down from 200 / 50 genome-wide), the best per gene, ranked by |delt
 `build_site_event_read_tracks.py` then gathers, for each, what a read-track figure
 draws:
 
-- the isoform shown for each site: the one carrying it with the most unique FSM reads;
-- 30 reads per cluster from the event's two clusters, sampled from the two isoforms'
-  unique FSM reads together, so each isoform's share of a cluster's reads is kept, with
-  their aligned blocks from the BAM;
+- the isoform shown for each site: of those carrying it with >= 5 unique FSM reads, the
+  one with the most reads assigned in the cluster that favours the site (cluster B for
+  the gained site, cluster A for the lost one), so the pair drawn carries the switch.
+  Ranking by unique FSM reads alone picks short fragment models, since full-length
+  reads are shared among near-identical full-length models. The manifest records each
+  isoform's reads in both clusters and the gained isoform's share of the pair
+  (`gained_pair_frac_A/B`), showing whether the pair itself switches;
+- 30 reads per cluster from the event's two clusters, split between the two isoforms in
+  proportion to their reads there: unique FSM reads first, then, if there are too few,
+  "compatible" reads -- reads whose 5' (TSS) or 3' (PolyA) end is within 25 bp of the
+  isoform's site and whose alignment fits the model (introns a consecutive run of the
+  model's, no block reaching into a model intron); drawn lighter in the figures;
 - each cluster's read-end density: the 5' (TSS) or 3' (PolyA) ends of all of the
   cluster's reads in the region, on the gene's strand.
 
