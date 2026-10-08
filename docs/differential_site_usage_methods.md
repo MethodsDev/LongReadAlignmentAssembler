@@ -381,13 +381,25 @@ share spliced between sites, splicing divergence and its intron).
 
 ## Step 6. Showcase events and read tracks
 
-**6a. Selection (`select_showcase_events.py`)** -- the same rule as the notebook's showcase
-tables: high-confidence events; both clusters >= 200 cells (`--min_cluster_cells`) with
->= 50 gene read ends each (`--min_gene_reads`); split by site kind and splicing group
-(alternative terminal usage; alternative splicing = terminal exon or internal); the best
-event per gene (largest |delta|, ties by gene); ranked by |delta|; the top 6
-(`--n_terminal_usage`) and 15 (`--n_alt_splicing`) per kind. PBMC: 42 events. Output:
-`events.tsv` (tag, e.g. `SELENOH.TSS.terminal_usage`; gene; kind; sites; clusters).
+**6a. Selection (`select_showcase_events.py`; the notebook reads its showcases from its
+output)**: high-confidence events; both clusters >= 200 cells (`--min_cluster_cells`)
+with >= 50 gene read ends each (`--min_gene_reads`); split by site kind and splicing
+group (alternative terminal usage; alternative splicing = terminal exon or internal);
+**dominant switches only**, judged on the read ends -- the gained site is the gene's
+most-used site of its kind in cluster B and the lost site the most-used in cluster A
+(`<prefix>.<KIND>.cluster_usage.tsv.gz`). A share can also shift while another site
+leads in both clusters; such events stay in the results but aren't showcased. Dominance
+is deliberately not judged on isoform quantifications: isoforms that share their introns
+and differ only at a terminus fit the same reads, so the quantification spreads reads
+among them whatever their ends -- EMP3's upstream-TSS isoform stays the top isoform in
+T cells, where only ~7% of the gene's read starts are at its TSS (> 50% at a downstream
+one). The best dominant event per gene (reciprocal first, then largest |delta|); ranked
+by |delta|; the top 6 (`--n_terminal_usage`) and 15 (`--n_alt_splicing`) per kind. The
+isoform drawn per site: of the gene's isoforms carrying it with >= 3 unique FSM reads
+(`--min_uniq_FSM`), the one with the most reads in the cluster favouring the site.
+Output: `events.tsv` (tag, e.g. `SELENOH.TSS.terminal_usage`; gene; kind; sites;
+clusters; `gained_tx` / `lost_tx`; the sites' shares in their clusters,
+`gained_usage_B` / `lost_usage_A`).
 
 **6b. Read-track data (`build_site_event_read_tracks.py`)**, per event:
 

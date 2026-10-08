@@ -5,7 +5,9 @@ for drawing each event's two isoforms over a sample of their reads plus each clu
 read-end density (site_usage_funcs.R plot_isoform_read_tracks).
 
 For each event:
-  - the isoform drawn for each site is the one, among the isoforms carrying the site
+  - the isoform drawn for each site: the events' gained_tx / lost_tx columns when given
+    (select_showcase_events.py: the dominant isoforms of the two clusters); otherwise the
+    one, among the isoforms carrying the site
     (site table transcript_ids) with >= --min_uniq_FSM unique full-splice-match (FSM)
     reads (all of them if none has that many), with the most reads assigned in the
     cluster favouring that site: cluster_B for the gained site, cluster_A for the lost
@@ -62,7 +64,7 @@ def main():
     parser.add_argument("--bam", required=True)
     parser.add_argument("--cell_clusters", required=True, help="cell_barcode <tab> cluster (header skipped)")
     parser.add_argument("--max_reads", type=int, default=30)
-    parser.add_argument("--min_uniq_FSM", type=float, default=5,
+    parser.add_argument("--min_uniq_FSM", type=float, default=3,
                         help="isoforms with fewer unique FSM reads are drawn only if no isoform at the site has this many")
     parser.add_argument("--site_tolerance", type=int, default=25,
                         help="a compatible read's terminus lies within this many bp of the site (LRAA: half the 50 bp site window)")
@@ -83,6 +85,8 @@ def main():
     # choose the isoform per site
     for e in events:
         for side in ("gained", "lost"):
+            if e.get(f"{side}_tx"):
+                continue
             tids = [t for t in sites[e[f"{side}_site"]]["transcript_ids"].split(",") if t]
             if not tids:
                 raise SystemExit(f"{e['tag']}: site {e[side + '_site']} carries no isoform")

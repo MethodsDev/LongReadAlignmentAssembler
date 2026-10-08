@@ -216,7 +216,17 @@ Output: `test.dexseq.site_pairs.splicing.tsv`.
 
 `select_showcase_events.py` picks, per site kind and splicing group, the high-confidence
 events between clusters of enough cells and reads (here >= 50 cells and >= 20 gene read
-ends, scaled down from 200 / 50 genome-wide), the best per gene, ranked by |delta|.
+ends, scaled down from 200 / 50 genome-wide) that are **dominant switches**, judged on
+the read ends: the gained site is the gene's most-used site of its kind in the cluster
+gaining it, and the lost site the most-used in the other cluster. The best such event
+per gene, ranked by |delta|. Here SELENOH, CIAO2A, EMP3 and AIF1 (TSS) qualify; AIF1's
+PolyA switch is real, but another PolyA site leads in one of its clusters.
+Dominance is not judged on isoform quantifications: isoforms that share their introns
+and differ only at a terminus fit the same reads, so the quantification spreads reads
+among them whatever their ends (EMP3's upstream-TSS isoform stays the top isoform in T
+cells, where only ~7% of read starts are at its TSS). For each site the isoform drawn is
+the one carrying it, with >= 3 unique FSM reads, that has the most reads in the cluster
+favouring the site; both are written to `events.tsv` (`gained_tx`, `lost_tx`).
 
 `build_site_event_read_tracks.py` then gathers, for each, what a read-track figure
 draws:

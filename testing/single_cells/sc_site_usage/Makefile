@@ -67,7 +67,8 @@ $(DEX).site_pairs.splicing.tsv: $(EVENTS) $(UTIL)/classify_site_pairs_by_splicin
 read_tracks/events.tsv: $(DEX).site_pairs.splicing.tsv $(UTIL)/select_showcase_events.py
 	mkdir -p read_tracks
 	python3 $(UTIL)/select_showcase_events.py --dexseq_prefix $(DEX) --splicing $< \
-		--cell_clusters $(D)/cell_clusters.tsv --min_cluster_cells 50 --min_gene_reads 20 --output $@
+		--cell_clusters $(D)/cell_clusters.tsv --min_cluster_cells 50 --min_gene_reads 20 \
+		--sites $(P).sites.tsv --gtf $(D)/models.gtf --cluster_quant_tar $(D)/cluster_quant.tar.gz --output $@
 
 read_tracks/manifest.tsv: read_tracks/events.tsv $(UTIL)/build_site_event_read_tracks.py
 	python3 $(UTIL)/build_site_event_read_tracks.py --events $< --sites $(P).sites.tsv --gtf $(D)/models.gtf \

@@ -75,9 +75,13 @@ def main():
         check(len(s) == 1 and s.splicing_class.iloc[0] == sclass,
               f"{label}: splicing class {s.splicing_class.iloc[0] if len(s) else None} (expected {sclass})")
 
-    # showcase read tracks
+    # showcase read tracks: only dominant switches are showcased (the gained site is the
+    # gene's most-used site in cluster B, the lost site the most-used in cluster A). AIF1's
+    # PolyA switch is a real site event that doesn't qualify: another PolyA site leads.
     m = pd.read_csv("read_tracks/manifest.tsv", sep="\t")
-    check(len(m) >= 4, f"read-track data built for {len(m)} showcase events")
+    expected = {"SELENOH.TSS.terminal_usage", "CIAO2A.TSS.terminal_usage", "EMP3.TSS.terminal_usage",
+                "AIF1.TSS.alt_splicing"}
+    check(set(m.tag) == expected, f"showcase (dominant switch) events {sorted(m.tag)} (expected {sorted(expected)})")
     for r in m.itertuples():
         reads = pd.read_csv(f"read_tracks/{r.tag}.reads.tsv", sep="\t")
         ends = pd.read_csv(f"read_tracks/{r.tag}.ends.tsv", sep="\t")
