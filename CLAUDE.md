@@ -17,6 +17,10 @@
   images `lraa-base` and `lraa-sc-base`. `Docker/build_docker.deps.sh` writes only a dated
   tag and records it in `Docker/DEPS_TAG.txt`, which the testing and release builds read;
   commit that file to move devel onto a new dependency set.
+- Exception: the CAS plugin image (`lraa/cas`) is not part of the LRAA release. Rebuild it
+  with `Plugins/CAS/build_docker.sh`, which pushes `:<cellarium-cas version>-<shortsha>`
+  and `:latest` together (the WDL defaults to `:latest`). Commit first; the script refuses
+  to run with uncommitted changes under `Plugins/CAS`.
 
 ## Branches
 

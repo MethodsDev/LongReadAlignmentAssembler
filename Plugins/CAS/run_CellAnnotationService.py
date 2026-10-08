@@ -395,13 +395,13 @@ def main():
     )
     logging.info("CAS response received with %d entries.", len(cas_response.data))
 
-    # 4) Insert CAS response into AnnData
-    logging.info("Integrating CAS response into AnnData...")
-    insert_cas_ontology_aware_response_into_adata(cas_response, adata)
-
-    # 5) Ontology
+    # 4) Ontology
     logging.info("Loading Cell Ontology Cache...")
     cl = CellOntologyCache()
+
+    # 5) Insert CAS response into AnnData
+    logging.info("Integrating CAS response into AnnData...")
+    insert_cas_ontology_aware_response_into_adata(cas_response, adata, cl)
 
     logging.info("Computing most granular top-%d calls...", args.top_k)
     pp.compute_most_granular_top_k_calls_single(
