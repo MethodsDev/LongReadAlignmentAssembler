@@ -84,12 +84,13 @@ def main():
         return max(ok, key=lambda t: (reads.get(t, 0), assigned.get(t, 0), fsm.get(t, 0), t)) if ok else None
 
     split = pd.read_csv(args.splicing, sep="\t")
-    top_site = {}
+    # a site is dominant in a cluster if no site of the gene is used more (ties all count)
+    top_sites = collections.defaultdict(set)
     for kind in ("TSS", "PolyA"):
         cu = pd.read_csv(f"{args.dexseq_prefix}.{kind}.cluster_usage.tsv.gz", sep="\t")
-        cu = cu.sort_values(["usage", "site_id"], ascending=[False, True], kind="mergesort")
-        for r in cu.groupby(["gene_key", "cluster"], sort=False).head(1).itertuples():
-            top_site[(kind, r.gene_key, r.cluster)] = r.site_id
+        cu = cu[cu.usage >= cu.groupby(["gene_key", "cluster"]).usage.transform("max")]
+        for r in cu.itertuples():
+            top_sites[(kind, r.gene_key, r.cluster)].add(r.site_id)
     rows = []
     for kind in ("TSS", "PolyA"):
         ev = pd.read_csv(f"{args.dexseq_prefix}.{kind}.events.tsv", sep="\t", keep_default_na=False)
@@ -107,13 +108,19 @@ def main():
             for r in g.itertuples():
                 if r.gene_key in best:
                     continue
-                if (top_site.get((kind, r.gene_key, r.cluster_B)) == r.gained_site
-                        and top_site.get((kind, r.gene_key, r.cluster_A)) == r.lost_site):
+                if (r.gained_site in top_sites[(kind, r.gene_key, r.cluster_B)]
+                        and r.lost_site in top_sites[(kind, r.gene_key, r.cluster_A)]):
                     best[r.gene_key] = r
             n = args.n_terminal_usage if tag == "terminal_usage" else args.n_alt_splicing
             ranked = sorted(best.values(), key=lambda r: (-r.abs_delta, r.gene_key))
             for r in ranked[:n]:
-                rows.append({"tag": f"{r.gene_symbol}.{kind}.{tag}", "gene_symbol": r.gene_symbol, "kind": kind,
+                # a symbol can name genes at two loci (gene_key carries the locus): keep tags unique
+                stem = r.gene_symbol
+                if any(x["gene_symbol"] == r.gene_symbol and x["kind"] == kind and x["tag"].endswith(f".{tag}")
+                       for x in rows):
+                    _, chrom, strand = r.gene_key.split("|")
+                    stem = f"{r.gene_symbol}_{chrom}{'plus' if strand == '+' else 'minus'}"
+                rows.append({"tag": f"{stem}.{kind}.{tag}", "gene_symbol": r.gene_symbol, "kind": kind,
                              "gained_site": r.gained_site, "lost_site": r.lost_site,
                              "cluster_A": r.cluster_A, "cluster_B": r.cluster_B, "abs_delta": round(r.abs_delta, 4),
                              "splicing_class": r.splicing_class,

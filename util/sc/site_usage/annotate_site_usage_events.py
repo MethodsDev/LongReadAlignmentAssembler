@@ -8,8 +8,9 @@ padj < --fdr and |delta usage| >= --min_delta, and at least --min_gene_reads of
 the gene's read ends (at its tested sites) in each of the two clusters: with a
 handful of reads in a cluster, usage jumps to 0 or 1 and the pairwise test,
 running on dispersions fitted across all clusters, can still call it. It is oriented so the site with
-the largest significant |delta| gains usage from cluster_A to cluster_B (the
-gained site); the lost site is the one whose usage falls the most.
+the largest significant |delta| gains usage from cluster_A to cluster_B: that site
+is the gained site, and the lost site is the one among the others whose usage falls
+the most.
 
 Each event is annotated with:
   event_type   PolyA: tandem_3UTR (both sites in the last exon of one isoform),
@@ -20,7 +21,8 @@ Each event is annotated with:
   FSM support  the most unique FSM reads among the isoforms carrying each site,
                summed over the cluster quantifications.
   switch_class from the two sites' read ends per million site-ending reads in
-               each cluster (+1), 1.5-fold: reciprocal (gained site up, lost
+               each cluster (+1; all sites' read ends, --site_cluster_counts),
+               1.5-fold: reciprocal (gained site up, lost
                site down), concordant (both up or both down), one site changes,
                neither. Direction-independent, as for the isoform-level classes.
   flags        monoexonic (a site carried only by single-exon isoforms),
@@ -31,7 +33,10 @@ Each event is annotated with:
                genomic bases past the gained site, an oligo-dT priming template).
   high_confidence  reciprocal, >= --min_FSM at both sites, no flags.
   isoform-level DTU on the same gene x cluster pair (alt-termini rows, where
-               the two isoforms share a splice pattern), when --isoform_DTU is given.
+               the two isoforms share a splice pattern), when --isoform_DTU is given;
+               matched on the isoforms' own symbols (the text before '^' in their
+               ids), not the DTU row's gene_symbol, which is the LRAA component's
+               and can be a neighbouring gene's (SELENOH's isoforms sit in TMX2's).
 """
 
 import argparse
@@ -68,6 +73,10 @@ def main():
     parser.add_argument("--min_gene_reads", type=int, default=20,
                         help="gene read ends (at tested sites) required in each cluster of an event")
     parser.add_argument("--min_FSM", type=int, default=5)
+    parser.add_argument("--site_cluster_counts", default=None,
+                        help="<support_prefix>.<KIND>.cluster_counts.tsv (site_read_support_to_sparse_matrix.py): "
+                             "all sites' read ends per cluster, the library for switch_class. Without it the "
+                             "library is the tested sites' read ends only")
     parser.add_argument("--min_separation", type=int, default=30)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -92,8 +101,10 @@ def main():
     events = events.merge(genes[["gene_key", "gene_symbol", "n_seeds_significant", "median_q"]], on="gene_key")
 
     fsm = parse_FSM(args.cluster_quant_tar)
-    want_symbols = set(events.gene_symbol)
-    exons = parse_exons(args.gtf, want_symbols)
+    # every isoform carrying an event's site, whatever symbol its gtf id carries
+    want_tids = {t for sid in set(events.gained_site) | set(events.lost_site)
+                 for t in str(sites.at[sid, "transcript_ids"]).split(",") if t}
+    exons = parse_exons(args.gtf, want_tids)
 
     for side in ("gained", "lost"):
         sid = events[f"{side}_site"]
@@ -127,7 +138,7 @@ def main():
         events["lost_downstream_A_of_20"] = [downstream_A(genome, c, p, s == "+")
                                              for c, p, s in zip(chrom, events.lost_pos, strand)]
 
-    add_switch_class(events, usage)
+    add_switch_class(events, usage, args.site_cluster_counts)
 
     flags = []
     for r in events.to_dict("records"):
@@ -167,8 +178,9 @@ def call_events(pw, fdr, min_delta, min_gene_reads):
         top = sig.loc[sig.delta_usage.abs().idxmax()]
         flip = top.delta_usage < 0
         d = -g.delta_usage if flip else g.delta_usage
-        gained = g.loc[d.idxmax()]
-        lost = g.loc[d.idxmin()]
+        # the significant site is the gained one; usages sum to 1, so another site falls
+        gained = top
+        lost = g.loc[d.drop(top.name).idxmin()]
         A, B = (cb, ca) if flip else (ca, cb)
         sfx_A, sfx_B = ("_B", "_A") if flip else ("_A", "_B")
         rows.append({
@@ -196,8 +208,8 @@ def parse_FSM(tar):
     return fsm
 
 
-def parse_exons(gtf, want_symbols):
-    """transcript_id (without the symbol prefix) -> merged sorted exons, for the wanted genes"""
+def parse_exons(gtf, want_tids):
+    """transcript_id (without the symbol prefix) -> merged sorted exons, for the wanted transcripts"""
     exons = collections.defaultdict(list)
     tid_re = re.compile(r'transcript_id "([^"]+)"')
     for line in open(gtf):
@@ -205,8 +217,8 @@ def parse_exons(gtf, want_symbols):
         if len(f) < 9 or f[2] != "exon":
             continue
         tid = tid_re.search(f[8]).group(1)
-        sym, _, bare = tid.partition("^")
-        if not bare or sym not in want_symbols:
+        bare = tid.split("^", 1)[-1]
+        if bare not in want_tids:
             continue
         exons[bare].append((int(f[3]), int(f[4])))
     merged = {}
@@ -259,8 +271,14 @@ def downstream_A(genome, contig, pos, plus):
     return genome.fetch(contig, max(0, pos - 21), pos - 1).upper().count("T")
 
 
-def add_switch_class(events, usage):
-    lib = usage.groupby("cluster").reads.sum()
+def add_switch_class(events, usage, site_cluster_counts=None):
+    if site_cluster_counts:
+        cc = pd.read_csv(site_cluster_counts, sep="\t", index_col=0)
+        lib = cc.sum(axis=0)
+        lib.index = ["Cluster_" + str(c) for c in lib.index]
+    else:
+        logger.warning("no --site_cluster_counts: switch_class library = the tested sites' read ends")
+        lib = usage.groupby("cluster").reads.sum()
     reads = usage.set_index(["site_id", "cluster"]).reads
 
     def log2fc(site, a, b):
@@ -279,7 +297,14 @@ def add_switch_class(events, usage):
 
 def add_isoform_DTU(events, filename, kind):
     d = pd.read_csv(filename, sep="\t", low_memory=False)
-    d = d[d.significant.astype(str) == "True"]
+    d = d[d.significant.astype(str) == "True"].copy()
+
+    def own_symbol(a, b):
+        syms = {i.split("^", 1)[0] for i in (str(a) + "," + str(b)).split(",") if "^" in i}
+        return syms.pop() if len(syms) == 1 else None
+    # rows pairing isoforms of two different genes (read-through components) drop out
+    d["gene_symbol"] = [own_symbol(a, b) for a, b in zip(d.dominant_transcript_ids, d.alternate_transcript_ids)]
+    d = d[d.gene_symbol.notna()]
     alt_termini = d[d.dominant_splice_hashcodes == d.alternate_splice_hashcodes]
     pairs_any = {(s, frozenset((a, b))) for s, a, b in zip(d.gene_symbol, d.cluster_A, d.cluster_B)}
     pairs_at = {(s, frozenset((a, b))) for s, a, b in zip(alt_termini.gene_symbol, alt_termini.cluster_A, alt_termini.cluster_B)}

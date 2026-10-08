@@ -5,10 +5,13 @@
 Starts from LRAA's integrated TSS and PolyA site beds and, for each site:
 
   - assigns it to a gene: the gene symbols of the transcripts the bed names as
-    carrying the site (cluster-guided sites), or else the symbols whose
-    transcript span covers the site on its strand. Sites assigned to more than
-    one symbol (read-through / cis-fusion models) or to none are kept in the
-    table, so their reads are not counted toward a neighbour, but are marked
+    carrying the site (cluster-guided sites), or else -- only for sites whose
+    transcripts aren't in the map (basic sites) -- the symbols whose transcript
+    span covers the site on its strand. A cluster-guided site carried only by
+    models of an unnamed LRAA gene is excluded (unnamed_gene) rather than handed
+    to a covering named gene: LRAA put it in a different gene. Sites assigned to
+    more than one symbol (read-through / cis-fusion models) or to none are kept in
+    the table, so their reads are not counted toward a neighbour, but are marked
     competing=False and left out of the test.
 
   - optionally merges sites of the same gene, kind and strand lying within
@@ -62,7 +65,7 @@ def main():
                         help="gene_transcript_splicehashcode.withGeneSymbols.tsv: transcript_id -> new_transcript_id / new_gene_id")
     parser.add_argument("--merge_dist_TSS", type=int, default=0)
     parser.add_argument("--merge_dist_PolyA", type=int, default=0)
-    parser.add_argument("--window_TSS", type=int, default=50)
+    parser.add_argument("--window_TSS", type=int, default=25)
     parser.add_argument("--window_PolyA", type=int, default=25)
     parser.add_argument("--output", required=True, help="site table (tsv)")
     parser.add_argument("--gene_spans_output", required=True,
@@ -72,7 +75,7 @@ def main():
     merge_dist = {"TSS": args.merge_dist_TSS, "PolyA": args.merge_dist_PolyA}
     max_window = {"TSS": args.window_TSS, "PolyA": args.window_PolyA}
 
-    tx_symbol = parse_transcript_symbols(args.gene_trans_map)
+    tx_symbol, tx_known = parse_transcript_symbols(args.gene_trans_map)
     spans = parse_symbol_spans(args.gtf)
     write_spans(spans, args.gene_spans_output)
     span_index = index_spans(spans)
@@ -81,7 +84,7 @@ def main():
     for kind, bed, cols in (("TSS", args.TSS_bed, TSS_COLS), ("PolyA", args.PolyA_bed, POLYA_COLS)):
         n = 0
         for row in read_bed(bed, cols):
-            sites.append(assign_gene(kind, row, tx_symbol, span_index))
+            sites.append(assign_gene(kind, row, tx_symbol, tx_known, span_index))
             n += 1
         logger.info("%s: %d sites read from %s", kind, n, bed)
 
@@ -116,14 +119,16 @@ def symbol_of(ident):
 
 
 def parse_transcript_symbols(filename):
-    """transcript_id -> gene symbol: the transcript's own symbol, else its gene's."""
-    tx_symbol = {}
+    """transcript_id -> gene symbol (the transcript's own symbol, else its gene's), and the
+    set of all transcript ids in the map (with or without a symbol)."""
+    tx_symbol, tx_known = {}, set()
     with open(filename) as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
+            tx_known.add(row["transcript_id"])
             sym = symbol_of(row["new_transcript_id"]) or symbol_of(row["new_gene_id"])
             if sym:
                 tx_symbol[row["transcript_id"]] = sym
-    return tx_symbol
+    return tx_symbol, tx_known
 
 
 def parse_symbol_spans(gtf):
@@ -185,14 +190,16 @@ def symbols_covering(span_index, chrom, strand, pos):
     return hits
 
 
-def assign_gene(kind, row, tx_symbol, span_index):
+def assign_gene(kind, row, tx_symbol, tx_known, span_index):
     tids = [t for t in row["transcript_ids"].split(",") if t and t != "."]
-    syms = set()
+    syms, mapped = set(), []
     if row["source"] == "cluster_guided":
         # basic sites name models of the initial catalog, whose ids are not in the map
-        syms = {tx_symbol[t] for t in tids if t in tx_symbol}
+        mapped = [t for t in tids if t in tx_known]
+        syms = {tx_symbol[t] for t in mapped if t in tx_symbol}
     how = "transcripts"
-    if not syms:
+    unnamed = bool(mapped) and not syms
+    if not syms and not unnamed:
         syms = symbols_covering(span_index, row["chrom"], row["strand"], row["pos"])
         how = "span" if syms else "none"
 
@@ -210,12 +217,13 @@ def assign_gene(kind, row, tx_symbol, span_index):
     else:
         site["gene_symbol"] = ",".join(sorted(syms))
         site["gene_key"] = ""
-        site["exclusion"] = "cross_gene" if syms else "no_gene"
+        site["exclusion"] = "cross_gene" if syms else ("unnamed_gene" if unnamed else "no_gene")
     return site
 
 
 def is_true(x):
-    return str(x).strip().lower() in ("true", "1", "1.0")
+    # a merged bed field can hold several values ("False|True"): true if any is
+    return any(v.strip().lower() in ("true", "1", "1.0") for v in str(x).replace(",", "|").split("|"))
 
 
 def merge_sites(sites, merge_dist):

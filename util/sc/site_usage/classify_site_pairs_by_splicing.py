@@ -7,9 +7,12 @@ site.
 An event (annotate_site_usage_events.py) moves read ends from a lost site to a
 gained site. Whether that is a change of terminus alone or comes with different
 splicing is read off the reads themselves: the reads starting (TSS) or ending
-(PolyA) at each site, assigned exactly as count_site_read_ends.py assigns them
-(nearest site of the kind on the read's transcript strand, within its window),
-and their introns (CIGAR N operations). Reads are pooled over all clustered
+(PolyA) at each site -- reads LRAA would keep (Util_funcs.quant_discard_reason;
+--HiFi / --rdna_mask_bed as given to site_read_support_to_sparse_matrix.py), their
+ends and transcribed strand as LRAA takes them (Pretty_alignment; ends with more
+soft clip than LRAA allows at a site don't count), each assigned to the nearest site
+of the kind within its window in the site table -- and their introns (CIGAR N
+operations). Reads are pooled over all clustered
 cells: the question is which splicing each site goes with, not where it is used.
 
 For each (gene, gained site, lost site) pair, one site is the inner one, nearer
@@ -61,9 +64,20 @@ import csv
 import logging
 from multiprocessing import Pool
 
+import os
+import sys
+
 import numpy as np
 import pandas as pd
 import pysam
+
+sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../../../pylib"]))
+import LRAA_Globals  # noqa: E402
+import RdnaMask  # noqa: E402
+import Util_funcs  # noqa: E402
+from Pretty_alignment import Pretty_alignment  # noqa: E402
+
+_CLIP_KEY = {"TSS": "max_soft_clip_at_TSS", "PolyA": "max_soft_clip_at_PolyA"}
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -86,6 +100,9 @@ def main():
     parser.add_argument("--min_adjacent_share", type=float, default=0.5)
     parser.add_argument("--min_divergence", type=float, default=0.25)
     parser.add_argument("--CPU", type=int, default=8)
+    parser.add_argument("--HiFi", action="store_true", help="HiFi percent-identity floor, as LRAA --HiFi")
+    parser.add_argument("--genome", default=None, help="genome fasta: corroborates ts:A:- strand flips, as LRAA")
+    parser.add_argument("--rdna_mask_bed", default=None, help="rDNA mask bed LRAA built for this genome")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -111,6 +128,10 @@ def main():
     G["site_span"] = {s["site_id"]: (int(s["span_lo"]), int(s["span_hi"]), int(s["window"])) for s in sites}
     G["spans"] = spans
     G["args"] = args
+    G["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID if args.HiFi else LRAA_Globals.config["min_per_id"]
+    G["min_mapq"] = int(LRAA_Globals.config["min_mapping_quality"])
+    G["rdna_mask"] = RdnaMask.load_mask_bed(args.rdna_mask_bed) or {}
+    G["max_clip"] = {k: LRAA_Globals.config[v] for k, v in _CLIP_KEY.items()}
 
     jobs = [(gk, g.kind.iloc[0] if g.kind.nunique() == 1 else None, g) for gk, g in pairs.groupby("gene_key")]
     # a gene can have events of both kinds; split them so each job reads one kind of end
@@ -164,13 +185,6 @@ def nearest_site(index, pos):
     return best
 
 
-def transcript_strand(read):
-    strand = "-" if read.is_reverse else "+"
-    if read.has_tag("ts") and read.get_tag("ts") == "-":
-        strand = "+" if strand == "-" else "-"
-    return strand
-
-
 def read_introns(read):
     introns, pos = [], read.reference_start
     for op, length in read.cigartuples:
@@ -199,15 +213,28 @@ def classify_gene(job):
     index = G["site_index"][(kind, contig, strand)]
     reads = collections.defaultdict(list)  # site_id -> [(span_lo, span_hi, introns)]
     full = set()
+    if args.genome and Util_funcs.contig_seq_for_strand_check(contig) is None:
+        with pysam.FastaFile(args.genome) as fa:
+            if contig in fa.references:  # contigs missing from the fasta keep the aligned strand
+                Util_funcs.register_contig_seq_for_strand_check(contig, fa.fetch(contig).upper())
     with pysam.AlignmentFile(G["bam"]) as bam:
         for read in bam.fetch(contig, max(0, lo - 1), hi):
-            if read.is_unmapped or read.is_secondary or read.is_supplementary or not read.has_tag("CB"):
+            if read.is_unmapped or not read.has_tag("CB") or read.get_tag("CB") not in G["cells"]:
                 continue
-            if transcript_strand(read) != strand or read.get_tag("CB") not in G["cells"]:
+            if Util_funcs.quant_discard_reason(read, None, min_mapping_quality=G["min_mapq"],
+                                               min_per_id=G["min_per_id"], rdna_mask=G["rdna_mask"]) is not None:
                 continue
-            five_prime = kind == "TSS"
-            pos = (read.reference_start + 1 if plus else read.reference_end) if five_prime else \
-                  (read.reference_end if plus else read.reference_start + 1)
+            # ends, strand and soft clips as LRAA takes them (site_read_support_to_sparse_matrix.py)
+            pa = Pretty_alignment.get_pretty_alignment(read)
+            if pa.get_strand() != strand:
+                continue
+            a_lo, a_hi = pa.get_alignment_span()
+            if kind == "TSS":
+                pos, clip = (a_lo, pa.left_soft_clipping) if plus else (a_hi, pa.right_soft_clipping)
+            else:
+                pos, clip = (a_hi, pa.right_soft_clipping) if plus else (a_lo, pa.left_soft_clipping)
+            if clip > G["max_clip"][kind]:
+                continue
             row = nearest_site(index, pos)
             sid = want_rows.get(row)
             if sid is None or sid in full:
@@ -306,8 +333,19 @@ def compare_sites(g, l, args):
     for p in (g, l):
         c = collections.Counter(i for s in p["intron_sets"] for i in s)
         seen.update({i for i, n in c.items() if n >= 0.1 * p["n_spliced"]})
+    # the inner site's own adjacent intron, used differently by the two sites' reads, is a
+    # terminal-exon difference (retained / alternative terminal intron), not an internal one
+    sg, ng = intron_share(g, a_inner)
+    sl, nl = intron_share(l, a_inner)
+    if ng >= args.min_spanning and nl >= args.min_spanning and abs(sg - sl) >= args.min_divergence:
+        res.update({"splicing_divergence": round(abs(sg - sl), 3), "divergent_intron": fmt_intron(a_inner),
+                    "divergent_intron_share_gained": round(sg, 3), "divergent_intron_share_lost": round(sl, 3),
+                    "splicing_class": "alt_splicing:terminal_exon"})
+        return res
     best = (0.0, None, None, None)
     for intron in seen:
+        if intron == a_inner:
+            continue
         sg, ng = intron_share(g, intron)
         sl, nl = intron_share(l, intron)
         if ng < args.min_spanning or nl < args.min_spanning:

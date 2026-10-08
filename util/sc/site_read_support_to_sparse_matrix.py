@@ -62,6 +62,7 @@ from scipy.io import mmwrite
 sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../../pylib"]))
 
 import LRAA_Globals  # noqa: E402
+import RdnaMask  # noqa: E402
 import Util_funcs  # noqa: E402
 from Pretty_alignment import Pretty_alignment  # noqa: E402
 
@@ -98,6 +99,12 @@ def main():
     parser.add_argument("--weighted", action="store_true",
                         help="sum XW normalization weights instead of counting reads")
     parser.add_argument("--CPU", type=int, default=4)
+    parser.add_argument("--genome", default=None,
+                        help="genome fasta (indexed): lets a read's ts:A:- strand flip be corroborated by its "
+                             "splice motifs, as LRAA does; without it every read keeps its aligned strand")
+    parser.add_argument("--rdna_mask_bed", default=None,
+                        help="rDNA mask bed LRAA built for this genome (__<prefix>.rdna_mask_cache/rdna_mask.*.bed): "
+                             "reads overlapping it are discarded, as LRAA discards them")
     args = parser.parse_args()
 
     beds = {k: b for k, b in (("TSS", args.TSS_bed), ("PolyA", args.PolyA_bed)) if b}
@@ -119,7 +126,11 @@ def main():
              tolerance={k: int(LRAA_Globals.config[_DIST_KEY[k]] / 2) for k in KINDS},
              max_clip={k: LRAA_Globals.config[_CLIP_KEY[k]] for k in KINDS},
              min_per_id=min_per_id, min_mapq=min_mapq, weighted=args.weighted,
-             cb_tag=LRAA_Globals.config["cell_barcode_tag"])
+             cb_tag=LRAA_Globals.config["cell_barcode_tag"], genome=args.genome,
+             rdna_mask=RdnaMask.load_mask_bed(args.rdna_mask_bed))
+    if args.genome is None:
+        logger.warning("no --genome: ts:A:- strand flips can't be corroborated, so reads keep their aligned "
+                       "strand (fine for oriented / stranded reads; unstranded cDNA needs --genome)")
     logger.info("read filter: min_per_id %s, min_mapping_quality %s; end-to-site tolerance %s; "
                 "max soft clip %s; counting %s", min_per_id, min_mapq, G["tolerance"], G["max_clip"],
                 "XW weights" if args.weighted else "reads")
@@ -220,6 +231,13 @@ def count_chunk(chunk):
     cb_col, barcodes = {}, []
     summ = collections.Counter()
 
+    if G.get("genome"):
+        # the ts-flip check reads the contig sequence LRAA would have registered
+        if Util_funcs.contig_seq_for_strand_check(contig) is None:
+            with pysam.FastaFile(G["genome"]) as fa:
+                if contig in fa.references:  # contigs missing from the fasta keep the aligned strand
+                    Util_funcs.register_contig_seq_for_strand_check(contig, fa.fetch(contig).upper())
+
     with pysam.AlignmentFile(G["bam"]) as bam:
         for read in bam.fetch(contig, lo, hi):
             # each read once: in the chunk holding its alignment start
@@ -227,7 +245,7 @@ def count_chunk(chunk):
                 continue
             summ["reads_seen"] += 1
             reason = Util_funcs.quant_discard_reason(read, None, min_mapping_quality=G["min_mapq"],
-                                                     min_per_id=G["min_per_id"])
+                                                     min_per_id=G["min_per_id"], rdna_mask=G["rdna_mask"] or {})
             if reason is not None:
                 summ[f"reads_discarded:{reason}"] += 1
                 continue

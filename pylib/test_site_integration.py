@@ -119,12 +119,30 @@ def test_half_window_gap_no_longer_kept(tmp_path):
     assert counts["supplement_dropped"] == 3
 
 
-def test_supplements_not_reaggregated_among_themselves(tmp_path):
+def test_supplement_near_duplicates_collapse_to_the_strongest(tmp_path):
+    # one basic site written once per transcript, a few nt apart (DDAH2-like)
     counts, rows = _integrate(
-        tmp_path, "PolyA", [], [_row("PolyA", 100), _row("PolyA", 105)]
+        tmp_path,
+        "TSS",
+        [],
+        [_row("TSS", 260, tids="a"), _row("TSS", 262, support=30, tids="b"),
+         _row("TSS", 268, tids="c"), _row("TSS", 400, tids="d")],
     )
-    assert [int(r[2]) for r in rows] == [100, 105]
-    assert counts["supplement_kept"] == 2
+    assert [int(r[2]) for r in rows] == [262, 400]
+    assert rows[0][8] == "a,b,c" and rows[0][7] == "3"
+    assert rows[0][6] == "30"
+    assert counts["supplement_collapsed"] == 2 and counts["supplement_kept"] == 2
+
+
+def test_supplement_collapse_does_not_chain(tmp_path):
+    # 0 and 100 are both within 50 of 50, but not of each other: only the strongest
+    # (50) absorbs; 0 and 100 are absorbed by it, nothing chains beyond its window
+    counts, rows = _integrate(
+        tmp_path, "PolyA", [],
+        [_row("PolyA", 100), _row("PolyA", 150, support=20), _row("PolyA", 201)],
+    )
+    assert [int(r[2]) for r in rows] == [150, 201]
+    assert counts["supplement_collapsed"] == 1
 
 
 def test_columns_preserved_and_sorted(tmp_path):
@@ -161,6 +179,7 @@ def test_cli_writes_both_beds_and_summary(tmp_path):
     summary = [l.rstrip("\n").split("\t") for l in open(prefix + ".integrated_sites.summary.tsv")]
     assert summary[0] == ["site_type", "window", "cluster_guided_sites",
                           "basic_sites", "basic_supplement_kept",
-                          "basic_within_window_dropped", "integrated_sites"]
-    assert summary[1] == ["TSS", "50", "1", "2", "1", "1", "2"]
-    assert summary[2] == ["PolyA", "50", "1", "1", "0", "1", "1"]
+                          "basic_within_window_dropped", "basic_near_duplicates_collapsed",
+                          "integrated_sites"]
+    assert summary[1] == ["TSS", "50", "1", "2", "1", "1", "0", "2"]
+    assert summary[2] == ["PolyA", "50", "1", "1", "0", "1", "0", "1"]

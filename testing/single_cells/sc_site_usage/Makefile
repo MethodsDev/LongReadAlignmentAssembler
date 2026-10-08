@@ -55,13 +55,14 @@ $(DEX).%.genes.tsv: $(P).site_counts.mtx.gz $(UTIL)/site_usage_dexseq.R
 # 5. pairwise switch events, annotated
 $(DEX).%.events.tsv: $(DEX).%.genes.tsv $(UTIL)/annotate_site_usage_events.py
 	python3 $(UTIL)/annotate_site_usage_events.py --dexseq_prefix $(DEX) --kind $* --sites $(P).sites.tsv \
-		--gtf $(D)/models.gtf --cluster_quant_tar $(D)/cluster_quant.tar.gz --output $@
+		--gtf $(D)/models.gtf --cluster_quant_tar $(D)/cluster_quant.tar.gz \
+		--site_cluster_counts support/$(P).$*.cluster_counts.tsv --output $@
 
 # 6. alternative terminal usage vs switches coupled with alternative splicing, from the reads
 $(DEX).site_pairs.splicing.tsv: $(EVENTS) $(UTIL)/classify_site_pairs_by_splicing.py
 	python3 $(UTIL)/classify_site_pairs_by_splicing.py --events $(foreach k,$(KINDS),$(k)=$(DEX).$(k).events.tsv) \
 		--sites $(P).sites.tsv --gene_spans $(P).gene_spans.tsv --bam $(D)/reads.bam \
-		--cell_clusters $(D)/cell_clusters.tsv --CPU $(CPU) --output $@
+		--cell_clusters $(D)/cell_clusters.tsv --HiFi --CPU $(CPU) --output $@
 
 # 7. showcase events and their read-track data
 read_tracks/events.tsv: $(DEX).site_pairs.splicing.tsv $(UTIL)/select_showcase_events.py

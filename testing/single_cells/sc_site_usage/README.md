@@ -69,9 +69,10 @@ Each step is a Makefile target; the scripts live in `util/sc/site_usage/` unless
 ### 1. Site table (`prep_site_table.py`)
 
 Reads the TSS and PolyA site beds and assigns each site to a gene: through the gene
-symbols of the isoforms carrying it (cluster-guided sites), else the symbol whose
-transcript span covers it on its strand. A site assigned to more than one symbol
-(read-through or cis-fusion models) or to none is kept, so that its reads are not
+symbols of the isoforms carrying it (cluster-guided sites), else -- for sites whose
+isoforms aren't in the gene map (basic sites) -- the symbol whose transcript span covers
+it on its strand. A site assigned to more than one symbol (read-through or cis-fusion
+models), to an unnamed LRAA gene only, or to none is kept, so that its reads are not
 counted toward a neighbouring site, but is left out of the test (`competing = False`).
 LRAA's sites are used as they are: LRAA already absorbs read ends within 50 nt
 (`max_dist_between_alt_{TSS,polyA}_sites`) into one site, so no further merging is done.
@@ -164,8 +165,9 @@ Output: `test.dexseq.{TSS,PolyA}.genes.tsv` (q per seed, seeds significant, stab
 
 An **event** is a stable gene and a pair of clusters with a site at pairwise padj < 0.05
 and |delta usage| >= 0.2, with >= 20 of the gene's read ends (at tested sites) in each
-cluster. It is oriented so its largest significant change is a gain: the **gained site**
-rises from cluster A to cluster B, the **lost site** is the one that falls most. Each
+cluster. It is oriented so its largest significant change is a gain: that site is the
+**gained site**, rising from cluster A to cluster B, and the **lost site** is the one among
+the others that falls most. Each
 event is annotated with:
 
 - `event_type`, from the isoform models carrying the two sites: TSS `tandem_TSS` (both on
@@ -173,8 +175,8 @@ event is annotated with:
   `alt_last_exon`;
 - unique full-splice-match (FSM) reads of the best-supported isoform carrying each site,
   summed over the cluster quantifications;
-- `switch_class`, from each site's read ends per million site-ending reads in each
-  cluster (+1), at 1.5-fold: reciprocal (gained site up, lost site down), concordant,
+- `switch_class`, from each site's read ends per million site-ending reads (all sites,
+  from step 2's cluster counts) in each cluster (+1), at 1.5-fold: reciprocal (gained site up, lost site down), concordant,
   one site changes, neither;
 - flags: `monoexonic` (a site carried only by single-exon models), `downstream_TSS_no_FSM`
   (a gained TSS downstream of the lost one with no isoform starting there holding 5 FSM
@@ -198,7 +200,8 @@ their way into the gene, so they show whether the two sites share a terminal exo
   the inner site's terminal intron carry it: an alternative first or last exon, an
   intronic PolyA, a retained intron.
 - **alternative splicing: internal** -- the same terminal exon, but some intron further
-  in is carried by shares of the two sites' reads differing by >= 0.25.
+  in is carried by shares of the two sites' reads differing by >= 0.25 (a difference at
+  the inner site's own adjacent intron counts as terminal exon).
 - **alternative terminal usage** -- the same terminal exon and the same splicing: tandem
   TSSs, tandem 3' UTR PolyA sites.
 - **unspliced site** -- fewer than 10 spliced reads at the inner site (a monoexonic

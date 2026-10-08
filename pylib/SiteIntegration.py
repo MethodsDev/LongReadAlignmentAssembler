@@ -18,8 +18,12 @@ max_dist / 2, is a different tolerance: how far a single read end may lie from a
 and still count as ending there. Using it here let basic sites 26-50 nt from a scg site
 through as separate sites.)
 
-Surviving supplement sites are NOT re-aggregated against each other; they are the basic
-run's own distinct calls and already went through that run's site clustering.
+Surviving supplement sites are then collapsed against each other within the same window.
+They should already be distinct -- the basic run clustered them -- but its bed can hold
+one site several times, once per transcript ending there, 1-8 nt apart with the same
+support (e.g. DDAH2's TSS at chr6:31730260-31730268). Strongest first: a supplement
+site within the window of a stronger kept one is absorbed by it (its transcript ids
+join the kept row; support is not summed, the rows being the same site written twice).
 
 Both inputs are the beds SplicePatternCollapse.write_site_bed produces, and the output
 keeps those columns unchanged and appends `source` (cluster_guided | basic). Support and
@@ -92,8 +96,40 @@ def _position(row):
     return int(row[2])
 
 
+def collapse_within_window(rows, window):
+    """Collapse rows of one site set lying within `window` of a stronger row of the same
+    contig and strand; returns (kept_rows, n_collapsed). Strongest first (support, then
+    position), each absorbed row going to the nearest stronger kept row; the kept row's
+    transcript_ids / num_transcripts take the union."""
+    by_key = defaultdict(list)
+    for row in rows:
+        by_key[(row[0], row[5])].append(row)
+    kept, collapsed = [], 0
+    for key_rows in by_key.values():
+        order = sorted(key_rows, key=lambda r: (-float(r[6]), _position(r)))
+        reps = []  # sorted positions of kept rows
+        rep_rows = {}
+        for row in order:
+            pos = _position(row)
+            i = bisect.bisect_left(reps, pos - window)
+            near = [p for p in reps[i:] if p <= pos + window]
+            if near:
+                target = rep_rows[min(near, key=lambda p: (abs(p - pos), p))]
+                tids = [t for t in (target[8] + "," + row[8]).split(",") if t and t != "."]
+                tids = sorted(set(tids))
+                target[8] = ",".join(tids) if tids else target[8]
+                target[7] = str(len(tids)) if tids else target[7]
+                collapsed += 1
+                continue
+            row = list(row)
+            bisect.insort(reps, pos)
+            rep_rows[pos] = row
+        kept.extend(rep_rows.values())
+    return kept, collapsed
+
+
 def integrate_sites(primary_rows, supplement_rows, window):
-    """Return (integrated_rows, n_supplement_dropped).
+    """Return (integrated_rows, n_supplement_dropped, n_supplement_collapsed).
 
     integrated_rows carry the source label appended and are sorted by
     (contig, position, strand), matching write_site_bed's order.
@@ -106,6 +142,7 @@ def integrate_sites(primary_rows, supplement_rows, window):
 
     integrated = [row + [PRIMARY_SOURCE] for row in primary_rows]
     dropped = 0
+    surviving = []
     for row in supplement_rows:
         positions = primary_positions.get((row[0], row[5]), [])
         pos = _position(row)
@@ -113,10 +150,12 @@ def integrate_sites(primary_rows, supplement_rows, window):
         if i < len(positions) and positions[i] <= pos + window:
             dropped += 1
             continue
-        integrated.append(row + [SUPPLEMENT_SOURCE])
+        surviving.append(row)
+    surviving, collapsed = collapse_within_window(surviving, window)
+    integrated += [row + [SUPPLEMENT_SOURCE] for row in surviving]
 
     integrated.sort(key=lambda r: (r[0], _position(r), r[5]))
-    return integrated, dropped
+    return integrated, dropped, collapsed
 
 
 def write_integrated_bed(
@@ -139,12 +178,14 @@ def write_integrated_bed(
         )
         ofh.write(
             "# counts: {primary} {p} kept, {supplement} {sk} kept, {supplement} {sd} "
-            "dropped as within {hw} nt of a {primary} site\n".format(
+            "dropped as within {hw} nt of a {primary} site, {supplement} {sc} collapsed "
+            "into a stronger {supplement} site within {hw} nt\n".format(
                 primary=PRIMARY_SOURCE,
                 supplement=SUPPLEMENT_SOURCE,
                 p=counts["primary"],
                 sk=counts["supplement_kept"],
                 sd=counts["supplement_dropped"],
+                sc=counts["supplement_collapsed"],
                 hw=window,
             )
         )
@@ -167,14 +208,15 @@ def integrate_site_beds(
         window = default_window(site_type)
     primary_rows = read_site_bed(primary_bed, site_type)
     supplement_rows = read_site_bed(supplement_bed, site_type)
-    integrated, dropped = integrate_sites(primary_rows, supplement_rows, window)
+    integrated, dropped, collapsed = integrate_sites(primary_rows, supplement_rows, window)
     counts = {
         "site_type": site_type,
         "window": window,
         "primary": len(primary_rows),
         "supplement_total": len(supplement_rows),
-        "supplement_kept": len(supplement_rows) - dropped,
+        "supplement_kept": len(supplement_rows) - dropped - collapsed,
         "supplement_dropped": dropped,
+        "supplement_collapsed": collapsed,
         "integrated": len(integrated),
     }
     write_integrated_bed(
@@ -191,6 +233,7 @@ SUMMARY_COLUMNS = [
     ("supplement_total", SUPPLEMENT_SOURCE + "_sites"),
     ("supplement_kept", SUPPLEMENT_SOURCE + "_supplement_kept"),
     ("supplement_dropped", SUPPLEMENT_SOURCE + "_within_window_dropped"),
+    ("supplement_collapsed", SUPPLEMENT_SOURCE + "_near_duplicates_collapsed"),
     ("integrated", "integrated_sites"),
 ]
 

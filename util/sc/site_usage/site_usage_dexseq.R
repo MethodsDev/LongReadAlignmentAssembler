@@ -69,6 +69,8 @@ parser$add_argument("--min_gene_cluster_reads", type="integer", default=20,
                     help="... with at least this many gene read ends in that cluster")
 parser$add_argument("--fdr", type="double", default=0.05)
 parser$add_argument("--cores", type="integer", default=8)
+parser$add_argument("--dispersion_parts", type="integer", default=8,
+                    help="blocks DEXSeq fits dispersions in (fixed, so results do not depend on --cores)")
 parser$add_argument("--no_pairwise", action="store_true")
 parser$add_argument("--max_genes", type="integer", default=0, help="test only this many genes, chosen at random (for trial runs)")
 parser$add_argument("--output_prefix", required=TRUE)
@@ -76,6 +78,12 @@ args <- parser$parse_args()
 
 msg <- function(...) message(format(Sys.time(), "%H:%M:%S "), sprintf(...))
 bp <- if (args$cores > 1) MulticoreParam(args$cores) else SerialParam()
+# DEXSeq's estimateDispersions fits the sites in one block per BPPARAM worker, and the
+# fitted values depend (slightly) on that blocking, so the dispersions -- and every p-value
+# downstream -- would change with --cores. A fixed number of blocks keeps results identical
+# whatever --cores is. testForDEU splits the same way (its p-values move only at ~1e-13,
+# but byte-identical outputs are worth the fixed split); the pairwise contrasts use --cores.
+bp_disp <- if (args$dispersion_parts > 1) MulticoreParam(args$dispersion_parts) else SerialParam()
 out <- function(suffix) paste0(args$output_prefix, ".", args$kind, ".", suffix)
 
 ## ---- counts: sites x cells
@@ -187,8 +195,8 @@ for (seed in seq_len(args$n_seeds)) {
     storage.mode(pb) <- "integer"
     pb <- pb[, order(match(sub("\\.r[0-9]+$", "", colnames(pb)), clusters), colnames(pb))]
     dxd <- run_dexseq(pb, sub("\\.r[0-9]+$", "", colnames(pb)))
-    dxd <- estimateDispersions(dxd, BPPARAM=bp)
-    dxd <- testForDEU(dxd, BPPARAM=bp)
+    dxd <- estimateDispersions(dxd, BPPARAM=bp_disp)
+    dxd <- testForDEU(dxd, BPPARAM=bp_disp)
     res <- DEXSeqResults(dxd, independentFiltering=FALSE)
     gene_q <- perGeneQValue(res)
 

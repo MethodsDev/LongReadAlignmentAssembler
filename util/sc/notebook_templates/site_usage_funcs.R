@@ -419,6 +419,10 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         y = y - length(idx) - gap
     }
     read_order$y = row_y
+    # the y range from all rows, fixed before any trimming to a zoom window: a zoom that
+    # loses the top model row or the bottom reads must not rescale, or its rows drift from
+    # the other panels' rows
+    ylim = c(min(c(row_y, model_rows$y)) - 0.6, max(model_rows$y) + 0.6)
     header = tibble(cluster_label = names(header), y = unlist(header))
     if (! is.null(read_totals)) {
         tot = read_totals %>% mutate(isoform = names(transcripts)[match(transcript_id, track_id)],
@@ -468,11 +472,13 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
               legend.key.size = unit(9, "pt"), legend.spacing.x = unit(4, "pt"),
               legend.text = element_text(margin = margin(r = 14)))
     if (! is.null(sites)) {
-        p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+        # the panel is unclipped: a site outside the window would be drawn on the next panel
+        in_view = if (is.null(xlim)) sites else sites[sites >= xlim[1] & sites <= xlim[2]]
+        if (length(in_view)) {
+            p = p + geom_vline(xintercept = in_view, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+        }
     }
-    if (! is.null(xlim)) {
-        p = p + coord_cartesian(xlim = xlim, expand = FALSE, clip = "off")
-    }
+    p = p + coord_cartesian(xlim = xlim, ylim = ylim, expand = is.null(xlim), clip = if (is.null(xlim)) "on" else "off")
     p + scale_x_continuous(labels = function(x) format(x, big.mark = ",", scientific = FALSE),
                            n.breaks = if (! is.null(xlim) && diff(xlim) < 1000) 3 else 5)
 }

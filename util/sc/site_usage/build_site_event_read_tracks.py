@@ -161,13 +161,14 @@ def main():
             if name in fsm_set:
                 blks = blocks(read)
             else:
-                for t in txs:
-                    if abs(pos - site_pos[t]) <= args.site_tolerance:
-                        b = blocks(read)
-                        if fits_model(b, exons[t]["exons"], args.site_tolerance):
-                            compatible[t].add((cl, name))
-                            blks = b
-                        break
+                # the nearer site's isoform (sites can lie closer than twice the tolerance)
+                near = [t for t in txs if abs(pos - site_pos[t]) <= args.site_tolerance]
+                if near:
+                    t = min(near, key=lambda t: abs(pos - site_pos[t]))
+                    b = blocks(read)
+                    if fits_model(b, exons[t]["exons"], args.site_tolerance):
+                        compatible[t].add((cl, name))
+                        blks = b
             if blks is not None:
                 aln[name] = (read.reference_start + 1, read.reference_end, s, blks)
 

@@ -81,10 +81,14 @@ cluster-guided site is kept; a basic site is added only if it lies **more than 5
 and strand. 50 nt is the distance over which LRAA's own site definition absorbs read ends
 into one site, so no two sites of one run are closer; a basic site within that distance
 is the same site called twice. (Before LRAA f283c326 the cutoff was half of that, 25 nt,
-which let 26-50 nt near-duplicates through.)
+which let 26-50 nt near-duplicates through.) The surviving basic sites are then collapsed
+among themselves within the same 50 nt, strongest first: the basic bed can hold one site
+several times, once per transcript ending there, 1-8 nt apart with the same support
+(DDAH2's TSS at chr6:31,730,260-268, five rows). A collapsed row's transcript ids join the
+kept one; support is not summed (the rows are one site written twice).
 
 Output: `<prefix>.integrated.TSS.bed`, `<prefix>.integrated.PolyA.bed` (LRAA's site-bed
-columns plus `source` = cluster_guided | basic). PBMC: 24,848 TSS and 57,593 PolyA sites.
+columns plus `source` = cluster_guided | basic). PBMC: 24,828 TSS and 57,589 PolyA sites (20 TSS and 4 PolyA basic near-duplicates collapsed).
 
 ## Step 1. Site table (`prep_site_table.py`)
 
@@ -96,10 +100,13 @@ ids (`SELENOH^t:chr11:+:comp-569:iso-10`); the gene / transcript id map
 
 - **Gene assignment:** the gene symbols of the isoforms carrying the site (cluster-guided
   sites); for basic sites, whose transcript ids refer to the initial catalog, the gene
-  whose transcript span covers the site on its strand.
+  whose transcript span covers the site on its strand. A cluster-guided site carried only
+  by models of an unnamed LRAA gene (no symbol) is excluded (`unnamed_gene`) rather than
+  given to a named gene covering it: LRAA put it in a different gene (e.g. a novel 2-exon
+  gene's TSS at chr3:122,730,212, outside HSPBAP1, used to become HSPBAP1's second TSS).
 - **Testable or not (`competing`):** a site assigned to exactly one gene is testable. A
-  site assigned to several genes (read-through / cis-fusion models: `cross_gene`) or none
-  (`no_gene`) is kept in the table, so its reads are counted toward it and cannot spill
+  site assigned to several genes (read-through / cis-fusion models: `cross_gene`), to an
+  unnamed gene (`unnamed_gene`) or to none (`no_gene`) is kept in the table, so its reads are counted toward it and cannot spill
   onto a neighbouring site, but is not tested.
 - **No merging** (`--merge_dist_* 0`, the default): LRAA's sites are used as they are.
 - **Read window:** 25 nt (used by the step-5 classifier; the counting in step 2 applies
@@ -112,8 +119,8 @@ SELENOH models only, are tested.
 
 **Outputs:** `<prefix>.sites.tsv` (site_id, kind, chrom, strand, pos, span, window,
 source, support, pas, internal_priming, gene_symbol, gene_key, competing, exclusion,
-transcript_ids) and `<prefix>.gene_spans.tsv`. PBMC: 22,569 testable TSS sites (2,279
-not), 55,706 testable PolyA sites (1,887 not).
+transcript_ids) and `<prefix>.gene_spans.tsv`. PBMC: 22,176 testable TSS sites (2,652
+not, 1,164 of them unnamed_gene), 54,807 testable PolyA sites (2,782 not, 1,483 unnamed_gene).
 
 ## Step 2. Per-cell read support (`util/sc/site_read_support_to_sparse_matrix.py`, then `site_counts_from_lraa_support.py`)
 
@@ -129,7 +136,12 @@ a reimplementation):
    >= 97 (`--HiFi`; else LRAA's default), mapping quality >= `min_mapping_quality` (0).
    Reads without a cell barcode are skipped.
 2. **Which strand:** the transcript's: the alignment orientation, flipped when minimap2's
-   `ts:A:-` marks the read antisense to its transcript.
+   `ts:A:-` marks the read antisense to its transcript and the read's splice motifs
+   corroborate it, as LRAA does. The check reads the genome (`--genome`); without it every
+   read keeps its aligned strand, which is fine for oriented reads (the PBMC Kinnex reads
+   are all `ts:A:+`) but not for unstranded cDNA. Reads overlapping LRAA's rDNA mask
+   (`--rdna_mask_bed`, the bed LRAA builds for the genome) are discarded, as LRAA discards
+   them.
 3. **Where its ends are:** as LRAA places them (`Pretty_alignment`): a soft-clipped polyA
    tail at the 3' end (>= 7 bases, mostly A) and untemplated G's at the 5' end (up to 3,
    or a run of >= 3 next to the alignment: reverse transcriptase's mark of the cap) are
@@ -142,9 +154,10 @@ a reimplementation):
 5. **Counts are reads**, not LRAA's coverage-normalization weights (`--weighted` sums those
    instead).
 
-PBMC: 84.7M reads seen, 80.5M used (3.1M supplementary, 1.0M below 97% identity, a few with
-long introns). TSS: 26.9M ends at a site, 10.1M rejected for soft clip, 43.4M at no site.
-PolyA: 18.0M at a site, 31.9M rejected for soft clip, 30.5M at no site. Ends at no site
+PBMC: 84.7M reads seen, 79.9M used (3.1M supplementary, 1.0M below 97% identity, 0.5M in the
+rDNA mask, a few with long introns). TSS: 26.9M ends at a site, 10.1M rejected for soft
+clip, 42.9M at no site. PolyA: 18.0M at a site, 31.8M rejected for soft clip, 30.1M at no
+site. Ends at no site
 are mostly 5'-truncated reads (TSS) and internally primed ends LRAA deliberately has no
 site for (PolyA). (Most of the PolyA soft-clip rejections are reads keeping a 1-2 base
 non-genomic 3' clip after tail stripping; allowing it was tested on chr19 and not adopted:
@@ -184,8 +197,8 @@ usage is recomputed over the kept sites only, so a gene's tested sites' usages s
 each cluster. Rationale: sites that are a tiny share everywhere carry little information
 and their near-zero counts are where spurious significance comes from; "in at least one
 cluster" keeps sites important in only one cell type; the 20-read floor keeps a 10% share
-from resting on a handful of reads. PBMC: TSS 22,569 testable sites in 5,030 multi-site
-genes -> 10,520 sites in 3,945 genes; PolyA 55,706 in 9,417 -> 23,367 in 6,361.
+from resting on a handful of reads. PBMC: TSS 13,559 testable sites in 4,935 multi-site
+genes -> 10,250 sites in 3,872 genes; PolyA 48,682 in 9,387 -> 23,185 in 6,340.
 
 **2. Usage per cluster:** each kept site's share of its gene's read ends, per cluster
 (`cluster_usage.tsv.gz`); the "usage" of all later tables and figures.
@@ -219,9 +232,15 @@ change. Size factors: DEXSeq's default needs a site with no zero in any pseudo-r
 with few genes there may be none, and DESeq2's poscounts geometric means are used instead
 (logged; never needed genome-wide).
 
+**Reproducibility:** DEXSeq fits dispersions (and runs `testForDEU`) in one block per
+worker, and the fitted values depend slightly on the blocking, so they are run in a fixed
+number of blocks (`--dispersion_parts`, 8) whatever `--cores` is: outputs are identical at
+any core count. (Earlier runs used `--cores` blocks; rerunning with a different core count
+moved a handful of borderline genes.)
+
 **5. Seeds:** the dealing is random, so all of this runs under 5 seeds (`--n_seeds`); a
-gene is **stable** when q < 0.05 under >= 4 (`--min_stable_seeds`). PBMC: 1,315 of 3,945
-TSS genes and 619 of 6,361 PolyA genes. SELENOH: 5 of 5.
+gene is **stable** when q < 0.05 under >= 4 (`--min_stable_seeds`). PBMC: 1,296 of 3,872
+TSS genes and 617 of 6,340 PolyA genes. SELENOH: 5 of 5.
 
 **6. Pairwise contrasts** (stable genes, first seed): for each pair of clusters (91 pairs),
 DEXSeq on that pair's 6 pseudo-replicates, each site taking its dispersion from the
@@ -248,7 +267,8 @@ and the isoform-level DTU table (cross-reference).
 each cluster (`--min_gene_reads`; with fewer, shares jump to 0 or 1 and the pairwise test,
 on all-cluster dispersions, can still call them) and a site at pairwise padj < 0.05 with
 |delta usage| >= 0.2 (`--fdr`, `--min_delta`). Oriented so its largest significant change is
-a gain: the **gained site** rises from cluster A to B, the **lost site** falls most.
+a gain: that site is the **gained site**, rising from cluster A to B; the **lost site** is
+the one among the others whose usage falls most.
 
 **Annotations:**
 
@@ -258,7 +278,7 @@ a gain: the **gained site** rises from cluster A to B, the **lost site** falls m
 - FSM support: per site, the number of isoforms carrying it and the largest unique-FSM
   read count among them (summed over the cluster quantifications).
 - `switch_class`: each site's read ends per million site-ending reads in each cluster
-  (+1), 1.5-fold: **reciprocal** (gained site up, lost site down), concordant (both up /
+  (all sites' read ends, from step 2's `<prefix>.<KIND>.cluster_counts.tsv`; +1), 1.5-fold: **reciprocal** (gained site up, lost site down), concordant (both up /
   both down), one site changes, neither. A share can flip with only one site moving; a
   reciprocal change in expression is the more interesting switch.
 - flags: `monoexonic` (a site carried only by single-exon models), `downstream_TSS_no_FSM`
@@ -274,14 +294,17 @@ lost 57,741,570 (81% -> 11%, 407 -> 34), |delta| 0.70, padj ~1e-60, `tandem_TSS`
 apart, unique FSM 3,394 / 3,287, gained site log2FC +1.88, lost -3.19: reciprocal, high
 confidence. (Not called by the isoform-level DTU for this pair; to be investigated.)
 
-**Output:** `<prefix>.dexseq.<KIND>.events.tsv`, one row per event. PBMC: 581 TSS genes
-and 206 PolyA genes with a high-confidence event.
+**Output:** `<prefix>.dexseq.<KIND>.events.tsv`, one row per event. PBMC: 15,012 TSS events
+in 1,145 genes, 569 genes with a high-confidence event; PolyA 3,175 events in 512 genes,
+218 with a high-confidence event.
 
 ## Step 5. Alternative terminal usage or alternative splicing (`classify_site_pairs_by_splicing.py`)
 
 Classifies each event's site pair (gene + gained + lost site; once, pooled over all cells)
 **from the reads at the two sites**: up to 3,000 reads per site whose 5' end (TSS) or 3'
 end (PolyA) lies within 25 nt of it, with their aligned spans and introns (CIGAR `N`).
+The reads are the ones step 2 counts: LRAA's read filters, ends, strand and soft-clip
+rule (`--HiFi`, `--genome`, `--rdna_mask_bed` as in step 2).
 
 Of the two sites the **inner** one is nearer the gene body (downstream TSS; proximal
 PolyA); reads from the **outer** site pass the inner site's position on their way into the
@@ -319,7 +342,9 @@ outer read:     ========================-----------=======        spans [t], oth
 - **alt_splicing:terminal_exon**: (a) >= 50% or (b) < 50%: an alternative first or last
   exon, an intronic PolyA, a retained intron.
 - **alt_splicing:internal**: same terminal exon, but an intron further in is carried by
-  shares of the two sites' reads differing by >= 0.25.
+  shares of the two sites' reads differing by >= 0.25. (The inner site's own adjacent
+  intron, carried by shares differing by >= 0.25, makes it **terminal_exon** instead: a
+  retained or alternative terminal intron.)
 - **unspliced_site**: < 10 spliced reads at the inner site (monoexonic models, reads inside
   an intron): read ends alone cannot tell splicing from pre-mRNA.
 - **unresolved**: < 10 outer reads reach the inner site's terminal intron (long 3' UTRs whose
@@ -369,8 +394,8 @@ inner reads:   ====[--t--]=====
 outer reads:                       ==================================   start inside the UTR
 ```
 
-PBMC (site pairs): TSS 727 alternative terminal usage, 1,394 terminal exon, 27 internal,
-489 unspliced site, 49 unresolved; PolyA 61 / 683 / 13 / 283 / 82. Among high-confidence
+PBMC (site pairs): TSS 726 alternative terminal usage, 1,395 terminal exon, 13 internal,
+469 unspliced site, 36 unresolved; PolyA 58 / 619 / 4 / 301 / 139. Among high-confidence
 genes (best event), about a third of TSS switches and a tenth of PolyA switches are
 alternative terminal usage; the rest come with alternative splicing, almost all a
 different terminal exon.
@@ -387,7 +412,7 @@ with >= 50 gene read ends each (`--min_gene_reads`); split by site kind and spli
 group (alternative terminal usage; alternative splicing = terminal exon or internal);
 **dominant switches only**, judged on the read ends -- the gained site is the gene's
 most-used site of its kind in cluster B and the lost site the most-used in cluster A
-(`<prefix>.<KIND>.cluster_usage.tsv.gz`). A share can also shift while another site
+(`<prefix>.<KIND>.cluster_usage.tsv.gz`; a site tied for the top counts). A share can also shift while another site
 leads in both clusters; such events stay in the results but aren't showcased. Dominance
 is deliberately not judged on isoform quantifications: isoforms that share their introns
 and differ only at a terminus fit the same reads, so the quantification spreads reads
@@ -403,11 +428,11 @@ clusters; `gained_tx` / `lost_tx`; the sites' shares in their clusters,
 
 **6b. Read-track data (`build_site_event_read_tracks.py`)**, per event:
 
-1. the isoform drawn for each site: of those carrying it with >= 5 unique FSM reads
-   (`--min_uniq_FSM`; all of them if none has that many), the one with the most reads
-   assigned in the cluster favouring the site -- cluster B for the gained site, cluster A
-   for the lost one -- so the pair drawn is the pair carrying the switch (SELENOH: iso-10
-   / iso-17). Ranking by unique FSM reads alone picked short fragment models (CRTAM,
+1. the isoform drawn for each site: given by `events.tsv` (`gained_tx` / `lost_tx`, chosen
+   in 6a); otherwise, of those carrying it with >= 3 unique FSM reads (`--min_uniq_FSM`;
+   all of them if none has that many), the one with the most reads assigned in the cluster
+   favouring the site -- cluster B for the gained site, cluster A for the lost one
+   (SELENOH: iso-10 / iso-17). Ranking by unique FSM reads alone picked short fragment models (CRTAM,
    FGR): full-length reads are shared among near-identical full-length models, so few of
    them are unique to any one. The manifest gives each isoform's reads in the two
    clusters and the gained isoform's share of the pair there (`gained_pair_frac_A/B`):

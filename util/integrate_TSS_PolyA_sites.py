@@ -65,9 +65,10 @@ def main():
             primary, supplement, site_type, out, window=window
         )
         logger.info(
-            "%s: %d cluster_guided + %d basic supplement (%d basic dropped within %d nt) -> %s",
+            "%s: %d cluster_guided + %d basic supplement (%d basic dropped within %d nt of a "
+            "cluster_guided site, %d collapsed as near-duplicates) -> %s",
             site_type, counts["primary"], counts["supplement_kept"],
-            counts["supplement_dropped"], counts["window"], out,
+            counts["supplement_dropped"], counts["window"], counts["supplement_collapsed"], out,
         )
         all_counts.append(counts)
 
