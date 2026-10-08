@@ -496,7 +496,7 @@ highlight_layer = function(highlight, fill = "#e4e3dc") {
 # `binwidth`-bp bins, as a share of that cluster's ends in the region, one row per
 # cluster. `ends`: cluster, pos, reads (extract_isoform_read_tracks.py --ends_output).
 plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
-                                 fill = "#5a5954", highlight = NULL, axis_side = "right") {
+                                 fill = "#5a5954", highlight = NULL, axis_side = "right", ends_at_sites = FALSE) {
     d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
         filter(! is.na(cluster_label)) %>%
         group_by(cluster_label) %>% mutate(share = reads / sum(reads)) %>% ungroup() %>%
@@ -513,7 +513,9 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
         scale_y_continuous(labels = scales::percent_format(accuracy = 1), n.breaks = 3,
                            position = axis_side, expand = expansion(mult = c(0, 0.35))) +
         labs(x = NULL, y = NULL,
-             subtitle = paste0("read ", if (kind == "TSS") "5'" else "3'", " ends per ", binwidth, " bp")) +
+             subtitle = paste0("read ", if (kind == "TSS") "5'" else "3'", " ends",
+                               if (ends_at_sites) paste0(" at the gene's ", kind, " sites") else "",
+                               " per ", binwidth, " bp")) +
         theme_minimal(base_size = 9) +
         theme(panel.grid.minor = element_blank(), strip.text = element_blank(), panel.spacing.y = unit(8, "pt"),
               axis.text.x = element_blank(), plot.subtitle = element_text(size = 8.5))
@@ -531,7 +533,7 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
 plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, kind = c("TSS", "PolyA"),
                                     zoom_flank = 120, title = NULL, file = NULL, width = 11, height = 8,
                                     read_totals = NULL, ends = NULL, zoom_bin = 4,
-                                    density_height = 0.28, max_joint_zoom = 400) {
+                                    density_height = 0.28, max_joint_zoom = 400, ends_at_sites = FALSE) {
     kind = match.arg(kind)
     full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end))
     # pad by 2% so a read-end peak at the gene's terminus isn't drawn on the panel edge
@@ -563,6 +565,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
     } else {
         dens = lapply(seq_along(xlims), function(i)
             plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind,
+                                  ends_at_sites = ends_at_sites,
                                   highlight = if (i == 1) zooms else NULL,
                                   axis_side = if (i == 1) "left" else "right") +
                 labs(title = col_titles[i]) + gap(i))
@@ -663,7 +666,7 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     ends = read_tsv(file.path(outdir, paste0(m$tag, ".ends.tsv")), show_col_types = FALSE)
     totals = read_tsv(file.path(outdir, paste0(m$tag, ".totals.tsv")), show_col_types = FALSE)
     plot_isoform_read_tracks(exons, reads, transcripts, clusters, sites = c(gained_pos, lost_pos), kind = kind,
-                             read_totals = totals, ends = ends,
+                             read_totals = totals, ends = ends, ends_at_sites = TRUE,
                              title = paste0(m$gene_symbol, ": alternative ", kind, ", ",
                                             if (any(reads$read_class %in% "compatible"))
                                                 paste0("unique FSM reads (solid) and partial reads sharing the ", kind, " (light), ")

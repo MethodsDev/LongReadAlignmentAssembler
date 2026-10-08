@@ -445,8 +445,11 @@ clusters; `gained_tx` / `lost_tx`; the sites' shares in their clusters,
    (introns a consecutive run of the model's introns, +- 3 bp; no block reaching into a
    model intron or past the model's far end). Compatible reads are drawn lighter; their
    aligned blocks come from the BAM;
-3. read-end density: each cluster's 5' (TSS) or 3' (PolyA) ends of **all** its reads in
-   the region, on the gene's strand;
+3. read-end density: each cluster's 5' (TSS) or 3' (PolyA) read ends on the gene's strand
+   that fall in the counting window of one of the gene's sites of that kind (span +-
+   window, site table) -- the ends the test counts, so the peaks are the sites' shares.
+   Ends elsewhere (e.g. 5'-truncated reads starting in the last exon, common in some
+   cell types) are left out, as they would otherwise dwarf the site peaks;
 4. totals: reads per isoform and cluster (FSM + compatible, as in the cluster headers;
    and unique FSM alone).
 

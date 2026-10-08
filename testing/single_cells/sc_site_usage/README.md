@@ -246,8 +246,9 @@ draws:
   "compatible" reads -- reads whose 5' (TSS) or 3' (PolyA) end is within 25 bp of the
   isoform's site and whose alignment fits the model (introns a consecutive run of the
   model's, no block reaching into a model intron); drawn lighter in the figures;
-- each cluster's read-end density: the 5' (TSS) or 3' (PolyA) ends of all of the
-  cluster's reads in the region, on the gene's strand.
+- each cluster's read-end density: the 5' (TSS) or 3' (PolyA) ends of the cluster's
+  reads on the gene's strand that fall in the counting window of one of the gene's sites
+  of that kind -- the read ends the test counts, so each peak is that site's share.
 
 Output: `read_tracks/manifest.tsv` and per event `<tag>.reads.tsv`, `.ends.tsv`,
 `.totals.tsv`. `make figures` draws them (`figures.R`, using

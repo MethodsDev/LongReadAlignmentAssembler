@@ -25,8 +25,11 @@ For each event:
   - drawn: up to --max_reads per cluster from the event's two clusters, split between the
     two isoforms in proportion to their reads there (FSM + compatible), each isoform's
     share filled from its unique FSM reads first, then from its compatible reads;
-  - read-end density: per cluster, the 5' (TSS events) or 3' (PolyA events) ends of all
-    reads of the two clusters on the gene's strand within the two isoforms' span;
+  - read-end density: per cluster, the 5' (TSS events) or 3' (PolyA events) ends of the
+    two clusters' reads on the gene's strand that fall within the counting window of one
+    of the gene's sites of that kind (site table span +- window) -- the read ends the
+    site-usage test counts, so the peaks are the sites' shares; read ends elsewhere
+    (5'-truncated reads starting in the last exon, ...) are left out;
   - totals: reads per isoform and cluster (FSM + compatible, and unique FSM alone).
 
 The tracking file is read once for all events.
@@ -130,6 +133,9 @@ def main():
         hi = max(max(x for _, x in exons[t]["exons"]) for t in txs) + 50
 
         site_pos = {txs[0]: int(e["gained_site"].split(":")[2]), txs[1]: int(e["lost_site"].split(":")[2])}
+        gk = sites[e["gained_site"]]["gene_key"]
+        counted = [(int(r["span_lo"]) - int(r["window"]), int(r["span_hi"]) + int(r["window"]))
+                   for r in sites.values() if r["kind"] == e["kind"] and r["gene_key"] == gk]
         fsm_names = {t: {(c, m) for c, m in reads_by_tx[t] if c in clusters} for t in txs}
         fsm_set = {m for t in txs for _, m in fsm_names[t]}
 
@@ -152,7 +158,7 @@ def main():
             five = (read.reference_start + 1) if s == "+" else read.reference_end
             three = read.reference_end if s == "+" else (read.reference_start + 1)
             pos = five if e["kind"] == "TSS" else three
-            if lo <= pos <= hi:
+            if any(a <= pos <= b for a, b in counted):
                 ends[(cl, pos)] += 1
             name = read.query_name
             if name in aln:
