@@ -381,20 +381,32 @@ task gather_shards {
     command <<<
         set -euo pipefail
 
-        # The shards are given in slice order, which is contig header order.
-        # Header, then each shard's table as it is: appended gzip members are one valid
-        # gzip stream (zcat, Python and R read it as one), so nothing is decompressed.
-        python3 -c '
+        # The shards are given in shard order, which is contig header order. The two
+        # appends are independent copies (no recompression), so they run side by side.
+        # `wait <pid>` returns that job's status, so a failed copy fails the task.
+        #
+        # Table: header, then each shard's table as it is. Appended gzip members are one
+        # valid gzip stream (zcat, Python and R read it as one).
+        (
+            python3 -c '
 import gzip, importlib.machinery, shutil, sys
 sq = importlib.machinery.SourceFileLoader("sq", shutil.which("SQANTI-like_cats_for_reads_or_isoforms.py")).load_module()
 with gzip.open("~{sample_id}.iso_cats.tsv.gz", "wt", compresslevel=6) as ofh:
     ofh.write("\t".join(sq.BAM_TSV_FIELDNAMES) + "\n")
 '
-        while read -r f; do
-            cat "$f" >> ~{sample_id}.iso_cats.tsv.gz
-        done < ~{write_lines(shard_tsvs)}
+            while read -r f; do
+                cat "$f" >> ~{sample_id}.iso_cats.tsv.gz
+            done < ~{write_lines(shard_tsvs)}
+        ) &
+        tsv_pid=$!
 
-        samtools cat --no-PG -b ~{write_lines(shard_bams)} -o ~{sample_id}.iso_cats.bam
+        # Bam: the shards cover disjoint contigs, in header order, so appending them
+        # keeps the bam coordinate sorted; samtools cat copies the compressed blocks.
+        samtools cat --no-PG -b ~{write_lines(shard_bams)} -o ~{sample_id}.iso_cats.bam &
+        bam_pid=$!
+
+        wait $tsv_pid
+        wait $bam_pid
 
         # Summed in slice order, so categories stay in the order a single run first sees them.
         awk -F'\t' -v OFS='\t' '
