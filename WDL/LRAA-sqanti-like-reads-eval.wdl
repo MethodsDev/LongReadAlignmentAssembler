@@ -42,9 +42,12 @@ workflow LRAA_sqanti_like_reads_eval_wf {
 
         # A shard reads its reads as a stream, so it classifies on one core whatever
         # its size; the cores only serve samtools and the compression of its output.
+        # 8 GB is headroom, not a model: the single-task run of the whole 26 GB bam
+        # peaked at 2.6 GiB with all 8 contig workers running at once (Terra
+        # monitoring.log), so one worker needs a fraction of that.
         Int plan_cpu = 4
         Int shard_cpu = 4
-        Int shard_memory_GB = 16
+        Int shard_memory_GB = 8
 
         Int preemptible_tries = 3
 
