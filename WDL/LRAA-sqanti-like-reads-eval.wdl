@@ -2,16 +2,20 @@ version 1.0
 
 # Classifies long reads (a BAM) or isoforms (a GTF) into SQANTI-like categories.
 #
-# A BAM is classified by CONTIG GROUP, in three phases:
+# A BAM is classified in SHARDS, in three phases:
 #
-#   1. plan_shards    one small task: reads the index statistics and groups the
-#                     contigs, in header order, into shards of similar read counts,
-#                     plus one shard for the unplaced reads.
+#   1. plan_shards    one small task: from the index alone, groups the small contigs
+#                     in header order and cuts each contig above max_reads_per_shard
+#                     into position ranges of similar read counts, plus one shard for
+#                     the unplaced reads (util/misc/plan_bam_shards.py). A read belongs
+#                     to the range holding its start, so none is classified twice, and
+#                     no cut needs a gap in coverage: a read is classified on its own
+#                     against its contig's annotation.
 #   2. classify_shard one task per shard. Gets the whole BAM and its index, reads only
-#                     its contigs from it (samtools view, as SAM into the classifier)
-#                     and keeps only its contigs' lines of the annotation, so it never
-#                     parses the whole reference. The price of not cutting the BAM once
-#                     is that every shard localizes all of it.
+#                     its contigs or range from it (samtools view, as SAM into the
+#                     classifier) and keeps only its contigs' lines of the annotation.
+#                     The price of not cutting the BAM once is that every shard
+#                     localizes all of it.
 #   3. gather_shards  one task: appends the per-read tables and the tagged BAMs in
 #                     shard order and sums the category counts, which reproduces what
 #                     a single run over the whole BAM writes.
@@ -33,11 +37,11 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
 
         # Contigs are grouped, in header order, until a group holds about this many
-        # records; a contig above it is a group of its own. The largest human contigs
-        # hold 3 to 4 million of the 46 million reads of the test bam, so they end up
-        # alone and the many small alt/unplaced contigs share a few shards. Lower it for
-        # more, shorter shards; a shard is one task, so a very low value only adds
-        # per-task overhead.
+        # records; a contig above it is cut into ranges of about this many. On the
+        # 46 million read test bam the largest contigs hold 3 to 4 million reads, so
+        # they become 3 shards of 1.1 to 1.4 million (measured), and the many small
+        # alt/unplaced contigs share a few. A shard is one task, so a very low value
+        # only adds per-task overhead.
         Int max_reads_per_shard = 1500000
 
         # A shard reads its reads as a stream, so it classifies on one core whatever
@@ -68,11 +72,11 @@ workflow LRAA_sqanti_like_reads_eval_wf {
                 disk_type = disk_type
         }
 
-        scatter (i in range(length(plan_shards.shard_contigs))) {
+        scatter (i in range(length(plan_shards.shard_specs))) {
             call classify_shard {
                 input:
                     shard_name = "shard_" + i,
-                    contigs = plan_shards.shard_contigs[i],
+                    shard_spec = plan_shards.shard_specs[i],
                     input_BAM = select_first([input_BAM]),
                     input_BAI = plan_shards.bai,
                     ref_annot_GTF = ref_annot_GTF,
@@ -179,36 +183,19 @@ task plan_shards {
         # delocalized.
         cp -L input.bam.bai plan.bam.bai
 
-        # contig, length, mapped, unmapped; the last row ('*') counts the unplaced reads.
-        samtools idxstats input.bam > idxstats.tsv
-
-        # One line per shard: the contigs it holds, space separated. Contigs holding
-        # any record, in header order, grouped into runs of about max_reads_per_shard
-        # records. Runs stay contiguous in header order, which is what lets the gather
-        # append the shards and get the order of a single run. The unplaced reads, if
-        # any, are the last shard, written as '*'.
-        awk -F'\t' -v target=~{max_reads_per_shard} '
-            $1 == "*" { unplaced = $4; next }
-            ($3 + $4) > 0 {
-                n = $3 + $4
-                if (held > 0 && held + n > target) { print line; line = ""; held = 0 }
-                line = (line == "" ? $1 : line " " $1)
-                held += n
-            }
-            END {
-                if (line != "") print line
-                if (unplaced > 0) print "*"
-            }
-        ' idxstats.tsv > shard_contigs.txt
-
-        if [ ! -s shard_contigs.txt ]; then
-            echo "Error, ~{basename(input_BAM)} has no reads" >&2
-            exit 1
-        fi
+        # One line per shard, see the script for the format: whole contigs (small ones
+        # grouped in header order), or a position range of one contig for a contig
+        # above max_reads_per_shard, cut from the index alone. The unplaced reads, if
+        # any, are the last shard. Shards stay in the bam's own order, which is what
+        # lets the gather append them and get the order of a single run.
+        "$(dirname "$(which SQANTI-like_cats_for_reads_or_isoforms.py)")/misc/plan_bam_shards.py" \
+            --bam input.bam --bai input.bam.bai \
+            --max_reads_per_shard ~{max_reads_per_shard} \
+            > shard_specs.txt
     >>>
 
     output {
-        Array[String] shard_contigs = read_lines("shard_contigs.txt")
+        Array[String] shard_specs = read_lines("shard_specs.txt")
         # the index the shards need, whether it was given or made here
         File bai = "plan.bam.bai"
     }
@@ -226,8 +213,9 @@ task plan_shards {
 task classify_shard {
     input {
         String shard_name
-        # space separated contig names, or * for the unplaced reads
-        String contigs
+        # one line of the plan: "contigs<TAB>name name ..." (* is the unplaced reads) or
+        # "range<TAB>name<TAB>start<TAB>end", the reads of one contig that start in it
+        String shard_spec
         File input_BAM
         File input_BAI
         File ref_annot_GTF
@@ -282,27 +270,42 @@ task classify_shard {
         ln -s ~{input_BAM} input.bam
         ln -s ~{input_BAI} input.bam.bai
 
-        # The shard's contigs, each as {name} so samtools takes it literally, which
-        # contigs like HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads.
-        # Read into an array rather than expanded unquoted, which would glob the *.
-        read -r -a names <<< '~{contigs}'
+        IFS=$'\t' read -r kind field1 field2 field3 <<< '~{shard_spec}'
+
+        # Each contig as {name} so samtools takes it literally, which contigs like
+        # HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads. Read into
+        # an array rather than expanded unquoted, which would glob the *.
         regions=()
-        for c in "${names[@]}"; do
-            if [ "$c" = "*" ]; then regions+=("*"); else regions+=("{$c}"); fi
-        done
+        min_pos=0
+        if [ "$kind" = "range" ]; then
+            names=("$field1")
+            regions+=("{$field1}:$field2-$field3")
+            # The query returns the reads overlapping the range, including ones that
+            # began before it; those belong to the range before. A read belongs to the
+            # range holding its start, so no read is classified twice.
+            min_pos=$field2
+        else
+            read -r -a names <<< "$field1"
+            for c in "${names[@]}"; do
+                if [ "$c" = "*" ]; then regions+=("*"); else regions+=("{$c}"); fi
+            done
+        fi
 
         # The reference lines of this shard's contigs, so the script does not parse the
         # whole annotation. Empty for the unplaced reads, which are not classified.
+        # (A range keeps its whole contig: a read is classified against all of it.)
+        printf '%s\n' "${names[@]}" > shard_contigs.txt
         zcat -f ~{ref_annot_GTF} | awk -F'\t' '
-            BEGIN { n = split("~{contigs}", names, " "); for (i = 1; i <= n; i++) want[names[i]] = 1 }
+            NR == FNR { want[$1] = 1; next }
             /^#/ { next }
             ($1 in want)
-        ' > shard.gtf
+        ' shard_contigs.txt - > shard.gtf
 
         # The reads reach the script as SAM on stdin, header included, so no slice of
         # the bam is written. A stream has no index, so the contigs of the shard are
         # classified one after the other.
         samtools view -h input.bam "${regions[@]}" | \
+            awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
             SQANTI-like_cats_for_reads_or_isoforms.py \
                 --ref_gtf shard.gtf \
                 --output_prefix ~{shard_name} \
