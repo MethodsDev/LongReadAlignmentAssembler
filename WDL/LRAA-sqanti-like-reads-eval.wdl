@@ -7,7 +7,8 @@ version 1.0
 #   1. plan_shards    one small task: from the index alone, groups the small contigs
 #                     in header order and cuts each contig above max_reads_per_shard
 #                     into position ranges of similar read counts, plus one shard for
-#                     the unplaced reads (util/misc/plan_bam_shards.py). A read belongs
+#                     the unplaced reads (util/misc/plan_bam_shards.py). It also writes
+#                     one annotation file per shard, so no shard reads the whole one. A read belongs
 #                     to the range holding its start, so none is classified twice, and
 #                     no cut needs a gap in coverage: a read is classified on its own
 #                     against its contig's annotation.
@@ -16,9 +17,11 @@ version 1.0
 #                     classifier) and keeps only its contigs' lines of the annotation.
 #                     The price of not cutting the BAM once is that every shard
 #                     localizes all of it.
-#   3. gather_shards  one task: appends the per-read tables and the tagged BAMs in
-#                     shard order and sums the category counts, which reproduces what
-#                     a single run over the whole BAM writes.
+#   3. gather_shards  one task: appends the per-read tables and the tagged BAMs of all
+#                     chunks in order and sums the category counts, which reproduces
+#                     what a single run over the whole BAM writes. The shards hand over
+#                     their chunks' files as they are; appending them anywhere else
+#                     would only be repeated here.
 #
 # A GTF of isoforms is small and is classified by one task.
 
@@ -39,13 +42,15 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         # A CHUNK is what one process classifies: contigs are grouped, in header order,
         # until a group holds about this many records, and a contig above it is cut into
         # ranges of about this many (from the index alone). A SHARD is what one VM runs:
-        # consecutive chunks packed up to max_reads_per_shard, run in parallel on the
-        # VM's cores, so a shard should hold at least as many chunks as it has cores.
-        # Measured (4 cores, 4 chunks of 1.1 to 1.3 million reads): one chunk alone on a
-        # VM keeps 1.3 of 4 cores busy, four together keep 3.25 and take 153 s of VM time
-        # against 390 s for four VMs.
-        Int max_reads_per_chunk = 1000000
-        Int max_reads_per_shard = 4000000
+        # chunks_per_shard consecutive chunks, run in parallel on the VM's cores. Use
+        # about twice as many chunks as cores: a shard starts its largest chunks first
+        # and the smaller ones fill the cores as they free up, so no core waits at the
+        # end on one big chunk. Measured (4 cores, 4 chunks of 1.1 to 1.3 million reads):
+        # one chunk alone on a VM keeps 1.3 of 4 cores busy, four together keep 3.25 and
+        # take 153 s of VM time against 390 s for four VMs; 8 chunks of about 600
+        # thousand took 133 s.
+        Int max_reads_per_chunk = 600000
+        Int chunks_per_shard = 8
 
         # Each chunk is classified on one core, so a shard uses as many cores as it has
         # chunks in flight; the rest compress the tagged bam of a shard with few chunks.
@@ -68,8 +73,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
             input:
                 input_BAM = select_first([input_BAM]),
                 input_BAI = input_BAI,
+                ref_annot_GTF = ref_annot_GTF,
                 max_reads_per_chunk = max_reads_per_chunk,
-                max_reads_per_shard = max_reads_per_shard,
+                max_reads_per_shard = max_reads_per_chunk * chunks_per_shard,
                 docker = docker_sc,
                 cpu = plan_cpu,
                 preemptible_tries = preemptible_tries,
@@ -83,7 +89,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
                     shard_spec = plan_shards.shard_specs[i],
                     input_BAM = select_first([input_BAM]),
                     input_BAI = plan_shards.bai,
-                    ref_annot_GTF = ref_annot_GTF,
+                    shard_gtf = plan_shards.shard_gtfs[i],
                     docker = docker_sc,
                     cpu = shard_cpu,
                     memory_GB = shard_memory_GB,
@@ -95,9 +101,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         call gather_shards {
             input:
                 sample_id = sample_id,
-                shard_tsvs = classify_shard.iso_cats_tsv,
-                shard_bams = classify_shard.iso_cats_bam,
-                shard_summaries = classify_shard.summary_counts_tsv,
+                chunk_tsvs = flatten(classify_shard.chunk_tsvs),
+                chunk_bams = flatten(classify_shard.chunk_bams),
+                chunk_summaries = flatten(classify_shard.chunk_summaries),
                 docker = docker_sc,
                 disk_type = disk_type
         }
@@ -128,6 +134,7 @@ task plan_shards {
     input {
         File input_BAM
         File? input_BAI
+        File ref_annot_GTF
 
         Int max_reads_per_chunk
         Int max_reads_per_shard
@@ -138,7 +145,7 @@ task plan_shards {
         String disk_type
     }
 
-    Int disk_GB = ceil(1.2 * size(input_BAM, "GB") + 20)
+    Int disk_GB = ceil(1.2 * size(input_BAM, "GB") + 2.2 * size(ref_annot_GTF, "GB") + 20)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -198,10 +205,37 @@ task plan_shards {
             --max_reads_per_chunk ~{max_reads_per_chunk} \
             --max_reads_per_shard ~{max_reads_per_shard} \
             > shard_specs.txt
+
+        # One annotation file per shard, in one pass over the reference: the lines of the
+        # contigs the shard's chunks need. A contig cut into ranges can be needed by two
+        # shards, so a line goes to every shard that needs its contig. Every shard gets a
+        # file, empty for the unplaced reads.
+        mkdir shard_gtfs
+        awk -F'\t' '{
+            n = split($0, chunks, ",")
+            for (i = 1; i <= n; i++) {
+                m = split(chunks[i], f, "\t")
+                if (f[1] == "range") { print f[2] "\t" NR - 1 }
+                else { k = split(f[2], names, " "); for (j = 1; j <= k; j++) print names[j] "\t" NR - 1 }
+            }
+        }' shard_specs.txt | sort -u > contig_to_shards.tsv
+        for i in $(seq 0 $(( $(wc -l < shard_specs.txt) - 1 ))); do
+            : > "$(printf 'shard_gtfs/shard_%05d.gtf' "$i")"
+        done
+        zcat -f ~{ref_annot_GTF} | awk -F'\t' '
+            NR == FNR { shards[$1] = shards[$1] " " $2; next }
+            /^#/ { next }
+            ($1 in shards) {
+                k = split(shards[$1], ids, " ")
+                for (i = 1; i <= k; i++) print > sprintf("shard_gtfs/shard_%05d.gtf", ids[i])
+            }
+        ' contig_to_shards.tsv -
     >>>
 
     output {
         Array[String] shard_specs = read_lines("shard_specs.txt")
+        # index i is shard i's annotation
+        Array[File] shard_gtfs = glob("shard_gtfs/*.gtf")
         # the index the shards need, whether it was given or made here
         File bai = "plan.bam.bai"
     }
@@ -219,13 +253,15 @@ task plan_shards {
 task classify_shard {
     input {
         String shard_name
-        # one line of the plan: chunks joined with commas, each "contigs<TAB>name name ..."
-        # (* is the unplaced reads) or "range<TAB>name<TAB>start<TAB>end", the reads of
-        # one contig that start in it
+        # one line of the plan: chunks joined with commas, each
+        # "contigs<TAB>name name ...<TAB>reads" (* is the unplaced reads) or
+        # "range<TAB>name<TAB>start<TAB>end<TAB>reads", the reads of one contig that
+        # start in it; reads is the estimated record count
         String shard_spec
         File input_BAM
         File input_BAI
-        File ref_annot_GTF
+        # the annotation lines of the contigs of this shard's chunks
+        File shard_gtf
 
         String docker
         Int cpu
@@ -237,7 +273,7 @@ task classify_shard {
     # Each shard localizes the whole bam and reads only its contigs from it, through
     # the index. The output is one shard's share: the tagged bam and the tables, both
     # at most the size of the bam.
-    Int disk_GB = ceil(1.5 * size(input_BAM, "GB") + 3 * size(ref_annot_GTF, "GB") + 20)
+    Int disk_GB = ceil(1.5 * size(input_BAM, "GB") + 3 * size(shard_gtf, "GB") + 20)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -277,17 +313,21 @@ task classify_shard {
         ln -s ~{input_BAM} input.bam
         ln -s ~{input_BAI} input.bam.bai
 
-        # The chunks of this shard, in order: one spec file each.
+        # The chunks of this shard, in order: one spec file each, and the estimated read
+        # count of each (the last field) for starting the largest first.
         mkdir chunks
-        printf '%s' '~{shard_spec}' | tr ',' '\n' | awk '{ print > sprintf("chunks/%05d.spec", NR - 1) }'
+        printf '%s' '~{shard_spec}' | tr ',' '\n' | awk -F'\t' '{
+            print > sprintf("chunks/%05d.spec", NR - 1)
+            print $NF "\t" NR - 1 > "chunk_sizes.tsv"
+        }'
         num_chunks=$(ls chunks/*.spec | wc -l)
 
-        # The reference, split once: one file per contig any chunk needs, so a chunk
-        # loads only its own contigs' lines and the annotation is read once per shard,
-        # not once per chunk.
+        # The shard's annotation, split once more: one file per contig any chunk needs, so
+        # a chunk loads only its own contigs' lines (this file is small, the plan task
+        # already cut it down to this shard's contigs).
         mkdir gtf
         cat chunks/*.spec | awk -F'\t' '$1 == "range" { print $2; next } { n = split($2, a, " "); for (i = 1; i <= n; i++) print a[i] }' | sort -u > contigs_needed.txt
-        zcat -f ~{ref_annot_GTF} | awk -F'\t' '
+        zcat -f ~{shard_gtf} | awk -F'\t' '
             NR == FNR { id[$1] = ++n; next }
             /^#/ { next }
             ($1 in id) { print > sprintf("gtf/%d.gtf", id[$1]) }
@@ -302,8 +342,11 @@ task classify_shard {
             local j="$1"
             local prefix
             prefix=$(printf 'chunks/%05d' "$j")
-            local kind field1 field2 field3
-            IFS=$'\t' read -r kind field1 field2 field3 < "$prefix.spec"
+            local out
+            out=$(printf 'chunks/~{shard_name}.c%05d' "$j")
+            local kind field1 field2 field3 estimate
+            # contigs: kind, names, reads.  range: kind, name, start, end, reads.
+            IFS=$'\t' read -r kind field1 field2 field3 estimate < "$prefix.spec"
 
             # Each contig as {name} so samtools takes it literally, which contigs like
             # HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads. Read
@@ -334,7 +377,7 @@ task classify_shard {
                 awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
                 SQANTI-like_cats_for_reads_or_isoforms.py \
                     --ref_gtf "$prefix.gtf" \
-                    --output_prefix "$prefix" \
+                    --output_prefix "$out" \
                     --input_bam - \
                     --gzip_tsv --no_tsv_header --no_plot \
                     --bam_write_threads ${extra_threads}
@@ -347,39 +390,19 @@ task classify_shard {
         if [ "$extra_threads" -lt 0 ]; then extra_threads=0; fi
         export extra_threads
 
-        # As many chunks at once as cores; the order of execution does not matter, the
-        # outputs are appended by chunk number below. A failed chunk fails the task.
-        seq 0 $((num_chunks - 1)) | xargs -P ~{c3d_effective_cpu} -I{} bash -c 'classify_chunk {}'
-
-        # Append in chunk order (which is the bam's order). The tables are gzip members,
-        # appended as they are; the bams' compressed blocks are copied, not recompressed.
-        # The two appends are independent, so they run side by side.
-        ls chunks/*.iso_cats.tsv.gz | sort > tsv_parts.txt
-        ls chunks/*.iso_cats.bam | sort > bam_parts.txt
-        ( cat $(cat tsv_parts.txt) > ~{shard_name}.iso_cats.tsv.gz ) &
-        tsv_pid=$!
-        samtools cat --no-PG -b bam_parts.txt -o ~{shard_name}.iso_cats.bam &
-        bam_pid=$!
-        wait $tsv_pid
-        wait $bam_pid
-
-        # category counts summed in chunk order, so categories keep the order a single
-        # run first sees them
-        awk -F'\t' -v OFS='\t' '
-            FNR == 1 { next }
-            !($1 in count) { order[++n] = $1 }
-            { count[$1] += $2 }
-            END {
-                print "Category", "Count"
-                for (i = 1; i <= n; i++) print order[i], count[order[i]]
-            }
-        ' $(ls chunks/*.iso_cats.summary_counts.tsv | sort) > ~{shard_name}.iso_cats.summary_counts.tsv
+        # As many chunks at once as cores, the largest first (by the plan's estimate) so
+        # the smaller ones fill the cores as they free up. The order of execution does not
+        # matter: the files carry the chunk number and the gather appends them in order.
+        # A failed chunk fails the task.
+        sort -k1,1nr chunk_sizes.tsv | cut -f2 \
+            | xargs -P ~{c3d_effective_cpu} -I{} bash -c 'classify_chunk {}'
     >>>
 
     output {
-        File iso_cats_tsv = "~{shard_name}.iso_cats.tsv.gz"
-        File iso_cats_bam = "~{shard_name}.iso_cats.bam"
-        File summary_counts_tsv = "~{shard_name}.iso_cats.summary_counts.tsv"
+        # one file per chunk, in chunk order: the file names carry the chunk number
+        Array[File] chunk_tsvs = glob("chunks/*.iso_cats.tsv.gz")
+        Array[File] chunk_bams = glob("chunks/*.iso_cats.bam")
+        Array[File] chunk_summaries = glob("chunks/*.iso_cats.summary_counts.tsv")
     }
 
     runtime {
@@ -395,9 +418,10 @@ task classify_shard {
 task gather_shards {
     input {
         String sample_id
-        Array[File] shard_tsvs
-        Array[File] shard_bams
-        Array[File] shard_summaries
+        # every chunk's files, in the bam's order
+        Array[File] chunk_tsvs
+        Array[File] chunk_bams
+        Array[File] chunk_summaries
 
         String docker
         Int cpu = 4
@@ -409,7 +433,7 @@ task gather_shards {
     }
 
     # the parts, and the same bytes again in the appended table and bam
-    Int disk_GB = ceil(2.2 * (size(shard_tsvs, "GB") + size(shard_bams, "GB")) + 20)
+    Int disk_GB = ceil(2.2 * (size(chunk_tsvs, "GB") + size(chunk_bams, "GB")) + 20)
     
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
@@ -447,11 +471,11 @@ task gather_shards {
     command <<<
         set -euo pipefail
 
-        # The shards are given in shard order, which is contig header order. The two
+        # The chunks are given in the bam's order (shard order, then chunk order). The two
         # appends are independent copies (no recompression), so they run side by side.
         # `wait <pid>` returns that job's status, so a failed copy fails the task.
         #
-        # Table: header, then each shard's table as it is. Appended gzip members are one
+        # Table: header, then each chunk's table as it is. Appended gzip members are one
         # valid gzip stream (zcat, Python and R read it as one).
         (
             python3 -c '
@@ -462,19 +486,19 @@ with gzip.open("~{sample_id}.iso_cats.tsv.gz", "wt", compresslevel=6) as ofh:
 '
             while read -r f; do
                 cat "$f" >> ~{sample_id}.iso_cats.tsv.gz
-            done < ~{write_lines(shard_tsvs)}
+            done < ~{write_lines(chunk_tsvs)}
         ) &
         tsv_pid=$!
 
-        # Bam: the shards cover disjoint contigs, in header order, so appending them
+        # Bam: the chunks cover disjoint reads, in the bam's order, so appending them
         # keeps the bam coordinate sorted; samtools cat copies the compressed blocks.
-        samtools cat --no-PG -b ~{write_lines(shard_bams)} -o ~{sample_id}.iso_cats.bam &
+        samtools cat --no-PG -b ~{write_lines(chunk_bams)} -o ~{sample_id}.iso_cats.bam &
         bam_pid=$!
 
         wait $tsv_pid
         wait $bam_pid
 
-        # Summed in slice order, so categories stay in the order a single run first sees them.
+        # Summed in chunk order, so categories stay in the order a single run first sees them.
         awk -F'\t' -v OFS='\t' '
             FNR == 1 { next }
             !($1 in count) { order[++n] = $1 }
@@ -483,7 +507,7 @@ with gzip.open("~{sample_id}.iso_cats.tsv.gz", "wt", compresslevel=6) as ofh:
                 print "Category", "Count"
                 for (i = 1; i <= n; i++) print order[i], count[order[i]]
             }
-        ' $(cat ~{write_lines(shard_summaries)}) > ~{sample_id}.iso_cats.summary_counts.tsv
+        ' $(cat ~{write_lines(chunk_summaries)}) > ~{sample_id}.iso_cats.summary_counts.tsv
 
         "$(dirname "$(which SQANTI-like_cats_for_reads_or_isoforms.py)")/misc/plot_SQANTI_cats.Rscript" \
             ~{sample_id}.iso_cats.summary_counts.tsv ~{sample_id}.iso_cats.summary_counts.pdf
