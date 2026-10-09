@@ -42,6 +42,11 @@ Outputs, for each site kind given (KIND = TSS | PolyA):
   <prefix>.site_read_support.summary.tsv
       reads seen / discarded by reason; per kind, ends at a site, ends rejected for
       soft clipping, ends at no site.
+  --polyA_end_histogram FILE   (optional)
+      every counted read's PolyA end, before any site matching or soft-clip check,
+      aggregated: chrom, strand, pos, residual_soft_clip (0, 1, 2, or 3 for > 2), reads.
+      A position can appear on more than one line (reads from different chunks); sum
+      them. Classified by site_usage/classify_polyA_read_ends.py.
 """
 
 import argparse
@@ -102,9 +107,16 @@ def main():
     parser.add_argument("--genome", default=None,
                         help="genome fasta (indexed): lets a read's ts:A:- strand flip be corroborated by its "
                              "splice motifs, as LRAA does; without it every read keeps its aligned strand")
+    parser.add_argument("--max_soft_clip_TSS", type=int, default=None,
+                        help="override LRAA's max_soft_clip_at_TSS (residual soft clip allowed at a counted TSS end)")
+    parser.add_argument("--max_soft_clip_PolyA", type=int, default=None,
+                        help="override LRAA's max_soft_clip_at_PolyA (residual soft clip allowed at a counted PolyA end)")
     parser.add_argument("--rdna_mask_bed", default=None,
                         help="rDNA mask bed LRAA built for this genome (__<prefix>.rdna_mask_cache/rdna_mask.*.bed): "
                              "reads overlapping it are discarded, as LRAA discards them")
+    parser.add_argument("--polyA_end_histogram", default=None,
+                        help="also write every counted read's PolyA end position and residual soft clip, "
+                             "aggregated (gzipped tsv), for classifying read ends against reference sites")
     args = parser.parse_args()
 
     beds = {k: b for k, b in (("TSS", args.TSS_bed), ("PolyA", args.PolyA_bed)) if b}
@@ -124,10 +136,12 @@ def main():
 
     G.update(bam=args.bam, site_index={k: index_sites(s) for k, s in sites.items()},
              tolerance={k: int(LRAA_Globals.config[_DIST_KEY[k]] / 2) for k in KINDS},
-             max_clip={k: LRAA_Globals.config[_CLIP_KEY[k]] for k in KINDS},
+             max_clip={k: (getattr(args, f"max_soft_clip_{k}") if getattr(args, f"max_soft_clip_{k}") is not None
+                           else LRAA_Globals.config[_CLIP_KEY[k]]) for k in KINDS},
              min_per_id=min_per_id, min_mapq=min_mapq, weighted=args.weighted,
              cb_tag=LRAA_Globals.config["cell_barcode_tag"], genome=args.genome,
-             rdna_mask=RdnaMask.load_mask_bed(args.rdna_mask_bed))
+             rdna_mask=RdnaMask.load_mask_bed(args.rdna_mask_bed),
+             end_histogram=args.polyA_end_histogram is not None)
     if args.genome is None:
         logger.warning("no --genome: ts:A:- strand flips can't be corroborated, so reads keep their aligned "
                        "strand (fine for oriented / stranded reads; unstranded cDNA needs --genome)")
@@ -142,8 +156,15 @@ def main():
     barcodes, cb_col = [], {}
     triplets = {k: ([], [], []) for k in sites}
     summary = collections.Counter()
+    hist_fh = None
+    if args.polyA_end_histogram:
+        hist_fh = gzip.open(args.polyA_end_histogram, "wt")
+        print("chrom\tstrand\tpos\tresidual_soft_clip\treads", file=hist_fh)
     with Pool(args.CPU) as pool:
-        for i, (chunk_barcodes, counts, summ) in enumerate(pool.imap_unordered(count_chunk, chunks)):
+        for i, (chunk_barcodes, counts, summ, hist) in enumerate(pool.imap_unordered(count_chunk, chunks)):
+            if hist_fh is not None:
+                for (contig, strand, pos, clip), n in sorted(hist.items()):
+                    print(f"{contig}\t{strand}\t{pos}\t{clip}\t{n}", file=hist_fh)
             remap = []
             for cb in chunk_barcodes:
                 if cb not in cb_col:
@@ -159,6 +180,9 @@ def main():
             summary.update(summ)
             if (i + 1) % 100 == 0:
                 logger.info("%d / %d chunks, %d reads used", i + 1, len(chunks), summary["reads_used"])
+
+    if hist_fh is not None:
+        hist_fh.close()
 
     clusters = parse_cell_clusters(args.cell_clusters) if args.cell_clusters else None
 
@@ -230,6 +254,7 @@ def count_chunk(chunk):
     counts = {k: collections.Counter() for k in site_index}
     cb_col, barcodes = {}, []
     summ = collections.Counter()
+    hist = collections.Counter()
 
     if G.get("genome"):
         # the ts-flip check reads the contig sequence LRAA would have registered
@@ -260,6 +285,9 @@ def count_chunk(chunk):
             plus = strand == "+"
             ends = {"TSS": (lend if plus else rend, pa.left_soft_clipping if plus else pa.right_soft_clipping),
                     "PolyA": (rend if plus else lend, pa.right_soft_clipping if plus else pa.left_soft_clipping)}
+            if G.get("end_histogram"):
+                pos, clip = ends["PolyA"]
+                hist[(contig, strand, pos, min(clip, 3))] += 1
             col = None
             for kind, index in site_index.items():
                 pos, clip = ends[kind]
@@ -286,7 +314,7 @@ def count_chunk(chunk):
         out[kind] = (np.fromiter((k[0] for k in keys), dtype=np.int64, count=len(keys)),
                      np.fromiter((k[1] for k in keys), dtype=np.int64, count=len(keys)),
                      np.fromiter((cnt[k] for k in keys), dtype=float, count=len(keys)))
-    return barcodes, out, summ
+    return barcodes, out, summ, hist
 
 
 def write_sparseM(outdir, m, features, barcodes):

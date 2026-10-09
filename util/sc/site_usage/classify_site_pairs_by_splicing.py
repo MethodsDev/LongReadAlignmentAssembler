@@ -103,6 +103,8 @@ def main():
     parser.add_argument("--HiFi", action="store_true", help="HiFi percent-identity floor, as LRAA --HiFi")
     parser.add_argument("--genome", default=None, help="genome fasta: corroborates ts:A:- strand flips, as LRAA")
     parser.add_argument("--rdna_mask_bed", default=None, help="rDNA mask bed LRAA built for this genome")
+    parser.add_argument("--max_soft_clip_TSS", type=int, default=None, help="override LRAA's max_soft_clip_at_TSS")
+    parser.add_argument("--max_soft_clip_PolyA", type=int, default=None, help="override LRAA's max_soft_clip_at_PolyA")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -131,7 +133,8 @@ def main():
     G["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID if args.HiFi else LRAA_Globals.config["min_per_id"]
     G["min_mapq"] = int(LRAA_Globals.config["min_mapping_quality"])
     G["rdna_mask"] = RdnaMask.load_mask_bed(args.rdna_mask_bed) or {}
-    G["max_clip"] = {k: LRAA_Globals.config[v] for k, v in _CLIP_KEY.items()}
+    G["max_clip"] = {k: (getattr(args, f"max_soft_clip_{k}") if getattr(args, f"max_soft_clip_{k}") is not None
+                         else LRAA_Globals.config[v]) for k, v in _CLIP_KEY.items()}
 
     jobs = [(gk, g.kind.iloc[0] if g.kind.nunique() == 1 else None, g) for gk, g in pairs.groupby("gene_key")]
     # a gene can have events of both kinds; split them so each job reads one kind of end

@@ -72,16 +72,30 @@ def main():
             sizes["Cluster_" + f[1].strip()] += 1
 
     fsm, assigned, by_cluster = parse_FSM(args.cluster_quant_tar)
-    gene_isoforms = multi_exon_isoforms_by_gene(args.gtf)
+    gene_isoforms, tx_span = multi_exon_isoforms_by_gene(args.gtf)
     carriers = {r["site_id"]: set(r["transcript_ids"].split(","))
                 for r in csv.DictReader(open(args.sites), delimiter="\t")}
 
-    def draw_isoform(gene_key, site, cl):
+    def isoform_candidates(gene_key, site, cl):
+        """isoforms carrying the site, best first (>= --min_uniq_FSM unique FSM reads, most reads in cl)"""
         own = set(gene_isoforms.get(gene_key, []))
         tids = [t for t in carriers.get(site, ()) if t in own] or [t for t in carriers.get(site, ()) if t]
         ok = [t for t in tids if fsm.get(t, 0) >= args.min_uniq_FSM] or tids
         reads = by_cluster.get(cl.replace("Cluster_", ""), {})
-        return max(ok, key=lambda t: (reads.get(t, 0), assigned.get(t, 0), fsm.get(t, 0), t)) if ok else None
+        return sorted(ok, key=lambda t: (-reads.get(t, 0), -assigned.get(t, 0), -fsm.get(t, 0), t))
+
+    def draw_pair(r):
+        """the best-ranked pair of a gained-site and a lost-site isoform that overlap on the genome
+        (a pair of models of the gene's two ends with nothing in common illustrates nothing), or None"""
+        gained = isoform_candidates(r.gene_key, r.gained_site, r.cluster_B)
+        lost = isoform_candidates(r.gene_key, r.lost_site, r.cluster_A)
+        pairs = sorted(((i + j, i, j) for i in range(len(gained)) for j in range(len(lost))))
+        for _, i, j in pairs:
+            a, b = gained[i], lost[j]
+            if a != b and a in tx_span and b in tx_span and \
+                    tx_span[a][0] <= tx_span[b][1] and tx_span[b][0] <= tx_span[a][1]:
+                return a, b
+        return None
 
     split = pd.read_csv(args.splicing, sep="\t")
     # a site is dominant in a cluster if no site of the gene is used more (ties all count)
@@ -104,16 +118,20 @@ def main():
             g["reciprocal"] = g.switch_class == "reciprocal"
             g = g.sort_values(["gene_key", "cluster_A", "cluster_B"], kind="mergesort")
             g = g.sort_values(["reciprocal", "abs_delta"], ascending=False, kind="mergesort")
-            best = {}
+            best, n_no_overlap = {}, 0
             for r in g.itertuples():
                 if r.gene_key in best:
                     continue
                 if (r.gained_site in top_sites[(kind, r.gene_key, r.cluster_B)]
                         and r.lost_site in top_sites[(kind, r.gene_key, r.cluster_A)]):
-                    best[r.gene_key] = r
+                    pair = draw_pair(r)
+                    if pair is None:
+                        n_no_overlap += 1
+                        continue
+                    best[r.gene_key] = (r, pair)
             n = args.n_terminal_usage if tag == "terminal_usage" else args.n_alt_splicing
-            ranked = sorted(best.values(), key=lambda r: (-r.abs_delta, r.gene_key))
-            for r in ranked[:n]:
+            ranked = sorted(best.values(), key=lambda x: (-x[0].abs_delta, x[0].gene_key))
+            for r, (gained_tx, lost_tx) in ranked[:n]:
                 # a symbol can name genes at two loci (gene_key carries the locus): keep tags unique
                 stem = r.gene_symbol
                 if any(x["gene_symbol"] == r.gene_symbol and x["kind"] == kind and x["tag"].endswith(f".{tag}")
@@ -124,11 +142,12 @@ def main():
                              "gained_site": r.gained_site, "lost_site": r.lost_site,
                              "cluster_A": r.cluster_A, "cluster_B": r.cluster_B, "abs_delta": round(r.abs_delta, 4),
                              "splicing_class": r.splicing_class,
-                             "gained_tx": draw_isoform(r.gene_key, r.gained_site, r.cluster_B),
-                             "lost_tx": draw_isoform(r.gene_key, r.lost_site, r.cluster_A),
+                             "gained_tx": gained_tx, "lost_tx": lost_tx,
                              "gained_usage_B": round(r.gained_usage_B, 3), "lost_usage_A": round(r.lost_usage_A, 3)})
             print(f"{kind} {tag}: {g.gene_key.nunique()} genes with candidate events, "
-                  f"{len(best)} with a dominant switch, {min(n, len(best))} showcased", file=sys.stderr)
+                  f"{len(best)} with a dominant switch drawn by overlapping isoforms "
+                  f"({n_no_overlap} dominant events skipped: no overlapping isoform pair), "
+                  f"{min(n, len(best))} showcased", file=sys.stderr)
 
     with open(args.output, "wt") as ofh:
         w = csv.DictWriter(ofh, fieldnames=list(rows[0].keys()), delimiter="\t", lineterminator="\n")
@@ -138,9 +157,9 @@ def main():
 
 def multi_exon_isoforms_by_gene(gtf):
     """gene_key (SYMBOL|chrom|strand) -> the multi-exon transcripts (bare ids) carrying that
-    symbol in their gtf transcript id"""
+    symbol in their gtf transcript id; and every transcript's span (lo, hi)"""
     tid_re = re.compile(r'transcript_id "([^"]+)"')
-    n_exons, key = collections.Counter(), {}
+    n_exons, key, span = collections.Counter(), {}, {}
     for line in open(gtf):
         f = line.split("\t", 9)
         if len(f) < 9 or f[2] != "exon":
@@ -150,12 +169,14 @@ def multi_exon_isoforms_by_gene(gtf):
             continue
         symbol, bare = full.split("^", 1)
         n_exons[bare] += 1
+        lo, hi = int(f[3]), int(f[4])
+        span[bare] = (min(lo, span.get(bare, (lo, hi))[0]), max(hi, span.get(bare, (lo, hi))[1]))
         key[bare] = f"{symbol}|{f[0]}|{f[6]}"
     out = collections.defaultdict(list)
     for t, k in key.items():
         if n_exons[t] > 1:
             out[k].append(t)
-    return out
+    return out, span
 
 
 if __name__ == "__main__":

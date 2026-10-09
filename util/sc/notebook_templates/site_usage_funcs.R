@@ -243,7 +243,8 @@ plot_site_usage_umap = function(event, kind, res, site_counts, smooth_graph = NU
         geom_text(data = centers, aes(label = seurat_clusters), size = 4, color = "purple", fontface = "bold") +
         facet_wrap(~ site, ncol = 2) +
         scale_color_viridis_c(limits = c(0, 1), name = "site usage") +
-        labs(title = paste0(event$gene_symbol, ": alternative ", kind, " site usage per cell"),
+        labs(title = paste0(event$gene_symbol, ": ", site_switch_description(kind, event$splicing_class),
+                            " -- site usage per cell"),
              subtitle = paste0("share of the gene's read ends at its tested ", kind, " sites (ends at no site excluded)",
                                if (is.null(smooth_graph)) "" else ", SNN-smoothed",
                                " (", format(n_cells, big.mark = ","), " cells with reads of the gene)")) +
@@ -325,6 +326,18 @@ plot_site_event_expression = function(event, kind, res, clusters = NULL) {
 
 # (A) smoothed per-cell site-usage umaps, (B) site shares across the clusters, (C) read ends
 # per million at the two sites in the same clusters.
+# What kind of switch an event is, for titles: from its read-based splicing class
+# (classify_site_pairs_by_splicing.py) or its showcase group ("terminal_usage" / "alt_splicing").
+site_switch_description = function(kind, class_or_group) {
+    x = as.character(class_or_group)
+    if (length(x) == 0 || is.na(x)) x = ""
+    terminal = x %in% c("alt_terminal_usage", "terminal_usage", "alternative terminal usage")
+    splicing = startsWith(x, "alt_splicing") || startsWith(x, "alt splicing")
+    if (terminal) return(if (kind == "TSS") "tandem TSSs" else "tandem 3' UTR PolyA sites")
+    if (splicing) return(paste0("alternative ", kind, " with alternative splicing"))
+    paste0("alternative ", kind)
+}
+
 plot_site_event = function(event, kind, res, site_counts, smooth_graph = NULL, clusters = NULL,
                            file = NULL, width = 10, height = 13.5) {
 
@@ -471,7 +484,7 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
                   color = "#0b0b0b", linewidth = 0.2) +
         geom_text(data = header, aes(x = -Inf, y = y - 0.2, label = cluster_label), hjust = -0.02, vjust = 0,
                   size = base_size * 0.3, color = "#0b0b0b") +
-        scale_fill_manual(values = tx_col, name = NULL) +
+        scale_fill_manual(values = tx_col, breaks = names(transcripts), name = NULL) +
         scale_y_continuous(breaks = NULL) +
         labs(x = NULL, y = NULL, title = title) +
         theme_minimal(base_size = base_size) +
@@ -514,10 +527,12 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
         group_by(cluster_label, bin) %>% summarize(share = sum(share), .groups = "drop") %>%
         mutate(cluster_label = factor(cluster_label, levels = names(clusters)))
     labels = tibble(cluster_label = factor(names(clusters), levels = names(clusters)))
+    # cluster names in the corner away from the sites, so they don't sit on the peaks
+    label_right = ! is.null(sites) && mean(sites) < mean(xlim)
     p = ggplot(d, aes(x = bin, y = share)) + highlight_layer(highlight) +
         geom_col(width = binwidth * 0.9, fill = fill) +
-        geom_text(data = labels, aes(x = -Inf, y = Inf, label = cluster_label), inherit.aes = FALSE,
-                  hjust = -0.03, vjust = 1.3, size = base_size * 0.3, color = "#0b0b0b") +
+        geom_text(data = labels, aes(x = if (label_right) Inf else -Inf, y = Inf, label = cluster_label), inherit.aes = FALSE,
+                  hjust = if (label_right) 1.03 else -0.03, vjust = 1.3, size = base_size * 0.3, color = "#0b0b0b") +
         facet_grid(cluster_label ~ .) +
         scale_y_continuous(labels = scales::percent_format(accuracy = 1), n.breaks = 3,
                            position = axis_side, expand = expansion(mult = c(0, 0.35))) +
@@ -559,14 +574,15 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
 
     xlims = c(list(full_xlim), zooms)
     bins = c(full_bin, rep(zoom_bin, length(zooms)))
-    col_titles = c("whole gene", if (length(zooms) == 1) paste0(kind, " region") else if (length(zooms) > 1)
+    # no zooms: one column, no column title
+    col_titles = c(if (length(zooms)) "whole gene" else "", if (length(zooms) == 1) paste0(kind, " region") else if (length(zooms) > 1)
         paste0(kind, " at ", format(sort(sites), big.mark = ",")))
     # the whole-gene column shades the zoomed windows and keeps its density axis on its
     # outer (left) side, with some space before the zooms, so the column boundary is clear
     gap = function(i) if (i > 1) theme(plot.margin = margin(5.5, 5.5, 5.5, 16)) else NULL
     tracks = lapply(seq_along(xlims), function(i)
         plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlims[[i]],
-                              title = if (is.null(ends)) col_titles[i] else NULL, show_legend = FALSE,
+                              title = if (is.null(ends) && nzchar(col_titles[i])) col_titles[i] else NULL, show_legend = FALSE,
                               read_totals = if (i == 1) read_totals else NULL,
                               highlight = if (i == 1 && length(zooms)) zooms else NULL, base_size = base_size,
                               model_scale = model_scale) + gap(i))
@@ -581,7 +597,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                                   ends_at_sites = ends_at_sites, base_size = base_size - 1, show_subtitle = i == 1,
                                   highlight = if (i == 1 && length(zooms)) zooms else NULL,
                                   axis_side = if (i == 1) "left" else "right") +
-                labs(title = col_titles[i]) + gap(i))
+                labs(title = if (nzchar(col_titles[i])) col_titles[i] else NULL) + gap(i))
         # patchwork aligns the panels across the grid with each row's axis space sized to
         # that row (cowplot's align = "hv", axis = "tblr" gave the density row the height of
         # the read tracks' x-axis labels as empty space)
@@ -683,7 +699,7 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     totals = read_tsv(file.path(outdir, paste0(m$tag, ".totals.tsv")), show_col_types = FALSE)
     plot_isoform_read_tracks(exons, reads, transcripts, clusters, sites = c(gained_pos, lost_pos), kind = kind,
                              read_totals = totals, ends = ends, ends_at_sites = TRUE,
-                             title = paste0(m$gene_symbol, ": alternative ", kind, ", ",
+                             title = paste0(m$gene_symbol, ": ", site_switch_description(kind, sub(".*\\.", "", m$tag)), ", ",
                                             if (any(reads$read_class %in% "compatible"))
                                                 paste0("unique FSM reads (solid) and partial reads sharing the ", kind, " (light), ")
                                             else "unique FSM reads, ",
