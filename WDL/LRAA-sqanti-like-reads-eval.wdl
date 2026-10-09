@@ -200,7 +200,7 @@ task plan_shards {
         # any, are the last shard. Shards stay in the bam's own order, which is what
         # lets the gather append them and get the order of a single run.
         "$(dirname "$(which SQANTI-like_cats_for_reads_or_isoforms.py)")/misc/plan_bam_shards.py" \
-            --bam input.bam --bai input.bam.bai \
+            --bam input.bam --bai input.bam.bai --threads ~{c3d_effective_cpu} \
             --max_reads_per_chunk ~{max_reads_per_chunk} \
             --max_reads_per_shard ~{max_reads_per_shard} \
             > shard_specs.txt

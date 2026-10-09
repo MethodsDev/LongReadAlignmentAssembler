@@ -42,6 +42,7 @@ import struct
 import sys
 
 import pysam
+from concurrent.futures import ProcessPoolExecutor
 
 LINEAR_WINDOW = 16384
 
@@ -88,6 +89,12 @@ def sample_points(bam, linear_index, contig, contig_end_coffset):
     points.sort()
     # a trailing sentinel so the last segment has an end
     return points, contig_end_coffset
+
+
+def sample_points_in_worker(bam_path, linear_index, contig, contig_end_coffset):
+    # one handle per call: a handle cannot be shared between processes
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        return sample_points(bam, linear_index, contig, contig_end_coffset)
 
 
 def cut_positions(points, end_coffset, contig_length, pieces):
@@ -141,6 +148,14 @@ def main():
         "Should be several times --max_reads_per_chunk, so a shard's cores stay busy",
     )
     parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="processes sampling the index, one contig each (default: the cores this "
+        "process may use). The sampling is the slow part of planning, and the contigs "
+        "are independent",
+    )
+    parser.add_argument(
         "--no_split",
         action="store_true",
         help="never cut a contig, only group them (also what happens without a .bai)",
@@ -167,6 +182,36 @@ def main():
         return (min(offsets) >> 16) if offsets else None
 
     file_end = os.path.getsize(args.bam) - 28
+
+    # The contigs to cut, each with where its records end in the file, sampled in
+    # parallel before the planning below needs them.
+    sampled = {}
+    if linear is not None:
+        to_cut = []
+        for index, contig in enumerate(contigs):
+            if stats[contig] > args.max_reads_per_chunk:
+                end = file_end
+                for later in contigs[index + 1 :]:
+                    later_start = first_coffset(later)
+                    if later_start is not None:
+                        end = later_start
+                        break
+                to_cut.append((contig, end))
+        threads = args.threads or len(os.sched_getaffinity(0))
+        workers = max(1, min(threads, len(to_cut)))
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                contig: pool.submit(
+                    sample_points_in_worker,
+                    args.bam,
+                    linear[bam.get_tid(contig)],
+                    contig,
+                    end,
+                )
+                for contig, end in to_cut
+            }
+            sampled = {contig: future.result() for contig, future in futures.items()}
+
     # (spec, estimated records), in the bam's order
     chunks = []
     group, held = [], 0
@@ -181,15 +226,8 @@ def main():
         n = stats[contig]
         if n > args.max_reads_per_chunk and linear is not None:
             flush()
-            end = file_end
-            for later in contigs[index + 1 :]:
-                later_start = first_coffset(later)
-                if later_start is not None:
-                    end = later_start
-                    break
             pieces = math.ceil(n / args.max_reads_per_chunk)
-            ref_id = bam.get_tid(contig)
-            points, end = sample_points(bam, linear[ref_id], contig, end)
+            points, end = sampled[contig]
             cuts = cut_positions(points, end, lengths[contig], pieces)
             bounds = [1] + cuts + [lengths[contig]]
             for start, stop in zip(bounds[:-1], bounds[1:]):
