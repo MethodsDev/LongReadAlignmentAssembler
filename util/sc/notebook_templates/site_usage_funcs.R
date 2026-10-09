@@ -404,7 +404,7 @@ read_transcript_exons = function(gtf, transcript_ids) {
 plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NULL, xlim = NULL,
                                  colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
                                  read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL,
-                                 highlight = NULL, base_size = 10, model_scale = 1) {
+                                 highlight = NULL, base_size = 10, model_scale = 1, site_linewidth = 0.3) {
 
     tx_label = setNames(names(transcripts), transcripts)
     tx_col = setNames(colors[seq_along(transcripts)], names(transcripts))
@@ -423,7 +423,9 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
     gap = 3
     # model_scale: thickness (and row spacing) of the isoform models relative to a read row
     model_rows = tibble(isoform = names(transcripts), y = -(seq_along(transcripts)) * model_scale)
-    y = min(model_rows$y) - gap
+    # below the bottom model's lower edge (models are model_scale thick), so thick models
+    # don't run into the first cluster's header
+    y = min(model_rows$y) - 0.5 * model_scale - gap
     row_y = numeric(nrow(read_order))
     header = list()
     for (cl in names(clusters)) {
@@ -496,7 +498,7 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         # the panel is unclipped: a site outside the window would be drawn on the next panel
         in_view = if (is.null(xlim)) sites else sites[sites >= xlim[1] & sites <= xlim[2]]
         if (length(in_view)) {
-            p = p + geom_vline(xintercept = in_view, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+            p = p + geom_vline(xintercept = in_view, linetype = "dashed", color = "#5a5954", linewidth = site_linewidth)
         }
     }
     p = p + coord_cartesian(xlim = xlim, ylim = ylim, expand = is.null(xlim), clip = if (is.null(xlim)) "on" else "off")
@@ -518,7 +520,7 @@ highlight_layer = function(highlight, fill = "#e4e3dc") {
 # cluster. `ends`: cluster, pos, reads (extract_isoform_read_tracks.py --ends_output).
 plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
                                  fill = "#5a5954", highlight = NULL, axis_side = "right", ends_at_sites = FALSE,
-                                 base_size = 9, show_subtitle = TRUE) {
+                                 base_size = 9, show_subtitle = TRUE, site_linewidth = 0.3) {
     d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
         filter(! is.na(cluster_label)) %>%
         group_by(cluster_label) %>% mutate(share = reads / sum(reads)) %>% ungroup() %>%
@@ -544,7 +546,7 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
         theme(panel.grid.minor = element_blank(), strip.text = element_blank(), panel.spacing.y = unit(8, "pt"),
               axis.text.x = element_blank(), plot.subtitle = element_text(size = base_size - 0.5))
     if (! is.null(sites)) {
-        p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
+        p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = site_linewidth)
     }
     p + coord_cartesian(xlim = xlim, expand = FALSE)
 }
@@ -558,7 +560,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                                     zoom_flank = 120, title = NULL, file = NULL, width = 11, height = 8,
                                     read_totals = NULL, ends = NULL, zoom_bin = 4,
                                     density_height = 0.28, max_joint_zoom = 400, ends_at_sites = FALSE,
-                                    base_size = 10, zoom = TRUE, model_scale = 1) {
+                                    base_size = 10, zoom = TRUE, model_scale = 1, site_linewidth = 0.3) {
     kind = match.arg(kind)
     full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end))
     # pad by 2% so a read-end peak at the gene's terminus isn't drawn on the panel edge
@@ -585,7 +587,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                               title = if (is.null(ends) && nzchar(col_titles[i])) col_titles[i] else NULL, show_legend = FALSE,
                               read_totals = if (i == 1) read_totals else NULL,
                               highlight = if (i == 1 && length(zooms)) zooms else NULL, base_size = base_size,
-                              model_scale = model_scale) + gap(i))
+                              model_scale = model_scale, site_linewidth = site_linewidth) + gap(i))
     # one grid, so every column's read rows share the same height and line up across
     # panels; the legend goes under the whole figure, not under one column
     widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms)))
@@ -596,7 +598,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
             plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind,
                                   ends_at_sites = ends_at_sites, base_size = base_size - 1, show_subtitle = i == 1,
                                   highlight = if (i == 1 && length(zooms)) zooms else NULL,
-                                  axis_side = if (i == 1) "left" else "right") +
+                                  axis_side = if (i == 1) "left" else "right", site_linewidth = site_linewidth) +
                 labs(title = if (nzchar(col_titles[i])) col_titles[i] else NULL) + gap(i))
         # patchwork aligns the panels across the grid with each row's axis space sized to
         # that row (cowplot's align = "hv", axis = "tblr" gave the density row the height of
