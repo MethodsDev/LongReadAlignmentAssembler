@@ -7,16 +7,16 @@ version 1.0
 #   1. plan_shards    one small task: from the index alone, groups the small contigs
 #                     in header order and cuts each contig above max_reads_per_shard
 #                     into position ranges of similar read counts, plus one shard for
-#                     the unplaced reads (util/misc/plan_bam_shards.py). It also writes
-#                     one annotation file per shard, so no shard reads the whole one. A read belongs
+#                     the unplaced reads (util/misc/plan_bam_shards.py). It also cuts
+#                     the BAM and the annotation into one file per shard. A read belongs
 #                     to the range holding its start, so none is classified twice, and
 #                     no cut needs a gap in coverage: a read is classified on its own
 #                     against its contig's annotation.
-#   2. classify_shard one task per shard. Gets the whole BAM and its index, reads only
-#                     its contigs or range from it (samtools view, as SAM into the
-#                     classifier) and keeps only its contigs' lines of the annotation.
-#                     The price of not cutting the BAM once is that every shard
-#                     localizes all of it.
+#   2. classify_shard one task per shard. Gets only its own slice of the BAM (the plan
+#                     task cut one per shard, so a shard localizes its share, not the
+#                     whole BAM, which matters more the larger the BAM), indexes it, and
+#                     runs one chunk per core: reads the chunk's contigs or range from
+#                     the slice (samtools view, as SAM into the classifier).
 #   3. gather_shards  one task: appends the per-read tables and the tagged BAMs of all
 #                     chunks in order and sums the category counts, which reproduces
 #                     what a single run over the whole BAM writes. The shards hand over
@@ -57,7 +57,10 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         # 8 GB is headroom, not a model: the single-task run of the whole 26 GB bam
         # peaked at 2.6 GiB with all 8 contig workers running at once (Terra
         # monitoring.log), so one worker needs a fraction of that.
-        Int plan_cpu = 4
+        # The plan task cuts one slice of the BAM per shard, one per core at a time, so
+        # give it cores in proportion to the BAM: it decompresses and recompresses all
+        # of it once.
+        Int plan_cpu = 16
         Int shard_cpu = 4
         Int shard_memory_GB = 8
 
@@ -87,8 +90,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
                 input:
                     shard_name = "shard_" + i,
                     shard_spec = plan_shards.shard_specs[i],
-                    input_BAM = select_first([input_BAM]),
-                    input_BAI = plan_shards.bai,
+                    shard_bam = plan_shards.shard_bams[i],
                     shard_gtf = plan_shards.shard_gtfs[i],
                     docker = docker_sc,
                     cpu = shard_cpu,
@@ -145,7 +147,8 @@ task plan_shards {
         String disk_type
     }
 
-    Int disk_GB = ceil(1.2 * size(input_BAM, "GB") + 2.2 * size(ref_annot_GTF, "GB") + 20)
+    # the bam, and its slices (level 1 compression, a little larger than the bam)
+    Int disk_GB = ceil(2.5 * size(input_BAM, "GB") + 2.2 * size(ref_annot_GTF, "GB") + 20)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -191,10 +194,6 @@ task plan_shards {
             samtools index -@ ~{c3d_effective_cpu} input.bam
         fi
 
-        # A copy, not the link: the index is an output, and a link to an input cannot be
-        # delocalized.
-        cp -L input.bam.bai plan.bam.bai
-
         # One line per shard, see the script for the format: its chunks, each whole
         # contigs (small ones grouped in header order) or a position range of one contig
         # above max_reads_per_chunk, cut from the index alone. The unplaced reads, if
@@ -205,6 +204,38 @@ task plan_shards {
             --max_reads_per_chunk ~{max_reads_per_chunk} \
             --max_reads_per_shard ~{max_reads_per_shard} \
             > shard_specs.txt
+
+        # One slice of the bam per shard: the union of its chunks' regions, taken through
+        # the index, so the bam is read once in total and each shard localizes only its
+        # share. Adjacent ranges of one contig are one query (a read spanning the
+        # boundary is then in the slice once); each chunk still filters by start
+        # position, so the slice needs nothing more than the reads overlapping its
+        # regions. Contigs are written as {name} so samtools takes them literally, which
+        # contigs like HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads.
+        mkdir shard_bams
+        awk -F'\t' '{
+            n = split($0, chunks, ",")
+            regions = ""; prev = ""; run_start = ""; run_end = ""
+            for (i = 1; i <= n; i++) {
+                m = split(chunks[i], f, "\t")
+                if (f[1] == "range") {
+                    if (f[2] == prev && f[3] == run_end + 1) { run_end = f[4] }
+                    else {
+                        if (prev != "") regions = regions " \047{" prev "}:" run_start "-" run_end "\047"
+                        prev = f[2]; run_start = f[3]; run_end = f[4]
+                    }
+                } else {
+                    if (prev != "") regions = regions " \047{" prev "}:" run_start "-" run_end "\047"
+                    prev = ""
+                    k = split(f[2], names, " ")
+                    for (j = 1; j <= k; j++) regions = regions " \047" (names[j] == "*" ? "*" : "{" names[j] "}") "\047"
+                }
+            }
+            if (prev != "") regions = regions " \047{" prev "}:" run_start "-" run_end "\047"
+            printf "samtools view -O bam,level=1 --no-PG -o shard_bams/shard_%05d.bam input.bam%s\n", NR - 1, regions
+        }' shard_specs.txt > slice_commands.txt
+        # independent reads of one bam through its index, as many at once as cores
+        xargs -P ~{c3d_effective_cpu} -d '\n' -I CMD bash -c CMD < slice_commands.txt
 
         # One annotation file per shard, in one pass over the reference: the lines of the
         # contigs the shard's chunks need. A contig cut into ranges can be needed by two
@@ -234,10 +265,9 @@ task plan_shards {
 
     output {
         Array[String] shard_specs = read_lines("shard_specs.txt")
-        # index i is shard i's annotation
+        # index i is shard i's slice of the bam, and its annotation
+        Array[File] shard_bams = glob("shard_bams/*.bam")
         Array[File] shard_gtfs = glob("shard_gtfs/*.gtf")
-        # the index the shards need, whether it was given or made here
-        File bai = "plan.bam.bai"
     }
 
     runtime {
@@ -258,8 +288,8 @@ task classify_shard {
         # "range<TAB>name<TAB>start<TAB>end<TAB>reads", the reads of one contig that
         # start in it; reads is the estimated record count
         String shard_spec
-        File input_BAM
-        File input_BAI
+        # this shard's slice of the bam: the reads overlapping its chunks' regions
+        File shard_bam
         # the annotation lines of the contigs of this shard's chunks
         File shard_gtf
 
@@ -270,10 +300,9 @@ task classify_shard {
         String disk_type
     }
 
-    # Each shard localizes the whole bam and reads only its contigs from it, through
-    # the index. The output is one shard's share: the tagged bam and the tables, both
-    # at most the size of the bam.
-    Int disk_GB = ceil(1.5 * size(input_BAM, "GB") + 3 * size(shard_gtf, "GB") + 20)
+    # The slice, its index, and the chunks' outputs (the tagged bam and the tables, at
+    # most the size of the slice).
+    Int disk_GB = ceil(3 * size(shard_bam, "GB") + 3 * size(shard_gtf, "GB") + 20)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -310,8 +339,8 @@ task classify_shard {
     command <<<
         set -euo pipefail
 
-        ln -s ~{input_BAM} input.bam
-        ln -s ~{input_BAI} input.bam.bai
+        ln -s ~{shard_bam} input.bam
+        samtools index -@ ~{c3d_effective_cpu} input.bam
 
         # The chunks of this shard, in order: one spec file each, and the estimated read
         # count of each (the last field) for starting the largest first.
