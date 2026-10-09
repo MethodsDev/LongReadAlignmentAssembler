@@ -28,6 +28,9 @@ FORMAT = (
 logger = logging.getLogger()
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
+# More threads than this buy nothing: compression is a quarter of the work.
+MAX_BAM_WRITE_THREADS = 3
+
 BAM_TSV_FIELDNAMES = [
     "feature_name",
     "sqanti_cat",
@@ -98,6 +101,18 @@ def main():
         help="write the summary counts but do not draw the barplot (and do not need "
         "R); for the per-slice runs of a scattered workflow, whose gather draws one "
         "plot from the summed counts",
+    )
+
+    parser.add_argument(
+        "--bam_write_threads",
+        type=str,
+        default="auto",
+        help="extra threads compressing the tagged bam when the reads are classified "
+        "in this one process (a stream, or --CPU 1): compressing it takes about a "
+        "quarter of that process's time, and the classifier itself cannot be split. "
+        "'auto' uses the cores this process is granted, less the one classifying, up "
+        "to {}; 0 compresses in the classifying thread. Not used with --CPU > 1, "
+        "where every core already runs a contig".format(MAX_BAM_WRITE_THREADS),
     )
 
     parser.add_argument(
@@ -174,7 +189,10 @@ def main():
 
         bam_output_filename = output_prefix + ".iso_cats.bam"
         bamwriter = pysam.AlignmentFile(
-            bam_output_filename, "wb", template=bamfile_reader
+            bam_output_filename,
+            "wb",
+            template=bamfile_reader,
+            threads=resolve_bam_write_threads(args.bam_write_threads),
         )
 
         for read in bamfile_reader:
@@ -269,6 +287,18 @@ def resolve_num_workers(cpu_arg, input_bam):
         return 1
     logger.info("--CPU auto: {} core(s) granted".format(num_workers))
     return num_workers
+
+
+def resolve_bam_write_threads(arg):
+    if arg == "auto":
+        return max(0, min(Util_funcs.granted_cpus() - 1, MAX_BAM_WRITE_THREADS))
+    try:
+        threads = int(arg)
+    except ValueError:
+        exit("Error, --bam_write_threads must be a whole number or 'auto', not " + arg)
+    if threads < 0:
+        exit("Error, --bam_write_threads must not be negative")
+    return threads
 
 
 def write_summary_and_plot(output_prefix, feature_category_counter, plot=True):
