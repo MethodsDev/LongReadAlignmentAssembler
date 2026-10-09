@@ -54,12 +54,12 @@ workflow LRAA_sqanti_like_reads_eval_wf {
 
         # Each chunk is classified on one core, so a shard uses as many cores as it has
         # chunks in flight; the rest compress the tagged bam of a shard with few chunks.
-        # 8 GB is headroom, not a model: the single-task run of the whole 26 GB bam
-        # peaked at 2.6 GiB with all 8 contig workers running at once (Terra
-        # monitoring.log), so one worker needs a fraction of that.
+        # 8 GB is headroom, not a model: a single-task run over a whole large bam
+        # peaked at 2.6 GiB with all 8 contig workers running at once, so one worker
+        # needs a fraction of that.
         # The plan task cuts one slice of the BAM per shard, one per core at a time. It
         # decompresses and recompresses all of the BAM once, but 4 cores is where more stop
-        # paying: slicing the 8.5 GB test bam into 10 shards took 143 s on 4 jobs, 103 s
+        # paying: slicing a test bam into 10 shards took 143 s on 4 jobs, 103 s
         # on 8 and 81 s on 16 (a shard is one job, so it is bounded by the largest
         # slice), and the planning that precedes it is seeks on a bam that was just
         # localized to the VM's SSD. Raise it for a BAM so large that the slicing
