@@ -68,7 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from build_site_event_read_tracks import parse_FSM, parse_gtf, blocks  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "diff_iso_usage"))
-from alt_termini_read_check import check_pair, transcript_strand  # noqa: E402
+from alt_termini_read_check import check_pair, make_read_filter, transcript_strand  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -98,6 +98,8 @@ def main():
     p.add_argument("--n_candidates", type=int, default=60)
     p.add_argument("--anchor_genes", default="", help="comma-separated genes checked and showcased first when they pass")
     p.add_argument("--n", type=int, default=10)
+    p.add_argument("--HiFi", action="store_true", help="LRAA's HiFi read-identity floor for the BAM read checks")
+    p.add_argument("--rdna_mask_bed", default=None, help="LRAA's rDNA mask bed: masked reads are not counted")
     p.add_argument("--max_per_pair", type=int, default=2)
     p.add_argument("--min_PolyA", type=int, default=2,
                    help="IsoformTermini: showcase at least this many PolyA events when that many pass (TSS events "
@@ -226,6 +228,8 @@ def main():
 
     bam = pysam.AlignmentFile(args.bam)
     genome = pysam.FastaFile(args.genome_fa)
+    # the reads LRAA would use, on LRAA's transcribed strand (alt_termini_read_check)
+    read_filter = make_read_filter(HiFi=args.HiFi, rdna_mask_bed=args.rdna_mask_bed)
     for d in rows:
         if not (d["gained_tx"] and d["lost_tx"]):
             continue
@@ -264,7 +268,7 @@ def main():
             win["TSS"].append((tss - args.end_tolerance, tss + args.end_tolerance))
             win["PolyA"].append((pa - args.end_tolerance, pa + args.end_tolerance))
         for read in bam.fetch(ex[g_tx]["chrom"], max(0, lo), hi):
-            if read.is_secondary or read.is_supplementary or transcript_strand(read) != strand:
+            if not read_filter(read) or transcript_strand(read, genome) != strand:
                 continue
             for t in ex:
                 if read.query_name in names[t]:
@@ -304,7 +308,7 @@ def main():
             res = check_pair({"alt_terminus": w, "dominant_transcript_ids": gfull, "alternate_transcript_ids": lfull,
                               "cluster_A": A, "cluster_B": B}, gex,
                              {gfull: strand, lfull: strand}, {gfull: ex[g_tx]["chrom"], lfull: ex[g_tx]["chrom"]},
-                             bam, genome, cluster_of, 50)
+                             bam, genome, cluster_of, 50, read_filter=read_filter)
             d["read_end_kind"] = w
             for k in ("n_reads", "read_frac_at_dom", "read_frac_at_alt", "reads_dom_A", "reads_alt_A",
                       "read_dom_share_A", "reads_dom_B", "reads_alt_B", "read_dom_share_B"):

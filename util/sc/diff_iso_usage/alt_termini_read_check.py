@@ -25,10 +25,21 @@ intron-carrying reads understates distal-site use. Reads ending at an unmodelled
 site (an internally primed A-run, say) are still counted: they come from an
 expressed isoform, only their end cannot be trusted as a site.
 
-Reads are kept only on the pair's transcript strand. minimap2's ts tag gives the
-transcript strand relative to the read, so the genomic transcript strand is the
-read's alignment orientation flipped when ts is "-"; reads without the tag are
-taken as oriented to the transcript, as long reads from oriented libraries are.
+Reads are those LRAA itself would use, so these counts match the site-usage
+counting (util/sc/site_read_support_to_sparse_matrix.py):
+  - LRAA's read filters (Util_funcs.quant_discard_reason): secondary,
+    supplementary and duplicate alignments, mapping quality, percent identity
+    (--HiFi for LRAA's HiFi floor), over-long introns, and the rDNA mask
+    (--rdna_mask_bed);
+  - LRAA's transcribed strand (Util_funcs.transcribed_strand): the alignment
+    orientation, flipped when minimap2's ts tag is "-" only if the read's own
+    junctions carry canonical splice motifs on the flipped strand (checked
+    against --genome_fa); a flip the motifs don't corroborate is not applied;
+  - LRAA's read geometry (Pretty_alignment): the aligned span's ends as the
+    read's 5' and 3' ends, and its reference skips (CIGAR N) > 30 bp as introns,
+    deletions staying in the exon. Read straight from the CIGAR rather than by
+    building a Pretty_alignment per read, which is most of a read's cost.
+Only reads on the pair's transcript strand are counted.
 
 read_frac_elsewhere, the share of reads ending away from both modelled termini,
 is computed over the intron-carrying reads only: reads in a long terminal exon
@@ -42,7 +53,15 @@ import csv
 import logging
 import sys
 
+import os
+
 import pysam
+
+sys.path.insert(0, os.path.sep.join([os.path.dirname(os.path.realpath(__file__)), "../../../pylib"]))
+
+import LRAA_Globals  # noqa: E402
+import RdnaMask  # noqa: E402
+import Util_funcs  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -70,6 +89,16 @@ def main():
     parser.add_argument("--spliced_only", action="store_true",
                         help="count only reads carrying the intron next to the varying terminus "
                              "(the behaviour before terminal-exon reads were counted)")
+    parser.add_argument("--HiFi", action="store_true",
+                        help="apply LRAA's HiFi read-identity floor (min_per_id {}), as the LRAA run given --HiFi "
+                             "did".format(LRAA_Globals.HIFI_MIN_PER_ID))
+    parser.add_argument("--min_per_id", type=float, default=None,
+                        help="override the percent-identity floor (default: LRAA config, or the HiFi one)")
+    parser.add_argument("--min_mapping_quality", type=int, default=None,
+                        help="override the mapping-quality floor (default: LRAA config min_mapping_quality)")
+    parser.add_argument("--rdna_mask_bed", default=None,
+                        help="rDNA mask bed LRAA built for this genome: reads overlapping it are discarded, as LRAA "
+                             "discards them")
     parser.add_argument("--output", required=True, help="output tsv: the candidate columns plus read-level columns")
     args = parser.parse_args()
 
@@ -85,11 +114,17 @@ def main():
     bam = pysam.AlignmentFile(args.bam)
     genome = pysam.FastaFile(args.genome_fa)
 
-    out_rows = []
-    for c in candidates:
+    read_filter = make_read_filter(HiFi=args.HiFi, min_per_id=args.min_per_id,
+                                   min_mapping_quality=args.min_mapping_quality, rdna_mask_bed=args.rdna_mask_bed)
+
+    # a contig at a time: the strand check holds one contig's sequence
+    out_rows = [None] * len(candidates)
+    order = sorted(range(len(candidates)), key=lambda i: contig_of[candidates[i]["dominant_transcript_ids"]])
+    for i in order:
+        c = candidates[i]
         res = check_pair(c, exons, strand_of, contig_of, bam, genome, cell_to_cluster, args.site_window,
-                         include_terminal_exon_reads=not args.spliced_only)
-        out_rows.append({**c, **res})
+                         include_terminal_exon_reads=not args.spliced_only, read_filter=read_filter)
+        out_rows[i] = {**c, **res}
         logger.info("%s %s: %d reads, dominant share %s -> %s",
                     c["gene_symbol"], c["alt_terminus"], res["n_reads"],
                     res["read_dom_share_A"], res["read_dom_share_B"])
@@ -137,8 +172,56 @@ def parse_cell_clusters(filename):
     return cell_to_cluster
 
 
+def read_geometry(read):
+    """(lend, rend, introns > MIN_READ_INTRON_LEN) of a read, 1-based, as Pretty_alignment
+    gives them: introns are the CIGAR's reference skips (N, consecutive ones joined);
+    deletions (D) stay inside the exon, however long."""
+    introns = []
+    pos = read.reference_start  # 0-based
+    skip_start = None
+    for op, n in read.cigartuples:
+        if op == 3:  # N
+            if skip_start is None:
+                skip_start = pos
+            pos += n
+            continue
+        if skip_start is not None:
+            if pos - skip_start > MIN_READ_INTRON_LEN:
+                introns.append((skip_start + 1, pos))
+            skip_start = None
+        if op in (0, 2, 7, 8):  # M, D, =, X consume the reference
+            pos += n
+    return read.reference_start + 1, read.reference_end, introns
+
+
+def make_read_filter(HiFi=False, min_per_id=None, min_mapping_quality=None, rdna_mask_bed=None):
+    """keep(read) -> True for a read LRAA would use (Util_funcs.quant_discard_reason), with
+    the identity / mapping-quality floors and rDNA mask the site-usage counting applies."""
+    if min_per_id is None:
+        min_per_id = LRAA_Globals.HIFI_MIN_PER_ID if HiFi else LRAA_Globals.config["min_per_id"]
+    if min_mapping_quality is None:
+        min_mapping_quality = int(LRAA_Globals.config["min_mapping_quality"])
+    # {} rather than None: None makes quant_discard_reason read the LRAA run's config mask
+    rdna_mask = (RdnaMask.load_mask_bed(rdna_mask_bed) if rdna_mask_bed else None) or {}
+
+    def keep(read):
+        return Util_funcs.quant_discard_reason(read, None, min_mapping_quality=min_mapping_quality,
+                                               min_per_id=min_per_id, rdna_mask=rdna_mask) is None
+    return keep
+
+
+def register_contig(genome, contig):
+    """Hold the contig's sequence for transcript_strand's splice-motif check (one contig at
+    a time; a contig missing from the fasta keeps every read's aligned strand)."""
+    if genome is None or Util_funcs.contig_seq_for_strand_check(contig) is not None:
+        return
+    if contig in genome.references:
+        Util_funcs.register_contig_seq_for_strand_check(contig, genome.fetch(contig).upper())
+
+
 def check_pair(c, exons, strand_of, contig_of, bam, genome, cell_to_cluster, window,
-               include_terminal_exon_reads=True):
+               include_terminal_exon_reads=True, read_filter=None):
+    """read_filter: keep(read) from make_read_filter (default: LRAA's non-HiFi filters)."""
 
     kind = c["alt_terminus"]
     if kind not in ("TSS", "PolyA"):
@@ -166,15 +249,15 @@ def check_pair(c, exons, strand_of, contig_of, bam, genome, cell_to_cluster, win
     fetch_lo = max(0, min(dom_pos, alt_pos, key_intron[0]) - 200)
     fetch_hi = max(dom_pos, alt_pos, key_intron[1]) + 200
 
+    if read_filter is None:
+        read_filter = make_read_filter()
+    register_contig(genome, contig)
+
     ends = []  # (position, cluster, carries the key intron)
     for read in bam.fetch(contig, fetch_lo, fetch_hi):
-        if read.is_secondary or read.is_supplementary or not read.has_tag("CB"):
+        if not read.has_tag("CB") or transcript_strand(read, genome) != strand:
             continue
-        if transcript_strand(read) != strand:
-            continue
-        blocks = read.get_blocks()
-        read_introns = [(a[1] + 1, b[0]) for a, b in zip(blocks, blocks[1:])
-                        if b[0] - a[1] > MIN_READ_INTRON_LEN]
+        read_lend, read_rend, read_introns = read_geometry(read)
         carries_intron = any(abs(i[0] - key_intron[0]) <= INTRON_TOLERANCE and abs(i[1] - key_intron[1]) <= INTRON_TOLERANCE
                              for i in read_introns)
         if not carries_intron:
@@ -182,20 +265,23 @@ def check_pair(c, exons, strand_of, contig_of, bam, genome, cell_to_cluster, win
                 continue
             # unspliced, and wholly on the terminal-exon side of the key intron
             if five_prime_side == plus:
-                in_terminal_exon = read.reference_end < key_intron[0]
+                in_terminal_exon = read_rend < key_intron[0]
             else:
-                in_terminal_exon = read.reference_start + 1 > key_intron[1]
+                in_terminal_exon = read_lend > key_intron[1]
             if not in_terminal_exon:
                 continue
 
         if five_prime_side:
-            pos = read.reference_start + 1 if plus else read.reference_end
+            pos = read_lend if plus else read_rend
             beyond = pos < key_intron[0] if plus else pos > key_intron[1]
         else:
-            pos = read.reference_end if plus else read.reference_start + 1
+            pos = read_rend if plus else read_lend
             beyond = pos > key_intron[1] if plus else pos < key_intron[0]
         if not beyond:
             continue  # ends inside the intron's flank on the wrong side: not a terminal-exon end
+        # LRAA's read filters last: the costliest test, needed only by reads that would count
+        if not read_filter(read):
+            continue
 
         ends.append((pos, cell_to_cluster.get(read.get_tag("CB")), carries_intron))
 
@@ -251,14 +337,16 @@ def check_pair(c, exons, strand_of, contig_of, bam, genome, cell_to_cluster, win
     return res
 
 
-def transcript_strand(read):
-    """Genomic strand of the transcript a read came from: its alignment orientation, flipped
-    when minimap2's ts tag says the read is antisense to the transcript; reads without the tag
-    are taken as oriented to the transcript."""
-    strand = "-" if read.is_reverse else "+"
-    if read.has_tag("ts") and read.get_tag("ts") == "-":
-        strand = "+" if strand == "-" else "-"
-    return strand
+def transcript_strand(read, genome=None):
+    """Genomic strand of the transcript a read came from, as LRAA assigns it
+    (Util_funcs.transcribed_strand): the alignment orientation, flipped for ts:A:- only when
+    the read's junctions carry canonical motifs on the flipped strand. With `genome` (a
+    pysam.FastaFile) the read's contig is registered for that check; without it, only an
+    already-registered contig can corroborate a flip, and otherwise the aligned strand
+    stands."""
+    if genome is not None:
+        register_contig(genome, read.reference_name)
+    return Util_funcs.transcribed_strand(read)
 
 
 def downstream_A(genome, contig, pos, plus):

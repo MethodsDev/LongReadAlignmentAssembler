@@ -1568,10 +1568,12 @@ alt_termini_read_check_candidates = function(alt_termini_support) {
 
 
 # Runs util/sc/diff_iso_usage/alt_termini_read_check.py over the candidate pairs and returns
-# its table. The result is cached in output_tsv and recomputed only when the candidate set
-# changes, since it reads the full BAM.
+# its table. The result is cached in output_tsv and recomputed only when the candidate set,
+# the script or its read-filter options change, since it reads the full BAM. HiFi and
+# rdna_mask_bed: LRAA's read filters, as the LRAA run (and the site-usage counting) applied
+# them -- the HiFi identity floor and the rDNA mask LRAA built for the genome.
 run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genome_fa, output_tsv,
-                                      site_window = 50,
+                                      site_window = 50, HiFi = FALSE, rdna_mask_bed = NULL,
                                       lraa_root = Sys.getenv("LRAA_ROOT", "~/GITHUB/MDL/LongReadAlignmentAssembler")) {
 
     candidate_cols = c("gene_symbol", "alt_terminus", "dominant_transcript_ids", "alternate_transcript_ids",
@@ -1586,7 +1588,8 @@ run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genom
     # the cache is also keyed on the script, so a change in how reads are counted reruns it
     script = file.path(path.expand(lraa_root), "util/sc/diff_iso_usage/alt_termini_read_check.py")
     script_md5_file = paste0(output_tsv, ".script_md5")
-    script_md5 = unname(tools::md5sum(script))
+    filter_args = c(if (HiFi) "--HiFi", if (! is.null(rdna_mask_bed)) c("--rdna_mask_bed", rdna_mask_bed))
+    script_md5 = paste(c(unname(tools::md5sum(script)), filter_args), collapse = " ")
 
     if (file.exists(output_tsv) && file.exists(candidates_tsv) &&
         unname(tools::md5sum(candidates_tsv)) == unname(tools::md5sum(new_candidates_tsv)) &&
@@ -1596,7 +1599,7 @@ run_alt_termini_read_check = function(candidates, gtf, bam, cell_clusters, genom
         file.copy(new_candidates_tsv, candidates_tsv, overwrite = TRUE)
         status = system2(script, c("--candidates", candidates_tsv, "--gtf", gtf, "--bam", bam,
                                    "--cell_clusters", cell_clusters, "--genome_fa", genome_fa,
-                                   "--site_window", site_window, "--output", output_tsv))
+                                   "--site_window", site_window, filter_args, "--output", output_tsv))
         if (status != 0) {
             stop("alt_termini_read_check.py failed with status ", status)
         }
