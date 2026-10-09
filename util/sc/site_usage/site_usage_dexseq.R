@@ -56,7 +56,8 @@ suppressPackageStartupMessages({
 parser <- ArgumentParser()
 parser$add_argument("--counts_prefix", required=TRUE, help="output prefix given to count_site_read_ends.py")
 parser$add_argument("--sites", required=TRUE, help="site table from prep_site_table.py")
-parser$add_argument("--kind", required=TRUE, choices=c("TSS", "PolyA"))
+parser$add_argument("--kind", required=TRUE,
+                    help="feature kind to test (the feature table's kind column): TSS, PolyA, or e.g. SplicePattern, IsoformTermini")
 parser$add_argument("--pseudoreps", type="integer", default=3, help="pseudo-replicates per cluster")
 parser$add_argument("--n_seeds", type="integer", default=5)
 parser$add_argument("--min_stable_seeds", type="integer", default=4)
@@ -90,7 +91,8 @@ out <- function(suffix) paste0(args$output_prefix, ".", args$kind, ".", suffix)
 
 counts <- readMM(paste0(args$counts_prefix, ".site_counts.mtx.gz"))
 counts <- as(counts, "CsparseMatrix")
-site_ids <- fread(paste0(args$counts_prefix, ".sites.tsv.gz"), header=FALSE)$V1
+# one id per line: sep fixed so ids holding ':' or '|' (e.g. pattern|TSS site|PolyA site) are not split
+site_ids <- fread(paste0(args$counts_prefix, ".sites.tsv.gz"), header=FALSE, sep="\t")$V1
 cells <- fread(paste0(args$counts_prefix, ".barcodes.tsv.gz"), header=FALSE, col.names=c("barcode", "cluster"))
 rownames(counts) <- site_ids
 colnames(counts) <- cells$barcode
@@ -192,6 +194,9 @@ for (seed in seq_len(args$n_seeds)) {
     msg("seed %d: DEXSeq", seed)
     samples <- sample_table_for_seed(seed)
     pb <- pseudobulk(counts, samples)
+    # counts may be fractional (EM-assigned isoform / splice-pattern counts): round, not
+    # truncate, to integers; read-end counts are integers already and are left unchanged
+    pb <- round(pb)
     storage.mode(pb) <- "integer"
     pb <- pb[, order(match(sub("\\.r[0-9]+$", "", colnames(pb)), clusters), colnames(pb))]
     dxd <- run_dexseq(pb, sub("\\.r[0-9]+$", "", colnames(pb)))

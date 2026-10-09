@@ -59,7 +59,9 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=loggin
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--events", required=True,
-                        help="tsv: tag, gene_symbol, kind (TSS|PolyA), gained_site, lost_site, cluster_A, cluster_B")
+                        help="tsv: tag, gene_symbol, kind (TSS|PolyA), gained_site, lost_site, cluster_A, cluster_B "
+                             "(gained_site may equal lost_site, for a splicing switch at a shared terminus; then a "
+                             "compatible read must fit exactly one of the two isoforms)")
     parser.add_argument("--sites", required=True, help="site table from prep_site_table.py")
     parser.add_argument("--gtf", required=True, help="LRAA gtf with SYMBOL^ transcript ids")
     parser.add_argument("--cluster_quant_tar", required=True, help="tar.gz of per-cluster quant.expr (uniq_FSM_reads)")
@@ -173,7 +175,15 @@ def main():
             else:
                 # the nearer site's isoform (sites can lie closer than twice the tolerance)
                 near = [t for t in txs if abs(pos - site_pos[t]) <= args.site_tolerance]
-                if near:
+                if near and site_pos[txs[0]] == site_pos[txs[1]]:
+                    # one site for both isoforms (a splicing switch at a shared terminus):
+                    # a read goes to the isoform whose structure it fits, if only one
+                    b = blocks(read)
+                    fit = [t for t in txs if fits_model(b, exons[t]["exons"], args.site_tolerance)]
+                    if len(fit) == 1:
+                        compatible[fit[0]].add((cl, name))
+                        blks = b
+                elif near:
                     t = min(near, key=lambda t: abs(pos - site_pos[t]))
                     b = blocks(read)
                     if fits_model(b, exons[t]["exons"], args.site_tolerance):
