@@ -181,7 +181,9 @@ event is annotated with:
 - flags: `monoexonic` (a site carried only by single-exon models), `downstream_TSS_no_FSM`
   (a gained TSS downstream of the lost one with no isoform starting there holding 5 FSM
   reads, which is what 5'-truncated reads look like), `close_sites` (< 30 nt apart),
-  `A_rich_downstream` (PolyA, if a genome is given);
+  `A_rich_downstream` and `polyA_site_unsupported` (PolyA, if a genome / the PolyASite
+  atlas is given: a site with no PAS hexamer, no PolyASite cluster used by >= 10% of
+  its samples, and > 7 A's in the 20 genomic bases past it looks like internal priming);
 - **high confidence** = reciprocal, >= 5 unique FSM reads at both sites, no flags.
 
 Output: `test.dexseq.{TSS,PolyA}.events.tsv`.

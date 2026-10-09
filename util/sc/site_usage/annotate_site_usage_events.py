@@ -30,7 +30,14 @@ Each event is annotated with:
                one and no isoform starting there has --min_FSM unique FSM reads:
                5'-truncated reads look like this), close_sites (separation <
                --min_separation), A_rich_downstream (PolyA: >= 12 A of the 20
-               genomic bases past the gained site, an oligo-dT priming template).
+               genomic bases past the gained or the lost site, an oligo-dT
+               priming template), polyA_site_unsupported (PolyA: the gained or
+               the lost site has no evidence of being a polyadenylation site
+               rather than internal priming: no PAS hexamer, not in the PolyASite
+               atlas with >= --min_polyasite_frac of its samples, and more than
+               --max_downstream_A A's in the 20 genomic bases past it).
+  site evidence  PolyA: <side>_site_evidence (PAS, PolyASite sample fraction,
+               downstream A count) and <side>_site_supported.
   high_confidence  reciprocal, >= --min_FSM at both sites, no flags.
   isoform-level DTU on the same gene x cluster pair (alt-termini rows, where
                the two isoforms share a splice pattern), when --isoform_DTU is given;
@@ -78,6 +85,13 @@ def main():
                              "all sites' read ends per cluster, the library for switch_class. Without it the "
                              "library is the tested sites' read ends only")
     parser.add_argument("--min_separation", type=int, default=30)
+    parser.add_argument("--polyasite_atlas", default=None,
+                        help="PolyASite 2.0 atlas clusters bed(.gz) (atlas.clusters.2.0.GRCh38.96.bed.gz), evidence for PolyA sites")
+    parser.add_argument("--min_polyasite_frac", type=float, default=0.10,
+                        help="PolyASite cluster within --site_tolerance supported by at least this fraction of atlas samples")
+    parser.add_argument("--max_downstream_A", type=int, default=7,
+                        help="a PolyA site with at most this many A's in the 20 genomic bases past it needs no other evidence")
+    parser.add_argument("--site_tolerance", type=int, default=25)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -138,6 +152,9 @@ def main():
         events["lost_downstream_A_of_20"] = [downstream_A(genome, c, p, s == "+")
                                              for c, p, s in zip(chrom, events.lost_pos, strand)]
 
+    if kind == "PolyA":
+        add_polyA_site_evidence(events, sites, args)
+
     add_switch_class(events, usage, args.site_cluster_counts)
 
     flags = []
@@ -149,8 +166,10 @@ def main():
             f.append("downstream_TSS_no_FSM")
         if r["separation"] < args.min_separation:
             f.append("close_sites")
-        if kind == "PolyA" and r.get("gained_downstream_A_of_20", 0) >= A_RICH:
+        if kind == "PolyA" and max(r.get("gained_downstream_A_of_20", 0), r.get("lost_downstream_A_of_20", 0)) >= A_RICH:
             f.append("A_rich_downstream")
+        if kind == "PolyA" and not (r.get("gained_site_supported", True) and r.get("lost_site_supported", True)):
+            f.append("polyA_site_unsupported")
         flags.append(",".join(f))
     events["flags"] = flags
 
@@ -263,6 +282,64 @@ def event_type(kind, r, sites, exons):
                 return "intronic_PolyA"
         return "alt_last_exon"
     return "alt_first_exon"
+
+
+def load_polyasite(path):
+    """(chrom, strand) -> sorted [(start1, end, fraction of samples)] from the PolyASite 2.0 atlas"""
+    import gzip
+    idx = collections.defaultdict(list)
+    with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as fh:
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 7 or line.startswith("#"):
+                continue
+            chrom = f[0] if f[0].startswith("chr") else "chr" + f[0]
+            idx[(chrom, f[5])].append((int(f[1]) + 1, int(f[2]), float(f[6])))
+    for v in idx.values():
+        v.sort()
+    return {k: ([x[0] for x in v], v) for k, v in idx.items()}
+
+
+def polyasite_frac(atlas, chrom, strand, pos, tol):
+    """largest sample fraction among atlas clusters within tol of pos (0 if none)"""
+    import bisect
+    if (chrom, strand) not in atlas:
+        return 0.0
+    starts, v = atlas[(chrom, strand)]
+    best = 0.0
+    for s, e, frac in v[bisect.bisect_left(starts, pos - tol - 1000):]:
+        if s > pos + tol:
+            break
+        if e >= pos - tol:
+            best = max(best, frac)
+    return best
+
+
+def add_polyA_site_evidence(events, sites, args):
+    """per site: PAS hexamer (site table), PolyASite sample fraction, downstream A count; supported if
+    any of: a PAS, PolyASite >= --min_polyasite_frac, <= --max_downstream_A A's"""
+    if not args.polyasite_atlas and not args.genome_fa:
+        logger.warning("no --polyasite_atlas or --genome_fa: PolyA site evidence not assessed")
+        return
+    atlas = load_polyasite(args.polyasite_atlas) if args.polyasite_atlas else None
+    if atlas is None:
+        logger.warning("no --polyasite_atlas: PolyA site evidence is the PAS and the downstream A count only")
+    for side in ("gained", "lost"):
+        ev, ok = [], []
+        a_col = events.get(f"{side}_downstream_A_of_20")
+        for i, sid in enumerate(events[f"{side}_site"]):
+            _, chrom, pos, strand = sid.split(":")
+            pas = str(sites.at[sid, "pas"])
+            has_pas = pas not in ("", "none", "NA", "nan")
+            frac = polyasite_frac(atlas, chrom, strand, int(pos), args.site_tolerance) if atlas else None
+            n_a = None if a_col is None else int(a_col.iloc[i])
+            ok.append(has_pas or (frac is not None and frac >= args.min_polyasite_frac)
+                      or (n_a is not None and n_a <= args.max_downstream_A))
+            ev.append(";".join([f"PAS={pas if has_pas else 'none'}",
+                                f"PolyASite={'NA' if frac is None else round(frac, 2)}",
+                                f"A={'NA' if n_a is None else n_a}"]))
+        events[f"{side}_site_evidence"] = ev
+        events[f"{side}_site_supported"] = ok
 
 
 def downstream_A(genome, contig, pos, plus):

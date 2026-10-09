@@ -284,7 +284,16 @@ the one among the others whose usage falls most.
 - flags: `monoexonic` (a site carried only by single-exon models), `downstream_TSS_no_FSM`
   (gained TSS downstream of the lost one with no isoform starting there holding 5 unique
   FSM reads: what 5'-truncated reads look like), `close_sites` (< 30 nt),
-  `A_rich_downstream` (PolyA, >= 12 A in the 20 genomic bases past the gained site).
+  `A_rich_downstream` (PolyA, >= 12 A in the 20 genomic bases past the gained or lost
+  site), `polyA_site_unsupported` (PolyA: the gained or lost site has none of: a PAS
+  hexamer; a PolyASite 2.0 atlas cluster within 25 nt used by >= 10% of its samples
+  (`--polyasite_atlas`, `--min_polyasite_frac`); <= 7 A's in the 20 genomic bases past it
+  (`--max_downstream_A`)). Each PolyA event reports `<side>_site_evidence` (PAS,
+  PolyASite fraction, A count) and `<side>_site_supported`. Why: in PBMC a quarter of
+  the tested PolyA sites have 10-11 A's past them and no PAS, and only 26% of those are
+  in PolyASite (vs 94% of sites with a PAS and <= 5 A's) -- oligo-dT internal priming
+  below LRAA's own internal-priming call; the flag took high-confidence PolyA events from
+  727 to 281 (genes 218 to 92), mostly lymphocyte intronic / upstream ends.
 - **high_confidence** = reciprocal, >= 5 unique FSM reads at both sites (`--min_FSM`), no
   flags.
 - isoform-level DTU on the same gene x cluster pair, if given.
@@ -296,7 +305,8 @@ confidence. (Not called by the isoform-level DTU for this pair; to be investigat
 
 **Output:** `<prefix>.dexseq.<KIND>.events.tsv`, one row per event. PBMC: 15,012 TSS events
 in 1,145 genes, 569 genes with a high-confidence event; PolyA 3,175 events in 512 genes,
-218 with a high-confidence event.
+92 with a high-confidence event (218 before the `polyA_site_unsupported` flag; 1,891 of the
+3,175 PolyA events carry it).
 
 ## Step 5. Alternative terminal usage or alternative splicing (`classify_site_pairs_by_splicing.py`)
 
@@ -396,7 +406,7 @@ outer reads:                       ==================================   start in
 
 PBMC (site pairs): TSS 726 alternative terminal usage, 1,395 terminal exon, 13 internal,
 469 unspliced site, 36 unresolved; PolyA 58 / 619 / 4 / 301 / 139. Among high-confidence
-genes (best event), about a third of TSS switches and a tenth of PolyA switches are
+genes (best event), about a third of TSS switches and an eighth of PolyA switches are
 alternative terminal usage; the rest come with alternative splicing, almost all a
 different terminal exon.
 
