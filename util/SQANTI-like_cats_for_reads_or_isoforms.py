@@ -57,7 +57,8 @@ def main():
         "--input_bam",
         type=str,
         required=False,
-        help="input bam with long read alignments",
+        help="input bam with long read alignments, or - for a bam or sam stream on "
+        "stdin (classified serially, as a stream has no index)",
     )
 
     parser.add_argument(
@@ -79,6 +80,24 @@ def main():
         action="store_true",
         default=False,
         help="write the per-feature table gzipped, as <output_prefix>.iso_cats.tsv.gz",
+    )
+
+    parser.add_argument(
+        "--no_tsv_header",
+        action="store_true",
+        default=False,
+        help="leave the header line out of the per-feature table, so that the tables "
+        "of several runs (one per contig group, from a scattered workflow) can be "
+        "appended to one table that has a single header",
+    )
+
+    parser.add_argument(
+        "--no_plot",
+        action="store_true",
+        default=False,
+        help="write the summary counts but do not draw the barplot (and do not need "
+        "R); for the per-slice runs of a scattered workflow, whose gather draws one "
+        "plot from the summed counts",
     )
 
     parser.add_argument(
@@ -106,7 +125,7 @@ def main():
     # The summary barplot is drawn by an Rscript at the very end. Check for R now
     # rather than after classifying every read: lraa-core ships without R, and a
     # run there used to fail only once all the work was done.
-    if shutil.which("Rscript") is None:
+    if not args.no_plot and shutil.which("Rscript") is None:
         exit(
             "Error, Rscript not found on PATH; it is needed for the summary plot. "
             "Run in the lraa-sc image, which includes R."
@@ -116,9 +135,16 @@ def main():
 
     if input_bam is not None and num_workers > 1:
         feature_category_counter = classify_bam_by_contig(
-            ref_annot_gtf, input_bam, output_prefix, num_workers, args.gzip_tsv
+            ref_annot_gtf,
+            input_bam,
+            output_prefix,
+            num_workers,
+            args.gzip_tsv,
+            not args.no_tsv_header,
         )
-        write_summary_and_plot(output_prefix, feature_category_counter)
+        write_summary_and_plot(
+            output_prefix, feature_category_counter, not args.no_plot
+        )
         sys.exit(0)
 
     sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf)
@@ -139,10 +165,12 @@ def main():
             delimiter="\t",
             lineterminator="\n",
         )
-        tsv_writer.writeheader()
+        if not args.no_tsv_header:
+            tsv_writer.writeheader()
 
         logger.info("Classifying reads from bam: {}".format(input_bam))
-        bamfile_reader = pysam.AlignmentFile(input_bam, "rb")
+        # "r" reads bam, sam or cram alike, which a stream needs
+        bamfile_reader = pysam.AlignmentFile(input_bam, "r")
 
         bam_output_filename = output_prefix + ".iso_cats.bam"
         bamwriter = pysam.AlignmentFile(
@@ -206,7 +234,7 @@ def main():
 
     tsv_ofh.close()
 
-    write_summary_and_plot(output_prefix, feature_category_counter)
+    write_summary_and_plot(output_prefix, feature_category_counter, not args.no_plot)
 
     sys.exit(0)
 
@@ -215,6 +243,9 @@ def resolve_num_workers(cpu_arg, input_bam):
     # 'auto' takes the cores actually granted (Util_funcs.granted_cpus), and falls
     # back to serial, with a warning, when the bam has no index; an explicit count is
     # honored as given, and classify_bam_by_contig refuses an unindexed bam for it.
+    if input_bam == "-":
+        return 1  # a stream has no index to read by contig
+
     if cpu_arg != "auto":
         try:
             num_workers = int(cpu_arg)
@@ -240,7 +271,7 @@ def resolve_num_workers(cpu_arg, input_bam):
     return num_workers
 
 
-def write_summary_and_plot(output_prefix, feature_category_counter):
+def write_summary_and_plot(output_prefix, feature_category_counter, plot=True):
 
     # write summary counts
     summary_counts_tsv = output_prefix + ".iso_cats.summary_counts.tsv"
@@ -248,6 +279,9 @@ def write_summary_and_plot(output_prefix, feature_category_counter):
         print("\t".join(["Category", "Count"]), file=ofh)
         for feature_category, count in feature_category_counter.items():
             print("\t".join([feature_category, str(count)]), file=ofh)
+
+    if not plot:
+        return
 
     # make barplot of cat counts.
     summary_counts_plot_name = output_prefix + ".iso_cats.summary_counts.pdf"
@@ -303,7 +337,7 @@ def process_bam_record(
 
 
 def classify_bam_by_contig(
-    ref_annot_gtf, input_bam, output_prefix, num_workers, gzip_tsv=False
+    ref_annot_gtf, input_bam, output_prefix, num_workers, gzip_tsv=False, header=True
 ):
     """Classify a coordinate-sorted, indexed bam one contig per worker.
 
@@ -384,9 +418,10 @@ def classify_bam_by_contig(
     tsv_suffix = ".tsv.gz" if gzip_tsv else ".tsv"
     tsv_output_filename = output_prefix + ".iso_cats" + tsv_suffix
     with open_tsv(tsv_output_filename, gzip_tsv) as ofh:
-        csv.DictWriter(
-            ofh, fieldnames=BAM_TSV_FIELDNAMES, delimiter="\t", lineterminator="\n"
-        ).writeheader()
+        if header:
+            csv.DictWriter(
+                ofh, fieldnames=BAM_TSV_FIELDNAMES, delimiter="\t", lineterminator="\n"
+            ).writeheader()
     with open(tsv_output_filename, "ab") as ofh:
         for _, _, part in jobs:
             with open(part + tsv_suffix, "rb") as fh:
