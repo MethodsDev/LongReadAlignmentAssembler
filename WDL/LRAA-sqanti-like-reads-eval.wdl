@@ -36,16 +36,19 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         # default) cannot carry over and run this on lraa-core, which has no R.
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
 
-        # Contigs are grouped, in header order, until a group holds about this many
-        # records; a contig above it is cut into ranges of about this many. On the
-        # 46 million read test bam the largest contigs hold 3 to 4 million reads, so
-        # they become 3 shards of 1.1 to 1.4 million (measured), and the many small
-        # alt/unplaced contigs share a few. A shard is one task, so a very low value
-        # only adds per-task overhead.
-        Int max_reads_per_shard = 1500000
+        # A CHUNK is what one process classifies: contigs are grouped, in header order,
+        # until a group holds about this many records, and a contig above it is cut into
+        # ranges of about this many (from the index alone). A SHARD is what one VM runs:
+        # consecutive chunks packed up to max_reads_per_shard, run in parallel on the
+        # VM's cores, so a shard should hold at least as many chunks as it has cores.
+        # Measured (4 cores, 4 chunks of 1.1 to 1.3 million reads): one chunk alone on a
+        # VM keeps 1.3 of 4 cores busy, four together keep 3.25 and take 153 s of VM time
+        # against 390 s for four VMs.
+        Int max_reads_per_chunk = 1000000
+        Int max_reads_per_shard = 4000000
 
-        # A shard reads its reads as a stream, so it classifies on one core whatever
-        # its size; the cores only serve samtools and the compression of its output.
+        # Each chunk is classified on one core, so a shard uses as many cores as it has
+        # chunks in flight; the rest compress the tagged bam of a shard with few chunks.
         # 8 GB is headroom, not a model: the single-task run of the whole 26 GB bam
         # peaked at 2.6 GiB with all 8 contig workers running at once (Terra
         # monitoring.log), so one worker needs a fraction of that.
@@ -65,6 +68,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
             input:
                 input_BAM = select_first([input_BAM]),
                 input_BAI = input_BAI,
+                max_reads_per_chunk = max_reads_per_chunk,
                 max_reads_per_shard = max_reads_per_shard,
                 docker = docker_sc,
                 cpu = plan_cpu,
@@ -125,6 +129,7 @@ task plan_shards {
         File input_BAM
         File? input_BAI
 
+        Int max_reads_per_chunk
         Int max_reads_per_shard
         String docker
         Int cpu = 4
@@ -183,13 +188,14 @@ task plan_shards {
         # delocalized.
         cp -L input.bam.bai plan.bam.bai
 
-        # One line per shard, see the script for the format: whole contigs (small ones
-        # grouped in header order), or a position range of one contig for a contig
-        # above max_reads_per_shard, cut from the index alone. The unplaced reads, if
+        # One line per shard, see the script for the format: its chunks, each whole
+        # contigs (small ones grouped in header order) or a position range of one contig
+        # above max_reads_per_chunk, cut from the index alone. The unplaced reads, if
         # any, are the last shard. Shards stay in the bam's own order, which is what
         # lets the gather append them and get the order of a single run.
         "$(dirname "$(which SQANTI-like_cats_for_reads_or_isoforms.py)")/misc/plan_bam_shards.py" \
             --bam input.bam --bai input.bam.bai \
+            --max_reads_per_chunk ~{max_reads_per_chunk} \
             --max_reads_per_shard ~{max_reads_per_shard} \
             > shard_specs.txt
     >>>
@@ -213,8 +219,9 @@ task plan_shards {
 task classify_shard {
     input {
         String shard_name
-        # one line of the plan: "contigs<TAB>name name ..." (* is the unplaced reads) or
-        # "range<TAB>name<TAB>start<TAB>end", the reads of one contig that start in it
+        # one line of the plan: chunks joined with commas, each "contigs<TAB>name name ..."
+        # (* is the unplaced reads) or "range<TAB>name<TAB>start<TAB>end", the reads of
+        # one contig that start in it
         String shard_spec
         File input_BAM
         File input_BAI
@@ -270,47 +277,103 @@ task classify_shard {
         ln -s ~{input_BAM} input.bam
         ln -s ~{input_BAI} input.bam.bai
 
-        IFS=$'\t' read -r kind field1 field2 field3 <<< '~{shard_spec}'
+        # The chunks of this shard, in order: one spec file each.
+        mkdir chunks
+        printf '%s' '~{shard_spec}' | tr ',' '\n' | awk '{ print > sprintf("chunks/%05d.spec", NR - 1) }'
+        num_chunks=$(ls chunks/*.spec | wc -l)
 
-        # Each contig as {name} so samtools takes it literally, which contigs like
-        # HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads. Read into
-        # an array rather than expanded unquoted, which would glob the *.
-        regions=()
-        min_pos=0
-        if [ "$kind" = "range" ]; then
-            names=("$field1")
-            regions+=("{$field1}:$field2-$field3")
-            # The query returns the reads overlapping the range, including ones that
-            # began before it; those belong to the range before. A read belongs to the
-            # range holding its start, so no read is classified twice.
-            min_pos=$field2
-        else
-            read -r -a names <<< "$field1"
-            for c in "${names[@]}"; do
-                if [ "$c" = "*" ]; then regions+=("*"); else regions+=("{$c}"); fi
-            done
-        fi
-
-        # The reference lines of this shard's contigs, so the script does not parse the
-        # whole annotation. Empty for the unplaced reads, which are not classified.
-        # (A range keeps its whole contig: a read is classified against all of it.)
-        printf '%s\n' "${names[@]}" > shard_contigs.txt
+        # The reference, split once: one file per contig any chunk needs, so a chunk
+        # loads only its own contigs' lines and the annotation is read once per shard,
+        # not once per chunk.
+        mkdir gtf
+        cat chunks/*.spec | awk -F'\t' '$1 == "range" { print $2; next } { n = split($2, a, " "); for (i = 1; i <= n; i++) print a[i] }' | sort -u > contigs_needed.txt
         zcat -f ~{ref_annot_GTF} | awk -F'\t' '
-            NR == FNR { want[$1] = 1; next }
+            NR == FNR { id[$1] = ++n; next }
             /^#/ { next }
-            ($1 in want)
-        ' shard_contigs.txt - > shard.gtf
+            ($1 in id) { print > sprintf("gtf/%d.gtf", id[$1]) }
+        ' contigs_needed.txt -
+        # a contig with no annotation (and the unplaced reads) still gets a file
+        n=0; while read -r c; do n=$((n + 1)); touch "gtf/$n.gtf"; done < contigs_needed.txt
 
-        # The reads reach the script as SAM on stdin, header included, so no slice of
-        # the bam is written. A stream has no index, so the contigs of the shard are
-        # classified one after the other.
-        samtools view -h input.bam "${regions[@]}" | \
-            awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
-            SQANTI-like_cats_for_reads_or_isoforms.py \
-                --ref_gtf shard.gtf \
-                --output_prefix ~{shard_name} \
-                --input_bam - \
-                --gzip_tsv --no_tsv_header --no_plot
+        # One chunk: its reads as SAM, header included, straight into the classifier, so
+        # no slice of the bam is written. Several of these run at once; each is one
+        # process on one core, so the cores that no chunk needs compress the tagged bam.
+        classify_chunk() {
+            local j="$1"
+            local prefix
+            prefix=$(printf 'chunks/%05d' "$j")
+            local kind field1 field2 field3
+            IFS=$'\t' read -r kind field1 field2 field3 < "$prefix.spec"
+
+            # Each contig as {name} so samtools takes it literally, which contigs like
+            # HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads. Read
+            # into an array rather than expanded unquoted, which would glob the *.
+            local regions=() names=() min_pos=0 c
+            if [ "$kind" = "range" ]; then
+                names=("$field1")
+                regions+=("{$field1}:$field2-$field3")
+                # The query returns the reads overlapping the range, including ones that
+                # began before it; those belong to the range before. A read belongs to
+                # the range holding its start, so no read is classified twice.
+                min_pos=$field2
+            else
+                read -r -a names <<< "$field1"
+                for c in "${names[@]}"; do
+                    if [ "$c" = "*" ]; then regions+=("*"); else regions+=("{$c}"); fi
+                done
+            fi
+
+            # this chunk's annotation: its contigs' files (a range keeps its whole
+            # contig, since a read is classified against all of it)
+            : > "$prefix.gtf"
+            for c in "${names[@]}"; do
+                cat "gtf/$(grep -n -x -F -- "$c" contigs_needed.txt | head -1 | cut -d: -f1).gtf" >> "$prefix.gtf"
+            done
+
+            samtools view -h input.bam "${regions[@]}" | \
+                awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
+                SQANTI-like_cats_for_reads_or_isoforms.py \
+                    --ref_gtf "$prefix.gtf" \
+                    --output_prefix "$prefix" \
+                    --input_bam - \
+                    --gzip_tsv --no_tsv_header --no_plot \
+                    --bam_write_threads ${extra_threads}
+        }
+        export -f classify_chunk
+
+        # Cores no chunk can use go to compressing the bam: 3 extra for a lone chunk on
+        # 4 cores, none when there are as many chunks as cores.
+        extra_threads=$(( ~{c3d_effective_cpu} / num_chunks - 1 ))
+        if [ "$extra_threads" -lt 0 ]; then extra_threads=0; fi
+        export extra_threads
+
+        # As many chunks at once as cores; the order of execution does not matter, the
+        # outputs are appended by chunk number below. A failed chunk fails the task.
+        seq 0 $((num_chunks - 1)) | xargs -P ~{c3d_effective_cpu} -I{} bash -c 'classify_chunk {}'
+
+        # Append in chunk order (which is the bam's order). The tables are gzip members,
+        # appended as they are; the bams' compressed blocks are copied, not recompressed.
+        # The two appends are independent, so they run side by side.
+        ls chunks/*.iso_cats.tsv.gz | sort > tsv_parts.txt
+        ls chunks/*.iso_cats.bam | sort > bam_parts.txt
+        ( cat $(cat tsv_parts.txt) > ~{shard_name}.iso_cats.tsv.gz ) &
+        tsv_pid=$!
+        samtools cat --no-PG -b bam_parts.txt -o ~{shard_name}.iso_cats.bam &
+        bam_pid=$!
+        wait $tsv_pid
+        wait $bam_pid
+
+        # category counts summed in chunk order, so categories keep the order a single
+        # run first sees them
+        awk -F'\t' -v OFS='\t' '
+            FNR == 1 { next }
+            !($1 in count) { order[++n] = $1 }
+            { count[$1] += $2 }
+            END {
+                print "Category", "Count"
+                for (i = 1; i <= n; i++) print order[i], count[order[i]]
+            }
+        ' $(ls chunks/*.iso_cats.summary_counts.tsv | sort) > ~{shard_name}.iso_cats.summary_counts.tsv
     >>>
 
     output {

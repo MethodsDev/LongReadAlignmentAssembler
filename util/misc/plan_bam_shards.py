@@ -2,15 +2,21 @@
 
 """Plan how to cut a coordinate-sorted, indexed bam into shards of similar size.
 
-Prints one line per shard, tab separated, in the order the shards must be appended to
-reproduce the bam's own order:
+Prints one line per shard, in the order the shards must be appended to reproduce the
+bam's own order. A shard is one or more CHUNKS, joined with commas (a comma cannot be
+in a contig name), each chunk being tab separated fields:
 
     contigs <TAB> name name name      whole contigs (small ones grouped, in header order)
     range   <TAB> name <TAB> S <TAB> E   reads of one contig whose 1-based start POS is
                                           in [S, E]
     contigs <TAB> *                   the reads with no coordinate, if any
 
-A contig holding more than --max_reads_per_shard records is cut into ranges of about
+A chunk is the unit one process classifies; a shard is what one VM runs, its chunks in
+parallel on its cores, so it should hold several. Chunks follow each other in the bam's
+order and are packed into shards in that order, so appending the chunks' outputs in
+order, then the shards', gives the order of a single run.
+
+A contig holding more than --max_reads_per_chunk records is cut into ranges of about
 that many. A read belongs to the range holding its start position, so every read is in
 exactly one shard (a read may extend past the end of its range, and a range's query
 returns reads that began before it; the consumer keeps only POS >= S). Nothing needs to
@@ -116,7 +122,20 @@ def main():
     parser.add_argument(
         "--bai", default=None, help="default: the index pysam finds beside the bam"
     )
-    parser.add_argument("--max_reads_per_shard", type=int, required=True)
+    parser.add_argument(
+        "--max_reads_per_chunk",
+        type=int,
+        required=True,
+        help="records one process classifies: contigs are grouped up to this, a larger "
+        "contig is cut into ranges of about this",
+    )
+    parser.add_argument(
+        "--max_reads_per_shard",
+        type=int,
+        required=True,
+        help="records one VM classifies: consecutive chunks are packed up to this. "
+        "Should be several times --max_reads_per_chunk, so a shard's cores stay busy",
+    )
     parser.add_argument(
         "--no_split",
         action="store_true",
@@ -144,18 +163,19 @@ def main():
         return (min(offsets) >> 16) if offsets else None
 
     file_end = os.path.getsize(args.bam) - 28
-    shards = []
+    # (spec, estimated records), in the bam's order
+    chunks = []
     group, held = [], 0
 
     def flush():
         nonlocal group, held
         if group:
-            shards.append("contigs\t" + " ".join(group))
+            chunks.append(("contigs\t" + " ".join(group), held))
         group, held = [], 0
 
     for index, contig in enumerate(contigs):
         n = stats[contig]
-        if n > args.max_reads_per_shard and linear is not None:
+        if n > args.max_reads_per_chunk and linear is not None:
             flush()
             end = file_end
             for later in contigs[index + 1 :]:
@@ -163,27 +183,44 @@ def main():
                 if later_start is not None:
                     end = later_start
                     break
-            pieces = math.ceil(n / args.max_reads_per_shard)
+            pieces = math.ceil(n / args.max_reads_per_chunk)
             ref_id = bam.get_tid(contig)
             points, end = sample_points(bam, linear[ref_id], contig, end)
             cuts = cut_positions(points, end, lengths[contig], pieces)
             bounds = [1] + cuts + [lengths[contig]]
             for start, stop in zip(bounds[:-1], bounds[1:]):
                 last = stop == lengths[contig]
-                shards.append(
-                    "range\t{}\t{}\t{}".format(contig, start, stop if last else stop - 1)
+                chunks.append(
+                    (
+                        "range\t{}\t{}\t{}".format(
+                            contig, start, stop if last else stop - 1
+                        ),
+                        n // (len(bounds) - 1),
+                    )
                 )
             continue
-        if held > 0 and held + n > args.max_reads_per_shard:
+        if held > 0 and held + n > args.max_reads_per_chunk:
             flush()
         group.append(contig)
         held += n
     flush()
     if unplaced > 0:
-        shards.append("contigs\t*")
+        chunks.append(("contigs\t*", unplaced))
 
-    if not shards:
+    if not chunks:
         sys.exit("Error, {} has no reads".format(args.bam))
+
+    # Pack consecutive chunks into shards. Never reorder: the outputs are appended in
+    # this order.
+    shards = []
+    current, current_reads = [], 0
+    for spec, reads in chunks:
+        if current and current_reads + reads > args.max_reads_per_shard:
+            shards.append(",".join(current))
+            current, current_reads = [], 0
+        current.append(spec)
+        current_reads += reads
+    shards.append(",".join(current))
     print("\n".join(shards))
 
 
