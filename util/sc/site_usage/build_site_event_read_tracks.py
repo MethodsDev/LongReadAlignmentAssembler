@@ -67,6 +67,10 @@ def main():
     parser.add_argument("--bam", required=True)
     parser.add_argument("--cell_clusters", required=True, help="cell_barcode <tab> cluster (header skipped)")
     parser.add_argument("--max_reads", type=int, default=30)
+    parser.add_argument("--min_reads_per_isoform", type=int, default=0,
+                        help="draw at least this many reads of an isoform in a cluster where it has any, taken from "
+                             "the other isoform's share (for illustration: the drawn proportions then no longer "
+                             "match the cluster's when an isoform is rare there)")
     parser.add_argument("--min_uniq_FSM", type=float, default=3,
                         help="isoforms with fewer unique FSM reads are drawn only if no isoform at the site has this many")
     parser.add_argument("--site_tolerance", type=int, default=25,
@@ -188,6 +192,10 @@ def main():
                 totals[(cl, t)] = (n[t], len({m for c, m in fsm_names[t] if c == cl}))
             k = min(args.max_reads, sum(n.values()))
             k0 = round(k * n[txs[0]] / sum(n.values())) if k else 0
+            m = args.min_reads_per_isoform
+            if m and k:
+                k0 = max(k0, min(m, n[txs[0]]))            # at least m of the first isoform...
+                k0 = min(k0, k - min(m, n[txs[1]]))        # ...and of the second
             for t, kt in ((txs[0], k0), (txs[1], k - k0)):
                 take = rng.sample(fsm_cl[t], min(kt, len(fsm_cl[t])))
                 take += rng.sample(comp_cl[t], min(kt - len(take), len(comp_cl[t])))

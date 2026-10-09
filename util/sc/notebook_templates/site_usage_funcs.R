@@ -391,7 +391,7 @@ read_transcript_exons = function(gtf, transcript_ids) {
 plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NULL, xlim = NULL,
                                  colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
                                  read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL,
-                                 highlight = NULL) {
+                                 highlight = NULL, base_size = 10, model_scale = 1) {
 
     tx_label = setNames(names(transcripts), transcripts)
     tx_col = setNames(colors[seq_along(transcripts)], names(transcripts))
@@ -408,7 +408,8 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
                five_prime = if (plus) read_start else -read_end) %>%
         arrange(cluster_label, isoform, five_prime)
     gap = 3
-    model_rows = tibble(isoform = names(transcripts), y = -(seq_along(transcripts)))
+    # model_scale: thickness (and row spacing) of the isoform models relative to a read row
+    model_rows = tibble(isoform = names(transcripts), y = -(seq_along(transcripts)) * model_scale)
     y = min(model_rows$y) - gap
     row_y = numeric(nrow(read_order))
     header = list()
@@ -422,7 +423,7 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
     # the y range from all rows, fixed before any trimming to a zoom window: a zoom that
     # loses the top model row or the bottom reads must not rescale, or its rows drift from
     # the other panels' rows
-    ylim = c(min(c(row_y, model_rows$y)) - 0.6, max(model_rows$y) + 0.6)
+    ylim = c(min(c(row_y, model_rows$y)) - 0.6, max(model_rows$y) + 0.5 * model_scale + 0.1)
     header = tibble(cluster_label = names(header), y = unlist(header))
     if (! is.null(read_totals)) {
         tot = read_totals %>% mutate(isoform = names(transcripts)[match(transcript_id, track_id)],
@@ -453,20 +454,27 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         model_span = trim(model_span, "start", "end")
     }
 
+    if (! is.null(highlight) && ! is.null(xlim)) {   # unclipped panel: keep the bands inside it
+        highlight = lapply(highlight, function(w) c(max(w[1], xlim[1]), min(w[2], xlim[2])))
+        highlight = highlight[vapply(highlight, function(w) w[1] < w[2], logical(1))]
+        if (! length(highlight)) highlight = NULL
+    }
     p = ggplot() + highlight_layer(highlight) +
         geom_segment(data = spans, aes(x = read_start, xend = read_end, y = y, yend = y), color = "#b8b7b1", linewidth = 0.25) +
         geom_rect(data = blocks, aes(xmin = block_start, xmax = block_end, ymin = y - read_height / 2, ymax = y + read_height / 2,
                                      fill = isoform, alpha = fsm), color = NA) +
         scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.45), guide = "none") +
-        geom_segment(data = model_span, aes(x = start, xend = end, y = y, yend = y), color = "#0b0b0b", linewidth = 0.4) +
-        geom_rect(data = model_ex, aes(xmin = start, xmax = end, ymin = y - 0.38, ymax = y + 0.38, fill = isoform),
+        geom_segment(data = model_span, aes(x = start, xend = end, y = y, yend = y), color = "#0b0b0b",
+                     linewidth = 0.4 * sqrt(model_scale)) +
+        geom_rect(data = model_ex, aes(xmin = start, xmax = end, ymin = y - 0.38 * model_scale, ymax = y + 0.38 * model_scale,
+                                       fill = isoform),
                   color = "#0b0b0b", linewidth = 0.2) +
         geom_text(data = header, aes(x = -Inf, y = y - 0.2, label = cluster_label), hjust = -0.02, vjust = 0,
-                  size = 3, color = "#0b0b0b") +
+                  size = base_size * 0.3, color = "#0b0b0b") +
         scale_fill_manual(values = tx_col, name = NULL) +
         scale_y_continuous(breaks = NULL) +
         labs(x = NULL, y = NULL, title = title) +
-        theme_minimal(base_size = 10) +
+        theme_minimal(base_size = base_size) +
         theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
               legend.position = if (show_legend) "bottom" else "none",
               legend.key.size = unit(9, "pt"), legend.spacing.x = unit(4, "pt"),
@@ -496,7 +504,8 @@ highlight_layer = function(highlight, fill = "#e4e3dc") {
 # `binwidth`-bp bins, as a share of that cluster's ends in the region, one row per
 # cluster. `ends`: cluster, pos, reads (extract_isoform_read_tracks.py --ends_output).
 plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
-                                 fill = "#5a5954", highlight = NULL, axis_side = "right", ends_at_sites = FALSE) {
+                                 fill = "#5a5954", highlight = NULL, axis_side = "right", ends_at_sites = FALSE,
+                                 base_size = 9, show_subtitle = TRUE) {
     d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
         filter(! is.na(cluster_label)) %>%
         group_by(cluster_label) %>% mutate(share = reads / sum(reads)) %>% ungroup() %>%
@@ -508,17 +517,17 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
     p = ggplot(d, aes(x = bin, y = share)) + highlight_layer(highlight) +
         geom_col(width = binwidth * 0.9, fill = fill) +
         geom_text(data = labels, aes(x = -Inf, y = Inf, label = cluster_label), inherit.aes = FALSE,
-                  hjust = -0.03, vjust = 1.3, size = 2.7, color = "#0b0b0b") +
+                  hjust = -0.03, vjust = 1.3, size = base_size * 0.3, color = "#0b0b0b") +
         facet_grid(cluster_label ~ .) +
         scale_y_continuous(labels = scales::percent_format(accuracy = 1), n.breaks = 3,
                            position = axis_side, expand = expansion(mult = c(0, 0.35))) +
         labs(x = NULL, y = NULL,
-             subtitle = paste0("read ", if (kind == "TSS") "5'" else "3'", " ends",
+             subtitle = if (show_subtitle) paste0("read ", if (kind == "TSS") "5'" else "3'", " ends",
                                if (ends_at_sites) paste0(" at the gene's ", kind, " sites") else "",
-                               " per ", binwidth, " bp")) +
-        theme_minimal(base_size = 9) +
+                               " per ", binwidth, " bp") else paste0(binwidth, " bp bins")) +
+        theme_minimal(base_size = base_size) +
         theme(panel.grid.minor = element_blank(), strip.text = element_blank(), panel.spacing.y = unit(8, "pt"),
-              axis.text.x = element_blank(), plot.subtitle = element_text(size = 8.5))
+              axis.text.x = element_blank(), plot.subtitle = element_text(size = base_size - 0.5))
     if (! is.null(sites)) {
         p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = 0.3)
     }
@@ -533,13 +542,16 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
 plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, kind = c("TSS", "PolyA"),
                                     zoom_flank = 120, title = NULL, file = NULL, width = 11, height = 8,
                                     read_totals = NULL, ends = NULL, zoom_bin = 4,
-                                    density_height = 0.28, max_joint_zoom = 400, ends_at_sites = FALSE) {
+                                    density_height = 0.28, max_joint_zoom = 400, ends_at_sites = FALSE,
+                                    base_size = 10, zoom = TRUE, model_scale = 1) {
     kind = match.arg(kind)
     full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end))
     # pad by 2% so a read-end peak at the gene's terminus isn't drawn on the panel edge
     full_xlim = full_xlim + c(-1, 1) * max(20, round(0.02 * diff(full_xlim)))
     full_bin = max(10, round(diff(full_xlim) / 250))
-    zooms = if (diff(range(sites)) <= max_joint_zoom) {
+    zooms = if (! zoom) {
+        list()   # whole gene only
+    } else if (diff(range(sites)) <= max_joint_zoom) {
         list(c(min(sites) - zoom_flank, max(sites) + zoom_flank))
     } else {
         lapply(sort(sites), function(p) c(p - zoom_flank, p + zoom_flank))
@@ -547,7 +559,7 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
 
     xlims = c(list(full_xlim), zooms)
     bins = c(full_bin, rep(zoom_bin, length(zooms)))
-    col_titles = c("whole gene", if (length(zooms) == 1) paste0(kind, " region") else
+    col_titles = c("whole gene", if (length(zooms) == 1) paste0(kind, " region") else if (length(zooms) > 1)
         paste0(kind, " at ", format(sort(sites), big.mark = ",")))
     # the whole-gene column shades the zoomed windows and keeps its density axis on its
     # outer (left) side, with some space before the zooms, so the column boundary is clear
@@ -556,7 +568,8 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
         plot_read_track_panel(exons, reads, transcripts, clusters, sites = sites, xlim = xlims[[i]],
                               title = if (is.null(ends)) col_titles[i] else NULL, show_legend = FALSE,
                               read_totals = if (i == 1) read_totals else NULL,
-                              highlight = if (i == 1) zooms else NULL) + gap(i))
+                              highlight = if (i == 1 && length(zooms)) zooms else NULL, base_size = base_size,
+                              model_scale = model_scale) + gap(i))
     # one grid, so every column's read rows share the same height and line up across
     # panels; the legend goes under the whole figure, not under one column
     widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms)))
@@ -565,17 +578,20 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
     } else {
         dens = lapply(seq_along(xlims), function(i)
             plot_read_end_density(ends, clusters, sites, xlims[[i]], binwidth = bins[i], kind = kind,
-                                  ends_at_sites = ends_at_sites,
-                                  highlight = if (i == 1) zooms else NULL,
+                                  ends_at_sites = ends_at_sites, base_size = base_size - 1, show_subtitle = i == 1,
+                                  highlight = if (i == 1 && length(zooms)) zooms else NULL,
                                   axis_side = if (i == 1) "left" else "right") +
                 labs(title = col_titles[i]) + gap(i))
-        plot_grid(plotlist = c(dens, tracks), nrow = 2, rel_widths = widths,
-                  rel_heights = c(density_height, 1), align = "hv", axis = "tblr")
+        # patchwork aligns the panels across the grid with each row's axis space sized to
+        # that row (cowplot's align = "hv", axis = "tblr" gave the density row the height of
+        # the read tracks' x-axis labels as empty space)
+        patchwork::patchworkGrob(patchwork::wrap_plots(c(dens, tracks), nrow = 2, widths = widths,
+                                                       heights = c(density_height, 1)))
     }
     legend = get_plot_component(tracks[[1]] + theme(legend.position = "bottom"), "guide-box-bottom")
     p = plot_grid(p, legend, ncol = 1, rel_heights = c(1, 0.03))
     if (! is.null(title)) {
-        p = plot_grid(ggdraw() + draw_label(title, x = 0.01, hjust = 0, size = 12), p, ncol = 1, rel_heights = c(0.04, 1))
+        p = plot_grid(ggdraw() + draw_label(title, x = 0.01, hjust = 0, size = base_size + 2), p, ncol = 1, rel_heights = c(0.04, 1))
     }
     save_figure(p, file, if (length(zooms) > 1) width * 1.15 else width, height)
     p
