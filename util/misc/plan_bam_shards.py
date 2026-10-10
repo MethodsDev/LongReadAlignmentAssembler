@@ -26,13 +26,17 @@ exactly one shard (a read may extend past the end of its range, and a range's qu
 returns reads that began before it; the consumer keeps only POS >= S). Nothing needs to
 be unspanned: classifying a read depends only on the read and its contig's annotation.
 
-The cut positions come from the index, not from reading the bam. The bai's linear index
-gives, for each 16 kb window, the file offset of the first record overlapping it. That
-is too coarse on its own (long spliced reads make many windows share one offset), so
-each distinct offset is opened and the position of the record found there is read:
-(file offset, position) pairs, exact, a few hundred per contig. The compressed bytes
-between them stand in for read counts, and the cuts are placed at equal shares of the
-compressed bytes by interpolating between the pairs.
+The cut positions come from the index, not from a pass over the reads. The bai's linear
+index gives, for each 16 kb window, the file offset of the first record overlapping it.
+That is too coarse on its own (long spliced reads make many windows share one offset), so
+each distinct offset is opened and the record found there is read: (file offset,
+position) pairs, exact, a few hundred per contig. Compressed bytes alone are a poor
+stand-in for read counts, though: reads of a very highly expressed locus compress far
+better than the rest, so an equal share of bytes can hold several times the reads (the
+first Terra run: one chunk of 2.25 million reads against 575 thousand planned). So the
+few blocks after each sample are decoded as well and the records counted, which gives the
+records per compressed byte right there; the reads between two samples are estimated from
+that density, and cuts are placed at equal shares of the estimated reads.
 """
 
 import argparse
@@ -45,6 +49,10 @@ import pysam
 from concurrent.futures import ProcessPoolExecutor
 
 LINEAR_WINDOW = 16384
+# uncompressed bytes per full BGZF block (htslib's BGZF_BLOCK_SIZE)
+BGZF_BLOCK_BYTES = 65280
+# blocks decoded after each sample to measure the local density of records
+DENSITY_BLOCKS = 4
 
 
 def read_linear_indexes(bai_path):
@@ -69,7 +77,8 @@ def read_linear_indexes(bai_path):
 
 
 def sample_points(bam, linear_index, contig, contig_end_coffset):
-    """(compressed offset, record start position) pairs along one contig, in order."""
+    """(compressed offset, record start position, records per compressed byte) along one
+    contig, in order."""
     points = []
     seen = set()
     for voffset in linear_index:
@@ -78,16 +87,49 @@ def sample_points(bam, linear_index, contig, contig_end_coffset):
         seen.add(voffset)
         bam.seek(voffset)
         try:
-            read = next(bam)
+            first = next(bam)
         except StopIteration:
             continue
-        if read.reference_name != contig:
+        if first.reference_name != contig:
             continue
+
+        # Count the records over the next few blocks. The first block is entered part
+        # way (the offset points at a record), so the compressed bytes it contributes
+        # are scaled by the fraction of it that is left.
+        first_coffset = voffset >> 16
+        entered = min((voffset & 0xFFFF) / BGZF_BLOCK_BYTES, 1.0)
+        records = 1
+        next_block = None  # offset of the block after the first
+        distinct_blocks = 1
+        last_block = first_coffset
+        stop_coffset = None
+        while True:
+            coffset = bam.tell() >> 16
+            if coffset != last_block:
+                if next_block is None:
+                    next_block = coffset
+                last_block = coffset
+                distinct_blocks += 1
+                if distinct_blocks > DENSITY_BLOCKS:
+                    stop_coffset = coffset
+                    break
+            try:
+                read = next(bam)
+            except StopIteration:
+                break
+            if read.reference_name != contig:
+                break
+            records += 1
+        density = 0.0
+        if next_block is not None:
+            end_coffset = stop_coffset if stop_coffset is not None else last_block
+            covered = (end_coffset - first_coffset) - entered * (next_block - first_coffset)
+            if covered > 0:
+                density = records / covered
         # file offset of the block, plus how far into it: both move forward together
         # with the position, so the pair is monotone
-        points.append((voffset >> 16, read.reference_start + 1))
+        points.append((first_coffset, first.reference_start + 1, density))
     points.sort()
-    # a trailing sentinel so the last segment has an end
     return points, contig_end_coffset
 
 
@@ -98,26 +140,41 @@ def sample_points_in_worker(bam_path, linear_index, contig, contig_end_coffset):
 
 
 def cut_positions(points, end_coffset, contig_length, pieces):
-    """Positions at which to start pieces 2..n, from equal shares of compressed bytes."""
+    """Positions at which to start pieces 2..n, from equal shares of the estimated reads."""
     if len(points) < 2:
         step = math.ceil(contig_length / pieces)
         return [1 + step * i for i in range(1, pieces)]
 
-    start_coffset = points[0][0]
-    total = max(end_coffset - start_coffset, 1)
-    # the span after the last sample runs to the contig's end
-    xs = [c for c, _ in points] + [end_coffset]
-    ps = [p for _, p in points] + [contig_length + 1]
+    # the span after the last sample runs to the contig's end, at the last density
+    xs = [c for c, _, _ in points] + [end_coffset]
+    ps = [p for _, p, _ in points] + [contig_length + 1]
+    ds = [d for _, _, d in points]
+    ds.append(ds[-1])
+    if not any(ds):
+        # no density measured anywhere (every sample inside one block): bytes instead
+        ds = [1.0] * len(xs)
+
+    # estimated records from the first sample up to each sample: the compressed bytes
+    # between two samples times the mean density at their ends
+    cumulative = [0.0]
+    for i in range(len(xs) - 1):
+        cumulative.append(
+            cumulative[-1] + max(xs[i + 1] - xs[i], 0) * (ds[i] + ds[i + 1]) / 2
+        )
+    total = cumulative[-1]
+    if total <= 0:
+        step = math.ceil(contig_length / pieces)
+        return [1 + step * i for i in range(1, pieces)]
 
     cuts = []
     segment = 0
     for i in range(1, pieces):
-        target = start_coffset + total * i / pieces
-        while segment + 1 < len(xs) - 1 and xs[segment + 1] <= target:
+        target = total * i / pieces
+        while segment + 1 < len(xs) - 1 and cumulative[segment + 1] <= target:
             segment += 1
-        x0, x1 = xs[segment], xs[segment + 1]
+        r0, r1 = cumulative[segment], cumulative[segment + 1]
         p0, p1 = ps[segment], ps[segment + 1]
-        fraction = (target - x0) / (x1 - x0) if x1 > x0 else 0.0
+        fraction = (target - r0) / (r1 - r0) if r1 > r0 else 0.0
         cuts.append(int(p0 + fraction * (p1 - p0)))
     # strictly increasing and inside the contig
     cleaned = []

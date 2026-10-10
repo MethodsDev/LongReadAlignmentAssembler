@@ -97,6 +97,7 @@ workflow LRAA_sqanti_like_reads_eval_wf {
                     shard_spec = plan_shards.shard_specs[i],
                     shard_bam = plan_shards.shard_bams[i],
                     shard_gtf = plan_shards.shard_gtfs[i],
+                    max_reads_per_chunk = max_reads_per_chunk,
                     docker = docker_sc,
                     cpu = shard_cpu,
                     memory_GB = shard_memory_GB,
@@ -297,6 +298,8 @@ task classify_shard {
         File shard_bam
         # the annotation lines of the contigs of this shard's chunks
         File shard_gtf
+        # the size a chunk should have; a range found to hold far more reads is split
+        Int max_reads_per_chunk
 
         String docker
         Int cpu
@@ -347,14 +350,58 @@ task classify_shard {
         ln -s ~{shard_bam} input.bam
         samtools index -@ ~{c3d_effective_cpu} input.bam
 
-        # The chunks of this shard, in order: one spec file each, and the estimated read
-        # count of each (the last field) for starting the largest first.
-        mkdir chunks
-        printf '%s' '~{shard_spec}' | tr ',' '\n' | awk -F'\t' '{
-            print > sprintf("chunks/%05d.spec", NR - 1)
-            print $NF "\t" NR - 1 > "chunk_sizes.tsv"
-        }'
+        # The chunks the plan gave this shard, in order: one spec file each.
+        mkdir plan chunks
+        printf '%s' '~{shard_spec}' | tr ',' '\n' | awk '{ print > sprintf("plan/%05d.spec", NR - 1) }'
+        num_planned=$(ls plan/*.spec | wc -l)
+
+        # REFINE the ranges. The plan places range cuts from block statistics of the
+        # index, which cannot see inside a very dense locus: no sample falls in a 9 kb gene
+        # holding two million reads, so the range around it came out 3.9 times its
+        # planned size and its shard ran 10 minutes after all the others (first Terra
+        # run). Here the slice is at hand, so each range's reads are counted exactly (a
+        # `samtools view` over the range, about 3 s per 600 thousand reads against about
+        # 45 s to classify them) and a range holding far more than a chunk is cut into
+        # pieces of equal numbers of reads: piece i keeps the reads numbered lo..hi in the
+        # range's own order (the reads whose start is in the range, as before). Cutting by
+        # read number rather than by position also splits reads that share one start, which
+        # a position cannot, and keeps the bam's order. The refined chunks carry exact
+        # sizes, for starting the largest first. Chunk spec of a range from here on:
+        # range <TAB> contig <TAB> start <TAB> end <TAB> lo <TAB> hi <TAB> reads
+        refine_chunk() {
+            local j="$1" kind field1 field2 field3 estimate
+            local prefix
+            prefix=$(printf 'plan/%05d' "$j")
+            IFS=$'\t' read -r kind field1 field2 field3 estimate < "$prefix.spec"
+            if [ "$kind" != "range" ]; then
+                cp "$prefix.spec" "$prefix.refined"
+                return
+            fi
+            local count pieces i lo hi
+            count=$(samtools view --no-PG input.bam "{$field1}:$field2-$field3" \
+                | awk -F'\t' -v min_pos="$field2" '$4 >= min_pos' | wc -l)
+            pieces=$(( (count + CHUNK_TARGET - 1) / CHUNK_TARGET ))
+            if [ "$count" -le $(( CHUNK_TARGET * 3 / 2 )) ] || [ "$pieces" -lt 1 ]; then pieces=1; fi
+            : > "$prefix.refined"
+            for (( i = 0; i < pieces; i++ )); do
+                lo=$(( i * count / pieces + 1 ))
+                hi=$(( (i + 1) * count / pieces ))
+                printf 'range\t%s\t%s\t%s\t%s\t%s\t%s\n' "$field1" "$field2" "$field3" "$lo" "$hi" "$(( hi - lo + 1 ))" >> "$prefix.refined"
+            done
+        }
+        export -f refine_chunk
+        export CHUNK_TARGET=~{max_reads_per_chunk}
+        seq 0 $((num_planned - 1)) | xargs -P ~{c3d_effective_cpu} -I{} bash -c 'refine_chunk {}'
+
+        # The refined chunks in order, renumbered; the last field is the (now exact for
+        # ranges) read count, for starting the largest first.
+        for j in $(seq 0 $((num_planned - 1))); do cat "$(printf 'plan/%05d.refined' "$j")"; done \
+            | awk -F'\t' '{
+                print > sprintf("chunks/%05d.spec", NR - 1)
+                print $NF "\t" NR - 1 > "chunk_sizes.tsv"
+            }'
         num_chunks=$(ls chunks/*.spec | wc -l)
+        echo "refined ${num_planned} planned chunks into ${num_chunks}"
 
         # The shard's annotation, split once more: one file per contig any chunk needs, so
         # a chunk loads only its own contigs' lines (this file is small, the plan task
@@ -378,14 +425,14 @@ task classify_shard {
             prefix=$(printf 'chunks/%05d' "$j")
             local out
             out=$(printf 'chunks/~{shard_name}.c%05d' "$j")
-            local kind field1 field2 field3 estimate
-            # contigs: kind, names, reads.  range: kind, name, start, end, reads.
-            IFS=$'\t' read -r kind field1 field2 field3 estimate < "$prefix.spec"
+            local kind field1 field2 field3 field4 field5 reads
+            # contigs: kind, names, reads.  range: kind, name, start, end, lo, hi, reads.
+            IFS=$'\t' read -r kind field1 field2 field3 field4 field5 reads < "$prefix.spec"
 
             # Each contig as {name} so samtools takes it literally, which contigs like
             # HLA-A*01:01 (GRCh38 alt haplotypes) need; * is the unplaced reads. Read
             # into an array rather than expanded unquoted, which would glob the *.
-            local regions=() names=() min_pos=0 c
+            local regions=() names=() min_pos=0 lo=1 hi=999999999999 c
             if [ "$kind" = "range" ]; then
                 names=("$field1")
                 regions+=("{$field1}:$field2-$field3")
@@ -393,6 +440,9 @@ task classify_shard {
                 # began before it; those belong to the range before. A read belongs to
                 # the range holding its start, so no read is classified twice.
                 min_pos=$field2
+                # and only the reads numbered lo..hi among them (the refinement's piece)
+                lo=$field4
+                hi=$field5
             else
                 read -r -a names <<< "$field1"
                 for c in "${names[@]}"; do
@@ -411,7 +461,8 @@ task classify_shard {
             # the merged bam keeps the first chunk's header, so without it a bam that
             # inherits 63 chain tips gains 63 lines (seen on the first Terra run).
             samtools view --no-PG -h input.bam "${regions[@]}" | \
-                awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
+                awk -F'\t' -v min_pos="$min_pos" -v lo="$lo" -v hi="$hi" \
+                    '/^@/ { print; next } $4 >= min_pos { n++; if (n >= lo && n <= hi) print }' | \
                 SQANTI-like_cats_for_reads_or_isoforms.py \
                     --ref_gtf "$prefix.gtf" \
                     --output_prefix "$out" \
