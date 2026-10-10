@@ -153,8 +153,15 @@ task plan_shards {
         String disk_type
     }
 
-    # the bam, and its slices (level 1 compression, a little larger than the bam)
-    Int disk_GB = ceil(2.5 * size(input_BAM, "GB") + 2.2 * size(ref_annot_GTF, "GB") + 20)
+    # The bam, and its slices, plus the annotation split per shard. MEASURED on a first run:
+    # bam: the slices (level 1) came to 1.30x the bam, so the task held 2.5x the bam, and
+    # the 2.5x this used to allocate left only the flat floor as margin: nothing at a few
+    # hundred GB, and less still for an input compressed harder than this one (the ratio
+    # of level 1 slices to the input is not fixed). 3x covers a ratio up to 2. The shard
+    # GTFs held 2.1x the annotation (21 shards); a contig cut across shards is copied to
+    # each, so this grows with the number of shards, hence the large multiple. Disk is a
+    # small part of the cost of a task of minutes.
+    Int disk_GB = ceil(3 * size(input_BAM, "GB") + 20 * size(ref_annot_GTF, "GB") + 30)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -308,9 +315,12 @@ task classify_shard {
         String disk_type
     }
 
-    # The slice, its index, the chunks' outputs (the tagged bam and the tables, at most
-    # the size of the slice) and the appended copy of them.
-    Int disk_GB = ceil(4 * size(shard_bam, "GB") + 3 * size(shard_gtf, "GB") + 20)
+    # The slice, its index, the chunks' outputs (the tagged bam and the tables) and the
+    # appended copy of them, plus a copy of the contig's annotation per chunk. MEASURED:
+    # 4.1x the slice at peak, so the 4x this used to allocate left only the flat floor as
+    # margin. 6x leaves room for output larger than the slice (it is written at a higher
+    # compression level, so it is normally smaller).
+    Int disk_GB = ceil(6 * size(shard_bam, "GB") + 10 * size(shard_gtf, "GB") + 30)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -545,8 +555,9 @@ task gather_shards {
         Int preemptible_tries = 0
     }
 
-    # the parts, and the same bytes again in the appended table and bam
-    Int disk_GB = ceil(2.2 * (size(shard_tsvs, "GB") + size(shard_bams, "GB")) + 20)
+    # The shards' files, and the same bytes again in the appended table and bam. MEASURED:
+    # 2.0x, against the 2.2x this used to allocate.
+    Int disk_GB = ceil(3 * (size(shard_tsvs, "GB") + size(shard_bams, "GB")) + 30)
     
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
