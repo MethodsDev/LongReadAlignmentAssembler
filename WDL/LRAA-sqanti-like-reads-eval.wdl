@@ -406,7 +406,10 @@ task classify_shard {
                 cat "gtf/$(grep -n -x -F -- "$c" contigs_needed.txt | head -1 | cut -d: -f1).gtf" >> "$prefix.gtf"
             done
 
-            samtools view -h input.bam "${regions[@]}" | \
+            # --no-PG: samtools view adds one @PG line per @PG chain tip of the header, and
+            # the merged bam keeps the first chunk's header, so without it a bam that
+            # inherits 63 chain tips gains 63 lines (seen on the first Terra run).
+            samtools view --no-PG -h input.bam "${regions[@]}" | \
                 awk -F'\t' -v min_pos="$min_pos" '/^@/ || $4 >= min_pos' | \
                 SQANTI-like_cats_for_reads_or_isoforms.py \
                     --ref_gtf "$prefix.gtf" \
