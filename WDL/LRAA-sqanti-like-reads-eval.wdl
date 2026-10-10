@@ -17,11 +17,12 @@ version 1.0
 #                     whole BAM, which matters more the larger the BAM), indexes it, and
 #                     runs one chunk per core: reads the chunk's contigs or range from
 #                     the slice (samtools view, as SAM into the classifier).
-#   3. gather_shards  one task: appends the per-read tables and the tagged BAMs of all
-#                     chunks in order and sums the category counts, which reproduces
-#                     what a single run over the whole BAM writes. The shards hand over
-#                     their chunks' files as they are; appending them anywhere else
-#                     would only be repeated here.
+#   3. gather_shards  one task: appends the shards' tables and tagged BAMs in order and
+#                     sums their category counts, which reproduces what a single run
+#                     over the whole BAM writes. Each shard has already appended its own
+#                     chunks, so the gather localizes one file per shard and kind, not
+#                     one per chunk: the first Terra run localized 531 chunk files at 34 MB/s,
+#                     against 72 MB/s for the plan task's one big file.
 #
 # A GTF of isoforms is small and is classified by one task.
 
@@ -107,9 +108,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         call gather_shards {
             input:
                 sample_id = sample_id,
-                chunk_tsvs = flatten(classify_shard.chunk_tsvs),
-                chunk_bams = flatten(classify_shard.chunk_bams),
-                chunk_summaries = flatten(classify_shard.chunk_summaries),
+                shard_tsvs = classify_shard.shard_tsv,
+                shard_bams = classify_shard.shard_bam_out,
+                shard_summaries = classify_shard.shard_summary,
                 docker = docker_sc,
                 disk_type = disk_type
         }
@@ -304,9 +305,9 @@ task classify_shard {
         String disk_type
     }
 
-    # The slice, its index, and the chunks' outputs (the tagged bam and the tables, at
-    # most the size of the slice).
-    Int disk_GB = ceil(3 * size(shard_bam, "GB") + 3 * size(shard_gtf, "GB") + 20)
+    # The slice, its index, the chunks' outputs (the tagged bam and the tables, at most
+    # the size of the slice) and the appended copy of them.
+    Int disk_GB = ceil(4 * size(shard_bam, "GB") + 3 * size(shard_gtf, "GB") + 20)
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
         else if cpu <= 8 then 8
@@ -428,17 +429,42 @@ task classify_shard {
 
         # As many chunks at once as cores, the largest first (by the plan's estimate) so
         # the smaller ones fill the cores as they free up. The order of execution does not
-        # matter: the files carry the chunk number and the gather appends them in order.
+        # matter: the files carry the chunk number and are appended in order below.
         # A failed chunk fails the task.
         sort -k1,1nr chunk_sizes.tsv | cut -f2 \
             | xargs -P ~{c3d_effective_cpu} -I{} bash -c 'classify_chunk {}'
+
+        # Append the chunks (chunk order is the bam's order) so the task hands back one
+        # file per kind: the tables are gzip members, appended as they are, and the bams'
+        # compressed blocks are copied, not recompressed. The two copies are independent
+        # and run side by side.
+        ls chunks/*.iso_cats.tsv.gz | sort > tsv_parts.txt
+        ls chunks/*.iso_cats.bam | sort > bam_parts.txt
+        ( cat $(cat tsv_parts.txt) > ~{shard_name}.iso_cats.tsv.gz ) &
+        tsv_pid=$!
+        samtools cat --no-PG -b bam_parts.txt -o ~{shard_name}.iso_cats.bam &
+        bam_pid=$!
+        wait $tsv_pid
+        wait $bam_pid
+
+        # category counts summed in chunk order, so categories keep the order a single
+        # run first sees them
+        awk -F'\t' -v OFS='\t' '
+            FNR == 1 { next }
+            !($1 in count) { order[++n] = $1 }
+            { count[$1] += $2 }
+            END {
+                print "Category", "Count"
+                for (i = 1; i <= n; i++) print order[i], count[order[i]]
+            }
+        ' $(ls chunks/*.iso_cats.summary_counts.tsv | sort) > ~{shard_name}.iso_cats.summary_counts.tsv
     >>>
 
     output {
-        # one file per chunk, in chunk order: the file names carry the chunk number
-        Array[File] chunk_tsvs = glob("chunks/*.iso_cats.tsv.gz")
-        Array[File] chunk_bams = glob("chunks/*.iso_cats.bam")
-        Array[File] chunk_summaries = glob("chunks/*.iso_cats.summary_counts.tsv")
+        # this shard's chunks, appended in the bam's order
+        File shard_tsv = "~{shard_name}.iso_cats.tsv.gz"
+        File shard_bam_out = "~{shard_name}.iso_cats.bam"
+        File shard_summary = "~{shard_name}.iso_cats.summary_counts.tsv"
     }
 
     runtime {
@@ -454,10 +480,10 @@ task classify_shard {
 task gather_shards {
     input {
         String sample_id
-        # every chunk's files, in the bam's order
-        Array[File] chunk_tsvs
-        Array[File] chunk_bams
-        Array[File] chunk_summaries
+        # every shard's files, in the bam's order
+        Array[File] shard_tsvs
+        Array[File] shard_bams
+        Array[File] shard_summaries
 
         String docker
         Int cpu = 4
@@ -469,7 +495,7 @@ task gather_shards {
     }
 
     # the parts, and the same bytes again in the appended table and bam
-    Int disk_GB = ceil(2.2 * (size(chunk_tsvs, "GB") + size(chunk_bams, "GB")) + 20)
+    Int disk_GB = ceil(2.2 * (size(shard_tsvs, "GB") + size(shard_bams, "GB")) + 20)
     
     # C3D has no custom shape; round up to the nearest fixed tier (4/8/16/30/60/90/180/360).
     Int c3d_cpu_tier = if cpu <= 4 then 4
@@ -507,11 +533,11 @@ task gather_shards {
     command <<<
         set -euo pipefail
 
-        # The chunks are given in the bam's order (shard order, then chunk order). The two
+        # The shards are given in the bam's order. The two
         # appends are independent copies (no recompression), so they run side by side.
         # `wait <pid>` returns that job's status, so a failed copy fails the task.
         #
-        # Table: header, then each chunk's table as it is. Appended gzip members are one
+        # Table: header, then each shard's table as it is. Appended gzip members are one
         # valid gzip stream (zcat, Python and R read it as one).
         (
             python3 -c '
@@ -522,19 +548,19 @@ with gzip.open("~{sample_id}.iso_cats.tsv.gz", "wt", compresslevel=6) as ofh:
 '
             while read -r f; do
                 cat "$f" >> ~{sample_id}.iso_cats.tsv.gz
-            done < ~{write_lines(chunk_tsvs)}
+            done < ~{write_lines(shard_tsvs)}
         ) &
         tsv_pid=$!
 
-        # Bam: the chunks cover disjoint reads, in the bam's order, so appending them
+        # Bam: the shards cover disjoint reads, in the bam's order, so appending them
         # keeps the bam coordinate sorted; samtools cat copies the compressed blocks.
-        samtools cat --no-PG -b ~{write_lines(chunk_bams)} -o ~{sample_id}.iso_cats.bam &
+        samtools cat --no-PG -b ~{write_lines(shard_bams)} -o ~{sample_id}.iso_cats.bam &
         bam_pid=$!
 
         wait $tsv_pid
         wait $bam_pid
 
-        # Summed in chunk order, so categories stay in the order a single run first sees them.
+        # Summed in shard order, so categories stay in the order a single run first sees them.
         awk -F'\t' -v OFS='\t' '
             FNR == 1 { next }
             !($1 in count) { order[++n] = $1 }
@@ -543,7 +569,7 @@ with gzip.open("~{sample_id}.iso_cats.tsv.gz", "wt", compresslevel=6) as ofh:
                 print "Category", "Count"
                 for (i = 1; i <= n; i++) print order[i], count[order[i]]
             }
-        ' $(cat ~{write_lines(chunk_summaries)}) > ~{sample_id}.iso_cats.summary_counts.tsv
+        ' $(cat ~{write_lines(shard_summaries)}) > ~{sample_id}.iso_cats.summary_counts.tsv
 
         "$(dirname "$(which SQANTI-like_cats_for_reads_or_isoforms.py)")/misc/plot_SQANTI_cats.Rscript" \
             ~{sample_id}.iso_cats.summary_counts.tsv ~{sample_id}.iso_cats.summary_counts.pdf
