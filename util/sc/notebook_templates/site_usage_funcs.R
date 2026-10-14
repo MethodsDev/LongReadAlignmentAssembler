@@ -17,15 +17,30 @@ library(cowplot)
 SITE_KINDS = c("TSS", "PolyA")
 
 
-# Write a figure to `file` (pdf), unless it already exists: re-knitting a notebook
-# then leaves existing figure files untouched (cairo_pdf output differs byte-wise from
-# run to run even when the figure does not). options(site_usage.overwrite_figures = TRUE)
-# rewrites them.
+# Write a figure to `file` (pdf) when its content changed. cairo_pdf output differs
+# byte-wise from run to run even for the same figure (randomized font-subset streams), so
+# a PDF is compared by a content fingerprint instead: the md5 of a low-resolution PNG
+# render (deterministic, and changes when anything drawn changes), kept in a hidden
+# sidecar `.<name>.pdf.md5`. Unchanged figures are left alone, so re-knits don't churn
+# git; changed ones (a new lead example, new data) are always rewritten, so no PDF goes
+# stale. A PDF without a sidecar is rewritten once. options(site_usage.overwrite_figures
+# = TRUE) rewrites every figure regardless.
+figure_fingerprint = function(p, width, height) {
+    f = tempfile(fileext = ".png")
+    on.exit(unlink(f))
+    ggsave(f, p, width = width, height = height, dpi = 72)
+    unname(tools::md5sum(f))
+}
+
 save_figure = function(p, file, width, height) {
     if (is.null(file)) return(invisible(FALSE))
-    if (file.exists(file) && ! isTRUE(getOption("site_usage.overwrite_figures", FALSE))) return(invisible(FALSE))
+    sidecar = file.path(dirname(file), paste0(".", basename(file), ".md5"))
+    key = figure_fingerprint(p, width, height)
+    unchanged = file.exists(file) && file.exists(sidecar) && identical(readLines(sidecar, warn = FALSE)[1], key)
+    if (unchanged && ! isTRUE(getOption("site_usage.overwrite_figures", FALSE))) return(invisible(FALSE))
     ggsave(p, file = file, width = width, height = height,
            device = if (capabilities("cairo")) cairo_pdf else "pdf")
+    writeLines(key, sidecar)
     invisible(TRUE)
 }
 
