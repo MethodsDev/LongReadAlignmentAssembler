@@ -656,8 +656,13 @@ build_site_event_read_tracks = function(events, outdir, sites, gtf, cluster_quan
     dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
     events_tsv = file.path(outdir, "events.tsv")
     new_tsv = file.path(outdir, "events.tsv.new")
-    write_tsv(events %>% select(tag, gene_symbol, kind, gained_site, lost_site, cluster_A, cluster_B), new_tsv)
-    key = paste(unname(tools::md5sum(new_tsv)), unname(tools::md5sum(script)), max_reads)
+    # gained_tx / lost_tx, when given, fix the isoforms drawn (build_site_event_read_tracks.py)
+    write_tsv(events %>% select(tag, gene_symbol, kind, gained_site, lost_site, cluster_A, cluster_B,
+                                any_of(c("gained_tx", "lost_tx"))), new_tsv)
+    # keyed on the inputs too (size + time), so new LRAA outputs rebuild the tracks
+    inputs_stamp = paste(file.info(c(sites, gtf, cluster_quant_tar, tracking, bam, cell_clusters))[, c("size", "mtime")] %>%
+                             apply(1, paste, collapse = "@"), collapse = ";")
+    key = paste(unname(tools::md5sum(new_tsv)), unname(tools::md5sum(script)), max_reads, inputs_stamp)
     key_file = file.path(outdir, "cache_key")
     manifest = file.path(outdir, "manifest.tsv")
     if (! (file.exists(manifest) && file.exists(key_file) && readLines(key_file, n = 1) == key)) {
@@ -681,7 +686,10 @@ build_site_event_read_tracks = function(events, outdir, sites, gtf, cluster_quan
 # reads first, then (lighter) partial reads compatible with the isoform that share its
 # terminus (build_site_event_read_tracks.py) -- with each cluster's read-end density
 # above; labelled as in plot_site_event.
-plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 34, ...) {
+# title / isoform_labels (gained, lost) override the site-event wording, e.g. for a DTU pair
+# (build_dtu_pair_read_tracks).
+plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 34, title = NULL,
+                                       isoform_labels = NULL, ...) {
     kind = m$kind
     gained_pos = as.numeric(m$gained_pos)
     lost_pos = as.numeric(m$lost_pos)
@@ -691,7 +699,8 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     site_lab = unname(site_event_labels(ev, kind))
     iso = function(x) sub(".*:", "", x)
     transcripts = setNames(c(m$gained_gtf_id, m$lost_gtf_id),
-                           c(paste0(site_lab[1], ", ", iso(m$gained_tx)), paste0(site_lab[2], ", ", iso(m$lost_tx))))
+                           if (! is.null(isoform_labels)) isoform_labels else
+                               c(paste0(site_lab[1], ", ", iso(m$gained_tx)), paste0(site_lab[2], ", ", iso(m$lost_tx))))
     cl_labels = get_cluster_labels(max_chars = max_chars)
     cl = c(m$cluster_A, m$cluster_B)
     clusters = setNames(cl, cl_labels$cluster_label[match(paste0("Cluster_", cl), cl_labels$cluster)])
@@ -701,10 +710,62 @@ plot_site_event_read_tracks = function(m, outdir, gtf, file = NULL, max_chars = 
     totals = read_tsv(file.path(outdir, paste0(m$tag, ".totals.tsv")), show_col_types = FALSE)
     plot_isoform_read_tracks(exons, reads, transcripts, clusters, sites = c(gained_pos, lost_pos), kind = kind,
                              read_totals = totals, ends = ends, ends_at_sites = TRUE,
-                             title = paste0(m$gene_symbol, ": ", site_switch_description(kind, sub(".*\\.", "", m$tag)), ", ",
+                             title = paste0(if (! is.null(title)) title else
+                                                paste0(m$gene_symbol, ": ", site_switch_description(kind, sub(".*\\.", "", m$tag))),
+                                            ", ",
                                             if (any(reads$read_class %in% "compatible"))
                                                 paste0("unique FSM reads (solid) and partial reads sharing the ", kind, " (light), ")
                                             else "unique FSM reads, ",
                                             max(table(reads$cluster[!duplicated(reads$read_name)])), " sampled per cluster"),
                              file = file, height = 10, ...)
+}
+
+
+# Read-track data for differential-usage pairs (DTU comparisons): `pairs` has tag,
+# gene_symbol, gained_id, lost_id, cluster_A, cluster_B (the gained model's share rises
+# from cluster_A to cluster_B); ids are isoform models (SYMBOL^t:...) or, with
+# splice_pattern_map, splice patterns (SYMBOL^<hash>), each drawn as its member model
+# with the most reads in the cluster favouring it. util/sc/site_usage/
+# dtu_pairs_to_read_track_events.py places each pair on the site table (the end at
+# which the two models differ), then build_site_event_read_tracks() builds the tracks.
+# Returns the manifest joined to the pairs' ids; draw a row with plot_site_event_read_tracks.
+build_dtu_pair_read_tracks = function(pairs, outdir, sites, gtf, cluster_quant_tar, tracking, bam,
+                                      cell_clusters, splice_pattern_map = NULL, max_reads = 30,
+                                      script = lraa_util_path("util/sc/site_usage/dtu_pairs_to_read_track_events.py")) {
+    if (! file.exists(script)) stop("cannot find ", script, "; set LRAA_HOME to the LRAA checkout")
+    dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+    pairs_tsv = file.path(outdir, "dtu_pairs.tsv")
+    write_tsv(pairs %>% select(tag, gene_symbol, gained_id, lost_id, cluster_A, cluster_B), pairs_tsv)
+    events_tsv = file.path(outdir, "dtu_events.tsv")
+    status = system2("python3", c(script, "--pairs", pairs_tsv, "--gtf", gtf, "--sites", sites,
+                                  "--cluster_quant_tar", cluster_quant_tar,
+                                  if (! is.null(splice_pattern_map)) c("--splice_pattern_map", splice_pattern_map),
+                                  "--output", events_tsv),
+                     stdout = file.path(outdir, "dtu_events.log"), stderr = file.path(outdir, "dtu_events.log"))
+    if (status != 0) stop("dtu_pairs_to_read_track_events.py failed; see ", file.path(outdir, "dtu_events.log"))
+    events = read_tsv(events_tsv, show_col_types = FALSE, col_types = cols(.default = "c"))
+    skipped = file.path(outdir, "dtu_events.tsv.skipped.tsv")
+    if (file.exists(skipped) && file.size(skipped) > 0)
+        message("read tracks: ", nrow(read_tsv(skipped, show_col_types = FALSE)), " pair(s) not placed; see ", skipped)
+    if (nrow(events) == 0) return(tibble())
+    m = build_site_event_read_tracks(events, outdir, sites, gtf, cluster_quant_tar, tracking, bam, cell_clusters,
+                                     max_reads = max_reads)
+    m %>% left_join(events %>% select(tag, gained_id, lost_id, gained_model, lost_model), by = "tag")
+}
+
+
+# One DTU pair's read tracks (a build_dtu_pair_read_tracks manifest row): the model whose
+# share rises in cluster_B (blue) and the one losing share (orange) over a sample of each
+# cluster's reads, with the read-end density at the end where the two models differ.
+plot_dtu_pair_read_tracks = function(m, outdir, gtf, description = NULL, file = NULL, ...) {
+    short = function(x) sub("^[^^]*\\^", "", x)
+    iso = function(x) sub(".*:", "", x)
+    lab = function(id, tx) if (grepl(":iso-", id)) iso(id) else paste0(substr(short(id), 1, 8), " (", iso(tx), ")")
+    cl_lab = get_cluster_labels(max_chars = 34)
+    clb = cl_lab$cluster_label[match(paste0("Cluster_", m$cluster_B), cl_lab$cluster)]
+    cla = cl_lab$cluster_label[match(paste0("Cluster_", m$cluster_A), cl_lab$cluster)]
+    plot_site_event_read_tracks(m, outdir, gtf, file = file,
+                                title = paste0(m$gene_symbol, ": ", if (is.null(description)) "DTU pair" else description),
+                                isoform_labels = c(paste0(lab(m$gained_id, m$gained_tx), ", up in ", clb),
+                                                   paste0(lab(m$lost_id, m$lost_tx), ", up in ", cla)), ...)
 }

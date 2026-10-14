@@ -2287,3 +2287,26 @@ plot_alt_termini_example = function(example, file_prefix, smooth_graph = NULL, d
 
     p
 }
+
+
+# DTU rows as read-track pairs (build_dtu_pair_read_tracks in site_usage_funcs.R): the
+# model whose share rises from cluster_A to cluster_B (delta_pi = dominant_pi_B -
+# dominant_pi_A) is the gained one. Rows with comma-joined model sets are dropped.
+dtu_rows_to_read_track_pairs = function(rows, tags = paste0(rows$gene_symbol, ".dtu")) {
+    rows %>% mutate(tag = tags,
+                    gained_id = if_else(delta_pi > 0, dominant_transcript_ids, alternate_transcript_ids),
+                    lost_id = if_else(delta_pi > 0, alternate_transcript_ids, dominant_transcript_ids)) %>%
+        filter(! grepl(",", gained_id), ! grepl(",", lost_id)) %>%
+        transmute(tag, gene_symbol, gained_id, lost_id, cluster_A, cluster_B)
+}
+
+
+# The DTU row behind get_top_dtu_pair(gene): that pair's significant comparison (all, if
+# none is) with the largest reciprocal shift.
+get_top_dtu_pair_row = function(gene_of_interest, stats = diff_iso_usage_stats, ...) {
+    pair = get_top_dtu_pair(gene_of_interest, stats = stats, ...)
+    rows = stats %>% filter(gene_symbol == gene_of_interest,
+                            dominant_transcript_ids == pair[1], alternate_transcript_ids == pair[2])
+    if ("significant" %in% names(rows) && any(rows$significant == "True")) rows = rows %>% filter(significant == "True")
+    rows %>% arrange(desc(pmin(abs(delta_pi), abs(alternate_delta_pi))), pvalue) %>% slice(1)
+}
