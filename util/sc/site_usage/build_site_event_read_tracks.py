@@ -69,6 +69,22 @@ def main():
     parser.add_argument("--bam", required=True)
     parser.add_argument("--cell_clusters", required=True, help="cell_barcode <tab> cluster (header skipped)")
     parser.add_argument("--max_reads", type=int, default=30)
+    parser.add_argument("--full_chain_reads", action="store_true",
+                        help="after an isoform's unique FSM reads, draw reads carrying its complete intron "
+                             "chain (every intron, nothing else; +/-2 bp) wherever they end (read_class "
+                             "full_chain), before partial reads -- for splice-pattern pairs, whose "
+                             "full-length reads can end away from the drawn model's terminus")
+    parser.add_argument("--partial_chain_reads", action="store_true",
+                        help="with --full_chain_reads: next draw reads carrying a consecutive run of the "
+                             "isoform's introns (at least one, nothing else; +/-2 bp), with their outer blocks inside the "
+                             "exons they lie in (not running into an intron), wherever they end, most "
+                             "introns first (read_class partial_chain), before reads with no intron -- the "
+                             "multi-exon pieces of an isoform whose reads rarely reach its terminus")
+    parser.add_argument("--compatible_order", choices=["random", "longest"], default="random",
+                        help="which compatible (partial) reads fill an isoform's share once its unique FSM "
+                             "reads are used: a random sample, or the most complete first (most of the "
+                             "model's exons covered, then longest span; ties random), so reads closest "
+                             "to full length are drawn ahead of short fragments")
     parser.add_argument("--min_reads_per_isoform", type=int, default=0,
                         help="draw at least this many reads of an isoform in a cluster where it has any, taken from "
                              "the other isoform's share (for illustration: the drawn proportions then no longer "
@@ -150,6 +166,9 @@ def main():
         ends = collections.Counter()
         aln = {}
         compatible = {t: set() for t in txs}
+        full_chain = {t: set() for t in txs}
+        partial_chain = {t: {} for t in txs}      # read -> introns carried
+        model_introns = {t: introns_of(exons[t]["exons"]) for t in txs}
         for read in bam.fetch(chrom, max(0, lo - 1), hi):
             if read.is_secondary or read.is_supplementary:
                 continue
@@ -172,6 +191,15 @@ def main():
             blks = None
             if name in fsm_set:
                 blks = blocks(read)
+            elif args.full_chain_reads and \
+                    len(chain := [t for t in txs if same_chain(ri := introns_of(b0 := blocks(read)), model_introns[t])]) == 1:
+                full_chain[chain[0]].add((cl, name))
+                blks = b0
+            elif args.partial_chain_reads and args.full_chain_reads and \
+                    len(sub := [t for t in txs if sub_chain(ri, model_introns[t])
+                                and ends_within_exons(b0, exons[t]["exons"])]) == 1:
+                partial_chain[sub[0]][(cl, name)] = len(ri)
+                blks = b0
             else:
                 # the nearer site's isoform (sites can lie closer than twice the tolerance)
                 near = [t for t in txs if abs(pos - site_pos[t]) <= args.site_tolerance]
@@ -197,7 +225,10 @@ def main():
         for cl in clusters:
             fsm_cl = {t: sorted(m for c, m in fsm_names[t] if c == cl and m in aln) for t in txs}
             comp_cl = {t: sorted(m for c, m in compatible[t] if c == cl) for t in txs}
-            n = {t: len(fsm_cl[t]) + len(comp_cl[t]) for t in txs}
+            chain_cl = {t: sorted(m for c, m in full_chain[t] if c == cl) for t in txs}
+            part_cl = {t: sorted((m for (c, m) in partial_chain[t] if c == cl),
+                                 key=lambda m: (-partial_chain[t][(cl, m)], m)) for t in txs}
+            n = {t: len(fsm_cl[t]) + len(chain_cl[t]) + len(part_cl[t]) + len(comp_cl[t]) for t in txs}
             for t in txs:
                 totals[(cl, t)] = (n[t], len({m for c, m in fsm_names[t] if c == cl}))
             k = min(args.max_reads, sum(n.values()))
@@ -208,9 +239,25 @@ def main():
                 k0 = min(k0, k - min(m, n[txs[1]]))        # ...and of the second
             for t, kt in ((txs[0], k0), (txs[1], k - k0)):
                 take = rng.sample(fsm_cl[t], min(kt, len(fsm_cl[t])))
-                take += rng.sample(comp_cl[t], min(kt - len(take), len(comp_cl[t])))
+                take += rng.sample(chain_cl[t], min(kt - len(take), len(chain_cl[t])))
+                if part_cl[t] and len(take) < kt:
+                    # most introns first; random among reads carrying the same number
+                    by_n = collections.defaultdict(list)
+                    for m in part_cl[t]:
+                        by_n[partial_chain[t][(cl, m)]].append(m)
+                    for k_n in sorted(by_n, reverse=True):
+                        take += rng.sample(by_n[k_n], min(kt - len(take), len(by_n[k_n])))
+                need = min(kt - len(take), len(comp_cl[t]))
+                if args.compatible_order == "longest":
+                    pool = rng.sample(comp_cl[t], len(comp_cl[t]))   # random tie order
+                    pool.sort(key=lambda m: completeness(aln[m], exons[t]["exons"]), reverse=True)
+                    take += pool[:need]
+                else:
+                    take += rng.sample(comp_cl[t], need)
                 for m in take:
-                    chosen[m] = (t, cl, "uniq_FSM" if m in fsm_set else "compatible")
+                    chosen[m] = (t, cl, "uniq_FSM" if m in fsm_set else
+                                 "full_chain" if (cl, m) in full_chain[t] else
+                                 "partial_chain" if (cl, m) in partial_chain[t] else "compatible")
 
         found = set()
         with open(os.path.join(args.outdir, f"{tag}.reads.tsv"), "wt") as ofh:
@@ -288,6 +335,60 @@ def parse_FSM(tar):
                     if cl is not None:
                         by_cluster[cl][r["transcript_id"]] += float(r["all_reads"])
     return fsm, assigned, by_cluster
+
+
+def introns_of(exon_blocks):
+    """introns between consecutive (start, end) blocks, 1-based inclusive"""
+    ex = sorted(exon_blocks)
+    return [(ex[i][1] + 1, ex[i + 1][0] - 1) for i in range(len(ex) - 1)]
+
+
+def same_chain(read_introns, model_introns, tol=2):
+    """the read carries exactly the model's introns (+/- tol bp)"""
+    return len(read_introns) == len(model_introns) > 0 and all(
+        abs(a - x) <= tol and abs(b - y) <= tol for (a, b), (x, y) in zip(read_introns, model_introns))
+
+
+def sub_chain(read_introns, model_introns, tol=2):
+    """the read carries a consecutive run of the model's introns (at least one) and no other"""
+    k = len(read_introns)
+    if not k or k > len(model_introns):
+        return False
+    return any(all(abs(a - x) <= tol and abs(b - y) <= tol
+                   for (a, b), (x, y) in zip(read_introns, model_introns[j:j + k]))
+               for j in range(len(model_introns) - k + 1))
+
+
+def ends_within_exons(read_blocks, model_exons, tol=10):
+    """a partial read's outer blocks stay inside the model exons they lie in (+/- tol bp): its
+    first block starts no earlier than that exon's start and its last block ends no later than
+    that exon's end -- unless the exon is the model's first / last, where a read may run past
+    the model's terminus. A read running into an intron (e.g. unspliced pre-mRNA) fails."""
+    ex = sorted(model_exons)
+    blks = sorted(read_blocks)
+    def exon_of(pos):
+        for i, (s_, e_) in enumerate(ex):
+            if s_ - tol <= pos <= e_ + tol:
+                return i
+        return None
+    first, last = blks[0], blks[-1]
+    i0 = exon_of(first[1])          # exon holding the first block (by its end, at the donor)
+    i1 = exon_of(last[0])           # exon holding the last block (by its start, at the acceptor)
+    if i0 is None or i1 is None:
+        return False
+    if i0 > 0 and first[0] < ex[i0][0] - tol:
+        return False
+    if i1 < len(ex) - 1 and last[1] > ex[i1][1] + tol:
+        return False
+    return True
+
+
+def completeness(a, model_exons):
+    """how complete a read is for a model: (model exons its aligned blocks overlap, aligned
+    span), for ranking partial reads -- more of the model first"""
+    lend, rend, _strand, blks = a
+    n = sum(1 for es, ee in model_exons if any(bs <= ee and be >= es for bs, be in blks))
+    return (n, rend - lend)
 
 
 def fits_model(read_blocks, model_exons, end_slack, intron_slack=3, edge_slack=10):
