@@ -421,7 +421,7 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
                                  colors = c("#2a78d6", "#eb6834", "#1baf7a", "#eda100"),
                                  read_height = 0.7, title = NULL, show_legend = TRUE, read_totals = NULL,
                                  highlight = NULL, base_size = 10, model_scale = 1, site_linewidth = 0.3,
-                                 model_border = 0.2, model_min_exon_frac = 0) {
+                                 model_border = 0.2, model_min_exon_frac = 0, reverse_x = FALSE) {
 
     tx_label = setNames(names(transcripts), transcripts)
     tx_col = setNames(colors[seq_along(transcripts)], names(transcripts))
@@ -509,7 +509,8 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         geom_rect(data = model_ex, aes(xmin = start, xmax = end, ymin = y - 0.38 * model_scale, ymax = y + 0.38 * model_scale,
                                        fill = isoform),
                   color = if (model_border > 0) "#0b0b0b" else NA, linewidth = model_border) +
-        geom_text(data = header, aes(x = -Inf, y = y - 0.2, label = cluster_label), hjust = -0.02, vjust = 0,
+        # at the panel's left edge (under a reversed axis, -Inf is the right edge)
+        geom_text(data = header, aes(x = if (reverse_x) Inf else -Inf, y = y - 0.2, label = cluster_label), hjust = -0.02, vjust = 0,
                   size = base_size * 0.3, color = "#0b0b0b") +
         scale_fill_manual(values = tx_col, breaks = names(transcripts), name = NULL) +
         scale_y_continuous(breaks = NULL) +
@@ -527,8 +528,10 @@ plot_read_track_panel = function(exons, reads, transcripts, clusters, sites = NU
         }
     }
     p = p + coord_cartesian(xlim = xlim, ylim = ylim, expand = is.null(xlim), clip = if (is.null(xlim)) "on" else "off")
-    p + scale_x_continuous(labels = function(x) format(x, big.mark = ",", scientific = FALSE),
-                           n.breaks = if (! is.null(xlim) && diff(xlim) < 1000) 3 else 5)
+    # reverse_x: genomic coordinates decreasing left to right (a minus-strand gene drawn 5' to 3')
+    p + (if (reverse_x) scale_x_reverse else scale_x_continuous)(
+        labels = function(x) format(x, big.mark = ",", scientific = FALSE),
+        n.breaks = if (! is.null(xlim) && diff(xlim) < 1000) 3 else 5)
 }
 
 
@@ -546,7 +549,7 @@ highlight_layer = function(highlight, fill = "#e4e3dc") {
 plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 5, kind = "TSS",
                                  fill = "#5a5954", highlight = NULL, axis_side = "right", ends_at_sites = FALSE,
                                  base_size = 9, show_subtitle = TRUE, site_linewidth = 0.3, bin_at_sites = FALSE,
-                                 n_breaks = 3) {
+                                 n_breaks = 3, reverse_x = FALSE) {
     origin = if (! is.null(sites) && length(sites)) min(sites) - binwidth / 2 else xlim[1]
     d = ends %>% mutate(cluster_label = names(clusters)[match(as.character(cluster), as.character(clusters))]) %>%
         filter(! is.na(cluster_label)) %>%
@@ -590,7 +593,7 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
     if (! is.null(sites)) {
         p = p + geom_vline(xintercept = sites, linetype = "dashed", color = "#5a5954", linewidth = site_linewidth)
     }
-    p + coord_cartesian(xlim = xlim, expand = FALSE)
+    p + (if (reverse_x) scale_x_reverse() else NULL) + coord_cartesian(xlim = xlim, expand = FALSE)
 }
 
 
@@ -598,13 +601,16 @@ plot_read_end_density = function(ends, clusters, sites = NULL, xlim, binwidth = 
 # optionally with the read-end density of each cluster above the reads (`ends`). Sites
 # up to `max_joint_zoom` apart share one zoom; farther apart (alternative first / last
 # exons) each site gets its own. The whole-gene density bins scale with the region.
+# reverse_x: coordinates decreasing left to right in every panel, so a minus-strand gene reads
+# 5' to 3' (the zoom columns keep their genomic order).
 plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, kind = c("TSS", "PolyA"),
                                     zoom_flank = 120, title = NULL, file = NULL, width = 11, height = 8,
                                     read_totals = NULL, ends = NULL, zoom_bin = 4,
                                     density_height = 0.28, max_joint_zoom = 400, ends_at_sites = FALSE,
                                     base_size = 10, zoom = TRUE, model_scale = 1, site_linewidth = 0.3,
                                     density_binwidth = NULL, density_bin_at_sites = FALSE, show_legend = TRUE,
-                                    density_breaks = 3, model_border = 0.2, model_min_exon_frac = 0) {
+                                    density_breaks = 3, model_border = 0.2, model_min_exon_frac = 0,
+                                    reverse_x = FALSE) {
     kind = match.arg(kind)
     full_xlim = range(c(exons$start, exons$end, reads$read_start, reads$read_end))
     # pad by 2% so a read-end peak at the gene's terminus isn't drawn on the panel edge
@@ -632,7 +638,8 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                               read_totals = if (i == 1) read_totals else NULL,
                               highlight = if (i == 1 && length(zooms)) zooms else NULL, base_size = base_size,
                               model_scale = model_scale, site_linewidth = site_linewidth,
-                              model_border = model_border, model_min_exon_frac = model_min_exon_frac) + gap(i))
+                              model_border = model_border, model_min_exon_frac = model_min_exon_frac,
+                              reverse_x = reverse_x) + gap(i))
     # one grid, so every column's read rows share the same height and line up across
     # panels; the legend goes under the whole figure, not under one column
     widths = c(1.6, rep(if (length(zooms) == 1) 1 else 0.7, length(zooms)))
@@ -644,7 +651,8 @@ plot_isoform_read_tracks = function(exons, reads, transcripts, clusters, sites, 
                                   ends_at_sites = ends_at_sites, base_size = base_size - 1, show_subtitle = i == 1,
                                   highlight = if (i == 1 && length(zooms)) zooms else NULL,
                                   axis_side = if (i == 1) "left" else "right", site_linewidth = site_linewidth,
-                                  bin_at_sites = density_bin_at_sites, n_breaks = density_breaks) +
+                                  bin_at_sites = density_bin_at_sites, n_breaks = density_breaks,
+                                  reverse_x = reverse_x) +
                 labs(title = if (nzchar(col_titles[i])) col_titles[i] else NULL) + gap(i))
         # patchwork aligns the panels across the grid with each row's axis space sized to
         # that row (cowplot's align = "hv", axis = "tblr" gave the density row the height of
