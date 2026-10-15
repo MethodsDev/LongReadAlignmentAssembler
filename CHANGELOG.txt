@@ -1,5 +1,71 @@
 v0.44.3
 
+Changes that alter run outputs. Assembly and quantification are otherwise as in
+v0.44.2; the sort-key change can break ties between isoforms of equal span and length
+differently, in filtering and read assignment:
+
+- FIXED: the final quantification at the end of run_transcript_assembly rewrote the
+  TSS/PolyA claims of the models it reports. It rebuilds the splice graph and remaps
+  each model; refine_{TSS,PolyA}_simple_path can trim a path onto a boundary node up
+  to max_dist_between_alt_*_sites / 2 inside the terminal exon, and the remap then set
+  the model's TSS/PolyA flag and *_read_count from that node while its coordinates,
+  which quantification does not move, stayed put. Models sharing such a node claimed
+  one site at different ends, and the site beds, keyed by model end, listed the site
+  once per end (DDAH2, PBMC Kinnex ref-guided v0.44.0: five models, TSS_read_count 405
+  each, five bed rows). The final quant now keeps the models' boundary annotations as
+  assembled (assign_transcripts_paths_in_graph / run_quant_only
+  keep_boundary_annotations_for). Quantification is identical; only the TSS/PolyA
+  flags and counts, and the beds built from them, change. MEASURED on the PBMC
+  cluster-guided rerun: near-duplicate sites collapsed at site integration went from
+  20 TSS / 4 PolyA to 0.
+- CHANGED: integrate_TSS_PolyA_sites.py (cluster-guided runs' integrated site beds)
+  drops a basic-catalog site within the full max_dist_between_alt_*_sites (50 nt,
+  inclusive) of a cluster-guided site; it used half that (25 nt), the read-to-site
+  tolerance, so basic sites 26-50 nt from a cluster-guided site came through as
+  separate sites (PBMC Kinnex: 190 TSS, 220 PolyA close pairs). The summary's
+  half_window column is removed.
+- CHANGED: isoform numbering (iso-N) within a gene follows exon structure, not
+  processing order (Transcript.structural_sort_key, below); expect iso-N ids to differ
+  from earlier outputs.
+
+- WDL/LRAA.wdl: chromosome-shard memory is sized from the reads a shard holds at once,
+  clamp(8 + 4 x (shard BAM GB x concurrent chunks / estimated chunks), 16, 128) GiB,
+  instead of a fixed 16 GiB. A contig that cannot be chunked holds all its reads at
+  once: chrM on a PacBio Kinnex 10x 3' run (50.7 M of 180.3 M reads, 7.0 GB of shard
+  BAM) peaked at 22.4 GiB in a 16 GiB box; it now gets 37 GiB. New inputs
+  memoryGB_base_per_chromosome_shard (8), memoryGB_per_inflight_bam_GB (4),
+  max_memoryGB_per_chromosome_shard (128); memoryGB_per_chromosome_shard (16) is now
+  the floor, and an explicit memoryGBPerWorkerScattered still applies to every shard.
+
+New single-cell utilities (util/sc; not part of an LRAA run):
+
+- site_usage/: site-first alternative TSS / PolyA usage across cell clusters, from
+  LRAA's integrated site beds: per-cell site support recounted from the alignments
+  with LRAA's read rules (site_read_support_to_sparse_matrix.py), DEXSeq on pseudo-bulk
+  replicates, classification of each switch as alternative terminal usage or coupled
+  with alternative splicing, an internal-priming guard for PolyA events (PAS hexamer,
+  PolyASite 2.0 usage, downstream A-richness), optional residual soft-clip override for
+  counting PolyA ends, showcase selection, and read-track figures of the reads behind a
+  switch (build_site_event_read_tracks.py). The same DEXSeq usage test runs on splice
+  patterns and isoform alt-termini from LRAA sparse matrices
+  (feature_counts_from_sparse_matrix.py). Methods:
+  docs/differential_site_usage_methods.md.
+- diff_iso_usage/alt_termini_read_check.py applies LRAA's read filters and strand rule;
+  DTU notebooks drop pairs whose models do not overlap, and DTU pairs can be drawn as
+  read tracks; diagnostics for DTU skip reasons, read-end profiles and 5' completeness.
+- SQLIKE read-support scripts shared by evaluation reports (FSM support as unique FSM
+  read / FSM read shared with a same-chain model / none).
+- notebook figure helper save_figure rewrites a PDF only when its content changes.
+
+Build and release:
+
+- Release images are gated on a published GitHub release LRAA_v<version> for HEAD
+  (release_docker.OFFICIAL.sh); build_docker.testing.sh is the default build.
+- Built against dependency set 20261006 (lraa-sc-base: Seurat 5.6.0 from CRAN, presto,
+  DEXSeq, stageR; lraa-base unchanged).
+
+Parallel merge and SQANTI-like work:
+
 - merge_LRAA_GTFs.py --CPU (default `auto`, the cores granted, as in the SQANTI-like
   util) merges contig/strand units in forked worker processes. Each unit was
   already merged independently: its own splice graph, its own comp-N:iso-N ids, gene
