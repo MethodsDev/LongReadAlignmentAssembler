@@ -74,6 +74,11 @@ All computation runs in the Makefile (`make`); the notebook only reads results a
 
 ## Step 0. One site collection (`util/integrate_TSS_PolyA_sites.py`)
 
+Not needed for single-cell runs made after the cross-cluster merge took the initial
+catalog as `--pooled_gtf` (see CHANGELOG, Unreleased): their final TSS/PolyA beds
+already contain the initial run's sites, and LRAA-singlecell.wdl no longer runs this
+step. It applies to earlier runs, whose two bed sets are described below.
+
 The single-cell workflow reports sites twice: from the initial whole-sample run (the
 "basic" catalog) and from the cluster-guided run (per-cluster runs, merged). Every
 cluster-guided site is kept; a basic site is added only if it lies **more than 50 nt**

@@ -56,7 +56,7 @@ full data set). Everything is restricted to the seven genes' spans +/- 1 kb.
 | `reads.bam` | aligned reads (minimap2 splice:hq) with `CB` cell barcodes; primary alignments, base qualities and unused tags dropped |
 | `cell_clusters.tsv` | cell barcode -> Seurat cluster |
 | `cluster_cell_types.tsv` | cluster -> majority cell type (figure labels only) |
-| `sites.TSS.bed`, `sites.PolyA.bed` | LRAA's integrated TSS / PolyA site beds (cluster-guided sites, plus initial-run sites farther than 50 nt from every cluster-guided site; `util/integrate_TSS_PolyA_sites.py`) |
+| `sites.TSS.bed`, `sites.PolyA.bed` | LRAA's integrated TSS / PolyA site beds from a run predating `--pooled_gtf` in the merge (cluster-guided sites, plus initial-run sites farther than 50 nt from every cluster-guided site; `util/integrate_TSS_PolyA_sites.py`). Newer runs' final beds already include those sites |
 | `models.gtf` | LRAA isoform models, transcript ids prefixed with the gene symbol (`SELENOH^t:chr11:+:comp-569:iso-10`) |
 | `gene_trans_map.tsv` | LRAA transcript id -> symbol-prefixed gene / transcript ids |
 | `cluster_quant.tar.gz` | per-cluster `quant.expr` (for unique full-splice-match read counts per isoform) |

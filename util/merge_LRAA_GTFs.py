@@ -532,6 +532,20 @@ def main():
         help="LRAA gtfs to merge",
     )
 
+    # The pooled (all-cells) run of a cluster-guided pipeline. Its models enter the
+    # merge like any input's, so structures that needed the pooled depth are kept even
+    # where the per-cluster runs, each at a fraction of it, lost them. Its TSS/PolyA
+    # read counts are NOT summed with the clusters' -- largely the same reads -- but
+    # added only where they exceed the cluster support around a site
+    # (Splice_graph._fold_in_pooled_site_support).
+    parser.add_argument(
+        "--pooled_gtf",
+        type=str,
+        default=None,
+        help="LRAA gtf from the pooled (all-cells) run: merged in as a structure "
+        "source, with its TSS/PolyA support counted only beyond the per-cluster support",
+    )
+
     parser.add_argument("--genome", type=str, required=True, help="target genome file")
 
     parser.add_argument(
@@ -767,7 +781,15 @@ def main():
             "inputs, not merged".format(",".join(sorted(oversimplify_contigs)))
         )
 
-    if len(gtf_list) < 2 and not LRAA_Globals.DEBUG:
+    pooled_gtf = args.pooled_gtf
+    if pooled_gtf is not None:
+        if os.path.abspath(pooled_gtf) in {os.path.abspath(f) for f in gtf_list}:
+            exit("Error, --pooled_gtf {} is also listed under --gtf".format(pooled_gtf))
+        if os.path.basename(pooled_gtf) in {os.path.basename(f) for f in gtf_list}:
+            # provenance and per-source support are keyed on the basename
+            exit("Error, --pooled_gtf shares its file name with a --gtf input")
+
+    if len(gtf_list) + (pooled_gtf is not None) < 2 and not LRAA_Globals.DEBUG:
         exit("Error, need at least two gtf files to merge")
 
     # Parse --contig parameter to determine chromosome and strand restrictions
@@ -790,8 +812,11 @@ def main():
 
     contig_strand_to_input_transcripts = defaultdict(list)
 
-    for gtf_file in gtf_list:
-        logger.info(f"-capturing input transcripts from gtf {gtf_file}")
+    for gtf_file in gtf_list + ([pooled_gtf] if pooled_gtf is not None else []):
+        is_pooled = gtf_file is pooled_gtf
+        logger.info(
+            f"-capturing input transcripts from {'pooled ' if is_pooled else ''}gtf {gtf_file}"
+        )
         contig_to_input_transcripts = (
             GTF_contig_to_transcripts.parse_GTF_to_Transcripts(
                 gtf_file,
@@ -814,6 +839,8 @@ def main():
                 try:
                     src_basename = os.path.basename(gtf_file)
                     transcript.add_meta("source_gtf", src_basename)
+                    if is_pooled:
+                        transcript.add_meta("merge_input_role", "pooled")
                 except Exception:
                     pass
 

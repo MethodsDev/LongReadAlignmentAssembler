@@ -134,6 +134,20 @@ config = {
     "aggregate_splice_boundary_dist": 5,
     "aggregate_splice_boundary_max_rel_support": 0.2,  # inclusive; collapse only when alt/top support <= this. 1.0 = legacy unconditional collapse
     "fracture_splice_graph_at_input_transcript_bounds": True,
+    # MERGE mode only (where the flag above is off): an input terminal exon that reaches
+    # into another input's intron is an alternative terminal exon, not a partial model,
+    # but the unfractured merge graph has no segment boundary there and mapping drops the
+    # under-covered overhang. When at least merge_overhang_min_sources source GTFs carry
+    # the same intron chain with such a terminus in one alt-site window, the window's
+    # consensus coordinate is added as a fracture point. Termini already on a TSS/PolyA
+    # site are left to those nodes.
+    "merge_fracture_recurrent_overhang_termini": True,
+    "merge_overhang_min_sources": 2,
+    "merge_overhang_density_radius": 5,  # bp; consensus = densest end within this radius
+    # MERGE mode only: trim a model's end onto a TSS/PolyA node anywhere within the whole
+    # max_dist_between_alt_{TSS,polyA}_sites of it (not half), so a model with no call of
+    # its own does not survive as a near-duplicate of the site-anchored one.
+    "merge_trim_to_boundary_full_alt_site_window": True,
     "max_path_nodes_per_component": 1000,  # max number of path graph nodes per connected component
     # transcript reclustering (gene definition) criteria
     # gene reclustering overlap thresholds

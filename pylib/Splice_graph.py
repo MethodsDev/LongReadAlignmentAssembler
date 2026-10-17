@@ -1249,6 +1249,12 @@ class Splice_graph:
         # and only add positive deltas to avoid double-count inflation.
         tss_src_coord_max_support = defaultdict(int)
         polya_src_coord_max_support = defaultdict(int)
+        # Merge only: boundary support from the pooled-sample GTF (merge_LRAA_GTFs.py
+        # --pooled_gtf) is kept apart. Its reads are, for the most part, the same reads
+        # the per-cluster GTFs already counted, so it is folded in afterwards by
+        # _fold_in_pooled_site_support as a residual rather than summed.
+        pooled_TSS_counter = defaultdict(int)
+        pooled_PolyA_counter = defaultdict(int)
 
         ## Exon Coverage and Intron Capture
 
@@ -1284,6 +1290,18 @@ class Splice_graph:
                 dynamic_ncols=True,
             )
 
+        # Merge only: terminal exons that reach into another input's intron are
+        # collected here and resolved after the loop, once every input intron is known.
+        collect_overhang_termini = (
+            LRAA_Globals.LRAA_MODE == "MERGE"
+            and LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"]
+            is not True
+            and LRAA_Globals.config.get(
+                "merge_fracture_recurrent_overhang_termini", False
+            )
+        )
+        overhang_candidates = list()
+
         for transcript in transcripts:
             if pbar is not None:
                 pbar.update(1)
@@ -1304,6 +1322,15 @@ class Splice_graph:
             # Note: under LRAA MERGE mode, the mp_counter is separately updated for read counts to match min novel count setting.
             #       The polyA and TSS are reconfigured here according to their min settings under MERGE mode.
 
+            if LRAA_Globals.LRAA_MODE == "MERGE" and Splice_graph._is_pooled_input(
+                transcript
+            ):
+                merge_TSS_counter = pooled_TSS_counter
+                merge_PolyA_counter = pooled_PolyA_counter
+            else:
+                merge_TSS_counter = TSS_evidence_counter
+                merge_PolyA_counter = PolyA_evidence_counter
+
             if transcript.has_annotated_TSS():
                 TSS_coord = trans_lend if orient == "+" else trans_rend
                 if LRAA_Globals.LRAA_MODE == "MERGE":
@@ -1318,7 +1345,7 @@ class Splice_graph:
                         src_key = (str(src_gtf), int(TSS_coord))
                         prev_support = tss_src_coord_max_support[src_key]
                         if tss_read_count > prev_support:
-                            TSS_evidence_counter[TSS_coord] += (
+                            merge_TSS_counter[TSS_coord] += (
                                 tss_read_count - prev_support
                             )
                             tss_src_coord_max_support[src_key] = tss_read_count
@@ -1327,7 +1354,7 @@ class Splice_graph:
                     if not tss_added:
                         # No recorded count on this model. Seed at the configured
                         # minimum; TPM is not consulted, see below.
-                        TSS_evidence_counter[TSS_coord] += LRAA_Globals.config[
+                        merge_TSS_counter[TSS_coord] += LRAA_Globals.config[
                             "min_alignments_define_TSS_site"
                         ]
                 else:
@@ -1357,7 +1384,7 @@ class Splice_graph:
                         src_key = (str(src_gtf), int(polyA_coord))
                         prev_support = polya_src_coord_max_support[src_key]
                         if polya_read_count > prev_support:
-                            PolyA_evidence_counter[polyA_coord] += (
+                            merge_PolyA_counter[polyA_coord] += (
                                 polya_read_count - prev_support
                             )
                             polya_src_coord_max_support[src_key] = polya_read_count
@@ -1366,7 +1393,7 @@ class Splice_graph:
                     if not polya_added:
                         # No recorded count on this model; see _incorporate_TSS_objects'
                         # counterpart for why TPM is not consulted.
-                        PolyA_evidence_counter[polyA_coord] += LRAA_Globals.config[
+                        merge_PolyA_counter[polyA_coord] += LRAA_Globals.config[
                             "min_alignments_define_polyA_site"
                         ]
                 else:
@@ -1380,6 +1407,9 @@ class Splice_graph:
             ):
                 self._input_transcript_lend_boundaries.add(trans_lend)
                 self._input_transcript_rend_boundaries.add(trans_rend)
+
+            if collect_overhang_termini and len(exon_segments) > 1:
+                overhang_candidates.append((transcript, exon_segments, orient))
 
             # add coverage for exonic region
             for exon_segment in exon_segments:
@@ -1432,6 +1462,24 @@ class Splice_graph:
         # comes from reads (+ the --polyA_known veto reprieve) and TSS from reads.
         seed_input_boundaries = quant_mode or (LRAA_Globals.LRAA_MODE == "MERGE")
 
+        if pooled_TSS_counter:
+            Splice_graph._fold_in_pooled_site_support(
+                TSS_evidence_counter,
+                pooled_TSS_counter,
+                LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
+            )
+        if pooled_PolyA_counter:
+            Splice_graph._fold_in_pooled_site_support(
+                PolyA_evidence_counter,
+                pooled_PolyA_counter,
+                LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
+            )
+
+        if overhang_candidates:
+            self._add_recurrent_overhang_fracture_points(
+                overhang_candidates, TSS_evidence_counter, PolyA_evidence_counter
+            )
+
         if (
             seed_input_boundaries
             and LRAA_Globals.config["infer_TSS"]
@@ -1454,6 +1502,208 @@ class Splice_graph:
             pbar.close()
 
         return
+
+    @staticmethod
+    def _is_pooled_input(transcript):
+        """True for a model from the merge's --pooled_gtf (the all-cells run)."""
+        try:
+            return transcript.get_meta().get("merge_input_role") == "pooled"
+        except Exception:
+            return False
+
+    @staticmethod
+    def _fold_in_pooled_site_support(evidence_counter, pooled_counter, window):
+        """Add the pooled GTF's boundary support to the per-cluster support, as a residual.
+
+        The per-cluster GTFs and the pooled GTF were built from largely the same reads,
+        so summing them would count each read about twice. Instead, each pooled site
+        (strongest first) claims the per-cluster support not yet claimed within `window`
+        -- the distance aggregate_sites_within_window later pools over -- and adds only
+        what it has beyond that. A window's support therefore ends up near the larger of
+        the two, not their sum: the pooled run fills in sites the clusters, each at a
+        fraction of the depth, did not call, without inflating sites they did.
+        """
+
+        remaining = dict(evidence_counter)
+        cluster_coords = sorted(remaining)
+
+        for coord, pooled_count in sorted(
+            pooled_counter.items(), key=lambda kv: (-kv[1], kv[0])
+        ):
+            lo = bisect.bisect_left(cluster_coords, coord - window)
+            hi = bisect.bisect_right(cluster_coords, coord + window)
+            # nearest per-cluster support is claimed first
+            nearby = sorted(cluster_coords[lo:hi], key=lambda c: (abs(c - coord), c))
+            need = pooled_count
+            for c in nearby:
+                if need <= 0:
+                    break
+                take = min(need, remaining[c])
+                remaining[c] -= take
+                need -= take
+            if need > 0:
+                evidence_counter[coord] += need
+
+    def _add_recurrent_overhang_fracture_points(
+        self, candidates, TSS_evidence_counter, PolyA_evidence_counter
+    ):
+        """Fracture the merge graph where recurrent alternative terminal exons end.
+
+        The merge leaves fracture_splice_graph_at_input_transcript_bounds off so that
+        models whose ends differ by a few bases collapse. The cost falls on a terminal
+        exon that runs past another model's splice site into that model's intron: with
+        no segment boundary at its end, the segment spanning the intron is only partly
+        covered, _map_segment_to_graph_INITIAL/TERMINAL drops it (min_feature_frac_overlap),
+        and the truncated path is absorbed as contained by the model whose intron it
+        overhung. Exon-wise the model is not contained; it is an alternative first or
+        last exon.
+
+        A terminus qualifies when it lies inside an input intron that ends (starts) within
+        the model's own first (last) exon, and carries no TSS/PolyA site within half the
+        alt-site window -- those ends already have a node. Qualifying ends are grouped by
+        side and intron chain and split into groups whose neighbours lie within half the
+        window; each chain end yields at most one fracture point, from its group with the
+        most distinct source GTFs, and only when that group has at least
+        merge_overhang_min_sources of them -- or includes an end from the pooled GTF
+        (--pooled_gtf). The pooled run assembled from all reads at once, with its graph
+        fractured at input transcript bounds, so a model it kept with such an end is a
+        structure it already resolved; requiring other inputs to repeat it would let the
+        merge undo it.
+        (Agreement between the pooled GTF and one cluster is not counted as a second
+        source: the per-cluster runs were guided by the pooled models' ends.) The point is the
+        densest end (most ends within merge_overhang_density_radius), and of the ends in
+        that radius the one nearest their median, so it is always a coordinate some input
+        asserted and outlying ends do not pull it.
+
+        A truly partial model ends inside the other model's exon, never inside its
+        intron, so it does not qualify and is still absorbed.
+        """
+
+        config = LRAA_Globals.config
+        min_sources = int(config.get("merge_overhang_min_sources", 2))
+        radius = int(config.get("merge_overhang_density_radius", 5))
+        tss_tol = int(config["max_dist_between_alt_TSS_sites"] / 2)
+        polya_tol = int(config["max_dist_between_alt_polyA_sites"] / 2)
+        sorted_TSS = sorted(TSS_evidence_counter.keys())
+        sorted_PolyA = sorted(PolyA_evidence_counter.keys())
+
+        def near_site(sorted_coords, coord, tol):
+            i = bisect.bisect_left(sorted_coords, coord - tol)
+            return i < len(sorted_coords) and sorted_coords[i] <= coord + tol
+
+        intron_tree = itree.IntervalTree()
+        for intron_obj in self._input_transcripts_introns.values():
+            intron_lend, intron_rend = intron_obj.get_coords()
+            intron_tree[intron_lend : intron_rend + 1] = (intron_lend, intron_rend)
+
+        groups = defaultdict(set)  # (side, intron chain) -> {(coord, source)}
+        pooled_sources = set()
+        for transcript, exon_segments, orient in candidates:
+            segs = sorted(exon_segments)
+            chain = tuple(
+                (segs[i][1] + 1, segs[i + 1][0] - 1) for i in range(len(segs) - 1)
+            )
+            try:
+                meta = transcript.get_meta()
+            except Exception:
+                meta = {}
+            source = str(meta.get("source_gtf", transcript.get_transcript_id()))
+            if Splice_graph._is_pooled_input(transcript):
+                pooled_sources.add(source)
+
+            for side in ("left", "right"):
+                if side == "left":
+                    coord = segs[0][0]
+                    overhangs = any(
+                        iv.data[1] < segs[0][1] for iv in intron_tree[coord]
+                    )
+                else:
+                    coord = segs[-1][1]
+                    overhangs = any(
+                        iv.data[0] > segs[-1][0] for iv in intron_tree[coord]
+                    )
+                if not overhangs:
+                    continue
+
+                if (side == "left") == (orient == "+"):
+                    if transcript.has_annotated_TSS() or near_site(
+                        sorted_TSS, coord, tss_tol
+                    ):
+                        continue
+                    tol = tss_tol
+                else:
+                    if transcript.has_annotated_PolyA() or near_site(
+                        sorted_PolyA, coord, polya_tol
+                    ):
+                        continue
+                    tol = polya_tol
+
+                groups[(side, chain, tol)].add((coord, source))
+
+        num_added = 0
+        for (side, chain, tol), ends in groups.items():
+            ends = sorted(ends)
+            clusters = [[ends[0]]]
+            for end in ends[1:]:
+                if end[0] - clusters[-1][-1][0] <= tol:
+                    clusters[-1].append(end)
+                else:
+                    clusters.append([end])
+
+            # One fracture point per chain end. Same-chain paths whose overhangs nest
+            # are sub-paths of one another, so every extra point would only be absorbed
+            # by the outermost one -- which would then set the reported end from
+            # whichever stray pair of inputs reached furthest. Keep the group most
+            # sources agree on (then more ends, then the tighter span).
+            def qualifies(cluster):
+                sources = {src for _, src in cluster}
+                return len(sources - pooled_sources) >= min_sources or bool(
+                    sources & pooled_sources
+                )
+
+            def group_rank(cluster):
+                span = cluster[-1][0] - cluster[0][0]
+                return (
+                    qualifies(cluster),
+                    len({src for _, src in cluster}),
+                    len(cluster),
+                    -span,
+                )
+
+            best_cluster = max(clusters, key=group_rank)
+            for cluster in [best_cluster]:
+                if not qualifies(cluster):
+                    continue
+                coords = [c for c, _ in cluster]
+                density = {
+                    x: sum(1 for c in coords if abs(c - x) <= radius)
+                    for x in set(coords)
+                }
+                best = max(density.values())
+                group_median = statistics.median(coords)
+                peak = min(
+                    (x for x in density if density[x] == best),
+                    key=lambda x: (abs(x - group_median), x),
+                )
+                core = [c for c in coords if abs(c - peak) <= radius]
+                core_median = statistics.median(core)
+                point = min(core, key=lambda c: (abs(c - core_median), c))
+
+                if side == "left":
+                    self._input_transcript_lend_boundaries.add(point)
+                else:
+                    self._input_transcript_rend_boundaries.add(point)
+                num_added += 1
+                logger.debug(
+                    "recurrent overhang fracture at {} ({} end; {} sources, {} ends)".format(
+                        point, side, len({src for _, src in cluster}), len(cluster)
+                    )
+                )
+
+        logger.info(
+            f"[{self._contig_acc}{self._contig_strand}] added {num_added} recurrent "
+            f"overhang-terminus fracture points (min sources {min_sources})"
+        )
 
     def _incorporate_TSS(self):
 

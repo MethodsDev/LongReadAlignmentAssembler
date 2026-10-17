@@ -696,6 +696,13 @@ workflow LRAA_singlecell_wf {
         inputBAM = inputBAM,
         cell_clusters_info = cluster_assignments_file,
         annot_gtf = if quant_only then initial_annot_gtf else init_gtf_file,
+        # The initial (pooled-read) catalog also enters the cross-cluster merge as
+        # --pooled_gtf, so structures and TSS/PolyA sites the pooled reads support but
+        # no single cluster recovers are kept in the final catalog. That is what makes
+        # the final TSS/PolyA beds a superset of the initial ones (the former
+        # integrate_TSS_PolyA_sites step is no longer needed). Unused in quant-only
+        # mode, which runs no merge.
+        pooled_gtf = init_gtf_file,
         HiFi = HiFi,
         oversimplify = oversimplify,
         polyA_known = polyA_known,
@@ -773,34 +780,6 @@ workflow LRAA_singlecell_wf {
         final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
         final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
         final_sc_gene_transcript_splicehash_mapping = select_first([mapping_for_symbols]),
-        docker = docker
-    }
-  }
-
-  # 6) Integrated TSS/PolyA sites (cluster-guided mode): the cluster-guided site beds,
-  # supplemented by basic (initial-catalog) sites no cluster-guided site reproduces
-  # within the site-aggregation tolerance. The basic beds come from LRAA_init; when the
-  # initial pass was skipped for a precomputed gtf they are derived here from that gtf,
-  # the same file LRAA_init's beds would have been derived from.
-  if (run_cluster_guided && !defined(LRAA_init.tssBed) && defined(init_gtf_file)) {
-    call LRAA.splice_pattern_collapse as init_sites_from_precomputed {
-      input:
-        lraaGtf = select_first([init_gtf_file]),
-        outputFilePrefix = sample_id + ".init_from_precomputed",
-        docker = docker
-    }
-  }
-  File? basic_TSS_bed = if defined(LRAA_init.tssBed) then LRAA_init.tssBed else init_sites_from_precomputed.tssBed
-  File? basic_PolyA_bed = if defined(LRAA_init.polyaBed) then LRAA_init.polyaBed else init_sites_from_precomputed.polyaBed
-
-  if (run_cluster_guided && defined(basic_TSS_bed) && defined(basic_PolyA_bed) && defined(cluster_guided.LRAA_final_TSS_bed) && defined(cluster_guided.LRAA_final_PolyA_bed)) {
-    call LRAA.integrate_TSS_PolyA_sites as integrate_sites {
-      input:
-        primary_TSS_bed = select_first([cluster_guided.LRAA_final_TSS_bed]),
-        primary_PolyA_bed = select_first([cluster_guided.LRAA_final_PolyA_bed]),
-        supplement_TSS_bed = select_first([basic_TSS_bed]),
-        supplement_PolyA_bed = select_first([basic_PolyA_bed]),
-        outputFilePrefix = sample_id,
         docker = docker
     }
   }
@@ -883,12 +862,6 @@ workflow LRAA_singlecell_wf {
     File? final_splice_pattern_collapsed_gene_conflicts = cluster_guided.LRAA_final_splice_pattern_collapsed_gene_conflicts
     File? final_TSS_bed = cluster_guided.LRAA_final_TSS_bed
     File? final_PolyA_bed = cluster_guided.LRAA_final_PolyA_bed
-    # Cluster-guided sites plus basic sites outside the aggregation window, each row
-    # labelled by `source` (cluster_guided | basic); counts in the summary. Absent in
-    # basic mode, where the initial catalog's beds are the only ones.
-    File? integrated_TSS_bed = integrate_sites.integratedTssBed
-    File? integrated_PolyA_bed = integrate_sites.integratedPolyaBed
-    File? integrated_sites_summary = integrate_sites.summary
     File? final_tracking = cluster_guided.LRAA_final_tracking
     File? final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz

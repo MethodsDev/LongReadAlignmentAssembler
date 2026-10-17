@@ -18,6 +18,15 @@ workflow LRAA_cell_cluster_guided {
 
         File? annot_gtf
 
+        # The pooled (all-cells) LRAA gtf -- in LRAA-singlecell.wdl the initial pass's
+        # catalog, the same file passed as annot_gtf there. Merged in alongside the
+        # per-cluster gtfs (merge_LRAA_GTFs.py --pooled_gtf) so structures that need the
+        # pooled read depth are kept, its TSS/PolyA support counted as a residual over the
+        # cluster support (about max, not sum) so boundaries are not inflated. Unset =
+        # merge the per-cluster gtfs only. Not the reference annotation: every model in it
+        # is carried into the final catalog.
+        File? pooled_gtf
+
         # --polyA_known: trusted cleavage-site BED/GTF (v0.43.0) forwarded to the
         # per-cluster discovery runs so they leverage the same trusted 3' ends as the
         # init pass (see LRAA-singlecell.wdl, which threads it here from init). Default
@@ -341,6 +350,7 @@ workflow LRAA_cell_cluster_guided {
             input:
                 sample_id = sample_id,
                 LRAA_cell_cluster_gtfs = select_all(LRAA_by_cluster.mergedGTF),
+                pooled_gtf = pooled_gtf,
                 referenceGenome = referenceGenome,
                 ignore_TSS_POLYA = ignore_TSS_POLYA,
                 # Same list the per-cluster runs were given, so the contigs the
@@ -681,6 +691,7 @@ task lraa_merge_gtf_task {
     input {
         String sample_id
         Array[File] LRAA_cell_cluster_gtfs
+        File? pooled_gtf
         File referenceGenome
         # TSS/PolyA annotations on the input gtfs are respected by default; set true to
         # ignore them (the former non-HiFi merge). No longer gated on --HiFi, since LRAA
@@ -717,6 +728,7 @@ task lraa_merge_gtf_task {
                            ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
                            --CPU auto \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \
+                           ~{"--pooled_gtf " + pooled_gtf} \
                            --output_gtf ~{sample_id}.LRAA.sc_merged.gtf  > command_output.log 2>&1
       ) || {
              echo "Command failed with exit code $?" >&2

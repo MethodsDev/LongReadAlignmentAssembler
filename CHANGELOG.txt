@@ -1,3 +1,33 @@
+Unreleased
+
+Changes that alter run outputs (cluster-guided single-cell runs; the merge only):
+
+- CHANGED: the cross-cluster merge (merge_LRAA_GTFs.py) takes the pooled (all-cells)
+  catalog as --pooled_gtf, and LRAA-singlecell.wdl passes the initial pass's gtf there
+  (LRAA-cell_cluster_guided.wdl input pooled_gtf). Its models enter the merge as
+  structure, so isoforms the pooled depth supports but the per-cluster runs dilute are
+  kept; its TSS/PolyA support is added as a residual over the cluster support within
+  the alt-site window (about max, not sum), so pooled-plus-cluster evidence for one
+  site is not double counted. MEASURED on the PBMC / ALS ref-guided v0.44.3 runs:
+  basic FSM spliced chains missing from scg 4,955 -> 102 / 10,975 -> 84, all 186
+  sub-chains of kept chains; site counts at merged sites equal the pooled run's
+  (median ratio 1.00).
+- FIXED: the merge dropped alternative first/last exons whose terminal exon reaches
+  into another input's intron (min_feature_frac_overlap on an unfractured segment),
+  absorbing the model into its container. In MERGE mode a terminus inside another
+  input's intron, recurring across >= 2 cluster gtfs (or carried by the pooled gtf),
+  now splits the graph (merge_fracture_recurrent_overhang_termini).
+- CHANGED: in MERGE mode, a terminus without its own TSS/PolyA call is trimmed onto a
+  boundary node within the full max_dist_between_alt_*_sites (50 nt), not half of it
+  (merge_trim_to_boundary_full_alt_site_window); same-chain models with both ends
+  within 50 nt fell from 8,904 to 523 (PBMC).
+- REMOVED: the integrate_TSS_PolyA_sites step of LRAA-singlecell.wdl and its outputs
+  integrated_TSS_bed / integrated_PolyA_bed / integrated_sites_summary. With the pooled
+  catalog in the merge, the final TSS/PolyA beds already hold the initial run's sites
+  (rerun on PBMC / ALS: 0 TSS and 5 / 2 PolyA basic sites left to add), each now the
+  end of a model the final quant counts. util/integrate_TSS_PolyA_sites.py remains
+  for combining beds of earlier runs.
+
 v0.44.3
 
 Changes that alter run outputs. Assembly and quantification are otherwise as in

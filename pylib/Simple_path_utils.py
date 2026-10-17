@@ -673,7 +673,13 @@ def remove_spacers_from_path(simple_path):
     return new_path
 
 
-def refine_TSS_simple_path(splice_graph, simple_path):
+def refine_TSS_simple_path(splice_graph, simple_path, full_window=False):
+    """Trim a path's 5' end onto a TSS node lying inside its first exon.
+
+    The node must lie within max_dist_between_alt_TSS_sites / 2 of the path's end, or
+    within the whole max_dist_between_alt_TSS_sites with full_window (the merge: see
+    LRAA.assign_transcripts_paths_in_graph).
+    """
 
     # print("Simple path: {}".format(simple_path))
     contig_strand = splice_graph.get_contig_strand()
@@ -713,7 +719,8 @@ def refine_TSS_simple_path(splice_graph, simple_path):
 
         elif (
             TSS_coord - lend_coord
-            <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2
+            <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
+            / (1 if full_window else 2)
         ):
             nodes_with_coords_list = nodes_with_coords_list[TSS_index:]
 
@@ -737,7 +744,8 @@ def refine_TSS_simple_path(splice_graph, simple_path):
 
         elif (
             rend_coord - TSS_coord
-            <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"] / 2
+            <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
+            / (1 if full_window else 2)
         ):
             nodes_with_coords_list = nodes_with_coords_list[0 : TSS_index + 1]
 
@@ -761,7 +769,8 @@ def refine_TSS_simple_path(splice_graph, simple_path):
     return simple_path
 
 
-def refine_PolyA_simple_path(splice_graph, simple_path):
+def refine_PolyA_simple_path(splice_graph, simple_path, full_window=False):
+    """PolyA counterpart of refine_TSS_simple_path, on the path's 3' end."""
 
     # print("\nSimple path input: {}".format(simple_path))
     contig_strand = splice_graph.get_contig_strand()
@@ -808,7 +817,8 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
 
         elif (
             rend_coord - polyA_coord
-            <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2
+            <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+            / (1 if full_window else 2)
         ):
             nodes_with_coords_list = nodes_with_coords_list[0 : polyA_index + 1]
 
@@ -828,7 +838,8 @@ def refine_PolyA_simple_path(splice_graph, simple_path):
 
         elif (
             polyA_coord - lend_coord
-            <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"] / 2
+            <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+            / (1 if full_window else 2)
         ):
             nodes_with_coords_list = nodes_with_coords_list[polyA_index:]
 

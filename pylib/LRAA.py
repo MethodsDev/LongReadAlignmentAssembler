@@ -1732,6 +1732,20 @@ class LRAA:
             {id(t) for t in snap_terminals_for} if snap_terminals_for else set()
         )
 
+        # Merge only: a model whose end lies within the whole alt-site window of a
+        # TSS/PolyA node in its terminal exon is trimmed onto that node, not only within
+        # half of it. Sites are defined by pooling ends within that window
+        # (aggregate_sites_within_window), but the half-window trim left a model with no
+        # boundary call of its own, ending 26-50 bp beyond a site, as a separate model
+        # beside the site-anchored one: a near-duplicate the merge exists to collapse.
+        # MEASURED (ALS ref-guided scg merge with --pooled_gtf): 2,047 of 2,428 same-chain
+        # model pairs with both ends within 50 bp were such a TSS-less end 26-50 bp
+        # upstream of a TSS-anchored model. A model carrying its own call starts or ends
+        # on its own node, which refinement leaves alone.
+        full_window_trim = LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+            "merge_trim_to_boundary_full_alt_site_window", False
+        )
+
         splice_graph = self.get_splice_graph()
         contig_acc = splice_graph.get_contig_acc() if splice_graph else "?"
         contig_strand = splice_graph.get_contig_strand() if splice_graph else "?"
@@ -1805,7 +1819,10 @@ class LRAA:
             logger.debug("-mapping transcript to graph: {}".format(transcript))
             segments = transcript.get_exon_segments()
             path = self._map_read_to_graph(
-                segments, refine_TSS_simple_path=True, refine_PolyA_simple_path=True
+                segments,
+                refine_TSS_simple_path=True,
+                refine_PolyA_simple_path=True,
+                full_window_boundary_trim=full_window_trim,
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
 
@@ -1969,6 +1986,7 @@ class LRAA:
         snap_nearby_boundary_features=False,
         left_soft_clipping=None,
         right_soft_clipping=None,
+        full_window_boundary_trim=False,
     ):
 
         logger.debug("incoming segments: {}".format(alignment_segments))
@@ -2039,7 +2057,7 @@ class LRAA:
             )
         ):
             path = Simple_path_utils.refine_TSS_simple_path(
-                self.get_splice_graph(), path
+                self.get_splice_graph(), path, full_window=full_window_boundary_trim
             )
 
         if (
@@ -2052,7 +2070,7 @@ class LRAA:
             )
         ):
             path = Simple_path_utils.refine_PolyA_simple_path(
-                self.get_splice_graph(), path
+                self.get_splice_graph(), path, full_window=full_window_boundary_trim
             )
 
         if Simple_path_utils.count_exons_in_simple_path(path) == 0:
