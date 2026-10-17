@@ -1,4 +1,4 @@
-Unreleased
+v0.45.0
 
 Changes that alter run outputs (cluster-guided single-cell runs; the merge only):
 
