@@ -37,7 +37,12 @@ save_figure = function(p, file, width, height) {
     sidecar = file.path(dirname(file), paste0(".", basename(file), ".md5"))
     key = figure_fingerprint(p, width, height)
     unchanged = file.exists(file) && file.exists(sidecar) && identical(readLines(sidecar, warn = FALSE)[1], key)
-    if (unchanged && ! isTRUE(getOption("site_usage.overwrite_figures", FALSE))) return(invisible(FALSE))
+    if (unchanged && ! isTRUE(getOption("site_usage.overwrite_figures", FALSE))) {
+        # the PDF keeps its date; the sidecar's date says this knit still draws it, so a sidecar
+        # older than the last knit marks a figure left over from a superseded one
+        Sys.setFileTime(sidecar, Sys.time())
+        return(invisible(FALSE))
+    }
     ggsave(p, file = file, width = width, height = height,
            device = if (capabilities("cairo")) cairo_pdf else "pdf")
     writeLines(key, sidecar)

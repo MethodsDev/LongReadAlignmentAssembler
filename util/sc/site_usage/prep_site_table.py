@@ -2,7 +2,10 @@
 
 """Build the TSS and PolyA site table for site-level usage testing.
 
-Starts from LRAA's integrated TSS and PolyA site beds and, for each site:
+Starts from LRAA's TSS and PolyA site beds -- the cluster-guided run's sc_merged beds, which
+since LRAA v0.45.0 already hold the basic run's sites, or the integrated beds of
+integrate_TSS_PolyA_sites.py (an extra `source` column; sites without one are taken as
+cluster_guided) -- and, for each site:
 
   - assigns it to a gene: the gene symbols of the transcripts the bed names as
     carrying the site (cluster-guided sites), or else -- only for sites whose
@@ -57,8 +60,8 @@ OUT_COLS = ["site_id", "kind", "chrom", "strand", "pos", "span_lo", "span_hi", "
 def main():
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--TSS_bed", required=True, help="LRAA integrated TSS site bed")
-    parser.add_argument("--PolyA_bed", required=True, help="LRAA integrated PolyA site bed")
+    parser.add_argument("--TSS_bed", required=True, help="LRAA TSS site bed (sc_merged, or integrated with a source column)")
+    parser.add_argument("--PolyA_bed", required=True, help="LRAA PolyA site bed (sc_merged, or integrated with a source column)")
     parser.add_argument("--gtf", required=True,
                         help="LRAA gtf with gene symbols prefixed to transcript ids (SYMBOL^t:...), for gene spans")
     parser.add_argument("--gene_trans_map", required=True,
@@ -106,8 +109,14 @@ def read_bed(filename, cols):
         if line.startswith("#") or not line.strip():
             continue
         f = line.rstrip("\n").split("\t")
+        if len(f) == len(cols) - 1:
+            # an LRAA site bed without the integrated beds' source column: since v0.45.0 the
+            # cluster-guided (sc_merged) beds already hold the basic run's sites, each carried
+            # by models of the cluster-guided catalog
+            f.append("cluster_guided")
         if len(f) != len(cols):
-            sys.exit(f"{filename}: expected {len(cols)} columns, got {len(f)}: {line[:200]}")
+            sys.exit(f"{filename}: expected {len(cols)} columns (or {len(cols) - 1} without source), "
+                     f"got {len(f)}: {line[:200]}")
         row = dict(zip(cols, f))
         row["pos"] = int(row["pos"])
         row["support"] = float(row["support"])
