@@ -1,3 +1,22 @@
+Unreleased
+
+No change to run outputs:
+
+- FIXED: the --oversimplify paths (chrM and M by default) held every read of the
+  contig-strand in memory. _run_oversimplify_best_overlap and _run_oversimplify_aggregate
+  took their reads from Pretty_alignment_manager.retrieve_pretty_alignments, which
+  returns a list, over bam_file_for_quant -- the full, unthinned --bam -- although each
+  read is scored and written on its own, and the streaming quant pass (--stream_reads)
+  never reaches these contigs. They now iterate the reads (LRAA _oversimplify_alignments
+  over the new Bam_alignment_extractor.iter_read_alignments, of which
+  get_read_alignments is the collected list). MEASURED on PBMC Kinnex chrM (5.5M
+  records; 5.4M kept on +): peak RSS 2.52 -> 0.06 GB on each path, quant.expr,
+  quant.tracking and gtf byte-identical on both strands (random tie-breaks seeded).
+  Memory had grown linearly with chrM depth (about 470 bytes per read).
+- The run-wide read accounting for an oversimplified work unit
+  (_write_unquantified_read_assignment_summary) still collects the unit's distinct read
+  names, over the first-pass bam (the normalized bam under --stream_reads); unchanged.
+
 v0.45.0
 
 Changes that alter run outputs (cluster-guided single-cell runs; the merge only):

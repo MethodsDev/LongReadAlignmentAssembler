@@ -28,12 +28,8 @@ class _FakePrettyAlignment:
         return "cell-1^umi-1"
 
 
-class _FakePrettyAlignmentManager:
-    def __init__(self, splice_graph=None):
-        pass
-
-    def retrieve_pretty_alignments(self, *args, **kwargs):
-        return [_FakePrettyAlignment()]
+def _fake_oversimplify_alignments(*args, **kwargs):
+    return iter([_FakePrettyAlignment()])
 
 
 def _write_repeated_alignment_bam(bam_path):
@@ -74,7 +70,7 @@ def _build_overlap_transcripts():
 
 def test_oversimplify_reports_composite_gene_identifier(monkeypatch):
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _fake_oversimplify_alignments)
 
     transcript = Transcript("chrM", [[1, 100]], "+")
     transcript.set_gene_id("ENSG00000198888")

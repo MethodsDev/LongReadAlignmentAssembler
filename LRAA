@@ -5467,6 +5467,37 @@ def _contig_job_runner(job):
     return
 
 
+def _oversimplify_alignments(
+    contig_acc, contig_strand, bam_file, restrict_region_lend, restrict_region_rend
+):
+    """The oversimplify paths' reads, one lightened Pretty_alignment at a time.
+
+    Both paths handle each read on its own, so neither needs the contig's reads held
+    at once -- yet they took them from Pretty_alignment_manager.retrieve_pretty_alignments,
+    which returns a list. On an oversimplified contig that is the whole UNTHINNED
+    library for the strand (bam_file_for_quant is the full --bam), and chrM is
+    oversimplified by default: PBMC Kinnex chrM is 5.5M records, cord blood 8.1M.
+
+    Same reads, in the same order, with the same segments as that call made them
+    (use_cache=False, correction forced off on an oversimplified contig): the
+    extractor's retention policy, lightened records, then the long-terminal-intron
+    prune, applied here per alignment by the primitive the streaming quant pass uses.
+    """
+
+    extractor = Bam_alignment_extractor(bam_file)
+    for pretty_alignment in extractor.iter_read_alignments(
+        contig_acc,
+        contig_strand,
+        restrict_region_lend,
+        restrict_region_rend,
+        pretty=True,
+        per_id_QC_raise_error=False,
+        force_lighten_all=True,
+    ):
+        pretty_alignment.prune_long_terminal_introns_single()
+        yield pretty_alignment
+
+
 def _run_oversimplify_best_overlap(
     contig_acc,
     contig_strand,
@@ -5504,20 +5535,13 @@ def _run_oversimplify_best_overlap(
         )
         return []
 
-    # Prepare alignment fetcher
-    pam = Pretty_alignment_manager(splice_graph=None)
-    pretty_alignments = pam.retrieve_pretty_alignments(
+    # Streamed: each read is scored and its tracking row written before the next is read.
+    pretty_alignments = _oversimplify_alignments(
         contig_acc,
         contig_strand,
-        contig_seq_str,
         bam_file_for_quant,
-        region_lend=restrict_region_lend,
-        region_rend=restrict_region_rend,
-        use_cache=False,
-        restrict_splice_type=None,
-        try_correct_alignments=False,
-        SE_read_encapsulation_mask=None,
-        per_id_QC_raise_error=False,
+        restrict_region_lend,
+        restrict_region_rend,
     )
 
     # Precompute transcript exon intervals and maps
@@ -5573,7 +5597,7 @@ def _run_oversimplify_best_overlap(
     # is what the retired read floor made possible and what the disk spool here
     # existed to compensate for.
 
-    for pa in pretty_alignments or []:
+    for pa in pretty_alignments:
         segs = pa.get_pretty_alignment_segments()
         if not segs:
             continue
@@ -5761,23 +5785,6 @@ def _run_oversimplify_aggregate(
         )
         return
 
-    # Fetch reads for this contig/strand/region
-    pam = Pretty_alignment_manager(splice_graph=None)
-    pretty_alignments = pam.retrieve_pretty_alignments(
-        contig_acc,
-        contig_strand,
-        contig_seq_str,
-        bam_file_for_quant,
-        region_lend=restrict_region_lend,
-        region_rend=restrict_region_rend,
-        use_cache=False,
-        restrict_splice_type=None,
-        try_correct_alignments=False,
-        SE_read_encapsulation_mask=None,
-        per_id_QC_raise_error=False,
-    )
-
-    read_count = float(sum(1 for pa in pretty_alignments or [] if pa.get_read_name()))
     # Emitted whether or not any read reached it. The aggregate is a STRUCTURAL
     # feature of an oversimplified contig -- one per contig and strand, named for
     # them -- so its existence is a property of the run's scope, not of coverage.
@@ -5811,11 +5818,7 @@ def _run_oversimplify_aggregate(
     except Exception:
         pass
 
-    # Assign counts and isoform fraction (only isoform in its gene)
-    t.set_read_counts_assigned(read_count)
-    t.set_isoform_fraction(1.0)
-
-    # Tracking: one line per read
+    # Tracking: one line per read, streamed; the count is taken in the same pass.
     mp_id_token = f"ovsimp-agg:{contig_acc}:{contig_strand}"
     num_exons = t.get_num_exon_segments()
     splice_hash = (
@@ -5823,10 +5826,18 @@ def _run_oversimplify_aggregate(
         if num_exons > 1
         else t.get_transcript_id()
     )
-    for pa in pretty_alignments or []:
+    read_count = 0.0
+    for pa in _oversimplify_alignments(
+        contig_acc,
+        contig_strand,
+        bam_file_for_quant,
+        restrict_region_lend,
+        restrict_region_rend,
+    ):
         rn = pa.get_read_name()
         if not rn:
             continue
+        read_count += 1.0
         print(
             "\t".join(
                 [
@@ -5846,6 +5857,10 @@ def _run_oversimplify_aggregate(
             ),
             file=ofh_track,
         )
+
+    # Assign counts and isoform fraction (only isoform in its gene)
+    t.set_read_counts_assigned(read_count)
+    t.set_isoform_fraction(1.0)
 
     # Quant row
     uniq_reads = int(round(read_count))

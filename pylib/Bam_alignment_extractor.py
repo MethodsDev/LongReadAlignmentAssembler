@@ -91,12 +91,45 @@ class Bam_alignment_extractor:
         force_lighten_all=False,
     ):
 
+        return list(
+            self.iter_read_alignments(
+                contig_acc,
+                contig_strand,
+                region_lend,
+                region_rend,
+                pretty=pretty,
+                per_id_QC_raise_error=per_id_QC_raise_error,
+                config=config,
+                force_lighten_all=force_lighten_all,
+            )
+        )
+
+    def iter_read_alignments(
+        self,
+        contig_acc,
+        contig_strand=None,
+        region_lend=None,
+        region_rend=None,
+        pretty=False,
+        per_id_QC_raise_error=False,
+        config=LRAA_Globals.config,
+        force_lighten_all=False,
+    ):
+        """get_read_alignments one read at a time, retaining none of them.
+
+        get_read_alignments is this generator collected into a list, so the two cannot
+        disagree about which reads a region holds. A caller that handles each read on
+        its own -- the oversimplify paths, which score a read and write its tracking row
+        -- iterates this instead and holds one alignment, not the contig's library:
+        PBMC chrM is 5.5M records on one strand.
+
+        The summary log line and the per-id QC warning are emitted when the iteration
+        is exhausted, and get_last_discarded_read_names_by_reason describes this pass
+        only from then on.
+        """
+
         discarded_read_counter = defaultdict(int)
         self._last_discarded_read_names_by_reason = defaultdict(set)
-
-        # Collect either raw reads or Pretty_alignment objects depending on 'pretty'
-        read_alignments = [] if not pretty else None
-        pretty_alignments = [] if pretty else None
 
         MIN_MAPPING_QUALITY = int(LRAA_Globals.config["min_mapping_quality"])
         MAX_INTRON_LENGTH = int(LRAA_Globals.config["max_intron_length"])
@@ -189,9 +222,6 @@ class Bam_alignment_extractor:
                         pa.lighten()
                     else:
                         candidates_retained += 1
-                pretty_alignments.append(pa)
-            else:
-                read_alignments.append(read)
 
             kept_so_far += 1
 
@@ -220,7 +250,9 @@ class Bam_alignment_extractor:
                     )
                 last_log_t = time.time()
 
-        kept_count = len(pretty_alignments) if pretty else len(read_alignments)
+            yield pa if pretty else read
+
+        kept_count = kept_so_far
         final_mem = _mem_usage_mb()
         try:
             frac_cand_final = (candidates_retained / kept_count) if kept_count else 0.0
@@ -254,11 +286,6 @@ class Bam_alignment_extractor:
                     f"{contig_acc} meet the {LRAA_Globals.config['min_per_id']} percent "
                     f"identity minimum. Please reevaluate --min_per_id for these alignments."
                 )
-
-        if pretty:
-            return pretty_alignments
-        else:
-            return read_alignments
 
     def retained_read_names(
         self, contig_acc, contig_strand=None, region_lend=None, region_rend=None

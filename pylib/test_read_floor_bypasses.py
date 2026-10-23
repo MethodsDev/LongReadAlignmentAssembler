@@ -58,24 +58,20 @@ class _FakeAlignment:
         return self._read_name
 
 
-def _manager_yielding(*read_names):
-    """A Pretty_alignment_manager stand-in serving one alignment per name given.
+def _alignments_yielding(*read_names):
+    """An LRAA._oversimplify_alignments stand-in streaming one alignment per name given.
 
     Parametrised by read count because the spool only engages above a floor of 1, so a
     model must be able to carry more than one read to be RETAINED on that path.
     """
 
-    class _Manager:
-        def __init__(self, splice_graph=None):
-            pass
+    def _alignments(*args, **kwargs):
+        return iter([_FakeAlignment(name) for name in read_names])
 
-        def retrieve_pretty_alignments(self, *args, **kwargs):
-            return [_FakeAlignment(name) for name in read_names]
-
-    return _Manager
+    return _alignments
 
 
-_FakePrettyAlignmentManager = _manager_yielding("cell-1^umi-1^read-1")
+_FakeOversimplifyAlignments = _alignments_yielding("cell-1^umi-1^read-1")
 
 
 # -- 1. oversimplify ----------------------------------------------------------
@@ -128,7 +124,7 @@ def test_oversimplify_assigns_nothing_to_an_unread_model(
     Without this the assertions below would pass for the wrong reason.
     """
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _FakeOversimplifyAlignments)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
@@ -147,7 +143,7 @@ def test_an_unread_model_is_still_carried_forward(monkeypatch, oversimplify_mode
     reach it -- and in a cluster-guided pipeline those runs are merged with each other.
     """
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _FakeOversimplifyAlignments)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
@@ -167,7 +163,7 @@ def test_the_carried_forward_model_reports_zero_rather_than_nothing(
     the reads never reached it.
     """
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _FakeOversimplifyAlignments)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
@@ -198,7 +194,7 @@ def test_gtf_and_quant_name_the_same_models_and_tracking_is_their_read_subset(
     forward unread, which is the behaviour this path deliberately has.
     """
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _FakeOversimplifyAlignments)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
@@ -220,7 +216,7 @@ def test_quant_only_semantics_report_every_transcript_asked_about(
     got nothing. That is a different question from discovery's "does this model exist".
     """
     lraa = _load_lraa_module()
-    monkeypatch.setattr(lraa, "Pretty_alignment_manager", _FakePrettyAlignmentManager)
+    monkeypatch.setattr(lraa, "_oversimplify_alignments", _FakeOversimplifyAlignments)
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1)
 
     supported, starved = oversimplify_models
