@@ -1,4 +1,4 @@
-Unreleased
+v0.45.1
 
 No change to run outputs:
 
