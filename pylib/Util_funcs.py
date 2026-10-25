@@ -218,9 +218,10 @@ def retrieve_contig_seq_from_fasta_file(contig_acc, fasta_filename):
 
     for attempt in range(1, attempts + 1):
         try:
+            # argv list, no shell: contig names such as 'gi|68711' (pipes, and any
+            # other shell metacharacter) must reach samtools verbatim.
             contig_seq_str = subprocess.check_output(
-                "samtools faidx {} {}".format(fasta_filename, contig_acc),
-                shell=True,
+                ["samtools", "faidx", fasta_filename, contig_acc],
                 encoding="utf-8",
             )
             break

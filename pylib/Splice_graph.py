@@ -1939,6 +1939,13 @@ class Splice_graph:
             intron_lend = seg_left_rend + 1
             intron_rend = seg_right_lend - 1
 
+            if not LRAA_Globals.config["require_canonical_splice_motif"]:
+                # The read's strand was decided upstream (e.g. PASA's spliced_orient),
+                # so the junction is taken on the strand the graph is built for,
+                # whatever its motif.
+                introns_list.append((intron_lend, intron_rend, contig_strand))
+                continue
+
             splice_type = Intron.check_canonical_splicing(
                 intron_lend, intron_rend, genome_seq
             )
@@ -2436,7 +2443,12 @@ class Splice_graph:
 
         exons_to_purge = set()
 
-        min_intron_cov_for_filtering = 1 / Splice_graph._min_alt_unspliced_freq + 1
+        # min_alt_unspliced_freq <= 0 disables this pruning: no exon segment can fall
+        # below a zero fraction of its intron's support.
+        if Splice_graph._min_alt_unspliced_freq <= 0:
+            min_intron_cov_for_filtering = float("inf")
+        else:
+            min_intron_cov_for_filtering = 1 / Splice_graph._min_alt_unspliced_freq + 1
 
         # progress logging controls
         _progress_interval = float(

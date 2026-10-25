@@ -686,6 +686,21 @@ config = {
     "normalize_max_cov_level": 1000,
     "restrict_asm_to_collapse": True,  # if True, no chaining of overlapping/extended paths
     #
+    # Splice-graph admission and reconstruction passes. Defaults keep stock behavior;
+    # --pasa_mode (or --config_update) relaxes them for curated transcript/EST alignments.
+    #
+    # Minimum number of reads that must support an intron for it to enter the splice
+    # graph (was hardcoded at 2).
+    "min_intron_support": 2,
+    # False: admit every read junction on the strand the graph is built for, whatever
+    # its splice motif. For inputs whose strand was decided upstream (e.g. PASA's
+    # spliced_orient), where a non-canonical junction is not evidence of a wrong strand.
+    "require_canonical_splice_motif": True,
+    # True: reconstruct spliced and unspliced reads together in one pass over one graph,
+    # instead of an ME pass followed by an SE pass masked by the ME models. Unspliced
+    # reads can then extend and bridge spliced assemblies, as PASA's assembler allows.
+    "single_pass_ME_SE": False,
+    #
     ###############################################
     # chunked parallelism: cutting a contig-strand
     #

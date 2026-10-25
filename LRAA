@@ -659,7 +659,7 @@ def _build_splice_graph_params(config):
         "min_alt_splice_freq": config["min_alt_splice_freq"],
         "min_alt_unspliced_freq": config["min_alt_unspliced_freq"],
         "max_intron_length_for_exon_segment_filtering": 10000,
-        "min_intron_support": 2,
+        "min_intron_support": config["min_intron_support"],
         "remove_unspliced_introns": False,
     }
 
@@ -7099,7 +7099,10 @@ def run_transcript_assembly(
     ME_input_transcripts = None
     if input_transcripts is not None:
         # extract the ME ones.
-        ME_input_transcripts = [x for x in input_transcripts if x.has_introns()]
+        if LRAA_Globals.config["single_pass_ME_SE"]:
+            ME_input_transcripts = list(input_transcripts)  # the one pass takes them all
+        else:
+            ME_input_transcripts = [x for x in input_transcripts if x.has_introns()]
         if len(ME_input_transcripts) == 0:
             ME_input_transcripts = None
 
@@ -7127,7 +7130,9 @@ def run_transcript_assembly(
             SE_input_transcripts = None
 
     SE_transcripts = None
-    if not ME_only:  # build SE unless explicitly restricted to ME
+    # With single_pass_ME_SE the pass above already took every read, spliced and
+    # unspliced, into one graph, so there is no separate SE pass to run.
+    if not ME_only and not LRAA_Globals.config["single_pass_ME_SE"]:
         SE_transcripts = build_SE_transcripts(
             contig_acc,
             contig_strand,
@@ -7923,9 +7928,7 @@ def get_genome_contigs_listing(genome_fasta_filename):
 
     fai_file = "{}.fai".format(genome_fasta_filename)
     if not os.path.exists(fai_file):
-        subprocess.check_call(
-            "samtools faidx {}".format(genome_fasta_filename), shell=True
-        )
+        subprocess.check_call(["samtools", "faidx", genome_fasta_filename])
 
     contigs_list = list()
 
@@ -8071,6 +8074,11 @@ def build_ME_transcripts(
 
     sg_ME = Splice_graph()
 
+    # single_pass_ME_SE: this pass takes unspliced reads too (see run_transcript_assembly)
+    ME_pass_splice_type = (
+        None if LRAA_Globals.config["single_pass_ME_SE"] else "ME"
+    )
+
     ## Build ME Splice Graph
     logger.info(f"\n// -building splice graph for {contig_acc}")
     sg_ME.build_splice_graph_for_contig(
@@ -8084,7 +8092,7 @@ def build_ME_transcripts(
         # caller passes ME_input_transcripts, the intron-bearing reference subset
         reference_transcripts=input_transcripts,
         quant_mode=False,
-        restrict_splice_type="ME",
+        restrict_splice_type=ME_pass_splice_type,
     )
 
     if sg_ME.is_empty():
@@ -8128,14 +8136,17 @@ def build_ME_transcripts(
         allow_spacers,
         input_transcripts,
         rescue_target_transcripts=input_transcripts,
-        restrict_splice_type="ME",
+        restrict_splice_type=ME_pass_splice_type,
     )
 
     # Define ME isoforms
     logger.info(f"\n// -begin reconstructing isoforms for {contig_acc}")
     ME_transcripts = lraa_ME_obj.reconstruct_isoforms(single_best_only)
 
-    if not LRAA_Globals.config.get("ME_graph_emits_monoexonic_models", False):
+    if not (
+        LRAA_Globals.config.get("ME_graph_emits_monoexonic_models", False)
+        or LRAA_Globals.config["single_pass_ME_SE"]
+    ):
         # Single-exon reconstruction belongs to the SE graph, which is the one holding
         # the monoexonic reads and their PolyA termini. An isolated exon segment here
         # carries no splicing evidence, so anything built on it is a monoexonic model
