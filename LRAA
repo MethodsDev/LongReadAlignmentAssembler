@@ -696,7 +696,9 @@ def _build_splice_graph_params(config):
         "min_alt_splice_freq": config["min_alt_splice_freq"],
         "min_alt_unspliced_freq": config["min_alt_unspliced_freq"],
         "max_intron_length_for_exon_segment_filtering": 10000,
-        "min_intron_support": config["min_intron_support"],
+        "min_intron_support": config.get(
+            "min_intron_support", LRAA_Globals.config["min_intron_support"]
+        ),
         "remove_unspliced_introns": False,
     }
 
