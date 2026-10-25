@@ -593,6 +593,12 @@ def _collect_explicit_config_overrides(args, parser, config):
 
     forward = set(file_keys)
 
+    # --pasa_mode is a preset of config keys, not of flags, so neither test below
+    # sees it; the worker would assemble with stock settings.
+    if config.get("pasa_mode", False):
+        forward.add("pasa_mode")
+        forward.update(LRAA_Globals.PASA_MODE_CONFIG)
+
     # SUPPRESS-defaulted: existing at all IS the user having stated it.
     for key in _SUPPRESS_DEFAULTED_CONFIG_FLAGS:
         if hasattr(args, key):
