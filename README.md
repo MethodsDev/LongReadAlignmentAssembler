@@ -19,6 +19,13 @@ Development builds are never published under `:latest`; they are tagged
 [Docker/README.md](Docker/README.md) for the full tag policy and the build
 scripts that enforce it.
 
+## Fragmented and preassembled inputs
+
+`--pasa_mode` chains fragmented transcript alignments (ESTs, partial cDNAs,
+staggered reads) that share introns into longer models; `--preassembled_input`
+accepts single-alignment support for preassembled transcripts (Trinity, StringTie).
+Long-read RNA-seq needs neither. See [docs/pasa_mode.md](docs/pasa_mode.md).
+
 ## Developer utilities
 
 `util/ascii_isoform_view.py` draws transcript structures as stacked ASCII rows —

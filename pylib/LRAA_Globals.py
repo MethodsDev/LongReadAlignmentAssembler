@@ -75,6 +75,17 @@ PASA_MODE_CONFIG = {
     "snap_terminal_overhang_fuzz": 20,  # PASA's terminal fuzz (fuzzlength)
 }
 
+# --preassembled_input: the alignments are already assembled transcripts (Trinity,
+# StringTie, ...), not long reads. One such transcript is evidence enough for an
+# intron or an isoform, so the two read minimums drop from 2 to 1. Long-read RNA-seq
+# keeps the defaults. Applied like PASA_MODE_CONFIG; an explicit --min_reads_novel
+# or --config_update still wins.
+PREASSEMBLED_INPUT_CONFIG = {
+    "min_intron_support": 1,
+    "min_reads_novel_isoform": 1,
+    "min_unique_reads_novel_isoform": 1,
+}
+
 config = {
     #########################
     # read alignment criteria
@@ -727,6 +738,8 @@ config = {
     # Set by --pasa_mode (see PASA_MODE_CONFIG above); read by code that behaves
     # differently for PASA inputs.
     "pasa_mode": False,
+    # Set by --preassembled_input (see PREASSEMBLED_INPUT_CONFIG above).
+    "preassembled_input": False,
     #
     ###############################################
     # chunked parallelism: cutting a contig-strand

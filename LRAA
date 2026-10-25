@@ -421,6 +421,26 @@ def _apply_pasa_mode_config_overrides(config, args):
     )
 
 
+def _apply_preassembled_input_config_overrides(config, args):
+    """--preassembled_input: LRAA_Globals.PREASSEMBLED_INPUT_CONFIG.
+
+    Same position as --pasa_mode's preset, so --config_update still wins; a
+    --min_reads_novel the user typed keeps the user's value.
+    """
+    if not getattr(args, "preassembled_input", False):
+        return
+    config["preassembled_input"] = True
+    user_set_min_reads = "min_reads_novel" in getattr(args, "user_specified_dests", set())
+    for key, value in LRAA_Globals.PREASSEMBLED_INPUT_CONFIG.items():
+        if user_set_min_reads and key in _RENAMED_CONFIG_FLAGS["min_reads_novel"]:
+            continue
+        config[key] = value
+    logger.info(
+        "--preassembled_input: %s",
+        {k: config[k] for k in LRAA_Globals.PREASSEMBLED_INPUT_CONFIG},
+    )
+
+
 def _load_config_update_file(cfg_file):
     """Read and validate a --config_update JSON file, or exit naming the fault."""
 
@@ -598,6 +618,9 @@ def _collect_explicit_config_overrides(args, parser, config):
     if config.get("pasa_mode", False):
         forward.add("pasa_mode")
         forward.update(LRAA_Globals.PASA_MODE_CONFIG)
+    if config.get("preassembled_input", False):
+        forward.add("preassembled_input")
+        forward.update(LRAA_Globals.PREASSEMBLED_INPUT_CONFIG)
 
     # SUPPRESS-defaulted: existing at all IS the user having stated it.
     for key in _SUPPRESS_DEFAULTED_CONFIG_FLAGS:
@@ -1180,12 +1203,24 @@ def main():
         "--pasa_mode",
         action="store_true",
         default=False,
-        help="assemble curated transcript/EST alignments as PASA's assembler does "
-        "(chain compatible alignments, 20 bp terminal fuzz, no long-read noise "
-        "filters, no normalization/EM/isoform filtering, one worker per "
-        "contig-strand). For PASA's use of LRAA as its assembler backend; see "
-        "LRAA_Globals.PASA_MODE_ARGS / PASA_MODE_CONFIG for the full bundle. "
-        "Explicit flags and --config_update still override it.",
+        help="chain fragmented transcript alignments (ESTs, partial cDNAs, staggered "
+        "reads) into longer models, as PASA does: spliced alignments that share an "
+        "intron are chained, with a 20 bp terminal fuzz. Unspliced alignments are "
+        "not chained, and EM, polyA/TSS inference and isoform filtering run as usual. "
+        "For preassembled inputs add --preassembled_input. See "
+        "LRAA_Globals.PASA_MODE_CONFIG; explicit flags and --config_update still "
+        "override it.",
+    )
+
+    parser.add_argument(
+        "--preassembled_input",
+        action="store_true",
+        default=False,
+        help="the input alignments are preassembled transcripts (e.g. Trinity or "
+        "StringTie assemblies), not long reads: a single alignment is enough to "
+        "support an intron or an isoform (min_intron_support and --min_reads_novel "
+        "set to 1). Leave off for long-read RNA-seq, where the default of 2 guards "
+        "against read errors. An explicit --min_reads_novel or --config_update wins.",
     )
     # Declared only so argparse produces the removal message below rather than
     # "unrecognized arguments". It is NOT a no-op and it does NOT warn -- an earlier
@@ -1423,7 +1458,8 @@ def main():
         "--min_reads_novel",
         type=int,
         default=2,
-        help="set both min_reads_novel_isoform and min_unique_reads_novel_isoform to this value",
+        help="set both min_reads_novel_isoform and min_unique_reads_novel_isoform to "
+        "this value (default 2, for long reads; --preassembled_input sets 1)",
     )
 
     config_group.add_argument(
@@ -2351,6 +2387,7 @@ def main():
 
     _apply_hifi_config_overrides(LRAA_Globals.config, args)
     _apply_pasa_mode_config_overrides(LRAA_Globals.config, args)
+    _apply_preassembled_input_config_overrides(LRAA_Globals.config, args)
 
     # --no_infer_TSS / --no_infer_PolyA apply in BOTH modes.  They used to be read
     # only inside the HiFi preset, which was harmless while the library defaults
