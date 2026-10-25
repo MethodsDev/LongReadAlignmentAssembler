@@ -38,6 +38,13 @@ testing/mismapping_filter/**
 !testing/mismapping_filter/*.bam
 !testing/mismapping_filter/*.bam.bai
 !testing/mismapping_filter/*.fa
+!testing/pasa_mode/
+testing/pasa_mode/**
+!testing/pasa_mode/Makefile
+!testing/pasa_mode/build_fixture.py
+!testing/pasa_mode/check_pasa_mode.py
+!testing/pasa_mode/fixture/
+!testing/pasa_mode/fixture/*
 !testing/mismapping_filter/*.fa.fai
 !testing/mismapping_filter/*.gtf
 !testing/txalign_path_rescue/

@@ -337,7 +337,10 @@ class MultiPathGraph:
                             print("i-COMPATIBLE-j", file=build_ofh)
                             # logger.debug("adding edge: {},{}".format(node_j, node_i))
 
-                        if not LRAA_Globals.config["restrict_asm_to_collapse"]:
+                        if not LRAA_Globals.config["restrict_asm_to_collapse"] and (
+                            not LRAA_Globals.config["chain_requires_shared_intron"]
+                            or node_i.shares_intron(node_j)
+                        ):
                             self._mp_graph.add_edge(node_j, node_i)
 
                     else:

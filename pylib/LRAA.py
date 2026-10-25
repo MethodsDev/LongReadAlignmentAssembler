@@ -2717,7 +2717,10 @@ class LRAA:
                 pasa_scored_paths.extend(new_list)
             return
 
-        # Otherwise, treat overlapping and compatible final paths as a hard error (unchanged)
+        # Otherwise, treat overlapping and compatible final paths as a hard error (unchanged).
+        # With chain_requires_shared_intron, only paths sharing an intron could have been
+        # chained, so only those must have been assembled together.
+        require_shared_intron = LRAA_Globals.config.get("chain_requires_shared_intron", False)
         for i in range(1, len(pasa_scored_paths)):
             mp_A = pasa_scored_paths[i].get_multiPath_obj()
             sp_A = mp_A.get_simple_path()
@@ -2726,6 +2729,11 @@ class LRAA:
             for j in range(i - 1, -1, -1):
                 mp_B = pasa_scored_paths[j].get_multiPath_obj()
                 sp_B = mp_B.get_simple_path()
+
+                if require_shared_intron and not any(
+                    n.startswith("I:") and n in sp_B for n in sp_A
+                ):
+                    continue
 
                 if Simple_path_utils.simple_paths_overlap_and_compatible_spacer_aware_both_paths(
                     sg, sp_A, sp_B

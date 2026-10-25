@@ -313,6 +313,12 @@ class MultiPathGraphNode:
         else:
             return False
 
+    def shares_intron(self, other_node):
+        self_introns = {n for n in self.get_simple_path() if n.startswith("I:")}
+        return any(
+            n in self_introns for n in other_node.get_simple_path() if n.startswith("I:")
+        )
+
     def get_mpgn_pair_token(mpgn_A, mpgn_B):
         assert type(mpgn_A) == MultiPathGraphNode
         assert type(mpgn_B) == MultiPathGraphNode

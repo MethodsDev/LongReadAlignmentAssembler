@@ -1,0 +1,6 @@
+tiled_plus	5700	12	60	61
+tiled_minus	5700	5820	60	61
+exon_skip	5000	11626	60	61
+exon_overlap_only	4200	16729	60	61
+unspliced_bridge	5400	21017	60	61
+overhang	5000	26517	60	61

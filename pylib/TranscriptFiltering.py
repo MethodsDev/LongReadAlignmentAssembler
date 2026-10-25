@@ -1314,10 +1314,16 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 #  both ends:
                 #    - "max_frac_alt_terminal_feature_absorbable"
 
+                # A compatible overlap that was not chained is only a degradation
+                # product when chaining could have joined it (see
+                # chain_requires_shared_intron); otherwise it is separate evidence.
                 paths_indicate_containment = SPU.path_A_contains_path_B(
                     i_path_trimmed, j_path_trimmed
-                ) or SPU.are_overlapping_and_compatible_NO_gaps_in_overlap(
-                    i_path_trimmed, j_path_trimmed
+                ) or (
+                    not LRAA_Globals.config.get("chain_requires_shared_intron", False)
+                    and SPU.are_overlapping_and_compatible_NO_gaps_in_overlap(
+                        i_path_trimmed, j_path_trimmed
+                    )
                 )
 
                 if paths_indicate_containment:

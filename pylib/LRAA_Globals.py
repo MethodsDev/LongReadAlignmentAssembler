@@ -59,45 +59,20 @@ SPLICE_GRAPH_NORMALIZATION_METHOD = "cov6"
 # literal in either caller.
 HIFI_MIN_PER_ID = 97.0
 
-# --pasa_mode: assemble curated transcript/EST alignments the way PASA's C++ `pasa`
-# assembler does (PASApipeline/pasa_cpp), so PASA can use LRAA as its assembler.
-# The input is a BAM of alignments that PASA already validated and oriented: every
-# alignment is evidence, and none of LRAA's long-read noise filters apply.
+# --pasa_mode: assemble transcript alignments that are fragments of longer
+# transcripts (ESTs, partial cDNAs, fragmented or staggered reads), as PASA does.
+# Spliced reads that share an intron are chained into longer models; everything
+# else (unspliced reads, EM, polyA handling, isoform filters) runs as usual.
 #
 # PASA_MODE_ARGS are CLI flags the switch turns on; a flag the user typed explicitly
 # keeps the user's value. PASA_MODE_CONFIG is applied after the HiFi preset and
 # before --config_update, so an explicit config file still has the last word.
-PASA_MODE_ARGS = {
-    "chunk": False,  # one worker per contig-strand
-    "stream_reads": False,
-    "no_norm": True,  # every alignment counts once
-    "no_EM": True,  # quant is not the product; tracking lists every compatible model
-    "no_filter_isoforms": True,
-    "no_filter_internal_priming": True,
-    "no_filter_mismappings": True,
-    "no_infer_TSS": True,
-    "no_infer_PolyA": True,
-    "no_rdna_mask": True,
-    "rescue_unassigned_reads_via_transcriptome_alignment": False,
-    "min_per_id": 0,
-    "max_intron_length": 10**9,  # PASA validated the alignments already
-    "min_alt_splice_freq": 0.0,
-    "min_alt_unspliced_freq": 0.0,
-}
+PASA_MODE_ARGS = {}
 
 PASA_MODE_CONFIG = {
-    "restrict_asm_to_collapse": False,  # chain overlapping compatible alignments
-    "min_intron_support": 1,
-    "require_canonical_splice_motif": False,  # strand comes from PASA's spliced_orient
-    "single_pass_ME_SE": True,
-    "snap_terminal_overhang_fuzz": 20,  # PASA fuzzlength
-    "min_feature_frac_overlap": 0.0,
-    "aggregate_adjacent_splice_boundaries": False,
-    "terminal_boundary_method": "extreme",  # assembly spans its members, as PASA's do
-    "min_transcript_length": 0,
-    "max_exon_spur_length": 0,
-    "try_correct_alignments": False,
-    "max_path_nodes_per_component": 10**9,
+    "restrict_asm_to_collapse": False,  # chain overlapping compatible reads...
+    "chain_requires_shared_intron": True,  # ...but only spliced reads sharing an intron
+    "snap_terminal_overhang_fuzz": 20,  # PASA's terminal fuzz (fuzzlength)
 }
 
 config = {
@@ -745,6 +720,10 @@ config = {
     # intron of the graph, past a splice site its terminal exon also covers, is trimmed
     # back to that splice site before the read is mapped. 0 = off (PASA uses 20).
     "snap_terminal_overhang_fuzz": 0,
+    # Chaining (restrict_asm_to_collapse False) links two compatible, overlapping read
+    # paths. With this set, they must also share an intron: reads that overlap only
+    # within an exon are not chained, and unspliced reads never chain.
+    "chain_requires_shared_intron": False,
     # Set by --pasa_mode (see PASA_MODE_CONFIG above); read by code that behaves
     # differently for PASA inputs.
     "pasa_mode": False,
