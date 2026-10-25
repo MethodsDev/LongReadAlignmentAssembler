@@ -1265,6 +1265,12 @@ class LRAA:
         # one acceptance probability per read, not per placement -- holds by construction
         # rather than by a flag a caller could get wrong.
 
+        # PASA's fuzzlength, applied to read ends rather than pairwise (see
+        # _snap_terminal_overhangs_into_introns). 0 = off.
+        snap_overhang_fuzz = int(
+            LRAA_Globals.config.get("snap_terminal_overhang_fuzz", 0) or 0
+        )
+
         pretty_alignment_manager = Pretty_alignment_manager(self._splice_graph)
 
         pretty_alignments = pretty_alignment_manager.retrieve_pretty_alignments(
@@ -1429,8 +1435,18 @@ class LRAA:
                 if read_type is None:
                     read_type = pretty_alignment.get_read_type()
 
+                read_segments = pretty_alignment.get_pretty_alignment_segments()
+                snapped = False
+                if snap_overhang_fuzz > 0:
+                    snapped_segments = self._snap_terminal_overhangs_into_introns(
+                        read_segments, snap_overhang_fuzz
+                    )
+                    if snapped_segments != read_segments:
+                        read_segments = snapped_segments
+                        snapped = True
+
                 path = self._map_read_to_graph(
-                    pretty_alignment.get_pretty_alignment_segments(),
+                    read_segments,
                     snap_nearby_boundary_features=True,
                     left_soft_clipping=pretty_alignment.left_soft_clipping,
                     right_soft_clipping=pretty_alignment.right_soft_clipping,
@@ -1446,7 +1462,10 @@ class LRAA:
                     assert path[-1] != SPACER, "path[-1] is SPACER, not allowed"
                     paths_list.append(path)
                     try:
-                        span = pretty_alignment.get_alignment_span()
+                        if snapped:
+                            span = (read_segments[0][0], read_segments[-1][1])
+                        else:
+                            span = pretty_alignment.get_alignment_span()
                     except Exception:
                         span = None
                     try:
@@ -1645,6 +1664,51 @@ class LRAA:
         )
 
         return mp_counter
+
+    def _snap_terminal_overhangs_into_introns(self, segments, fuzz):
+        """Trim a read end that runs at most `fuzz` bp past a splice site into an intron.
+
+        PASA's assembler (pasa_cpp canMerge/mergeAlignments, fuzzlength 20) treats a
+        terminal exon that overhangs a splice site of an overlapping alignment by up to
+        fuzzlength bases as compatible with it, and the merged structure takes the
+        splice site. Done here once per read, against the introns of this graph: a
+        first segment whose left end lies inside an intron, within `fuzz` of that
+        intron's acceptor-side exon start and still reaching past it, is moved to that
+        exon start; likewise the right end of a last segment to the donor-side exon end.
+        Without it each such read adds its own sub-chain path.
+
+        Returns a new segment list (the input is not modified), or the input itself
+        when nothing moved.
+        """
+        sg = self._splice_graph
+        new_segments = None
+
+        lend, rend = segments[0]
+        best = None
+        for intron in sg.get_overlapping_introns(lend, lend):
+            intron_lend, intron_rend = intron.get_coords()
+            exon_start = intron_rend + 1
+            if intron_lend <= lend < exon_start <= lend + fuzz and rend >= exon_start:
+                if best is None or exon_start < best:
+                    best = exon_start
+        if best is not None:
+            new_segments = [list(seg) for seg in segments]
+            new_segments[0][0] = best
+
+        lend, rend = (new_segments or segments)[-1]
+        best = None
+        for intron in sg.get_overlapping_introns(rend, rend):
+            intron_lend, intron_rend = intron.get_coords()
+            exon_end = intron_lend - 1
+            if rend - fuzz <= exon_end < rend <= intron_rend and lend <= exon_end:
+                if best is None or exon_end > best:
+                    best = exon_end
+        if best is not None:
+            if new_segments is None:
+                new_segments = [list(seg) for seg in segments]
+            new_segments[-1][1] = best
+
+        return segments if new_segments is None else new_segments
 
     def _snap_terminals_to_boundary_nodes(self, transcript, path):
         """

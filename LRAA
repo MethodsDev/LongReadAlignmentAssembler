@@ -384,6 +384,43 @@ def _apply_hifi_config_overrides(config, args):
     _apply_hifi_isoform_fraction_defaults(config, args)
 
 
+def _apply_pasa_mode_args(args):
+    """--pasa_mode, CLI half: turn on the flags in LRAA_Globals.PASA_MODE_ARGS.
+
+    Applied right after parsing, before anything reads args, so the run proceeds
+    exactly as if those flags had been typed. A flag the user did type keeps the
+    user's value.
+    """
+    if not getattr(args, "pasa_mode", False):
+        return
+    specified = getattr(args, "user_specified_dests", set())
+    for dest, value in LRAA_Globals.PASA_MODE_ARGS.items():
+        if dest in specified:
+            continue
+        setattr(args, dest, value)
+
+
+def _apply_pasa_mode_config_overrides(config, args):
+    """--pasa_mode, config half: LRAA_Globals.PASA_MODE_CONFIG.
+
+    After the HiFi preset, before --config_update, so an explicit file wins.
+    """
+    if not getattr(args, "pasa_mode", False):
+        return
+    config["pasa_mode"] = True
+    for key, value in LRAA_Globals.PASA_MODE_CONFIG.items():
+        config[key] = value
+    logger.info(
+        "--pasa_mode: config %s; flags %s",
+        LRAA_Globals.PASA_MODE_CONFIG,
+        {
+            k: v
+            for k, v in LRAA_Globals.PASA_MODE_ARGS.items()
+            if k not in getattr(args, "user_specified_dests", set())
+        },
+    )
+
+
 def _load_config_update_file(cfg_file):
     """Read and validate a --config_update JSON file, or exit naming the fault."""
 
@@ -1129,6 +1166,18 @@ def main():
         action="store_true",
         default=False,
         help="high fidelity mode (more stringent): min_per_id: 97, infer_TSS, infer_PolyA, max_exon_spur_length: 13",
+    )
+
+    parser.add_argument(
+        "--pasa_mode",
+        action="store_true",
+        default=False,
+        help="assemble curated transcript/EST alignments as PASA's assembler does "
+        "(chain compatible alignments, 20 bp terminal fuzz, no long-read noise "
+        "filters, no normalization/EM/isoform filtering, one worker per "
+        "contig-strand). For PASA's use of LRAA as its assembler backend; see "
+        "LRAA_Globals.PASA_MODE_ARGS / PASA_MODE_CONFIG for the full bundle. "
+        "Explicit flags and --config_update still override it.",
     )
     # Declared only so argparse produces the removal message below rather than
     # "unrecognized arguments". It is NOT a no-op and it does NOT warn -- an earlier
@@ -1895,6 +1944,7 @@ def main():
     # Captured here, before main() derives or mutates anything on args --
     # see _user_specified_dests for why this cannot be recomputed later.
     args.user_specified_dests = _user_specified_dests(args, parser)
+    _apply_pasa_mode_args(args)
 
     # (deprecated flags removed; no back-compat mapping)
 
@@ -2292,6 +2342,7 @@ def main():
     # low-memory behavior is always on (externalized read-name store; spans always tracked)
 
     _apply_hifi_config_overrides(LRAA_Globals.config, args)
+    _apply_pasa_mode_config_overrides(LRAA_Globals.config, args)
 
     # --no_infer_TSS / --no_infer_PolyA apply in BOTH modes.  They used to be read
     # only inside the HiFi preset, which was harmless while the library defaults
