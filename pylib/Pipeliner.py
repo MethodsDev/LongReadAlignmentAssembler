@@ -143,7 +143,7 @@ class Command(object):
                         runtime_minutes, cmdstr
                     )
                 )
-                run_cmd("touch {}".format(checkpoint_file))  # only if succeeds.
+                run_cmd("touch {}".format(shlex.quote(checkpoint_file)))  # only if succeeds.
 
         return ret
 
@@ -246,7 +246,7 @@ class ParallelCommandList(object):
         else:
             logger.info("All parallel commands succeeded.")
 
-        run_cmd("touch {}".format(full_path_parallel_job_checkpoint_file))
+        run_cmd("touch {}".format(shlex.quote(full_path_parallel_job_checkpoint_file)))
 
         logger.info("done running parallel command series.")
 

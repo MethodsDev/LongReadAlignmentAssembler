@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys, os, re
+import shlex
 import multiprocessing
 import shutil
 import subprocess
@@ -192,9 +193,11 @@ def main():
         SS_output_prefix = f"{os.path.basename(input_bam_filename)}.{split_token}.SS"
 
         scriptdir = os.path.abspath(os.path.dirname(__file__))
-        cmd = " ".join([os.path.join(scriptdir, "separate_bam_by_strand.py"),
-                        "--bam {}".format(input_bam_filename),
-                        "--output_prefix {}".format(SS_output_prefix),
+        # paths quoted: chunk directories are named for contigs, which may hold
+        # shell metacharacters (e.g. NCBI's "gi|68716")
+        cmd = " ".join([shlex.quote(os.path.join(scriptdir, "separate_bam_by_strand.py")),
+                        "--bam {}".format(shlex.quote(input_bam_filename)),
+                        "--output_prefix {}".format(shlex.quote(SS_output_prefix)),
                         "--max_intron_length {}".format(max_intron_length),
                         # the split is one thread per contig rather than one
                         # thread for the file; measured on a 48.1 M-record
@@ -255,8 +258,8 @@ def main():
         # whole of its cost; measured at 12.6 min single-threaded over 40.1 M
         # records on the cluster-guided path
         cmd = (
-            f"samtools merge --no-PG -@ {samtools_threads} -f {output_bam_filename} "
-            + " ".join(norm_bam_files)
+            f"samtools merge --no-PG -@ {samtools_threads} -f {shlex.quote(output_bam_filename)} "
+            + " ".join(shlex.quote(f) for f in norm_bam_files)
         )
         pipeliner.add_commands([Command(cmd, f"SS_merge.{run_token}.ok")])
         index_checkpoint = f"index_merged.{run_token}.ok"
@@ -275,10 +278,13 @@ def main():
     collapse_script = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "misc", "collapse_bam_pg_header.py"
     )
-    cmd = f"{sys.executable} {collapse_script} --input_bam {output_bam_filename} --no-index"
+    cmd = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(collapse_script)} "
+        f"--input_bam {shlex.quote(output_bam_filename)} --no-index"
+    )
     pipeliner.add_commands([Command(cmd, f"collapse_pg.{run_token}.ok")])
 
-    cmd = f"samtools index -@ {samtools_threads} {output_bam_filename}"
+    cmd = f"samtools index -@ {samtools_threads} {shlex.quote(output_bam_filename)}"
     pipeliner.add_commands([Command(cmd, index_checkpoint)])
 
     pipeliner.run()
