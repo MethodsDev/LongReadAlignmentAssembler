@@ -22,6 +22,26 @@ Changes that alter run outputs (the read-assignment summary only):
   deduplicated by name. MEASURED on PBMC Kinnex chrM: identical counts (+: 5,444,358
   kept, 5,445,971 with low_perID), peak RSS 0.90 -> 0.03 GB.
 
+Also in this version (devel 2026-10-25), no change to default runs:
+
+- NEW: --pasa_mode, a preset for assembling PASA-validated transcript/EST alignments:
+  chaining on, with chain_requires_shared_intron (two overlapping reads chain only if
+  they share an intron) and snap_terminal_overhang_fuzz 20 (a read end at most N bp
+  inside a graph intron is trimmed to the splice site). Explicit flags and
+  --config_update still win; chunked mode forwards the preset to its workers.
+  docs/pasa_mode.md.
+- NEW: --preassembled_input (Trinity/StringTie assemblies, ESTs, cDNAs): min_intron_support
+  and --min_reads_novel drop from 2 to 1.
+- NEW config keys, defaults keeping stock behavior: min_intron_support (2; was
+  hardcoded), require_canonical_splice_motif (True), single_pass_ME_SE (False),
+  chain_requires_shared_intron (False), snap_terminal_overhang_fuzz (0).
+- FIXED: min_alt_unspliced_freq=0 raised ZeroDivisionError; <= 0 now disables that
+  pruning.
+- FIXED: contig names containing '|' (NCBI "gi|..." style) broke samtools faidx and
+  chunked mode's shell commands; paths and names are now quoted or passed as argv.
+- CHANGED: the splice-graph cache key includes require_canonical_splice_motif (cache
+  version 12), so caches from earlier versions are rebuilt.
+
 v0.45.1
 
 No change to run outputs:
