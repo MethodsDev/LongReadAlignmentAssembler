@@ -1,4 +1,4 @@
-Unreleased
+v0.45.2
 
 Changes that alter run outputs (the read-assignment summary only):
 
