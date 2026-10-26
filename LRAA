@@ -2946,7 +2946,8 @@ def _safe_token(token):
 # _SPLICE_GRAPH_CONFIG_KEYS below, and bump SPLICE_GRAPH_CACHE_VERSION here. The
 # version is part of the signature, so entries built by different versions get
 # different cache paths and cannot be confused for one another.
-SPLICE_GRAPH_CACHE_VERSION = 11
+# Bumped to 12: require_canonical_splice_motif joined the signature.
+SPLICE_GRAPH_CACHE_VERSION = 12
 _REGISTERED_SPLICE_GRAPH_CACHE_DIRS = set()
 _SPLICE_GRAPH_CONFIG_KEYS = [
     # Ingestion rather than construction: this decides which alignments reach the
@@ -3010,6 +3011,9 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     "polyA_tail_proximal_window",
     "min_proximal_tail_base_frac",
     "strip_polyA_on_proximal_window",
+    # False admits junctions whatever their splice motif (Splice_graph.py), so it
+    # decides which introns the graph has.
+    "require_canonical_splice_motif",
 ]
 
 
