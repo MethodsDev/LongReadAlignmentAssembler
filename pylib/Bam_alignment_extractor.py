@@ -287,17 +287,22 @@ class Bam_alignment_extractor:
                     f"identity minimum. Please reevaluate --min_per_id for these alignments."
                 )
 
-    def retained_read_names(
-        self, contig_acc, contig_strand=None, region_lend=None, region_rend=None
+    def count_retained_reads(
+        self,
+        contig_acc,
+        contig_strand=None,
+        region_lend=None,
+        region_rend=None,
+        include_low_perID=False,
     ):
-        """The read NAMES get_read_alignments would keep over the same window.
+        """How many distinct reads get_read_alignments would keep over the same window.
 
         Same fetch window, same Util_funcs.quant_discard_reason policy, same
-        Util_funcs.get_read_name_include_sc_encoding naming, and the same
-        low_perID discard provenance -- it differs from get_read_alignments only
-        in building no Pretty_alignment and retaining no pysam record, so a caller
-        that wants the size of a region's read population does not pay for the
-        alignments it will not use.
+        Util_funcs.get_read_name_include_sc_encoding naming -- it differs from
+        get_read_alignments only in building no Pretty_alignment and retaining no
+        pysam record, so a caller that wants the size of a region's read population
+        does not pay for the alignments it will not use. With include_low_perID, the
+        reads discarded for low_perID count too.
 
         Exists for LRAA's count-then-report early returns: a work unit that
         quantifies nothing still has to say how many reads it SAW, and the only
@@ -305,14 +310,21 @@ class Bam_alignment_extractor:
         Reimplementing the retention rule to get it is what produced divergent
         approximations before quant_discard_reason was factored out, which is why
         this asks that predicate rather than repeating it.
-        """
 
-        self._last_discarded_read_names_by_reason = defaultdict(set)
+        Counted, not collected. The policy discards secondary, supplementary and
+        improperly paired alignments, so an unpaired read leaves at most one counted
+        record and needs no name to deduplicate; each record takes one outcome, so a
+        kept read and a low_perID one are never the same. Only proper-pair mates
+        share a name, and only they are deduplicated by it. MEASURED on PBMC Kinnex
+        chrM (+): 5,444,358 kept and 1,613 low_perID records, 5,445,971 distinct
+        names; the name set this replaces held 0.9 GB.
+        """
 
         min_mapping_quality = int(LRAA_Globals.config["min_mapping_quality"])
         max_intron_length = int(LRAA_Globals.config["max_intron_length"])
 
-        retained = set()
+        unpaired = {"kept": 0, "low_perID": 0}
+        paired_names = {"kept": set(), "low_perID": set()}
         for read in self._fetch_region(
             contig_acc, contig_strand, region_lend, region_rend
         ):
@@ -323,22 +335,30 @@ class Bam_alignment_extractor:
                 min_mapping_quality=min_mapping_quality,
                 min_per_id=LRAA_Globals.config["min_per_id"],
             )
-            if reason is None:
-                retained.add(Util_funcs.get_read_name_include_sc_encoding(read))
-            elif reason == "low_perID":
-                self._last_discarded_read_names_by_reason["low_perID"].add(
+            outcome = "kept" if reason is None else reason
+            if outcome not in unpaired:
+                continue
+            if read.is_paired:
+                paired_names[outcome].add(
                     Util_funcs.get_read_name_include_sc_encoding(read)
                 )
+            else:
+                unpaired[outcome] += 1
 
-        logger.info(
-            "[%s%s] retained_read_names: %d read(s) kept, %d discarded for low_perID",
-            contig_acc,
-            contig_strand,
-            len(retained),
-            len(self._last_discarded_read_names_by_reason["low_perID"]),
+        kept = unpaired["kept"] + len(paired_names["kept"])
+        low_perID = unpaired["low_perID"] + len(
+            paired_names["low_perID"] - paired_names["kept"]
         )
 
-        return retained
+        logger.info(
+            "[%s%s] count_retained_reads: %d read(s) kept, %d discarded for low_perID",
+            contig_acc,
+            contig_strand,
+            kept,
+            low_perID,
+        )
+
+        return kept + low_perID if include_low_perID else kept
 
     def get_last_discarded_read_names_by_reason(self):
         return {

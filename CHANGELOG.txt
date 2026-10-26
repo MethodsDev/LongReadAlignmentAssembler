@@ -1,3 +1,27 @@
+Unreleased
+
+Changes that alter run outputs (the read-assignment summary only):
+
+- FIXED: an oversimplified work unit (chrM and M by default) reported the wrong reads in
+  <prefix>.read_assignment.summary.tsv. The oversimplify paths wrote no summary row, so
+  the _contig_job_runner backstop wrote one: reads counted in a second pass over the
+  first-pass bam -- the coverage-normalized one under --stream_reads, and in chunked
+  runs -- with every assigned count zero, while the paths quantify the full
+  bam_file_for_quant. _run_oversimplify_best_overlap and _run_oversimplify_aggregate now
+  write their own row: reads_total is the reads they streamed, reads_kept_genome the
+  ones credited to a model (all of them for the aggregate; best-overlap leaves out a
+  read with no exonic overlap). No rescue runs there, so the rescue columns stay zero.
+  MEASURED on a chunked chrM fixture normalized to 5x: the row went from reads_total
+  5 / 9 with 0 kept to 60 / 20 with all kept, on + / -. On a deep chrM the merged
+  reads_total and frac_kept_genome move accordingly. quant.expr, quant.tracking and the
+  gtf are unchanged.
+- CHANGED: the backstop counts reads instead of collecting their names
+  (Bam_alignment_extractor.count_retained_reads replaces retained_read_names). The
+  retention policy already drops secondary, supplementary and improperly paired
+  alignments, so unpaired records are counted one each and only proper-pair mates are
+  deduplicated by name. MEASURED on PBMC Kinnex chrM: identical counts (+: 5,444,358
+  kept, 5,445,971 with low_perID), peak RSS 0.90 -> 0.03 GB.
+
 v0.45.1
 
 No change to run outputs:

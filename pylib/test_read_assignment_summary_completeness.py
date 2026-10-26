@@ -744,11 +744,12 @@ def test_a_discovery_unit_that_assembles_nothing_still_reports_its_reads(tmp_pat
 
 def test_an_oversimplified_contig_still_reports_its_reads(tmp_path):
     """chrM is oversimplified BY DEFAULT (``--oversimplify chrM,M``), and the
-    oversimplify paths take no summary argument at all.
+    oversimplify paths once took no summary argument at all.
 
     So on any genome with a chrM, one chunk of every run produced no read-assignment
     summary -- MEASURED: both units of an oversimplified chrM chunk wrote quant
-    output and no summary, and their 40 reads were missing from the total. Requiring
+    output and no summary, and their 40 reads were missing from the total. They now
+    write their own row (test_oversimplify_read_assignment_summary.py). Requiring
     a summary from every unit would have refused every such run outright, which is
     what makes this the test that keeps the refusal shippable.
     """

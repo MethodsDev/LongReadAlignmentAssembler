@@ -5343,6 +5343,7 @@ def _contig_job_runner(job):
                 input_transcripts=input_transcripts,
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
+                read_assignment_summary_path=read_assignment_summary_tmp,
             )
         elif (
             # Ref-guided, non-quant-only: skip discovery on oversimplified contigs; use provided GTF as-is and quantify via best-overlap
@@ -5365,6 +5366,7 @@ def _contig_job_runner(job):
                 input_transcripts=input_transcripts,
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
+                read_assignment_summary_path=read_assignment_summary_tmp,
                 # No read floor. An oversimplified contig's models come from the input
                 # annotation and are carried forward whatever the reads did, so that
                 # every run over this contig reports the same set -- which is what
@@ -5414,6 +5416,7 @@ def _contig_job_runner(job):
                 ofh_gtf=ofh_gtf_local,
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
+                read_assignment_summary_path=read_assignment_summary_tmp,
             )
         else:
             # Default behavior
@@ -5475,13 +5478,13 @@ def _contig_job_runner(job):
         # many reads it saw.
         #
         # run_quant_only's three early returns write their own summary, naming
-        # which condition fired. Nothing else does. run_transcript_assembly has
-        # NINE more early returns of its own -- nothing assembled, no draft mapped
-        # into the final graph, and one per isoform filter that emptied the set --
-        # and the two oversimplify paths take no summary argument at all. MEASURED:
-        # a two-read discovery chunk and an oversimplified chrM chunk each wrote a
-        # quant.expr and no summary, so their reads were absent from the run's
-        # accounting entirely.
+        # which condition fired, and the two oversimplify paths write theirs from
+        # the reads they quantified. run_transcript_assembly has NINE more early
+        # returns of its own -- nothing assembled, no draft mapped into the final
+        # graph, and one per isoform filter that emptied the set. MEASURED: a
+        # two-read discovery chunk and (before the oversimplify paths wrote their
+        # own) an oversimplified chrM chunk each wrote a quant.expr and no summary,
+        # so their reads were absent from the run's accounting entirely.
         #
         # Held here, once, rather than at each of those returns: this is the only
         # place that knows a work unit is finishing, so it is the only place that
@@ -5608,6 +5611,7 @@ def _run_oversimplify_best_overlap(
     input_transcripts,
     ofh_quant,
     ofh_track,
+    read_assignment_summary_path=None,
 ):
     """Assign each read to the single best-overlapping reference transcript on this contig/strand.
 
@@ -5627,6 +5631,8 @@ def _run_oversimplify_best_overlap(
     A model no read reached still gets its quant row, carrying zero.
     Quant-only and ref-guided discovery therefore get the same model set here; the
     two differ in what they do elsewhere, not in what this path reports.
+
+    Writes the unit's read-assignment summary row (_write_oversimplify_read_assignment_summary).
     """
 
     if not input_transcripts:
@@ -5683,6 +5689,7 @@ def _run_oversimplify_best_overlap(
         return ov
 
     # Assign each passing primary alignment directly.
+    reads_seen = 0
     assigned_read_count = 0
     assigned_tids = set()
     mp_id_token = f"ovsimp:{contig_acc}:{contig_strand}"
@@ -5698,6 +5705,7 @@ def _run_oversimplify_best_overlap(
     # existed to compensate for.
 
     for pa in pretty_alignments:
+        reads_seen += 1
         segs = pa.get_pretty_alignment_segments()
         if not segs:
             continue
@@ -5845,6 +5853,13 @@ def _run_oversimplify_best_overlap(
     logger.info(
         f"[{contig_acc}{contig_strand}] oversimplify: assigned {assigned_read_count} reads across {len(assigned_tids)} transcripts"
     )
+    _write_oversimplify_read_assignment_summary(
+        read_assignment_summary_path,
+        contig_acc,
+        contig_strand,
+        reads_seen,
+        assigned_read_count,
+    )
     # Exactly the models that got a quant row, so the caller's GTF cannot disagree.
     return sorted_tx
 
@@ -5859,13 +5874,15 @@ def _run_oversimplify_aggregate(
     ofh_gtf,
     ofh_quant,
     ofh_track,
+    read_assignment_summary_path=None,
 ):
     """De novo oversimplify: create a single pseudo-transcript spanning the contig (or region) and
     assign all reads on this (contig,strand) to it.
 
     - Span: region bounds if provided, else full contig length from contig_seq_str.
     - Per-strand: this is invoked within a strand-specific worker.
-    - Outputs: writes one GTF transcript (with one exon), quant row, and tracking rows.
+    - Outputs: writes one GTF transcript (with one exon), quant row, and tracking rows,
+      and the unit's read-assignment summary row.
     """
 
     # Determine span
@@ -5926,6 +5943,7 @@ def _run_oversimplify_aggregate(
         if num_exons > 1
         else t.get_transcript_id()
     )
+    reads_seen = 0
     read_count = 0.0
     for pa in _oversimplify_alignments(
         contig_acc,
@@ -5934,6 +5952,7 @@ def _run_oversimplify_aggregate(
         restrict_region_lend,
         restrict_region_rend,
     ):
+        reads_seen += 1
         rn = pa.get_read_name()
         if not rn:
             continue
@@ -6008,7 +6027,43 @@ def _run_oversimplify_aggregate(
     logger.info(
         f"[{contig_acc}{contig_strand}] oversimplify-aggregate: span {lend}-{rend}, reads {uniq_reads}"
     )
+    _write_oversimplify_read_assignment_summary(
+        read_assignment_summary_path,
+        contig_acc,
+        contig_strand,
+        reads_seen,
+        uniq_reads,
+    )
     return
+
+
+def _write_oversimplify_read_assignment_summary(
+    summary_path, contig_acc, contig_strand, reads_seen, reads_assigned
+):
+    """The read-assignment summary row of an oversimplified work unit, from its own counts.
+
+    Left to the _contig_job_runner backstop, the row reported reads it had counted in
+    a second pass over the FIRST-PASS bam -- under --stream_reads the coverage-
+    normalized one -- with zero assigned, while these paths quantify the full
+    bam_file_for_quant. On a deep chrM that is a different and far smaller population
+    than the one in quant.expr, and an assigned count of zero for reads that were
+    assigned.
+
+    reads_total is the reads the path streamed (its retention policy already applied)
+    and reads_kept_genome the ones it credited to a model: a read with no exonic
+    overlap is the analogue of one that maps into no graph path. Counted per record,
+    as quant.expr counts them. No rescue runs here, so the rescue columns are zero,
+    and a low_perID discard is not a rescue candidate.
+    """
+
+    if summary_path is None:
+        return
+    _write_read_assignment_summary(
+        summary_path,
+        contig_acc,
+        contig_strand,
+        {"reads_total": reads_seen, "reads_kept_genome": reads_assigned},
+    )
 
 
 RESCUE_STATS_COLUMNS = (
@@ -6451,8 +6506,8 @@ def _write_unquantified_read_assignment_summary(
     no input transcripts for this contig/strand, an empty splice graph, and no input
     transcript left after mapping into the graph -- because those name WHICH
     condition fired. Everything else reaches it through the backstop in
-    _contig_job_runner, which covers run_transcript_assembly's nine early returns
-    and the two oversimplify paths that take no summary argument at all.
+    _contig_job_runner, which covers run_transcript_assembly's nine early returns.
+    The two oversimplify paths write their own row, from the reads they quantified.
 
     A whole-genome chunked run has ~600 work units, and these shards still HOLD
     reads: an intergenic chunk, one whose every annotated transcript was filtered
@@ -6464,9 +6519,11 @@ def _write_unquantified_read_assignment_summary(
 
     reads_total is therefore MEASURED, over the bam the first assignment pass would
     have read, the same region it would have fetched, and the same retention policy
-    it applies -- Bam_alignment_extractor.retained_read_names asks
+    it applies -- Bam_alignment_extractor.count_retained_reads asks
     Util_funcs.quant_discard_reason, exactly as get_read_alignments does, so this is
-    the same population and not a second approximation of it.
+    the same population and not a second approximation of it. It counts the reads
+    rather than collecting their names, which would cost about 165 bytes per read
+    for a deduplication the retention policy has already done.
 
     Every other counter is zero because nothing was assigned, not because nothing
     was looked at. A fabricated zero reads_total would be worse than the absent row
@@ -6484,7 +6541,7 @@ def _write_unquantified_read_assignment_summary(
     LRAA_Globals.config["min_mapping_quality"] = LRAA_Globals.config[
         "min_mapping_quality_for_final_quant"
     ]
-    read_names = set()
+    reads_total = 0
     try:
         if bam_file is None:
             logger.warning(
@@ -6495,31 +6552,31 @@ def _write_unquantified_read_assignment_summary(
                 reason,
             )
         else:
-            extractor = Bam_alignment_extractor(bam_file)
-            read_names = extractor.retained_read_names(
-                contig_acc, contig_strand, region_lend, region_rend
+            # The assigning path folds the extractor's low-identity discards into
+            # reads_total by way of the rescue candidate set (LRAA.py:1259-1267),
+            # and only when rescue is on. Same condition here, so both paths count
+            # one population rather than two that differ by those reads.
+            reads_total = Bam_alignment_extractor(bam_file).count_retained_reads(
+                contig_acc,
+                contig_strand,
+                region_lend,
+                region_rend,
+                include_low_perID=LRAA_Globals.config[
+                    "rescue_unassigned_reads_via_transcriptome_alignment"
+                ],
             )
-            if LRAA_Globals.config[
-                "rescue_unassigned_reads_via_transcriptome_alignment"
-            ]:
-                # The assigning path folds the extractor's low-identity discards
-                # into reads_total by way of the rescue candidate set
-                # (LRAA.py:1259-1267), and only when rescue is on. Same condition
-                # here, so both paths count one population rather than two that
-                # differ by those reads.
-                discarded = extractor.get_last_discarded_read_names_by_reason()
-                read_names = read_names | discarded.get("low_perID", set())
     finally:
         LRAA_Globals.config["min_mapping_quality"] = saved_min_mapq
 
-    # Distinct read NAMES, which is the cardinality reads_total reports: the
-    # assigning path counts distinct _normalize_read_identifier values, and that
-    # normalization is a renaming of these same names. It is deliberately not
-    # applied here -- it writes through LRAA_Globals.READ_NAME_STORE, which these
-    # early returns run before, so asking it would either populate a store this
-    # unit never uses or, on a store left closed by a previous unit, silently drop
-    # reads from the count this function exists to make honest.
-    stats = {"reads_total": len(read_names)}
+    # Distinct READS, which is the cardinality reads_total reports: the assigning
+    # path counts distinct _normalize_read_identifier values, and that
+    # normalization is a renaming of the names count_retained_reads deduplicates
+    # by. It is deliberately not applied here -- it writes through
+    # LRAA_Globals.READ_NAME_STORE, which these early returns run before, so asking
+    # it would either populate a store this unit never uses or, on a store left
+    # closed by a previous unit, silently drop reads from the count this function
+    # exists to make honest.
+    stats = {"reads_total": reads_total}
 
     logger.info(
         "[%s%s] %s: reporting %d read(s) with zero assigned",
