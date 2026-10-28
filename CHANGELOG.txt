@@ -1,3 +1,39 @@
+v0.46.0
+
+Changes that alter run outputs (TSS sites, and the models through them):
+
+- NEW, ON BY DEFAULT: prune_uncapped_alt_TSS. A read that starts at a capped RNA end
+  carries one more untemplated 5' G than the library's uncapped reads (reverse
+  transcriptase adds a C opposite the cap). Pretty_alignment now records the 5' G run
+  before the untemplated-G strip; Splice_graph counts it per TSS position (reads whose
+  genomic base just 5' of the start is G are not informative), calibrates the library's
+  baseline G run from spliced read starts away from TSS peaks, and prunes a TSS lying
+  downstream of a capped site, on any splice graph path, when under min_TSS_cap_frac
+  (0.10) of its informative reads (>= 5) are capped. Capped alternative TSSs are exempt
+  from the max_frac_alt_TSS_from_degradation pruning (protect_capped_alt_TSS). A gene's
+  upstream-most site is never judged, and the rule switches itself off where peak and
+  non-peak starts are capped alike (min_TSS_cap_signal_delta), so uncapped spike-ins,
+  trimmed reads and simulations are untouched. MEASURED, de novo, chromosome scale:
+  FTD nuclei chr19 TSS sites in CAGE 39.6 -> 47.5% (neuronal 5' truncation sites
+  removed); PBMC chr22 52.9 -> 58.0%; BT474 PacBio chr19 +14 TSS, 13 at CAGE peaks,
+  multi-exon models and GENCODE matches unchanged; MCF7 ONT, SIRVs and an Arabidopsis
+  simulation unchanged.
+- NEW, OFF in LRAA, ON in LRAA-singlecell.wdl's per-cluster discovery runs:
+  require_cap_for_new_TSS. A read-defined TSS that the guide lacks (no guide 5' end with
+  TSS "True" within max_dist_between_alt_TSS_sites) is admitted only with >= 2 capped
+  reads and min_TSS_cap_frac of >= 5 informative ones. MEASURED, FTD chr19 ref-guided
+  cluster-guided path: merged catalog TSS sites in CAGE 47.6 -> 59.2%, neuronal
+  "downstream TSS" switch sites 13 -> 0.
+
+Also in this version, no change to default runs:
+
+- NEW: --config_update accepts the JSON object itself as well as a file, when the
+  value starts with '{'.
+- NEW (WDL): LRAA.wdl config_update_json, reaching all three scattering modes
+  (--config_update; the by_chunk leaves' worker config). LRAA-singlecell.wdl
+  init_config_update_json and cluster_config_update_json give the two discovery phases
+  their own settings; the final quant gets neither.
+
 v0.45.2
 
 Changes that alter run outputs (the read-assignment summary only):

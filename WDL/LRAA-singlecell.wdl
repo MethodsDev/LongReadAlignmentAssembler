@@ -185,12 +185,15 @@ workflow LRAA_singlecell_wf {
 
     # LRAA_Globals.config overrides as JSON objects, one per DISCOVERY phase, since
     # LRAA cannot tell the phases apart: a cluster's discovery run is an ordinary
-    # guided run whose guide happens to be the init gtf. E.g. for the cap signature at
-    # TSSs, init '{"prune_uncapped_alt_TSS": true}' and cluster
-    # '{"require_cap_for_new_TSS": true}'. Neither reaches the final quant, which
-    # quantifies the merged catalog. Unset: LRAA's defaults, as before.
+    # guided run whose guide happens to be the init gtf. Neither reaches the final
+    # quant, which quantifies the merged catalog.
+    #
+    # The cluster default turns on the cap-signature gate for new TSSs (v0.46.0): a
+    # cluster's sparse reads otherwise turn 5' truncation pile-ups into sites that the
+    # merged catalog keeps (FTD nuclei). Set it to "" for LRAA's defaults. The init
+    # run needs nothing: prune_uncapped_alt_TSS is on by default.
     String? init_config_update_json
-    String? cluster_config_update_json
+    String cluster_config_update_json = '{"require_cap_for_new_TSS": true}'
 
     # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
     # case -- means LRAA counts the input bam itself, once, with its -F 0x904

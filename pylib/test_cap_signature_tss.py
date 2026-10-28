@@ -188,8 +188,11 @@ def test_a_site_without_enough_informative_reads_is_not_judged(restore_config):
     assert t["D2"] in kept
 
 
-def test_the_rule_is_off_by_default():
-    assert LRAA_Globals.config["prune_uncapped_alt_TSS"] is False
+def test_the_defaults():
+    """Pruning on everywhere (it switches itself off without a cap signature); the
+    new-TSS gate only where the single-cell workflow turns it on."""
+    assert LRAA_Globals.config["prune_uncapped_alt_TSS"] is True
+    assert LRAA_Globals.config["require_cap_for_new_TSS"] is False
 
 
 # --------------------------------------------------------------------------

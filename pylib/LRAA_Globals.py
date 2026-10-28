@@ -303,7 +303,7 @@ config = {
     "max_frac_alt_TSS_from_degradation": 0.20,
     # to retain j TSS when comparing to i TSS, j TSS must have >= read support fraction of all gene reads
     #
-    ## - cap signature at alt TSSs (EXPERIMENTAL, off by default)
+    ## - cap signature at alt TSSs (prune_uncapped_alt_TSS on by default since v0.46.0)
     # A read whose 5' end is a capped RNA end carries ONE more untemplated G than the
     # library's uncapped reads: reverse transcriptase adds a C opposite the cap.
     # Measured (__TSS_5prime_Completeness/cap_signature_other_datasets): sc Kinnex
@@ -320,12 +320,24 @@ config = {
     # upstream-most site is never judged, so uncapped spike-ins and libraries without
     # the signature keep their starts.
     #
-    # The baseline G count is estimated per splice graph from read starts away from
-    # any TSS peak (TSS_cap_G_baseline "auto", or an int). The rule switches itself
+    # The baseline G count is estimated per splice graph from spliced read starts away
+    # from any TSS peak (TSS_cap_G_baseline "auto", or an int). The rule switches itself
     # off where peak and non-peak starts don't differ by min_TSS_cap_signal_delta
     # (no signature: trimmed reads, simulations, MORFs). Reads whose genomic base just
     # 5' of the start is G are not informative (a capped read's extra G aligns there).
-    "prune_uncapped_alt_TSS": False,
+    #
+    # MEASURED, de novo, chromosome scale, off -> on (v0.46.0 branch):
+    #   FTD nuclei chr19     TSS sites 983 -> 851, in CAGE 39.6 -> 47.5%; 178 lost
+    #                        (15 in CAGE); neuron "downstream TSS" switch sites 9 -> 1
+    #                        (the one left is 52% capped)
+    #   PBMC chr22           586 -> 548, in CAGE 52.9 -> 58.0%; 49 lost (1 in CAGE);
+    #                        its downstream switch sites all kept (16/16)
+    #   BT474 PacBio chr19   active at baseline 1 G; multi-exon models 4687 -> 4685,
+    #                        GENCODE matches unchanged; +14 TSS (13 at CAGE peaks)
+    #   MCF7 ONT chr19       active at baseline 3 G; output identical
+    #   SIRVs, Arabidopsis   inactive; output identical
+    #   simulation
+    "prune_uncapped_alt_TSS": True,
     # Cluster-guided runs (each cluster's reads, guided by the pooled run's gtf): a
     # read-defined TSS that is NEW -- not within max_dist_between_alt_TSS_sites of a
     # guide transcript's 5' end -- is admitted only with the cap signature: at least
@@ -334,7 +346,14 @@ config = {
     # reads otherwise turn every 5' truncation pile-up into a site, and the merged
     # catalog keeps any site one cluster calls. Sites the guide has were judged on the
     # pooled reads (prune_uncapped_alt_TSS there). Inactive where the library shows no
-    # cap signature, like the pruning.
+    # cap signature, like the pruning. Only guide 5' ends with TSS "True" count.
+    #
+    # OFF here because LRAA cannot tell a cluster's discovery run from any other guided
+    # run; on, it would gate every non-guide TSS of a ref-guided bulk run too.
+    # LRAA-singlecell.wdl turns it on for the per-cluster discovery runs
+    # (cluster_config_update_json). MEASURED, FTD chr19 ref-guided cluster-guided path:
+    # merged catalog TSS 867 -> 713, in CAGE 47.6 -> 59.2%, neuron "downstream TSS"
+    # switch sites 13 -> 0.
     "require_cap_for_new_TSS": False,
     "min_new_TSS_capped_reads": 2,
     "protect_capped_alt_TSS": True,
