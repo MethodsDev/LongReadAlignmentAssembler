@@ -329,12 +329,17 @@ class Splice_graph:
         )
 
         # guide 5' ends, for require_cap_for_new_TSS; needed by the read pass, which
-        # runs before the guide is folded in below
+        # runs before the guide is folded in below. Only 5' ends the guide calls a TSS
+        # (TSS "True") count: a model without one starts at a read extent, often a 5'
+        # truncation point. In a cluster-guided run the guide is the pooled LRAA gtf,
+        # which carries the attribute on every model; a gtf without it (a reference
+        # annotation, parsed as False) vouches for no site.
         self._guide_TSS_positions = sorted(
             {
                 (t.get_coords()[0] if contig_strand == "+" else t.get_coords()[1])
                 for t in (input_transcripts or [])
                 if t.get_strand() == contig_strand
+                and getattr(t, "_imported_has_TSS", None) is True
             }
         ) if not quant_mode else []
 
