@@ -80,6 +80,10 @@ workflow LRAA_chunk_scatter {
         # --config_update file (see lraa_cmd) because per-flag forwarding there is
         # the same allowlist that silently dropped every threshold once already.
         Boolean no_weight_reads_by_3prime_agreement = false
+        # LRAA_Globals.config overrides as a JSON object, e.g.
+        # '{"require_cap_for_new_TSS": true}'. Merged into the same worker config
+        # file as the override above (and applied after it), for every leaf.
+        String? config_update_json
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         File? cell_list
@@ -302,6 +306,7 @@ workflow LRAA_chunk_scatter {
                 oversimplify = oversimplify,
                 polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                config_update_json = config_update_json,
                 chunkCpu = chunkCpu_use,
                 chunkMemoryGB = chunkMemoryGB_use,
                 chunkPreemptible = chunkPreemptible,
@@ -546,6 +551,7 @@ task process_chunk {
         String? oversimplify
         File? polyA_known
         Boolean no_weight_reads_by_3prime_agreement = false
+        String? config_update_json
         Int chunkCpu
         Int chunkMemoryGB
         Int chunkPreemptible
@@ -576,6 +582,20 @@ task process_chunk {
     if [[ "~{no_weight_reads_by_3prime_agreement}" == "true" ]]; then
         printf '{"weight_reads_by_3prime_agreement": false}\n' > worker_config.json
     fi
+    # config_update_json, the phase's own overrides, merged into the same file and
+    # applied after the override above.
+    cat > config_update.json <<'LRAA_CONFIG_UPDATE_EOF'
+~{default="" config_update_json}
+LRAA_CONFIG_UPDATE_EOF
+    python3 - <<'PY'
+import json, os
+extra = open("config_update.json").read().strip()
+if extra:
+    cfg = json.load(open("worker_config.json")) if os.path.exists("worker_config.json") else {}
+    cfg.update(json.loads(extra))
+    with open("worker_config.json", "w") as fh:
+        json.dump(cfg, fh, sort_keys=True)
+PY
 
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --output_dir work \
@@ -592,7 +612,7 @@ task process_chunk {
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
         ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
-        ~{if no_weight_reads_by_3prime_agreement then "--worker_config_json \"$PWD/worker_config.json\"" else ""}
+        ~{if (no_weight_reads_by_3prime_agreement || select_first([config_update_json, ""]) != "") then "--worker_config_json \"$PWD/worker_config.json\"" else ""}
 
     # Rename every unit artifact to <unit_id>.<suffix>. The merge addresses inputs as
     # quant_prefix + ".quant.expr" etc, so unit-scoped basenames let the merge task drop

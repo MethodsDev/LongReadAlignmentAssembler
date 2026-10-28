@@ -150,6 +150,12 @@ workflow LRAA_wf {
         # its config key is the NEGATION of its dest and _NEGATED_CONFIG_FLAGS did
         # not map the pair.
         Boolean no_weight_reads_by_3prime_agreement = false
+        # LRAA_Globals.config overrides for this run, as a JSON object, e.g.
+        # '{"prune_uncapped_alt_TSS": true}'. Reaches all three scattering modes:
+        # LRAA's --config_update for by_chromosome and off, the leaf worker config for
+        # by_chunk. This is how a setting with no CLI flag is set from a workflow, and
+        # how a calling workflow gives its phases different settings.
+        String? config_update_json
         Boolean quant_only = false
         # Whole-genome alignment-mismapping filter, ON BY DEFAULT. Runs once as a
         # dedicated post-merge task (alignment_mismapping_filter) on the merged
@@ -452,6 +458,7 @@ workflow LRAA_wf {
                 oversimplify = oversimplify,
                 polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                config_update_json = config_update_json,
                 quant_only = quant_only,
                 HiFi = HiFi,
                 min_mapping_quality = min_mapping_quality,
@@ -639,6 +646,7 @@ workflow LRAA_wf {
                     no_norm = no_norm,
                     no_EM = no_EM,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                    config_update_json = config_update_json,
                     retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
@@ -740,6 +748,7 @@ workflow LRAA_wf {
                 no_norm = no_norm,
                 no_EM = no_EM,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                config_update_json = config_update_json,
                 retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,

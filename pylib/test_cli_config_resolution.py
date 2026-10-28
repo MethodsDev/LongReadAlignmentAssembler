@@ -3,6 +3,8 @@
 import argparse
 import importlib.util
 import json
+
+import pytest
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -167,3 +169,14 @@ def test_named_values_seed_config_and_json_wins_for_all_consumers():
     splice_graph_params = LRAA_CLI._build_splice_graph_params(config)
     assert splice_graph_params["min_alt_splice_freq"] == 0.02
     assert splice_graph_params["min_alt_unspliced_freq"] == 0.04
+
+
+def test_config_update_accepts_inline_json(tmp_path):
+    """--config_update takes a JSON file or, starting with '{', the object itself."""
+    inline = LRAA_CLI._load_config_update_file(' {"require_cap_for_new_TSS": true}')
+    assert inline == {"require_cap_for_new_TSS": True}
+    f = tmp_path / "cfg.json"
+    f.write_text(json.dumps({"min_TSS_cap_frac": 0.2}))
+    assert LRAA_CLI._load_config_update_file(str(f)) == {"min_TSS_cap_frac": 0.2}
+    with pytest.raises(SystemExit):
+        LRAA_CLI._load_config_update_file('{"unterminated": ')

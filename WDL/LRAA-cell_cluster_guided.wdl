@@ -117,6 +117,9 @@ workflow LRAA_cell_cluster_guided {
         # per-cluster discovery and the final quant -- because a weighting that
         # differed between the phases would make their numbers incomparable.
         Boolean no_weight_reads_by_3prime_agreement = false
+        # LRAA_Globals.config overrides (JSON object) for the per-cluster DISCOVERY runs
+        # only; the final quant gets LRAA's defaults. See LRAA-singlecell.wdl.
+        String? cluster_config_update_json
         Int memoryGBscSparseMatrices = 16
         # Build the single-cell matrices per (cluster, contig) shard during the
         # final quantification wave and merge them, instead of one
@@ -262,6 +265,7 @@ workflow LRAA_cell_cluster_guided {
                     emit_splice_pattern_collapse = false,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                    config_update_json = cluster_config_update_json,
                     main_chromosomes = main_chromosomes,
                     partition_workers = cluster_partition_workers,
                     quant_only = false,

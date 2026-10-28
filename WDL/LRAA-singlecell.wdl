@@ -183,6 +183,15 @@ workflow LRAA_singlecell_wf {
     # not, which is what made it unreachable from Terra on single-cell runs.
     Boolean no_weight_reads_by_3prime_agreement = false
 
+    # LRAA_Globals.config overrides as JSON objects, one per DISCOVERY phase, since
+    # LRAA cannot tell the phases apart: a cluster's discovery run is an ordinary
+    # guided run whose guide happens to be the init gtf. E.g. for the cap signature at
+    # TSSs, init '{"prune_uncapped_alt_TSS": true}' and cluster
+    # '{"require_cap_for_new_TSS": true}'. Neither reaches the final quant, which
+    # quantifies the merged catalog. Unset: LRAA's defaults, as before.
+    String? init_config_update_json
+    String? cluster_config_update_json
+
     # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
     # case -- means LRAA counts the input bam itself, once, with its -F 0x904
     # mapped-primary policy.
@@ -519,6 +528,7 @@ workflow LRAA_singlecell_wf {
         retain_normalized_splice_graph_bam = false,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+        config_update_json = init_config_update_json,
         # Init only. The cluster_guided call below deliberately does not get this --
         # see the input's declaration for why.
         num_total_reads = num_total_reads,
@@ -707,6 +717,7 @@ workflow LRAA_singlecell_wf {
         oversimplify = oversimplify,
         polyA_known = polyA_known,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+        cluster_config_update_json = cluster_config_update_json,
         main_chromosomes = main_chromosomes,
         # Backend-dependent, and separate from the initial phase's value on purpose:
         # these partitions run once per cluster, which is 14-32 jobs sharing ONE host

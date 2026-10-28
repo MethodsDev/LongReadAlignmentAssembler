@@ -442,15 +442,27 @@ def _apply_preassembled_input_config_overrides(config, args):
 
 
 def _load_config_update_file(cfg_file):
-    """Read and validate a --config_update JSON file, or exit naming the fault."""
+    """Read and validate --config_update, or exit naming the fault.
 
-    if not os.path.exists(cfg_file):
-        sys.exit(f"Error, --config_update file not found: {cfg_file}")
-    try:
-        with open(cfg_file, "rt") as fh:
-            user_cfg = json.load(fh)
-    except Exception as e:
-        sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
+    A JSON file, or the JSON object itself when the value starts with '{' (e.g.
+    --config_update '{"require_cap_for_new_TSS": true}'). Chunk workers never see
+    the original value: the resolved overrides reach them as a file (see
+    worker_config_json).
+    """
+
+    if cfg_file.lstrip().startswith("{"):
+        try:
+            user_cfg = json.loads(cfg_file)
+        except Exception as e:
+            sys.exit(f"Error parsing inline JSON --config_update {cfg_file!r}: {e}")
+    else:
+        if not os.path.exists(cfg_file):
+            sys.exit(f"Error, --config_update file not found: {cfg_file}")
+        try:
+            with open(cfg_file, "rt") as fh:
+                user_cfg = json.load(fh)
+        except Exception as e:
+            sys.exit(f"Error parsing JSON config_update file {cfg_file}: {e}")
 
     if not isinstance(user_cfg, dict):
         sys.exit(
@@ -1938,7 +1950,7 @@ def main():
         "--config_update",
         type=str,
         required=False,
-        help="JSON file containing key:value pairs to override entries in LRAA_Globals.config after other CLI options are processed",
+        help="JSON file, or an inline JSON object starting with '{', of key:value pairs overriding entries in LRAA_Globals.config after other CLI options are processed",
     )
 
     # resource monitoring

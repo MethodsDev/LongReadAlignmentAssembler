@@ -62,6 +62,10 @@ task LRAA_runner_task {
         # from the wrong apportionment, which is what happened: the flag reached no
         # workflow at all, and on a chunked run LRAA parsed it and dropped it.
         Boolean no_weight_reads_by_3prime_agreement = false
+        # LRAA_Globals.config overrides as a JSON object, e.g.
+        # '{"require_cap_for_new_TSS": true}', handed to LRAA as --config_update.
+        # Settings with no CLI flag reach a workflow run this way, per phase.
+        String? config_update_json
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -285,6 +289,13 @@ task LRAA_runner_task {
         progress_reporter &
         progress_pid=$!
 
+        # Written to a file with a quoted heredoc, so the shell never sees the JSON;
+        # an absolute path, since LRAA's chunk workers run in their own dirs.
+        config_update_file="$(pwd)/lraa_config_update.json"
+        cat > "$config_update_file" <<'LRAA_CONFIG_UPDATE_EOF'
+~{default="" config_update_json}
+LRAA_CONFIG_UPDATE_EOF
+
         # --no_splice_collapsed_outputs below: the WORKFLOW owns those artifacts.
         # LRAA.wdl runs one splice_pattern_collapse task on the FINAL gtf, while this
         # task is normally one chromosome shard of it, so letting each shard collapse
@@ -314,6 +325,7 @@ task LRAA_runner_task {
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
                                  ~{true="--no_filter_mismappings" false='' no_filter_mismappings} \
                                  ~{true="--no_weight_reads_by_3prime_agreement" false='' no_weight_reads_by_3prime_agreement} \
+                                 ~{if select_first([config_update_json, ""]) != "" then "--config_update \"$config_update_file\"" else ""} \
                                  ~{if defined(min_alt_splice_freq) then "--min_alt_splice_freq " + min_alt_splice_freq else ""} \
                                  ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \
                                  ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
@@ -508,6 +520,7 @@ workflow LRAA_runner {
         Float? min_monoexonic_TPM
         Boolean? no_filter_internal_priming
         Boolean no_weight_reads_by_3prime_agreement = false
+        String? config_update_json
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -564,6 +577,7 @@ workflow LRAA_runner {
             min_monoexonic_TPM=min_monoexonic_TPM,
             no_filter_internal_priming=no_filter_internal_priming,
             no_weight_reads_by_3prime_agreement=no_weight_reads_by_3prime_agreement,
+            config_update_json=config_update_json,
             min_alt_splice_freq=min_alt_splice_freq,
             min_alt_unspliced_freq=min_alt_unspliced_freq,
             cell_barcode_tag = cell_barcode_tag,
