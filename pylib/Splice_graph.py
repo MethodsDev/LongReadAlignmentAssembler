@@ -328,6 +328,9 @@ class Splice_graph:
             reference_transcripts, contig_strand
         )
 
+        # set per build by the read pass (_assign_TSS_cap_counts); never carried over
+        self._TSS_cap_active = False
+
         # guide 5' ends, for require_cap_for_new_TSS; needed by the read pass, which
         # runs before the guide is folded in below. Only 5' ends the guide calls a TSS
         # (TSS "True") count: a model without one starts at a read extent, often a 5'
@@ -723,11 +726,16 @@ class Splice_graph:
         TSS_position_counter = defaultdict(int)
         polyA_position_counter = defaultdict(int)
         # TSS position -> {(5' G-run length, read is spliced): weighted informative
-        # reads}; only with prune_uncapped_alt_TSS or require_cap_for_new_TSS
+        # reads}; only with prune_uncapped_alt_TSS or require_cap_for_new_TSS, and only
+        # in discovery: both rules decide which TSSs models may start at, and a
+        # quant-only run's models are fixed, so its read assignment stays as before.
         TSS_cap_counter = (
             defaultdict(lambda: defaultdict(float))
-            if LRAA_Globals.config.get("prune_uncapped_alt_TSS", False)
-            or LRAA_Globals.config.get("require_cap_for_new_TSS", False)
+            if not quant_mode
+            and (
+                LRAA_Globals.config.get("prune_uncapped_alt_TSS", False)
+                or LRAA_Globals.config.get("require_cap_for_new_TSS", False)
+            )
             else None
         )
 

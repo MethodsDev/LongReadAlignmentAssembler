@@ -17,7 +17,8 @@ Changes that alter run outputs (TSS sites, and the models through them):
   FTD nuclei chr19 TSS sites in CAGE 39.6 -> 47.5% (neuronal 5' truncation sites
   removed); PBMC chr22 52.9 -> 58.0%; BT474 PacBio chr19 +14 TSS, 13 at CAGE peaks,
   multi-exon models and GENCODE matches unchanged; MCF7 ONT, SIRVs and an Arabidopsis
-  simulation unchanged.
+  simulation unchanged. Discovery only: a quant-only run (and the single-cell final
+  quant) builds no cap counts, so its read assignment is as before.
 - NEW, OFF in LRAA, ON in LRAA-singlecell.wdl's per-cluster discovery runs:
   require_cap_for_new_TSS. A read-defined TSS that the guide lacks (no guide 5' end with
   TSS "True" within max_dist_between_alt_TSS_sites) is admitted only with >= 2 capped
