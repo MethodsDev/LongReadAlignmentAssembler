@@ -328,6 +328,16 @@ class Splice_graph:
             reference_transcripts, contig_strand
         )
 
+        # guide 5' ends, for require_cap_for_new_TSS; needed by the read pass, which
+        # runs before the guide is folded in below
+        self._guide_TSS_positions = sorted(
+            {
+                (t.get_coords()[0] if contig_strand == "+" else t.get_coords()[1])
+                for t in (input_transcripts or [])
+                if t.get_strand() == contig_strand
+            }
+        ) if not quant_mode else []
+
         if bam_files:
             # accumulate coverage/intron/TSS/PolyA evidence across all bam inputs
             for bamf in bam_files:
@@ -712,6 +722,7 @@ class Splice_graph:
         TSS_cap_counter = (
             defaultdict(lambda: defaultdict(float))
             if LRAA_Globals.config.get("prune_uncapped_alt_TSS", False)
+            or LRAA_Globals.config.get("require_cap_for_new_TSS", False)
             else None
         )
 
@@ -1171,6 +1182,38 @@ class Splice_graph:
                     if run > baseline:
                         marked += w
             TSS_obj.set_cap_counts(informative, marked)
+
+        if LRAA_Globals.config.get("require_cap_for_new_TSS", False):
+            self._reject_uncapped_new_TSS(TSS_objs, window)
+
+    def _reject_uncapped_new_TSS(self, TSS_objs, window):
+        """require_cap_for_new_TSS: drop read-defined TSSs away from every guide 5'
+        end that lack the cap signature (see LRAA_Globals)."""
+        cfg = LRAA_Globals.config
+        guide = getattr(self, "_guide_TSS_positions", [])
+        rejected = []
+        for TSS_obj in TSS_objs:
+            site = TSS_obj.get_coords()[0]
+            k = bisect.bisect_left(guide, site - window)
+            if k < len(guide) and guide[k] <= site + window:
+                continue  # the guide has it
+            informative = getattr(TSS_obj, "_cap_informative", 0)
+            marked = getattr(TSS_obj, "_cap_marked", 0)
+            if (
+                informative >= cfg["min_TSS_cap_informative_reads"]
+                and marked >= cfg["min_new_TSS_capped_reads"]
+                and marked / informative >= cfg["min_TSS_cap_frac"]
+            ):
+                continue
+            rejected.append(TSS_obj)
+        if rejected:
+            logger.info(
+                "[{}{}] rejected {} new TSS lacking the cap signature".format(
+                    self._contig_acc, self._contig_strand, len(rejected)
+                )
+            )
+            rejected = set(rejected)
+            self._TSS_objs[:] = [t for t in self._TSS_objs if t not in rejected]
 
     def _collect_reference_three_prime_ends(self, reference_transcripts, contig_strand):
         """Sorted 3' cleavage coordinates that ENDORSE (waive) the internal-priming veto.

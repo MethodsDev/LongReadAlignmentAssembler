@@ -189,3 +189,30 @@ def test_a_site_without_enough_informative_reads_is_not_judged(restore_config):
 
 def test_the_rule_is_off_by_default():
     assert LRAA_Globals.config["prune_uncapped_alt_TSS"] is False
+
+
+# --------------------------------------------------------------------------
+# new TSSs in cluster-guided runs
+# --------------------------------------------------------------------------
+
+
+def test_a_new_TSS_needs_the_cap_signature(restore_config):
+    """require_cap_for_new_TSS: sites the guide lacks need >= 2 capped reads and
+    min_TSS_cap_frac; sites at a guide 5' end are left alone."""
+    LRAA_Globals.config.update(
+        {
+            "require_cap_for_new_TSS": True,
+            "min_TSS_cap_informative_reads": 5,
+            "min_new_TSS_capped_reads": 2,
+            "min_TSS_cap_frac": 0.10,
+        }
+    )
+    sg = _bare_graph()
+    sg._guide_TSS_positions = [1000]
+    at_guide = _tss(1010, 50, 0)
+    capped = _tss(3000, 10, 3)
+    one_capped = _tss(5000, 5, 1)
+    sparse = _tss(7000, 4, 4)
+    sg._TSS_objs = [at_guide, capped, one_capped, sparse]
+    sg._reject_uncapped_new_TSS(list(sg._TSS_objs), 50)
+    assert sg._TSS_objs == [at_guide, capped]

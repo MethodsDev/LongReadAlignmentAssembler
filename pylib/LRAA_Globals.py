@@ -326,6 +326,17 @@ config = {
     # (no signature: trimmed reads, simulations, MORFs). Reads whose genomic base just
     # 5' of the start is G are not informative (a capped read's extra G aligns there).
     "prune_uncapped_alt_TSS": False,
+    # Cluster-guided runs (each cluster's reads, guided by the pooled run's gtf): a
+    # read-defined TSS that is NEW -- not within max_dist_between_alt_TSS_sites of a
+    # guide transcript's 5' end -- is admitted only with the cap signature: at least
+    # min_new_TSS_capped_reads capped and min_TSS_cap_frac of its
+    # min_TSS_cap_informative_reads or more informative reads. A cluster's sparse
+    # reads otherwise turn every 5' truncation pile-up into a site, and the merged
+    # catalog keeps any site one cluster calls. Sites the guide has were judged on the
+    # pooled reads (prune_uncapped_alt_TSS there). Inactive where the library shows no
+    # cap signature, like the pruning.
+    "require_cap_for_new_TSS": False,
+    "min_new_TSS_capped_reads": 2,
     "protect_capped_alt_TSS": True,
     "TSS_cap_G_baseline": "auto",
     "min_TSS_cap_frac": 0.10,  # capped fraction of a site's informative reads
