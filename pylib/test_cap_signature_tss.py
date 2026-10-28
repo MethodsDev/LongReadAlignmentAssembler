@@ -84,6 +84,7 @@ def test_reverse_reads_count_the_complement_at_the_right_end(restore_config):
 
 
 def _bare_graph():
+    Splice_graph._TSS_cap_calibration.clear()
     sg = Splice_graph.__new__(Splice_graph)
     sg._contig_acc = "chr1"
     sg._contig_strand = "+"
@@ -93,11 +94,11 @@ def _bare_graph():
 def test_the_baseline_is_the_common_run_away_from_peaks(restore_config):
     """Bulk PacBio-like: uncapped starts carry one G, capped two."""
     counter = defaultdict(lambda: defaultdict(float))
-    counter[1000][2] = 70
-    counter[1000][1] = 30
+    counter[1000][(2, True)] = 70
+    counter[1000][(1, True)] = 30
     for pos in range(5000, 5300):
-        counter[pos][1] = 0.9
-        counter[pos][2] = 0.1
+        counter[pos][(1, True)] = 0.9
+        counter[pos][(2, True)] = 0.1
     baseline, active, stats = _bare_graph()._calibrate_TSS_cap_signature(
         counter, [1000], 50
     )
@@ -109,9 +110,9 @@ def test_the_baseline_is_the_common_run_away_from_peaks(restore_config):
 def test_no_signature_leaves_the_rule_off(restore_config):
     """Simulated or trimmed reads: peaks and body look alike."""
     counter = defaultdict(lambda: defaultdict(float))
-    counter[1000][0] = 100
+    counter[1000][(0, True)] = 100
     for pos in range(5000, 5300):
-        counter[pos][0] = 1
+        counter[pos][(0, True)] = 1
     baseline, active, _ = _bare_graph()._calibrate_TSS_cap_signature(
         counter, [1000], 50
     )
@@ -121,8 +122,8 @@ def test_no_signature_leaves_the_rule_off(restore_config):
 
 def test_too_few_calibration_reads_leave_the_rule_off(restore_config):
     counter = defaultdict(lambda: defaultdict(float))
-    counter[1000][1] = 100
-    counter[5000][0] = 10
+    counter[1000][(1, True)] = 100
+    counter[5000][(0, True)] = 10
     _, active, _ = _bare_graph()._calibrate_TSS_cap_signature(counter, [1000], 50)
     assert not active
 
@@ -216,3 +217,25 @@ def test_a_new_TSS_needs_the_cap_signature(restore_config):
     sg._TSS_objs = [at_guide, capped, one_capped, sparse]
     sg._reject_uncapped_new_TSS(list(sg._TSS_objs), 50)
     assert sg._TSS_objs == [at_guide, capped]
+
+
+def test_calibration_ignores_unspliced_reads_and_reuses_the_last_one(restore_config):
+    """Unspliced truncation piles dilute the contrast; a build without spliced reads
+    (the SE graph) takes the contig strand's earlier calibration."""
+    sg = _bare_graph()
+    counter = defaultdict(lambda: defaultdict(float))
+    counter[1000][(1, True)] = 60
+    counter[1000][(0, True)] = 40
+    counter[1000][(0, False)] = 5000  # an unspliced pile at the peak
+    for pos in range(5000, 5300):
+        counter[pos][(0, True)] = 0.95
+        counter[pos][(1, True)] = 0.05
+    baseline, active, _ = sg._calibrate_TSS_cap_signature(counter, [1000], 50)
+    assert (baseline, active) == (0, True)
+
+    unspliced_only = defaultdict(lambda: defaultdict(float))
+    unspliced_only[1000][(0, False)] = 100
+    baseline, active, stats = sg._calibrate_TSS_cap_signature(
+        unspliced_only, [1000], 50
+    )
+    assert (baseline, active) == (0, True) and "reused" in stats

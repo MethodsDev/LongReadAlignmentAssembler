@@ -211,13 +211,15 @@ class TSS(GenomeFeature):
         return getattr(self, "_cap_marked", 0) / informative
 
     def __repr__(self):
-        return "TSS: {} {}:{}-{} [{}] read_count:{}".format(
+        return "TSS: {} {}:{}-{} [{}] read_count:{} cap:{:g}/{:g}".format(
             self._id,
             self._contig_acc,
             self._lend,
             self._rend,
             self._orient,
             self._count,
+            getattr(self, "_cap_marked", 0),
+            getattr(self, "_cap_informative", 0),
         )
 
 

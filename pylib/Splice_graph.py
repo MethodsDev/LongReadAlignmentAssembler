@@ -717,8 +717,8 @@ class Splice_graph:
         ## do not count boundaries with soft clipping for TSS sites.  TODO:// examine polyA on reads for polyA sites.
         TSS_position_counter = defaultdict(int)
         polyA_position_counter = defaultdict(int)
-        # TSS position -> {5' G-run length: weighted informative reads}; only with
-        # prune_uncapped_alt_TSS (see LRAA_Globals)
+        # TSS position -> {(5' G-run length, read is spliced): weighted informative
+        # reads}; only with prune_uncapped_alt_TSS or require_cap_for_new_TSS
         TSS_cap_counter = (
             defaultdict(lambda: defaultdict(float))
             if LRAA_Globals.config.get("prune_uncapped_alt_TSS", False)
@@ -806,7 +806,9 @@ class Splice_graph:
                     if G_run is not None and not self._genomic_G_upstream_of_TSS(
                         TSS_pos, contig_strand
                     ):
-                        TSS_cap_counter[TSS_pos][min(G_run, 8)] += read_weight
+                        TSS_cap_counter[TSS_pos][
+                            (min(G_run, 8), pretty_alignment.has_introns())
+                        ] += read_weight
                 if TSS_reads_ofh is not None:
                     print(
                         "\t".join(
@@ -1007,6 +1009,10 @@ class Splice_graph:
                 return obj
         return None
 
+    # (contig, strand) -> (baseline, active), per process; see
+    # _calibrate_TSS_cap_signature
+    _TSS_cap_calibration = dict()
+
     def _genomic_G_upstream_of_TSS(self, TSS_pos, contig_strand):
         """Is the genomic base just 5' of a TSS (transcript strand) a G?
 
@@ -1026,6 +1032,12 @@ class Splice_graph:
         `window` from every TSS peak (mostly truncated and body starts). Capped: one G
         more than that. Enabled when peak starts are capped more often than non-peak
         starts by min_TSS_cap_signal_delta. Returns (baseline, active, stats).
+
+        Spliced reads only. Unspliced reads -- most of a nucleus library -- pile up at
+        5' truncation points that count as peaks, which dilutes the contrast (FTD
+        chr19, all reads: 13% capped at peaks vs 5% elsewhere; spliced: 40% vs 11%).
+        A build with too few spliced reads (the SE graph) reuses the last calibration
+        of the same contig strand in this process.
         """
         cfg = LRAA_Globals.config
         peaks = sorted(peak_positions)
@@ -1038,11 +1050,18 @@ class Splice_graph:
         off_peak = defaultdict(float)
         for pos, runs in TSS_cap_counter.items():
             dest = at_peak if near_peak(pos) else off_peak
-            for run, w in runs.items():
-                dest[run] += w
+            for (run, spliced), w in runs.items():
+                if spliced:
+                    dest[run] += w
 
         n_off = sum(off_peak.values())
         n_at = sum(at_peak.values())
+
+        cache_key = (self._contig_acc, self._contig_strand)
+        if n_off < cfg["min_TSS_cap_calibration_reads"]:
+            if cache_key in Splice_graph._TSS_cap_calibration:
+                baseline, active = Splice_graph._TSS_cap_calibration[cache_key]
+                return baseline, active, dict(reused="earlier build", n_off_peak=n_off)
 
         baseline = cfg.get("TSS_cap_G_baseline", "auto")
         if baseline == "auto" or baseline is None:
@@ -1067,6 +1086,8 @@ class Splice_graph:
             capped_peak=round(frac_at, 3),
             capped_off_peak=round(frac_off, 3),
         )
+        if n_off >= cfg["min_TSS_cap_calibration_reads"]:
+            Splice_graph._TSS_cap_calibration[cache_key] = (baseline, active)
         return baseline, active, stats
 
     def _incorporate_TSS_objects(
@@ -1177,7 +1198,7 @@ class Splice_graph:
             informative = 0.0
             marked = 0.0
             for pos in positions[lo:hi]:
-                for run, w in TSS_cap_counter[pos].items():
+                for (run, _spliced), w in TSS_cap_counter[pos].items():
                     informative += w
                     if run > baseline:
                         marked += w
