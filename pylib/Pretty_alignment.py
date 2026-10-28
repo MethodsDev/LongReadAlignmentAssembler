@@ -27,6 +27,7 @@ class Pretty_alignment:
         "left_soft_clipping",
         "right_soft_clipping",
         "has_external_tail",
+        "five_prime_G_run",
         "read_name",
         "strand",
         "_normalization_weight",
@@ -56,8 +57,12 @@ class Pretty_alignment:
         # Whether the clip at the read's 3' end looks like a real polyA tail.
         # Recorded for filtering only; see _set_read_soft_clipping_info.
         self.has_external_tail = False
+        # Length of the G run in the 5' clip touching the alignment (0 if unclipped,
+        # None if the read has no sequence). The cap signature; see
+        # prune_uncapped_alt_TSS in LRAA_Globals.
+        self.five_prime_G_run = None
 
-        self.read_name = Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
+        self.read_name =Util_funcs.get_read_name_include_sc_encoding(pysam_alignment)
         self.strand = self.get_strand(pysam_alignment)
         # Read now, not on demand: lighten() drops the pysam record long before
         # the splice graph tallies support, and a float per alignment is cheaper
@@ -304,6 +309,15 @@ class Pretty_alignment:
         # Stripping the run mirrors what already happens for polyA at the other
         # end, and is narrower than tolerating N clipped bases of any kind: GG is
         # the library signature and passes, AT is a misalignment and does not.
+        # Recorded before the stripping below zeroes the clip, whether or not the
+        # read can define a TSS; Splice_graph decides that.
+        if tx_forward:
+            _clip5 = left_soft_clipped_seq.upper()
+            self.five_prime_G_run = len(_clip5) - len(_clip5.rstrip("G"))
+        else:
+            _clip5 = right_soft_clipped_seq.upper()
+            self.five_prime_G_run = len(_clip5) - len(_clip5.lstrip("C"))
+
         max_untemplated_G = LRAA_Globals.config["max_untemplated_G_at_TSS"]
 
         if max_untemplated_G > 0:
@@ -410,6 +424,11 @@ class Pretty_alignment:
         'no evidence recorded' rather than an AttributeError.
         """
         return getattr(self, "has_external_tail", False)
+
+    def get_five_prime_G_run(self):
+        """G run in the 5' clip touching the alignment; None when not recorded
+        (no sequence, or an alignment cache predating this slot)."""
+        return getattr(self, "five_prime_G_run", None)
 
     def has_soft_clipping(self):
 

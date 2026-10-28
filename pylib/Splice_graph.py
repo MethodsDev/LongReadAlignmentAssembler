@@ -707,6 +707,13 @@ class Splice_graph:
         ## do not count boundaries with soft clipping for TSS sites.  TODO:// examine polyA on reads for polyA sites.
         TSS_position_counter = defaultdict(int)
         polyA_position_counter = defaultdict(int)
+        # TSS position -> {5' G-run length: weighted informative reads}; only with
+        # prune_uncapped_alt_TSS (see LRAA_Globals)
+        TSS_cap_counter = (
+            defaultdict(lambda: defaultdict(float))
+            if LRAA_Globals.config.get("prune_uncapped_alt_TSS", False)
+            else None
+        )
 
         # Debug read support logs only when the corresponding feature inference is enabled
         TSS_reads_ofh = None
@@ -783,6 +790,12 @@ class Splice_graph:
 
             if TSS_pos_soft_clipping <= LRAA_Globals.config["max_soft_clip_at_TSS"]:
                 TSS_position_counter[TSS_pos] += read_weight
+                if TSS_cap_counter is not None:
+                    G_run = pretty_alignment.get_five_prime_G_run()
+                    if G_run is not None and not self._genomic_G_upstream_of_TSS(
+                        TSS_pos, contig_strand
+                    ):
+                        TSS_cap_counter[TSS_pos][min(G_run, 8)] += read_weight
                 if TSS_reads_ofh is not None:
                     print(
                         "\t".join(
@@ -946,7 +959,10 @@ class Splice_graph:
 
             if LRAA_Globals.config["infer_TSS"]:
                 self._incorporate_TSS_objects(
-                    contig_acc, contig_strand, TSS_position_counter
+                    contig_acc,
+                    contig_strand,
+                    TSS_position_counter,
+                    TSS_cap_counter=TSS_cap_counter,
                 )
 
             if LRAA_Globals.config["infer_PolyA"]:
@@ -980,8 +996,75 @@ class Splice_graph:
                 return obj
         return None
 
+    def _genomic_G_upstream_of_TSS(self, TSS_pos, contig_strand):
+        """Is the genomic base just 5' of a TSS (transcript strand) a G?
+
+        A capped read's extra G then matches the genome and aligns, so the read shows
+        no cap signature and is not informative for it.
+        """
+        if contig_strand == "+":
+            i = TSS_pos - 2
+            return 0 <= i < self._contig_seq_len and self._contig_seq_str[i] in "Gg"
+        i = TSS_pos  # genomic TSS_pos + 1, 0-based
+        return 0 <= i < self._contig_seq_len and self._contig_seq_str[i] in "Cc"
+
+    def _calibrate_TSS_cap_signature(self, TSS_cap_counter, peak_positions, window):
+        """Baseline G count and whether this library shows the cap signature.
+
+        Baseline: the most common 5' G run among informative read starts farther than
+        `window` from every TSS peak (mostly truncated and body starts). Capped: one G
+        more than that. Enabled when peak starts are capped more often than non-peak
+        starts by min_TSS_cap_signal_delta. Returns (baseline, active, stats).
+        """
+        cfg = LRAA_Globals.config
+        peaks = sorted(peak_positions)
+
+        def near_peak(pos):
+            k = bisect.bisect_left(peaks, pos - window)
+            return k < len(peaks) and peaks[k] <= pos + window
+
+        at_peak = defaultdict(float)
+        off_peak = defaultdict(float)
+        for pos, runs in TSS_cap_counter.items():
+            dest = at_peak if near_peak(pos) else off_peak
+            for run, w in runs.items():
+                dest[run] += w
+
+        n_off = sum(off_peak.values())
+        n_at = sum(at_peak.values())
+
+        baseline = cfg.get("TSS_cap_G_baseline", "auto")
+        if baseline == "auto" or baseline is None:
+            if n_off <= 0:
+                return None, False, dict(n_peak=n_at, n_off_peak=n_off)
+            baseline = max(off_peak.items(), key=lambda x: (x[1], -x[0]))[0]
+        baseline = int(baseline)
+
+        def capped_frac(d, n):
+            return sum(w for run, w in d.items() if run > baseline) / n if n > 0 else 0.0
+
+        frac_at = capped_frac(at_peak, n_at)
+        frac_off = capped_frac(off_peak, n_off)
+        active = (
+            n_off >= cfg["min_TSS_cap_calibration_reads"]
+            and n_at > 0
+            and frac_at - frac_off >= cfg["min_TSS_cap_signal_delta"]
+        )
+        stats = dict(
+            n_peak=round(n_at, 1),
+            n_off_peak=round(n_off, 1),
+            capped_peak=round(frac_at, 3),
+            capped_off_peak=round(frac_off, 3),
+        )
+        return baseline, active, stats
+
     def _incorporate_TSS_objects(
-        self, contig_acc, contig_strand, TSS_position_counter, from_reads=True
+        self,
+        contig_acc,
+        contig_strand,
+        TSS_position_counter,
+        from_reads=True,
+        TSS_cap_counter=None,
     ):
 
         if LRAA_Globals.DEBUG:
@@ -1016,6 +1099,7 @@ class Splice_graph:
                 TSS_grouped_positions, TSS_position_counter, contig_acc, contig_strand
             )
 
+        new_read_TSS_objs = list()
         for TSS_peak in TSS_grouped_positions:
             position, count = TSS_peak
 
@@ -1036,14 +1120,57 @@ class Splice_graph:
                 # it outrank sites the reads actually measured.
                 site_count = LRAA_Globals.config["min_alignments_define_TSS_site"]
 
-            self._TSS_objs.append(
-                TSS(contig_acc, position, position, contig_strand, site_count)
+            TSS_obj = TSS(contig_acc, position, position, contig_strand, site_count)
+            self._TSS_objs.append(TSS_obj)
+            new_read_TSS_objs.append(TSS_obj)
+
+        if from_reads and TSS_cap_counter is not None:
+            self._assign_TSS_cap_counts(
+                contig_acc, contig_strand, TSS_cap_counter, new_read_TSS_objs, window
             )
 
         if LRAA_Globals.DEBUG:
             append_log_file("__prefilter_TSS_info.bed", self._TSS_objs)
 
         return
+
+    def _assign_TSS_cap_counts(
+        self, contig_acc, contig_strand, TSS_cap_counter, TSS_objs, window
+    ):
+        """Calibrate the cap signature and give each read-defined TSS its cap counts.
+
+        A site's reads are those starting within `window` of it, as for its read count.
+        """
+        baseline, active, stats = self._calibrate_TSS_cap_signature(
+            TSS_cap_counter, [t.get_coords()[0] for t in TSS_objs], window
+        )
+        self._TSS_cap_active = active
+        self._TSS_cap_baseline = baseline
+        logger.info(
+            "[{}{}] TSS cap signature: baseline G run {}, {} ({})".format(
+                contig_acc,
+                contig_strand,
+                baseline,
+                "active" if active else "inactive",
+                ", ".join("{}={}".format(k, v) for k, v in stats.items()),
+            )
+        )
+        if not active:
+            return
+
+        positions = sorted(TSS_cap_counter.keys())
+        for TSS_obj in TSS_objs:
+            site = TSS_obj.get_coords()[0]
+            lo = bisect.bisect_left(positions, site - window)
+            hi = bisect.bisect_right(positions, site + window)
+            informative = 0.0
+            marked = 0.0
+            for pos in positions[lo:hi]:
+                for run, w in TSS_cap_counter[pos].items():
+                    informative += w
+                    if run > baseline:
+                        marked += w
+            TSS_obj.set_cap_counts(informative, marked)
 
     def _collect_reference_three_prime_ends(self, reference_transcripts, contig_strand):
         """Sorted 3' cleavage coordinates that ENDORSE (waive) the internal-priming veto.
@@ -3497,6 +3624,16 @@ class Splice_graph:
             if type(node) == TSS:
                 TSS_list.append(node)
 
+        cap_active = LRAA_Globals.config.get(
+            "prune_uncapped_alt_TSS", False
+        ) and getattr(self, "_TSS_cap_active", False)
+
+        if TSS_list and cap_active:
+            # before the support-fraction purge: in truncation-heavy cells the capped
+            # upstream site can fall below min_TSS_iso_fraction only because its
+            # truncated reads pile up downstream
+            TSS_list = self._prune_uncapped_alt_TSS(TSS_list)
+
         if TSS_list:
 
             sum_TSS_read_support = 0
@@ -3629,6 +3766,13 @@ class Splice_graph:
                             alt_TSS_candidate = alt_TSS_candidates[0]
                             if (
                                 alt_TSS_candidate not in TSS_to_purge
+                                and not (
+                                    cap_active
+                                    and self._TSS_is_capped(alt_TSS_candidate)
+                                    and LRAA_Globals.config.get(
+                                        "protect_capped_alt_TSS", True
+                                    )
+                                )
                                 and alt_TSS_candidate.get_read_support()
                                 / this_TSS_support
                                 <= max_frac_TSS_is_degradation
@@ -3651,6 +3795,71 @@ class Splice_graph:
                 self._splice_graph.remove_nodes_from(TSS_to_purge)
 
         return
+
+    def _TSS_cap_frac(self, TSS_obj):
+        return TSS_obj.get_cap_frac(
+            LRAA_Globals.config["min_TSS_cap_informative_reads"]
+        )
+
+    def _TSS_is_capped(self, TSS_obj):
+        frac = self._TSS_cap_frac(TSS_obj)
+        return frac is not None and frac >= LRAA_Globals.config["min_TSS_cap_frac"]
+
+    def _TSS_is_uncapped(self, TSS_obj):
+        frac = self._TSS_cap_frac(TSS_obj)
+        return frac is not None and frac < LRAA_Globals.config["min_TSS_cap_frac"]
+
+    def _TSS_reachable_downstream(self, source_TSS_objs):
+        """TSSs whose first exon segment lies 3' of a source TSS along any splice
+        graph path (exons and introns), sources excluded."""
+        succ = (
+            self._splice_graph.successors
+            if self._contig_strand == "+"
+            else self._splice_graph.predecessors
+        )
+        pred = (
+            self._splice_graph.predecessors
+            if self._contig_strand == "+"
+            else self._splice_graph.successors
+        )
+        seen = set()
+        frontier = [
+            x for t in source_TSS_objs for x in succ(t) if type(x) in (Exon, Intron)
+        ]
+        reached = set()
+        while frontier:
+            node = frontier.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            for x in pred(node):
+                if type(x) == TSS:
+                    reached.add(x)
+            frontier.extend(x for x in succ(node) if type(x) in (Exon, Intron))
+        return reached - set(source_TSS_objs)
+
+    def _prune_uncapped_alt_TSS(self, TSS_list):
+        """Remove TSSs downstream of a capped site whose own reads are rarely capped
+        (5' truncation products). See prune_uncapped_alt_TSS."""
+        capped = [t for t in TSS_list if self._TSS_is_capped(t)]
+        if not capped:
+            return TSS_list
+        to_purge = {
+            t
+            for t in self._TSS_reachable_downstream(capped)
+            if t in TSS_list and self._TSS_is_uncapped(t)
+        }
+        if to_purge:
+            logger.info(
+                "[{}{}] pruned {} uncapped alt TSS downstream of capped sites".format(
+                    self._contig_acc, self._contig_strand, len(to_purge)
+                )
+            )
+            for TSS_obj in to_purge:
+                logger.debug("-purging uncapped alt TSS {}".format(TSS_obj))
+                self._TSS_objs.remove(TSS_obj)
+            self._splice_graph.remove_nodes_from(to_purge)
+        return [t for t in TSS_list if t not in to_purge]
 
     def _eliminate_low_support_PolyA(self, node_list):
         logger.info(

@@ -303,6 +303,36 @@ config = {
     "max_frac_alt_TSS_from_degradation": 0.20,
     # to retain j TSS when comparing to i TSS, j TSS must have >= read support fraction of all gene reads
     #
+    ## - cap signature at alt TSSs (EXPERIMENTAL, off by default)
+    # A read whose 5' end is a capped RNA end carries ONE more untemplated G than the
+    # library's uncapped reads: reverse transcriptase adds a C opposite the cap.
+    # Measured (__TSS_5prime_Completeness/cap_signature_other_datasets): sc Kinnex
+    # 0 -> 1 G (reads at annotated TSSs 65% PBMC / 42% FTD nuclei vs 1-2% in the body),
+    # bulk PacBio 1 -> 2 (74% vs 6-7%), ONT PCS109 3 -> 4 (28-29% vs 3%); uncapped
+    # SIRVs 3% vs 2%. A 5' truncated read starts at a pile-up that looks like a TSS
+    # but lacks the extra G, which is what the FTD neuronal "downstream TSS" sites
+    # look like (median 1% capped vs 48% at their upstream sites).
+    #
+    # When on, an alternative TSS met on the degradation walk downstream of a capped
+    # site (the walk below max_frac_alt_TSS_from_degradation uses) is pruned when its
+    # own reads are rarely capped, whatever its read support; one that is capped is
+    # exempt from the support-ratio pruning (protect_capped_alt_TSS). A gene's
+    # upstream-most site is never judged, so uncapped spike-ins and libraries without
+    # the signature keep their starts.
+    #
+    # The baseline G count is estimated per splice graph from read starts away from
+    # any TSS peak (TSS_cap_G_baseline "auto", or an int). The rule switches itself
+    # off where peak and non-peak starts don't differ by min_TSS_cap_signal_delta
+    # (no signature: trimmed reads, simulations, MORFs). Reads whose genomic base just
+    # 5' of the start is G are not informative (a capped read's extra G aligns there).
+    "prune_uncapped_alt_TSS": False,
+    "protect_capped_alt_TSS": True,
+    "TSS_cap_G_baseline": "auto",
+    "min_TSS_cap_frac": 0.10,  # capped fraction of a site's informative reads
+    "min_TSS_cap_informative_reads": 5,  # below this a site is not judged
+    "min_TSS_cap_signal_delta": 0.10,  # peak minus non-peak capped fraction to enable
+    "min_TSS_cap_calibration_reads": 200,  # non-peak informative reads to calibrate
+    #
     ####################
     ## polyA site config
     # ON for every platform as of v0.37.0. This is the switch the MCF7 evidence

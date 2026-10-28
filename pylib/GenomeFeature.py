@@ -189,11 +189,26 @@ class TSS(GenomeFeature):
         TSS.TSS_id_counter += 1
         self._id = "TSS:{}".format(TSS.TSS_id_counter)
 
+        # cap signature of the reads defining the site (prune_uncapped_alt_TSS)
+        self._cap_informative = 0
+        self._cap_marked = 0
+
         return
 
     def get_read_support(self):
         # implement your own!
         return self._count
+
+    def set_cap_counts(self, informative, marked):
+        self._cap_informative = informative
+        self._cap_marked = marked
+
+    def get_cap_frac(self, min_informative):
+        """Capped share of the site's informative reads, or None below min_informative."""
+        informative = getattr(self, "_cap_informative", 0)
+        if informative <= 0 or informative < min_informative:
+            return None
+        return getattr(self, "_cap_marked", 0) / informative
 
     def __repr__(self):
         return "TSS: {} {}:{}-{} [{}] read_count:{}".format(
