@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-VERSION = "v0.46.1"
+VERSION = "v0.47.0"
 LRAA_VERSION_COMMENT = f"# LRAA version {VERSION}"
 
 import sys, os, re
@@ -2539,16 +2539,16 @@ def main():
     # chunked run as much as an unchunked one -- a chunked run that was going to
     # die on a bad --polyA_signal_window now dies before partitioning rather than
     # inside a worker an hour later.
-    # After every config source, before the chunk dispatch: one library-level cap
-    # calibration that the chunk workers inherit through the forwarded overrides.
-    cap_calibration = _resolve_TSS_cap_calibration(args)
-
     if args.chunk:
         args.explicit_config_overrides = _collect_explicit_config_overrides(
             args, parser, LRAA_Globals.config
         )
-        args.explicit_config_overrides.update(cap_calibration)
         sys.exit(_run_chunked_mode(args))
+
+    # The library-level cap calibration, after every config source (chunked mode runs
+    # it in _run_chunked_mode, after the library count, and forwards its keys to every
+    # chunk worker).
+    _resolve_TSS_cap_calibration(args)
 
     if args.mpm_monitor:
         mpm.set_debug()
@@ -4043,6 +4043,16 @@ def _run_chunked_mode(args):
         logger.info(
             "chunked mode: using num_total_reads = %d", args.num_total_reads
         )
+
+    # One library-level TSS cap calibration for the whole run, after the count (so a
+    # bam problem surfaces there first); its keys reach every chunk worker with the
+    # explicit overrides below.
+    cap_calibration = _resolve_TSS_cap_calibration(args)
+    if cap_calibration:
+        args.explicit_config_overrides = dict(
+            getattr(args, "explicit_config_overrides", None) or {}
+        )
+        args.explicit_config_overrides.update(cap_calibration)
 
     work_dir = args.chunk_work_dir or "{}.chunked_work".format(args.output_prefix)
     logger.info("chunked mode: staging under %s", work_dir)

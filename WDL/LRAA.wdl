@@ -157,6 +157,18 @@ workflow LRAA_wf {
         # how a calling workflow gives its phases different settings.
         String? config_update_json
         Boolean quant_only = false
+        # TSS cap calibration (v0.47.0): whether the library carries the untemplated-G
+        # cap signature, and its baseline, decided ONCE on the whole bam before any
+        # sharding (calibrate_TSS_cap_signature, util/calibrate_TSS_cap_signature.py)
+        # and handed to every shard with the config, so no shard decides from its own
+        # subset of the reads. Skipped under quant_only, and when config_update_json
+        # already sets TSS_cap_signature.
+        Boolean run_TSS_cap_calibration = true
+        # INTERNAL PLUMBING: a calibration made elsewhere (its config keys, as JSON).
+        # LRAA-singlecell.wdl passes the init run's to every cluster run, so a
+        # cluster's runs take the library's decision instead of scanning their own
+        # sparse reads. Given, the task only merges it into config_update_json.
+        String? internal_cap_calibration_json
         # Whole-genome alignment-mismapping filter, ON BY DEFAULT. Runs once as a
         # dedicated post-merge task (alignment_mismapping_filter) on the merged
         # genome-wide gtf + quant, never per shard -- the per-shard LRAA runs pass
@@ -442,6 +454,23 @@ workflow LRAA_wf {
     # no other way to order a task ahead of one that needs none of its outputs.
     Boolean inputs_validated = validate_scattering.checked != ""
 
+    # The cap calibration, once, before any shard runs; every scattering mode below
+    # takes effective_config_update_json.
+    String config_update_given = select_first([config_update_json, ""])
+    Boolean caller_set_cap_signature = sub(config_update_given, "TSS_cap_signature", "") != config_update_given
+    if (inputs_validated && !quant_only && run_TSS_cap_calibration && !caller_set_cap_signature) {
+        call calibrate_TSS_cap_signature as cap_calibration {
+            input:
+                sample_id = sample_id,
+                inputBAM = inputBAM,
+                referenceGenome = referenceGenome,
+                config_update_json = config_update_json,
+                precomputed_calibration_json = internal_cap_calibration_json,
+                docker = docker,
+        }
+    }
+    String? effective_config_update_json = if (defined(cap_calibration.merged_config_json)) then cap_calibration.merged_config_json else config_update_json
+
     if (inputs_validated && scatter_by_chunk) {
         call ChunkScatter.LRAA_chunk_scatter as chunk_scatter {
             input:
@@ -458,7 +487,7 @@ workflow LRAA_wf {
                 oversimplify = oversimplify,
                 polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
-                config_update_json = config_update_json,
+                config_update_json = effective_config_update_json,
                 quant_only = quant_only,
                 HiFi = HiFi,
                 min_mapping_quality = min_mapping_quality,
@@ -646,7 +675,7 @@ workflow LRAA_wf {
                     no_norm = no_norm,
                     no_EM = no_EM,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
-                    config_update_json = config_update_json,
+                    config_update_json = effective_config_update_json,
                     retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
@@ -748,7 +777,7 @@ workflow LRAA_wf {
                 no_norm = no_norm,
                 no_EM = no_EM,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
-                config_update_json = config_update_json,
+                config_update_json = effective_config_update_json,
                 retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
@@ -845,6 +874,11 @@ workflow LRAA_wf {
     }
 
     output {
+    # TSS cap calibration: the decision's config keys (for sibling runs of the same
+    # library) and its report: decision and statistics, per-peak capped-fraction
+    # histogram, its plot, and the scan behind it.
+    String? capCalibrationJson = cap_calibration.calibration_json
+    Array[File] capCalibrationReport = select_first([cap_calibration.report_files, []])
     # Three producers now, so each output names all of them. by_chunk merges
     # inside its subworkflow, by_chromosome merges here, off produces directly.
     # mergedQuantExpr/mergedGTF prefer the mismapping-filtered outputs when the
@@ -1461,6 +1495,84 @@ task validate_scattering {
         cpu: 1
         memory: "1 GiB"
         disks: "local-disk 10 HDD"
+    }
+}
+
+
+task calibrate_TSS_cap_signature {
+    # LRAA's library-level cap calibration (pylib/TSS_cap_calibration.py) on the whole
+    # bam, or, given precomputed_calibration_json, just its merge. Outputs the caller's
+    # config with the calibration merged in, the calibration keys alone, and the
+    # report. Both carry TSS_cap_prepass false, so the runs they reach never calibrate
+    # on their own subset of the reads (an undetermined library then falls back to
+    # each graph build's own decision, as in LRAA itself).
+    input {
+        String sample_id
+        File inputBAM
+        File referenceGenome
+        String? config_update_json
+        String? precomputed_calibration_json
+        String docker
+        Int cpu = 8
+        Int memoryGB = 16
+    }
+
+    Int disk_gb = ceil(size(inputBAM, "GB") * 1.2 + size(referenceGenome, "GB") * 2.0 + 20.0)
+
+    command <<<
+        set -euo pipefail
+
+        cat > user_config.json <<'LRAA_CONFIG_UPDATE_EOF'
+~{default="" config_update_json}
+LRAA_CONFIG_UPDATE_EOF
+        cat > precomputed.json <<'LRAA_CAP_CALIBRATION_EOF'
+~{default="" precomputed_calibration_json}
+LRAA_CAP_CALIBRATION_EOF
+
+        if [[ -n "$(tr -d '[:space:]' < precomputed.json)" ]]; then
+            # merge only: a calibration made on the whole library elsewhere
+            cp precomputed.json calibration.json
+        else
+            # the inputs may be mounted read-only: index local symlinks
+            ln -s ~{inputBAM} reads.bam
+            samtools index -@ ~{cpu} reads.bam
+            ln -s ~{referenceGenome} genome.fa
+            samtools faidx genome.fa
+            cfg=()
+            if [[ -n "$(tr -d '[:space:]' < user_config.json)" ]]; then
+                cfg=(--config_update user_config.json)
+            fi
+            calibrate_TSS_cap_signature.py --bam reads.bam --genome genome.fa \
+                --cpu ~{cpu} --output_prefix ~{sample_id} "${cfg[@]}"
+            cp ~{sample_id}.TSS_cap_calibration.config.json calibration.json
+        fi
+
+        python3 - <<'MERGE_EOF'
+import json
+def load(path):
+    txt = open(path).read().strip()
+    return json.loads(txt) if txt else {}
+merged = load("user_config.json")
+cal = load("calibration.json")
+cal["TSS_cap_prepass"] = False
+merged.update(cal)
+json.dump(cal, open("calibration.json", "w"), sort_keys=True)
+json.dump(merged, open("merged_config.json", "w"), sort_keys=True)
+MERGE_EOF
+        cat merged_config.json
+    >>>
+
+    output {
+        String merged_config_json = read_string("merged_config.json")
+        String calibration_json = read_string("calibration.json")
+        Array[File] report_files = glob("~{sample_id}.TSS_cap_calibration.*")
+    }
+
+    runtime {
+        docker: docker
+        cpu: cpu
+        memory: "~{memoryGB} GiB"
+        disks: "local-disk " + disk_gb + " SSD"
     }
 }
 

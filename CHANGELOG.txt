@@ -1,3 +1,36 @@
+v0.47.0
+
+Changes that alter run outputs (TSS sites, where a library's cap-signature decision
+differed by chunk strand or cell cluster):
+
+- NEW, ON BY DEFAULT: TSS cap calibration once per library (pylib/TSS_cap_calibration.py).
+  A discovery run whose TSS_cap_signature is "auto" first scans the bam (one worker per
+  contig, strands apart), calls TSS peaks as a graph build does, and takes each peak's
+  capped fraction of its spliced informative read starts. With the signature these are
+  bimodal: an uncapped mode at the transcript-body rate (truncation pile-ups) and a capped
+  mode (promoters); without it, one mode at 0. Split where they separate best (Otsu), the
+  signature is "on" when the capped group holds >= 10% of the judged peaks (>= 20 reads
+  each) and >= 50 peaks, with medians >= 0.20 apart; "off" otherwise; "undetermined"
+  (nothing set, per-graph "auto" as before) with < 50 judged peaks or a thin capped mode.
+  The decision and baseline G run reach every graph build and chunk worker, so no chunk
+  strand or cluster decides for itself. MEASURED on ten libraries
+  (LRAA_PAPER_Analyses __TSS_5prime_Completeness/cap_calibration): FTD nuclei, PBMC, BT474,
+  K562, MCF7, A549 on (baselines 0, 0, 1, 1, 3, 3); MORFs, Arabidopsis simulation off;
+  SIRVs undetermined. Report: <prefix>.TSS_cap_calibration.{json,hist.tsv,svg,scan.tsv.gz}.
+  TSS_cap_prepass false keeps the per-graph decision.
+- NEW: util/calibrate_TSS_cap_signature.py, the same calibration as a standalone step (bam,
+  or a saved scan table), writing a config json for --config_update.
+- WDL: LRAA.wdl runs it once on the whole bam before any sharding (task
+  calibrate_TSS_cap_signature; run_TSS_cap_calibration, default true) and merges the result
+  into every shard's config; outputs capCalibrationJson and capCalibrationReport.
+  LRAA-singlecell.wdl hands the init run's calibration to every cluster run
+  (internal_cap_calibration_json) and drops TSS_cap_signature "on" from
+  cluster_config_update_json (now '{"require_cap_for_new_TSS": true}'); outputs
+  cap_calibration_json and cap_calibration_report.
+- Tests: pylib/test_TSS_cap_calibration.py; execution test testing/TSS_cap_calibration
+  (scan tables, no bam). docs/TSS_cap_calibration.md, including a fitted-mixture extension
+  recorded but not implemented.
+
 v0.46.1
 
 Changes that alter run outputs (TSS sites where the cap rules had switched themselves off):

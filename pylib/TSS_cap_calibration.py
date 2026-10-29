@@ -548,8 +548,9 @@ def main(argv=None):
     p.add_argument(
         "--output_prefix",
         required=True,
-        help="writes <prefix>.TSS_cap_calibration.{json,hist.tsv,svg} and "
-        "<prefix>.TSS_cap_calibration.config.json (for LRAA --config_update)",
+        help="writes <prefix>.TSS_cap_calibration.{json,hist.tsv,svg,scan.tsv.gz} and "
+        "<prefix>.TSS_cap_calibration.config.json, for LRAA --config_update: the "
+        "decision's keys (none if undetermined) and TSS_cap_prepass false",
     )
     p.add_argument(
         "--merge",
@@ -592,6 +593,10 @@ def main(argv=None):
     write_report(args.output_prefix, overrides, stats)
     out = dict(user) if args.merge else {}
     out.update(overrides)
+    # the runs handed this file must not calibrate again on their own subset of the
+    # reads (a workflow's shards, a cell cluster): an undetermined library then falls
+    # back to the per-graph decision, as in LRAA itself
+    out["TSS_cap_prepass"] = False
     with open(args.output_prefix + ".TSS_cap_calibration.config.json", "wt") as ofh:
         json.dump(out, ofh, indent=2, sort_keys=True)
 

@@ -5,7 +5,7 @@
 .PHONY: test clean
 
 test:
-	python3 test_TSS_cap_calibration.py
+	python3 check_TSS_cap_calibration.py
 
 clean:
 	rm -rf __test_runs

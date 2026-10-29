@@ -190,13 +190,17 @@ workflow LRAA_singlecell_wf {
     #
     # The cluster default turns on the cap-signature gate for new TSSs (v0.46.0): a
     # cluster's sparse reads otherwise turn 5' truncation pile-ups into sites that the
-    # merged catalog keeps (FTD nuclei). TSS_cap_signature "on" (v0.46.1) skips the
-    # per-strand test for the signature, which a cluster's reads are often too few to
-    # pass (the pooled run has shown it); it suits template-switching libraries
-    # (10x, Kinnex). Set it to "" for LRAA's defaults. The init run needs nothing:
-    # prune_uncapped_alt_TSS is on by default.
+    # merged catalog keeps (FTD nuclei). Set it to "" for LRAA's defaults. The init
+    # run needs nothing: prune_uncapped_alt_TSS is on by default.
+    #
+    # Whether the library carries the cap signature, and its baseline, is decided once
+    # (v0.47.0): the init run calibrates on the full bam (LRAA.wdl
+    # calibrate_TSS_cap_signature) and every cluster run takes that calibration
+    # (internal_cap_calibration_json) rather than judging its own sparse reads. Without
+    # an init run (a precomputed init gtf), each cluster's runs calibrate on that
+    # cluster's whole bam.
     String? init_config_update_json
-    String cluster_config_update_json = '{"require_cap_for_new_TSS": true, "TSS_cap_signature": "on"}'
+    String cluster_config_update_json = '{"require_cap_for_new_TSS": true}'
 
     # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
     # case -- means LRAA counts the input bam itself, once, with its -F 0x904
@@ -724,6 +728,7 @@ workflow LRAA_singlecell_wf {
         polyA_known = polyA_known,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         cluster_config_update_json = cluster_config_update_json,
+        cap_calibration_json = LRAA_init.capCalibrationJson,
         main_chromosomes = main_chromosomes,
         # Backend-dependent, and separate from the initial phase's value on purpose:
         # these partitions run once per cluster, which is 14-32 jobs sharing ONE host
@@ -802,6 +807,11 @@ workflow LRAA_singlecell_wf {
   }
 
   output {
+    # The library's TSS cap calibration (from the init run): the decision's config
+    # keys, and its report (decision and statistics, per-peak capped-fraction
+    # histogram, its plot, the scan behind it).
+    String? cap_calibration_json = LRAA_init.capCalibrationJson
+    Array[File] cap_calibration_report = select_first([LRAA_init.capCalibrationReport, []])
     # Initial discovery outputs
     File? init_quant_expr = init_quant_expr_file
     File? init_quant_tracking = init_quant_tracking_generated

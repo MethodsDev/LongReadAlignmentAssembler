@@ -371,10 +371,13 @@ config = {
     "min_TSS_cap_calibration_peaks": 10,
     # "auto": decide per contig strand from the contrast above. "on": the library is
     # known to carry the signature; only the baseline is estimated, from as few as
-    # min_TSS_cap_baseline_reads non-peak reads. LRAA-singlecell.wdl sets "on" for
-    # the cluster runs: a cluster's reads are often too few to calibrate (FTD chr19,
-    # the three smallest clusters: off in 60-90% of builds at v0.46.0), and off
-    # calibration also lifts require_cap_for_new_TSS. "off": no cap rules.
+    # min_TSS_cap_baseline_reads non-peak reads (or none, with TSS_cap_G_baseline
+    # an int). "off": no cap rules. Since v0.47.0 the library-level calibration
+    # below sets "on"/"off" and the baseline for every graph build; a cluster's reads
+    # alone are often too few to calibrate (FTD chr19, the three smallest clusters:
+    # off in 60-90% of builds at v0.46.0), and off calibration also lifts
+    # require_cap_for_new_TSS, so LRAA-singlecell.wdl hands the init run's
+    # calibration to every cluster run.
     "TSS_cap_signature": "auto",
     "min_TSS_cap_baseline_reads": 20,
     # v0.47.0: decide once per LIBRARY instead (pylib/TSS_cap_calibration.py). A

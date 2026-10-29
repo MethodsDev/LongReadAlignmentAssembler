@@ -51,7 +51,7 @@ testing/pasa_mode/**
 testing/TSS_cap_calibration/**
 !testing/TSS_cap_calibration/Makefile
 !testing/TSS_cap_calibration/README.md
-!testing/TSS_cap_calibration/test_TSS_cap_calibration.py
+!testing/TSS_cap_calibration/check_TSS_cap_calibration.py
 !testing/TSS_cap_calibration/data/
 !testing/TSS_cap_calibration/data/*.scan.tsv.gz
 !testing/txalign_path_rescue/

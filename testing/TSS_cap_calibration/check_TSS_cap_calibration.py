@@ -87,6 +87,8 @@ def main():
     print("BT474_on: bulk PacBio")
     p = calibrate("BT474_on", "BT474_PacBio.scan.tsv.gz")
     rep, cfg = check_report(p, "on", 1)
+    check(cfg == {"TSS_cap_signature": "on", "TSS_cap_G_baseline": 1, "TSS_cap_prepass": False},
+          "config.json: the calibration, and no re-calibration downstream")
     st = rep["stats"]
     check(st["capped_mode_frac"] > 0.8 and st["mode_separation"] > 0.5, "capped mode dominant and well separated")
     check(st["valley"] is not None and st["valley"] >= st["per_site_threshold"], "valley at or above the per-site threshold")
@@ -96,7 +98,7 @@ def main():
     p = calibrate("SIRV_undetermined", "SIRV.scan.tsv.gz")
     rep, cfg = check_report(p, "undetermined", 1)
     check("too few peaks" in rep["stats"].get("reason", ""), "reason: too few peaks")
-    check(cfg == {}, "config.json is empty")
+    check(cfg == {"TSS_cap_prepass": False}, "config.json: only TSS_cap_prepass false (runs keep auto per graph)")
     summary.append(("SIRV_undetermined", rep))
 
     print("sim_off: Arabidopsis simulation")
@@ -113,8 +115,8 @@ def main():
     print("BT474_merge: --merge keeps the caller's keys")
     p = calibrate("BT474_merge", "BT474_PacBio.scan.tsv.gz", config={"require_cap_for_new_TSS": True}, merge=True)
     rep, cfg = check_report(p, "on", 1)
-    check(cfg == {"require_cap_for_new_TSS": True, "TSS_cap_signature": "on", "TSS_cap_G_baseline": 1},
-          "config.json: caller's key plus the calibration")
+    check(cfg == {"require_cap_for_new_TSS": True, "TSS_cap_signature": "on", "TSS_cap_G_baseline": 1,
+                  "TSS_cap_prepass": False}, "config.json: caller's key plus the calibration")
 
     with open(os.path.join(OUT, "summary.md"), "wt") as ofh:
         ofh.write("# TSS cap calibration: execution test\n\n")

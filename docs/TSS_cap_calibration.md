@@ -51,9 +51,16 @@ undetermined.
   `TSS_cap_prepass`), after every config source and before chunking; the result reaches every
   chunk worker with the forwarded config. Not in quant-only runs.
 - **Standalone**: `util/calibrate_TSS_cap_signature.py --bam --genome --output_prefix`
-  (or `--scan_table` to re-decide from a saved scan). A workflow runs it once on the full bam
-  and passes `<prefix>.TSS_cap_calibration.config.json` to every LRAA run of the library
-  (`--config_update`), so shards and cell clusters share one decision.
+  (or `--scan_table` to re-decide from a saved scan). It writes
+  `<prefix>.TSS_cap_calibration.config.json` for `--config_update`: the decision's keys and
+  `TSS_cap_prepass` false, so a run given it never calibrates again on its own reads.
+- **WDL**: `LRAA.wdl` runs the standalone step once on the whole bam before any sharding
+  (task `calibrate_TSS_cap_signature`, input `run_TSS_cap_calibration`, default true) and
+  merges the result into every shard's `config_update_json`; skipped under `quant_only` or
+  when the caller's config sets `TSS_cap_signature`. Outputs `capCalibrationJson` (the keys)
+  and `capCalibrationReport`. `LRAA-singlecell.wdl` hands the init run's calibration to every
+  per-cluster discovery run (`internal_cap_calibration_json`), so clusters inherit the
+  library's decision; it surfaces `cap_calibration_json` and `cap_calibration_report`.
 
 Outputs, either way: `<prefix>.TSS_cap_calibration.json` (decision, config keys, statistics),
 `.hist.tsv` (per-peak capped-fraction histogram), `.svg` (its plot, no plotting library

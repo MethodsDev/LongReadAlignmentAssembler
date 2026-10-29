@@ -120,6 +120,10 @@ workflow LRAA_cell_cluster_guided {
         # LRAA_Globals.config overrides (JSON object) for the per-cluster DISCOVERY runs
         # only; the final quant gets LRAA's defaults. See LRAA-singlecell.wdl.
         String? cluster_config_update_json
+        # The library's TSS cap calibration (LRAA.wdl capCalibrationJson of the init
+        # run), handed to every per-cluster discovery run so none decides from its own
+        # sparse reads. Unset, each cluster's runs calibrate on the cluster's bam.
+        String? cap_calibration_json
         Int memoryGBscSparseMatrices = 16
         # Build the single-cell matrices per (cluster, contig) shard during the
         # final quantification wave and merge them, instead of one
@@ -266,6 +270,7 @@ workflow LRAA_cell_cluster_guided {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     config_update_json = cluster_config_update_json,
+                    internal_cap_calibration_json = cap_calibration_json,
                     main_chromosomes = main_chromosomes,
                     partition_workers = cluster_partition_workers,
                     quant_only = false,
