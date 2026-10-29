@@ -1086,6 +1086,10 @@ class Splice_graph:
         n_at = sum(at_peak.values())
 
         cache_key = (self._contig_acc, self._contig_strand)
+        fixed_baseline = cfg.get("TSS_cap_G_baseline", "auto")
+        if mode == "on" and fixed_baseline not in ("auto", None):
+            # decided for the library (TSS_cap_calibration): nothing to estimate
+            return int(fixed_baseline), True, dict(TSS_cap_signature="on", library_baseline=int(fixed_baseline))
         min_reads = (
             cfg["min_TSS_cap_baseline_reads"]
             if mode == "on"

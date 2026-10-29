@@ -47,6 +47,13 @@ testing/pasa_mode/**
 !testing/pasa_mode/fixture/*
 !testing/mismapping_filter/*.fa.fai
 !testing/mismapping_filter/*.gtf
+!testing/TSS_cap_calibration/
+testing/TSS_cap_calibration/**
+!testing/TSS_cap_calibration/Makefile
+!testing/TSS_cap_calibration/README.md
+!testing/TSS_cap_calibration/test_TSS_cap_calibration.py
+!testing/TSS_cap_calibration/data/
+!testing/TSS_cap_calibration/data/*.scan.tsv.gz
 !testing/txalign_path_rescue/
 !testing/txalign_path_rescue/Makefile
 !testing/txalign_path_rescue/validate_txalign_path_rescue.py

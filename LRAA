@@ -585,6 +585,54 @@ def _user_specified_dests(args, parser, argv=None):
     return specified
 
 
+def _resolve_TSS_cap_calibration(args):
+    """Calibrate the TSS cap signature once for the whole library (TSS_cap_calibration).
+
+    Discovery runs with a cap rule on and TSS_cap_signature "auto" (with
+    TSS_cap_prepass): the bam is scanned before any chunking, one worker per contig,
+    and the library's decision and baseline replace "auto" -- so no splice graph, chunk
+    or cluster decides for itself. Returns the overrides (also applied to
+    LRAA_Globals.config), or {} when nothing was calibrated. A chunk worker never
+    calibrates: it receives the parent's result with the forwarded overrides.
+    """
+    import ChunkedRun
+
+    cfg = LRAA_Globals.config
+    if args.quant_only or os.environ.get(ChunkedRun.WORKER_ENV):
+        return {}
+    if not (cfg.get("prune_uncapped_alt_TSS") or cfg.get("require_cap_for_new_TSS")):
+        return {}
+    if cfg.get("TSS_cap_signature", "auto") != "auto" or not cfg.get(
+        "TSS_cap_prepass", True
+    ):
+        return {}
+    import TSS_cap_calibration
+
+    contigs = None
+    if args.contig or args.restrict_to_chromosomes:
+        contigs = _resolve_contig_restriction(args, args.genome)[0]
+    cpu = args.cpu_budget or CpuBudget.default_budget()
+    logger.info("TSS cap calibration: scanning %s (%d workers)", args.bam, cpu)
+    per_contig = TSS_cap_calibration.scan(
+        args.bam, args.genome, cpu=cpu, contigs=contigs
+    )
+    overrides, stats = TSS_cap_calibration.overrides_from(
+        *TSS_cap_calibration.decide(per_contig)
+    )
+    cfg.update(overrides)
+    TSS_cap_calibration.log_summary(overrides, stats)
+    try:
+        TSS_cap_calibration.write_report(args.output_prefix, overrides, stats)
+        # the counts behind the decision, to re-decide without the bam
+        # (util/calibrate_TSS_cap_signature.py --scan_table)
+        TSS_cap_calibration.write_scan_table(
+            args.output_prefix + ".TSS_cap_calibration.scan.tsv.gz", per_contig
+        )
+    except OSError as e:
+        logger.warning("could not write the TSS cap calibration report: %s", e)
+    return overrides
+
+
 def _collect_explicit_config_overrides(args, parser, config):
     """What to forward to every chunk worker: RESOLVED values, for changed keys.
 
@@ -2491,10 +2539,15 @@ def main():
     # chunked run as much as an unchunked one -- a chunked run that was going to
     # die on a bad --polyA_signal_window now dies before partitioning rather than
     # inside a worker an hour later.
+    # After every config source, before the chunk dispatch: one library-level cap
+    # calibration that the chunk workers inherit through the forwarded overrides.
+    cap_calibration = _resolve_TSS_cap_calibration(args)
+
     if args.chunk:
         args.explicit_config_overrides = _collect_explicit_config_overrides(
             args, parser, LRAA_Globals.config
         )
+        args.explicit_config_overrides.update(cap_calibration)
         sys.exit(_run_chunked_mode(args))
 
     if args.mpm_monitor:

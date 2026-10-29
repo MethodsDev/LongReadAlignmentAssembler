@@ -377,6 +377,23 @@ config = {
     # calibration also lifts require_cap_for_new_TSS. "off": no cap rules.
     "TSS_cap_signature": "auto",
     "min_TSS_cap_baseline_reads": 20,
+    # v0.47.0: decide once per LIBRARY instead (pylib/TSS_cap_calibration.py). A
+    # discovery run with TSS_cap_signature "auto" first scans the bam, one worker per
+    # contig, and pools every contig strand's peaks and off-peak starts into one
+    # decision and baseline, which replace "auto" for every graph build and chunk
+    # worker; the report is <output_prefix>.TSS_cap_calibration.json. False keeps
+    # the per-graph decision above. LRAA-singlecell.wdl runs the scan once on the
+    # full bam and hands the result to both discovery phases, so a cluster's runs
+    # inherit the library's calibration.
+    "TSS_cap_prepass": True,
+    # The library decision reads the per-peak capped fractions, which are bimodal
+    # with the signature (an uncapped mode near the transcript-body rate, a capped
+    # mode at promoters) and one mode at 0 without it; see TSS_cap_calibration.decide.
+    "TSS_cap_prepass_min_peak_reads": 20,  # informative spliced starts for a peak to count
+    "TSS_cap_prepass_min_peaks": 50,  # fewer peaks judged: off
+    "TSS_cap_prepass_min_capped_mode_frac": 0.10,  # MORF trimmed reads: 1.3% of peaks
+    "TSS_cap_prepass_min_capped_mode_peaks": 50,
+    "TSS_cap_prepass_min_mode_separation": 0.20,  # capped minus uncapped mode median
     #
     ####################
     ## polyA site config
