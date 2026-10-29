@@ -190,10 +190,13 @@ workflow LRAA_singlecell_wf {
     #
     # The cluster default turns on the cap-signature gate for new TSSs (v0.46.0): a
     # cluster's sparse reads otherwise turn 5' truncation pile-ups into sites that the
-    # merged catalog keeps (FTD nuclei). Set it to "" for LRAA's defaults. The init
-    # run needs nothing: prune_uncapped_alt_TSS is on by default.
+    # merged catalog keeps (FTD nuclei). TSS_cap_signature "on" (v0.46.1) skips the
+    # per-strand test for the signature, which a cluster's reads are often too few to
+    # pass (the pooled run has shown it); it suits template-switching libraries
+    # (10x, Kinnex). Set it to "" for LRAA's defaults. The init run needs nothing:
+    # prune_uncapped_alt_TSS is on by default.
     String? init_config_update_json
-    String cluster_config_update_json = '{"require_cap_for_new_TSS": true}'
+    String cluster_config_update_json = '{"require_cap_for_new_TSS": true, "TSS_cap_signature": "on"}'
 
     # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
     # case -- means LRAA counts the input bam itself, once, with its -F 0x904

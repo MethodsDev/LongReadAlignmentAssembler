@@ -362,6 +362,21 @@ config = {
     "min_TSS_cap_informative_reads": 5,  # below this a site is not judged
     "min_TSS_cap_signal_delta": 0.10,  # peak minus non-peak capped fraction to enable
     "min_TSS_cap_calibration_reads": 200,  # non-peak informative reads to calibrate
+    # The contrast is per peak: the upper quartile of peak capped fractions (peaks
+    # with >= min_TSS_cap_calibration_peak_reads spliced informative reads, at least
+    # min_TSS_cap_calibration_peaks of them; else all peak reads pooled). Pooled, one
+    # deep uncapped truncation pile-up switched off a whole strand: FTD nuclei
+    # chr10:10-20 Mb plus strand, VIM's downstream site, 13.1% vs 5.8% (v0.46.0).
+    "min_TSS_cap_calibration_peak_reads": 10,
+    "min_TSS_cap_calibration_peaks": 10,
+    # "auto": decide per contig strand from the contrast above. "on": the library is
+    # known to carry the signature; only the baseline is estimated, from as few as
+    # min_TSS_cap_baseline_reads non-peak reads. LRAA-singlecell.wdl sets "on" for
+    # the cluster runs: a cluster's reads are often too few to calibrate (FTD chr19,
+    # the three smallest clusters: off in 60-90% of builds at v0.46.0), and off
+    # calibration also lifts require_cap_for_new_TSS. "off": no cap rules.
+    "TSS_cap_signature": "auto",
+    "min_TSS_cap_baseline_reads": 20,
     #
     ####################
     ## polyA site config

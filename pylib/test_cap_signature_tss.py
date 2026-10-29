@@ -128,6 +128,70 @@ def test_too_few_calibration_reads_leave_the_rule_off(restore_config):
     assert not active
 
 
+def _strand_with_a_deep_uncapped_pile():
+    """Twelve promoters, 40% capped, 20 reads each; one 5' truncation pile of 2000
+    uncapped reads; body starts 5% capped (FTD chr10+ around VIM)."""
+    counter = defaultdict(lambda: defaultdict(float))
+    peaks = []
+    for i in range(12):
+        p = 10000 + 1000 * i
+        counter[p][(1, True)] = 8
+        counter[p][(0, True)] = 12
+        peaks.append(p)
+    counter[50000][(0, True)] = 2000
+    peaks.append(50000)
+    for pos in range(60000, 60400):
+        counter[pos][(0, True)] = 0.95
+        counter[pos][(1, True)] = 0.05
+    return counter, peaks
+
+
+def test_one_deep_uncapped_pile_does_not_switch_the_strand_off(restore_config):
+    """Pooled, the pile makes the peaks 7% capped against 5% elsewhere; per peak, the
+    upper quartile is 40%."""
+    counter, peaks = _strand_with_a_deep_uncapped_pile()
+    baseline, active, stats = _bare_graph()._calibrate_TSS_cap_signature(
+        counter, peaks, 50
+    )
+    assert stats["capped_peak"] < 0.10
+    assert stats["peaks_judged"] == 13
+    assert (baseline, active) == (0, True)
+
+
+def test_per_peak_contrast_stays_off_without_a_signature(restore_config):
+    """Twenty peaks at the body rate, with binomial scatter: no signature."""
+    counter = defaultdict(lambda: defaultdict(float))
+    peaks = []
+    for i in range(20):
+        p = 10000 + 1000 * i
+        counter[p][(1, True)] = i % 3  # 0-2 of 20 marked
+        counter[p][(0, True)] = 20 - i % 3
+        peaks.append(p)
+    for pos in range(60000, 60400):
+        counter[pos][(0, True)] = 0.95
+        counter[pos][(1, True)] = 0.05
+    _, active, stats = _bare_graph()._calibrate_TSS_cap_signature(counter, peaks, 50)
+    assert stats["peaks_judged"] == 20
+    assert not active
+
+
+def test_TSS_cap_signature_on_needs_only_a_baseline(restore_config):
+    """Cluster runs: too few reads to calibrate, the library is known to be capped."""
+    LRAA_Globals.config["TSS_cap_signature"] = "on"
+    counter = defaultdict(lambda: defaultdict(float))
+    counter[1000][(1, True)] = 10
+    for pos in range(5000, 5030):
+        counter[pos][(0, True)] = 1
+    baseline, active, _ = _bare_graph()._calibrate_TSS_cap_signature(
+        counter, [1000], 50
+    )
+    assert (baseline, active) == (0, True)
+
+    LRAA_Globals.config["TSS_cap_signature"] = "off"
+    _, active, _ = _bare_graph()._calibrate_TSS_cap_signature(counter, [1000], 50)
+    assert not active
+
+
 # --------------------------------------------------------------------------
 # pruning
 # --------------------------------------------------------------------------

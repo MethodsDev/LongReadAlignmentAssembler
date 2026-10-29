@@ -1,3 +1,26 @@
+v0.46.1
+
+Changes that alter run outputs (TSS sites where the cap rules had switched themselves off):
+
+- The cap-signature test is now per peak: the upper quartile of the TSS peaks' capped
+  fractions (peaks with >= 10 spliced informative reads, at least 10 such peaks; else
+  all peak reads pooled, as before) against the non-peak rate. Pooled, one deep uncapped
+  5' truncation pile-up switched the rules off for a whole contig strand: FTD nuclei,
+  chunk chr10:10-20 Mb plus strand, VIM's downstream site, 13.1% capped at peaks vs
+  5.8% elsewhere (v0.46.0); per peak 0.36-0.41 vs 0.06, and VIM's uncapped site (0 of
+  108 reads capped) and 7 other uncapped sites go. In the v0.46.0 FTD run, 31 of the 72
+  remaining up/downstream TSS event pairs had an uncapped downstream site. MEASURED,
+  same inputs as v0.46.0: FTD chr19 (ref-guided pooled, de novo) and PBMC chr22 de novo
+  unchanged (every strand was already on); BT474 PacBio, SIRVs and an Arabidopsis
+  simulation unchanged (SIRV and simulation stay off); MCF7 ONT chr19: one locus's
+  isoforms renumbered, one 5' end moved 4 nt.
+- NEW: TSS_cap_signature = auto | on | off (config, default "auto"). "on" skips the
+  test and estimates only the baseline G run (min_TSS_cap_baseline_reads, 20).
+  LRAA-singlecell.wdl's cluster_config_update_json now sets it "on" for the per-cluster
+  discovery runs: their reads are often too few to calibrate (FTD chr19, the three
+  smallest clusters off in 60-90% of builds at v0.46.0), and off calibration also lifts
+  require_cap_for_new_TSS. With it, FTD chr19 cluster-guided merged TSS 713 -> 707.
+
 v0.46.0
 
 Changes that alter run outputs (TSS sites, and the models through them):

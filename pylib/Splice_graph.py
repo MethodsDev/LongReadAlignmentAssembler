@@ -1051,8 +1051,23 @@ class Splice_graph:
         chr19, all reads: 13% capped at peaks vs 5% elsewhere; spliced: 40% vs 11%).
         A build with too few spliced reads (the SE graph) reuses the last calibration
         of the same contig strand in this process.
+
+        The contrast is taken per peak: the upper quartile of the peaks' capped
+        fractions (peaks with min_TSS_cap_calibration_peak_reads or more) against the
+        non-peak rate. Pooling the reads of all peaks let one deep uncapped pile-up
+        switch off a whole strand (FTD chr10:10-20 Mb plus strand, VIM's 5'
+        truncation site: 13% vs 6% pooled). With fewer than
+        min_TSS_cap_calibration_peaks such peaks the pooled reads decide.
+
+        TSS_cap_signature "on" skips the contrast (the single-cell workflow sets it
+        for cluster runs, whose reads are too few to calibrate; the pooled run showed
+        the signature); the baseline then needs only min_TSS_cap_baseline_reads.
+        "off" disables the cap rules.
         """
         cfg = LRAA_Globals.config
+        mode = cfg.get("TSS_cap_signature", "auto")
+        if mode == "off":
+            return None, False, dict(TSS_cap_signature="off")
         peaks = sorted(peak_positions)
 
         def near_peak(pos):
@@ -1071,7 +1086,12 @@ class Splice_graph:
         n_at = sum(at_peak.values())
 
         cache_key = (self._contig_acc, self._contig_strand)
-        if n_off < cfg["min_TSS_cap_calibration_reads"]:
+        min_reads = (
+            cfg["min_TSS_cap_baseline_reads"]
+            if mode == "on"
+            else cfg["min_TSS_cap_calibration_reads"]
+        )
+        if n_off < min_reads:
             if cache_key in Splice_graph._TSS_cap_calibration:
                 baseline, active = Splice_graph._TSS_cap_calibration[cache_key]
                 return baseline, active, dict(reused="earlier build", n_off_peak=n_off)
@@ -1088,18 +1108,47 @@ class Splice_graph:
 
         frac_at = capped_frac(at_peak, n_at)
         frac_off = capped_frac(off_peak, n_off)
-        active = (
-            n_off >= cfg["min_TSS_cap_calibration_reads"]
-            and n_at > 0
-            and frac_at - frac_off >= cfg["min_TSS_cap_signal_delta"]
-        )
+
+        # per-peak capped fractions
+        positions = sorted(TSS_cap_counter.keys())
+        peak_fracs = []
+        for site in peaks:
+            lo = bisect.bisect_left(positions, site - window)
+            hi = bisect.bisect_right(positions, site + window)
+            n = marked = 0.0
+            for pos in positions[lo:hi]:
+                for (run, spliced), w in TSS_cap_counter[pos].items():
+                    if spliced:
+                        n += w
+                        if run > baseline:
+                            marked += w
+            if n >= cfg["min_TSS_cap_calibration_peak_reads"]:
+                peak_fracs.append(marked / n)
+        if len(peak_fracs) >= cfg["min_TSS_cap_calibration_peaks"]:
+            peak_fracs.sort()
+            contrast_at = peak_fracs[int(0.75 * (len(peak_fracs) - 1))]
+        else:
+            contrast_at = frac_at
+
+        if mode == "on":
+            active = n_off >= min_reads
+        else:
+            active = (
+                n_off >= min_reads
+                and n_at > 0
+                and contrast_at - frac_off >= cfg["min_TSS_cap_signal_delta"]
+            )
         stats = dict(
             n_peak=round(n_at, 1),
             n_off_peak=round(n_off, 1),
             capped_peak=round(frac_at, 3),
             capped_off_peak=round(frac_off, 3),
+            peaks_judged=len(peak_fracs),
+            capped_peak_q75=round(contrast_at, 3),
         )
-        if n_off >= cfg["min_TSS_cap_calibration_reads"]:
+        if mode == "on":
+            stats["TSS_cap_signature"] = "on"
+        if n_off >= min_reads:
             Splice_graph._TSS_cap_calibration[cache_key] = (baseline, active)
         return baseline, active, stats
 
