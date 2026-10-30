@@ -13,11 +13,21 @@ signature at all, and its baseline G count.
 - **G run**: the run of G's in a read's 5' soft clip that touches the alignment, recorded by
   `Pretty_alignment` before the untemplated-G strip (a reverse-strand read: the C run at the
   head of its right clip).
+- **Trusted 5' end**: the read's start is taken as the first base of its molecule only when
+  its 5' clip is accounted for: nothing but 1-3 G's (Kinnex, Iso-Seq: the template-switch oligo
+  already trimmed), or a run of at least 3 G's next to the alignment (ONT PCS109: adapter +
+  the strand-switching primer, whose 3' GGG anneals to the C's reverse transcriptase adds).
+  The >= 3 G rule marks the primer, not the cap. A trusted end is a real molecule end, not
+  necessarily a TSS: away from peaks most are truncated or degraded molecules. Reads with an
+  unexplained clip are skipped.
 - **Informative**: the genomic base just 5' of the read start is not G (otherwise a capped
   read's extra G aligns to it and the read shows nothing).
-- **Baseline**: the most common G run among spliced informative read starts away from every
-  TSS peak: 0 for sc Kinnex 10x, 1 for bulk PacBio, 3 for ONT PCS109 (whose primer carries
-  GGG). A read is **capped** when its G run exceeds the baseline.
+- **Baseline**: the most common G run among trusted, informative, spliced read starts away
+  from every TSS peak, pooled over the library (ties to the smaller run); an int
+  `TSS_cap_G_baseline` in the config is used as given. Measured: 0 for sc Kinnex 10x, 1 for
+  bulk PacBio Kinnex (likely an extra G in the bulk Kinnex PCR adapters; the library's uncapped
+  SIRV spike-ins carry it too), 3 for ONT PCS109 (the primer's GGG). A read is **capped** when
+  its G run exceeds the baseline: the cap adds one G (reads with two extra are rarer).
 
 ## The library decision (pre-pass, `pylib/TSS_cap_calibration.py`)
 
