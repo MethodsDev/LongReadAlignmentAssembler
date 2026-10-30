@@ -76,3 +76,12 @@ takes 9 s on the real run; gunzip of the 1.4 GB reference ~5 s. Change: plain in
 ## Cromwell 92 (Local backend, Docker) end-to-end on testing/single_cells/sc_full_pipe_scattered fixture, images lraa-core/lraa-sc :cg-terra-testing (commit 5870393 + partition read_map fix)
 cluster-guided scattered: Succeeded, 639 s, 59 workflow outputs (empty ones = features this fixture disables). basic + quant_only (same fixture): Succeeded, 163 s, 13 non-empty outputs
 (no gtf outputs, as expected for quant-only). Only ERROR lines: Cromwell's cost estimate not knowing C3D machine types. Not covered locally: GCP Batch machine types, preemption, real data size.
+
+## First successful Terra run (basic + quant-only + ref annot, GRCh38-2024-A, images cg-terra-testing-0.44.3-5870393) vs local 2020-A quant-only run
+Wall 2 h 02 min (19:47 -> 21:49). Preempted attempts: 1 of 26 LRAA_runner_task (shard 2, ran 29 min, then the retry sat 31 min in Initializing before its 20 min run) and 1 mergeQuantResults
+(3 min in, retried, 262 s). count_bam and validate_scattering were call-cache hits. Run seconds (median/max): runner 427/1770, partition (16 cpu) 327, merge_sc_from_shards 252, mergeQuantResults 262,
+filter_good_cells 193, mergeReadAssignmentSummaries 104, sc_shard_sparse 38/76, run_seurat 76, gather_shard_cut_plans 80, integrate_symbols 85.
+Results vs the 2020-A run (different reference, so not identical): pseudobulk reads_total 19,311,739 vs 19,311,742; gene-level (by symbol) Pearson(log) 0.997 for genes >=100 reads in both (94% within 10%,
+top genes within 1%); transcript-level lower (0.83 / 0.48 for >=100 reads) because 2024-A has ~27k more transcripts to split reads across. Cells: 401,764 vs 400,384 barcodes (400,213 shared), per-barcode total
+counts Pearson(log) 0.9997, 96.6% within 5%; emptyDrops kept 3,321 vs 3,299 cells; Seurat clusters 13 vs 12, Adjusted Rand Index 0.955 (one 2020 cluster split in two).
+Not a same-reference regression test: that needs the 2020-A reference run through the new code.
