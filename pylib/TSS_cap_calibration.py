@@ -17,9 +17,10 @@ one baseline and one decision, which reach every graph build as TSS_cap_signatur
 
 Read-level rules are Splice_graph's and Pretty_alignment's: the transcribed strand
 (Util_funcs.transcribed_strand), the 5' G run read from the clip before the
-untemplated-G strip, a read defines a TSS only if what is left of its 5' clip is within
-max_soft_clip_at_TSS (five_prime_clip), and a read whose genomic base just 5' of its start is G carries no
-cap information. Peaks are called as a graph build calls them
+untemplated-G strip, a read's 5' end is trusted (taken as the first base of its molecule --
+a real molecule end, not necessarily a TSS) only if what is left of its 5' clip is within
+max_soft_clip_at_TSS (five_prime_clip), and a read whose genomic base just 5' of its start is
+G carries no cap information. Peaks are called as a graph build calls them
 (aggregate_sites_within_window, filter_non_peaky_positions); only spliced reads enter
 the statistics, as in _calibrate_TSS_cap_signature.
 """
@@ -71,7 +72,8 @@ def five_prime_clip(clip_seq, tx_forward):
 
 
 def _five_prime_start(read, strand, seq):
-    """(TSS position, G run, spliced) of a read, or None if it defines no TSS.
+    """(5' end position, G run, spliced) of a read, or None if its 5' end is not trusted
+    (an unexplained 5' clip).
 
     G run is None when the read is not informative (genomic G just 5' of the start).
     """
