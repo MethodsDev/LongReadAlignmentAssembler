@@ -5,6 +5,8 @@
 - **"Rebuild the dockers" means testing images**: `cd Docker && bash build_docker.testing.sh`.
   It writes `testing`, `<version>-testing` and `<version>-<shortsha>`. This holds after a
   version bump too: a version bump is not a release.
+- The full release procedure (version numbers, changelog, checks, steps, release notes) is
+  `docs/RELEASING.md`.
 - Only when the user explicitly says this is an **official / public release**:
   fast-forward `main`, push an `LRAA_v<version>` tag, publish the GitHub release, then run
   `Docker/release_docker.OFFICIAL.sh` (bare `<version>` and `:latest`). Confirm each of
