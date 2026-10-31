@@ -98,7 +98,14 @@ class Vertex:
                         file=extension_audit_ofh,
                     )
 
-                if extension_path_candidate.get_score() > best_score:
+                # pasa_mode: keep a compatible extension even at score 0. Nodes supported
+                # only by input-transcript templates score 0, so with a strict > two such
+                # nodes never chain; the one with the extra terminal exon then needs a path
+                # of its own, overlapping and compatible with the other (AT4G14030).
+                if extension_path_candidate.get_score() > best_score or (
+                    best_prev_scored_path is None
+                    and LRAA_Globals.config.get("pasa_mode", False)
+                ):
                     best_score = extension_path_candidate.get_score()
                     best_prev_scored_path = extension_path_candidate
 
