@@ -92,7 +92,7 @@ workflow LRAA_quant_by_cluster {
         # OOM, so undersizing this costs wall time, not the run.
         Int memoryGB_chunk_plan = 8
         # WORKING disk for the per-cluster LRAA_wf calls below: they hand it to
-        # subwdls/LRAA_runner.wdl, which spends it as `disks: "local-disk N HDD"` --
+        # subwdls/LRAA_runner.wdl, which spends it as `disks: "local-disk N SSD"` --
         # not the boot disk, which that task pins at 30. 256 is the same default
         # LRAA.wdl, LRAA-singlecell.wdl and LRAA-cell_cluster_guided.wdl already
         # carry, so leaving it unset changes nothing about how this workflow ran
@@ -423,12 +423,11 @@ task validate_pre_normalized_inputs {
         Array[File]? normalized_bais
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 1
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -492,7 +491,7 @@ task merge_bams {
     }
 
     Int disksize = 100 + ceil(3 * size(normalized_bams, "GB"))
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -732,7 +731,7 @@ task emit_shared_chunk_plan {
     Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0)
     Float diskRawGB = 2.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 100.0 then ceil(diskRawGB) else 100
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -892,12 +891,11 @@ task collate_read_assignment_summaries {
     # Text collation over a few hundred small TSVs; the inputs are the only thing on
     # disk that scales, and the output is smaller than their sum.
     Int diskGB = ceil(size(summaryFiles, "GB") * 3.0) + 10
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 2
     Int shape_cpu_tier = if shape_cpu <= 2 then 2

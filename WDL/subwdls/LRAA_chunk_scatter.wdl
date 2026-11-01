@@ -388,7 +388,7 @@ task make_chunks {
     Float diskRawGB = 3.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 200.0 then ceil(diskRawGB) else 200
     String numTotalReadsStr = if defined(num_total_reads) then "~{select_first([num_total_reads])}" else ""
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -597,36 +597,37 @@ task process_chunk {
     # and stage 5 its own scratch, all from the mini BAM.
     Float chunkDiskRawGB = 12.0 * size(chunkTar, "GB") + 20.0
     Int chunkDiskGB = if chunkDiskRawGB > 50.0 then ceil(chunkDiskRawGB) else 50
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
+    # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
+    # (7.5 GiB passes), hence 7 for that tier: such a request steps up to c3d-standard-4.
     Int shape_cpu = chunkCpu
     Int shape_memGB = chunkMemoryGB
-    Int shape_cpu_tier = if shape_cpu <= 2 then 2
-        else if shape_cpu <= 4 then 4
+    Int shape_cpu_tier = if shape_cpu <= 4 then 4
         else if shape_cpu <= 8 then 8
         else if shape_cpu <= 16 then 16
-        else if shape_cpu <= 32 then 32
-        else if shape_cpu <= 48 then 48
-        else if shape_cpu <= 64 then 64
-        else if shape_cpu <= 80 then 80
-        else 96
-    Int shape_mem_tier = if shape_memGB <= 16 then 2
-        else if shape_memGB <= 32 then 4
+        else if shape_cpu <= 30 then 30
+        else if shape_cpu <= 60 then 60
+        else if shape_cpu <= 90 then 90
+        else 180
+    Int shape_mem_tier = if shape_memGB <= 32 then 4
         else if shape_memGB <= 64 then 8
         else if shape_memGB <= 128 then 16
-        else if shape_memGB <= 256 then 32
-        else if shape_memGB <= 384 then 48
-        else if shape_memGB <= 512 then 64
-        else if shape_memGB <= 640 then 80
-        else 96
+        else if shape_memGB <= 240 then 30
+        else if shape_memGB <= 480 then 60
+        else if shape_memGB <= 720 then 90
+        else 180
     Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
-    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
-        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
-        else "n2d-highmem-~{shape_cores}"
+    Int shape_highcpu_memGB = if shape_cores == 4 then 7
+        else if shape_cores == 30 then 59
+        else if shape_cores == 60 then 118
+        else if shape_cores == 90 then 177
+        else if shape_cores == 180 then 354
+        else shape_cores * 2
+    String machine_type = if shape_memGB <= shape_highcpu_memGB then "c3d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "c3d-standard-~{shape_cores}"
+        else "c3d-highmem-~{shape_cores}"
 
 
     command <<<
@@ -764,7 +765,7 @@ PY
         cpu: chunkCpu
         memory: "~{chunkMemoryGB} GiB"
         preemptible: chunkPreemptible
-        disks: "local-disk ~{chunkDiskGB} HDD"
+        disks: "local-disk ~{chunkDiskGB} SSD"
     }
 }
 
@@ -786,7 +787,7 @@ task merge_chunks {
     Float mergeInputsGB = size(quantExprFiles, "GB") + size(quantTrackingFiles, "GB") + size(gtfFiles, "GB")
     Float mergeDiskRawGB = 3.0 * mergeInputsGB + 20.0
     Int mergeDiskGB = if mergeDiskRawGB > 100.0 then ceil(mergeDiskRawGB) else 100
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4

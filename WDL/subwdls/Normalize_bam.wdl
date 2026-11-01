@@ -43,7 +43,7 @@ task normalize_bam_by_strand {
 
   # derive a safe base name in WDL (avoid putting conditional logic inside the command string)
   String base = if label == "" then basename(input_bam) else label
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4

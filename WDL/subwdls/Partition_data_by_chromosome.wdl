@@ -92,7 +92,7 @@ task partition_by_chromosome_task {
     Int computed_memoryGB = if mem_raw_partition > 24.0 then ceil(mem_raw_partition) else 24
     Int concurrency_memoryGB = computed_memoryGB + (effective_partition_workers - 1)
     Int effective_memoryGB = select_first([memoryGB, concurrency_memoryGB])
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4

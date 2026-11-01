@@ -7,8 +7,9 @@ Rules from the Batch probes of 2026-10-30 and from miniwdl:
   than the machine, and rejects 8 GiB on c3d-highcpu-4 although the shape lists 8 GiB;
 - miniwdl ignores predefinedMachineType and reserves 0 cores and 0 memory for a task with
   no cpu/memory, so those lines must stay;
-- an HDD task stays off C3D, which appears not to take pd-standard (from the Compute Engine
-  docs, not probed; see docs/v0.47.1_terra_runtime_plan.md).
+- C3D never gets an HDD disk: it appears not to take pd-standard (from the Compute Engine docs,
+  not probed; see docs/v0.47.1_terra_runtime_plan.md). Only the two near-zero tasks that
+  cg-terra-testing leaves alone stay on HDD.
 The tier text is repeated per task because WDL 1.0 has no functions, so it is checked here.
 """
 
@@ -84,10 +85,39 @@ def test_machine_sits_beside_the_reservation(rel, name, body):
         assert re.search(r"^\s*cpu:", runtime, re.M)
 
 
+def _disk_type(body):
+    return re.search(r"disks:.*\s(SSD|HDD)\"\s*$", _runtime(body), re.M).group(1)
+
+
 @pytest.mark.parametrize("rel,name,body", TASKS, ids=IDS)
-def test_an_hdd_task_is_not_on_c3d(rel, name, body):
-    if '" HDD"' in _runtime(body) or re.search(r"\sHDD\"", _runtime(body)):
-        assert '"c3d-' not in _shape_block(body)
+def test_c3d_is_never_paired_with_hdd(rel, name, body):
+    on_c3d = '"c3d-' in _shape_block(body)
+    assert on_c3d or '"n2d-' in _shape_block(body)
+    if on_c3d:
+        assert _disk_type(body) == "SSD"
+
+
+def test_only_the_near_zero_tasks_stay_on_hdd():
+    hdd = {name for _, name, body in TASKS if _disk_type(body) == "HDD"}
+    assert hdd == {"derive_contigs", "validate_scattering"}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LRAA_runner_task",
+        "process_chunk",
+        "LRAA_merge_trackings",
+        "lraa_merge_gtf_task",
+        "sc_build_sparse_matrices",
+        "run_seurat_from_gene_sparseM",
+        "partition_bam_by_cell_cluster",
+    ],
+)
+def test_tasks_held_on_n2d_only_by_hdd_are_on_c3d(name):
+    bodies = {task: body for _, task, body in TASKS}
+    assert '"c3d-' in _shape_block(bodies[name])
+    assert _disk_type(bodies[name]) == "SSD"
 
 
 def test_the_shape_text_is_identical_across_tasks():
@@ -141,6 +171,16 @@ def test_the_batch_rejection_cases():
     assert _eval_machine(tasks["count_bam"], 16, 32) == "c3d-highcpu-16"
     assert _eval_machine(tasks["derive_contigs"], 1, 2) == "n2d-highcpu-2"
     assert _eval_machine(tasks["derive_contigs"], 1, 16) == "n2d-highmem-2"
+
+
+def test_the_moved_tasks_land_on_the_expected_shapes():
+    WDL = pytest.importorskip("WDL")
+    runner = WDL.load(str(REPO / "WDL/subwdls/LRAA_runner.wdl")).tasks[0]
+    assert runner.name == "LRAA_runner_task"
+    assert _eval_machine(runner, 5, 32) == "c3d-standard-8"
+    assert _eval_machine(runner, 2, 16) == "c3d-standard-4"
+    assert _eval_machine(runner, 16, 128) == "c3d-highmem-16"
+    assert _eval_machine(runner, 16, 32) == "c3d-highcpu-16"
 
 
 def test_runner_is_spot_and_the_terminal_tasks_are_not():

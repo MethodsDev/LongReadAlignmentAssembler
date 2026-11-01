@@ -946,12 +946,11 @@ task merge_GTFs {
         String outputFilePrefix
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 16
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1031,12 +1030,11 @@ task splice_pattern_collapse {
         String outputFilePrefix
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 16
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1121,12 +1119,11 @@ task integrate_TSS_PolyA_sites {
         String outputFilePrefix
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 4
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1203,7 +1200,7 @@ task alignment_mismapping_filter {
         Int cpu = 4
         Int memoryGB = 32
     }
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -1295,12 +1292,11 @@ task gather_shard_cut_plans {
         String outputFilePrefix
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 2
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1369,7 +1365,7 @@ task mergeQuantResults {
     # The merge concatenates the shard expr files and streams the shard trackings into one
     # gzip, so disk needs the localized inputs plus a copy of them: 2.2x total input.
     Float mergeDiskRawGB = (quantExprGB + quantTrackingGB) * 2.2 + 5.0
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -1504,12 +1500,11 @@ task mergeReadAssignmentSummaries {
         String outputFilePrefix
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 2
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1680,12 +1675,11 @@ task validate_scattering {
         Boolean no_chunk
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 1
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -1825,7 +1819,7 @@ task calibrate_TSS_cap_signature {
     }
 
     Int disk_gb = ceil(size(inputBAM, "GB") * 1.2 + size(referenceGenome, "GB") * 2.0 + 20.0)
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -1952,7 +1946,7 @@ task count_bam {
     Float estimated_disk = ceil(bam_size_gb * 2.2 + 20.0)
     Float disk_gb = if estimated_disk > 150.0 then estimated_disk else 150.0
     Int disk_gb_int = ceil(disk_gb)
-    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
     # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
@@ -2025,12 +2019,11 @@ task derive_contigs {
         File inputBAM
         String docker
     }
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = 2
     Int shape_cpu_tier = if shape_cpu <= 2 then 2

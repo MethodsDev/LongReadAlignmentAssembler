@@ -62,12 +62,11 @@ task run_filter_good_cells {
   }
 
   Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")))
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 1
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -174,6 +173,6 @@ task run_filter_good_cells {
       preemptible: preemptible_tries
     docker: docker
     memory: memoryGB + " GB"
-    disks: "local-disk " + disksize + " HDD"
+    disks: "local-disk " + disksize + " SSD"
   }
 }

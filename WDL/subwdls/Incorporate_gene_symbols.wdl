@@ -64,12 +64,11 @@ task run_gffcompare {
 
   Int disksize = 20 + ceil(2 * (size(reference_gtf, "GB") + size(query_gtf, "GB")))
   String output_prefix = "~{sample_id}.gffcmp"
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 2
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -138,7 +137,7 @@ task run_gffcompare {
     docker: docker
     cpu: 2
     memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    disks: "local-disk ~{disksize} SSD"
   }
 }
 
@@ -167,12 +166,11 @@ task incorporate_gene_symbols_sc {
   String splice_sparse_tar_out = "~{sample_id}.withGeneSymbols.splice_pattern-sparseM.tar.gz"
   String updated_gtf_out = "~{sample_id}.withGeneSymbols.gtf"
   String updated_mapping_out = "~{sample_id}.gene_transcript_splicehashcode.withGeneSymbols.tsv"
-    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
-    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
-    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
-    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
-    # probe settles that.
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
     Int shape_cpu = 2
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -275,6 +273,6 @@ task incorporate_gene_symbols_sc {
     docker: docker
     cpu: 2
     memory: "~{memoryGB} GiB"
-    disks: "local-disk ~{disksize} HDD"
+    disks: "local-disk ~{disksize} SSD"
   }
 }

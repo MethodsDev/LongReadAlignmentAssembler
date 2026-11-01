@@ -15,9 +15,11 @@ PYTHONHASHSEED. Not measured: any Cromwell or Terra run, cost, or the speedups o
 
 Workflows:
 - Every task reachable from LRAA.wdl and LRAA-singlecell.wdl names predefinedMachineType next to
-  its cpu and memory. Tasks of 3+ cores on SSD use C3D tiers; tasks of up to 2 cores, or on HDD, use
-  N2D, because C3D appears not to take pd-standard (unprobed) and disks were left as they were.
-  Without a named machine Cromwell builds a custom N1 VM.
+  its cpu and memory. Tasks of 3+ cores use C3D tiers, as do LRAA_runner_task and process_chunk
+  whatever their cpu; fixed tasks of up to 2 cores use N2D. Without a named machine Cromwell builds
+  a custom N1 VM.
+- Task disks move from HDD to SSD as on cg-terra-testing, sizes unchanged, except derive_contigs
+  and validate_scattering. C3D is never paired with HDD.
 - Commands stay on the requested cpu, so a larger tier leaves cores idle rather than changing
   a thread count.
 - Spot: LRAA_runner_task 2 tries (70% of the task-hours of the PBMC v0.47.0 basic arm, median 6.6
