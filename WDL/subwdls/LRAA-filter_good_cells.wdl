@@ -49,6 +49,7 @@ workflow FilterGoodCells {
 
 task run_filter_good_cells {
   input {
+    Int preemptible_tries = 3
     File gene_sparse_tar_gz
     File? isoform_sparse_tar_gz
     File? splice_pattern_sparse_tar_gz
@@ -61,6 +62,36 @@ task run_filter_good_cells {
   }
 
   Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")))
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
   command <<<
     set -ex
@@ -136,6 +167,10 @@ task run_filter_good_cells {
   }
 
   runtime {
+
+      predefinedMachineType: machine_type
+
+      preemptible: preemptible_tries
     docker: docker
     memory: memoryGB + " GB"
     disks: "local-disk " + disksize + " HDD"

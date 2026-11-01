@@ -417,11 +417,42 @@ workflow LRAA_quant_by_cluster {
 
 task validate_pre_normalized_inputs {
     input {
+        Int preemptible_tries = 3
         Array[File] cluster_bams
         Array[File] normalized_bams
         Array[File]? normalized_bais
         String docker
     }
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = 1
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     command <<<
         set -euo pipefail
@@ -437,6 +468,10 @@ task validate_pre_normalized_inputs {
     >>>
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "1 GiB"
@@ -447,6 +482,7 @@ task validate_pre_normalized_inputs {
 
 task merge_bams {
     input {
+        Int preemptible_tries = 3
         Array[File] normalized_bams
         String output_basename
         String docker
@@ -455,6 +491,38 @@ task merge_bams {
     }
 
     Int disksize = 100 + ceil(3 * size(normalized_bams, "GB"))
+    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
+    # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
+    # (7.5 GiB passes), hence 7 for that tier: such a request steps up to c3d-standard-4.
+    Int shape_cpu = cpu
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 30 then 30
+        else if shape_cpu <= 60 then 60
+        else if shape_cpu <= 90 then 90
+        else 180
+    Int shape_mem_tier = if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 240 then 30
+        else if shape_memGB <= 480 then 60
+        else if shape_memGB <= 720 then 90
+        else 180
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    Int shape_highcpu_memGB = if shape_cores == 4 then 7
+        else if shape_cores == 30 then 59
+        else if shape_cores == 60 then 118
+        else if shape_cores == 90 then 177
+        else if shape_cores == 180 then 354
+        else shape_cores * 2
+    String machine_type = if shape_memGB <= shape_highcpu_memGB then "c3d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "c3d-standard-~{shape_cores}"
+        else "c3d-highmem-~{shape_cores}"
+
 
     command <<<
         set -euo pipefail
@@ -595,6 +663,10 @@ print(total)
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: "~{cpu}"
         memory: "~{memoryGB} GiB"
@@ -659,6 +731,38 @@ task emit_shared_chunk_plan {
     Float inputsGB = size(inputBAM, "GB") + size(referenceGenome, "GB") + (if defined(annot_gtf) then size(annot_gtf, "GB") else 0.0)
     Float diskRawGB = 2.0 * inputsGB + 50.0
     Int diskGB = if diskRawGB > 100.0 then ceil(diskRawGB) else 100
+    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
+    # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
+    # (7.5 GiB passes), hence 7 for that tier: such a request steps up to c3d-standard-4.
+    Int shape_cpu = cpu
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 30 then 30
+        else if shape_cpu <= 60 then 60
+        else if shape_cpu <= 90 then 90
+        else 180
+    Int shape_mem_tier = if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 240 then 30
+        else if shape_memGB <= 480 then 60
+        else if shape_memGB <= 720 then 90
+        else 180
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    Int shape_highcpu_memGB = if shape_cores == 4 then 7
+        else if shape_cores == 30 then 59
+        else if shape_cores == 60 then 118
+        else if shape_cores == 90 then 177
+        else if shape_cores == 180 then 354
+        else shape_cores * 2
+    String machine_type = if shape_memGB <= shape_highcpu_memGB then "c3d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "c3d-standard-~{shape_cores}"
+        else "c3d-highmem-~{shape_cores}"
+
 
     command <<<
     set -euo pipefail
@@ -738,6 +842,8 @@ task emit_shared_chunk_plan {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
         docker: docker
         cpu: cpu
         memory: "~{memoryGB} GiB"
@@ -759,6 +865,7 @@ task collate_read_assignment_summaries {
     # so their totals legitimately disagree and one table holding both would invite a
     # false reconciliation.
     input {
+        Int preemptible_tries = 3
         # One merged read_assignment.summary.tsv per LRAA invocation, chunked or not.
         Array[File] summaryFiles
         # Paired BY POSITION with summaryFiles; the util exits 2 naming both counts if
@@ -784,6 +891,36 @@ task collate_read_assignment_summaries {
     # Text collation over a few hundred small TSVs; the inputs are the only thing on
     # disk that scales, and the output is smaller than their sum.
     Int diskGB = ceil(size(summaryFiles, "GB") * 3.0) + 10
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = 2
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     command <<<
     set -euo pipefail
@@ -802,6 +939,10 @@ task collate_read_assignment_summaries {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "2 GiB"

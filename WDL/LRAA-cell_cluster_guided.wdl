@@ -580,6 +580,7 @@ workflow LRAA_cell_cluster_guided {
 
 task LRAA_tar_outputs {
     input {
+        Int preemptible_tries = 3
         String tar_directory_name
         Array[File] input_files
         String docker
@@ -587,6 +588,36 @@ task LRAA_tar_outputs {
 
     Int memoryGB = 8
     Int disksize = 20 + ceil(5 * size(input_files, "GiB"))
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
     
     command <<<
 
@@ -608,6 +639,10 @@ task LRAA_tar_outputs {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "~{memoryGB} GiB"
@@ -618,15 +653,48 @@ task LRAA_tar_outputs {
 
 task LRAA_merge_trackings {
     input {
+        Int preemptible_tries = 3
         String sample_id
         Array[File] tracking_files
         String docker
     }
 
     Int memoryGB = 8
+    # Cores for the per-shard tracking merge below.
+    Int merge_cpu = 4
     Int disksize = 20 + ceil(10 * length(tracking_files))
         
     String outputfile = "~{sample_id}.cluster_merged.quant.tracking.gz"
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = merge_cpu
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
     
     command <<<
         set -ex
@@ -639,46 +707,55 @@ task LRAA_merge_trackings {
             --inputs ~{sep=' ' tracking_files} \
             --output merge_header.txt
 
-        python <<CODE
-import json
-import gzip
+    # Same result as the former single-stream python gzip loop (the merge header once, then
+    # every shard's rows with '#' lines and repeated column headers dropped), but each shard
+    # is processed by its own job and the parts are concatenated in input order. The output
+    # is a multi-member gzip: its decompressed bytes are what is unchanged, not the .gz bytes.
+    set -o pipefail
+    mkdir parts
+    mapfile -t inputs < ~{write_lines(tracking_files)}
+    n=${#inputs[@]}
 
-tracking_files_json = '["' + '~{sep='","' tracking_files}' + '"]'
-tracking_files_list = json.loads(tracking_files_json)    # Parse the JSON string into a Python list
-header_lines = open("merge_header.txt", "rt").read()
+    # Schema check: each shard's column header (first non-'#' line) must match the first
+    # shard that has one. A shard with no such line contributes nothing.
+    first=-1
+    for i in "${!inputs[@]}"; do
+        { gzip -dcf "${inputs[$i]}" | grep -a -m1 -v '^#' > parts/hdr.$i || true; }
+        if [ -s parts/hdr.$i ]; then
+            if [ $first -lt 0 ]; then
+                first=$i
+            elif ! cmp -s parts/hdr.$first parts/hdr.$i; then
+                echo "Cannot merge tracking files with different schemas: ${inputs[$i]} differs from the first input" >&2
+                exit 1
+            fi
+        fi
+    done
 
-with gzip.open("~{outputfile}", "wt") as ofh:
-    ofh.write(header_lines)
-    wrote_header = False
-    expected_header = None
-    for i, tracking_file in enumerate(tracking_files_list):
-        openf = gzip.open if tracking_file.split(".")[-1] == "gz" else open
-        with openf(tracking_file, "rt") as fh:
-            header = None
-            for line in fh:
-                if line.startswith("#"):
-                    continue
-                if header is None:
-                    header = line
-                    if expected_header is None:
-                        expected_header = header
-                    elif header != expected_header:
-                        raise RuntimeError(
-                            "Cannot merge tracking files with different schemas: {} differs from the first input".format(
-                                tracking_file
-                            )
-                        )
-                    if not wrote_header:
-                        print(header, file=ofh, end='')
-                        wrote_header = True
-                    continue
-                print(line, file=ofh, end='')
+    # merge_cpu jobs at a time; spare cores go to the compressors when shards are few.
+    threads_per_job=$(( ~{merge_cpu} / n ))
+    if [ $threads_per_job -lt 1 ]; then threads_per_job=1; fi
+    for i in "${!inputs[@]}"; do
+        while [ "$(jobs -rp | wc -l)" -ge ~{merge_cpu} ]; do wait -n; done
+        (
+            set -o pipefail
+            gzip -dcf "${inputs[$i]}" | { grep -a -v '^#' || [ $? -eq 1 ]; } \
+                | { if [ $i -eq $first ]; then cat; else tail -n +2; fi; } \
+                | pigz -n -p $threads_per_job > parts/part.$i.gz
+            touch parts/ok.$i
+        ) &
+    done
+    wait
+    # A failed background job does not fail a bare 'wait', so check that each one finished.
+    for i in "${!inputs[@]}"; do
+        if [ ! -e parts/ok.$i ]; then echo "Failed to process ${inputs[$i]}" >&2; exit 1; fi
+    done
 
+    pigz -n -c merge_header.txt > "~{outputfile}"
+    for i in "${!inputs[@]}"; do
+        cat parts/part.$i.gz >> "~{outputfile}"
+        rm parts/part.$i.gz
+    done
 
-CODE
-
-       
-    
      >>>
 
      output {
@@ -686,8 +763,12 @@ CODE
      }
     
      runtime {
+    
+         predefinedMachineType: machine_type
+    
+         preemptible: preemptible_tries
         docker: docker
-        cpu: 1
+        cpu: merge_cpu
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} HDD"
      }
@@ -698,6 +779,7 @@ CODE
 
 task lraa_merge_gtf_task {
     input {
+        Int preemptible_tries = 1
         String sample_id
         Array[File] LRAA_cell_cluster_gtfs
         File? pooled_gtf
@@ -721,6 +803,36 @@ task lraa_merge_gtf_task {
         # memory granted (6 GB budgeted per worker).
         Int cpu = 8
     }
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = cpu
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     
     command <<<
@@ -776,6 +888,10 @@ task lraa_merge_gtf_task {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: cpu
         memory: "~{memoryGB} GiB"
@@ -787,6 +903,7 @@ task lraa_merge_gtf_task {
 
 task build_cluster_pseudobulk_matrices {
     input {
+        Int preemptible_tries = 3
         String sample_id
         Array[File] quant_expr_files
         String docker
@@ -796,6 +913,36 @@ task build_cluster_pseudobulk_matrices {
     Int disksize = 20 + ceil(10 * length(quant_expr_files))
 
     String output_prefix = "~{sample_id}.LRAA.cluster_pseudobulk"
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     command <<<
         set -ex
@@ -814,6 +961,10 @@ task build_cluster_pseudobulk_matrices {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "~{memoryGB} GiB"
@@ -824,6 +975,7 @@ task build_cluster_pseudobulk_matrices {
 
 task sc_build_sparse_matrices {
     input {
+        Int preemptible_tries = 3
         String sample_id
         File tracking_file
         String docker
@@ -837,6 +989,36 @@ task sc_build_sparse_matrices {
     Int disksize = 50 + ceil(2 * size(tracking_file, "GB"))
 
     String output_prefix = "~{sample_id}.LRAA.sc"
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 3
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     command <<<
         set -ex
@@ -878,6 +1060,10 @@ task sc_build_sparse_matrices {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 3
         memory: "~{memoryGB} GiB"
@@ -888,6 +1074,7 @@ task sc_build_sparse_matrices {
 
 task require_annot_gtf {
     input {
+        Int preemptible_tries = 3
         File annot_gtf
         # REQUIRED, and the omission of this input was a real Terra failure:
         # GCP Batch rejects any task with no image ("No container image found in
@@ -899,6 +1086,36 @@ task require_annot_gtf {
         # future call site cannot omit it silently.
         String docker
     }
+    # Machine shape (v0.47.1, generated text, identical in every small or HDD task). cpu: and
+    # memory: stay as they are, so miniwdl's reservations do not change; this only names the
+    # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
+    # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
+    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    Int shape_cpu = 1
+    Int shape_memGB = 1
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
 
     command <<<
         set -euo pipefail
@@ -910,6 +1127,10 @@ task require_annot_gtf {
     }
 
     runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
         cpu: 1
         memory: "1 GiB"
