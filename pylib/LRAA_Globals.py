@@ -478,48 +478,41 @@ config = {
     # Experiments on unsupported TSS ends only; PolyA ends do not read these. None = off.
     # terminal_boundary_percentile at the transcript's 5' end (80 = 20th percentile from the 5' side).
     "terminal_boundary_percentile_TSS": None,
-    # Named rule for the TSS end: see LRAA.tss_end_by_rule.
-    "terminal_TSS_end_rule": None,
+    # Named rule for an unsupported TSS end: see LRAA.tss_end_by_rule. Default "own_vote" (v0.48.0): the read 5' end
+    # pile-up (+-2 bp, >= 2 reads) among the reads the model represents, else their 20th percentile from the 5' side,
+    # at any read count. MEASURED chr19 de novo, 5' ends within a CAGE peak: BT474 76.5 -> 82.4%, HG002 67.1 -> 75.4%
+    # (with terminal_end_rule_extend). None restores v0.47.0 (percentile, exon edge below min_reads).
+    "terminal_TSS_end_rule": "own_vote",
     # The same named rules applied to the PolyA end, mirrored ("own_vote" = peak of own reads, else 20% from the 3' side).
     "terminal_PolyA_end_rule": None,
     # With a rule above: own reads ending beyond the terminal exon count too, and the end may extend past the exon edge.
     # An extended end that leaves the model without a spacer-free path in the splice graph is not applied
     # (the remap after the adjustment would otherwise drop the model); the un-extended rule end is used instead.
-    "terminal_end_rule_extend": False,
+    "terminal_end_rule_extend": True,
     # With terminal_end_rule_extend: an end more than this many bp past the exon edge needs >= 2 read ends within +-2 bp;
-    # otherwise the un-extended rule end is used. None = no limit.
-    "terminal_end_rule_extend_unvoted_max": None,
-    # Unsupported 3' end moves past the terminal exon to a pile-up of the model's reads (+-2 bp, >= 2 reads) unless the
-    # genome there is A-rich (Util_funcs.looks_internally_primed) or the model loses its spacer-free path. Otherwise the
-    # end stays where the rules above put it. Not in merge mode. Works with or without terminal_end_rule_extend.
-    "terminal_PolyA_outward_pileup": False,
-    # With a rule above: "own reads" are only the reads whose own graph path carries exactly the isoform's
-    # intron chain (Scored_path.own_chain_read_names). Off: every read the assembled path represents counts,
-    # including partial reads and reads of contained sibling structures.
-    "terminal_end_rule_own_chain_strict": False,
+    # otherwise the un-extended rule end is used. None = no limit. 200 MEASURED HG002 chr19: 5' CAGE 75.4 -> 75.7%,
+    # fewer ends moved by lone reads. Not applied in a merge (one end per input model is the evidence there).
+    "terminal_end_rule_extend_unvoted_max": 200,
     # Merge only: the merged model's unsupported ends get the same adjustment as a normal model's, with
     # one read end per input model as the evidence (LRAA.own_chain_source_model_ends): the rules above where
     # set, else terminal_boundary_method (exon edge below min_reads_for_terminal_adjustment input models).
-    "merge_end_rule_from_sources": False,
+    "merge_end_rule_from_sources": True,
     # Merge only: with merge_trim_to_boundary_full_alt_site_window, measure the distance to a TSS / PolyA node
     # from the model's own end, not from the outer edge of the graph node that end falls in.
-    "merge_trim_from_model_end": False,
-    # Not merge: on model re-paths (not read mapping), measure the half-window distance to a TSS / PolyA node from the
-    # model's own end, not from the outer edge of the graph node that end falls in.
-    "terminal_trim_from_model_end": False,
+    "merge_trim_from_model_end": True,
     # Merge only: re-path and snap the reconstructed models once before their ends are adjusted, so an end
     # about to land on a TSS / PolyA node already counts as carrying that call.
-    "merge_repath_before_end_adjustment": False,
+    "merge_repath_before_end_adjustment": True,
     # Merge only: an end adjustment that would carry an end past a TSS (5' end) or PolyA (3' end) site in the
     # graph stops on the first such site instead.
-    "merge_end_stop_at_called_site": False,
+    "merge_end_stop_at_called_site": True,
     # Merge only: after the final re-path, models with identical exons (ends adjusted onto the same site) become one.
-    "merge_dedupe_identical_models": False,
+    "merge_dedupe_identical_models": True,
     # Merge only: an end on a TSS / PolyA site counts only if an input model of the merged model ends within
     # max_dist_between_alt_{TSS,polyA}_sites of that site. Otherwise the site node comes off the path, the flag
     # goes and the end gets the normal adjustment; merge_end_stop_at_called_site stops only on sites that pass.
     # Implies the re-path of merge_repath_before_end_adjustment.
-    "merge_site_end_requires_source_support": False,
+    "merge_site_end_requires_source_support": True,
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned

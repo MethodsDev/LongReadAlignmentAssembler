@@ -289,29 +289,6 @@ def extension_lacks_peak(coord, exon_edge, read_ends, max_bp):
     )
 
 
-def polyA_outward_pileup_end(read_ends, exon_edge, side, internally_primed=None):
-    """terminal_PolyA_outward_pileup: where an unsupported 3' end moves, or None to stay.
-
-    read_ends        : 3' coordinates of the model's reads ending in or past the terminal exon.
-    exon_edge        : the exon's 3' coordinate; only reads past it count.
-    side             : "right" on the + strand, "left" on the - strand.
-    internally_primed: optional test of a coordinate. A pile-up on A-rich genome is refused:
-                       such pile-ups match PolyASite at the background rate (MEASURED chr19:
-                       1% vs 73% for the others).
-
-    The pile-up is read_start_vote (+-2 bp, at least 2 reads) on those reads. The result is
-    always strictly past exon_edge, so the rule can only move an end outward.
-    """
-    sgn = 1 if side == "right" else -1
-    chosen = read_start_vote([sgn * p for p in read_ends if sgn * p > sgn * exon_edge])
-    if chosen is None:
-        return None
-    coord = sgn * chosen
-    if internally_primed is not None and internally_primed(coord):
-        return None
-    return coord
-
-
 def own_chain_source_model_ends(transcript, own_chain=None):
     """Merge mode: (lend, rend) of the input models behind a merged isoform.
 
@@ -397,6 +374,40 @@ def stop_end_at_site(end, new_end, site_positions):
         if i >= 0 and site_positions[i] > new_end:
             return site_positions[i]
     return new_end
+
+
+def revert_unmappable_extension(
+    new_first_lend,
+    new_last_rend,
+    exon_edges,
+    unextended,
+    adjust_left,
+    adjust_right,
+    mappable,
+    left_sites=(),
+    right_sites=(),
+):
+    """terminal_end_rule_extend guard: (first_lend, last_rend) to apply to a model.
+
+    An end moved past its terminal exon edge (exon_edges = (first_lend, last_rend)) can put
+    the model onto exon segments its terminal exon has no edge to, or across a gap with no
+    segment: the path then holds a SPACER and the remap drops the model. When
+    mappable(lend, rend) is False for the proposed ends, the left extension goes back to
+    the rule's in-exon coordinate (unextended[0], never past the edge) first; the right one
+    follows only if the model is still unmappable. Ends that did not extend are kept.
+    left_sites / right_sites: as in stop_end_at_site (merge_end_stop_at_called_site).
+    """
+    first_lend, last_rend = exon_edges
+    unext_first, unext_last = unextended
+    left_beyond = adjust_left and new_first_lend < first_lend
+    right_beyond = adjust_right and new_last_rend > last_rend
+    if not (left_beyond or right_beyond) or mappable(new_first_lend, new_last_rend):
+        return new_first_lend, new_last_rend
+    if left_beyond:
+        new_first_lend = stop_end_at_site(first_lend, max(unext_first, first_lend), left_sites)
+    if right_beyond and not mappable(new_first_lend, new_last_rend):
+        new_last_rend = stop_end_at_site(last_rend, min(unext_last, last_rend), right_sites)
+    return new_first_lend, new_last_rend
 
 
 def terminal_low_count_methods(setting, strand):
@@ -1296,39 +1307,20 @@ class LRAA:
             # Reads with this isoform's own intron chain (terminal_TSS_end_rule only).
             tss_end_rule = LRAA_Globals.config.get("terminal_TSS_end_rule", None)
             polyA_end_rule = LRAA_Globals.config.get("terminal_PolyA_end_rule", None)
-            # terminal_PolyA_outward_pileup: unsupported 3' end to a pile-up of the model's reads
-            # past the exon edge (a merge has no reads).
-            outward_pileup = LRAA_Globals.LRAA_MODE != "MERGE" and LRAA_Globals.config.get(
-                "terminal_PolyA_outward_pileup", False
-            )
             own_spans = []
-            if tss_end_rule is not None or polyA_end_rule is not None or outward_pileup:
+            if tss_end_rule is not None or polyA_end_rule is not None:
                 own_chain = sorted(tuple(i) for i in transcript.get_introns())
                 # The evidence multipath of an assembled model is its merged path carrying
                 # every represented read, so the chain test below passes for all of them
-                # (partial reads, reads of contained sibling structures). With
-                # terminal_end_rule_own_chain_strict the names recorded per graph node at
-                # construction (Scored_path.own_chain_read_names) are used instead.
-                strict_names = (
-                    transcript.get_own_chain_read_names()
-                    if LRAA_Globals.config.get("terminal_end_rule_own_chain_strict", False)
-                    else None
-                )
-                if strict_names is not None:
-                    for rn in sorted(strict_names):
+                # (partial reads, reads of contained sibling structures).
+                for mp in transcript.get_multipaths_evidence_assigned():
+                    if sorted(i.get_coords() for i in mp.get_introns()) != own_chain:
+                        continue
+                    for rn in mp.get_read_names():
                         if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
                             continue
                         if rn in self._read_name_to_span:
                             own_spans.append(self._read_name_to_span[rn])
-                else:
-                    for mp in transcript.get_multipaths_evidence_assigned():
-                        if sorted(i.get_coords() for i in mp.get_introns()) != own_chain:
-                            continue
-                        for rn in mp.get_read_names():
-                            if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
-                                continue
-                            if rn in self._read_name_to_span:
-                                own_spans.append(self._read_name_to_span[rn])
                 if ends_from_sources:
                     own_spans = own_chain_source_model_ends(transcript, own_chain)
 
@@ -1481,8 +1473,12 @@ class LRAA:
                 )
 
             # terminal_end_rule_extend_unvoted_max: a long extension needs a read peak.
+            # Not in a merge: there the evidence is one end per input model, each already
+            # its own run's placement, and a single source reaching past the merged exon's
+            # edge is no lone read (TIGD7: an input model's 5' exon 42995-43431 came out of
+            # the merge assembly as 42995-43212 and was held there by the cap).
             unvoted_max = LRAA_Globals.config.get("terminal_end_rule_extend_unvoted_max", None)
-            if extend_ends and unvoted_max is not None:
+            if extend_ends and unvoted_max is not None and LRAA_Globals.LRAA_MODE != "MERGE":
                 if left_rule is not None and extension_lacks_peak(
                     candidate_first_lend, first_lend, own_left, unvoted_max
                 ):
@@ -1525,32 +1521,6 @@ class LRAA:
             new_first_lend = candidate_first_lend if adjust_left else first_lend
             new_last_rend = candidate_last_rend if adjust_right else last_rend
 
-            outward_moved = False
-            if outward_pileup and (adjust_right if tss_is_left else adjust_left):
-
-                def _a_rich(coord):
-                    return Util_funcs.looks_internally_primed(
-                        self._splice_graph._contig_seq_str, coord, strand
-                    )
-
-                if tss_is_left:
-                    ends = [r for _, r in own_spans if r is not None and r >= last_exon_lend]
-                    moved_end = polyA_outward_pileup_end(ends, last_rend, "right", _a_rich)
-                else:
-                    ends = [l for l, _ in own_spans if l is not None and l <= first_exon_rend]
-                    moved_end = polyA_outward_pileup_end(ends, first_lend, "left", _a_rich)
-                if moved_end is not None:
-                    outward_moved = True
-                    logger.info(
-                        f"  PILEUP_EXTENDED {transcript.get_transcript_id()}: "
-                        f"3' end [{new_last_rend if tss_is_left else new_first_lend}]->[{moved_end}], "
-                        f"edge {last_rend if tss_is_left else first_lend}, {len(ends)} reads"
-                    )
-                    if tss_is_left:
-                        new_last_rend = moved_end
-                    else:
-                        new_first_lend = moved_end
-
             # Merge: no adjustment carries an end past a called site. Crossing one left
             # an unflagged model beside the site-anchored one; stopping on the site lets
             # the final re-path give it that call.
@@ -1577,7 +1547,7 @@ class LRAA:
                 new_first_lend = stop_end_at_site(first_lend, new_first_lend, left_sites)
                 new_last_rend = stop_end_at_site(last_rend, new_last_rend, right_sites)
 
-            if extend_ends or outward_moved:
+            if extend_ends:
                 # An end moved past the terminal exon can put the model onto exon
                 # segments its terminal exon is not connected to, or across a gap with
                 # no segment at all: the remap that follows the adjustment then finds
@@ -1593,32 +1563,22 @@ class LRAA:
                         refine_TSS_simple_path=True,
                         refine_PolyA_simple_path=True,
                         full_window_boundary_trim=self._full_window_trim_enabled(),
-                        is_model=True,
                     )
                     return path is not None and SPACER not in path
 
-                # A pile-up move is tested on its own, so an unmappable TSS extension can't undo it.
-                if outward_moved and not (
-                    _mappable(first_lend, new_last_rend)
-                    if tss_is_left
-                    else _mappable(new_first_lend, last_rend)
-                ):
-                    logger.info(f"  PILEUP_REVERTED {transcript.get_transcript_id()}: no spacer-free path")
-                    if tss_is_left:
-                        new_last_rend = min(unextended_last_rend, last_rend)
-                    else:
-                        new_first_lend = max(unextended_first_lend, first_lend)
-
-                left_beyond = adjust_left and new_first_lend < first_lend
-                right_beyond = adjust_right and new_last_rend > last_rend
-                if (left_beyond or right_beyond) and not _mappable(new_first_lend, new_last_rend):
-                    kept_first, kept_last = new_first_lend, new_last_rend
-                    if left_beyond:
-                        new_first_lend = max(unextended_first_lend, first_lend) if adjust_left else first_lend
-                        new_first_lend = stop_end_at_site(first_lend, new_first_lend, left_sites)
-                    if right_beyond and not _mappable(new_first_lend, new_last_rend):
-                        new_last_rend = min(unextended_last_rend, last_rend) if adjust_right else last_rend
-                        new_last_rend = stop_end_at_site(last_rend, new_last_rend, right_sites)
+                kept_first, kept_last = new_first_lend, new_last_rend
+                new_first_lend, new_last_rend = revert_unmappable_extension(
+                    new_first_lend,
+                    new_last_rend,
+                    (first_lend, last_rend),
+                    (unextended_first_lend, unextended_last_rend),
+                    adjust_left,
+                    adjust_right,
+                    _mappable,
+                    left_sites,
+                    right_sites,
+                )
+                if (new_first_lend, new_last_rend) != (kept_first, kept_last):
                     logger.info(
                         f"  EXTENSION_REVERTED {transcript.get_transcript_id()}: "
                         f"[{kept_first}-{kept_last}] has no spacer-free path; using [{new_first_lend}-{new_last_rend}]"
@@ -2500,7 +2460,6 @@ class LRAA:
                 refine_TSS_simple_path=True,
                 refine_PolyA_simple_path=True,
                 full_window_boundary_trim=full_window_trim,
-                is_model=True,
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
 
@@ -2662,15 +2621,10 @@ class LRAA:
         return (read_name, span_lend)
 
     @staticmethod
-    def _own_end_for_trim(segments, full_window_boundary_trim, is_model):
+    def _own_end_for_trim(segments, full_window_boundary_trim):
         """(lend, rend) to measure the TSS / PolyA trim from, or None for the node edge."""
-        if (
-            full_window_boundary_trim
-            and LRAA_Globals.config.get("merge_trim_from_model_end", False)
-        ) or (
-            is_model
-            and LRAA_Globals.LRAA_MODE != "MERGE"
-            and LRAA_Globals.config.get("terminal_trim_from_model_end", False)
+        if full_window_boundary_trim and LRAA_Globals.config.get(
+            "merge_trim_from_model_end", False
         ):
             return (segments[0][0], segments[-1][1])
         return None
@@ -2684,7 +2638,6 @@ class LRAA:
         left_soft_clipping=None,
         right_soft_clipping=None,
         full_window_boundary_trim=False,
-        is_model=False,
     ):
 
         logger.debug("incoming segments: {}".format(alignment_segments))
@@ -2748,9 +2701,7 @@ class LRAA:
             path = Simple_path_utils.trim_terminal_spacers(path)
 
         # The model's own ends, for the full-window trim's distance test.
-        own_end = self._own_end_for_trim(
-            alignment_segments, full_window_boundary_trim, is_model
-        )
+        own_end = self._own_end_for_trim(alignment_segments, full_window_boundary_trim)
 
         if (
             refine_TSS_simple_path

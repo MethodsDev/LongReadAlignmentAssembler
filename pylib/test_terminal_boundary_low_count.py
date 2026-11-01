@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 import LRAA_Globals  # noqa: E402
 from LRAA import (  # noqa: E402
     extension_lacks_peak,
-    polyA_outward_pileup_end,
     read_start_vote,
     terminal_boundary_coord,
     terminal_low_count_methods,
@@ -207,9 +206,12 @@ def test_rule_clamped_to_exon_and_unknown_rejected():
         _rule("nope", [1], [], "left", 0, 0)
 
 
-def test_new_keys_default_off():
+def test_v048_end_rule_defaults():
+    # v0.48.0: own_vote at the 5' end with extension and the 200 bp no-peak cap; 3' unchanged
     assert LRAA_Globals.config["terminal_boundary_percentile_TSS"] is None
-    assert LRAA_Globals.config["terminal_TSS_end_rule"] is None
+    assert LRAA_Globals.config["terminal_TSS_end_rule"] == "own_vote"
+    assert LRAA_Globals.config["terminal_end_rule_extend"] is True
+    assert LRAA_Globals.config["terminal_end_rule_extend_unvoted_max"] == 200
 
 
 def test_percentile_tss_key_mirrors_per_side():
@@ -230,10 +232,6 @@ def test_own_vote_mirrored_at_3prime_end():
     assert _rule("own_vote", [700], [700], "right", 2000, 2000) == 700
     # peak wins over the percentile
     assert _rule("own_vote", [100, 300, 301, 600], [100, 300, 301, 600], "right", 2000, 2000) == 300
-
-
-def test_extend_key_default_off():
-    assert LRAA_Globals.config["terminal_end_rule_extend"] is False
 
 
 def test_extend_goes_past_the_exon_edge_only_when_asked():
@@ -304,37 +302,7 @@ def test_source_ends_count_each_model_once_and_pooled_as_residual():
     assert sorted(ends, key=str) == sorted([(100, 500), (150, 500), (None, 700)], key=str)
 
 
-class _FakeMPGN:
-    def __init__(self, mp, contained=()):
-        self._mp, self._c = mp, list(contained)
-
-    def get_multiPathObj(self):
-        return self._mp
-
-    def get_containments(self):
-        return self._c
-
-
-def test_own_chain_strict_key_default_off():
-    assert LRAA_Globals.config["terminal_end_rule_own_chain_strict"] is False
-
-
-def test_own_chain_read_names_takes_only_exact_chain_multipaths():
-    from Scored_path import own_chain_read_names
-
-    chain = [(200, 300), (400, 500)]
-    full = _FakeMP(chain, {"r_full1", "r_full2"})
-    same_chain_shorter_exons = _FakeMP(chain, {"r_short"})
-    partial = _FakeMP([(400, 500)], {"r_partial"})
-    sibling = _FakeMP([(200, 300), (400, 600)], {"r_sib"})
-    path = [_FakeMPGN(full, contained=[_FakeMPGN(m) for m in (same_chain_shorter_exons, partial, sibling)])]
-    assert own_chain_read_names(path, chain) == {"r_full1", "r_full2", "r_short"}
-    # the chain comparison is order-free and tuple-based, as in the end rules
-    assert own_chain_read_names(path, [(400, 500), (200, 300)]) == {"r_full1", "r_full2", "r_short"}
-    assert own_chain_read_names(path, [(400, 500)]) == {"r_partial"}
-
-
-def test_merge_end_keys_default_off():
+def test_merge_end_keys_default_on():
     for key in (
         "merge_end_rule_from_sources",
         "merge_trim_from_model_end",
@@ -343,7 +311,7 @@ def test_merge_end_keys_default_off():
         "merge_dedupe_identical_models",
         "merge_site_end_requires_source_support",
     ):
-        assert LRAA_Globals.config[key] is False
+        assert LRAA_Globals.config[key] is True
 
 
 def test_source_ends_any_chain_when_no_chain_given():
@@ -538,67 +506,88 @@ def test_stop_does_not_stop_on_the_site_the_end_leaves():
     assert stop_end_at_site(728, 431, [728]) == 431
 
 
-def test_outward_pileup_key_is_off_by_default():
-    assert LRAA_Globals.config["terminal_PolyA_outward_pileup"] is False
-
-
-def test_outward_pileup_moves_right_end_to_peak_past_edge():
-    assert polyA_outward_pileup_end([90, 100, 130, 131, 131, 132, 180], 100, "right") == 131
-
-
-def test_outward_pileup_mirrored_on_minus_strand():
-    assert polyA_outward_pileup_end([210, 200, 170, 169, 169, 168, 120], 200, "left") == 169
-
-
-def test_outward_pileup_ignores_reads_inside_the_exon():
-    assert polyA_outward_pileup_end([98, 99, 100, 100, 100], 100, "right") is None
-    assert polyA_outward_pileup_end([200, 200, 201, 203], 200, "left") is None
-
-
-def test_outward_pileup_needs_two_agreeing_reads():
-    assert polyA_outward_pileup_end([120, 140, 160], 100, "right") is None
-    assert polyA_outward_pileup_end([], 100, "right") is None
-
-
-def test_outward_pileup_refused_on_a_rich_genome():
-    assert polyA_outward_pileup_end([120, 121], 100, "right", lambda c: True) is None
-    seen = []
-    assert polyA_outward_pileup_end([120, 121], 100, "right", lambda c: seen.append(c) or False) == 121
-    assert seen == [121]
-
-
-@pytest.mark.parametrize(
-    "ends,edge,side",
-    [([101, 101, 102, 300, 301], 100, "right"), ([99, 99, 98, 5, 4], 100, "left")],
-)
-def test_outward_pileup_is_never_inward(ends, edge, side):
-    got = polyA_outward_pileup_end(ends, edge, side)
-    assert got > edge if side == "right" else got < edge
-
-
-@pytest.mark.parametrize(
-    "mode, key, is_model, expected",
-    [
-        ("ID", False, True, None),
-        ("ID", True, False, None),  # reads keep the node-edge measure
-        ("ID", True, True, (100, 900)),
-        ("MERGE", True, True, None),  # the merge has its own key
-    ],
-)
-def test_normal_mode_trim_key_covers_models_only(monkeypatch, mode, key, is_model, expected):
-    from LRAA import LRAA
-
-    monkeypatch.setattr(LRAA_Globals, "LRAA_MODE", mode)
-    monkeypatch.setitem(LRAA_Globals.config, "terminal_trim_from_model_end", key)
-    assert LRAA._own_end_for_trim([[100, 200], [800, 900]], False, is_model) == expected
-
-
-def test_normal_mode_trim_key_is_off_by_default():
-    assert LRAA_Globals.config["terminal_trim_from_model_end"] is False
-
-
 def test_long_extension_needs_a_read_peak():
     assert extension_lacks_peak(700, 1000, [700, 950, 990], 200)
     assert not extension_lacks_peak(700, 1000, [700, 702, 990], 200)
     assert not extension_lacks_peak(900, 1000, [900], 200)
     assert extension_lacks_peak(1300, 1000, [1300], 200)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "terminal_PolyA_outward_pileup",
+        "terminal_end_rule_own_chain_strict",
+        "terminal_trim_from_model_end",
+    ],
+)
+def test_rejected_experiment_keys_are_gone(key):
+    # tested on the v0.48.0 candidate and not adopted; the code is removed with the key
+    assert key not in LRAA_Globals.config
+
+
+# SPACER revert (terminal_end_rule_extend guard). Model exon edges 1000 (first exon lend)
+# and 5000 (last exon rend); the rule put the ends at 400 (extended) and 5600 (extended),
+# its in-exon coordinates being 1050 and 4950.
+
+
+def _revert(new_first, new_last, mappable, adjust_left=True, adjust_right=True, **kw):
+    from LRAA import revert_unmappable_extension
+
+    calls = []
+
+    def _m(lend, rend):
+        calls.append((lend, rend))
+        return mappable(lend, rend)
+
+    got = revert_unmappable_extension(
+        new_first, new_last, (1000, 5000), (1050, 4950), adjust_left, adjust_right, _m, **kw
+    )
+    return got, calls
+
+
+def test_spacer_revert_keeps_a_mappable_extension():
+    got, calls = _revert(400, 5000, lambda l, r: True)
+    assert got == (400, 5000)
+    assert calls == [(400, 5000)]
+
+
+def test_spacer_revert_undoes_an_unmappable_left_extension():
+    # the extended first exon reaches a segment the exon has no edge to
+    got, _ = _revert(400, 5000, lambda l, r: l >= 1000)
+    assert got == (1050, 5000)
+
+
+def test_spacer_revert_never_leaves_the_end_past_the_edge():
+    # the rule's unextended coordinate is the edge itself or beyond: clamp to the edge
+    from LRAA import revert_unmappable_extension
+
+    got = revert_unmappable_extension(
+        400, 5000, (1000, 5000), (900, 5100), True, False, lambda l, r: l >= 1000
+    )
+    assert got == (1000, 5000)
+
+
+def test_spacer_revert_right_end_only_when_still_unmappable():
+    # left revert alone fixes it: the right extension stays
+    got, _ = _revert(400, 5600, lambda l, r: l >= 1000)
+    assert got == (1050, 5600)
+    # both ends unmappable: both revert
+    got, _ = _revert(400, 5600, lambda l, r: l >= 1000 and r <= 5000)
+    assert got == (1050, 4950)
+
+
+def test_spacer_revert_ignores_ends_that_did_not_extend():
+    # inward moves are never tested or changed, even when the model is unmappable
+    got, calls = _revert(1050, 4950, lambda l, r: False)
+    assert got == (1050, 4950)
+    assert calls == []
+    # an extension on a side that is not adjusted (site-anchored end) is not ours to revert
+    got, calls = _revert(400, 5000, lambda l, r: False, adjust_left=False)
+    assert got == (400, 5000) and calls == []
+
+
+def test_spacer_revert_stops_on_a_called_site():
+    # merge_end_stop_at_called_site: the reverted end still may not cross a site
+    got, _ = _revert(400, 5000, lambda l, r: l >= 1000, left_sites=[1020])
+    assert got == (1020, 5000)
