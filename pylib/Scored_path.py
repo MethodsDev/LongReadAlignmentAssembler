@@ -13,6 +13,33 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def own_chain_read_names(mpgn_list, own_chain):
+    """Names of the reads whose own graph path carries exactly the intron chain own_chain
+    (a list of (lend, rend) tuples), over the multipaths of the path's graph nodes and of
+    the nodes they contain.
+
+    The transcript's evidence multipath is the merged path with every represented read
+    id on it, contained nodes included, so it cannot say which reads have the chain:
+    MEASURED on BT474 chr19, the first-exon end of a 17-intron model was voted to a read
+    with a 2-intron alignment whose unmappable leading segment had been spacer-trimmed
+    (span 57 kb upstream), and on a minus-strand model to reads of a contained sibling
+    ending on an unconnected node; with terminal_end_rule_extend both models then had
+    no spacer-free path and were dropped at the remap.
+    """
+    own_chain = sorted(tuple(i) for i in own_chain)
+    names = set()
+    seen = set()
+    for mpgn in mpgn_list:
+        for node in [mpgn] + list(mpgn.get_containments()):
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            mp = node.get_multiPathObj()
+            if sorted(i.get_coords() for i in mp.get_introns()) == own_chain:
+                names.update(mp.get_read_names())
+    return names
+
+
 class Scored_path:
 
     def __init__(self, path_list_of_multipath_graph_nodes):
@@ -183,6 +210,11 @@ class Scored_path:
         )
 
         transcript_obj = transcript_mp.toTranscript()
+
+        if LRAA_Globals.config.get("terminal_end_rule_own_chain_strict", False):
+            transcript_obj.set_own_chain_read_names(
+                own_chain_read_names(mpgn_list, transcript_obj.get_introns())
+            )
 
         return transcript_obj
 

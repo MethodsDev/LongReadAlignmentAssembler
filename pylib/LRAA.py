@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import sys, os, re
+import bisect
 import subprocess
 import logging
 import string
@@ -112,6 +113,314 @@ def _path_selection_sort_key(scored_path):
     return (scored_path.get_score(), has_template)
 
 
+def terminal_boundary_coord(
+    positions,
+    side,
+    exon_limit,
+    method,
+    percentile=90,
+    min_reads=7,
+    low_count_method=None,
+):
+    """Coordinate of an isoform end that has no TSS / PolyA site behind it.
+
+    positions : read 5'-most (side "left") or 3'-most (side "right") genomic
+                coordinates of the reads assigned to the isoform whose end falls
+                inside the terminal exon.
+    exon_limit: the terminal exon's outer edge (splice-graph extent). The result
+                never lies beyond it, and it is returned when no rule applies.
+    method    : terminal_boundary_method ("mean", "median", "quartile",
+                "percentile", "extreme"). The first four need >= min_reads
+                positions; "extreme" needs one.
+    low_count_method: terminal_boundary_method_low_count. None keeps the exon
+                edge below min_reads (the long-standing behaviour); "median" places
+                the end at the median read end when 1 <= n < min_reads.
+    """
+    import statistics
+
+    if side not in ("left", "right"):
+        raise ValueError("side must be 'left' or 'right': {}".format(side))
+    if low_count_method not in (None, "median"):
+        raise ValueError(
+            "terminal_boundary_method_low_count must be None or 'median': {}".format(
+                low_count_method
+            )
+        )
+    left = side == "left"
+    n = len(positions)
+
+    def clamp(v):
+        return max(exon_limit, v) if left else min(exon_limit, v)
+
+    if method == "mean" and n >= min_reads:
+        return clamp(int(statistics.mean(positions)))
+    if method == "median" and n >= min_reads:
+        return clamp(int(statistics.median(positions)))
+    if method == "quartile" and n >= min_reads:
+        if n >= 2:
+            q = int(statistics.quantiles(positions, n=4)[0 if left else 2])
+        else:
+            q = min(positions) if left else max(positions)
+        return clamp(q)
+    if method == "percentile" and n >= min_reads:
+        # left uses the lower percentile (percentile=90 -> 10th), right the upper
+        pct = (100 - percentile) if left else percentile
+        if n >= 2:
+            v = int(statistics.quantiles(sorted(positions), n=100)[int(pct) - 1])
+        else:
+            v = min(positions) if left else max(positions)
+        return clamp(v)
+    if method == "extreme" and n > 0:
+        return clamp(min(positions) if left else max(positions))
+    if (
+        low_count_method == "median"
+        and method in ("mean", "median", "quartile", "percentile")
+        and 1 <= n < min_reads
+    ):
+        return clamp(int(statistics.median(positions)))
+    return exon_limit
+
+
+def read_start_vote(oriented):
+    """Most supported read start, or None when no two reads agree.
+
+    oriented: read 5' positions in transcript orientation (smaller = upstream).
+    Reads within +-2 bp of a position agree with it. Ties go to the position with more
+    reads exactly on it, then to the more downstream position.
+    """
+    best = None
+    for x in set(oriented):
+        window = sum(1 for o in oriented if abs(o - x) <= 2)
+        exact = sum(1 for o in oriented if o == x)
+        key = (window, exact, x)
+        if best is None or key > best:
+            best = key
+    if best is None or best[0] < 2:
+        return None
+    return best[2]
+
+
+def _lower_percentile(oriented, q):
+    """numpy percentile(method='lower') on transcript-oriented positions."""
+    ordered = sorted(oriented)
+    return ordered[int((len(ordered) - 1) * q / 100)]
+
+
+TSS_END_RULES = (
+    "low_outermost_own",
+    "low_median_own",
+    "low_vote",
+    "vote",
+    "outer30_vote",
+    "own_vote",
+)
+
+
+def tss_end_by_rule(
+    rule, positions, own_positions, side, exon_limit, fallback, min_reads=7, extend=False
+):
+    """Experimental placement of an unsupported TSS end (terminal_TSS_end_rule).
+
+    positions    : read 5' coordinates of the assigned reads ending in the terminal exon.
+    own_positions: the subset whose intron chain is the isoform's own.
+    side         : "left" on the + strand, "right" on the - strand.
+    fallback     : the coordinate the percentile / low-count rules gave; returned when
+                   the rule does not apply or finds nothing.
+    extend       : terminal_end_rule_extend. The chosen coordinate is not capped at
+                   exon_limit, so a read-backed end may lie beyond the terminal exon.
+
+    low_outermost_own: below min_reads, the outermost own read.
+    low_median_own   : below min_reads, the median own read.
+    low_vote         : below min_reads, read_start_vote of the assigned reads.
+    vote             : read_start_vote of the assigned reads, at any read count.
+    outer30_vote     : vote among the outermost 30% of reads, else the 20th percentile
+                       of all reads, at any read count.
+    own_vote         : vote among own reads, else the 20th percentile of own reads, at
+                       any read count.
+    """
+    import math
+    import statistics
+
+    if rule not in TSS_END_RULES:
+        raise ValueError(
+            "terminal_TSS_end_rule must be None or one of {}: {}".format(TSS_END_RULES, rule)
+        )
+    sgn = 1 if side == "left" else -1
+    oriented = [sgn * p for p in positions]
+    own = [sgn * p for p in own_positions]
+    n = len(positions)
+    chosen = None
+    if rule == "low_outermost_own":
+        if n < min_reads and own:
+            chosen = min(own)
+    elif rule == "low_median_own":
+        if n < min_reads and own:
+            chosen = int(statistics.median(own))
+    elif rule == "low_vote":
+        if n < min_reads:
+            chosen = read_start_vote(oriented)
+    elif rule == "vote":
+        chosen = read_start_vote(oriented)
+    elif rule == "outer30_vote":
+        if oriented:
+            outer = sorted(oriented)[: max(1, math.ceil(n * 0.3))]
+            chosen = read_start_vote(outer)
+            if chosen is None:
+                chosen = _lower_percentile(oriented, 20)
+    elif rule == "own_vote":
+        if own:
+            chosen = read_start_vote(own)
+            if chosen is None:
+                chosen = _lower_percentile(own, 20)
+    if chosen is None:
+        return fallback
+    coord = sgn * chosen
+    if extend:
+        return coord
+    return max(exon_limit, coord) if side == "left" else min(exon_limit, coord)
+
+
+def extension_lacks_peak(coord, exon_edge, read_ends, max_bp):
+    """True when an extended end lies more than max_bp past the exon edge and fewer than
+    two read ends fall within +-2 bp of it (the rule's percentile fallback, a lone read)."""
+    return (
+        abs(coord - exon_edge) > max_bp
+        and sum(1 for r in read_ends if abs(r - coord) <= 2) < 2
+    )
+
+
+def polyA_outward_pileup_end(read_ends, exon_edge, side, internally_primed=None):
+    """terminal_PolyA_outward_pileup: where an unsupported 3' end moves, or None to stay.
+
+    read_ends        : 3' coordinates of the model's reads ending in or past the terminal exon.
+    exon_edge        : the exon's 3' coordinate; only reads past it count.
+    side             : "right" on the + strand, "left" on the - strand.
+    internally_primed: optional test of a coordinate. A pile-up on A-rich genome is refused:
+                       such pile-ups match PolyASite at the background rate (MEASURED chr19:
+                       1% vs 73% for the others).
+
+    The pile-up is read_start_vote (+-2 bp, at least 2 reads) on those reads. The result is
+    always strictly past exon_edge, so the rule can only move an end outward.
+    """
+    sgn = 1 if side == "right" else -1
+    chosen = read_start_vote([sgn * p for p in read_ends if sgn * p > sgn * exon_edge])
+    if chosen is None:
+        return None
+    coord = sgn * chosen
+    if internally_primed is not None and internally_primed(coord):
+        return None
+    return coord
+
+
+def own_chain_source_model_ends(transcript, own_chain=None):
+    """Merge mode: (lend, rend) of the input models behind a merged isoform.
+
+    One entry per input model, however many fake reads carry it: every model has the
+    same k fake reads, so counted per read a single model would out-vote itself into a
+    peak. A --pooled_gtf model's end counts only where no cluster model has an end within
+    2 bp, per side (None on that side), since the pooled run saw the same reads (the rule
+    _fold_in_pooled_site_support applies to site support). own_chain (sorted intron
+    tuples) limits this to the evidence multipaths with exactly that chain.
+    """
+    cluster, pooled = {}, {}
+    for mp in transcript.get_multipaths_evidence_assigned():
+        if own_chain is not None and sorted(i.get_coords() for i in mp.get_introns()) != own_chain:
+            continue
+        for rn in mp.get_read_names():
+            if not rn.startswith("fake_for_merge|") or "|span=" not in rn:
+                continue
+            fields = dict(tok.split("=", 1) for tok in rn.split("|")[1:] if "=" in tok)
+            lend, rend = fields["span"].split("-")
+            key = (fields["src"], fields["tid"])
+            target = pooled if fields.get("pooled") == "1" else cluster
+            target[key] = (int(lend), int(rend))
+    ends = list(cluster.values())
+    lends = [l for l, _ in ends]
+    rends = [r for _, r in ends]
+    for lend, rend in pooled.values():
+        keep_l = lend if not any(abs(lend - x) <= 2 for x in lends) else None
+        keep_r = rend if not any(abs(rend - x) <= 2 for x in rends) else None
+        ends.append((keep_l, keep_r))
+    return ends
+
+
+def source_model_end_coords(transcript):
+    """Merge mode: (lends, rends) of every input model behind a merged isoform, from the
+    fake reads' names. All of them, --pooled_gtf models included: a pooled model ending at
+    a site supports that site, so the discount of own_chain_source_model_ends is not wanted.
+    """
+    lends, rends = set(), set()
+    for mp in transcript.get_multipaths_evidence_assigned():
+        for rn in mp.get_read_names():
+            if not rn.startswith("fake_for_merge|") or "|span=" not in rn:
+                continue
+            lend, rend = rn.split("|span=", 1)[1].split("|", 1)[0].split("-")
+            lends.add(int(lend))
+            rends.add(int(rend))
+    return lends, rends
+
+
+def site_end_supported(site, source_ends, window):
+    """An end on `site` counts only if an input model ends within `window` of it. A source
+    with that site ends on it (sites pool input ends within the window), so this covers
+    the flagged sources too.
+    """
+    return any(abs(end - site) <= window for end in source_ends)
+
+
+def collapse_identical_models(transcripts):
+    """Keep the first of the models with identical exons; it takes over the others'
+    evidence, so the merge's tracking file still lists their input models.
+    """
+    kept = dict()
+    for transcript in transcripts:
+        key = tuple(tuple(seg) for seg in transcript.get_exon_segments())
+        if key in kept:
+            kept[key].add_multipaths_evidence_assigned(
+                transcript.get_multipaths_evidence_assigned()
+            )
+        else:
+            kept[key] = transcript
+    return list(kept.values())
+
+
+def stop_end_at_site(end, new_end, site_positions):
+    """new_end, or the first site met walking from end to new_end when one lies strictly
+    between them. site_positions: sorted coordinates.
+    """
+    if new_end > end:
+        i = bisect.bisect_right(site_positions, end)
+        if i < len(site_positions) and site_positions[i] < new_end:
+            return site_positions[i]
+    elif new_end < end:
+        i = bisect.bisect_left(site_positions, end) - 1
+        if i >= 0 and site_positions[i] > new_end:
+            return site_positions[i]
+    return new_end
+
+
+def terminal_low_count_methods(setting, strand):
+    """(left, right) low_count_method for terminal_boundary_coord, from the
+    terminal_boundary_method_low_count setting.
+
+    None: neither end. "median": both ends. "median_5prime": only the transcript's
+    5' end, which is the left end on '+' and the right end on '-'.
+    """
+    if setting in (None, "median"):
+        return setting, setting
+    if setting == "median_5prime":
+        if strand == "+":
+            return "median", None
+        if strand == "-":
+            return None, "median"
+        raise ValueError("median_5prime needs a '+' or '-' strand: {}".format(strand))
+    raise ValueError(
+        "terminal_boundary_method_low_count must be None, 'median' or 'median_5prime': {}".format(
+            setting
+        )
+    )
+
+
 class LRAA:
 
     # Removed min_transcript_length as class variable - now referenced from LRAA_Globals.config at runtime
@@ -122,6 +431,7 @@ class LRAA:
     def __init__(self, splice_graph, component_workers=0, core_lease=None):
 
         self._splice_graph = splice_graph
+        self._boundary_sites_cache = None  # see _boundary_site_positions
 
         self._multipath_graph = None  # set under build_multipath_graph()
         self._mp_counter = None  # set under build_multipath_graph()
@@ -974,9 +1284,57 @@ class LRAA:
                 if rn in self._read_name_to_span:
                     spans.append(self._read_name_to_span[rn])
 
+            # Merge: no reads, so one end per input model stands in for them. These stay
+            # local: a name in _read_name_to_span would set a graph node's read span
+            # (MultiPathGraph), which a merge has no business doing.
+            ends_from_sources = LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+                "merge_end_rule_from_sources", False
+            )
+            if ends_from_sources:
+                spans = own_chain_source_model_ends(transcript)
+
+            # Reads with this isoform's own intron chain (terminal_TSS_end_rule only).
+            tss_end_rule = LRAA_Globals.config.get("terminal_TSS_end_rule", None)
+            polyA_end_rule = LRAA_Globals.config.get("terminal_PolyA_end_rule", None)
+            # terminal_PolyA_outward_pileup: unsupported 3' end to a pile-up of the model's reads
+            # past the exon edge (a merge has no reads).
+            outward_pileup = LRAA_Globals.LRAA_MODE != "MERGE" and LRAA_Globals.config.get(
+                "terminal_PolyA_outward_pileup", False
+            )
+            own_spans = []
+            if tss_end_rule is not None or polyA_end_rule is not None or outward_pileup:
+                own_chain = sorted(tuple(i) for i in transcript.get_introns())
+                # The evidence multipath of an assembled model is its merged path carrying
+                # every represented read, so the chain test below passes for all of them
+                # (partial reads, reads of contained sibling structures). With
+                # terminal_end_rule_own_chain_strict the names recorded per graph node at
+                # construction (Scored_path.own_chain_read_names) are used instead.
+                strict_names = (
+                    transcript.get_own_chain_read_names()
+                    if LRAA_Globals.config.get("terminal_end_rule_own_chain_strict", False)
+                    else None
+                )
+                if strict_names is not None:
+                    for rn in sorted(strict_names):
+                        if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
+                            continue
+                        if rn in self._read_name_to_span:
+                            own_spans.append(self._read_name_to_span[rn])
+                else:
+                    for mp in transcript.get_multipaths_evidence_assigned():
+                        if sorted(i.get_coords() for i in mp.get_introns()) != own_chain:
+                            continue
+                        for rn in mp.get_read_names():
+                            if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
+                                continue
+                            if rn in self._read_name_to_span:
+                                own_spans.append(self._read_name_to_span[rn])
+                if ends_from_sources:
+                    own_spans = own_chain_source_model_ends(transcript, own_chain)
+
             logger.info(f"DEBUG_TEST: Processing {transcript.get_transcript_id()}, found {len(read_names)} reads, {len(spans)} spans")
 
-            if not spans:
+            if not spans and not own_spans:
                 logger.info(f"  No spans found for {transcript.get_transcript_id()}, returning without adjustment")
                 return  # nothing to adjust
 
@@ -1000,11 +1358,11 @@ class LRAA:
 
             for span_lend, span_rend in spans:
                 # Check if read's 5' end is in first exon
-                if first_exon_lend <= span_lend <= first_exon_rend:
+                if span_lend is not None and first_exon_lend <= span_lend <= first_exon_rend:
                     left_terminal_spans.append(span_lend)
 
                 # Check if read's 3' end is in last exon
-                if last_exon_lend <= span_rend <= last_exon_rend:
+                if span_rend is not None and last_exon_lend <= span_rend <= last_exon_rend:
                     right_terminal_spans.append(span_rend)
 
             # Calculate boundaries using configured method
@@ -1041,70 +1399,98 @@ class LRAA:
                     f"max={max(right_terminal_spans)}"
                 )
 
-            if boundary_method == "mean" and len(left_terminal_spans) >= min_reads_threshold:
-                import statistics
-                candidate_first_lend = max(exon_left_limit, int(statistics.mean(left_terminal_spans)))
-            elif boundary_method == "median" and len(left_terminal_spans) >= min_reads_threshold:
-                import statistics
-                candidate_first_lend = max(exon_left_limit, int(statistics.median(left_terminal_spans)))
-            elif boundary_method == "quartile" and len(left_terminal_spans) >= min_reads_threshold:
-                import statistics
-                # Use Q1 (lower quartile) for left boundary
-                if len(left_terminal_spans) >= 2:
-                    q1 = int(statistics.quantiles(left_terminal_spans, n=4)[0])
-                else:
-                    q1 = min(left_terminal_spans)
-                candidate_first_lend = max(exon_left_limit, q1)
-            elif boundary_method == "percentile" and len(left_terminal_spans) >= min_reads_threshold:
-                import statistics
-                # Use lower percentile for left boundary (e.g., if percentile=90, use 10th)
-                percentile_value = LRAA_Globals.config.get("terminal_boundary_percentile", 90)
-                lower_percentile = 100 - percentile_value
-                if len(left_terminal_spans) >= 2:
-                    # quantiles function with n=100 gives percentiles
-                    sorted_spans = sorted(left_terminal_spans)
-                    pct_val = int(statistics.quantiles(sorted_spans, n=100)[int(lower_percentile) - 1])
-                else:
-                    pct_val = min(left_terminal_spans)
-                candidate_first_lend = max(exon_left_limit, pct_val)
-            elif boundary_method == "extreme" and left_terminal_spans:
-                # Use min of reads terminating in first exon (consistent with mean/median filtering)
-                candidate_first_lend = max(exon_left_limit, min(left_terminal_spans))
-            else:
-                # Fallback if no reads terminate in first exon or unknown method
-                candidate_first_lend = first_lend
+            low_count_left, low_count_right = terminal_low_count_methods(
+                LRAA_Globals.config.get("terminal_boundary_method_low_count", None),
+                transcript.get_strand(),
+            )
+            percentile_value = LRAA_Globals.config.get("terminal_boundary_percentile", 90)
+            # terminal_boundary_percentile_TSS replaces it at the transcript's 5' end only.
+            percentile_TSS = LRAA_Globals.config.get("terminal_boundary_percentile_TSS", None)
+            if percentile_TSS is None:
+                percentile_TSS = percentile_value
+            tss_is_left = transcript.get_strand() == "+"
+            # terminal_end_rule_extend: own reads ending in OR beyond the terminal exon
+            # count, and the rule's coordinate is not capped at the exon edge.
+            extend_ends = bool(LRAA_Globals.config.get("terminal_end_rule_extend", False))
+            own_left = [
+                l
+                for l, _ in own_spans
+                if l is not None
+                and l <= first_exon_rend
+                and (extend_ends or l >= first_exon_lend)
+            ]
+            own_right = [
+                r
+                for _, r in own_spans
+                if r is not None
+                and r >= last_exon_lend
+                and (extend_ends or r <= last_exon_rend)
+            ]
+            candidate_first_lend = terminal_boundary_coord(
+                left_terminal_spans,
+                "left",
+                exon_left_limit,
+                boundary_method,
+                percentile=percentile_TSS if tss_is_left else percentile_value,
+                min_reads=min_reads_threshold,
+                low_count_method=low_count_left,
+            )
+            candidate_last_rend = terminal_boundary_coord(
+                right_terminal_spans,
+                "right",
+                exon_right_limit,
+                boundary_method,
+                percentile=percentile_value if tss_is_left else percentile_TSS,
+                min_reads=min_reads_threshold,
+                low_count_method=low_count_right,
+            )
+            # Per end: the rule's coordinate within the exon (unextended_*) and, with
+            # terminal_end_rule_extend, the extended one. The extended model is checked
+            # for a spacer-free path in the graph below before it is applied.
+            left_rule = tss_end_rule if tss_is_left else polyA_end_rule
+            right_rule = polyA_end_rule if tss_is_left else tss_end_rule
+            unextended_first_lend, unextended_last_rend = candidate_first_lend, candidate_last_rend
+            if left_rule is not None:
+                own_left_in = [l for l in own_left if l >= first_exon_lend]
+                unextended_first_lend = tss_end_by_rule(
+                    left_rule, left_terminal_spans, own_left_in, "left", exon_left_limit,
+                    candidate_first_lend, min_reads_threshold, extend=False,
+                )
+                candidate_first_lend = (
+                    tss_end_by_rule(
+                        left_rule, left_terminal_spans, own_left, "left", exon_left_limit,
+                        candidate_first_lend, min_reads_threshold, extend=True,
+                    )
+                    if extend_ends
+                    else unextended_first_lend
+                )
+            if right_rule is not None:
+                # Same rule mirrored: "outer" is the 3'-most side of the reads.
+                own_right_in = [r for r in own_right if r <= last_exon_rend]
+                unextended_last_rend = tss_end_by_rule(
+                    right_rule, right_terminal_spans, own_right_in, "right", exon_right_limit,
+                    candidate_last_rend, min_reads_threshold, extend=False,
+                )
+                candidate_last_rend = (
+                    tss_end_by_rule(
+                        right_rule, right_terminal_spans, own_right, "right", exon_right_limit,
+                        candidate_last_rend, min_reads_threshold, extend=True,
+                    )
+                    if extend_ends
+                    else unextended_last_rend
+                )
 
-            if boundary_method == "mean" and len(right_terminal_spans) >= min_reads_threshold:
-                import statistics
-                candidate_last_rend = min(exon_right_limit, int(statistics.mean(right_terminal_spans)))
-            elif boundary_method == "median" and len(right_terminal_spans) >= min_reads_threshold:
-                import statistics
-                candidate_last_rend = min(exon_right_limit, int(statistics.median(right_terminal_spans)))
-            elif boundary_method == "quartile" and len(right_terminal_spans) >= min_reads_threshold:
-                import statistics
-                # Use Q3 (upper quartile) for right boundary
-                if len(right_terminal_spans) >= 2:
-                    q3 = int(statistics.quantiles(right_terminal_spans, n=4)[2])
-                else:
-                    q3 = max(right_terminal_spans)
-                candidate_last_rend = min(exon_right_limit, q3)
-            elif boundary_method == "percentile" and len(right_terminal_spans) >= min_reads_threshold:
-                import statistics
-                # Use upper percentile for right boundary (e.g., if percentile=90, use 90th)
-                percentile_value = LRAA_Globals.config.get("terminal_boundary_percentile", 90)
-                if len(right_terminal_spans) >= 2:
-                    # quantiles function with n=100 gives percentiles
-                    sorted_spans = sorted(right_terminal_spans)
-                    pct_val = int(statistics.quantiles(sorted_spans, n=100)[int(percentile_value) - 1])
-                else:
-                    pct_val = max(right_terminal_spans)
-                candidate_last_rend = min(exon_right_limit, pct_val)
-            elif boundary_method == "extreme" and right_terminal_spans:
-                # Use max of reads terminating in last exon (consistent with mean/median filtering)
-                candidate_last_rend = min(exon_right_limit, max(right_terminal_spans))
-            else:
-                # Fallback if no reads terminate in last exon or unknown method
-                candidate_last_rend = last_rend
+            # terminal_end_rule_extend_unvoted_max: a long extension needs a read peak.
+            unvoted_max = LRAA_Globals.config.get("terminal_end_rule_extend_unvoted_max", None)
+            if extend_ends and unvoted_max is not None:
+                if left_rule is not None and extension_lacks_peak(
+                    candidate_first_lend, first_lend, own_left, unvoted_max
+                ):
+                    candidate_first_lend = unextended_first_lend
+                if right_rule is not None and extension_lacks_peak(
+                    candidate_last_rend, last_rend, own_right, unvoted_max
+                ):
+                    candidate_last_rend = unextended_last_rend
 
             # Only adjust ends lacking explicit annotation: TSS and PolyA
             has_TSS = transcript.has_TSS()
@@ -1139,6 +1525,105 @@ class LRAA:
             new_first_lend = candidate_first_lend if adjust_left else first_lend
             new_last_rend = candidate_last_rend if adjust_right else last_rend
 
+            outward_moved = False
+            if outward_pileup and (adjust_right if tss_is_left else adjust_left):
+
+                def _a_rich(coord):
+                    return Util_funcs.looks_internally_primed(
+                        self._splice_graph._contig_seq_str, coord, strand
+                    )
+
+                if tss_is_left:
+                    ends = [r for _, r in own_spans if r is not None and r >= last_exon_lend]
+                    moved_end = polyA_outward_pileup_end(ends, last_rend, "right", _a_rich)
+                else:
+                    ends = [l for l, _ in own_spans if l is not None and l <= first_exon_rend]
+                    moved_end = polyA_outward_pileup_end(ends, first_lend, "left", _a_rich)
+                if moved_end is not None:
+                    outward_moved = True
+                    logger.info(
+                        f"  PILEUP_EXTENDED {transcript.get_transcript_id()}: "
+                        f"3' end [{new_last_rend if tss_is_left else new_first_lend}]->[{moved_end}], "
+                        f"edge {last_rend if tss_is_left else first_lend}, {len(ends)} reads"
+                    )
+                    if tss_is_left:
+                        new_last_rend = moved_end
+                    else:
+                        new_first_lend = moved_end
+
+            # Merge: no adjustment carries an end past a called site. Crossing one left
+            # an unflagged model beside the site-anchored one; stopping on the site lets
+            # the final re-path give it that call.
+            stop_at_site = LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+                "merge_end_stop_at_called_site", False
+            )
+            left_sites, right_sites = [], []
+            if stop_at_site:
+                TSS_sites, PolyA_sites = self._boundary_site_positions()
+                left_sites = TSS_sites if tss_is_left else PolyA_sites
+                right_sites = PolyA_sites if tss_is_left else TSS_sites
+                if self._site_support_required():
+                    # Stopping on a site no source reaches would make an unsupported end.
+                    left_ends, right_ends = source_model_end_coords(transcript)
+                    TSS_window, PolyA_window = self._alt_site_windows()
+                    left_window = TSS_window if tss_is_left else PolyA_window
+                    right_window = PolyA_window if tss_is_left else TSS_window
+                    left_sites = [
+                        s for s in left_sites if site_end_supported(s, left_ends, left_window)
+                    ]
+                    right_sites = [
+                        s for s in right_sites if site_end_supported(s, right_ends, right_window)
+                    ]
+                new_first_lend = stop_end_at_site(first_lend, new_first_lend, left_sites)
+                new_last_rend = stop_end_at_site(last_rend, new_last_rend, right_sites)
+
+            if extend_ends or outward_moved:
+                # An end moved past the terminal exon can put the model onto exon
+                # segments its terminal exon is not connected to, or across a gap with
+                # no segment at all: the remap that follows the adjustment then finds
+                # a SPACER in the path and drops the model (MEASURED: 261 of 5,776
+                # BT474 chr19 models, 642 of 6,813 HG002). Such an end falls back to
+                # the rule's coordinate within the exon.
+                def _mappable(lend, rend):
+                    test = [list(seg) for seg in exons]
+                    test[0][0] = lend
+                    test[-1][1] = rend
+                    path = self._map_read_to_graph(
+                        test,
+                        refine_TSS_simple_path=True,
+                        refine_PolyA_simple_path=True,
+                        full_window_boundary_trim=self._full_window_trim_enabled(),
+                        is_model=True,
+                    )
+                    return path is not None and SPACER not in path
+
+                # A pile-up move is tested on its own, so an unmappable TSS extension can't undo it.
+                if outward_moved and not (
+                    _mappable(first_lend, new_last_rend)
+                    if tss_is_left
+                    else _mappable(new_first_lend, last_rend)
+                ):
+                    logger.info(f"  PILEUP_REVERTED {transcript.get_transcript_id()}: no spacer-free path")
+                    if tss_is_left:
+                        new_last_rend = min(unextended_last_rend, last_rend)
+                    else:
+                        new_first_lend = max(unextended_first_lend, first_lend)
+
+                left_beyond = adjust_left and new_first_lend < first_lend
+                right_beyond = adjust_right and new_last_rend > last_rend
+                if (left_beyond or right_beyond) and not _mappable(new_first_lend, new_last_rend):
+                    kept_first, kept_last = new_first_lend, new_last_rend
+                    if left_beyond:
+                        new_first_lend = max(unextended_first_lend, first_lend) if adjust_left else first_lend
+                        new_first_lend = stop_end_at_site(first_lend, new_first_lend, left_sites)
+                    if right_beyond and not _mappable(new_first_lend, new_last_rend):
+                        new_last_rend = min(unextended_last_rend, last_rend) if adjust_right else last_rend
+                        new_last_rend = stop_end_at_site(last_rend, new_last_rend, right_sites)
+                    logger.info(
+                        f"  EXTENSION_REVERTED {transcript.get_transcript_id()}: "
+                        f"[{kept_first}-{kept_last}] has no spacer-free path; using [{new_first_lend}-{new_last_rend}]"
+                    )
+
             # Sanity: ensure we don't invert exons
             if new_first_lend > first_rend or new_last_rend < last_lend:
                 logger.debug(
@@ -1172,15 +1657,49 @@ class LRAA:
             else:
                 logger.debug(f"  NO adjustment needed - coordinates unchanged")
 
+        site_support_required = self._site_support_required()
+        if site_support_required or (
+            LRAA_Globals.LRAA_MODE == "MERGE"
+            and LRAA_Globals.config.get("merge_repath_before_end_adjustment", False)
+        ):
+            # The reconstruction path can stop short of a site the model's end is about
+            # to be trimmed to, and has_TSS / has_PolyA below read that path: such an
+            # end would look unsupported and be voted past the site. Conversely, an end on
+            # a site none of its sources reach comes off it here (merge_site_end_requires_
+            # source_support), so the gate below sees it as unsupported and it is adjusted.
+            num_reconstructed = len(transcripts)
+            transcripts = self.assign_transcripts_paths_in_graph(
+                transcripts,
+                snap_terminals_for=transcripts,
+                require_site_source_support=site_support_required,
+            )
+            logger.info(
+                "[%s%s] -repath before end adjustment: %d of %d models dropped",
+                contig_acc,
+                contig_strand,
+                num_reconstructed - len(transcripts),
+                num_reconstructed,
+            )
+
         for transcript in transcripts:
             _adjust_transcript_terminals_from_reads(transcript)
 
         # Terminal adjustment mutates exon coordinates but leaves the pre-adjustment
         # simple path in place. Refresh transcript paths against the current splice
-        # graph so downstream filtering uses the adjusted terminal structure.
+        # graph so downstream filtering uses the adjusted terminal structure. The site
+        # check repeats here, so neither this remap nor its trim puts an end back on a
+        # site its sources do not reach; it is stateless, and an end adjusted onto a site
+        # a source does reach keeps that site.
         transcripts = self.assign_transcripts_paths_in_graph(
-            transcripts, snap_terminals_for=transcripts
+            transcripts,
+            snap_terminals_for=transcripts,
+            require_site_source_support=site_support_required,
         )
+
+        if LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+            "merge_dedupe_identical_models", False
+        ):
+            transcripts = collapse_identical_models(transcripts)
 
         #
         ###################
@@ -1769,8 +2288,102 @@ class LRAA:
         transcript._rend = new_rend
         transcript._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
 
+    @staticmethod
+    def _full_window_trim_enabled():
+        return LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+            "merge_trim_to_boundary_full_alt_site_window", False
+        )
+
+    @staticmethod
+    def _site_support_required():
+        return LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
+            "merge_site_end_requires_source_support", False
+        )
+
+    @staticmethod
+    def _alt_site_windows():
+        return (
+            LRAA_Globals.config["max_dist_between_alt_TSS_sites"],
+            LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
+        )
+
+    def _path_without_unsupported_site_ends(self, transcript, segments, path, full_window_trim):
+        """Merge: `path` for this model with terminal TSS / POLYA nodes its sources do not
+        reach taken off (merge_site_end_requires_source_support).
+
+        The merge's graph is not split at model ends, so a model that needs a node for its
+        splice site can run to a site at that node's far edge, or be trimmed onto one, past
+        all its sources. The model is mapped again without the trim for that site type, so
+        no coordinate moves onto the site, then the node is removed if the path still ends
+        on it. A path that would lose its last exon is left as it was.
+        """
+        lends, rends = source_model_end_coords(transcript)
+        if not lends:
+            return path
+        splice_graph = self.get_splice_graph()
+        TSS_window, PolyA_window = self._alt_site_windows()
+
+        def unsupported_kind(node_id, source_ends, coord_index):
+            if not isinstance(node_id, str) or not node_id.startswith(("TSS:", "POLYA:")):
+                return None
+            kind = "TSS" if node_id.startswith("TSS:") else "PolyA"
+            site = splice_graph.get_node_obj_via_id(node_id).get_coords()[coord_index]
+            window = TSS_window if kind == "TSS" else PolyA_window
+            if site_end_supported(site, source_ends, window):
+                return None
+            taken_off.append((kind, site, min(abs(end - site) for end in source_ends)))
+            return kind
+
+        taken_off = []
+        kinds = {unsupported_kind(path[0], lends, 0), unsupported_kind(path[-1], rends, 1)}
+        kinds.discard(None)
+        if not kinds:
+            return path
+
+        untrimmed = self._map_read_to_graph(
+            segments,
+            refine_TSS_simple_path="TSS" not in kinds,
+            refine_PolyA_simple_path="PolyA" not in kinds,
+            full_window_boundary_trim=full_window_trim,
+        )
+        stripped = list(path if untrimmed is None or SPACER in untrimmed else untrimmed)
+        taken_off = []
+        while len(stripped) > 1 and unsupported_kind(stripped[0], lends, 0):
+            stripped = stripped[1:]
+        while len(stripped) > 1 and unsupported_kind(stripped[-1], rends, 1):
+            stripped = stripped[:-1]
+        if Simple_path_utils.count_exons_in_simple_path(stripped) == 0:
+            logger.info("  SITE_END_KEPT %s: no exon left", transcript.get_transcript_id())
+            return path
+        for kind, site, nearest in taken_off:
+            logger.info(
+                "  SITE_END_REMOVED %s %s site=%d nearest_source=%d",
+                transcript.get_transcript_id(),
+                kind,
+                site,
+                nearest,
+            )
+        return stripped
+
+    def _boundary_site_positions(self):
+        """(TSS, PolyA) sorted site coordinates in this splice graph."""
+        if self._boundary_sites_cache is None:
+            TSS_sites, PolyA_sites = [], []
+            for node in self.get_splice_graph()._splice_graph.nodes:
+                node_id = node.get_id()
+                if isinstance(node_id, str) and node_id.startswith("TSS:"):
+                    TSS_sites.append(node.get_coords()[0])
+                elif isinstance(node_id, str) and node_id.startswith("POLYA:"):
+                    PolyA_sites.append(node.get_coords()[0])
+            self._boundary_sites_cache = (sorted(TSS_sites), sorted(PolyA_sites))
+        return self._boundary_sites_cache
+
     def assign_transcripts_paths_in_graph(
-        self, transcripts, snap_terminals_for=None, keep_boundary_annotations_for=None
+        self,
+        transcripts,
+        snap_terminals_for=None,
+        keep_boundary_annotations_for=None,
+        require_site_source_support=False,
     ):
         """
         Assigns paths in the splice graph to input transcripts.
@@ -1791,6 +2404,8 @@ class LRAA:
         terminal exon, so the model would claim that node's site and support while its
         coordinates -- which quantification does not change -- still end elsewhere. The
         path itself is still replaced, since reads are assigned against it.
+
+        require_site_source_support: merge only, see _path_without_unsupported_site_ends.
         """
         snap_ids = (
             {id(t) for t in snap_terminals_for} if snap_terminals_for else set()
@@ -1806,9 +2421,7 @@ class LRAA:
         # model pairs with both ends within 50 bp were such a TSS-less end 26-50 bp
         # upstream of a TSS-anchored model. A model carrying its own call starts or ends
         # on its own node, which refinement leaves alone.
-        full_window_trim = LRAA_Globals.LRAA_MODE == "MERGE" and LRAA_Globals.config.get(
-            "merge_trim_to_boundary_full_alt_site_window", False
-        )
+        full_window_trim = self._full_window_trim_enabled()
 
         splice_graph = self.get_splice_graph()
         contig_acc = splice_graph.get_contig_acc() if splice_graph else "?"
@@ -1887,6 +2500,7 @@ class LRAA:
                 refine_TSS_simple_path=True,
                 refine_PolyA_simple_path=True,
                 full_window_boundary_trim=full_window_trim,
+                is_model=True,
             )
             logger.debug(str(transcript) + " maps to graph as " + str(path))
 
@@ -1933,6 +2547,11 @@ class LRAA:
                 )
                 skipped_transcript_ids.append(transcript.get_transcript_id())
                 continue  # Skip this transcript too
+
+            if require_site_source_support:
+                path = self._path_without_unsupported_site_ends(
+                    transcript, segments, path, full_window_trim
+                )
 
             transcript.set_simple_path(path)
             transcript.refresh_boundary_annotations_from_simple_path()
@@ -2042,6 +2661,20 @@ class LRAA:
 
         return (read_name, span_lend)
 
+    @staticmethod
+    def _own_end_for_trim(segments, full_window_boundary_trim, is_model):
+        """(lend, rend) to measure the TSS / PolyA trim from, or None for the node edge."""
+        if (
+            full_window_boundary_trim
+            and LRAA_Globals.config.get("merge_trim_from_model_end", False)
+        ) or (
+            is_model
+            and LRAA_Globals.LRAA_MODE != "MERGE"
+            and LRAA_Globals.config.get("terminal_trim_from_model_end", False)
+        ):
+            return (segments[0][0], segments[-1][1])
+        return None
+
     def _map_read_to_graph(
         self,
         alignment_segments,
@@ -2051,6 +2684,7 @@ class LRAA:
         left_soft_clipping=None,
         right_soft_clipping=None,
         full_window_boundary_trim=False,
+        is_model=False,
     ):
 
         logger.debug("incoming segments: {}".format(alignment_segments))
@@ -2113,6 +2747,11 @@ class LRAA:
         if SPACER in path:
             path = Simple_path_utils.trim_terminal_spacers(path)
 
+        # The model's own ends, for the full-window trim's distance test.
+        own_end = self._own_end_for_trim(
+            alignment_segments, full_window_boundary_trim, is_model
+        )
+
         if (
             refine_TSS_simple_path
             and any(
@@ -2121,7 +2760,10 @@ class LRAA:
             )
         ):
             path = Simple_path_utils.refine_TSS_simple_path(
-                self.get_splice_graph(), path, full_window=full_window_boundary_trim
+                self.get_splice_graph(),
+                path,
+                full_window=full_window_boundary_trim,
+                own_end=own_end,
             )
 
         if (
@@ -2134,7 +2776,10 @@ class LRAA:
             )
         ):
             path = Simple_path_utils.refine_PolyA_simple_path(
-                self.get_splice_graph(), path, full_window=full_window_boundary_trim
+                self.get_splice_graph(),
+                path,
+                full_window=full_window_boundary_trim,
+                own_end=own_end,
             )
 
         if Simple_path_utils.count_exons_in_simple_path(path) == 0:
@@ -2822,10 +3467,15 @@ class LRAA:
                 src_basename = _sanitize(src_basename)
                 src_tid = _sanitize(src_tid)
 
+                # The source model's ends travel in the name, for merge_end_rule_from_sources.
+                src_lend, src_rend = input_transcript.get_coords()
+                pooled_flag = int(meta.get("merge_input_role") == "pooled")
+                span_suffix = f"|span={src_lend}-{src_rend}|pooled={pooled_flag}"
+
                 # Create k distinct fake read names to preserve scoring parity, each carrying n=k
                 fake_read_names = set(
                     [
-                        f"fake_for_merge|src={src_basename}|tid={src_tid}|flags={flags_str}|n={k}|uid={i}"
+                        f"fake_for_merge|src={src_basename}|tid={src_tid}|flags={flags_str}|n={k}|uid={i}{span_suffix}"
                         for i in range(1, k + 1)
                     ]
                 )

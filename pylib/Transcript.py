@@ -108,6 +108,11 @@ class Transcript(GenomeFeature):
 
         self._multipaths_evidence_weights = dict()
 
+        # terminal_end_rule_own_chain_strict: names of the reads whose own graph path
+        # carries exactly this isoform's intron chain (set by Scored_path.toTranscript);
+        # None when not computed.
+        self._own_chain_read_names = None
+
         self._multipath = (
             None  # multipath obj (when transcript is constructed based on a multipath)
         )
@@ -484,6 +489,13 @@ class Transcript(GenomeFeature):
 
     def get_multipaths_evidence_assigned(self):
         return list(self.multipaths_evidence_assigned)
+
+    def set_own_chain_read_names(self, read_names):
+        self._own_chain_read_names = set(read_names)
+
+    def get_own_chain_read_names(self):
+        """Read names with exactly this isoform's intron chain, or None when not computed."""
+        return self._own_chain_read_names
 
     def contains_reference_model(self):
         """True when a reference model is structurally contained by this isoform.

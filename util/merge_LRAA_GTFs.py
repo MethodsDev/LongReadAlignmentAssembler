@@ -539,6 +539,12 @@ def main():
     # added only where they exceed the cluster support around a site
     # (Splice_graph._fold_in_pooled_site_support).
     parser.add_argument(
+        "--config_update",
+        default=None,
+        help="json file of LRAA_Globals.config overrides, applied before the merge",
+    )
+
+    parser.add_argument(
         "--pooled_gtf",
         type=str,
         default=None,
@@ -708,6 +714,14 @@ def main():
     # collapsing of transcripts whose starts/ends differ within the alt-TSS/PolyA
     # window. Disable it for the merge tool regardless of mode.
     LRAA_Globals.config["fracture_splice_graph_at_input_transcript_bounds"] = False
+    if args.config_update:
+        import json
+
+        with open(args.config_update, "rt") as fh:
+            for key, value in json.load(fh).items():
+                if key not in LRAA_Globals.config:
+                    exit("Error, unknown config key in --config_update: {}".format(key))
+                LRAA_Globals.config[key] = value
 
     # TSS/PolyA boundaries from the input GTFs are respected by DEFAULT now: LRAA models
     # them in both HiFi and non-HiFi modes, so the merge no longer gates this on --HiFi.

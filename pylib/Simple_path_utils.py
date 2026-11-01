@@ -673,12 +673,16 @@ def remove_spacers_from_path(simple_path):
     return new_path
 
 
-def refine_TSS_simple_path(splice_graph, simple_path, full_window=False):
+def refine_TSS_simple_path(splice_graph, simple_path, full_window=False, own_end=None):
     """Trim a path's 5' end onto a TSS node lying inside its first exon.
 
     The node must lie within max_dist_between_alt_TSS_sites / 2 of the path's end, or
     within the whole max_dist_between_alt_TSS_sites with full_window (the merge: see
     LRAA.assign_transcripts_paths_in_graph).
+
+    own_end: optional (lend, rend) of the model. The distance is then measured from the
+    model's own end instead of the outer edge of the path's first graph node, which can
+    lie well beyond it (merge_trim_from_model_end).
     """
 
     # print("Simple path: {}".format(simple_path))
@@ -718,7 +722,7 @@ def refine_TSS_simple_path(splice_graph, simple_path, full_window=False):
             )
 
         elif (
-            TSS_coord - lend_coord
+            TSS_coord - (own_end[0] if own_end else lend_coord)
             <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
             / (1 if full_window else 2)
         ):
@@ -743,7 +747,7 @@ def refine_TSS_simple_path(splice_graph, simple_path, full_window=False):
             )
 
         elif (
-            rend_coord - TSS_coord
+            (own_end[1] if own_end else rend_coord) - TSS_coord
             <= LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
             / (1 if full_window else 2)
         ):
@@ -769,7 +773,7 @@ def refine_TSS_simple_path(splice_graph, simple_path, full_window=False):
     return simple_path
 
 
-def refine_PolyA_simple_path(splice_graph, simple_path, full_window=False):
+def refine_PolyA_simple_path(splice_graph, simple_path, full_window=False, own_end=None):
     """PolyA counterpart of refine_TSS_simple_path, on the path's 3' end."""
 
     # print("\nSimple path input: {}".format(simple_path))
@@ -816,7 +820,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path, full_window=False):
             )
 
         elif (
-            rend_coord - polyA_coord
+            (own_end[1] if own_end else rend_coord) - polyA_coord
             <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
             / (1 if full_window else 2)
         ):
@@ -837,7 +841,7 @@ def refine_PolyA_simple_path(splice_graph, simple_path, full_window=False):
             )
 
         elif (
-            polyA_coord - lend_coord
+            polyA_coord - (own_end[0] if own_end else lend_coord)
             <= LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
             / (1 if full_window else 2)
         ):
