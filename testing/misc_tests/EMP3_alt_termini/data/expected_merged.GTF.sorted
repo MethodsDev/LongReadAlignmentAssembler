@@ -54,7 +54,7 @@ chr19	LRAA	exon	6151	6403	.	+
 chr19	LRAA	exon	6151	6403	.	+
 chr19	LRAA	exon	6151	6403	.	+
 chr19	LRAA	exon	6151	6403	.	+
-chr19	LRAA	exon	714	3473	.	+
+chr19	LRAA	exon	714	3439	.	+
 chr19	LRAA	transcript	1207	6403	.	+
 chr19	LRAA	transcript	1207	6403	.	+
 chr19	LRAA	transcript	1207	6403	.	+
@@ -67,4 +67,4 @@ chr19	LRAA	transcript	1402	6403	.	+
 chr19	LRAA	transcript	3474	5036	.	+
 chr19	LRAA	transcript	4046	5239	.	-
 chr19	LRAA	transcript	5087	6403	.	+
-chr19	LRAA	transcript	714	3473	.	+
+chr19	LRAA	transcript	714	3439	.	+
