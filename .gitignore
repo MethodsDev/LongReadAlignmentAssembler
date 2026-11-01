@@ -54,6 +54,13 @@ testing/TSS_cap_calibration/**
 !testing/TSS_cap_calibration/check_TSS_cap_calibration.py
 !testing/TSS_cap_calibration/data/
 !testing/TSS_cap_calibration/data/*.scan.tsv.gz
+!testing/end_placement/
+testing/end_placement/**
+!testing/end_placement/Makefile
+!testing/end_placement/README.md
+!testing/end_placement/check_end_placement.py
+!testing/end_placement/data/
+!testing/end_placement/data/*
 !testing/txalign_path_rescue/
 !testing/txalign_path_rescue/Makefile
 !testing/txalign_path_rescue/validate_txalign_path_rescue.py
