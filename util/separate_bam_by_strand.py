@@ -47,6 +47,19 @@ DISCARD_REASONS = (
 )
 
 
+# BGZF level for the bams this script writes; None leaves htslib's default. Set once in
+# main() and, for a pool worker, from the context it is handed, so every writer below
+# agrees without the level being threaded through each signature. Only a caller whose
+# output is a transient intermediate has any business setting it.
+_INTERMEDIATE_COMPRESSION_LEVEL = None
+
+
+def _writer_options():
+    if _INTERMEDIATE_COMPRESSION_LEVEL is None:
+        return {}
+    return {"format_options": ["level={}".format(_INTERMEDIATE_COMPRESSION_LEVEL).encode()]}
+
+
 def discard_counter_name(discard_reason):
     return "num_records_discarded_" + discard_reason
 
@@ -240,7 +253,20 @@ def main():
         "over one reference.",
     )
 
+    parser.add_argument(
+        "--intermediate_compression_level",
+        type=int,
+        choices=range(0, 10),
+        default=None,
+        help="BGZF compression level for the strand bams, for a caller that reads "
+        "them once and discards them (normalize_bam_by_strand.py). Default: htslib's "
+        "own, which is right for a bam that is kept.",
+    )
+
     args = parser.parse_args()
+
+    global _INTERMEDIATE_COMPRESSION_LEVEL
+    _INTERMEDIATE_COMPRESSION_LEVEL = args.intermediate_compression_level
 
     input_bam_filename = args.bam
     output_prefix = args.output_prefix
@@ -386,6 +412,7 @@ def split_bam_by_strand(
         header=Util_funcs.stamp_strand_split_header(
             bamfile_reader.header.to_dict(), "+"
         ),
+        **_writer_options(),
     )
     bottom_strand_bamfile_writer = pysam.AlignmentFile(
         bottom_strand_bam_filename,
@@ -393,6 +420,7 @@ def split_bam_by_strand(
         header=Util_funcs.stamp_strand_split_header(
             bamfile_reader.header.to_dict(), "-"
         ),
+        **_writer_options(),
     )
 
     chrom_seq = None
@@ -600,7 +628,9 @@ _split_worker_context = dict()
 
 
 def _init_split_worker(context):
+    global _INTERMEDIATE_COMPRESSION_LEVEL
     _split_worker_context.update(context)
+    _INTERMEDIATE_COMPRESSION_LEVEL = context.get("intermediate_compression_level")
 
 
 def _split_one_scope(task):
@@ -784,7 +814,7 @@ def split_bam_by_strand_parallel(
                 bottom_strand_bam_filename,
             ):
                 pysam.AlignmentFile(
-                    output_bam_filename, "wb", template=reader
+                    output_bam_filename, "wb", template=reader, **_writer_options()
                 ).close()
         return new_counters()
 
@@ -830,6 +860,7 @@ def split_bam_by_strand_parallel(
             "infer_read_orient_flag": infer_read_orient_flag,
             "genome_fasta": genome_fasta,
             "chrom_to_itree": chrom_to_itree,
+            "intermediate_compression_level": _INTERMEDIATE_COMPRESSION_LEVEL,
         }
 
         # biggest scope first, so the longest pass is not the one that starts last.

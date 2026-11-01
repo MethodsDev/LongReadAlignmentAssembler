@@ -6,6 +6,7 @@ version 1.0
 
 task normalize_bam_by_strand {
   input {
+    Int preemptible_tries = 3
     File input_bam
     Int normalize_max_cov_level
     String label = ""
@@ -34,16 +35,52 @@ task normalize_bam_by_strand {
     # is roughly 2.6x under a true cgroup peak -- so 8 GiB stays, unchanged: the
     # measurement says this stage got cheaper, not that the request can shrink.
     Int memoryGB = 8
+    # BGZF level of the strand bams and per-contig parts, which are read once and deleted.
+    # The final bam is written by samtools merge at its own level. Measured with the threaded
+    # PG scan on a 6.6 GB merged bam: 547 s -> 353 s, records, header and size identical.
+    Int intermediate_compression_level = 1
   }
 
   # derive a safe base name in WDL (avoid putting conditional logic inside the command string)
   String base = if label == "" then basename(input_bam) else label
+    # Machine shape (v0.47.1, generated text, identical in every SSD task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
+    # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
+    # (7.5 GiB passes), hence 7 for that tier: such a request steps up to c3d-standard-4.
+    Int shape_cpu = cpu
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 30 then 30
+        else if shape_cpu <= 60 then 60
+        else if shape_cpu <= 90 then 90
+        else 180
+    Int shape_mem_tier = if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 240 then 30
+        else if shape_memGB <= 480 then 60
+        else if shape_memGB <= 720 then 90
+        else 180
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    Int shape_highcpu_memGB = if shape_cores == 4 then 7
+        else if shape_cores == 30 then 59
+        else if shape_cores == 60 then 118
+        else if shape_cores == 90 then 177
+        else if shape_cores == 180 then 354
+        else shape_cores * 2
+    String machine_type = if shape_memGB <= shape_highcpu_memGB then "c3d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "c3d-standard-~{shape_cores}"
+        else "c3d-highmem-~{shape_cores}"
+
 
   command <<<
 set -euo pipefail
 
 # Run normalization script (script is expected in PATH inside the docker image) and index output
-normalize_bam_by_strand.py --input_bam "~{input_bam}" --normalize_max_cov_level ~{normalize_max_cov_level} --output_bam "~{base}.norm_~{normalize_max_cov_level}.bam" --num_workers ~{cpu}
+normalize_bam_by_strand.py --input_bam "~{input_bam}" --normalize_max_cov_level ~{normalize_max_cov_level} --output_bam "~{base}.norm_~{normalize_max_cov_level}.bam" --num_workers ~{cpu} --intermediate_compression_level ~{intermediate_compression_level}
 samtools index -@ ~{cpu} "~{base}.norm_~{normalize_max_cov_level}.bam"
 
 echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm_~{normalize_max_cov_level}.bam.bai"
@@ -67,6 +104,10 @@ echo "WDL: produced ~{base}.norm_~{normalize_max_cov_level}.bam and ~{base}.norm
   }
 
   runtime {
+
+      predefinedMachineType: machine_type
+
+      preemptible: preemptible_tries
     docker: docker
     bootDiskSizeGb: 30
     cpu: "~{cpu}"
