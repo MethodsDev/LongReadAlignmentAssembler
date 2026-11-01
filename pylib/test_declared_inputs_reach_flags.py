@@ -96,6 +96,7 @@ RUNTIME_ONLY_INPUTS = {
     "memoryGB",  # task sizing
     "diskSizeGB",  # task sizing
     "chunkPreemptible",  # per-leaf preemptibility
+    "preemptible_tries",  # spot tries
 }
 
 # Calls to one callee that legitimately differ, because the WDL layer above them
