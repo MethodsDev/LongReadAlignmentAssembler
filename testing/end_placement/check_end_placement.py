@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Checks for testing/end_placement: where isoform ends land (v0.48.0 end rules, merge end
-logic, SE weak-junction guard, internal TSS of an ISM isoform).
+logic, SE weak-junction guard, internal TSS of an ISM isoform, own_vote at low read counts).
 
 Coordinates are those of the extracted minigenomes (1-based from each region's start); the
 regions and their origin are in README.md. Every check names the locus and what moved.
 
 usage: check_end_placement.py <locus> <run_dir>
-  locus: TIGD7 | TIGD7_merge | SPACER_revert | SEPHS2 | COMT
+  locus: TIGD7 | TIGD7_merge | SPACER_revert | SEPHS2 | COMT | SLC30A1 | RTL6
 """
 
 import glob
@@ -180,6 +180,30 @@ def check_COMT(run_dir):
     check(bool(ism), "COMT: an S-COMT model is an ISM of an MB-COMT model, starting inside its exon")
 
 
+# SLC30A1 (HG002 chr1:211,551,501-211,610,163, minus strand; a TUSCO gene). The long-3' form's
+# own reads are few and mostly 5'-truncated, so they have no 5' peak; the capped reads at the
+# annotated TSS (local 27661) sit with the short-3' form, which shares the first intron.
+# own_vote's shared-first-intron fallback puts the 5' end there; without it the 20th
+# percentile of own reads gave 27584 (TUSCO TP -> PTP).
+def check_SLC30A1(run_dir):
+    models = read_models(one(f"{run_dir}/*.LRAA.ref-free.gtf"))
+    hits = by_chain(models, "-", ((24790, 26490),))
+    check(len(hits) >= 1, f"SLC30A1: a minus-strand model with first intron 24790-26490 (found {len(hits)})")
+    for m in hits:
+        check(near(m["five"], 27661), f"SLC30A1: 5' end {m['five']}, the annotated TSS 27661 (v0.48.0 without the fallback: 27584)")
+
+
+# RTL6 (UHRR chr22:44,472,501-44,518,233, minus strand): single-exon reads with scattered 5'
+# ends. Two of 17 agree at local 21298, 2.5 kb inside the others; without the minimum peak
+# size that chance pair set the 5' end and the shortened model lost reads (TUSCO PTP -> FN).
+def check_RTL6(run_dir):
+    models = read_models(one(f"{run_dir}/*.LRAA.ref-free.gtf"))
+    se = [m for m in models.values() if m["strand"] == "-" and len(m["exons"]) == 1]
+    check(len(se) == 1, f"RTL6: one single-exon minus-strand model (found {len(se)})")
+    for m in se:
+        check(m["five"] > 21298 + 500, f"RTL6: 5' end {m['five']} not on the 2-read pile-up at 21298")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         sys.exit(__doc__)
@@ -190,6 +214,8 @@ if __name__ == "__main__":
         "SPACER_revert": check_SPACER_revert,
         "SEPHS2": check_SEPHS2,
         "COMT": check_COMT,
+        "SLC30A1": check_SLC30A1,
+        "RTL6": check_RTL6,
     }[locus](run_dir)
     if FAILS:
         sys.exit(f"{locus}: {len(FAILS)} check(s) failed")

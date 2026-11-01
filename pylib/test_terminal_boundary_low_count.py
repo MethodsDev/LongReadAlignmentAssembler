@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import LRAA_Globals  # noqa: E402
 from LRAA import (  # noqa: E402
+    own_vote_min_peak,
     extension_lacks_peak,
     read_start_vote,
     terminal_boundary_coord,
@@ -198,6 +199,57 @@ def test_own_vote_then_20th_percentile_of_own():
     assert _rule("own_vote", pos, [100, 100, 140], "left", 50, 50) == 100
     # right end, n = 3, index 0 from the 5' (largest) side
     assert _rule("own_vote", pos, [100, 120, 140], "right", 2000, 2000) == 140
+
+
+def test_own_vote_min_peak_size():
+    # min(3 reads, 20% of n), never below 2
+    assert own_vote_min_peak(5, 3, 0.20) == 2
+    assert own_vote_min_peak(17, 3, 0.20) == 3
+    assert own_vote_min_peak(17, None, None) == 2
+    # 17 own reads, a chance 2-read pile-up far inside: no longer a peak, 20th percentile
+    own = [100, 130, 160, 190, 220, 250, 280, 310, 340, 370, 400, 430, 460, 490, 2500, 2501, 520]
+    assert tss_end_by_rule("own_vote", own, own, "left", 50, 50) == 2501
+    assert (
+        tss_end_by_rule("own_vote", own, own, "left", 50, 50, min_peak_reads=3, min_peak_frac=0.2)
+        == 190
+    )
+    # a 3-read peak still wins
+    own3 = own + [2502]
+    assert (
+        tss_end_by_rule("own_vote", own3, own3, "left", 50, 50, min_peak_reads=3, min_peak_frac=0.2)
+        == 2502
+    )
+
+
+def test_own_vote_shared_first_intron_fallback():
+    # minus strand (5' = right end): own reads 5'-truncated, no peak; the sibling's capped
+    # reads at 1661 vote before the own 20th percentile (1584)
+    own = [1702, 1584, 1500, 1450, 1400, 1300, 1200, 1100]
+    shared = own + [1661, 1661, 1661, 1660, 1500, 1300]
+    assert tss_end_by_rule("own_vote", own, own, "right", 1716, 1716) == 1584
+    kw = dict(min_peak_reads=3, min_peak_frac=0.2)
+    assert tss_end_by_rule("own_vote", own, own, "right", 1716, 1716, **kw) == 1584
+    assert (
+        tss_end_by_rule("own_vote", own, own, "right", 1716, 1716, shared_positions=shared, **kw)
+        == 1661
+    )
+    # an own peak keeps priority over the shared reads
+    own_pk = own + [1450, 1451]
+    assert (
+        tss_end_by_rule("own_vote", own_pk, own_pk, "right", 1716, 1716, shared_positions=shared, **kw)
+        == 1450
+    )
+    # shared reads with no peak: own 20th percentile as before
+    assert (
+        tss_end_by_rule("own_vote", own, own, "right", 1716, 1716, shared_positions=[1690, 1600], **kw)
+        == 1584
+    )
+
+
+def test_v048_own_vote_peak_defaults():
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_min_peak_reads"] == 3
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_min_peak_frac"] == 0.20
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_shared_first_intron"] is True
 
 
 def test_rule_clamped_to_exon_and_unknown_rejected():

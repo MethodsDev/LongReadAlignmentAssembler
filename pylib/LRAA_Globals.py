@@ -479,10 +479,21 @@ config = {
     # terminal_boundary_percentile at the transcript's 5' end (80 = 20th percentile from the 5' side).
     "terminal_boundary_percentile_TSS": None,
     # Named rule for an unsupported TSS end: see LRAA.tss_end_by_rule. Default "own_vote" (v0.48.0): the read 5' end
-    # pile-up (+-2 bp, >= 2 reads) among the reads the model represents, else their 20th percentile from the 5' side,
-    # at any read count. MEASURED chr19 de novo, 5' ends within a CAGE peak: BT474 76.5 -> 82.4%, HG002 67.1 -> 75.4%
-    # (with terminal_end_rule_extend). None restores v0.47.0 (percentile, exon edge below min_reads).
+    # pile-up (+-2 bp) among the reads the model represents, else among the reads of models sharing its first intron,
+    # else their 20th percentile from the 5' side, at any read count (pile-up size: the two keys below).
+    # MEASURED chr19 de novo, multi-exon 5' ends within a CAGE peak: BT474 76.5 -> 83.5%, HG002 67.1 -> 77.3%
+    # (v0.48.0 defaults). None restores v0.47.0 (percentile, exon edge below min_reads).
     "terminal_TSS_end_rule": "own_vote",
+    # own_vote at the TSS end, outside a merge: a winning read 5' end peak needs at least min_peak_reads reads
+    # or min_peak_frac of the reads voting, whichever is fewer (never fewer than 2). None for both = 2 reads.
+    # Against a chance 2-read peak far inside a well-read model (UHRR RTL6).
+    "terminal_end_rule_own_vote_min_peak_reads": 3,
+    "terminal_end_rule_own_vote_min_peak_frac": 0.20,
+    # own_vote at the TSS end, outside a merge: when the model's own reads give no peak, the reads of every model
+    # with the same first intron vote (same peak test) before the 20th percentile of own reads is taken. The 5'
+    # reads of isoforms differing only downstream are the same evidence (SLC30A1: the capped TSS reads sat with
+    # the short-3' sibling, the long-3' model's own 8 reads were mostly 5'-truncated).
+    "terminal_end_rule_own_vote_shared_first_intron": True,
     # The same named rules applied to the PolyA end, mirrored ("own_vote" = peak of own reads, else 20% from the 3' side).
     "terminal_PolyA_end_rule": None,
     # With a rule above: own reads ending beyond the terminal exon count too, and the end may extend past the exon edge.

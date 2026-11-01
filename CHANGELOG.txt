@@ -7,18 +7,25 @@ candidate's images are still to be run.
 
 - Unsupported 5' ends (no TSS site) are placed by terminal_TSS_end_rule "own_vote" (new default;
   was the 10th-percentile read start, or the terminal exon's edge below
-  min_reads_for_terminal_adjustment reads): the read 5' end pile-up (+-2 bp, >= 2 reads) among the
-  reads the model represents, else their 20th percentile from the 5' side, at any read count.
+  min_reads_for_terminal_adjustment reads): the read 5' end pile-up (+-2 bp) among the reads the
+  model represents, else the pile-up among the reads of all models with the same first intron
+  (terminal_end_rule_own_vote_shared_first_intron), else the 20th percentile of the model's reads
+  from the 5' side, at any read count. A pile-up needs 3 reads or 20% of the reads voting,
+  whichever is fewer, and at least 2 (terminal_end_rule_own_vote_min_peak_reads / _frac); not in
+  a merge, where one end per input model votes.
   terminal_end_rule_extend (default true) lets that end lie past the exon edge, with two guards:
   an extended end whose model would have no spacer-free path in the splice graph falls back to
   the rule's in-exon coordinate (without it the remap dropped the model: 261 of 5,776 BT474 chr19
   models, 642 of 6,813 HG002), and an end more than terminal_end_rule_extend_unvoted_max (200) bp
   past the edge needs a read pile-up there. 3' ends are unchanged (terminal_PolyA_end_rule stays
   None; moving them lost PolyA atlas agreement).
-  MEASURED chr19 de novo (PacBio), 5' ends of all models within a CAGE peak: BT474 76.5 -> 82.4%,
-  HG002 67.1 -> 75.7%; unsupported 5' ends only: BT474 38.4 -> 54.2%, HG002 33.7 -> 50.9%.
-  Reconstructed GENCODE chains: BT474 1,783 -> 1,786, HG002 2,205 -> 2,207. 3' ends within a
-  PolyASite cluster: BT474 82.4 -> 81.9%.
+  MEASURED chr19 de novo (PacBio), 5' ends of all multi-exon models within a CAGE peak: BT474
+  76.5 -> 83.5%, HG002 67.1 -> 77.3%; unsupported 5' ends only: BT474 38.4 -> 55.8%, HG002
+  33.7 -> 52.9%. Reconstructed GENCODE chains: BT474 1,783 -> 1,786, HG002 2,205 -> 2,206. 3' ends
+  within a PolyASite cluster: BT474 82.4 -> 81.8%, HG002 72.2 -> 71.6%. Models: BT474 5,776 ->
+  5,467, HG002 6,813 -> 6,601 (fewer end variants of the same chain). The minimum pile-up and the
+  shared-first-intron vote, against the rule without them: 5' in CAGE BT474 82.4 -> 83.5%, HG002
+  75.7 -> 77.3%; TUSCO shortcut SLC30A1 (HG002) PTP -> TP, RTL6 (UHRR) FN -> PTP, no gene worse.
 - Merge (merge_LRAA_GTFs.py, LRAA_MODE MERGE): a merged model's unsupported ends get the same
   adjustment as a normal model's, with one end per input model as the evidence
   (merge_end_rule_from_sources); the full-window trim measures from the model's own end, not
@@ -42,12 +49,15 @@ candidate's images are still to be run.
   sensitivity BT474 45.65 -> 54.35, HG002 50.00 -> 56.52, K562 36.96 -> 41.30, UHRR 36.96 -> 39.13;
   RNF26, SEPHS2, C6orf47, NCBP2AS2 (BT474) and KBTBD6, MARS2 now TP, no gene worse.
   docs/SE_weak_junction_guard.md.
-- Combined on chr19 (BT474 and HG002, this commit's defaults): the models are those of the end
-  rules alone plus the one single-exon model the guard adds (the same locus in both libraries);
-  the guard changes no multi-exon model.
+- Combined on chr19 (BT474 and HG002): the models are those of the end rules alone plus the one
+  single-exon model the guard adds (the same locus in both libraries); the guard changes no
+  multi-exon model. TUSCO shortcut, all v0.48.0 defaults, sensitivity: BT474 45.65 -> 54.35,
+  HG002 50.00 -> 54.35, K562 36.96 -> 41.30, UHRR 36.96 -> 36.96; PDR BT474 67.39 -> 73.91,
+  HG002 80.43 -> 89.13, K562 67.39 -> 69.57, UHRR 69.57 -> 73.91.
 - Tests: pylib/test_terminal_boundary_low_count.py (end rules, SPACER revert,
   merge end logic), pylib/test_SE_weak_junction_guard.py; execution test testing/end_placement
-  (TIGD7 normal run and merge, a SPACER revert locus, SEPHS2, COMT; BT474 reads);
+  (TIGD7 normal run and merge, a SPACER revert locus, SEPHS2, COMT from BT474 reads; SLC30A1 from
+  HG002 and RTL6 from UHRR reads);
   testing/misc_tests/EMP3_alt_termini expected merge updated (one single-exon model ends at its
   input models' 3439, not the node edge 3473).
 

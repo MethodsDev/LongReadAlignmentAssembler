@@ -2,7 +2,9 @@
 
 Execution test for where LRAA puts isoform ends (v0.48.0). Five minigenomes cut from the BT474
 PacBio Kinnex benchmark library (`util/misc/extract_contig_region_inputs.py`, GRCh38, GENCODE v39
-loci kept whole). Coordinates in the checks are local: genomic = local + region start - 1.
+loci kept whole), and two TUSCO loci from the HG002 and UHRR PacBio libraries (the TUSCO shortcut's
+extracted regions, `__Benchmark_extras/TUSCO/shortcut` in the paper analyses). Coordinates in the
+checks are local: genomic = local + region start - 1.
 
 | locus | region (GRCh38) | what it guards | v0.47.x result |
 |---|---|---|---|
@@ -11,8 +13,10 @@ loci kept whole). Coordinates in the checks are local: genomic = local + region 
 | `SPACER_revert` | chr19:14,071,536-14,207,187 | an extension onto an exon segment the model's 5' exon has no edge to is reverted (EXTENSION_REVERTED), and the model is kept | no extension (5' end at the exon edge) |
 | `SEPHS2` | chr16:30,438,631-30,450,874 | single-exon TUSCO gene beside a 2-read junction is reported as one exon with its ~1,400 reads (SE weak-junction guard) | spliced model only, 213 reads |
 | `COMT` | chr22:19,874,517-20,071,569 | MB-COMT and the internal-promoter S-COMT (an ISM of it) both called with a TSS | same (regression guard) |
+| `SLC30A1` | chr1:211,551,501-211,610,163 (HG002) | a model whose own reads give no 5' peak takes the peak of the reads of models sharing its first intron: 5' end at the annotated TSS (27661) | v0.48.0 without that fallback: 27584 |
+| `RTL6` | chr22:44,472,501-44,518,233 (UHRR) | a 2-read 5' pile-up among 17 reads is not a peak (minimum peak size); the single-exon model's 5' end is not pulled 2.5 kb inward | v0.48.0 without the minimum: 21298 |
 
-`data/cap_calib.json` sets BT474's TSS cap calibration (signature on, baseline 1): the
+`data/cap_calib.json` sets the TSS cap calibration of the three libraries (signature on, baseline 1): the
 minigenomes are too small to calibrate.
 
-    make test     # runs and checks all five, about a minute
+    make test     # runs and checks all seven, about a minute

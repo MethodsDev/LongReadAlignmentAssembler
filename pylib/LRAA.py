@@ -181,8 +181,8 @@ def terminal_boundary_coord(
     return exon_limit
 
 
-def read_start_vote(oriented):
-    """Most supported read start, or None when no two reads agree.
+def read_start_vote(oriented, min_peak=2):
+    """Most supported read start, or None when fewer than min_peak reads agree.
 
     oriented: read 5' positions in transcript orientation (smaller = upstream).
     Reads within +-2 bp of a position agree with it. Ties go to the position with more
@@ -195,9 +195,22 @@ def read_start_vote(oriented):
         key = (window, exact, x)
         if best is None or key > best:
             best = key
-    if best is None or best[0] < 2:
+    if best is None or best[0] < max(2, min_peak):
         return None
     return best[2]
+
+
+def own_vote_min_peak(n, min_peak_reads, min_peak_frac):
+    """Reads a winning own_vote peak needs among n reads: min_peak_reads or min_peak_frac
+    of n, whichever is fewer, and never fewer than 2. None for both keeps 2."""
+    import math
+
+    needed = []
+    if min_peak_reads is not None:
+        needed.append(min_peak_reads)
+    if min_peak_frac is not None:
+        needed.append(math.ceil(min_peak_frac * n))
+    return max(2, min(needed)) if needed else 2
 
 
 def _lower_percentile(oriented, q):
@@ -217,7 +230,17 @@ TSS_END_RULES = (
 
 
 def tss_end_by_rule(
-    rule, positions, own_positions, side, exon_limit, fallback, min_reads=7, extend=False
+    rule,
+    positions,
+    own_positions,
+    side,
+    exon_limit,
+    fallback,
+    min_reads=7,
+    extend=False,
+    min_peak_reads=None,
+    min_peak_frac=None,
+    shared_positions=None,
 ):
     """Experimental placement of an unsupported TSS end (terminal_TSS_end_rule).
 
@@ -237,6 +260,13 @@ def tss_end_by_rule(
                        of all reads, at any read count.
     own_vote         : vote among own reads, else the 20th percentile of own reads, at
                        any read count.
+
+    own_vote only:
+    min_peak_reads, min_peak_frac: a peak wins with at least own_vote_min_peak reads of
+                   the reads voting (terminal_end_rule_own_vote_min_peak_*); None = 2.
+    shared_positions: read 5' ends of every model sharing this end's first intron. When
+                   the own reads give no peak, these vote (same peak size test, on their
+                   number) before the 20th percentile of own reads is taken.
     """
     import math
     import statistics
@@ -269,7 +299,14 @@ def tss_end_by_rule(
                 chosen = _lower_percentile(oriented, 20)
     elif rule == "own_vote":
         if own:
-            chosen = read_start_vote(own)
+            chosen = read_start_vote(
+                own, own_vote_min_peak(len(own), min_peak_reads, min_peak_frac)
+            )
+            if chosen is None and shared_positions:
+                shared = [sgn * p for p in shared_positions]
+                chosen = read_start_vote(
+                    shared, own_vote_min_peak(len(shared), min_peak_reads, min_peak_frac)
+                )
             if chosen is None:
                 chosen = _lower_percentile(own, 20)
     if chosen is None:
@@ -1281,6 +1318,14 @@ class LRAA:
             f"using method: {LRAA_Globals.config.get('terminal_boundary_method', 'mean')}"
         )
 
+        shared_first_intron_reads = {}
+
+        def _tss_first_intron(transcript):
+            introns = sorted(tuple(i) for i in transcript.get_introns())
+            if not introns:
+                return None
+            return (transcript.get_strand(), introns[0] if transcript.get_strand() == "+" else introns[-1])
+
         def _adjust_transcript_terminals_from_reads(transcript):
             # Gather all read names that supported this transcript
             read_names = set()
@@ -1441,17 +1486,62 @@ class LRAA:
             # for a spacer-free path in the graph below before it is applied.
             left_rule = tss_end_rule if tss_is_left else polyA_end_rule
             right_rule = polyA_end_rule if tss_is_left else tss_end_rule
+            # own_vote at the TSS end (not in a merge, where one end per input model votes):
+            # a minimum peak size, and the reads of models sharing the first intron as the
+            # fallback vote.
+            tss_vote_kw = {}
+            if LRAA_Globals.LRAA_MODE != "MERGE":
+                tss_vote_kw = dict(
+                    min_peak_reads=LRAA_Globals.config.get(
+                        "terminal_end_rule_own_vote_min_peak_reads", None
+                    ),
+                    min_peak_frac=LRAA_Globals.config.get(
+                        "terminal_end_rule_own_vote_min_peak_frac", None
+                    ),
+                )
+            shared_tss = []
+            shared_key = _tss_first_intron(transcript) if shared_first_intron_reads else None
+            if shared_key in shared_first_intron_reads:
+                for rn in shared_first_intron_reads[shared_key]:
+                    if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
+                        continue
+                    span = self._read_name_to_span.get(rn)
+                    if span is None:
+                        continue
+                    if tss_is_left:
+                        p = span[0]
+                        if p is not None and p <= first_exon_rend and (extend_ends or p >= first_exon_lend):
+                            shared_tss.append(p)
+                    else:
+                        p = span[1]
+                        if p is not None and p >= last_exon_lend and (extend_ends or p <= last_exon_rend):
+                            shared_tss.append(p)
+            left_kw = dict(tss_vote_kw) if tss_is_left else {}
+            right_kw = {} if tss_is_left else dict(tss_vote_kw)
+
+            def _in_exon(kw, lo, hi):
+                # shared reads for the un-extended call: those within the terminal exon
+                if not shared_tss or not kw:
+                    return kw
+                return dict(kw, shared_positions=[p for p in shared_tss if lo <= p <= hi])
+
+            def _all(kw):
+                if not shared_tss or not kw:
+                    return kw
+                return dict(kw, shared_positions=shared_tss)
             unextended_first_lend, unextended_last_rend = candidate_first_lend, candidate_last_rend
             if left_rule is not None:
                 own_left_in = [l for l in own_left if l >= first_exon_lend]
                 unextended_first_lend = tss_end_by_rule(
                     left_rule, left_terminal_spans, own_left_in, "left", exon_left_limit,
                     candidate_first_lend, min_reads_threshold, extend=False,
+                    **_in_exon(left_kw, first_exon_lend, first_exon_rend),
                 )
                 candidate_first_lend = (
                     tss_end_by_rule(
                         left_rule, left_terminal_spans, own_left, "left", exon_left_limit,
                         candidate_first_lend, min_reads_threshold, extend=True,
+                        **_all(left_kw),
                     )
                     if extend_ends
                     else unextended_first_lend
@@ -1462,11 +1552,13 @@ class LRAA:
                 unextended_last_rend = tss_end_by_rule(
                     right_rule, right_terminal_spans, own_right_in, "right", exon_right_limit,
                     candidate_last_rend, min_reads_threshold, extend=False,
+                    **_in_exon(right_kw, last_exon_lend, last_exon_rend),
                 )
                 candidate_last_rend = (
                     tss_end_by_rule(
                         right_rule, right_terminal_spans, own_right, "right", exon_right_limit,
                         candidate_last_rend, min_reads_threshold, extend=True,
+                        **_all(right_kw),
                     )
                     if extend_ends
                     else unextended_last_rend
@@ -1640,6 +1732,23 @@ class LRAA:
                 num_reconstructed - len(transcripts),
                 num_reconstructed,
             )
+
+        # terminal_end_rule_own_vote_shared_first_intron: reads of all models with the
+        # same first intron, the fallback vote of own_vote at the TSS end. Taken before
+        # any end moves; read spans do not depend on the models' coordinates.
+        shared_first_intron_reads.clear()
+        if (
+            LRAA_Globals.LRAA_MODE != "MERGE"
+            and LRAA_Globals.config.get("terminal_TSS_end_rule", None) == "own_vote"
+            and LRAA_Globals.config.get("terminal_end_rule_own_vote_shared_first_intron", False)
+        ):
+            for transcript in transcripts:
+                key = _tss_first_intron(transcript)
+                if key is None:
+                    continue
+                names = shared_first_intron_reads.setdefault(key, set())
+                for mp in transcript.get_multipaths_evidence_assigned():
+                    names.update(mp.get_read_names())
 
         for transcript in transcripts:
             _adjust_transcript_terminals_from_reads(transcript)

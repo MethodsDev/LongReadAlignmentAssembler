@@ -1,14 +1,16 @@
 # Where isoform ends land: v0.48.0 5' end rule (own_vote + extension, SPACER revert), merge end
-# logic, SE weak-junction guard, internal TSS of an ISM isoform. Five small BT474 minigenomes
+# logic, SE weak-junction guard, internal TSS of an ISM isoform, own_vote at low read counts. Small
+# minigenomes from BT474, HG002 and UHRR
 # (README.md); each run takes seconds. check_end_placement.py asserts properties, not a golden GTF.
 
 LRAA = ../../LRAA
 MERGE = ../../util/merge_LRAA_GTFs.py
-# The minigenomes are too small for the library cap calibration; this is BT474's calibration.
+# The minigenomes are too small for the library cap calibration; this is the calibration of all
+# three libraries (signature on, baseline 1).
 LRAA_ARGS = --HiFi --min_mapping_quality 0 --min_mapping_quality_for_final_quant 0 --cpu_budget 2 \
             --config_update ../data/cap_calib.json
 
-LOCI = TIGD7 SPACER_revert SEPHS2 COMT
+LOCI = TIGD7 SPACER_revert SEPHS2 COMT SLC30A1 RTL6
 
 .PHONY: test clean $(addprefix check_,$(LOCI)) check_TIGD7_merge
 
