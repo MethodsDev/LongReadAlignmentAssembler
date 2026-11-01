@@ -1,3 +1,62 @@
+v0.48.0
+
+Changes that alter run outputs (isoform 5' ends without a TSS site, merged models' ends,
+single-exon genes beside a weak junction). RELEASE CANDIDATE: the measurements below are
+chromosome and minigenome scale; the benchmark families and single-cell evaluations on this
+candidate's images are still to be run.
+
+- Unsupported 5' ends (no TSS site) are placed by terminal_TSS_end_rule "own_vote" (new default;
+  was the 10th-percentile read start, or the terminal exon's edge below
+  min_reads_for_terminal_adjustment reads): the read 5' end pile-up (+-2 bp, >= 2 reads) among the
+  reads the model represents, else their 20th percentile from the 5' side, at any read count.
+  terminal_end_rule_extend (default true) lets that end lie past the exon edge, with two guards:
+  an extended end whose model would have no spacer-free path in the splice graph falls back to
+  the rule's in-exon coordinate (without it the remap dropped the model: 261 of 5,776 BT474 chr19
+  models, 642 of 6,813 HG002), and an end more than terminal_end_rule_extend_unvoted_max (200) bp
+  past the edge needs a read pile-up there. 3' ends are unchanged (terminal_PolyA_end_rule stays
+  None; moving them lost PolyA atlas agreement).
+  MEASURED chr19 de novo (PacBio), 5' ends of all models within a CAGE peak: BT474 76.5 -> 82.4%,
+  HG002 67.1 -> 75.7%; unsupported 5' ends only: BT474 38.4 -> 54.2%, HG002 33.7 -> 50.9%.
+  Reconstructed GENCODE chains: BT474 1,783 -> 1,786, HG002 2,205 -> 2,207. 3' ends within a
+  PolyASite cluster: BT474 82.4 -> 81.9%.
+- Merge (merge_LRAA_GTFs.py, LRAA_MODE MERGE): a merged model's unsupported ends get the same
+  adjustment as a normal model's, with one end per input model as the evidence
+  (merge_end_rule_from_sources); the full-window trim measures from the model's own end, not
+  the graph node's edge (merge_trim_from_model_end); models are re-pathed before their ends are
+  adjusted (merge_repath_before_end_adjustment); an adjustment stops on the first called site
+  it would cross (merge_end_stop_at_called_site); models made identical by the adjustment become
+  one (merge_dedupe_identical_models); an end keeps a TSS / PolyA site only when an input model
+  ends within the site window (merge_site_end_requires_source_support). All default true.
+  MEASURED PBMC chr22 cluster-guided merge, v0.47.0 (cluster runs and merge) against the new
+  5' rule in the cluster runs plus these merge changes (without the 200 bp cap): multi-exon
+  isoforms 5,535 -> 5,461, near-duplicate pairs 7 -> 7, 5' ends in a CAGE peak 55.6 -> 60.1%,
+  3' in a PolyASite cluster 38.5 -> 37.9%, GENCODE chains 725 -> 722. On the same cluster GTFs,
+  TSS-flagged ends more than 50 bp from every input model's end: 19 without the merge changes,
+  0 with them.
+- Single-exon pass: weak-junction guards. An ME model's exon no longer masks the unspliced reads
+  of an intron whose read-through T exceeds 20 x its spliced support J
+  (SE_mask_max_readthrough_to_junction_ratio), and an intron whose background floor exceeds 20 x J
+  is not subtracted (SE_intronic_background_max_floor_to_junction_ratio). None restores v0.47.0.
+  MEASURED BT474 chr19: 13 of 11,257 model introns above the ratio, none a GENCODE intron; one
+  single-exon model gained, no chain lost. TUSCO (fast minigenome shortcut, four PacBio libraries):
+  sensitivity BT474 45.65 -> 54.35, HG002 50.00 -> 56.52, K562 36.96 -> 41.30, UHRR 36.96 -> 39.13;
+  RNF26, SEPHS2, C6orf47, NCBP2AS2 (BT474) and KBTBD6, MARS2 now TP, no gene worse.
+  docs/SE_weak_junction_guard.md.
+- Combined on chr19 (BT474 and HG002, this commit's defaults): the models are those of the end
+  rules alone plus the one single-exon model the guard adds (the same locus in both libraries);
+  the guard changes no multi-exon model.
+- Tests: pylib/test_terminal_boundary_low_count.py (end rules, SPACER revert,
+  merge end logic), pylib/test_SE_weak_junction_guard.py; execution test testing/end_placement
+  (TIGD7 normal run and merge, a SPACER revert locus, SEPHS2, COMT; BT474 reads);
+  testing/misc_tests/EMP3_alt_termini expected merge updated (one single-exon model ends at its
+  input models' 3439, not the node edge 3473).
+
+Also in this version, no change to default runs: experimental keys terminal_boundary_method_low_count,
+terminal_boundary_percentile_TSS and terminal_PolyA_end_rule (off). Tested and not adopted, so
+not kept: an outward-only 3' pile-up rule, an exact-chain-only read vote, and the model-end trim
+measure outside the merge.
+
+
 v0.47.1
 
 No change to run outputs. Lower Terra cost and wall time, no change to how the WDLs schedule
