@@ -7,8 +7,8 @@ Rules from the Batch probes of 2026-10-30 and from miniwdl:
   than the machine, and rejects 8 GiB on c3d-highcpu-4 although the shape lists 8 GiB;
 - miniwdl ignores predefinedMachineType and reserves 0 cores and 0 memory for a task with
   no cpu/memory, so those lines must stay;
-- an HDD task cannot go on C3D, which Compute Engine does not list with pd-standard (not
-  probed; see docs/v0.47.1_terra_runtime_plan.md).
+- an HDD task stays off C3D, which appears not to take pd-standard (from the Compute Engine
+  docs, not probed; see docs/v0.47.1_terra_runtime_plan.md).
 The tier text is repeated per task because WDL 1.0 has no functions, so it is checked here.
 """
 

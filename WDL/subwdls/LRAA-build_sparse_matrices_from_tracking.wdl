@@ -68,7 +68,8 @@ task sc_build_sparse_matrices_from_tracking {
     # memory: stay as they are, so miniwdl's reservations do not change; this only names the
     # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
     # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
+    # probe settles that.
     Int shape_cpu = 2
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -190,7 +191,8 @@ task sc_build_shard_sparse {
     # memory: stay as they are, so miniwdl's reservations do not change; this only names the
     # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
     # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
+    # probe settles that.
     Int shape_cpu = cpu
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2
@@ -269,7 +271,8 @@ task merge_sc_shard_sparse {
     # memory: stay as they are, so miniwdl's reservations do not change; this only names the
     # Terra VM (miniwdl ignores predefinedMachineType). N2D rather than C3D here because the
     # task uses at most 2 cores or an HDD disk: C3D has no 2-core shape, and Compute Engine
-    # lists no pd-standard for C3D. Disks stay as they were until a probe settles that.
+    # docs appear not to offer pd-standard on C3D (unprobed). Disks stay as they were until a
+    # probe settles that.
     Int shape_cpu = 1
     Int shape_memGB = memoryGB
     Int shape_cpu_tier = if shape_cpu <= 2 then 2

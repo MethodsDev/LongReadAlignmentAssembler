@@ -1,3 +1,42 @@
+v0.47.1
+
+No change to run outputs. Lower Terra cost and wall time, no change to how the WDLs schedule
+under miniwdl (one exception below). Outputs of v0.47.0 stay valid.
+
+Measured, v0.47.0 image against this commit under miniwdl, one fixture run each: sirvs ref-free,
+ref-guided and quant-only; sep_contigs ref-free, ref-guided and quant-only (scattered);
+sc_full_pipe basic and cluster-guided, full and quant-only; sc_full_pipe_scattered. GTFs,
+quant.expr, tracking (sorted lines), sc matrices and tarball contents are identical, and the 29
+normalized BAMs of the cluster-guided run are byte-identical. Differing files were only: timing and
+memory telemetry in chunk reports, bam_identity in chunk plans (the path, size and mtime of the
+file, not its records), and row order of the cluster pseudobulk matrices, which already varies with
+PYTHONHASHSEED. Not measured: any Cromwell or Terra run, cost, or the speedups on real data
+(the timings below are from the cg-terra-testing branch's own measurements).
+
+Workflows:
+- Every task reachable from LRAA.wdl and LRAA-singlecell.wdl names predefinedMachineType next to
+  its cpu and memory. Tasks of 3+ cores on SSD use C3D tiers; tasks of up to 2 cores, or on HDD, use
+  N2D, because C3D appears not to take pd-standard (unprobed) and disks were left as they were.
+  Without a named machine Cromwell builds a custom N1 VM.
+- Commands stay on the requested cpu, so a larger tier leaves cores idle rather than changing
+  a thread count.
+- Spot: LRAA_runner_task 2 tries (70% of the task-hours of the PBMC v0.47.0 basic arm, median 6.6
+  min), partition_by_chromosome_task, alignment_mismapping_filter and lraa_merge_gtf_task 1, small
+  tasks and normalize 3. make_chunks, merge_chunks and emit_shared_chunk_plan stay on demand.
+- mergeQuantResults and LRAA_merge_trackings merge per shard with pigz instead of one python gzip
+  stream (293 s -> 43 s on 25 shards). Decompressed output is byte-identical; the .gz file is now a
+  multi-member gzip, level 6 rather than 9. These two tasks reserve cpu 4 rather than 1, the
+  one change to miniwdl scheduling.
+
+Options, no change to default runs:
+- normalize_bam_by_strand.py and separate_bam_by_strand.py: --intermediate_compression_level for
+  the strand bams and per-contig parts, never the final bam; Normalize_bam.wdl sets 1. The PG scan
+  gets --threads. 547 s -> 353 s on a 6.6 GB merged bam.
+
+Also in this version, no change to default runs: pasa_mode keeps a compatible trellis extension
+at score 0 (only under --pasa_mode); docs and comments.
+
+
 v0.47.0
 
 Changes that alter run outputs (TSS sites, where a library's cap-signature decision

@@ -157,7 +157,7 @@ task partition_by_chromosome_task {
     runtime {
 
         predefinedMachineType: machine_type
-
+        # One spot try, then on demand: PBMC v0.47.0 ran 12 min at the median, 16 at most.
         preemptible: preemptible_tries
         docker: docker
         bootDiskSizeGb: 50
