@@ -726,6 +726,26 @@ config = {
     # and 7,558 bp on chr22, covering 80% of introns but only 22% of intronic bp.
     # Computed per contig-strand from the ME transcripts actually present.
     "SE_intronic_background_intron_length_pctile": 80,
+    # Weak-junction guards for the SE pass (TUSCO single-exon genes reported only as a
+    # spliced model: RNF26, SEPHS2, C6orf47, NCBP2AS2 in BT474, ~1,000 unspliced
+    # full-length reads against a 2-read GT-AG junction). The ME models arrive at the SE
+    # pass carrying each junction's spliced-read count J (build_ME_transcripts).
+    #   SE_mask_max_readthrough_to_junction_ratio: an ME exon flanking an intron whose
+    #     unspliced read-through T (reads spanning the whole intron) exceeds ratio x J
+    #     does not mask unspliced reads (min_SE_read_ME_exon_overlap_pct).
+    #   SE_intronic_background_max_floor_to_junction_ratio: an intron whose background
+    #     floor (median intronic coverage) exceeds ratio x J is not subtracted.
+    # None disables a guard (v0.47.0 behaviour). Default 20, measured on BT474 chr19
+    # (docs/SE_weak_junction_guard.md): 13 of 11,257 model introns have T/J > 20, none
+    # of them a GENCODE intron (the highest annotated intron sits at T/J 9.3, FOSB's
+    # retained introns at 3-3.5); the TUSCO failures sit at T/J 61-608. The floor guard
+    # skips 5 of 7,948 eligible introns there. Both are needed: the mask guard alone
+    # leaves the unmasked read-through pile to be subtracted as "background", and the
+    # subtraction guard alone cannot help where the mask removed every unspliced read.
+    "SE_mask_max_readthrough_to_junction_ratio": 20,
+    "SE_intronic_background_max_floor_to_junction_ratio": 20,
+    # Development aid: append per-intron (J, T, floor) rows to this path. None: off.
+    "SE_weak_junction_stats_path": None,
     # Internal-priming veto at PolyA site identification: when a READ-DERIVED candidate
     # sits at a 3' end the supplied reference annotation also calls, the reference is
     # independent evidence that cleavage happens there, so the A-rich context veto is

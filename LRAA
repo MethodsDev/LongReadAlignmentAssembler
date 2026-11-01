@@ -3066,6 +3066,10 @@ _SPLICE_GRAPH_CONFIG_KEYS = [
     # Decrements the coverage array the SE graph is segmented from.
     "SE_subtract_intronic_background",
     "SE_intronic_background_intron_length_pctile",
+    # Weak-junction guards: decide which ME exons mask SE reads and which introns
+    # the SE coverage floor is subtracted from.
+    "SE_mask_max_readthrough_to_junction_ratio",
+    "SE_intronic_background_max_floor_to_junction_ratio",
     "min_frac_alignments_define_polyA_site",
     "min_PolyA_ident_length",
     "min_PolyA_iso_fraction",
@@ -8393,6 +8397,29 @@ def build_ME_transcripts(
                 f"dropped {n_dropped} of {n_before} ME models; single-exon "
                 f"reconstruction deferred to the SE graph"
             )
+
+    # Carry each junction's spliced-read support with the model: the SE pass receives
+    # these models as its encapsulation mask, holds a different graph, and needs the
+    # support to tell a weak junction from a well-spliced one (weak-junction guards in
+    # Pretty_alignment_manager.apply_SE_read_encapsulation_mask and
+    # Splice_graph._subtract_intronic_background).
+    n_introns = n_found = 0
+    for transcript in ME_transcripts:
+        support = dict()
+        for intron_lend, intron_rend in transcript.get_introns():
+            intron_obj = sg_ME.get_intron_node_obj(intron_lend, intron_rend)
+            n_introns += 1
+            if intron_obj is not None:
+                n_found += 1
+                support[(intron_lend, intron_rend)] = intron_obj.get_read_support()
+            else:
+                support[(intron_lend, intron_rend)] = None
+        transcript.set_intron_read_support(support)
+    if n_introns:
+        logger.info(
+            f"[{contig_acc}{contig_strand}] ME model intron support: "
+            f"{n_found} of {n_introns} model introns found in the ME graph"
+        )
 
     if len(ME_transcripts) == 0:
         logger.info(

@@ -122,6 +122,12 @@ class Transcript(GenomeFeature):
         # cleared when this isoform's intron chain matches a reference model exactly
         self._has_novel_splice_pattern = True
 
+        # {(intron_lend, intron_rend): spliced reads supporting it} from the graph the
+        # model was reconstructed in; None per intron when that graph did not hold it.
+        # Set on ME models before they become the SE read encapsulation mask, so the SE
+        # pass can weigh a junction's support against the unspliced reads through it.
+        self._intron_read_support = None
+
         self._cdna_len = 0
         for exon_segment in segment_coordinates_list:
             self._cdna_len += exon_segment[1] - exon_segment[0] + 1
@@ -603,6 +609,13 @@ class Transcript(GenomeFeature):
             self._isoform_fraction is not None
         ), "Error, isoform fraction is None - maybe quant not run yet?"
         return self._isoform_fraction
+
+    def set_intron_read_support(self, intron_read_support):
+        self._intron_read_support = dict(intron_read_support)
+
+    def get_intron_read_support(self):
+        # getattr: transcripts unpickled from before this attribute existed
+        return getattr(self, "_intron_read_support", None)
 
     def lighten(self):
         # lighten transcript by removing nonessential memory allocs

@@ -544,13 +544,20 @@ class Splice_graph:
 
         exons = list()
         introns = list()
+        # junction reads per intron, max over the models sharing it (None: unknown)
+        junction_support = dict()
         for transcript in ME_transcripts:
             segs = sorted(transcript.get_exon_segments())
             exons.extend(segs)
+            get_support = getattr(transcript, "get_intron_read_support", None)
+            support = (get_support() if get_support else None) or {}
             for i in range(len(segs) - 1):
                 a, b = segs[i][1] + 1, segs[i + 1][0] - 1
                 if b > a:
                     introns.append((a, b))
+                    J = support.get((a, b))
+                    if J is not None:
+                        junction_support[(a, b)] = max(J, junction_support.get((a, b), 0))
 
         # Distinct introns only. An intron shared by N isoforms was appended N
         # times above, so counting instances would weight the length percentile
@@ -579,7 +586,19 @@ class Splice_graph:
 
         cov = self._contig_base_cov
         contig_len = self._contig_seq_len
-        n_introns = n_bases = n_decremented = 0
+        n_introns = n_bases = n_decremented = n_guarded = 0
+
+        # Weak-junction guard: the floor is meant to be pre-mRNA / intronic noise under a
+        # well-spliced gene, i.e. well below the junction's own read support. When the
+        # "intronic" median is the unspliced read-through of a single-exon gene carrying
+        # a rare junction, it exceeds the junction support many-fold and subtracting it
+        # erases the gene. Skip an intron whose floor exceeds
+        # SE_intronic_background_max_floor_to_junction_ratio x its junction reads.
+        # None disables the guard; unknown junction support never skips.
+        max_floor_ratio = LRAA_Globals.config.get(
+            "SE_intronic_background_max_floor_to_junction_ratio"
+        )
+        stats_rows = list() if LRAA_Globals.config.get("SE_weak_junction_stats_path") else None
 
         for a, b in introns:
             if b - a + 1 > max_intron_len:
@@ -617,7 +636,20 @@ class Splice_graph:
                 continue
             vals.sort()
             background = vals[len(vals) // 2]
+            J = junction_support.get((a, b))
+            guarded = (
+                max_floor_ratio is not None
+                and J is not None
+                and J > 0
+                and background > max_floor_ratio * J
+            )
+            if stats_rows is not None:
+                stats_rows.append(("floor", contig_acc, contig_strand, a, b, b - a + 1,
+                                   J, "", background, "", "", int(guarded)))
             if background <= 0:
+                continue
+            if guarded:
+                n_guarded += 1
                 continue
 
             n_introns += 1
@@ -632,14 +664,21 @@ class Splice_graph:
 
         logger.info(
             "[%s%s] SE intronic background subtraction: %d introns <= %d bp treated, "
-            "%d covered intronic bases adjusted, %d dropped to zero",
+            "%d covered intronic bases adjusted, %d dropped to zero, "
+            "%d introns skipped as weak junctions (floor > %s x junction reads)",
             contig_acc,
             contig_strand,
             n_introns,
             max_intron_len,
             n_bases,
             n_decremented,
+            n_guarded,
+            max_floor_ratio,
         )
+        if stats_rows:
+            from Pretty_alignment_manager import _write_weak_junction_stats
+
+            _write_weak_junction_stats(stats_rows)
 
     def _initialize_contig_coverage(self):
 

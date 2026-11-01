@@ -57,6 +57,86 @@ def _contig_seq_digest(contig_seq):
     return f"{len(contig_seq)}:{hasher.hexdigest()[:16]}"
 
 
+def _write_weak_junction_stats(rows):
+    """Append per-intron diagnostics to SE_weak_junction_stats_path (development aid;
+    one line per write so concurrent chunk workers do not interleave rows)."""
+    path = LRAA_Globals.config.get("SE_weak_junction_stats_path")
+    if not path or not rows:
+        return
+    # the working directory names the chunk, whose manifest holds the coordinate offset
+    cwd = os.getcwd()
+    with open(path, "a") as ofh:
+        ofh.write("".join("\t".join(str(x) for x in r) + "\t" + cwd + "\n" for r in rows))
+
+
+def count_readthrough_reads(pretty_alignments, introns):
+    """{(lend, rend): unspliced alignments whose span strictly contains the intron}.
+    An unspliced read that runs through an intron is direct evidence the intron is not
+    spliced out in that molecule. Reads are counted by their normalization weight (1/p
+    of the pre-assembly thinning, 1 when unthinned), the same footing as the junction
+    counts and the coverage array of the splice graph."""
+    counts = {intron: 0 for intron in introns}
+    if not introns or not pretty_alignments:
+        return counts
+    # IntervalTree is a set: identical (begin, end, data) intervals collapse into one,
+    # and many reads share a span, so each interval carries its read's index.
+    read_tree = itree.IntervalTree()
+    for i, pa in enumerate(pretty_alignments):
+        lend, rend = pa.get_alignment_span()
+        read_tree[lend : rend + 1] = (i, pa.get_normalization_weight())
+    for lend, rend in introns:
+        n = 0
+        for iv in read_tree[lend - 1]:  # reads covering the base before the intron
+            if iv.end - 1 > rend:  # ... and the base after it
+                n += iv.data[1]
+        counts[(lend, rend)] = n
+    return counts
+
+
+def weak_junction_exons_for_SE_mask(pretty_alignments, mask_transcripts):
+    """Exons of mask models that flank a weak junction, as {(id(transcript), lend, rend)}.
+
+    A junction is weak when the unspliced reads running through its intron exceed
+    SE_mask_max_readthrough_to_junction_ratio times the spliced reads that carry it
+    (the support recorded on the model by build_ME_transcripts). Only the two exons
+    flanking the weak intron are exempted, so one dominant retained intron in a long
+    gene does not unmask the rest of it. Unknown support never exempts."""
+    ratio = LRAA_Globals.config.get("SE_mask_max_readthrough_to_junction_ratio")
+    want_stats = bool(LRAA_Globals.config.get("SE_weak_junction_stats_path"))
+    if (ratio is None and not want_stats) or not mask_transcripts:
+        return set()
+
+    def model_introns(t):
+        exons = sorted(t.get_exon_segments())
+        return exons, [(exons[i][1] + 1, exons[i + 1][0] - 1) for i in range(len(exons) - 1)]
+
+    introns = set()
+    for t in mask_transcripts:
+        introns.update(model_introns(t)[1])
+    readthrough = count_readthrough_reads(pretty_alignments, introns)
+
+    weak_exons = set()
+    rows = list()
+    for t in mask_transcripts:
+        get_support = getattr(t, "get_intron_read_support", None)
+        support = (get_support() if get_support else None) or {}
+        exons, t_introns = model_introns(t)
+        for i, intron in enumerate(t_introns):
+            J = support.get(intron)
+            T = readthrough.get(intron, 0)
+            weak = ratio is not None and J is not None and J > 0 and T > ratio * J
+            if weak:
+                weak_exons.add((id(t), exons[i][0], exons[i][1]))
+                weak_exons.add((id(t), exons[i + 1][0], exons[i + 1][1]))
+            if want_stats:
+                rows.append(("mask", getattr(t, "get_contig_acc", lambda: "")(),
+                             getattr(t, "get_strand", lambda: "")(), intron[0],
+                             intron[1], intron[1] - intron[0] + 1, J, T, "", len(exons),
+                             getattr(t, "get_transcript_id", lambda: "")(), int(weak)))
+    _write_weak_junction_stats(rows)
+    return weak_exons
+
+
 class Pretty_alignment_manager:
 
     def __init__(self, splice_graph, alignment_cache_dir = "__alignment_cache"):
@@ -470,12 +550,35 @@ class Pretty_alignment_manager:
 
         non_overlapping_pretty_alignments = list()
 
+        # Weak-junction guard. A spliced model can rest on a junction that a handful of
+        # reads carry while hundreds of unspliced reads run straight through the same
+        # intron (a single-exon gene with a rare splice). Its exons then hide those
+        # unspliced reads from the SE graph and the gene's real single-exon form is
+        # never built. An exon flanking an intron whose unspliced read-through exceeds
+        # SE_mask_max_readthrough_to_junction_ratio x its junction reads is not used
+        # as a mask. None disables the guard.
+        weak_exons = weak_junction_exons_for_SE_mask(
+            pretty_alignments, SE_read_encapsulation_mask
+        )
+
+        n_exons_masking = n_exons_exempt = 0
         for transcript in SE_read_encapsulation_mask:
             exon_segments = transcript.get_exon_segments()
             for exon in exon_segments:
                 exon_lend, exon_rend = exon
+                if (id(transcript), exon_lend, exon_rend) in weak_exons:
+                    n_exons_exempt += 1
+                    continue
+                n_exons_masking += 1
                 # store each exon as half-open interval [lend, rend+1); data not needed
                 exon_itree[exon_lend:exon_rend + 1] = True
+        if n_exons_exempt:
+            logger.info(
+                "SE read encapsulation mask: %d exons flank a weak junction and do not "
+                "mask (%d exons mask)",
+                n_exons_exempt,
+                n_exons_masking,
+            )
 
         for pretty_alignment in pretty_alignments:
             # only evaluate single-exon (SE) alignments; keep others unchanged
