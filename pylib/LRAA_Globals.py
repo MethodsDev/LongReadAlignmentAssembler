@@ -494,17 +494,17 @@ config = {
     # reads of isoforms differing only downstream are the same evidence (SLC30A1: the capped TSS reads sat with
     # the short-3' sibling, the long-3' model's own 8 reads were mostly 5'-truncated).
     "terminal_end_rule_own_vote_shared_first_intron": True,
-    # EXPERIMENT (off): own_vote at the TSS end in three tiers. 1) a peak (own reads, then shared-first-intron reads,
+    # own_vote at the TSS end in three tiers (default on since v0.49.0). 1) a peak (own reads, then shared-first-intron reads,
     # same peak test as above) -> the peak; 2) no peak, >= tiered_min_reads own reads -> their 20th percentile from the
     # 5' side; 3) no peak, fewer -> the outermost own read 5' end (the longest read). Applies in a merge too (one end
     # per input model). NOTE: the 20th percentile of <= 5 reads already is the outermost read, so with 7 the tiers
     # change v0.48.0 only for models with exactly 6 own reads and no peak.
-    "terminal_end_rule_own_vote_tiered": False,
+    "terminal_end_rule_own_vote_tiered": True,
     "terminal_end_rule_own_vote_tiered_min_reads": 7,
     # With the tiered rule, ref-guided: the annotated 5' end of a reference transcript with the model's own intron
     # chain is a candidate in tier 3 (the outermost of it and the own reads wins). It is not a read: it does not count
     # toward tiered_min_reads and never votes or enters the percentile.
-    "terminal_end_rule_own_vote_tiered_reference_end": False,
+    "terminal_end_rule_own_vote_tiered_reference_end": True,
     # The same named rules applied to the PolyA end, mirrored ("own_vote" = peak of own reads, else 20% from the 3' side).
     "terminal_PolyA_end_rule": None,
     # With a rule above: own reads ending beyond the terminal exon count too, and the end may extend past the exon edge.

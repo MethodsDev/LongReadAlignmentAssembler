@@ -650,10 +650,10 @@ def test_spacer_revert_stops_on_a_called_site():
 TIER_KW = dict(min_peak_reads=3, min_peak_frac=0.2, tiered_min_reads=7)
 
 
-def test_tiered_keys_default_off():
-    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered"] is False
+def test_tiered_keys_default_on():
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered"] is True
     assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered_min_reads"] == 7
-    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered_reference_end"] is False
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered_reference_end"] is True
 
 
 def test_tiered_tier1_peak_wins():
