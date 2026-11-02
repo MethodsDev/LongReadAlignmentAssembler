@@ -643,3 +643,90 @@ def test_spacer_revert_stops_on_a_called_site():
     # merge_end_stop_at_called_site: the reverted end still may not cross a site
     got, _ = _revert(400, 5000, lambda l, r: l >= 1000, left_sites=[1020])
     assert got == (1020, 5000)
+
+
+# terminal_end_rule_own_vote_tiered: 1) peak -> peak; 2) no peak, >= tiered_min_reads own
+# reads -> 20th percentile; 3) no peak, fewer -> outermost own read (+ reference ends).
+TIER_KW = dict(min_peak_reads=3, min_peak_frac=0.2, tiered_min_reads=7)
+
+
+def test_tiered_keys_default_off():
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered"] is False
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered_min_reads"] == 7
+    assert LRAA_Globals.config["terminal_end_rule_own_vote_tiered_reference_end"] is False
+
+
+def test_tiered_tier1_peak_wins():
+    # 3 reads within +-2 bp among 8: a peak, whatever the tiers say
+    own = [100, 150, 151, 151, 300, 310, 320, 330]
+    assert tss_end_by_rule("own_vote", own, own, "left", 90, 90, **TIER_KW) == 151
+    # a peak also beats an outward reference end
+    assert (
+        tss_end_by_rule("own_vote", own, own, "left", 90, 90, reference_ends=[90], **TIER_KW)
+        == 151
+    )
+
+
+def test_tiered_tier2_percentile_at_min_reads():
+    # 7 spread reads, no peak: 20th percentile (2nd outermost), not the outermost
+    own = [100, 200, 300, 400, 500, 600, 700]
+    assert tss_end_by_rule("own_vote", own, own, "left", 90, 90, **TIER_KW) == 200
+    # the reference end is not a tier-2 candidate
+    assert (
+        tss_end_by_rule("own_vote", own, own, "left", 90, 90, reference_ends=[90], **TIER_KW)
+        == 200
+    )
+    # minus strand, mirrored
+    assert tss_end_by_rule("own_vote", own, own, "right", 710, 710, **TIER_KW) == 600
+
+
+def test_tiered_tier3_outermost_below_min_reads():
+    # 6 spread reads: v0.48.0's 20th percentile is the 2nd outermost; the tier takes the outermost
+    own = [100, 200, 300, 400, 500, 600]
+    assert tss_end_by_rule("own_vote", own, own, "left", 90, 90, min_peak_reads=3, min_peak_frac=0.2) == 200
+    assert tss_end_by_rule("own_vote", own, own, "left", 90, 90, **TIER_KW) == 100
+    assert tss_end_by_rule("own_vote", own, own, "right", 610, 610, **TIER_KW) == 600
+
+
+def test_tiered_tier3_equals_plain_rule_up_to_5_reads():
+    # the 20th percentile of <= 5 reads is the outermost read: tiers change nothing there
+    for own in ([28128], [300, 500], [100, 200, 300, 400, 500]):
+        plain = tss_end_by_rule("own_vote", own, own, "left", 90, 90, min_peak_reads=3, min_peak_frac=0.2)
+        assert tss_end_by_rule("own_vote", own, own, "left", 90, 90, **TIER_KW) == plain == min(own)
+
+
+def test_tiered_tier3_reference_end_counts_as_longest():
+    # ONT ref-guided RTL6 (minus strand): one read 106 bp inside the annotated TSS 28234
+    assert tss_end_by_rule("own_vote", [28128], [28128], "right", 28234, 28234, **TIER_KW) == 28128
+    assert (
+        tss_end_by_rule(
+            "own_vote", [28128], [28128], "right", 28234, 28234, reference_ends=[28234], **TIER_KW
+        )
+        == 28234
+    )
+    # a read reaching past the reference end is the longer evidence
+    assert (
+        tss_end_by_rule(
+            "own_vote", [28250, 28128], [28250, 28128], "right", 28234, 28234,
+            reference_ends=[28234], extend=True, **TIER_KW,
+        )
+        == 28250
+    )
+    # the reference end is not a read: 6 reads + reference stays in tier 3, 7 reads go to tier 2
+    own6 = [100, 200, 300, 400, 500, 600]
+    assert tss_end_by_rule("own_vote", own6, own6, "left", 50, 50, reference_ends=[50], **TIER_KW) == 50
+    own7 = own6 + [700]
+    assert tss_end_by_rule("own_vote", own7, own7, "left", 50, 50, reference_ends=[50], **TIER_KW) == 200
+
+
+def test_tiered_shared_first_intron_peak_stays_tier1():
+    # own reads give no peak, the shared-first-intron reads do: still the peak (tier 1)
+    own = [300, 500]
+    shared = [200, 201, 201, 300, 500]
+    assert (
+        tss_end_by_rule(
+            "own_vote", own, own, "left", 90, 90, shared_positions=shared,
+            reference_ends=[90], **TIER_KW,
+        )
+        == 201
+    )

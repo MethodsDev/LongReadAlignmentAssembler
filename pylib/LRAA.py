@@ -241,6 +241,8 @@ def tss_end_by_rule(
     min_peak_reads=None,
     min_peak_frac=None,
     shared_positions=None,
+    tiered_min_reads=None,
+    reference_ends=None,
 ):
     """Experimental placement of an unsupported TSS end (terminal_TSS_end_rule).
 
@@ -267,6 +269,16 @@ def tss_end_by_rule(
     shared_positions: read 5' ends of every model sharing this end's first intron. When
                    the own reads give no peak, these vote (same peak size test, on their
                    number) before the 20th percentile of own reads is taken.
+    tiered_min_reads: terminal_end_rule_own_vote_tiered. When neither vote finds a peak:
+                   at least this many own reads -> the 20th percentile of own reads (as
+                   without it); fewer -> the outermost own read 5' end (the longest read).
+                   None = off. With q = 20 the percentile IS the outermost read for n <= 5,
+                   so the tiers differ from the plain rule only at n = 6 (min_reads 7).
+    reference_ends: terminal_end_rule_own_vote_tiered_reference_end. Annotated 5' ends of
+                   the reference transcripts behind the model (ref-guided). Candidates in
+                   the few-reads tier only: the outermost of own reads and these wins. They
+                   do not count toward the read number and never vote or enter the
+                   percentile.
     """
     import math
     import statistics
@@ -308,7 +320,13 @@ def tss_end_by_rule(
                     shared, own_vote_min_peak(len(shared), min_peak_reads, min_peak_frac)
                 )
             if chosen is None:
-                chosen = _lower_percentile(own, 20)
+                if tiered_min_reads is not None and len(own) < tiered_min_reads:
+                    candidates = list(own)
+                    if reference_ends:
+                        candidates.extend(sgn * p for p in reference_ends)
+                    chosen = min(candidates)
+                else:
+                    chosen = _lower_percentile(own, 20)
     if chosen is None:
         return fallback
     coord = sgn * chosen
@@ -503,6 +521,9 @@ class LRAA:
         # Map read_name -> (lend, rend) genomic span of the chosen alignment for that read
         # Populated during _populate_read_multi_paths and used to refine transcript terminal bounds.
         self._read_name_to_span = dict()
+        # ref-guided: annotated 5' end of each input reference transcript, by its
+        # "reftranscript:<id>" read name (terminal_end_rule_own_vote_tiered_reference_end)
+        self._reftranscript_5p_end = dict()
         # Map read_name -> genomic coord of that read's 3' terminus, present only
         # when its own soft clip there carried polyA tail evidence. Sparse by
         # design: absence means "no tail seen", not "not measured".
@@ -1353,6 +1374,7 @@ class LRAA:
             tss_end_rule = LRAA_Globals.config.get("terminal_TSS_end_rule", None)
             polyA_end_rule = LRAA_Globals.config.get("terminal_PolyA_end_rule", None)
             own_spans = []
+            own_ref_names = []  # reftranscript reads with the model's own chain
             if tss_end_rule is not None or polyA_end_rule is not None:
                 own_chain = sorted(tuple(i) for i in transcript.get_introns())
                 # The evidence multipath of an assembled model is its merged path carrying
@@ -1362,7 +1384,10 @@ class LRAA:
                     if sorted(i.get_coords() for i in mp.get_introns()) != own_chain:
                         continue
                     for rn in mp.get_read_names():
-                        if rn.startswith("reftranscript:") or rn.startswith("fake_for_merge"):
+                        if rn.startswith("reftranscript:"):
+                            own_ref_names.append(rn)
+                            continue
+                        if rn.startswith("fake_for_merge"):
                             continue
                         if rn in self._read_name_to_span:
                             own_spans.append(self._read_name_to_span[rn])
@@ -1516,6 +1541,36 @@ class LRAA:
                         p = span[1]
                         if p is not None and p >= last_exon_lend and (extend_ends or p <= last_exon_rend):
                             shared_tss.append(p)
+            # terminal_end_rule_own_vote_tiered: when no vote finds a peak, fewer than
+            # tiered_min_reads own reads take the outermost own read (the longest), not the
+            # 20th percentile. Also in a merge (one end per input model). With
+            # terminal_end_rule_own_vote_tiered_reference_end, a reference transcript with the
+            # model's own chain offers its annotated 5' end as a candidate in that tier.
+            if tss_end_rule == "own_vote" and LRAA_Globals.config.get(
+                "terminal_end_rule_own_vote_tiered", False
+            ):
+                tier_kw = dict(
+                    tiered_min_reads=LRAA_Globals.config.get(
+                        "terminal_end_rule_own_vote_tiered_min_reads", 7
+                    )
+                )
+                if LRAA_Globals.config.get(
+                    "terminal_end_rule_own_vote_tiered_reference_end", False
+                ):
+                    ref_ends = [
+                        self._reftranscript_5p_end[rn]
+                        for rn in set(own_ref_names)
+                        if rn in self._reftranscript_5p_end
+                    ]
+                    # only ends in (or beyond) the model's 5' terminal exon
+                    ref_ends = [
+                        p
+                        for p in ref_ends
+                        if (p <= first_exon_rend if tss_is_left else p >= last_exon_lend)
+                    ]
+                    if ref_ends:
+                        tier_kw["reference_ends"] = ref_ends
+                tss_vote_kw = dict(tss_vote_kw, **tier_kw)
             left_kw = dict(tss_vote_kw) if tss_is_left else {}
             right_kw = {} if tss_is_left else dict(tss_vote_kw)
 
@@ -3471,6 +3526,15 @@ class LRAA:
                         "reftranscript:" + input_transcript.get_transcript_id()
                     },
                 )
+                ref_exons = input_transcript.get_exon_segments()
+                if ref_exons:
+                    self._reftranscript_5p_end[
+                        "reftranscript:" + input_transcript.get_transcript_id()
+                    ] = (
+                        ref_exons[0][0]
+                        if input_transcript.get_strand() == "+"
+                        else ref_exons[-1][1]
+                    )
 
                 # Record the synthetic read IDs so path scoring can ignore them. Only
                 # in discovery, where a reference template stands in for reads that may
