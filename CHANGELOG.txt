@@ -1,3 +1,58 @@
+v0.49.0
+
+Changes that alter run outputs (5' ends of isoforms with no TSS site and few reads, mainly in
+ref-guided runs). v0.48.0 plus one rule change. RELEASE CANDIDATE: the measurements below are
+chromosome and minigenome scale; the benchmark families and single-cell evaluations on this
+candidate's images are still to be run.
+
+- The own_vote 5' end rule (v0.48.0) is now tiered (terminal_end_rule_own_vote_tiered, default
+  true; terminal_end_rule_own_vote_tiered_min_reads = 7). At a 5' end with no called TSS site:
+  1. a clear read 5' end pile-up (the model's own reads, then the reads of all models with the
+     same first intron; same pile-up test as v0.48.0) -> the pile-up;
+  2. no pile-up and >= 7 own reads -> the 20th percentile of the own reads from the 5' side
+     (as v0.48.0);
+  3. no pile-up and fewer than 7 own reads -> the outermost evidence: the longest own read's 5'
+     end, and in ref-guided runs also the annotated 5' end of a reference transcript that carries
+     the model's intron chain (terminal_end_rule_own_vote_tiered_reference_end, default true);
+     the outermost of these wins. The reference end is not a read: it does not count toward the
+     7, never votes for a pile-up and never enters the percentile, so a read reaching past it
+     still sets the end.
+  The read count is the model's own-chain reads (own_vote's pool); the cutoff 7 is v0.47.0's
+  min_reads_for_terminal_adjustment. Why: v0.48.0 excluded the reference transcripts' synthetic
+  reads from the end rule, so a reference model backed by one or two short reads had its 5' end
+  pulled inside the annotated TSS (v0.47.0 kept the exon edge below 7 reads); that cost the
+  ref-guided benchmarks known-transcript sensitivity and ONT TUSCO genes. The 20th percentile of
+  <= 5 reads is already the outermost read, so tiers 2-3 by themselves differ from v0.48.0 only
+  for models with exactly 6 own reads; the reference end is the change that matters. De novo
+  runs and merges carry no reference transcripts, so there only the 6-read case changes.
+  MEASURED chr19 ref-guided, against v0.48.0 (benchmark flags; HG002 and BT474 PacBio --HiFi,
+  A549 and MCF7 ONT): guide (one-per-gene) chains reproduced HG002 576 -> 585 of 589 (v0.47.0
+  589), BT474 387 -> 390 of 394, A549 259 -> 257, MCF7 250 -> 250; guide models with a 5' end
+  within 10 bp of the annotated TSS HG002 49.8 -> 58.1%, BT474 47.0 -> 53.6%, A549 56.4 -> 68.1%,
+  MCF7 56.4 -> 72.4%; multi-exon 5' ends in a CAGE peak 79.2 -> 79.3%, 86.1 -> 86.1%,
+  77.8 -> 77.8%, 76.5 -> 77.0% (v0.48.0's gain over v0.47.0 kept); 3' ends in a PolyASite cluster
+  unchanged; novel (non-GENCODE) chains +1, +2, 0, +1. Every moved 5' end moved outward, onto the
+  annotated end; of those ends, in a CAGE peak HG002 27 -> 39 of 69, BT474 20 -> 25 of 37,
+  A549 32 -> 30 of 43, MCF7 32 -> 39 of 54. chr19 de novo (HG002, A549): models, CAGE, PolyASite
+  and chains unchanged to 0.1 pt; 19 and 16 model ends move (the 6-read case), all outward,
+  CAGE-neutral. ONT TUSCO minigenomes (ref-guided): ABHD15 (A549 and MCF7), RTL6 (A549), GNG11
+  and C9orf40 (MCF7) return to TP (v0.47.0 had them TP; v0.48.0 lost them).
+- Known, not addressed in this version:
+  - a real 2-read 5' pile-up still wins over the reference end (tier 1, by design): STBD1
+    (A549, 9 reads) stays 186 bp inside its annotated TSS;
+  - C6orf47 (MCF7, single-exon) keeps v0.48.0's lone-read 5' end; the reads at the annotated end
+    do not count as the model's own and the reference end does not apply (not traced);
+  - DAZAP1-type ISM losses: alternative first exons sharing the canonical donor are pulled
+    inward by the shared-first-intron vote (tier 1) and then dropped as fragments (whether they
+    are real alternative TSSs or truncations is not known);
+  - the 6-read tier change in de novo runs and merges measured neutral on chr19 only; the
+    single-cell merge path is tested on the TIGD7 merge fixture only.
+- Tests: pylib/test_terminal_boundary_low_count.py (keys on by default; tier 1 pile-up beats an
+  outward reference end; tier 2 at 7 reads ignores the reference end; tier 3 outermost at 6
+  reads; tiers equal the plain rule at <= 5 reads; the reference end counts as the longest
+  evidence but not as a read; a shared-first-intron pile-up stays tier 1).
+
+
 v0.48.0
 
 Changes that alter run outputs (isoform 5' ends without a TSS site, merged models' ends,
