@@ -81,7 +81,16 @@ archival.
 Per-Cluster Isoform Discovery: Each cluster-specific BAM is processed independently through the
 complete LRAA isoform discovery pipeline. When the initial discovery GTF is provided (derived
 from basic mode or provided as a reference), it serves as an initial annotation for
-reference-guided LRAA isoform identification as applied to each cluster-specific BAM.
+reference-guided LRAA isoform identification as applied to each cluster-specific BAM. Since
+v0.50.0 an initial GTF written by LRAA counts as reference only where it says so: its models
+flagged `ref_splice_pattern "True"` (intron chain of a reference transcript) or
+`ref_supported "True"` (single-exon, matching a reference single-exon transcript) are reference
+models in the cluster runs, using the pooled `ref_FSM_reads` counts the initial run recorded;
+its novel models are novel in the cluster runs too. An initial GTF from an earlier version
+lacks these attributes and is refused (see `LRAA_isoform_ID_and_quant_methods.md`, "Reference
+models in reference-guided runs"); to use one anyway, set `{"allow_unflagged_LRAA_guide": true}`
+in both `cluster_config_update_json` and `merge_config_update_json` (the merge task's
+`--config_update`, unset by default).
 
 
 Cell Cluster GTF Merging for a Consensus Isoform Catalog: Per-cluster GTF files are merged into
@@ -94,7 +103,10 @@ gene assignments unified across clusters. Novel isoforms discovered in only one 
 mostly included in the final annotation if they pass expression and support thresholds,
 ensuring that well-supported cluster-specific variants are retained. The final merged GTF
 represents the comprehensive isoform catalog spanning all cell types, incorporating both shared
-isoforms expressed across clusters and cluster-specific transcript variants.
+isoforms expressed across clusters and cluster-specific transcript variants. Each merged
+multi-exon model is flagged `ref_splice_pattern "True"` when any input (a cluster GTF or the
+pooled initial GTF) flagged its intron chain so, and carries the largest `ref_FSM_reads` among
+them; single-exon models are re-judged for `ref_supported` against the inputs.
 
 Final Quantification and Single-Cell Matrix Generation: After generating the consensus GTF,
 each cluster of cells is separately re-quantified against the merged isoform catalog and

@@ -47,6 +47,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import Util_funcs  # type: ignore
 import TranscriptFiltering  # type: ignore
+import ReferenceSupport  # type: ignore
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -307,6 +308,10 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
 
     lraa_obj = LRAA(sg)
 
+    # The inputs as given: the merged models' reference identity is read from all of
+    # them, including any the path mapping below drops.
+    input_transcripts = list(transcript_list)
+
     # Assign paths and filter out transcripts that couldn't be mapped
     transcript_list = lraa_obj.assign_transcripts_paths_in_graph(transcript_list)
 
@@ -333,6 +338,8 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
         logger.warning(
             f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
         )
+
+    transfer_reference_identity(transcripts, input_transcripts)
 
     # 3'-end annotation, RECOMPUTED rather than carried over from the inputs.
     # reconstruct_isoforms builds new Transcript objects out of multipaths, so an
@@ -437,6 +444,49 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
             pass
 
     return "".join(gtf_chunks), tracking_records
+
+
+def transfer_reference_identity(merged_transcripts, input_transcripts):
+    """Set the merged models' reference identity from the inputs'.
+
+    reconstruct_isoforms builds new models, so what the inputs recorded is carried by
+    intron chain: a merged chain is a reference chain when any input carrying it says so
+    (is_reference_splice_pattern_source: a cluster GTF's or the pooled GTF's
+    ref_splice_pattern "True", or any reference annotation row), and its ref_FSM_reads
+    is the largest count an input carries for it -- the pooled GTF's count, which each
+    cluster run inherited, unless a cluster scanned its own bam. Single-exon models are
+    re-judged against the inputs' reference single-exon transcripts. A merge
+    reconciles catalogs and filters nothing, so nothing here is used for a decision; it
+    is written so the merged GTF can guide or be merged again.
+    """
+    if LRAA_Globals.config["ref_splice_pattern_reprieve"]:
+        ref_splice_hashes = set()
+        hash_to_ref_FSM_reads = dict()
+        for transcript in input_transcripts:
+            if not transcript.is_reference_splice_pattern_source():
+                continue
+            splice_hash = transcript.get_splice_hash()
+            ref_splice_hashes.add(splice_hash)
+            num_reads = transcript.get_ref_FSM_reads()
+            if num_reads is not None:
+                hash_to_ref_FSM_reads[splice_hash] = max(
+                    hash_to_ref_FSM_reads.get(splice_hash, 0), num_reads
+                )
+
+        for transcript in merged_transcripts:
+            if not transcript.has_introns():
+                continue
+            splice_hash = transcript.get_splice_hash()
+            is_reference_chain = splice_hash in ref_splice_hashes
+            transcript.set_has_novel_splice_pattern(not is_reference_chain)
+            transcript.set_ref_splice_pattern(is_reference_chain)
+            if is_reference_chain:
+                transcript.set_ref_FSM_reads(hash_to_ref_FSM_reads.get(splice_hash))
+
+    if LRAA_Globals.config["ref_supported_monoexonic"]:
+        ReferenceSupport.assign_ref_supported_monoexonic(
+            merged_transcripts, input_transcripts
+        )
 
 
 def _merge_unit_worker(stranded_contig, genome_fasta_file):
@@ -837,6 +887,19 @@ def main():
                 chr_restrict=chr_restrict,
                 strand_restrict=strand_restrict
             )
+        )
+        # Inputs must say which of their models stand for reference transcripts. Rows
+        # this merge does not merge are exempt: oversimplified contigs (copied below)
+        # and, with --exclude_SE_transcripts, single-exon rows.
+        ReferenceSupport.validate_guide_transcripts(
+            [
+                transcript
+                for contig, transcript_obj_list in contig_to_input_transcripts.items()
+                if contig not in oversimplify_contigs
+                for transcript in transcript_obj_list
+                if transcript.has_introns() or not exclude_SE
+            ],
+            gtf_file,
         )
         for contig, transcript_obj_list in contig_to_input_transcripts.items():
             # Dropped BEFORE the merge sees them rather than filtered out of its

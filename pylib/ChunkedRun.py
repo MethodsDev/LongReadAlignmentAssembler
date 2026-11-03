@@ -4769,6 +4769,46 @@ def iter_tsv(path):
 # gene_id / transcript_id in a GTF attribute column, quoted.
 _GTF_ID_ATTR = re.compile(r'(gene_id|transcript_id)\s+"([^"]*)"')
 
+# The splice_hash attribute (v0.50.0): a hash of the intron COORDINATES, so it moves
+# with the chunk offset like columns 4 and 5.
+_GTF_SPLICE_HASH_ATTR = re.compile(r'splice_hash\s+"([^"]*)"')
+
+
+def splice_hash_of_exons(contig_acc, strand, exons):
+    """Transcript.get_splice_hash() of a model with these (lend, rend) exon rows: the
+    hash of the intron string Transcript.get_introns_string() writes."""
+    exons = sorted(exons)
+    introns = [
+        (exons[i - 1][1] + 1, exons[i][0] - 1) for i in range(1, len(exons))
+    ]
+    return Util_funcs.get_hash_code("{}:({}){}".format(contig_acc, strand, introns))
+
+
+def _translated_splice_hashes(gtf_lines, offset):
+    """{transcript_id: splice_hash in the whole-contig frame} for the transcripts of one
+    chunk gtf whose transcript row carries splice_hash."""
+    has_hash = set()
+    exons = collections.defaultdict(list)
+    contig_strand = dict()
+    for line in gtf_lines:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) < 9:
+            continue
+        m = re.search(r'transcript_id\s+"([^"]*)"', fields[8])
+        if m is None:
+            continue
+        transcript_id = m.group(1)
+        if fields[2] == "transcript" and _GTF_SPLICE_HASH_ATTR.search(fields[8]):
+            has_hash.add(transcript_id)
+        elif fields[2] == "exon":
+            exons[transcript_id].append((int(fields[3]) + offset, int(fields[4]) + offset))
+            contig_strand[transcript_id] = (fields[0], fields[6])
+    return {
+        transcript_id: splice_hash_of_exons(*contig_strand[transcript_id], exons[transcript_id])
+        for transcript_id in has_hash
+        if transcript_id in exons
+    }
+
 
 # Separates a chunk's unit id from the chunk-local model id it qualifies. NOT "|":
 # gffcompare's .tracking file delimits the subfields of its query column with an
@@ -5020,7 +5060,9 @@ def merge_discovery_gtf(merged_dir, units):
     COORDINATES. The extractor rebases each chunk onto a mini contig that starts
     at 1 and is NAMED after the real contig, so a chunk's models carry chunk-local
     coordinates under a contig name that looks absolute. Columns 4 and 5 take the
-    chunk offset; nothing else in a GTF line is a coordinate. Uncut contigs are
+    chunk offset, and so does the splice_hash attribute (v0.50.0), a hash of the
+    intron coordinates, recomputed from the translated exon rows; nothing else in a
+    GTF line is a coordinate. Uncut contigs are
     exempt: ``coords_already_whole_contig`` means both columns already hold
     whole-contig coordinates and they are written through as read.
 
@@ -5066,35 +5108,50 @@ def merge_discovery_gtf(merged_dir, units):
             offset = unit["offset"]
             path = unit["quant_prefix"] + ".gtf"
             with open(path, "rt") as fh:
-                for line in fh:
-                    if line.startswith("#") or not line.strip():
-                        continue
-                    fields = line.rstrip("\n").split("\t")
-                    if len(fields) < 9:
-                        raise PipelineError(
-                            "unit {} gtf line carries {} field(s), not 9: "
-                            "{}".format(
-                                unit["unit_id"], len(fields), line.rstrip()
-                            )
+                gtf_lines = fh.readlines()
+            translated_hashes = (
+                _translated_splice_hashes(gtf_lines, offset) if translate else {}
+            )
+            for line in gtf_lines:
+                if line.startswith("#") or not line.strip():
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 9:
+                    raise PipelineError(
+                        "unit {} gtf line carries {} field(s), not 9: "
+                        "{}".format(
+                            unit["unit_id"], len(fields), line.rstrip()
                         )
-                    if translate:
-                        fields[3] = str(int(fields[3]) + offset)
-                        fields[4] = str(int(fields[4]) + offset)
-                    # m.group(1) is the attribute name, which IS the kind, so the
-                    # gene and transcript spaces stay separate through the lookup.
-                    fields[8] = _GTF_ID_ATTR.sub(
-                        lambda m: '{} "{}"'.format(
-                            m.group(1),
-                            mapped_id(
-                                id_map or {}, unit["unit_id"], m.group(1), m.group(2)
-                            ),
-                        ),
-                        fields[8],
                     )
-                    print("\t".join(fields), file=ofh)
-                    lines_written += 1
-                    if fields[2] == "transcript":
-                        transcripts += 1
+                if translate:
+                    fields[3] = str(int(fields[3]) + offset)
+                    fields[4] = str(int(fields[4]) + offset)
+                    if fields[2] == "transcript" and translated_hashes:
+                        transcript_id = re.search(
+                            r'transcript_id\s+"([^"]*)"', fields[8]
+                        ).group(1)
+                        if transcript_id in translated_hashes:
+                            fields[8] = _GTF_SPLICE_HASH_ATTR.sub(
+                                'splice_hash "{}"'.format(
+                                    translated_hashes[transcript_id]
+                                ),
+                                fields[8],
+                            )
+                # m.group(1) is the attribute name, which IS the kind, so the
+                # gene and transcript spaces stay separate through the lookup.
+                fields[8] = _GTF_ID_ATTR.sub(
+                    lambda m: '{} "{}"'.format(
+                        m.group(1),
+                        mapped_id(
+                            id_map or {}, unit["unit_id"], m.group(1), m.group(2)
+                        ),
+                    ),
+                    fields[8],
+                )
+                print("\t".join(fields), file=ofh)
+                lines_written += 1
+                if fields[2] == "transcript":
+                    transcripts += 1
 
     return {
         "gtf": gtf_out,

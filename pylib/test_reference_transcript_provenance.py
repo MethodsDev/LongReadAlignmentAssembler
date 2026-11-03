@@ -122,6 +122,9 @@ def test_reference_provenance_survives_quant_reset_and_drives_filter(monkeypatch
     monkeypatch.setitem(
         LRAA_Globals.config, "ref_trans_filter_mode", "retain_expressed"
     )
+    # Single-exon models are reprieved by containment only with ref_supported_monoexonic
+    # off (v0.50.0 default on: test_ref_splice_pattern_reprieve.py covers that rule).
+    monkeypatch.setitem(LRAA_Globals.config, "ref_supported_monoexonic", False)
     transcript = _transcript("draft", ["E:1"], exons=[[100, 150]])
     transcript.set_source_reference_transcript_ids({"reference"})
 

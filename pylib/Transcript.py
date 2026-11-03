@@ -5,6 +5,7 @@ from collections import defaultdict
 from GenomeFeature import GenomeFeature
 import Scored_path
 import LRAA_Globals
+import Util_funcs
 from gene_symbol_utils import combine_gene_name_and_id
 import logging
 import gzip
@@ -30,6 +31,12 @@ class Transcript(GenomeFeature):
         # An input GTF's TPM is a rate against a library this run never measured.
         # It is neither consumed nor re-exported: this run computes its own TPM.
         "TPM",
+        # Reference identity (ref_splice_pattern_reprieve, ref_supported_monoexonic):
+        # parsed into the model and re-emitted from it, like InternalPriming.
+        "splice_hash",
+        "ref_splice_pattern",
+        "ref_FSM_reads",
+        "ref_supported",
     ]
 
     def __init__(self, contig_acc, segment_coordinates_list, orient):
@@ -121,6 +128,20 @@ class Transcript(GenomeFeature):
 
         # cleared when this isoform's intron chain matches a reference model exactly
         self._has_novel_splice_pattern = True
+
+        # Reference identity written to and read from GTFs. None means not recorded:
+        # a model of a run with ref_splice_pattern_reprieve off, or a GTF row without
+        # the attribute (a reference annotation, or an LRAA GTF from before v0.50.0).
+        #   _ref_splice_pattern: multi-exon models, whether the intron chain is a
+        #     reference chain.
+        #   _ref_FSM_reads: reads of the full bam carrying exactly that reference chain.
+        #   _ref_supported: single-exon models, ReferenceSupport.assign_ref_supported_monoexonic.
+        self._ref_splice_pattern = None
+        self._ref_FSM_reads = None
+        self._ref_supported = None
+        # Set by the GTF parser from column 2: "LRAA_guide_model" for an LRAA-produced
+        # row, "reference_annotation" otherwise. None for a model this run built.
+        self._guide_class = None
 
         # {(intron_lend, intron_rend): spliced reads supporting it} from the graph the
         # model was reconstructed in; None per intron when that graph did not hold it.
@@ -507,6 +528,78 @@ class Transcript(GenomeFeature):
     def set_has_novel_splice_pattern(self, boolean_val: bool):
         self._has_novel_splice_pattern = boolean_val
 
+    # Reference identity. The getattr defaults cover transcripts unpickled from before
+    # these attributes existed.
+
+    def get_splice_hash(self):
+        """Hash of the intron chain (None when monoexonic): the one
+        differentiate_known_vs_novel_isoforms and Pretty_alignment.get_splice_hashcode
+        match chains by, and quant reports as transcript_splice_hash_code."""
+        if not self.has_introns():
+            return None
+        return Util_funcs.get_hash_code(self.get_introns_string())
+
+    def get_ref_splice_pattern(self):
+        """Whether the intron chain is recorded as a reference chain: True / False, or
+        None when not recorded (see __init__)."""
+        return getattr(self, "_ref_splice_pattern", None)
+
+    def set_ref_splice_pattern(self, boolean_val):
+        self._ref_splice_pattern = boolean_val
+
+    def get_ref_FSM_reads(self):
+        """Reads of the full bam carrying exactly this model's reference chain, or None."""
+        return getattr(self, "_ref_FSM_reads", None)
+
+    def set_ref_FSM_reads(self, num_reads):
+        self._ref_FSM_reads = num_reads
+
+    def is_ref_supported(self):
+        return bool(getattr(self, "_ref_supported", None))
+
+    def get_ref_supported(self):
+        """Single-exon models: True / False, or None when not recorded."""
+        return getattr(self, "_ref_supported", None)
+
+    def set_ref_supported(self, boolean_val):
+        self._ref_supported = boolean_val
+
+    def is_LRAA_guide_model(self):
+        return getattr(self, "_guide_class", None) == "LRAA_guide_model"
+
+    def is_reference_annotation_model(self):
+        return getattr(self, "_guide_class", None) == "reference_annotation"
+
+    def is_reference_splice_pattern_source(self):
+        """As a guide model: whether its intron chain is a reference chain.
+
+        A reference annotation row always is. An LRAA-produced row is a model that was
+        built from reads, so only its own recorded call counts: ref_splice_pattern
+        "True" yes, "False" (a chain that was novel in the run that wrote it) no. An
+        LRAA row without the attribute is refused by
+        ReferenceSupport.validate_guide_transcripts unless allow_unflagged_LRAA_guide,
+        which counts it as a reference."""
+        if not self.has_introns():
+            return False
+        if self.is_LRAA_guide_model():
+            if self.get_ref_splice_pattern() is None:
+                return bool(LRAA_Globals.config["allow_unflagged_LRAA_guide"])
+            return self.get_ref_splice_pattern()
+        return True
+
+    def is_reference_single_exon_source(self):
+        """As a guide model: whether this single-exon transcript stands for a reference
+        single-exon transcript (a reference annotation row, or an LRAA row flagged
+        ref_supported "True"; an unflagged LRAA row as in
+        is_reference_splice_pattern_source)."""
+        if self.has_introns():
+            return False
+        if self.is_LRAA_guide_model():
+            if self.get_ref_supported() is None:
+                return bool(LRAA_Globals.config["allow_unflagged_LRAA_guide"])
+            return self.get_ref_supported()
+        return True
+
     def add_multipaths_evidence_assigned(self, multipaths):
         if self.multipaths_evidence_assigned is None:
             self.multipaths_evidence_assigned = dict()
@@ -663,6 +756,21 @@ class Transcript(GenomeFeature):
             )
         if self.get_TSS_read_count() is not None:
             misc_transcript_features["TSS_read_count"] = str(self.get_TSS_read_count())
+
+        # Reference identity, written only when recorded, so a run with the rules off
+        # writes what v0.49.0 wrote and an imported row is re-emitted as it came.
+        if self.has_introns():
+            if self.get_ref_splice_pattern() is not None:
+                misc_transcript_features["splice_hash"] = self.get_splice_hash()
+                misc_transcript_features["ref_splice_pattern"] = str(
+                    self.get_ref_splice_pattern()
+                )
+                if self.get_ref_splice_pattern() and self.get_ref_FSM_reads() is not None:
+                    misc_transcript_features["ref_FSM_reads"] = str(
+                        self.get_ref_FSM_reads()
+                    )
+        elif self.get_ref_supported() is not None:
+            misc_transcript_features["ref_supported"] = str(self.get_ref_supported())
 
         # Internal priming annotation, and the canonical PAS upstream of the 3' end.
         # The two are independent: InternalPriming asks whether the genome DOWNSTREAM
@@ -1089,6 +1197,7 @@ class GTF_contig_to_transcripts:
 
                 transcript_id_to_genome_info[transcript_id]["contig"] = contig
                 transcript_id_to_genome_info[transcript_id]["strand"] = strand
+                transcript_id_to_genome_info[transcript_id]["source"] = vals[1]
                 if "coords" in transcript_id_to_genome_info[transcript_id].keys():
                     transcript_id_to_genome_info[transcript_id]["coords"].append(
                         [lend, rend]
@@ -1132,6 +1241,24 @@ class GTF_contig_to_transcripts:
 
             transcript_obj.set_gene_id(gene_id)
             transcript_obj.set_transcript_id(transcript_id)
+
+            # GTF column 2 "LRAA" marks a model LRAA wrote (init, cluster, merged and
+            # gene-symbol GTFs all keep it); any other source is a reference annotation.
+            transcript_obj._guide_class = (
+                "LRAA_guide_model"
+                if transcript_info_dict.get("source") == "LRAA"
+                else "reference_annotation"
+            )
+
+            # Reference identity recorded by the run that wrote the GTF.
+            if "ref_splice_pattern" in transcript_meta:
+                transcript_obj.set_ref_splice_pattern(
+                    transcript_meta["ref_splice_pattern"] == "True"
+                )
+            if "ref_FSM_reads" in transcript_meta:
+                transcript_obj.set_ref_FSM_reads(int(transcript_meta["ref_FSM_reads"]))
+            if "ref_supported" in transcript_meta:
+                transcript_obj.set_ref_supported(transcript_meta["ref_supported"] == "True")
 
             if "PolyA" in transcript_meta:
                 transcript_obj._imported_has_POLYA = (

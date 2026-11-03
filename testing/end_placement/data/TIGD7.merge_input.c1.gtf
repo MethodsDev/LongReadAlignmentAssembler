@@ -1,11 +1,12 @@
 # LRAA version v0.47.0
 # LRAA CMD: LRAA --genome TIGD7.fa --bam <reads of one half of TIGD7.bam> --HiFi (v0.47.0 defaults)
-chr16	LRAA	transcript	21393	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-1"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15";
+# v0.50.0: ref_splice_pattern / ref_supported added as a v0.50.0 de novo run writes them (merge inputs must carry them)
+chr16	LRAA	transcript	21393	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-1"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15"; ref_splice_pattern "False";
 chr16	LRAA	exon	21393	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-1";
 chr16	LRAA	exon	26455	26571	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-1";
 chr16	LRAA	exon	27394	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-1";
 
-chr16	LRAA	transcript	21501	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15";
+chr16	LRAA	transcript	21501	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15"; ref_splice_pattern "False";
 chr16	LRAA	exon	21501	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3";
 chr16	LRAA	exon	23060	23240	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3";
 chr16	LRAA	exon	23682	23755	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3";
@@ -13,24 +14,24 @@ chr16	LRAA	exon	24024	24150	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:c
 chr16	LRAA	exon	26455	26571	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3";
 chr16	LRAA	exon	27394	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-3";
 
-chr16	LRAA	transcript	21518	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15";
+chr16	LRAA	transcript	21518	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15"; ref_splice_pattern "False";
 chr16	LRAA	exon	21518	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4";
 chr16	LRAA	exon	24024	24150	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4";
 chr16	LRAA	exon	26455	26571	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4";
 chr16	LRAA	exon	27394	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-4";
 
-chr16	LRAA	transcript	21532	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-8"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15";
+chr16	LRAA	transcript	21532	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-8"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15"; ref_splice_pattern "False";
 chr16	LRAA	exon	21532	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-8";
 chr16	LRAA	exon	27394	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-8";
 
-chr16	LRAA	transcript	21532	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15";
+chr16	LRAA	transcript	21532	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9"; PolyA "True"; TSS "False"; PolyA_read_count "41"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-15"; ref_splice_pattern "False";
 chr16	LRAA	exon	21532	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9";
 chr16	LRAA	exon	23682	23755	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9";
 chr16	LRAA	exon	24024	24150	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9";
 chr16	LRAA	exon	26455	26571	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9";
 chr16	LRAA	exon	27394	29452	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-9";
 
-chr16	LRAA	transcript	21532	41455	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10"; PolyA "False"; TSS "False"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-29";
+chr16	LRAA	transcript	21532	41455	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10"; PolyA "False"; TSS "False"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-29"; ref_splice_pattern "False";
 chr16	LRAA	exon	21532	22206	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10";
 chr16	LRAA	exon	24024	24150	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10";
 chr16	LRAA	exon	26455	26571	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10";
@@ -38,26 +39,26 @@ chr16	LRAA	exon	27394	28554	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:c
 chr16	LRAA	exon	37107	37157	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10";
 chr16	LRAA	exon	38914	41455	.	+	.	gene_id "g:chr16:+:comp-2"; transcript_id "t:chr16:+:comp-2:iso-10";
 
-chr16	LRAA	transcript	43509	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-2"; PolyA "True"; TSS "True"; PolyA_read_count "7"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-18";
+chr16	LRAA	transcript	43509	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-2"; PolyA "True"; TSS "True"; PolyA_read_count "7"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-18"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-2";
 chr16	LRAA	exon	46314	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-2";
 
-chr16	LRAA	transcript	43509	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-3"; PolyA "True"; TSS "True"; PolyA_read_count "7"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-18";
+chr16	LRAA	transcript	43509	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-3"; PolyA "True"; TSS "True"; PolyA_read_count "7"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-18"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	44407	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-3";
 chr16	LRAA	exon	46314	47316	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-3";
 
-chr16	LRAA	transcript	43509	47931	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-4"; PolyA "False"; TSS "True"; TSS_read_count "131"; InternalPriming "True"; PAS "none";
+chr16	LRAA	transcript	43509	47931	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-4"; PolyA "False"; TSS "True"; TSS_read_count "131"; InternalPriming "True"; PAS "none"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	44407	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-4";
 chr16	LRAA	exon	46314	47931	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-4";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6";
 chr16	LRAA	exon	50678	50769	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6";
 chr16	LRAA	exon	54913	55023	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-6";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7";
 chr16	LRAA	exon	50678	50769	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7";
@@ -65,14 +66,14 @@ chr16	LRAA	exon	51050	51176	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:c
 chr16	LRAA	exon	54913	55023	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-7";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8";
 chr16	LRAA	exon	46314	46837	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8";
 chr16	LRAA	exon	50678	50769	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-8";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9";
 chr16	LRAA	exon	46314	46837	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9";
@@ -80,7 +81,7 @@ chr16	LRAA	exon	50678	50769	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:c
 chr16	LRAA	exon	54913	55023	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-9";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	43644	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11";
 chr16	LRAA	exon	46314	46837	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11";
@@ -89,7 +90,7 @@ chr16	LRAA	exon	51050	51176	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:c
 chr16	LRAA	exon	54913	55023	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-11";
 
-chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21";
+chr16	LRAA	transcript	43509	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12"; PolyA "True"; TSS "True"; PolyA_read_count "54"; TSS_read_count "131"; InternalPriming "False"; PAS "AATAAA"; PAS_offset "-21"; ref_splice_pattern "False";
 chr16	LRAA	exon	43509	44407	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12";
 chr16	LRAA	exon	46314	46837	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12";
 chr16	LRAA	exon	49754	49949	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12";
@@ -98,7 +99,7 @@ chr16	LRAA	exon	51050	51176	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:c
 chr16	LRAA	exon	54913	55023	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12";
 chr16	LRAA	exon	55191	56575	.	+	.	gene_id "g:chr16:+:comp-6"; transcript_id "t:chr16:+:comp-6:iso-12";
 
-chr16	LRAA	transcript	36840	43410	.	-	.	gene_id "g:chr16:-:comp-3"; transcript_id "t:chr16:-:comp-3:iso-2"; PolyA "True"; TSS "False"; PolyA_read_count "14"; InternalPriming "False"; PAS "none";
+chr16	LRAA	transcript	36840	43410	.	-	.	gene_id "g:chr16:-:comp-3"; transcript_id "t:chr16:-:comp-3:iso-2"; PolyA "True"; TSS "False"; PolyA_read_count "14"; InternalPriming "False"; PAS "none"; ref_splice_pattern "False";
 chr16	LRAA	exon	36840	40010	.	-	.	gene_id "g:chr16:-:comp-3"; transcript_id "t:chr16:-:comp-3:iso-2";
 chr16	LRAA	exon	43213	43410	.	-	.	gene_id "g:chr16:-:comp-3"; transcript_id "t:chr16:-:comp-3:iso-2";
 

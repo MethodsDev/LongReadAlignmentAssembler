@@ -120,6 +120,11 @@ workflow LRAA_cell_cluster_guided {
         # LRAA_Globals.config overrides (JSON object) for the per-cluster DISCOVERY runs
         # only; the final quant gets LRAA's defaults. See LRAA-singlecell.wdl.
         String? cluster_config_update_json
+        # LRAA_Globals.config overrides (JSON object) for the cross-cluster merge
+        # (merge_LRAA_GTFs.py --config_update). Unset by default. E.g.
+        # '{"allow_unflagged_LRAA_guide": true}' to merge GTFs written before v0.50.0,
+        # which lack ref_splice_pattern / ref_supported and are otherwise refused.
+        String? merge_config_update_json
         # The library's TSS cap calibration (LRAA.wdl capCalibrationJson of the init
         # run), handed to every per-cluster discovery run so none decides from its own
         # sparse reads. Unset, each cluster's runs calibrate on the cluster's bam.
@@ -367,6 +372,7 @@ workflow LRAA_cell_cluster_guided {
                 # select_first because the workflow input is String? (:43) while the
                 # task takes String; "" is the task's own "no contigs" value.
                 oversimplify = select_first([oversimplify, ""]),
+                config_update_json = merge_config_update_json,
                 docker = docker,
                 memoryGB = memoryGBmergeGTFs,
                 cpu = cpu_mergeGTFs,
@@ -798,6 +804,9 @@ task lraa_merge_gtf_task {
         # contigs' records verbatim from the inputs instead, and refuses if the
         # inputs disagree about them.
         String oversimplify = ""
+        # LRAA_Globals.config overrides (JSON object), handed to merge_LRAA_GTFs.py as
+        # --config_update. Unset: the merge runs on LRAA's defaults.
+        String? config_update_json
         String docker
         Int memoryGB
         # Contig/strand units are merged in parallel worker processes. The script
@@ -846,10 +855,17 @@ task lraa_merge_gtf_task {
         version_comment="# LRAA version ${lraa_version}"
 
 
+        # Written to a file with a quoted heredoc, so the shell never sees the JSON.
+        config_update_file="$(pwd)/merge_config_update.json"
+        cat > "$config_update_file" <<'LRAA_CONFIG_UPDATE_EOF'
+~{default="" config_update_json}
+LRAA_CONFIG_UPDATE_EOF
+
       (
       
         merge_LRAA_GTFs.py --genome ~{referenceGenome} \
                            ~{if ignore_TSS_POLYA then "--ignore_TSS_POLYA" else ""} \
+                           ~{if select_first([config_update_json, ""]) != "" then "--config_update \"$config_update_file\"" else ""} \
                            ~{if (oversimplify != "") then "--oversimplify '" + oversimplify + "'" else ""} \
                            --CPU auto \
                            --gtf ~{sep=' ' LRAA_cell_cluster_gtfs } \

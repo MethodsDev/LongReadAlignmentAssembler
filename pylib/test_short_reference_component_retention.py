@@ -89,8 +89,10 @@ def test_min_length_filter_exempts_expressed_annotation_contained_model(monkeypa
     )
     monkeypatch.setitem(LRAA_Globals.config, "num_total_reads", 1000)
 
+    # Spliced: containment is still the reprieve for spliced models at this filter
+    # (single-exon models use ref_supported since v0.50.0). cDNA 162 bp.
     short_with_reference = _transcript(
-        "short.ref", [[100, 260]], reference_ids=["ref1"]
+        "short.ref", [[100, 180], [300, 380]], reference_ids=["ref1"]
     )
     short_without_reference = _transcript("short.novel", [[400, 560]])
     long_novel = _transcript("long.novel", [[1000, 1400]])

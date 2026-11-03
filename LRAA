@@ -40,6 +40,7 @@ from IsoformReadRescue import (
 )
 from ResourceMonitor import ResourceMonitor, summarize_resource_log
 import TranscriptFiltering
+import ReferenceSupport
 import Util_funcs
 import CpuBudget
 import RdnaMask
@@ -2514,6 +2515,19 @@ def main():
         )
 
     runtime_config = _snapshot_runtime_config(LRAA_Globals.config)
+
+    # Which guide models are references; refuses an unflagged LRAA guide here, before
+    # any work unit or chunk is launched. Discovery only: quant-only runs and
+    # oversimplified contigs filter nothing, so any GTF can be quantified or carried
+    # there. Chunk workers skip it: their guide is a slice of the one checked here.
+    import ChunkedRun
+
+    if (
+        input_gtf
+        and not QUANT_ONLY
+        and not os.environ.get(ChunkedRun.WORKER_ENV)
+    ):
+        ReferenceSupport.validate_guide_gtf_file(input_gtf, set(oversimplify_contigs))
 
     # Chunked mode delegates the whole run, and it delegates HERE -- after the
     # config resolution above, not before it.
@@ -5455,6 +5469,7 @@ def _contig_job_runner(job):
             # the same models, and taking the GTF from the return value is what makes
             # that structural rather than a pair of filters that have to agree.
             if ofh_gtf_local is not None:
+                ReferenceSupport.record_carried_model_identity(reported_transcripts)
                 try:
                     for t in reported_transcripts:
                         ofh_gtf_local.write(t.to_GTF_format(include_TPM=False) + "\n")
@@ -6101,6 +6116,7 @@ def _run_oversimplify_aggregate(
 
     # GTF row
     if ofh_gtf is not None:
+        ReferenceSupport.record_carried_model_identity([t])
         ofh_gtf.write(t.to_GTF_format(include_TPM=False) + "\n")
 
     logger.info(
@@ -7484,6 +7500,11 @@ def run_transcript_assembly(
     lraa_all_obj.assign_reference_transcript_provenance(
         all_transcripts, mapped_reference_transcripts
     )
+    if LRAA_Globals.config["ref_supported_monoexonic"]:
+        # before the min-length filter, the first reprieve site
+        ReferenceSupport.assign_ref_supported_monoexonic(
+            all_transcripts, input_transcripts
+        )
 
     # reassign gene and transcript component ids based on shared nodes.
     logger.info(
@@ -7625,18 +7646,49 @@ def run_transcript_assembly(
         )
         return
 
+    ref_splice_pattern_reprieve = LRAA_Globals.config["ref_splice_pattern_reprieve"]
+
     if input_transcripts is not None:
-        # build splice pattern hash set for spliced reference transcripts only
+        # build splice pattern hash set for spliced reference transcripts only. Under
+        # ref_splice_pattern_reprieve an LRAA-produced guide (the init GTF of a cluster
+        # run) contributes only the chains it flagged as reference chains: its novel
+        # models do not become references by being a guide.
         ref_splice_hashes = set(
             [
-                Util_funcs.get_hash_code(t.get_introns_string())
+                t.get_splice_hash()
                 for t in input_transcripts
                 if t.has_introns()
+                and (
+                    not ref_splice_pattern_reprieve
+                    or t.is_reference_splice_pattern_source()
+                )
             ]
         )
         LRAA.differentiate_known_vs_novel_isoforms(
             transcripts, reference_splice_hashes=ref_splice_hashes
         )
+        if ref_splice_pattern_reprieve:
+            # the reprieve's evidence: reads of the full bam carrying each reference
+            # chain exactly (or the pooled counts an LRAA guide carries)
+            ReferenceSupport.assign_ref_FSM_reads(
+                transcripts,
+                input_transcripts,
+                ref_splice_hashes,
+                bam_file_for_quant,
+                contig_acc,
+                contig_strand,
+                restrict_region_lend,
+                restrict_region_rend,
+            )
+
+    if ref_splice_pattern_reprieve:
+        # recorded on every spliced model, de novo ones included (all "False"), so this
+        # run's GTF can itself guide a later run
+        for transcript in transcripts:
+            if transcript.has_introns():
+                transcript.set_ref_splice_pattern(
+                    not transcript.has_novel_splice_pattern()
+                )
 
     if NO_FILTER_ISOFORMS:
 

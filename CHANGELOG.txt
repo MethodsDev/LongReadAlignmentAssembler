@@ -1,3 +1,138 @@
+Unreleased (v0.50.0 draft; version not bumped)
+
+Changes that alter run outputs (which reference transcripts ref-guided runs keep, single-exon
+models' reference reprieve, which init models single-cell cluster runs treat as references, new
+GTF attributes). BREAKING: an LRAA-produced GTF from an earlier version is refused as a
+discovery guide and as a merge input (below). RELEASE CANDIDATE: the measurements below are
+chromosome and minigenome scale (__LRAA_dev/v049_sc_fsm_loss/NOTES.md sections 13-15 and
+VM_NOTES.md in the paper analyses repo); the benchmark families and single-cell evaluations on
+this candidate's images are still to be run.
+
+- Reference reprieve of spliced models keyed on the reference SPLICE PATTERN
+  (ref_splice_pattern_reprieve, default true). In the isoform-fraction filter a spliced model is
+  kept as a reference model when its intron chain is exactly a reference chain (wherever its ends
+  are), it is the last model of its gene still carrying that chain, and >= 1 read of the FULL bam
+  carries exactly that chain (ref_splice_pattern_reprieve_min_FSM_reads = 1; reads that also fit
+  another isoform count; counted once per work unit with quant's read filters and intron
+  convention, before depth normalization: pylib/ReferenceSupport.py). It replaces, there only,
+  the path-containment reprieve (a model containing a whole reference path, >= 1 EM read, any
+  number of carriers). Why: v0.48.0's own_vote 5' rule moves annotated 5' ends inside the first
+  exon, which breaks containment, so read-supported reference chains were filtered in sc
+  ref-guided runs (guided by all of GENCODE): v0.49.0 recovered about half. Containment stays at
+  the min-length filter (runs before the known/novel call). By design, a reference chain no read
+  carries is no longer kept on the annotation alone, and several terminal variants of one
+  reference chain are no longer all kept.
+- Single-exon models are reference models only when ref_supported (ref_supported_monoexonic,
+  default true): same-strand reciprocal overlap >= 0.8
+  (ref_supported_monoexonic_min_reciprocal_overlap) with a reference single-exon transcript,
+  instead of containing any guide model (which counted fragments of multi-exon references and
+  intronic models). Applies at the min-length, monoexonic and isoform-fraction filters.
+- NEW GTF attributes on the transcript row: splice_hash and ref_splice_pattern ("True"/"False")
+  on multi-exon models, ref_FSM_reads on reference-chain models, ref_supported on single-exon
+  models (docs/methods.md, Outputs). De novo runs write ref_splice_pattern "False" /
+  ref_supported "False". Carried by the GTF parser, the splice-pattern collapse, the chunked
+  discovery merge (splice_hash translated with the coordinates) and merge_LRAA_GTFs.py (flag by
+  intron chain from any input, ref_FSM_reads the maximum over the inputs).
+- Guide class from GTF column 2: "LRAA" is an LRAA-produced model, anything else a reference
+  annotation. An LRAA guide contributes as reference chains only its rows flagged
+  ref_splice_pattern "True" (single-exon: ref_supported "True") and supplies their ref_FSM_reads,
+  so single-cell cluster runs guided by the init GTF decide on the pooled counts and do not
+  treat the init run's novel models as references (they now face the novel-isoform read floors
+  in each cluster; the merge still re-imports them via --pooled_gtf).
+- BREAKING: a discovery run (not --quant_only, not an oversimplified contig) guided by an LRAA
+  GTF whose rows lack ref_splice_pattern / ref_supported (any GTF written before v0.50.0) stops
+  with an error at startup, before any work unit or chunk is launched (the --gtf file is
+  streamed once; rows on oversimplified contigs are exempt), and so does merge_LRAA_GTFs.py
+  given such an input. Fallback:
+  --config_update '{"allow_unflagged_LRAA_guide": true}' treats all of its models as reference
+  models (the pre-v0.50.0 behaviour), or regenerate the GTF with v0.50.0. On Terra, put the key
+  in the merge task's config input (below) and, for a precomputed_init_gtf, also in
+  cluster_config_update_json. Quant-only runs accept any GTF.
+- WDL: the merge task (lraa_merge_gtf_task) takes an optional config_update_json, handed to
+  merge_LRAA_GTFs.py as --config_update (written through a quoted heredoc like the LRAA
+  tasks). Exposed as merge_config_update_json in LRAA-singlecell.wdl and
+  LRAA-cell_cluster_guided.wdl, and as config_update_json in
+  LRAA-merge_gtfs_from_sample_set.wdl. Unset by default: no change to the command. Tests:
+  pylib/test_wdl_pooled_gtf_merge.py (wiring from both workflows; flag only when set; the JSON
+  reaches the file verbatim); testing/ref_splice_pattern_reprieve runs the task's rendered
+  command outside a container, which refuses an unflagged pooled GTF without the input and
+  merges it with '{"allow_unflagged_LRAA_guide": true}'.
+- Turning both rules off (ref_splice_pattern_reprieve and ref_supported_monoexonic false)
+  restores v0.49.0's filtering and writes none of the new attributes; the guide-class check is
+  then off too.
+- MEASURED (prototype, same rule): 34-locus minigenome panel (PBMC / ALS sc loci with the
+  GENCODE47 guide, bulk TUSCO loci with the benchmark guide): every GENCODE chain dropped
+  relative to v0.49.0 had 0 FSM reads in the v0.49.0 run; EEF1A1 ENST00000455918 restored,
+  AIF1 ENST00000466820 kept (a unique-read version of the rule dropped it: 0 FSM reads among the
+  depth-normalized reads the filter sees vs 27 unique reads in the bam); bulk 5' end placement
+  unchanged at every TUSCO locus; de novo loci unchanged. chr22 sc basic (fleet): total GENCODE
+  chains -5% PBMC / -13% ALS against v0.49.0, with the most read-supported GENCODE chains and the
+  fewest novel chains of the arms tested and v0.48.0's 5' CAGE gain kept. chr19 bulk ref-guided
+  guide chains HG002 583 / BT474 393 (v0.49.0 585 / 390, v0.47.0 589 / 394). Full-bam scan cost
+  ~1.3% of wall time on the panel (EEF1A1, 329k reads: 36 s of ~25 min). This code with
+  default settings reproduces the prototype's v050cand output exactly (same models, same
+  ref_splice_pattern / ref_FSM_reads / ref_supported / TSS / PolyA) on the PBMC CHMP5, AIF1,
+  TNFAIP8 and HSP90AA1 panel minigenomes.
+- MEASURED (this code and the prototype, chromosome scale; this code is exon-identical to the
+  prototype on PBMC chr22 ref-guided sc: basic, all 14 cluster GTFs and the merged GTF).
+  Mouse simulated reads, ref-guided with the one-isoform-per-gene guide, chr2/11/17, guide
+  chains reconstructed (knownTPR) at 0 / 5 / 8.5% simulated error: v0.47.0 .980 / .976 / .971,
+  v0.49.0 .974 / .955 / .945, v0.50.0 .977 / .974 / .966; novel TPR/FDR within 0.001. chr19
+  bulk ref-guided (HG002 / BT474): guide chains 583 / 393 (v0.49.0 585 / 390, v0.47.0
+  589 / 394), multi-exon 5' ends in a CAGE peak 79.3 / 86.1% (v0.49.0 79.3 / 86.1, v0.47.0
+  74.0 / 82.9), novel chains 3,666 / 2,863 (v0.49.0 3,717 / 2,898); chr19 de novo identical to
+  v0.49.0. chr22 sc ref-guided cluster-guided (PBMC / ALS): GENCODE chains with a bam read
+  carrying the exact chain 1,117 / 761 (v0.49.0 1,043 / 694, v0.47.0 1,067 / 724), novel chains
+  3,439 / 1,706 (v0.49.0 3,526 / 1,742), 5' CAGE 63.3% PBMC (v0.49.0 63.1); GENCODE chains
+  dropped against v0.49.0 153 / 270, of which 151 / 265 had no read carrying the chain. Every
+  read-supported guide chain lost against v0.47.0 is also lost at v0.49.0 (known issue b), except
+  the rDNA-mask case (known issue a).
+- FIX: single-cell cluster runs guided by an init GTF reprieved every init model as if it were a
+  reference model (provenance was assigned against any guide). The reprieve is meant for the
+  original reference annotation only. Init models now carry their reference status from the
+  init GTF's flags; in DE NOVO runs every chain is "False", so the init models face the
+  novel-isoform floors in the cluster runs (the merge still re-imports them via --pooled_gtf).
+  MEASURED chr22 de novo sc (PBMC / ALS, 14 clusters, v0.49.0 -> v0.50.0): basic runs
+  identical; init chains rediscovered per cluster 1,130 -> 800 / 574 -> 375 on average; the merge
+  keeps the init chains (3,172 -> 3,174 / 2,132 -> 2,136). Merged models 5,960 -> 5,805 /
+  3,688 -> 3,613; spliced chains 4,514 -> 4,535 / 2,627 -> 2,645; chains with a bam read
+  carrying the exact chain 4,437 -> 4,456 / 2,547 -> 2,565; GENCODE chains 854 -> 855 /
+  545 -> 555; 5' ends in a CAGE peak unchanged (62.7% / 39.3%). Chains lost 26 / 19, gained
+  47 / 37; no lost chain was an init model (cluster-discovered at v0.49.0, mostly with a longer
+  containing chain in v0.50.0).
+- Known issues, not addressed in this version:
+  a. rDNA mask false positive on non-human genomes: the bundled human rDNA cassette matches mouse
+     chr17 near 8.17 Mb, so the 53 reads carrying ENSMUST00000097423 (an 88-bp exon inside the
+     mask) are discarded in every version; v0.47.0 kept the model only through the containment
+     reprieve, v0.50.0 drops it. Any non-human genome can be affected. Workaround:
+     --no_rdna_mask (or --rdna_mask_fasta with the organism's own cassette). Fix planned after
+     this release.
+  b. Read-supported reference chains pruned as degradation products: the 5' end moves inward onto
+     a read pile-up inside an exon shared with a longer model, and the model is then pruned as
+     lacking a TSS with no distinguishing PolyA (UBE2M 83 reads, PPP6R1 31 reads (HG002 chr19),
+     mouse ENSMUST00000109316 103 reads). Pre-existing at v0.49.0; no reprieve rule applies there.
+     Reads carrying the shorter chain cannot tell a real shorter isoform from fragments of the
+     longer one.
+- Tests: pylib/test_ref_splice_pattern_reprieve.py (rule, attributes, guide class, unflagged
+  guide refused and its fallback, ref_supported classes, full-bam count incl. reads crossing a
+  work-unit boundary, pooled counts from the guide); test_chunked_entry_point.py (splice_hash
+  translated by the chunked merge); execution test testing/ref_splice_pattern_reprieve (SIRV:
+  attributes, ref_FSM_reads equal to an independent count of the bam, chunked = unchunked
+  counts, run guided by an LRAA GTF uses its pooled counts, unflagged guide refused / allowed /
+  chunked run refused at startup with nothing but its log written, quant-only accepted,
+  merge flags and maximum counts, merge refuses unflagged inputs). Fixtures
+  updated to carry the new attributes, as v0.50.0 writes them (and test_chunked_entry_point's
+  ref-guided reachability test now passes an existing empty --gtf, since the guide is read at
+  startup): testing/end_placement TIGD7 merge
+  inputs and the hand-written merge inputs of test_merge_recurrent_overhang_termini.py and
+  test_merge_annotates_three_prime_ends.py; two containment tests pin the single-exon rule off
+  or use a spliced model (test_reference_transcript_provenance.py,
+  test_short_reference_component_retention.py). testing/misc_tests: the hand-written reference
+  of internal_priming_removal (data/use_as_ref.gtf) said "LRAA" in column 2 and now says
+  "reference"; merge_LRAA_GTFs and EMP3_alt_termini merge real pre-v0.50.0 cluster GTFs and now
+  run under allow_unflagged_LRAA_guide (outputs unchanged: parity and expected coordinates hold).
+
+
 v0.49.0
 
 Changes that alter run outputs (5' ends of isoforms with no TSS site and few reads, mainly in

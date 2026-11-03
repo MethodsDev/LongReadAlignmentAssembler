@@ -61,6 +61,12 @@ testing/end_placement/**
 !testing/end_placement/check_end_placement.py
 !testing/end_placement/data/
 !testing/end_placement/data/*
+!testing/ref_splice_pattern_reprieve/
+testing/ref_splice_pattern_reprieve/**
+!testing/ref_splice_pattern_reprieve/Makefile
+!testing/ref_splice_pattern_reprieve/check_ref_identity.py
+!testing/ref_splice_pattern_reprieve/allow_unflagged.json
+!testing/ref_splice_pattern_reprieve/render_merge_task.py
 !testing/txalign_path_rescue/
 !testing/txalign_path_rescue/Makefile
 !testing/txalign_path_rescue/validate_txalign_path_rescue.py

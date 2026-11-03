@@ -3,15 +3,23 @@ MERGE_TOOL = ../../../util/merge_LRAA_GTFs.py
 DATA_DIR = data
 GENOME = $(DATA_DIR)/chr19.genome.fa
 GTFS = $(DATA_DIR)/*.gtf
+# The inputs are PBMC cluster GTFs written before v0.50.0, without ref_splice_pattern /
+# ref_supported, which the merge refuses by default; merged here under the documented
+# fallback, which treats their models as references as earlier versions did.
+LEGACY_CONFIG = legacy_LRAA_inputs.config.json
+MERGE_TOOL += --config_update $(LEGACY_CONFIG)
+
+$(LEGACY_CONFIG):
+	echo '{"allow_unflagged_LRAA_guide": true}' > $@
 
 # The merge respects input TSS/PolyA by default (the former --HiFi merge, v0.42.0);
 # --ignore_TSS_POLYA restores the former non-HiFi merge that ignores them.
 test: test_ignore_TSS_POLYA test_respect_TSS_POLYA test_parallel_parity
 
-test_ignore_TSS_POLYA:
+test_ignore_TSS_POLYA: $(LEGACY_CONFIG)
 	$(PYTHON) $(MERGE_TOOL) --ignore_TSS_POLYA --genome $(GENOME) --output_gtf lraa.merged.ignore_TSS_POLYA.gtf --gtf $(GTFS)
 
-test_respect_TSS_POLYA:
+test_respect_TSS_POLYA: $(LEGACY_CONFIG)
 	$(PYTHON) $(MERGE_TOOL) --genome $(GENOME) --output_gtf lraa.merged.respect_TSS_POLYA.gtf --gtf $(GTFS)
 	$(MAKE) check_TSS_PolyA_annotations
 
@@ -23,7 +31,7 @@ test_respect_TSS_POLYA:
 # the full run, where it is merged AFTER chr19-: a unit's output may not depend on
 # which units its process merged before it, or the workers could not reproduce it.
 PARITY = lraa.merged.parity
-test_parallel_parity:
+test_parallel_parity: $(LEGACY_CONFIG)
 	$(PYTHON) $(MERGE_TOOL) --CPU 1 --genome $(GENOME) --output_gtf $(PARITY).serial.gtf --gtf $(GTFS)
 	$(PYTHON) $(MERGE_TOOL) --CPU 1 --genome $(GENOME) --output_gtf $(PARITY).serial2.gtf --gtf $(GTFS)
 	$(PYTHON) $(MERGE_TOOL) --CPU 4 --genome $(GENOME) --output_gtf $(PARITY).cpu4.gtf --gtf $(GTFS)
@@ -82,4 +90,4 @@ check_TSS_PolyA_annotations:
 clean:
 	rm -rf ./__* lraa.merged.gtf lraa.merged.ignore_TSS_POLYA.gtf lraa.merged.respect_TSS_POLYA.gtf \
 		lraa.merged.ignore_TSS_POLYA.gtf.tracking.tsv lraa.merged.respect_TSS_POLYA.gtf.tracking.tsv \
-		$(PARITY).*
+		$(PARITY).* $(LEGACY_CONFIG)

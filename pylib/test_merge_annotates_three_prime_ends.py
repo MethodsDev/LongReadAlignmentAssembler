@@ -61,7 +61,8 @@ def _input_gtf(path, transcript_id, exons):
     Deliberate: the merged model must be annotated from the genome, so an input that
     never carried the attribute still produces one that does.
     """
-    attrs = 'gene_id "g1"; transcript_id "{}"; TSS "True"; PolyA "True"; ' 'TSS_read_count "40"; PolyA_read_count "25";'.format(
+    # ref_splice_pattern: what a v0.50.0 de novo GTF records (merge inputs must carry it)
+    attrs = 'gene_id "g1"; transcript_id "{}"; TSS "True"; PolyA "True"; ' 'TSS_read_count "40"; PolyA_read_count "25"; ref_splice_pattern "False";'.format(
         transcript_id
     )
     exon_attrs = 'gene_id "g1"; transcript_id "{}";'.format(transcript_id)

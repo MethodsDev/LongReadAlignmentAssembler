@@ -275,7 +275,22 @@ path removes per-read state from quantification altogether (`docs/streaming_quan
 ## Outputs
 
 - Assembly: `LRAA.gtf` (and optional `.bed`), with one record per transcript isoform;
-  boundaries mark TSS/PolyA when applicable.
+  boundaries mark TSS/PolyA when applicable. Reference identity attributes on the transcript
+  row (v0.50.0; written by discovery runs and `merge_LRAA_GTFs.py` while
+  `ref_splice_pattern_reprieve` / `ref_supported_monoexonic` are on, the default):
+  - `splice_hash` (multi-exon models): hash of the intron chain, the same value as
+    `transcript_splice_hash_code` in quant.tracking and the read-side splice hash.
+  - `ref_splice_pattern` (multi-exon models): `True` when the intron chain is exactly a
+    reference (guide) chain, else `False`; every multi-exon model of a de novo run is `False`.
+  - `ref_FSM_reads` (multi-exon models with `ref_splice_pattern "True"`): reads of the full input
+    BAM whose intron chain is exactly this chain (shared reads included, before normalization).
+    In a run guided by an LRAA GTF carrying it, the guide's (pooled) count; after
+    `merge_LRAA_GTFs.py`, the largest count among the inputs.
+  - `ref_supported` (single-exon models): `True` when the model and a reference single-exon
+    transcript overlap on the same strand by at least 0.8 of both lengths.
+  A guide or merge input whose column 2 is `LRAA` must carry `ref_splice_pattern` /
+  `ref_supported`, or is refused unless `allow_unflagged_LRAA_guide` is set (see
+  `LRAA_isoform_ID_and_quant_methods.md`, "Reference models in reference-guided runs").
 - Quantification: `LRAA.quant.expr` (per-transcript counts, final-report TPM, and
   `RPM_total_reads`) and `LRAA.quant.tracking.gz` (read-to-transcript compatibility/assignment
   details). The `TPM` column is normalized over final reported transcripts; `RPM_total_reads`

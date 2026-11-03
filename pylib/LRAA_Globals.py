@@ -857,6 +857,43 @@ config = {
     # of mass lands on it. Fractional because EM assignments are fractional; set 0
     # to restore the any-nonzero-mass behaviour.
     "min_reads_retain_reference": 1.0,
+    # Reference reprieve of SPLICED models in the isoform-fraction filter, keyed on the
+    # reference SPLICE PATTERN rather than on path containment. A model is kept there when
+    # (a) its intron chain is a reference chain (has_novel_splice_pattern() is False,
+    # wherever its ends sit), (b) it is the last standing model of its gene with that chain
+    # (filtering runs weakest-first, so terminal variants go first), and (c) at least
+    # ref_splice_pattern_reprieve_min_FSM_reads reads of the FULL bam carry exactly that
+    # chain (ReferenceSupport.assign_ref_FSM_reads: quant's read filters and intron
+    # convention; reads that also fit other isoforms count; depth normalization does not
+    # apply). Containment still reprieves spliced models at the min-length filter, which
+    # runs before the known/novel call. Output GTFs carry splice_hash and
+    # ref_splice_pattern on multi-exon models, and ref_FSM_reads on reference-chain ones.
+    # A guide GTF written by LRAA (column 2 "LRAA") contributes as reference chains only
+    # its rows flagged ref_splice_pattern "True", and supplies their ref_FSM_reads, so a
+    # cluster run guided by the pooled init GTF decides on the pooled counts; the merge
+    # carries the flag and the maximum count. WHY: the v0.48.0 5' end rule moves annotated
+    # 5' ends, which broke path containment and dropped read-supported reference chains in
+    # sc ref-guided runs; a chain no read carries is not kept on the annotation's word
+    # alone. False restores the v0.49.0 containment reprieve and writes none of the
+    # attributes.
+    "ref_splice_pattern_reprieve": True,
+    "ref_splice_pattern_reprieve_min_FSM_reads": 1,
+    # Single-exon models are reprieved (min-length filter, monoexonic filters,
+    # isoform-fraction filter) only when ref_supported -- same-strand reciprocal overlap >=
+    # ref_supported_monoexonic_min_reciprocal_overlap with a reference single-exon
+    # transcript -- instead of when they contain any guide model. Overlap with an exon of a
+    # multi-exon reference does not count. Output GTFs carry ref_supported on single-exon
+    # models; an LRAA guide row counts as a reference single-exon transcript only when
+    # flagged ref_supported "True". 0.8 keeps the near-identical models and those with one
+    # end offset by up to a few hundred bp (v0.49.0 PBMC / ALS single-exon models vs
+    # GENCODE: no valley in the overlap distribution; 0.7 vs 0.9 moves ~200 models).
+    "ref_supported_monoexonic": True,
+    "ref_supported_monoexonic_min_reciprocal_overlap": 0.8,
+    # An LRAA-produced guide (column 2 "LRAA") whose rows lack ref_splice_pattern
+    # (multi-exon) or ref_supported (single-exon) cannot say which of its models stand for
+    # reference transcripts, and discovery runs and the merge refuse it. True treats every
+    # such row as a reference (the pre-v0.50.0 behaviour for those rows).
+    "allow_unflagged_LRAA_guide": False,
     "min_reads_novel_isoform": 2,
     "min_unique_reads_novel_isoform": 2,
     "min_isoform_count_aggressive_filtering_iso_fraction": 10,  # allow for filtering mult isoforms in a single round if more than this number of isoform candidates.

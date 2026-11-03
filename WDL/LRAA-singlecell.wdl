@@ -201,6 +201,11 @@ workflow LRAA_singlecell_wf {
     # cluster's whole bam.
     String? init_config_update_json
     String cluster_config_update_json = '{"require_cap_for_new_TSS": true}'
+    # LRAA_Globals.config overrides (JSON object) for the cross-cluster merge only.
+    # Unset by default. '{"allow_unflagged_LRAA_guide": true}' lets the merge take a
+    # precomputed_init_gtf written before v0.50.0 (no ref_splice_pattern / ref_supported);
+    # the cluster runs then need the same key in cluster_config_update_json.
+    String? merge_config_update_json
 
     # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
     # case -- means LRAA counts the input bam itself, once, with its -F 0x904
@@ -728,6 +733,7 @@ workflow LRAA_singlecell_wf {
         polyA_known = polyA_known,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         cluster_config_update_json = cluster_config_update_json,
+        merge_config_update_json = merge_config_update_json,
         cap_calibration_json = LRAA_init.capCalibrationJson,
         main_chromosomes = main_chromosomes,
         # Backend-dependent, and separate from the initial phase's value on purpose:

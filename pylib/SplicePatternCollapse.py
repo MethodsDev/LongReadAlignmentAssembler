@@ -613,6 +613,17 @@ def merge_isoforms(transcript_obj_list, sites=None):
     merged_transcript._imported_has_TSS = has_TSS
     merged_transcript._imported_has_POLYA = has_PolyA
 
+    # One intron chain, so one reference call; the members' ref_FSM_reads count the
+    # same chain and agree unless they came from different runs, so keep the largest.
+    merged_transcript.set_ref_splice_pattern(first_transcript_obj.get_ref_splice_pattern())
+    ref_FSM_reads = [
+        t.get_ref_FSM_reads()
+        for t in transcript_obj_list
+        if t.get_ref_FSM_reads() is not None
+    ]
+    if ref_FSM_reads:
+        merged_transcript.set_ref_FSM_reads(max(ref_FSM_reads))
+
     merged_transcript.add_meta(
         "merged_isoforms_shared_splice_pattern", ",".join(sorted(merged_isoform_ids))
     )

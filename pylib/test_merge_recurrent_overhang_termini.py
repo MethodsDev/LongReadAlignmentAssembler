@@ -69,7 +69,9 @@ def _gtf(path, models):
             tss_attrs = f'TSS "True"; TSS_read_count "{tss[0]}";'
         else:
             tss_attrs = 'TSS "False";'
-        attrs = f'gene_id "g1"; transcript_id "{tid}"; {tss_attrs} PolyA "False";'
+        # what a v0.50.0 de novo cluster GTF records (merge inputs must carry it)
+        ref_attr = 'ref_splice_pattern "False";' if len(exons) > 1 else 'ref_supported "False";'
+        attrs = f'gene_id "g1"; transcript_id "{tid}"; {tss_attrs} PolyA "False"; {ref_attr}'
         rows.append("\t".join(["chr1", "LRAA", "transcript", str(exons[0][0]), str(exons[-1][1]), ".", "+", ".", attrs]))
         for lend, rend in exons:
             rows.append("\t".join(["chr1", "LRAA", "exon", str(lend), str(rend), ".", "+", ".", f'gene_id "g1"; transcript_id "{tid}";']))

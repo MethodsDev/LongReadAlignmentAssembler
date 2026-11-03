@@ -93,11 +93,20 @@ def _record_prefilter_decision(*values):
 def reference_model_reprieved(transcript):
     """Whether retain_expressed exempts this model from a discovery filter.
 
-    One predicate for every reprieve site, because the rule is one rule. It asks for
-    assigned READ COUNTS, not TPM: get_TPM() is read_counts_assigned / num_total_reads,
-    so the previous `get_TPM() > 0` fired on any nonzero EM mass however small, and on
-    a 52M-read library that is any mass at all. min_reads_retain_reference (default
-    1.0) is the count of assigned reads the annotation must actually have attracted.
+    The reprieve at every site except one: in the isoform-fraction filter a spliced
+    model is judged by ref_splice_pattern_reprieved() instead when
+    ref_splice_pattern_reprieve is on (the default).
+
+    Which models count as reference models: a spliced model that contains a reference
+    model's whole path (assign_reference_transcript_provenance); a single-exon model
+    that is ref_supported (ReferenceSupport.assign_ref_supported_monoexonic) when
+    ref_supported_monoexonic is on, else one that contains a reference model too.
+
+    It asks for assigned READ COUNTS, not TPM: get_TPM() is read_counts_assigned /
+    num_total_reads, so the previous `get_TPM() > 0` fired on any nonzero EM mass
+    however small, and on a 52M-read library that is any mass at all.
+    min_reads_retain_reference (default 1.0) is the count of assigned reads the
+    annotation must actually have attracted.
 
     Not a unique-read requirement. An isoform no single read can distinguish from its
     neighbours still qualifies once the fractional assignments landing on it sum to a
@@ -106,7 +115,12 @@ def reference_model_reprieved(transcript):
     if LRAA_Globals.config["ref_trans_filter_mode"] != "retain_expressed":
         return False
 
-    if not transcript.contains_reference_model():
+    if LRAA_Globals.config["ref_supported_monoexonic"] and not transcript.has_introns():
+        is_reference_model = transcript.is_ref_supported()
+    else:
+        is_reference_model = transcript.contains_reference_model()
+
+    if not is_reference_model:
         return False
 
     return (
@@ -144,10 +158,13 @@ def filter_isoforms_by_min_assigned_reads(transcripts, min_reads):
 def filter_transcripts_by_min_length(transcripts, min_transcript_length):
     """Retain only transcripts meeting minimum cDNA length.
 
-    A model containing a reference transcript that reads actually support is exempt:
-    the annotation asserts a transcript there, and its component was admitted for
-    assembly on that basis, so dropping it here would discard its reads without any
-    output row. See reference_model_reprieved() for what "actually support" means."""
+    A reference model that reads actually support is exempt: the annotation asserts a
+    transcript there, and its component was admitted for assembly on that basis, so
+    dropping it here would discard its reads without any output row. See
+    reference_model_reprieved() for what counts as a reference model and what "actually
+    support" means. Spliced models are judged by path containment here even under
+    ref_splice_pattern_reprieve: this filter runs before the known/novel call that rule
+    needs, and it is a length check, not a support check."""
 
     if min_transcript_length is None or min_transcript_length <= 0:
         return transcripts
@@ -210,8 +227,9 @@ def filter_novel_monoexonic_isoforms_by_min_cells(
     independent axis of evidence available: reads all drawn from one cell describe a
     single amplification event, not a transcript the population expresses.
 
-    A model containing a reference model is exempt: the annotation already asserts a
-    transcript there, so prevalence is not the evidence being asked for. Only novel
+    A reference model (reference_model_reprieved(): ref_supported by default) is exempt:
+    the annotation already asserts a transcript there, so prevalence is not the evidence
+    being asked for. Only novel
     monoexonic models must clear the bar. The exemption is
     reference_model_reprieved(), so it is conditional on the annotation having attracted
     min_reads_retain_reference of a read -- it is not categorical.
@@ -696,6 +714,37 @@ def get_isoform_FSM_read_count(transcript, frac_read_assignments):
     return sum(reads_by_path.values())
 
 
+def ref_splice_pattern_reprieved(transcript, carriers_standing):
+    """Whether the isoform-fraction filter keeps this spliced model as a reference.
+
+    ref_splice_pattern_reprieve's rule, in place of reference_model_reprieved() for
+    spliced models there: the model's intron chain is a reference chain, wherever its
+    ends sit (has_novel_splice_pattern() is False); it is the last standing model of its
+    gene with that chain (carriers_standing == 1; filtering runs weakest-first, so the
+    weaker terminal variants of the chain go first); and at least
+    ref_splice_pattern_reprieve_min_FSM_reads reads of the full bam carry exactly that
+    chain (get_ref_FSM_reads(), ReferenceSupport.assign_ref_FSM_reads).
+
+    The read count is taken from the full bam rather than from the reads this filter
+    sees, which are depth-normalized and assigned by EM: a chain carried only by reads
+    that also fit a longer isoform, or thinned away by normalization, is still real in
+    the sample. Those reads need not be unique to the model.
+    """
+    if LRAA_Globals.config["ref_trans_filter_mode"] != "retain_expressed":
+        return False
+
+    num_ref_FSM_reads = transcript.get_ref_FSM_reads()
+
+    return (
+        transcript.has_introns()
+        and transcript.has_novel_splice_pattern() is False
+        and carriers_standing == 1
+        and num_ref_FSM_reads is not None
+        and num_ref_FSM_reads
+        >= LRAA_Globals.config["ref_splice_pattern_reprieve_min_FSM_reads"]
+    )
+
+
 def has_insufficient_support(
     num_FSM_reads,
     frac_gene_unique_reads,
@@ -727,6 +776,7 @@ def filter_isoforms_by_min_isoform_fraction(
 ):
 
     min_frac_gene_unique_reads = LRAA_Globals.config["min_frac_gene_unique_reads"]
+    ref_splice_pattern_reprieve = LRAA_Globals.config["ref_splice_pattern_reprieve"]
     min_FSM_reads_retain_isoform = LRAA_Globals.config["min_FSM_reads_retain_isoform"]
     min_FSM_reads_gate = LRAA_Globals.config["min_FSM_reads_gate"]
     min_unique_reads_novel_isoform = LRAA_Globals.config[
@@ -972,7 +1022,16 @@ def filter_isoforms_by_min_isoform_fraction(
                     and num_FSM_reads >= min_FSM_reads_retain_isoform
                 )
 
-                if reference_model_reprieved(transcript):
+                # Spliced models are reference models here by their intron chain, not by
+                # containing a reference path; single-exon models keep the shared rule.
+                if ref_splice_pattern_reprieve and transcript_pattern:
+                    reprieved = ref_splice_pattern_reprieved(
+                        transcript, pattern_carriers_standing[transcript_pattern]
+                    )
+                else:
+                    reprieved = reference_model_reprieved(transcript)
+
+                if reprieved:
                     transcripts_retained.append(transcript)
                     verdict = "retained_reference_model"
 

@@ -306,6 +306,44 @@ context.
 Novel isoforms (those not matching reference annotation) must be supported by at least 2
 uniquely assigned reads.
 
+### Reference models in reference-guided runs (v0.50.0)
+
+Which models count as reference models, and so may be kept below the expression thresholds
+above, is decided by the reference structure itself rather than by where a model's ends lie.
+
+- Spliced models, isoform-fraction filter: a model is kept as a reference model when its intron
+  chain is exactly a reference intron chain (wherever its 5' and 3' ends are), it is the last
+  model of its gene still carrying that chain (the filter removes the weakest first, so terminal
+  variants of the chain go before it), and at least `ref_splice_pattern_reprieve_min_FSM_reads`
+  (default 1) reads of the full BAM carry exactly that chain. Those reads are counted once per
+  work unit before filtering, with quantification's read filters and intron convention, and
+  before coverage normalization; a read that also fits another isoform counts. A reference chain
+  that no read carries is not kept on the annotation alone. Up to v0.49.0 a spliced model was
+  kept when its path contained a whole reference transcript's path, which an end moved by the
+  5' end rule (v0.48.0) could break. At the minimum-length filter, which runs before the
+  known/novel call, spliced models are still judged by containment.
+- Single-exon models (minimum-length, monoexonic and isoform-fraction filters): a model is a
+  reference model when it is `ref_supported`: on its strand, it and a reference single-exon
+  transcript each have at least `ref_supported_monoexonic_min_reciprocal_overlap` (default 0.8)
+  of their length in the overlap. Lying within an exon of a multi-exon reference transcript, or
+  spanning one of its introns, is not reference support.
+- Both rules keep the existing `ref_trans_filter_mode retain_expressed` requirement and are on by
+  default (`ref_splice_pattern_reprieve`, `ref_supported_monoexonic`; set either to false with
+  `--config_update` to restore the v0.49.0 rule). De novo runs have no reference chains, so
+  nothing there is kept by either rule.
+
+The guide can itself be an LRAA GTF (in single-cell cluster-guided runs each cluster is guided
+by the pooled initial GTF). An LRAA model is built from reads, not annotated, so it stands for a
+reference transcript only when the run that wrote it said so: GTF rows whose column 2 is `LRAA`
+contribute as reference chains only when flagged `ref_splice_pattern "True"` (single-exon rows:
+`ref_supported "True"`), and their `ref_FSM_reads` counts (pooled reads) are used in place of a
+scan of the cluster's own BAM. A novel model of the initial run is therefore novel in the
+cluster runs too, and faces the novel-isoform read requirements there. An LRAA GTF without these
+attributes (written before v0.50.0) is refused as a guide by discovery runs (at startup, before
+any work begins) and by `merge_LRAA_GTFs.py`; quantification-only runs accept any GTF. To use such a GTF anyway, set
+`allow_unflagged_LRAA_guide` to true (via `--config_update`), which treats all of its models as
+reference models, as earlier versions did, or regenerate it with v0.50.0.
+
 ## Isoform Terminal Exon Boundary Refinement
 
 For isoforms lacking explicit TSS or PolyA annotation, corresponding terminal exon boundaries

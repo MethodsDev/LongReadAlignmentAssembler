@@ -1,7 +1,15 @@
 test: check_merged_coords check_merged_3prime_attributes
 
-LRAA.merged.gtf:
-	../../../util/merge_LRAA_GTFs.py --genome data/EMP3.genome.fa --gtf data/EMP3.*gtf
+# The inputs are cluster GTFs written before v0.50.0, without ref_splice_pattern /
+# ref_supported, which the merge refuses by default; merged here under the documented
+# fallback, which treats their models as references as earlier versions did.
+LEGACY_CONFIG = legacy_LRAA_inputs.config.json
+
+$(LEGACY_CONFIG):
+	echo '{"allow_unflagged_LRAA_guide": true}' > $@
+
+LRAA.merged.gtf: $(LEGACY_CONFIG)
+	../../../util/merge_LRAA_GTFs.py --genome data/EMP3.genome.fa --gtf data/EMP3.*gtf --config_update $(LEGACY_CONFIG)
 
 check_merged_coords: LRAA.merged.gtf
 	sort LRAA.merged.gtf | cut -f1-7 > LRAA.merged.gtf.sorted
@@ -35,7 +43,7 @@ check_merged_3prime_attributes: LRAA.merged.gtf
 
 
 clean:
-	rm -f ./LRAA* 
+	rm -f ./LRAA* $(LEGACY_CONFIG)
 	rm -rf ./__* 
 
 

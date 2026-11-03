@@ -92,9 +92,13 @@ def test_chunked_ref_guided_discovery_is_reachable(tmp_path):
     rejected.
     """
 
+    # An existing (empty) annotation: since v0.50.0 the guide is read at startup, so a
+    # missing file would fail there, before the point this test is about.
+    annot = tmp_path / "annot.gtf"
+    annot.write_text("")
     result = _lraa(
         "--chunk",
-        "--gtf", "annot.gtf",
+        "--gtf", str(annot),
         "--bam", "reads.bam",
         "--genome", "genome.fa",
         "--output_prefix", str(tmp_path / "sample"),
@@ -729,6 +733,44 @@ def test_the_merged_gtf_is_rebased_and_its_model_ids_cannot_collide(tmp_path):
         ("5100", "5400"),
         ("5100", "5200"),
     ]
+
+
+def test_the_merged_gtf_translates_splice_hash(tmp_path):
+    """splice_hash (v0.50.0) hashes intron coordinates, so a chunk's chunk-local hash
+    must follow the coordinate shift; ref_splice_pattern / ref_FSM_reads do not move."""
+    from Transcript import Transcript
+
+    exons = [(100, 200), (300, 400)]
+    local = Transcript("chrT", [list(e) for e in exons], "+")
+    attrs = 'gene_id "g1"; transcript_id "t1";'
+    units = []
+    for unit_id, offset in (("c0", 0), ("c1", 5000)):
+        prefix = str(tmp_path / unit_id)
+        with open(prefix + ".gtf", "wt") as fh:
+            print("# LRAA version comment", file=fh)
+            print(
+                "\t".join(
+                    ("chrT", "LRAA", "transcript", "100", "400", ".", "+", ".",
+                     attrs + ' splice_hash "{}"; ref_splice_pattern "True"; ref_FSM_reads "3";'.format(
+                         local.get_splice_hash()))
+                ),
+                file=fh,
+            )
+            for lend, rend in exons:
+                print("\t".join(("chrT", "LRAA", "exon", str(lend), str(rend), ".", "+", ".", attrs)), file=fh)
+        units.append({"unit_id": unit_id, "offset": offset, "quant_prefix": prefix})
+
+    merged_dir = str(tmp_path / "merged")
+    os.makedirs(merged_dir)
+    result = ChunkedRun.merge_discovery_gtf(merged_dir, units)
+
+    with open(result["gtf"], "rt") as fh:
+        rows = [line.rstrip("\n").split("\t") for line in fh if line[0] != "#"]
+    hashes = [re.search(r'splice_hash "([^"]*)"', r[8]).group(1) for r in rows if r[2] == "transcript"]
+    shifted = Transcript("chrT", [[lend + 5000, rend + 5000] for lend, rend in exons], "+")
+    assert hashes == [local.get_splice_hash(), shifted.get_splice_hash()]
+    assert ChunkedRun.splice_hash_of_exons("chrT", "+", exons) == local.get_splice_hash()
+    assert all('ref_FSM_reads "3"' in r[8] for r in rows if r[2] == "transcript")
 
 
 def test_strandless_is_the_default_chunking_mode(tmp_path):
