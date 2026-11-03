@@ -1,4 +1,4 @@
-Unreleased (v0.50.0 draft; version not bumped)
+v0.50.0
 
 Changes that alter run outputs (which reference transcripts ref-guided runs keep, single-exon
 models' reference reprieve, which init models single-cell cluster runs treat as references, new
