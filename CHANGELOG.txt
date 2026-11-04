@@ -1,301 +1,108 @@
 v0.50.0
 
-Changes that alter run outputs (which reference transcripts ref-guided runs keep, single-exon
-models' reference reprieve, which init models single-cell cluster runs treat as references, new
-GTF attributes). BREAKING: an LRAA-produced GTF from an earlier version is refused as a
-discovery guide and as a merge input (below). RELEASE CANDIDATE: the measurements below are
-chromosome and minigenome scale (__LRAA_dev/v049_sc_fsm_loss/NOTES.md sections 13-15 and
-VM_NOTES.md in the paper analyses repo); the benchmark families and single-cell evaluations on
-this candidate's images are still to be run.
+Changes that alter run outputs (which reference transcripts ref-guided runs keep, which init models
+single-cell cluster runs treat as references, new GTF attributes). BREAKING: an LRAA GTF written
+before v0.50.0 is refused as a discovery guide and as a merge input (below).
 
-- Reference reprieve of spliced models keyed on the reference SPLICE PATTERN
-  (ref_splice_pattern_reprieve, default true). In the isoform-fraction filter a spliced model is
-  kept as a reference model when its intron chain is exactly a reference chain (wherever its ends
-  are), it is the last model of its gene still carrying that chain, and >= 1 read of the FULL bam
-  carries exactly that chain (ref_splice_pattern_reprieve_min_FSM_reads = 1; reads that also fit
-  another isoform count; counted once per work unit with quant's read filters and intron
-  convention, before depth normalization: pylib/ReferenceSupport.py). It replaces, there only,
-  the path-containment reprieve (a model containing a whole reference path, >= 1 EM read, any
-  number of carriers). Why: v0.48.0's own_vote 5' rule moves annotated 5' ends inside the first
-  exon, which breaks containment, so read-supported reference chains were filtered in sc
-  ref-guided runs (guided by all of GENCODE): v0.49.0 recovered about half. Containment stays at
-  the min-length filter (runs before the known/novel call). By design, a reference chain no read
-  carries is no longer kept on the annotation alone, and several terminal variants of one
-  reference chain are no longer all kept.
-- Single-exon models are reference models only when ref_supported (ref_supported_monoexonic,
-  default true): same-strand reciprocal overlap >= 0.8
-  (ref_supported_monoexonic_min_reciprocal_overlap) with a reference single-exon transcript,
-  instead of containing any guide model (which counted fragments of multi-exon references and
-  intronic models). Applies at the min-length, monoexonic and isoform-fraction filters.
-- NEW GTF attributes on the transcript row: splice_hash and ref_splice_pattern ("True"/"False")
-  on multi-exon models, ref_FSM_reads on reference-chain models, ref_supported on single-exon
-  models (docs/methods.md, Outputs). De novo runs write ref_splice_pattern "False" /
-  ref_supported "False". Carried by the GTF parser, the splice-pattern collapse, the chunked
-  discovery merge (splice_hash translated with the coordinates) and merge_LRAA_GTFs.py (flag by
-  intron chain from any input, ref_FSM_reads the maximum over the inputs).
-- Guide class from GTF column 2: "LRAA" is an LRAA-produced model, anything else a reference
-  annotation. An LRAA guide contributes as reference chains only its rows flagged
-  ref_splice_pattern "True" (single-exon: ref_supported "True") and supplies their ref_FSM_reads,
-  so single-cell cluster runs guided by the init GTF decide on the pooled counts and do not
-  treat the init run's novel models as references (they now face the novel-isoform read floors
-  in each cluster; the merge still re-imports them via --pooled_gtf).
-- BREAKING: a discovery run (not --quant_only, not an oversimplified contig) guided by an LRAA
-  GTF whose rows lack ref_splice_pattern / ref_supported (any GTF written before v0.50.0) stops
-  with an error at startup, before any work unit or chunk is launched (the --gtf file is
-  streamed once; rows on oversimplified contigs are exempt), and so does merge_LRAA_GTFs.py
-  given such an input. Fallback:
-  --config_update '{"allow_unflagged_LRAA_guide": true}' treats all of its models as reference
-  models (the pre-v0.50.0 behaviour), or regenerate the GTF with v0.50.0. On Terra, put the key
-  in the merge task's config input (below) and, for a precomputed_init_gtf, also in
-  cluster_config_update_json. Quant-only runs accept any GTF.
-- WDL: the merge task (lraa_merge_gtf_task) takes an optional config_update_json, handed to
-  merge_LRAA_GTFs.py as --config_update (written through a quoted heredoc like the LRAA
-  tasks). Exposed as merge_config_update_json in LRAA-singlecell.wdl and
-  LRAA-cell_cluster_guided.wdl, and as config_update_json in
-  LRAA-merge_gtfs_from_sample_set.wdl. Unset by default: no change to the command. Tests:
-  pylib/test_wdl_pooled_gtf_merge.py (wiring from both workflows; flag only when set; the JSON
-  reaches the file verbatim); testing/ref_splice_pattern_reprieve runs the task's rendered
-  command outside a container, which refuses an unflagged pooled GTF without the input and
-  merges it with '{"allow_unflagged_LRAA_guide": true}'.
-- Turning both rules off (ref_splice_pattern_reprieve and ref_supported_monoexonic false)
-  restores v0.49.0's filtering and writes none of the new attributes; the guide-class check is
-  then off too.
-- MEASURED (prototype, same rule): 34-locus minigenome panel (PBMC / ALS sc loci with the
-  GENCODE47 guide, bulk TUSCO loci with the benchmark guide): every GENCODE chain dropped
-  relative to v0.49.0 had 0 FSM reads in the v0.49.0 run; EEF1A1 ENST00000455918 restored,
-  AIF1 ENST00000466820 kept (a unique-read version of the rule dropped it: 0 FSM reads among the
-  depth-normalized reads the filter sees vs 27 unique reads in the bam); bulk 5' end placement
-  unchanged at every TUSCO locus; de novo loci unchanged. chr22 sc basic (fleet): total GENCODE
-  chains -5% PBMC / -13% ALS against v0.49.0, with the most read-supported GENCODE chains and the
-  fewest novel chains of the arms tested and v0.48.0's 5' CAGE gain kept. chr19 bulk ref-guided
-  guide chains HG002 583 / BT474 393 (v0.49.0 585 / 390, v0.47.0 589 / 394). Full-bam scan cost
-  ~1.3% of wall time on the panel (EEF1A1, 329k reads: 36 s of ~25 min). This code with
-  default settings reproduces the prototype's v050cand output exactly (same models, same
-  ref_splice_pattern / ref_FSM_reads / ref_supported / TSS / PolyA) on the PBMC CHMP5, AIF1,
-  TNFAIP8 and HSP90AA1 panel minigenomes.
-- MEASURED (this code and the prototype, chromosome scale; this code is exon-identical to the
-  prototype on PBMC chr22 ref-guided sc: basic, all 14 cluster GTFs and the merged GTF).
-  Mouse simulated reads, ref-guided with the one-isoform-per-gene guide, chr2/11/17, guide
-  chains reconstructed (knownTPR) at 0 / 5 / 8.5% simulated error: v0.47.0 .980 / .976 / .971,
-  v0.49.0 .974 / .955 / .945, v0.50.0 .977 / .974 / .966; novel TPR/FDR within 0.001. chr19
-  bulk ref-guided (HG002 / BT474): guide chains 583 / 393 (v0.49.0 585 / 390, v0.47.0
-  589 / 394), multi-exon 5' ends in a CAGE peak 79.3 / 86.1% (v0.49.0 79.3 / 86.1, v0.47.0
-  74.0 / 82.9), novel chains 3,666 / 2,863 (v0.49.0 3,717 / 2,898); chr19 de novo identical to
-  v0.49.0. chr22 sc ref-guided cluster-guided (PBMC / ALS): GENCODE chains with a bam read
-  carrying the exact chain 1,117 / 761 (v0.49.0 1,043 / 694, v0.47.0 1,067 / 724), novel chains
-  3,439 / 1,706 (v0.49.0 3,526 / 1,742), 5' CAGE 63.3% PBMC (v0.49.0 63.1); GENCODE chains
-  dropped against v0.49.0 153 / 270, of which 151 / 265 had no read carrying the chain. Every
-  read-supported guide chain lost against v0.47.0 is also lost at v0.49.0 (known issue b), except
-  the rDNA-mask case (known issue a).
-- FIX: single-cell cluster runs guided by an init GTF reprieved every init model as if it were a
-  reference model (provenance was assigned against any guide). The reprieve is meant for the
-  original reference annotation only. Init models now carry their reference status from the
-  init GTF's flags; in DE NOVO runs every chain is "False", so the init models face the
-  novel-isoform floors in the cluster runs (the merge still re-imports them via --pooled_gtf).
-  MEASURED chr22 de novo sc (PBMC / ALS, 14 clusters, v0.49.0 -> v0.50.0): basic runs
-  identical; init chains rediscovered per cluster 1,130 -> 800 / 574 -> 375 on average; the merge
-  keeps the init chains (3,172 -> 3,174 / 2,132 -> 2,136). Merged models 5,960 -> 5,805 /
-  3,688 -> 3,613; spliced chains 4,514 -> 4,535 / 2,627 -> 2,645; chains with a bam read
-  carrying the exact chain 4,437 -> 4,456 / 2,547 -> 2,565; GENCODE chains 854 -> 855 /
-  545 -> 555; 5' ends in a CAGE peak unchanged (62.7% / 39.3%). Chains lost 26 / 19, gained
-  47 / 37; no lost chain was an init model (cluster-discovered at v0.49.0, mostly with a longer
-  containing chain in v0.50.0).
-- Known issues, not addressed in this version:
-  a. rDNA mask false positive on non-human genomes: the bundled human rDNA cassette matches mouse
-     chr17 near 8.17 Mb, so the 53 reads carrying ENSMUST00000097423 (an 88-bp exon inside the
-     mask) are discarded in every version; v0.47.0 kept the model only through the containment
-     reprieve, v0.50.0 drops it. Any non-human genome can be affected. Workaround:
-     --no_rdna_mask (or --rdna_mask_fasta with the organism's own cassette). Fix planned after
-     this release.
-  b. Read-supported reference chains pruned as degradation products: the 5' end moves inward onto
-     a read pile-up inside an exon shared with a longer model, and the model is then pruned as
-     lacking a TSS with no distinguishing PolyA (UBE2M 83 reads, PPP6R1 31 reads (HG002 chr19),
-     mouse ENSMUST00000109316 103 reads). Pre-existing at v0.49.0; no reprieve rule applies there.
-     Reads carrying the shorter chain cannot tell a real shorter isoform from fragments of the
-     longer one.
-- Tests: pylib/test_ref_splice_pattern_reprieve.py (rule, attributes, guide class, unflagged
-  guide refused and its fallback, ref_supported classes, full-bam count incl. reads crossing a
-  work-unit boundary, pooled counts from the guide); test_chunked_entry_point.py (splice_hash
-  translated by the chunked merge); execution test testing/ref_splice_pattern_reprieve (SIRV:
-  attributes, ref_FSM_reads equal to an independent count of the bam, chunked = unchunked
-  counts, run guided by an LRAA GTF uses its pooled counts, unflagged guide refused / allowed /
-  chunked run refused at startup with nothing but its log written, quant-only accepted,
-  merge flags and maximum counts, merge refuses unflagged inputs). Fixtures
-  updated to carry the new attributes, as v0.50.0 writes them (and test_chunked_entry_point's
-  ref-guided reachability test now passes an existing empty --gtf, since the guide is read at
-  startup): testing/end_placement TIGD7 merge
-  inputs and the hand-written merge inputs of test_merge_recurrent_overhang_termini.py and
-  test_merge_annotates_three_prime_ends.py; two containment tests pin the single-exon rule off
-  or use a spliced model (test_reference_transcript_provenance.py,
-  test_short_reference_component_retention.py). testing/misc_tests: the hand-written reference
-  of internal_priming_removal (data/use_as_ref.gtf) said "LRAA" in column 2 and now says
-  "reference"; merge_LRAA_GTFs and EMP3_alt_termini merge real pre-v0.50.0 cluster GTFs and now
-  run under allow_unflagged_LRAA_guide (outputs unchanged: parity and expected coordinates hold).
+- Reference reprieve by splice pattern (ref_splice_pattern_reprieve, default true). In the
+  isoform-fraction filter a spliced model is kept as a reference model when its intron chain is
+  exactly a reference chain (wherever its ends are), it is the last model in the assembly carrying
+  that chain, and at least one read of the full BAM carries the whole chain
+  (ref_splice_pattern_reprieve_min_FSM_reads, default 1; counted before depth normalization).
+  This replaces, at that filter, the reprieve of any model containing a whole reference path. A
+  reference transcript that no read carries end to end is kept only if it passes the ordinary
+  filters on its assigned reads.
+- Single-exon models count as reference models only with same-strand reciprocal overlap >= 0.8
+  with a reference single-exon transcript (ref_supported_monoexonic, default true;
+  ref_supported_monoexonic_min_reciprocal_overlap).
+- New GTF attributes on transcript rows: splice_hash and ref_splice_pattern ("True"/"False") on
+  multi-exon models, ref_FSM_reads (full-BAM reads carrying the chain) on reference-chain models,
+  ref_supported on single-exon models. Carried through splice-pattern collapse, chunked runs and
+  merge_LRAA_GTFs.py (which keeps the maximum ref_FSM_reads over its inputs).
+- Guide GTFs: column 2 "LRAA" marks an LRAA-produced model; anything else is a reference
+  annotation. From an LRAA guide, only rows flagged ref_splice_pattern "True" (single-exon:
+  ref_supported "True") are reference chains, with their ref_FSM_reads.
+- FIX: single-cell cluster runs treated every model of the init (pooled) GTF as a reference
+  model, including de novo ones. Init models now carry their reference status from the init
+  GTF's flags. The merge still re-imports the init models (--pooled_gtf).
+- BREAKING: a discovery run guided by an LRAA GTF without the new flags (any GTF written before
+  v0.50.0) stops with an error at startup, and so does merge_LRAA_GTFs.py given such an input.
+  Regenerate the GTF with v0.50.0, or set --config_update '{"allow_unflagged_LRAA_guide": true}'
+  to treat all of its models as reference models (the earlier behaviour). Quant-only runs accept
+  any GTF.
+- WDL: the merge task takes an optional config_update_json (merge_config_update_json in
+  LRAA-singlecell.wdl and LRAA-cell_cluster_guided.wdl, config_update_json in
+  LRAA-merge_gtfs_from_sample_set.wdl). On Terra, use it for the key above, and for a
+  precomputed_init_gtf also set the key in cluster_config_update_json.
+- Setting ref_splice_pattern_reprieve and ref_supported_monoexonic to false restores v0.49.0's
+  filtering and writes none of the new attributes.
+- Known issues:
+  - The default rDNA read mask uses the human rDNA repeat and can mask reads on other genomes.
+    Use --no_rdna_mask, or --rdna_mask_fasta with the organism's own repeat.
+  - A reference transcript with reads can be pruned as a degradation fragment when its 5' end
+    moves onto a read pile-up inside an exon shared with a longer isoform.
 
 
 v0.49.0
 
 Changes that alter run outputs (5' ends of isoforms with no TSS site and few reads, mainly in
-ref-guided runs). v0.48.0 plus one rule change. RELEASE CANDIDATE: the measurements below are
-chromosome and minigenome scale; the benchmark families and single-cell evaluations on this
-candidate's images are still to be run.
+ref-guided runs).
 
-- The own_vote 5' end rule (v0.48.0) is now tiered (terminal_end_rule_own_vote_tiered, default
-  true; terminal_end_rule_own_vote_tiered_min_reads = 7). At a 5' end with no called TSS site:
-  1. a clear read 5' end pile-up (the model's own reads, then the reads of all models with the
-     same first intron; same pile-up test as v0.48.0) -> the pile-up;
-  2. no pile-up and >= 7 own reads -> the 20th percentile of the own reads from the 5' side
-     (as v0.48.0);
-  3. no pile-up and fewer than 7 own reads -> the outermost evidence: the longest own read's 5'
-     end, and in ref-guided runs also the annotated 5' end of a reference transcript that carries
-     the model's intron chain (terminal_end_rule_own_vote_tiered_reference_end, default true);
-     the outermost of these wins. The reference end is not a read: it does not count toward the
-     7, never votes for a pile-up and never enters the percentile, so a read reaching past it
-     still sets the end.
-  The read count is the model's own-chain reads (own_vote's pool); the cutoff 7 is v0.47.0's
-  min_reads_for_terminal_adjustment. Why: v0.48.0 excluded the reference transcripts' synthetic
-  reads from the end rule, so a reference model backed by one or two short reads had its 5' end
-  pulled inside the annotated TSS (v0.47.0 kept the exon edge below 7 reads); that cost the
-  ref-guided benchmarks known-transcript sensitivity and ONT TUSCO genes. The 20th percentile of
-  <= 5 reads is already the outermost read, so tiers 2-3 by themselves differ from v0.48.0 only
-  for models with exactly 6 own reads; the reference end is the change that matters. De novo
-  runs and merges carry no reference transcripts, so there only the 6-read case changes.
-  MEASURED chr19 ref-guided, against v0.48.0 (benchmark flags; HG002 and BT474 PacBio --HiFi,
-  A549 and MCF7 ONT): guide (one-per-gene) chains reproduced HG002 576 -> 585 of 589 (v0.47.0
-  589), BT474 387 -> 390 of 394, A549 259 -> 257, MCF7 250 -> 250; guide models with a 5' end
-  within 10 bp of the annotated TSS HG002 49.8 -> 58.1%, BT474 47.0 -> 53.6%, A549 56.4 -> 68.1%,
-  MCF7 56.4 -> 72.4%; multi-exon 5' ends in a CAGE peak 79.2 -> 79.3%, 86.1 -> 86.1%,
-  77.8 -> 77.8%, 76.5 -> 77.0% (v0.48.0's gain over v0.47.0 kept); 3' ends in a PolyASite cluster
-  unchanged; novel (non-GENCODE) chains +1, +2, 0, +1. Every moved 5' end moved outward, onto the
-  annotated end; of those ends, in a CAGE peak HG002 27 -> 39 of 69, BT474 20 -> 25 of 37,
-  A549 32 -> 30 of 43, MCF7 32 -> 39 of 54. chr19 de novo (HG002, A549): models, CAGE, PolyASite
-  and chains unchanged to 0.1 pt; 19 and 16 model ends move (the 6-read case), all outward,
-  CAGE-neutral. ONT TUSCO minigenomes (ref-guided): ABHD15 (A549 and MCF7), RTL6 (A549), GNG11
-  and C9orf40 (MCF7) return to TP (v0.47.0 had them TP; v0.48.0 lost them).
-- Known, not addressed in this version:
-  - a real 2-read 5' pile-up still wins over the reference end (tier 1, by design): STBD1
-    (A549, 9 reads) stays 186 bp inside its annotated TSS;
-  - C6orf47 (MCF7, single-exon) keeps v0.48.0's lone-read 5' end; the reads at the annotated end
-    do not count as the model's own and the reference end does not apply (not traced);
-  - DAZAP1-type ISM losses: alternative first exons sharing the canonical donor are pulled
-    inward by the shared-first-intron vote (tier 1) and then dropped as fragments (whether they
-    are real alternative TSSs or truncations is not known);
-  - the 6-read tier change in de novo runs and merges measured neutral on chr19 only; the
-    single-cell merge path is tested on the TIGD7 merge fixture only.
-- Tests: pylib/test_terminal_boundary_low_count.py (keys on by default; tier 1 pile-up beats an
-  outward reference end; tier 2 at 7 reads ignores the reference end; tier 3 outermost at 6
-  reads; tiers equal the plain rule at <= 5 reads; the reference end counts as the longest
-  evidence but not as a read; a shared-first-intron pile-up stays tier 1).
+- The own_vote 5' end rule (v0.48.0) is tiered (terminal_end_rule_own_vote_tiered, default true).
+  At a 5' end with no called TSS site:
+  1. a clear pile-up of read 5' ends (the model's own reads, then those of all models with the
+     same first intron) sets the end;
+  2. otherwise, with >= 7 own reads (terminal_end_rule_own_vote_tiered_min_reads), the 20th
+     percentile of the own reads from the 5' side;
+  3. otherwise the outermost evidence: the longest own read's 5' end and, in ref-guided runs, the
+     annotated 5' end of a reference transcript carrying the model's intron chain
+     (terminal_end_rule_own_vote_tiered_reference_end, default true). The reference end is not
+     counted as a read.
+- Known: alternative first exons sharing the canonical donor can be pulled inward by the
+  shared-first-intron vote and then dropped as fragments.
 
 
 v0.48.0
 
 Changes that alter run outputs (isoform 5' ends without a TSS site, merged models' ends,
-single-exon genes beside a weak junction). RELEASE CANDIDATE: the measurements below are
-chromosome and minigenome scale; the benchmark families and single-cell evaluations on this
-candidate's images are still to be run.
+single-exon genes beside a weak junction).
 
-- Unsupported 5' ends (no TSS site) are placed by terminal_TSS_end_rule "own_vote" (new default;
-  was the 10th-percentile read start, or the terminal exon's edge below
-  min_reads_for_terminal_adjustment reads): the read 5' end pile-up (+-2 bp) among the reads the
-  model represents, else the pile-up among the reads of all models with the same first intron
-  (terminal_end_rule_own_vote_shared_first_intron), else the 20th percentile of the model's reads
-  from the 5' side, at any read count. A pile-up needs 3 reads or 20% of the reads voting,
-  whichever is fewer, and at least 2 (terminal_end_rule_own_vote_min_peak_reads / _frac); not in
-  a merge, where one end per input model votes.
-  terminal_end_rule_extend (default true) lets that end lie past the exon edge, with two guards:
-  an extended end whose model would have no spacer-free path in the splice graph falls back to
-  the rule's in-exon coordinate (without it the remap dropped the model: 261 of 5,776 BT474 chr19
-  models, 642 of 6,813 HG002), and an end more than terminal_end_rule_extend_unvoted_max (200) bp
-  past the edge needs a read pile-up there. 3' ends are unchanged (terminal_PolyA_end_rule stays
-  None; moving them lost PolyA atlas agreement).
-  MEASURED chr19 de novo (PacBio), 5' ends of all multi-exon models within a CAGE peak: BT474
-  76.5 -> 83.5%, HG002 67.1 -> 77.3%; unsupported 5' ends only: BT474 38.4 -> 55.8%, HG002
-  33.7 -> 52.9%. Reconstructed GENCODE chains: BT474 1,783 -> 1,786, HG002 2,205 -> 2,206. 3' ends
-  within a PolyASite cluster: BT474 82.4 -> 81.8%, HG002 72.2 -> 71.6%. Models: BT474 5,776 ->
-  5,467, HG002 6,813 -> 6,601 (fewer end variants of the same chain). The minimum pile-up and the
-  shared-first-intron vote, against the rule without them: 5' in CAGE BT474 82.4 -> 83.5%, HG002
-  75.7 -> 77.3%; TUSCO shortcut SLC30A1 (HG002) PTP -> TP, RTL6 (UHRR) FN -> PTP, no gene worse.
-- Merge (merge_LRAA_GTFs.py, LRAA_MODE MERGE): a merged model's unsupported ends get the same
-  adjustment as a normal model's, with one end per input model as the evidence
-  (merge_end_rule_from_sources); the full-window trim measures from the model's own end, not
-  the graph node's edge (merge_trim_from_model_end); models are re-pathed before their ends are
-  adjusted (merge_repath_before_end_adjustment); an adjustment stops on the first called site
-  it would cross (merge_end_stop_at_called_site); models made identical by the adjustment become
-  one (merge_dedupe_identical_models); an end keeps a TSS / PolyA site only when an input model
-  ends within the site window (merge_site_end_requires_source_support). All default true.
-  MEASURED PBMC chr22 cluster-guided merge, v0.47.0 (cluster runs and merge) against the new
-  5' rule in the cluster runs plus these merge changes (without the 200 bp cap): multi-exon
-  isoforms 5,535 -> 5,461, near-duplicate pairs 7 -> 7, 5' ends in a CAGE peak 55.6 -> 60.1%,
-  3' in a PolyASite cluster 38.5 -> 37.9%, GENCODE chains 725 -> 722. On the same cluster GTFs,
-  TSS-flagged ends more than 50 bp from every input model's end: 19 without the merge changes,
-  0 with them.
-- Single-exon pass: weak-junction guards. An ME model's exon no longer masks the unspliced reads
-  of an intron whose read-through T exceeds 20 x its spliced support J
-  (SE_mask_max_readthrough_to_junction_ratio), and an intron whose background floor exceeds 20 x J
-  is not subtracted (SE_intronic_background_max_floor_to_junction_ratio). None restores v0.47.0.
-  MEASURED BT474 chr19: 13 of 11,257 model introns above the ratio, none a GENCODE intron; one
-  single-exon model gained, no chain lost. TUSCO (fast minigenome shortcut, four PacBio libraries):
-  sensitivity BT474 45.65 -> 54.35, HG002 50.00 -> 56.52, K562 36.96 -> 41.30, UHRR 36.96 -> 39.13;
-  RNF26, SEPHS2, C6orf47, NCBP2AS2 (BT474) and KBTBD6, MARS2 now TP, no gene worse.
-  docs/SE_weak_junction_guard.md.
-- Combined on chr19 (BT474 and HG002): the models are those of the end rules alone plus the one
-  single-exon model the guard adds (the same locus in both libraries); the guard changes no
-  multi-exon model. TUSCO shortcut, all v0.48.0 defaults, sensitivity: BT474 45.65 -> 54.35,
-  HG002 50.00 -> 54.35, K562 36.96 -> 41.30, UHRR 36.96 -> 36.96; PDR BT474 67.39 -> 73.91,
-  HG002 80.43 -> 89.13, K562 67.39 -> 69.57, UHRR 69.57 -> 73.91.
-- Tests: pylib/test_terminal_boundary_low_count.py (end rules, SPACER revert,
-  merge end logic), pylib/test_SE_weak_junction_guard.py; execution test testing/end_placement
-  (TIGD7 normal run and merge, a SPACER revert locus, SEPHS2, COMT from BT474 reads; SLC30A1 from
-  HG002 and RTL6 from UHRR reads);
-  testing/misc_tests/EMP3_alt_termini expected merge updated (one single-exon model ends at its
-  input models' 3439, not the node edge 3473).
-
-Also in this version, no change to default runs: experimental keys terminal_boundary_method_low_count,
-terminal_boundary_percentile_TSS and terminal_PolyA_end_rule (off). Tested and not adopted, so
-not kept: an outward-only 3' pile-up rule, an exact-chain-only read vote, and the model-end trim
-measure outside the merge.
+- Unsupported 5' ends (no TSS site) are placed by terminal_TSS_end_rule "own_vote" (new default):
+  the pile-up of read 5' ends (+-2 bp) among the model's reads, else among the reads of all
+  models with the same first intron, else the 20th percentile of the model's reads from the 5'
+  side. A pile-up needs 3 reads or 20% of the reads, whichever is fewer, and at least 2
+  (terminal_end_rule_own_vote_min_peak_reads / _frac). terminal_end_rule_extend (default true)
+  lets the end lie past the exon edge; an end more than terminal_end_rule_extend_unvoted_max
+  (200) bp past it needs a read pile-up there. 3' ends are unchanged.
+- merge_LRAA_GTFs.py: a merged model's unsupported ends get the same rule, with one end per input
+  model as the evidence; models are re-pathed before their ends are adjusted; an adjustment stops
+  at the first called site it would cross; models made identical become one; an end keeps a
+  TSS/PolyA site only when an input model ends within the site window (merge_end_rule_from_sources,
+  merge_trim_from_model_end, merge_repath_before_end_adjustment, merge_end_stop_at_called_site,
+  merge_dedupe_identical_models, merge_site_end_requires_source_support; all default true).
+- Single-exon pass: an ME model's exon no longer masks the unspliced reads of an intron whose
+  read-through exceeds 20x its spliced support (SE_mask_max_readthrough_to_junction_ratio), and an
+  intron whose background floor exceeds 20x its spliced support is not subtracted
+  (SE_intronic_background_max_floor_to_junction_ratio).
+- Also in this version, no change to default runs: experimental keys
+  terminal_boundary_method_low_count, terminal_boundary_percentile_TSS and
+  terminal_PolyA_end_rule (off).
 
 
 v0.47.1
 
-No change to run outputs. Lower Terra cost and wall time, no change to how the WDLs schedule
-under miniwdl (one exception below). Outputs of v0.47.0 stay valid.
+No change to run outputs. Lower Terra cost and wall time.
 
-Measured, v0.47.0 image against this commit under miniwdl, one fixture run each: sirvs ref-free,
-ref-guided and quant-only; sep_contigs ref-free, ref-guided and quant-only (scattered);
-sc_full_pipe basic and cluster-guided, full and quant-only; sc_full_pipe_scattered. GTFs,
-quant.expr, tracking (sorted lines), sc matrices and tarball contents are identical, and the 29
-normalized BAMs of the cluster-guided run are byte-identical. Differing files were only: timing and
-memory telemetry in chunk reports, bam_identity in chunk plans (the path, size and mtime of the
-file, not its records), and row order of the cluster pseudobulk matrices, which already varies with
-PYTHONHASHSEED. Not measured: any Cromwell or Terra run, cost, or the speedups on real data
-(the timings below are from the cg-terra-testing branch's own measurements).
-
-Workflows:
-- Every task reachable from LRAA.wdl and LRAA-singlecell.wdl names predefinedMachineType next to
-  its cpu and memory. Tasks of 3+ cores use C3D tiers, as do LRAA_runner_task and process_chunk
-  whatever their cpu; fixed tasks of up to 2 cores use N2D. Without a named machine Cromwell builds
-  a custom N1 VM.
-- Task disks move from HDD to SSD as on cg-terra-testing, sizes unchanged, except derive_contigs
-  and validate_scattering. C3D is never paired with HDD.
-- Commands stay on the requested cpu, so a larger tier leaves cores idle rather than changing
-  a thread count.
-- Spot: LRAA_runner_task 2 tries (70% of the task-hours of the PBMC v0.47.0 basic arm, median 6.6
-  min), partition_by_chromosome_task, alignment_mismapping_filter and lraa_merge_gtf_task 1, small
-  tasks and normalize 3. make_chunks, merge_chunks and emit_shared_chunk_plan stay on demand.
-- mergeQuantResults and LRAA_merge_trackings merge per shard with pigz instead of one python gzip
-  stream (293 s -> 43 s on 25 shards). Decompressed output is byte-identical; the .gz file is now a
-  multi-member gzip, level 6 rather than 9. These two tasks reserve cpu 4 rather than 1, the
-  one change to miniwdl scheduling.
-
-Options, no change to default runs:
+- Every task reachable from LRAA.wdl and LRAA-singlecell.wdl names a predefinedMachineType next
+  to its cpu and memory (C3D for tasks of 3+ cores and for the main runner, N2D for small fixed
+  tasks); task disks are SSD; commands keep their requested cpu.
+- Spot instances for LRAA_runner_task, the partition, mismapping-filter, merge, normalize and
+  small tasks; make_chunks, merge_chunks and emit_shared_chunk_plan stay on demand.
+- mergeQuantResults and LRAA_merge_trackings merge per shard with pigz (decompressed output
+  identical; the .gz is multi-member, level 6). These two tasks reserve 4 cpu instead of 1.
 - normalize_bam_by_strand.py and separate_bam_by_strand.py: --intermediate_compression_level for
-  the strand bams and per-contig parts, never the final bam; Normalize_bam.wdl sets 1. The PG scan
-  gets --threads. 547 s -> 353 s on a 6.6 GB merged bam.
-
-Also in this version, no change to default runs: pasa_mode keeps a compatible trellis extension
-at score 0 (only under --pasa_mode); docs and comments.
+  intermediate BAMs (Normalize_bam.wdl sets 1); the PG scan gets --threads.
+- pasa_mode keeps a compatible trellis extension at score 0 (only under --pasa_mode).
 
 
 v0.47.0

@@ -44,9 +44,12 @@ The version is set in two places, changed together in one commit titled
 
 `CHANGELOG.txt`, newest first, one section per version. Each section says up front whether run
 outputs change ("Changes that alter run outputs (...)" / "No change to run outputs" / "Also in
-this version, no change to default runs"), and gives MEASURED evidence for output changes: the
-dataset, the region, and the numbers before and after. The release notes are a short,
-user-facing summary of the changelog sections since the previous release.
+this version, no change to default runs"), then lists the software changes users need to know:
+what behaviour changed, the config keys and defaults, workflow inputs/outputs, breaking changes
+and known issues. It does not hold benchmark numbers, validation measurements or findings about
+specific genes (maintainer, 2026-11-04): those belong in the analysis records that validated the
+release. The release notes are a short, user-facing summary of the changelog sections since the
+previous release.
 
 ## Before releasing
 
@@ -55,8 +58,8 @@ user-facing summary of the changelog sections since the previous release.
   devel commits go in the next release.
 - `pytest pylib` passes (including the serial tests), and the execution tests under `testing/`
   pass on that commit.
-- For a MINOR release: the changelog's MEASURED evidence exists for the output changes. For
-  the LRAA paper this means the benchmark families and the single-cell evaluations were rerun
+- For a MINOR release: the output changes were validated, and the measurements are recorded
+  outside the changelog. For the LRAA paper this means the benchmark families and the single-cell evaluations were rerun
   on the candidate's development images (`X.Y.Z-<shortsha>`).
 - For a PATCH release: outputs shown identical to the previous release on at least one sample
   per mode (bulk ref-free, ref-guided, quant-only, and the single-cell test pipeline).
@@ -131,3 +134,7 @@ No internal paths or commit hashes in the notes.
 - `LRAA_v0.47.0` (2026-10-31): released from `09025bb2`, the commit whose development images
   (`0.47.0-09025bb`) produced the LRAA paper's v0.47.0 analyses; the two later devel commits
   (docs and comments) go into the next release. This document was written at that release.
+- `LRAA_v0.50.0` (2026-11-04): released from `bcf1ca31`, whose development images
+  (`0.50.0-bcf1ca3`) produced the LRAA paper's v0.50.0 benchmark and single-cell analyses;
+  includes v0.47.1-v0.49.0, which were not released separately. The changelog sections from
+  v0.47.1 on were rewritten afterwards on `devel` to hold feature notes only.
