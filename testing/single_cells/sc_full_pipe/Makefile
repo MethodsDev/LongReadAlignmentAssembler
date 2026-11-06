@@ -5,7 +5,7 @@ include ../../lraa_test_docker.mk
 
 # MINIWDL_CFG and MINIWDL_RUN come from the include above.
 
-test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_cluster_guided_wdl_QOnly
+test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly
 
 
 test_full_sc_pipe_basic_wdl:
@@ -15,6 +15,13 @@ test_full_sc_pipe_basic_wdl:
 test_full_sc_pipe_basic_wdl_QOnly:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.inputs.json  -d sc_pipe_outdir-basic-QOnly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
+
+# quant_only against an LRAA-built GTF: its features carry LRAA ids, so only
+# gffcompare against the reference can name them (a reference-id GTF, as in the
+# target above, is named without it and cannot catch a skipped comparison).
+test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.LRAA_gtf.inputs.json -d sc_pipe_outdir-basic-QOnly-LRAA_gtf $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+	python3 check_quant_only_LRAA_gtf_symbols.py sc_pipe_outdir-basic-QOnly-LRAA_gtf
 
 test_full_sc_pipe_cluster_guided_wdl:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose

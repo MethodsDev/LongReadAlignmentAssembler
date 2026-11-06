@@ -115,7 +115,7 @@ def main():
 
     # print(str(gff_compare_LRAA_id_to_REF_id_mapping))
 
-    id_mappings = parse_id_mappings(id_mappings_file)
+    id_mappings, splice_hash_to_transcript_ids = parse_id_mappings(id_mappings_file)
 
     feature_ids_updated = dict()
 
@@ -126,6 +126,7 @@ def main():
             gff_compare_LRAA_id_to_REF_id_mapping,
             ref_id_to_gene_name,
             id_mappings,
+            splice_hash_to_transcript_ids,
             feature_ids_updated,
         )
 
@@ -197,6 +198,9 @@ def write_annotated_id_mappings_file(
 def parse_id_mappings(id_mappings_file):
 
     id_mappings = dict()
+    # every transcript sharing a splice pattern, in file order: a pattern is named
+    # from any of its isoforms, not only the last one id_mappings keeps for it
+    splice_hash_to_transcript_ids = defaultdict(list)
 
     with open(id_mappings_file, "rt") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -205,8 +209,30 @@ def parse_id_mappings(id_mappings_file):
             transcript_splice_hash_code = row["transcript_splice_hash_code"]
             id_mappings[transcript_id] = row
             id_mappings[transcript_splice_hash_code] = row
+            splice_hash_to_transcript_ids[transcript_splice_hash_code].append(
+                transcript_id
+            )
 
-    return id_mappings
+    return id_mappings, splice_hash_to_transcript_ids
+
+
+def lookup_gene_name(feature_id, gff_compare_LRAA_id_to_REF_id_mapping, ref_id_to_gene_name):
+    """gene name for a reference id, or for an LRAA id via gffcompare; None if neither"""
+
+    if feature_id in ref_id_to_gene_name:
+        return ref_id_to_gene_name[feature_id]
+
+    if (
+        gff_compare_LRAA_id_to_REF_id_mapping is not None
+        and feature_id in gff_compare_LRAA_id_to_REF_id_mapping
+    ):
+        ensg_id, enst_id = gff_compare_LRAA_id_to_REF_id_mapping[feature_id]
+        if ensg_id in ref_id_to_gene_name:
+            return ref_id_to_gene_name[ensg_id]
+        if enst_id in ref_id_to_gene_name:
+            return ref_id_to_gene_name[enst_id]
+
+    return None
 
 
 def update_LRAA_gff_feature_ids(
@@ -272,6 +298,7 @@ def update_sparseM_feature_names(
     gff_compare_LRAA_id_to_REF_id_mapping,
     ref_id_to_gene_name,
     id_mappings,
+    splice_hash_to_transcript_ids,
     feature_ids_updated,
 ):
 
@@ -293,36 +320,35 @@ def update_sparseM_feature_names(
                     if existing_gene_name:
                         gene_name = existing_gene_name
 
-                # check for splice hash code
-                transcript_splice_hash_code = None
-                if (
-                    feature_id in id_mappings
-                    and feature_id
-                    == id_mappings[feature_id]["transcript_splice_hash_code"]
-                ):
-                    transcript_splice_hash_code = feature_id
-                    feature_id = id_mappings[feature_id]["transcript_id"]
+                # a splice hash code is named from its member isoforms; the id
+                # written out stays the hash code, named or not
+                if gene_name is None:
+                    if (
+                        feature_id in id_mappings
+                        and feature_id
+                        == id_mappings[feature_id]["transcript_splice_hash_code"]
+                    ):
+                        # the representative isoform first (the last listed, as
+                        # before), then the others in file order
+                        representative_id = id_mappings[feature_id]["transcript_id"]
+                        lookup_ids = [representative_id] + [
+                            transcript_id
+                            for transcript_id in splice_hash_to_transcript_ids[feature_id]
+                            if transcript_id != representative_id
+                        ]
+                    else:
+                        lookup_ids = [feature_id]
 
-                if gene_name is None and feature_id in ref_id_to_gene_name:
-                    gene_name = ref_id_to_gene_name[feature_id]
-
-                # check gffcompare results
-                elif (
-                    gff_compare_LRAA_id_to_REF_id_mapping is not None
-                    and feature_id in gff_compare_LRAA_id_to_REF_id_mapping
-                ):
-                    ensg_id, enst_id = gff_compare_LRAA_id_to_REF_id_mapping[feature_id]
-
-                    if ensg_id in ref_id_to_gene_name:
-                        gene_name = ref_id_to_gene_name[ensg_id]
-                    elif enst_id in ref_id_to_gene_name:
-                        gene_name = ref_id_to_gene_name[enst_id]
+                    for lookup_id in lookup_ids:
+                        gene_name = lookup_gene_name(
+                            lookup_id,
+                            gff_compare_LRAA_id_to_REF_id_mapping,
+                            ref_id_to_gene_name,
+                        )
+                        if gene_name is not None:
+                            break
 
                 if gene_name is not None:
-                    if transcript_splice_hash_code is not None:
-                        # restore splice hash code
-                        feature_id = transcript_splice_hash_code
-
                     new_feature_id = combine_gene_name_and_id(gene_name, feature_id)
                     print(new_feature_id, file=ofh)
                     num_gene_names_added += 1

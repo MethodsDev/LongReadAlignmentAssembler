@@ -1,3 +1,25 @@
+v0.50.1
+
+Fixes to gene-symbol naming of single-cell feature matrices (no change to LRAA models or quantification):
+
+- FIX: incorporate_gene_symbols_in_sc_features.py wrote a splice-pattern feature that got
+  no gene name under its representative isoform's transcript id instead of its splice hash
+  code. Every splice-pattern feature now keeps its hash code, named or not.
+- FIX: a splice pattern is named from any of its isoforms: the representative isoform
+  first (as before), then the others in mapping-file order. Before, a pattern whose
+  representative isoform had no reference match stayed unnamed even when another of its
+  isoforms had one.
+- WDL: LRAA-singlecell.wdl with quant_only now names features from the GTF they were
+  quantified against (initial_annot_gtf), running gffcompare against
+  ref_annot_gtf_source_gene_symbols. Before, a quant_only run skipped the comparison, so
+  only features with reference ids were named and LRAA ids in an LRAA-built GTF stayed
+  unnamed. Such runs now also output incl_gene_symbols_updated_gtf and the gffcompare
+  tracking and stats.
+- Tests: util/sc/test_incorporate_gene_symbols_in_sc_features.py (splice hash kept and
+  named from any isoform); testing/single_cells/sc_full_pipe target
+  test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf (basic quant_only on an LRAA-built GTF).
+
+
 v0.50.0
 
 Changes that alter run outputs (which reference transcripts ref-guided runs keep, which init models

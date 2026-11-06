@@ -95,3 +95,57 @@ def test_precomposed_gene_feature_is_accepted_without_double_prefix(tmp_path):
     assert result.returncode == 0, result.stderr
     with gzip.open(sparse_matrix_dir / "features.tsv.gz", "rt") as features:
         assert features.read().splitlines() == ["MT-ND1^ENSG00000198888"]
+
+
+def test_splice_hash_is_named_from_any_member_and_kept_when_unnamed(tmp_path):
+    # Pattern HASH_AB has two isoforms; only the first one gffcompare places, and the
+    # mapping file lists it first, so a lookup through the last row alone missed it.
+    # HASH_NOVEL matches no reference gene: it must come out as its hash, not as its
+    # transcript id.
+    script = Path(__file__).with_name("incorporate_gene_symbols_in_sc_features.py")
+    ref_gtf = tmp_path / "reference.gtf"
+    id_mappings = tmp_path / "id_mappings.tsv"
+    tracking = tmp_path / "gffcmp.tracking"
+    sparse_matrix_dir = tmp_path / "splice_pattern-sparseM"
+    sparse_matrix_dir.mkdir()
+
+    ref_gtf.write_text(
+        'chr1\tref\ttranscript\t1\t100\t.\t+\t.\tgene_id "REF_G"; transcript_id "REF_G_TX"; gene_name "GENE_G";\n'
+    )
+    id_mappings.write_text(
+        "gene_id\ttranscript_id\ttranscript_splice_hash_code\tnum_exons\n"
+        "g:chr1:+:comp-1\tt:chr1:+:comp-1:iso-1\tHASH_AB\t3\n"
+        "g:chr1:+:comp-1\tt:chr1:+:comp-1:iso-2\tHASH_AB\t3\n"
+        "g:chr1:+:comp-2\tt:chr1:+:comp-2:iso-1\tHASH_NOVEL\t2\n"
+    )
+    tracking.write_text(
+        "TCONS_1\tXLOC_1\tREF_G|REF_G_TX\tj\tq1:g:chr1:+:comp-1|t:chr1:+:comp-1:iso-1|1|1.0|1.0|1.0\n"
+    )
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "wt") as features:
+        features.write("HASH_AB\nHASH_NOVEL\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ref_gtf",
+            str(ref_gtf),
+            "--id_mappings",
+            str(id_mappings),
+            "--sparseM_dirs",
+            str(sparse_matrix_dir),
+            "--gffcompare_tracking",
+            str(tracking),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "rt") as features:
+        assert features.read().splitlines() == ["GENE_G^HASH_AB", "HASH_NOVEL"]
+    mapped = (tmp_path / "id_mappings.tsv.wAnnotIDs").read_text().splitlines()
+    assert mapped[1].split("\t")[-1] == "GENE_G^HASH_AB"
+    assert mapped[2].split("\t")[-1] == "GENE_G^HASH_AB"
+    assert mapped[3].split("\t")[-1] == "HASH_NOVEL"

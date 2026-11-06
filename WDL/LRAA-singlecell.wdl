@@ -789,10 +789,11 @@ workflow LRAA_singlecell_wf {
   # selector below with it, leaving ref_annot_gtf_source_gene_symbols silently
   # inert in exactly the configuration that now has matrices to annotate.
   #
-  # In quant_only mode the GTF values are naturally undefined, since discovery
-  # produces none.
+  # In quant_only mode discovery produces no GTF, so the features are named from
+  # the GTF they were quantified against: when it carries LRAA ids rather than
+  # reference ids, only gffcompare against the reference can name them.
   Boolean have_filtered_matrices = run_clustering_phase && enable_filter_good_cells
-  File? gtf_for_symbols = if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file
+  File? gtf_for_symbols = if quant_only then initial_annot_gtf else (if run_cluster_guided then cluster_guided.LRAA_final_gtf else init_gtf_file)
   File? gene_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_gene_sparse_tar_gz else init_sc_gene_tgz)
   File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_isoform_sparse_tar_gz else init_sc_isoform_tgz)
   File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else init_sc_splice_tgz)
