@@ -339,6 +339,37 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
             f"Reclustering/refinement skipped due to error: {e}. Proceeding with original transcripts."
         )
 
+    # Containment prune across clusters. Each per-cluster run absorbs a model with no
+    # terminal feature of its own (no TSS; PolyA shared with, or absent from, a model
+    # that contains it) into its container (prune_likely_degradation_products). A
+    # cluster where the container is weak or absent keeps the truncation, and without
+    # this step the merge carries it next to the container rebuilt elsewhere. Only the
+    # structural cases apply: a merge has no reads to weigh.
+    if LRAA_Globals.config.get("merge_prune_degradation_products", False):
+        spare = (
+            _has_pooled_source
+            if LRAA_Globals.config.get("merge_prune_spare_pooled_models", False)
+            else None
+        )
+        num_before = len(transcripts)
+        transcripts, pruned_pairs = (
+            TranscriptFiltering.prune_contained_truncations_structural(
+                transcripts,
+                contig_strand,
+                spare=spare,
+                end_tolerance=LRAA_Globals.config.get("merge_prune_end_tolerance"),
+            )
+        )
+        logger.info(
+            "[%s%s] -merge degradation prune: %d of %d models absorbed into a container",
+            contig_acc,
+            contig_strand,
+            num_before - len(transcripts),
+            num_before,
+        )
+        for pruned_id, container_id in pruned_pairs:
+            logger.debug("merge prune: %s absorbed into %s", pruned_id, container_id)
+
     transfer_reference_identity(transcripts, input_transcripts)
 
     # 3'-end annotation, RECOMPUTED rather than carried over from the inputs.
@@ -356,7 +387,9 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
     #
     # Annotation only. delete=False, and no reference is supplied for the
     # known-3'-end reprieve, because a merge reconciles catalogs and is not where
-    # models are filtered; the sources already applied their own policy.
+    # models are filtered; the sources already applied their own policy. (The one
+    # exception is the containment prune above, which re-applies a per-source rule
+    # that a source lacking the container could not apply.)
     transcripts = TranscriptFiltering.annotate_polyA_signal(
         transcripts, contig_seq_str, contig_strand
     )
@@ -446,6 +479,15 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
     return "".join(gtf_chunks), tracking_records
 
 
+def _has_pooled_source(transcript):
+    """True when any input model merged into this one came from --pooled_gtf."""
+    for mp in transcript.get_multipaths_evidence_assigned():
+        for rn in mp.get_read_names():
+            if isinstance(rn, str) and rn.startswith("fake_for_merge|") and "|pooled=1" in rn:
+                return True
+    return False
+
+
 def transfer_reference_identity(merged_transcripts, input_transcripts):
     """Set the merged models' reference identity from the inputs'.
 
@@ -456,7 +498,8 @@ def transfer_reference_identity(merged_transcripts, input_transcripts):
     is the largest count an input carries for it -- the pooled GTF's count, which each
     cluster run inherited, unless a cluster scanned its own bam. Single-exon models are
     re-judged against the inputs' reference single-exon transcripts. A merge
-    reconciles catalogs and filters nothing, so nothing here is used for a decision; it
+    reconciles catalogs and filters nothing here (merge_prune_degradation_products runs
+    before this), so nothing here is used for a decision; it
     is written so the merged GTF can guide or be merged again.
     """
     if LRAA_Globals.config["ref_splice_pattern_reprieve"]:
