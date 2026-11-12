@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 
-"""The per-shard tracking merge in the WDLs equals the python merge it replaced.
+"""The per-shard tracking merge in the WDL equals the python merge it replaced.
 
-mergeQuantResults (LRAA.wdl) and LRAA_merge_trackings (LRAA-cell_cluster_guided.wdl) carry
-the same bash text. These tests lift it out of each WDL and run it against a copy of the
-former python loop, on the shard shapes that break a naive pipeline: an empty first shard,
+mergeQuantResults (LRAA.wdl) carries it. (LRAA_merge_trackings in
+LRAA-cell_cluster_guided.wdl carried the same text until the per-cluster final quant was
+replaced by one pooled quant, which leaves nothing to merge across clusters.) These tests
+lift it out of the WDL and run it against a copy of the former python loop, on the shard shapes that break a naive pipeline: an empty first shard,
 a plain-text shard, one input, more shards than cores, comment-only shards, and a schema
 mismatch, which must still fail.
 """
 
 import gzip
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,7 +20,6 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 BLOCKS = {
     "mergeQuantResults": (REPO / "WDL" / "LRAA.wdl", "quantTrackingFiles", "~{outputFilePrefix}.quant.tracking.gz"),
-    "LRAA_merge_trackings": (REPO / "WDL" / "LRAA-cell_cluster_guided.wdl", "tracking_files", "~{outputfile}"),
 }
 HEADER = "gene_id\ttranscript_id\tread_name\tfrac\n"
 MERGE_HEADER = "# LRAA version vX\n"
@@ -159,10 +158,3 @@ def test_a_corrupt_shard_fails(task, tmp_path):
     result = _run(task, tmp_path, [good, bad])
     assert result.returncode != 0
 
-
-def test_the_two_wdls_carry_the_same_text():
-    texts = []
-    for task in sorted(BLOCKS):
-        body, files, out = _block(task)
-        texts.append(re.sub(r"\s+$", "", body.replace(files, "F").replace(out, "O"), flags=re.M).rstrip())
-    assert texts[0] == texts[1]

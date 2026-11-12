@@ -145,8 +145,9 @@ scarce-junction exemption described at :95-101, where peak retained depth across
 high-expression loci ran to 1.78x the target, and through ordinary sampling variation. The target
 is a target and not a bound, so `p2 < 1` follows without any pooling.
 
-Pooling is what makes a second thinning both likely and material. The cluster-guided path
-normalizes per cluster, merges, then normalizes the merged file, so pass 2 sees the summed depth
+Pooling is what makes a second thinning both likely and material. The per-cluster quant path
+(`WDL/LRAA_quant_by_cluster.wdl`; the single-cell pipeline's final quant before it became one
+pooled pass) normalizes per cluster, merges, then normalizes the merged file, so pass 2 sees the summed depth
 of every cluster — a locus at target in each of 31 clusters arrives at the merge far above it, and
 is thinned again against the same per-read draw.
 

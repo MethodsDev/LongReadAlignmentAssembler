@@ -52,7 +52,7 @@ workflow LRAA_cell_cluster_guided {
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         # `scattering` is per-cluster DISCOVERY, `scattering_final_quant` the final
-        # per-cluster quant. These MUST agree with LRAA-singlecell.wdl's defaults for
+        # pooled quant. These MUST agree with LRAA-singlecell.wdl's defaults for
         # the same two knobs: that workflow passes both through when it is the
         # entrypoint, so a divergence here would only show when this workflow is
         # called DIRECTLY -- the same run shape silently differing by entry path.
@@ -69,6 +69,10 @@ workflow LRAA_cell_cluster_guided {
         # these jobs share one host; 4 on Terra, where each is its own VM and the
         # 2.19x measured for the fan-out is available on every one of them.
         Int cluster_partition_workers = 1
+        # Contigs the final pooled quant's ONE full-library partition extracts
+        # concurrently. LRAA-singlecell.wdl passes its initial_partition_workers, since
+        # that partition has the same shape as the init pass's; see the measurement there.
+        Int final_quant_partition_workers = 1
         
         String cell_barcode_tag = "CB"
         String read_umi_tag = "XM"
@@ -101,17 +105,23 @@ workflow LRAA_cell_cluster_guided {
         # whole-genome PBMC cluster gtfs: 4.9 GB parsed, 25.6 GB peak at 4 workers.
         # At 64 GB and 8 cpus that is ~8 workers. Output is identical to serial.
         Int cpu_mergeGTFs = 8
-        Int memoryGBquantFinal = 32
-        Int memoryGBquantNormalize = 16
-        Int memoryGBquantMerge = 16
+        # The final pooled quant: one LRAA run over the whole library, like the init
+        # pass. memoryGB applies only to scattering_final_quant = "off" (one whole-genome
+        # invocation); unset, LRAA.wdl sizes it from the bam as for the init pass. Under
+        # by_chromosome each shard is sized by LRAA.wdl or memoryGBPerWorkerScattered.
+        # cpu unset = `cpu` above.
+        Int? memoryGBquantFinal
+        Int? cpuFinalQuant
+        # The final pooled quant's TPM denominator (RPM_total_reads). Unset -- the
+        # normal case -- LRAA counts inputBAM itself, with its -F 0x904 policy. The
+        # per-cluster discovery runs never get it: each counts its own cluster bam.
+        Int? num_total_reads
         # The one-off shared-chunk-plan task below. Cut selection runs one concurrent
         # unit per contig under --cpu_budget, so cpu IS that budget; the memory number
         # is justified where these same two inputs are declared in
-        # LRAA_quant_by_cluster.wdl. Forwarded there as well, so ONE pair of numbers
-        # covers the task whichever level of the run emits it.
+        # LRAA_quant_by_cluster.wdl.
         Int cpu_chunk_plan = 16
         Int memoryGB_chunk_plan = 8
-        Int normalize_max_cov_level = 1000
 
         # Turn off 3' end weighting in the EM. Forwarded to BOTH phases below --
         # per-cluster discovery and the final quant -- because a weighting that
@@ -120,6 +130,9 @@ workflow LRAA_cell_cluster_guided {
         # LRAA_Globals.config overrides (JSON object) for the per-cluster DISCOVERY runs
         # only; the final quant gets LRAA's defaults. See LRAA-singlecell.wdl.
         String? cluster_config_update_json
+        # LRAA_Globals.config overrides (JSON object) for the final pooled quant. Unset by
+        # default: it runs on LRAA's defaults. Not set from LRAA-singlecell.wdl.
+        String? final_quant_config_update_json
         # LRAA_Globals.config overrides (JSON object) for the cross-cluster merge
         # (merge_LRAA_GTFs.py --config_update). Unset by default. E.g.
         # '{"allow_unflagged_LRAA_guide": true}' to merge GTFs written before v0.50.0,
@@ -130,9 +143,9 @@ workflow LRAA_cell_cluster_guided {
         # sparse reads. Unset, each cluster's runs calibrate on the cluster's bam.
         String? cap_calibration_json
         Int memoryGBscSparseMatrices = 16
-        # Build the single-cell matrices per (cluster, contig) shard during the
-        # final quantification wave and merge them, instead of one
-        # single-threaded pass over the merged cluster tracking file. On by
+        # Build the single-cell matrices per contig shard during the final
+        # quantification and merge them, instead of one single-threaded pass
+        # over its tracking file. On by
         # default; see LRAA-singlecell.wdl's input for the measured basis.
         # Requires scattering_final_quant = "by_chromosome", the default since
         # v0.32.0; "off" produces no per-contig shards to merge and forces this
@@ -144,15 +157,34 @@ workflow LRAA_cell_cluster_guided {
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Boolean quant_only_cluster_guided = false
-        Array[File]? pre_normalized_cluster_bams
-        Array[File]? pre_normalized_cluster_bais
+
+        # INTERNAL PLUMBING, not a user knob: a whole-library quant the CALLER already
+        # ran that is the same run the final quant below would be -- same bam, same gtf,
+        # same chunk plan, same settings. LRAA-singlecell.wdl passes its init pass's
+        # outputs here in quant_only mode, where the init pass IS a quant-only run of
+        # initial_annot_gtf over the full bam. When the tracking and expr are given,
+        # LRAA_final_quant does not run; when the four matrices are given too, they are
+        # used as the final single-cell matrices instead of being rebuilt.
+        File? internal_final_quant_tracking
+        File? internal_final_quant_expr
+        File? internal_final_quant_read_assignment_summary
+        File? internal_final_sc_gene_tgz
+        File? internal_final_sc_isoform_tgz
+        File? internal_final_sc_splice_pattern_tgz
+        File? internal_final_sc_mapping
 
      }
 
     # The shard path needs shards; scattering_final_quant = "off" produces none,
     # so the request is forced off rather than left to fail on an empty list.
+    Boolean reuse_final_quant = defined(internal_final_quant_tracking) && defined(internal_final_quant_expr)
+    Boolean reuse_final_matrices = reuse_final_quant
+        && defined(internal_final_sc_gene_tgz) && defined(internal_final_sc_isoform_tgz)
+        && defined(internal_final_sc_splice_pattern_tgz) && defined(internal_final_sc_mapping)
+    # A reused quant left no shards here, so without its matrices they are rebuilt
+    # from its tracking.
     Boolean use_sc_sparse_from_shards =
-        sc_sparse_from_shards && scattering_final_quant == "by_chromosome"
+        sc_sparse_from_shards && scattering_final_quant == "by_chromosome" && !reuse_final_quant
 
       
      call PartitionBam.partition_bam_by_cell_cluster {
@@ -192,9 +224,11 @@ workflow LRAA_cell_cluster_guided {
     # Emitted here rather than inside the final quant, because a plan emitted there
     # serves that phase and nothing earlier: per-cluster discovery then still selects
     # its own cuts, measured at 76 distinct geometries over 270 extractions on the
-    # ref-guided smoke run. Cut positions are read off a bam, so per-phase selection
-    # means per-phase boundaries, and the shared splice-graph bam the final quant is
-    # handed then gets sliced at boundaries no earlier phase used.
+    # ref-guided smoke run (when the final quant was per cluster). Cut positions are
+    # read off a bam, so per-phase selection means per-phase boundaries: the clusters'
+    # discovery runs would each cut differently, and the final quant would cut through
+    # places no discovery run cut, where a model found inside one chunk can straddle
+    # the quant's boundary.
     #
     # Selected against the REFERENCE annotation, the only one that exists this early,
     # and that is correct rather than a compromise. Cut selection will not place a
@@ -272,6 +306,10 @@ workflow LRAA_cell_cluster_guided {
                     # These per-cluster gtfs are inputs to the cross-cluster merge
                     # below; the collapse runs once on its result instead.
                     emit_splice_pattern_collapse = false,
+                    # Discovery only: the single-cell matrices come from the final
+                    # pooled quant below.
+                    build_sc_sparse_shards = false,
+                    docker_sc = docker_sc,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     config_update_json = cluster_config_update_json,
@@ -302,15 +340,13 @@ workflow LRAA_cell_cluster_guided {
                     # was the one that did not.
                     #
                     # Reaches BOTH phases: the per-cluster discovery runs here, and
-                    # the final quant via LRAA_quant_by_cluster, which now declares
-                    # its own diskSizeGB (same 256 default) and forwards it to its
-                    # per-cluster quant runs.
+                    # the pooled final quant (LRAA_final_quant) below.
                     diskSizeGB = diskSizeGB,
                     docker = docker
             }
 
-            # Same pairing discipline as the final quant applies in
-            # LRAA_quant_by_cluster.wdl: mergedReadAssignmentSummary is File?, and
+            # Same pairing discipline as LRAA_quant_by_cluster.wdl applies:
+            # mergedReadAssignmentSummary is File?, and
             # select_all() compacts, so the cluster id has to be filtered by the SAME
             # predicate to stay aligned with the surviving files.
             if (defined(LRAA_by_cluster.mergedReadAssignmentSummary)) {
@@ -331,6 +367,7 @@ workflow LRAA_cell_cluster_guided {
                 input:
                     summaryFiles = prelim_read_assignment_summaries,
                     clusterIds = prelim_read_assignment_ids,
+                    emitAllClusters = true,
                     outputFilePrefix = sample_id + ".prelim_clusters",
                     population = "cluster_thinned",
                     docker = docker
@@ -391,98 +428,129 @@ workflow LRAA_cell_cluster_guided {
         }
     }
 
-     
-    # Final quantification using new cluster-based parallelization workflow
-    call LRAA_quant_by_cluster.LRAA_quant_by_cluster as LRAA_quant_final_bamlist {
+
+    # Final quantification: ONE quant-only pass over every cell, against the final
+    # catalog, in place of the former per-cluster quant (LRAA_quant_by_cluster.wdl).
+    #
+    # Why pooled. Quantified per cluster, each cluster's EM divides its ambiguous reads
+    # by that cluster's own isoform proportions, so every pseudo-replicate of a cluster
+    # shares that cluster's prior and differential-usage tests between clusters see
+    # differences the prior put there. One EM over all cells gives every cell the same
+    # prior: a cell's ambiguous reads are divided by the library-wide proportions, and
+    # a difference between clusters has to come from the reads themselves.
+    # Cluster-guided DISCOVERY above is unchanged; only the quantification is pooled.
+    #
+    # The call is the init pass's shape (LRAA-singlecell.wdl LRAA_init) in quant-only
+    # mode: the full pre-partition bam, LRAA's own coverage normalization for the
+    # splice graph, the run's ONE chunk plan, and the single-cell sparse shards built
+    # alongside quantification. Reads from barcodes in no cluster are quantified too:
+    # they are in the single-cell matrices and in no cluster's pseudobulk below.
+    # Skipped when the caller passed an identical quant to reuse (internal_final_quant_*).
+    if (!reuse_final_quant) {
+        call LRAA.LRAA_wf as LRAA_final_quant {
+            input:
+                sample_id = sample_id,
+                referenceGenome = referenceGenome,
+                inputBAM = inputBAM,
+                annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
+                quant_only = true,
+                HiFi = HiFi,
+                oversimplify = oversimplify,
+                # As the init pass gets it, in quant-only mode too.
+                polyA_known = polyA_known,
+                config_update_json = final_quant_config_update_json,
+                main_chromosomes = main_chromosomes,
+                # The one full-library partition of this pass, like the init pass's; see
+                # final_quant_partition_workers.
+                partition_workers = final_quant_partition_workers,
+                # Whole library, so the whole library's denominator; unset = LRAA counts
+                # inputBAM itself.
+                num_total_reads = num_total_reads,
+                # single-cell: this workflow never surfaces the normalized splice-graph BAM
+                retain_normalized_splice_graph_bam = false,
+                # quant-only against the already-collapsed catalog; nothing to collapse
+                emit_splice_pattern_collapse = false,
+                rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
+                no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
+                cell_barcode_tag = cell_barcode_tag,
+                read_umi_tag = read_umi_tag,
+                scattering = scattering_final_quant,
+                build_sc_sparse_shards = use_sc_sparse_from_shards,
+                docker_sc = docker_sc,
+                # The SAME geometry phase-1 discovery above ran under, so no model it found
+                # can straddle one of this pass's cuts.
+                internal_chunk_plan = final_quant_chunk_plan,
+                approx_MB_per_cut = approx_MB_per_cut,
+                approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
+                cpu = select_first([cpuFinalQuant, cpu]),
+                cpuScattered = cpuScattered,
+                memoryGB = memoryGBquantFinal,
+                memoryGBPerWorkerScattered = memoryGBPerWorkerScattered,
+                chunkMakeChunksCpu = chunkMakeChunksCpu,
+                chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
+                chunkCpu = chunkCpu,
+                chunkMemoryGB = chunkMemoryGB,
+                chunkMergeCpu = chunkMergeCpu,
+                chunkMergeMemoryGB = chunkMergeMemoryGB,
+                diskSizeGB = diskSizeGB,
+                docker = docker
+        }
+    }
+
+    File final_quant_tracking = select_first([internal_final_quant_tracking, LRAA_final_quant.mergedQuantTracking])
+    File final_quant_expr = select_first([internal_final_quant_expr, LRAA_final_quant.mergedQuantExpr])
+    File? final_quant_read_assignment_summary = if reuse_final_quant then internal_final_quant_read_assignment_summary else LRAA_final_quant.mergedReadAssignmentSummary
+
+    # This pass's read-assignment accounting: ONE invocation over the whole bam,
+    # normalized once, so the same table shape as the init pass's (LRAA-singlecell.wdl
+    # collate_init_read_assignment_summary), not the per-cluster phase's.
+    if (defined(final_quant_read_assignment_summary)) {
+        call LRAA_quant_by_cluster.collate_read_assignment_summaries as collate_final_read_assignment_summary {
+            input:
+                summaryFiles = [select_first([final_quant_read_assignment_summary])],
+                clusterIds = ["pseudobulk"],
+                emitAllClusters = false,
+                outputFilePrefix = sample_id + ".final",
+                population = "pooled_thinned",
+                docker = docker
+        }
+    }
+
+    # Per-cluster pseudobulk: the pooled assignment summed over each cluster's cells.
+    # No EM per cluster; see util/sc/tracking_to_cluster_pseudobulk_exprs.py. File names
+    # are the ones the former per-cluster quant runs wrote,
+    # <sample_id>.<cluster>.LRAA.quant-only.quant.expr.
+    call split_pooled_quant_by_cluster {
         input:
             sample_id = sample_id,
-            referenceGenome = referenceGenome,
-            scattering = scattering_final_quant,
-            build_sc_sparse_shards = use_sc_sparse_from_shards,
-            docker_sc = docker_sc,
-            cluster_partition_workers = cluster_partition_workers,
-            approx_MB_per_cut = approx_MB_per_cut,
-            approx_MB_per_cut_wiggle_window = approx_MB_per_cut_wiggle_window,
-            annot_gtf = select_first([lraa_merge_gtf_task.mergedGTF, annot_gtf]),
-            bam_files = partition_bam_by_cell_cluster.partitioned_bams,
-            # The pre-partition BAM the cluster BAMs above were split out of. It does
-            # NOT trigger partitioning there -- bam_files is supplied, so that branch is
-            # skipped -- it is the unthinned SUPERSET the ONE shared chunk plan is
-            # selected on, so every cluster cuts at identical positions and slices the
-            # shared splice-graph BAM identically. Without it LRAA_quant_by_cluster has
-            # no superset file, and a by_chunk final quant is refused rather than each
-            # cluster quietly choosing its own chunk boundaries.
-            inputBAM = inputBAM,
-            # The SAME geometry phase-1 discovery above ran under. Threading it in
-            # rather than letting the final quant select its own is what makes the
-            # run's chunk bounds uniform end to end; unset, that workflow emits its own
-            # plan from the consolidated gtf and only its own phase is planned.
-            internal_chunk_plan = final_quant_chunk_plan,
-            cpu_chunk_plan = cpu_chunk_plan,
-            memoryGB_chunk_plan = memoryGB_chunk_plan,
-            pre_normalized_cluster_bams = pre_normalized_cluster_bams,
-            pre_normalized_cluster_bais = pre_normalized_cluster_bais,
-            HiFi = HiFi,
-            oversimplify = oversimplify,
-            rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
-            no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
-            normalize_max_cov_level = normalize_max_cov_level,
-            main_chromosomes = main_chromosomes,
-            cell_barcode_tag = cell_barcode_tag,
-            read_umi_tag = read_umi_tag,
-            cpu = cpu,
-            cpu_scattered = cpuScattered,
-            memoryGB_normalize = memoryGBquantNormalize,
-            memoryGB_merge = memoryGBquantMerge,
-            memoryGB_quant = memoryGBquantFinal,
-            memoryGB_quant_scattered = memoryGBPerWorkerScattered,
-            chunkMakeChunksCpu = chunkMakeChunksCpu,
-            chunkMakeChunksMemoryGB = chunkMakeChunksMemoryGB,
-            chunkCpu = chunkCpu,
-            chunkMemoryGB = chunkMemoryGB,
-            chunkMergeCpu = chunkMergeCpu,
-            chunkMergeMemoryGB = chunkMergeMemoryGB,
-            diskSizeGB = diskSizeGB,
+            quant_tracking = final_quant_tracking,
+            quant_expr = final_quant_expr,
+            cell_clusters_info = cell_clusters_info,
             docker = docker
     }
 
-    # Tar the per-cluster final quant outputs for convenient retrieval
+    # Tar the per-cluster expression files for convenient retrieval
     call LRAA_tar_outputs as tar_final_cluster_expr_files {
         input:
             tar_directory_name = sample_id + ".LRAA.final.cluster_quant.EXPRs",
-            input_files = LRAA_quant_final_bamlist.quant_exprs,
+            input_files = split_pooled_quant_by_cluster.cluster_quant_exprs,
             docker = docker
     }
 
-    call LRAA_tar_outputs as tar_final_cluster_tracking_files {
-        input:
-            tar_directory_name = sample_id + ".LRAA.final.cluster_quant.trackings",
-            input_files = LRAA_quant_final_bamlist.quant_trackings,
-            docker = docker
-    }
-
-    # Build cluster-level pseudobulk matrices from the per-cluster quant expr files
+    # Build cluster-level pseudobulk matrices from the per-cluster expr files
     call build_cluster_pseudobulk_matrices as build_cluster_pseudobulk {
         input:
             sample_id = sample_id,
-            quant_expr_files = LRAA_quant_final_bamlist.quant_exprs,
+            quant_expr_files = split_pooled_quant_by_cluster.cluster_quant_exprs,
             docker = docker
     }
 
-     # Merge all per-cluster tracking files into a single tracking.gz for downstream single-cell matrices
-    call LRAA_merge_trackings as merge_cluster_trackings {
-        input:
-            sample_id = sample_id,
-            tracking_files = LRAA_quant_final_bamlist.quant_trackings,
-            docker = docker
-    }
-
-     # Build sparse matrices (Seurat-compatible) from the merged tracking
-     if (!use_sc_sparse_from_shards) {
+     # Build sparse matrices (Seurat-compatible) from the pooled tracking
+     if (!reuse_final_matrices && !use_sc_sparse_from_shards) {
          call sc_build_sparse_matrices as build_sc_sparse_matrices {
              input:
                      sample_id = sample_id,
-                     tracking_file = merge_cluster_trackings.merged_tracking,
+                     tracking_file = final_quant_tracking,
                      docker = docker_sc,
                      memoryGB = memoryGBscSparseMatrices,
                      csv_engine = sparseMatrixCsvEngine,
@@ -490,29 +558,26 @@ workflow LRAA_cell_cluster_guided {
          }
      }
 
-     # shared_features is TRUE here, and that is the whole difference from basic
-     # mode: cells partition across clusters while features do not, so one
-     # feature legitimately arrives from every cluster carrying disjoint cells.
-     # Still no summing -- feature -> contig and cell -> cluster together put
-     # each (feature, cell) pair in exactly one shard.
-     if (use_sc_sparse_from_shards) {
+     # shared_features stays false, as in basic mode: one LRAA run, so features
+     # partition across contigs and a feature turning up in two shards is an error.
+     if (!reuse_final_matrices && use_sc_sparse_from_shards) {
          call BuildMatrices.merge_sc_shard_sparse as merge_sc_cluster_shards {
              input:
                  sample_id = sample_id,
-                 shard_sparse_tars = LRAA_quant_final_bamlist.scShardSparse,
+                 shard_sparse_tars = select_first([LRAA_final_quant.scShardSparse]),
                  docker = docker_sc,
                  gzip_level = sparseMatrixGzipLevel,
-                 shared_features = true
+                 shared_features = false
          }
      }
 
-     File sc_gene_tgz = select_first([merge_sc_cluster_shards.gene_sparse_dir_tgz,
+     File sc_gene_tgz = select_first([if reuse_final_matrices then internal_final_sc_gene_tgz else merge_sc_cluster_shards.gene_sparse_dir_tgz,
                                       build_sc_sparse_matrices.gene_sparse_dir_tgz])
-     File sc_isoform_tgz = select_first([merge_sc_cluster_shards.isoform_sparse_dir_tgz,
+     File sc_isoform_tgz = select_first([if reuse_final_matrices then internal_final_sc_isoform_tgz else merge_sc_cluster_shards.isoform_sparse_dir_tgz,
                                          build_sc_sparse_matrices.isoform_sparse_dir_tgz])
-     File sc_splice_tgz = select_first([merge_sc_cluster_shards.splice_pattern_sparse_dir_tgz,
+     File sc_splice_tgz = select_first([if reuse_final_matrices then internal_final_sc_splice_pattern_tgz else merge_sc_cluster_shards.splice_pattern_sparse_dir_tgz,
                                         build_sc_sparse_matrices.splice_pattern_sparse_dir_tgz])
-     File sc_mapping_tsv = select_first([merge_sc_cluster_shards.mapping_file,
+     File sc_mapping_tsv = select_first([if reuse_final_matrices then internal_final_sc_mapping else merge_sc_cluster_shards.mapping_file,
                                          build_sc_sparse_matrices.mapping_file])
 
      output {
@@ -532,11 +597,17 @@ workflow LRAA_cell_cluster_guided {
          File? LRAA_final_PolyA_bed = sc_splice_pattern_collapse.polyaBed
          # partitioned cluster BAMs (always produced)
          File LRAA_partitioned_cluster_bams_tar = tar_partitioned_cluster_bams.tar_gz
-         # cluster-level final quant outputs (per-cluster/partition) packaged
+         # Per-cluster quant.expr files, one per cluster, each the pooled final
+         # quantification summed over that cluster's cells (no per-cluster EM).
          File LRAA_final_cluster_exprs_tar = tar_final_cluster_expr_files.tar_gz
-         File LRAA_final_cluster_trackings_tar = tar_final_cluster_tracking_files.tar_gz
-         # merged tracking across clusters (used for downstream SC matrices)
-         File LRAA_final_tracking = merge_cluster_trackings.merged_tracking
+         # The pooled final quantification: its quant.expr over all cells, and its read
+         # tracking, from which the single-cell matrices and the per-cluster files are
+         # built. The tracking includes reads from barcodes in no cluster.
+         File LRAA_final_quant_expr = final_quant_expr
+         File LRAA_final_tracking = final_quant_tracking
+         # Assigned reads per cluster, and of barcodes in no cluster, in the pooled
+         # quantification.
+         File LRAA_final_cluster_read_partition = split_pooled_quant_by_cluster.read_partition_summary
 
          # single-cell sparse matrices and intermediate counts
          File sc_gene_transcript_splicehash_mapping = sc_mapping_tsv
@@ -560,24 +631,19 @@ workflow LRAA_cell_cluster_guided {
          File cluster_isoform_TPM_matrix = build_cluster_pseudobulk.cluster_isoform_TPM_matrix
          File cluster_isoform_counts_forDiffIsoUsage = build_cluster_pseudobulk.cluster_isoform_counts_forDiffIsoUsage
 
-         # normalized BAM intermediate outputs (for debugging/reuse)
-         Array[File] normalized_cluster_bams = LRAA_quant_final_bamlist.normalized_cluster_bams
-         Array[File]? normalized_cluster_bais = LRAA_quant_final_bamlist.normalized_cluster_bais
-         File merged_normalized_bam = LRAA_quant_final_bamlist.merged_bam
-         File merged_normalized_bai = LRAA_quant_final_bamlist.merged_bai
-         File final_normalized_merged_bam = LRAA_quant_final_bamlist.normalized_merged_bam
-         File final_normalized_merged_bai = LRAA_quant_final_bamlist.normalized_merged_bai
          # The ONE geometry every phase of this run cut on. Absent only when both
          # scattering knobs are off, the mode with nothing to share.
          File? shared_chunk_plan = shared_chunk_plan_resolved
 
          # Read-assignment accounting, one table per PHASE and never pooled across
-         # them. Each carries level=chunk rows (with their chunk_id), one level=cluster
-         # row per cluster, and one level=all_clusters row; rows of different level
-         # must not be summed, which the file states on its first line.
-         # Absent in quant_only mode, which runs no phase-1 discovery.
+         # them; rows of different level must not be summed, which the file states on
+         # its first line. The prelim table (per-cluster discovery) carries level=chunk
+         # rows, one level=cluster row per cluster and one level=all_clusters row, and
+         # is absent in quant_only mode, which runs no phase-1 discovery. The final
+         # table is the one pooled quantification: level=chunk rows and one row
+         # labelled "pseudobulk".
          File? prelim_collated_read_assignment_summary = collate_prelim_read_assignment_summaries.collatedSummary
-         File? collated_read_assignment_summary = LRAA_quant_final_bamlist.collated_read_assignment_summary
+         File? collated_read_assignment_summary = collate_final_read_assignment_summary.collatedSummary
     
      }
      
@@ -657,130 +723,433 @@ task LRAA_tar_outputs {
 }
 
 
-task LRAA_merge_trackings {
+task split_pooled_quant_by_cluster {
+    # Per-cluster quant.expr files from the ONE pooled final quantification: every read
+    # row of the tracking is credited to the cluster of its cell barcode and summed.
+    # No EM; util/sc/tracking_to_cluster_pseudobulk_exprs.py documents each column.
+    # Reads of barcodes in no cluster are counted in no file, and reported in
+    # read_partition_summary.
     input {
         Int preemptible_tries = 3
         String sample_id
-        Array[File] tracking_files
+        File quant_tracking
+        File quant_expr
+        File cell_clusters_info
         String docker
+        # One pass over the tracking, holding per (cluster, isoform) totals and the
+        # barcodes seen; memory scales with isoforms x clusters plus barcodes, not with
+        # the tracking's rows. MEASURED on the PBMC v0.50.0 ref-guided pooled tracking
+        # (2.8 GB gz, 131 M rows, 14 clusters): 10.9 min wall, 1.3 GB peak RSS.
+        Int memoryGB = 8
     }
 
-    Int memoryGB = 8
-    # Cores for the per-shard tracking merge below.
-    Int merge_cpu = 4
-    Int disksize = 20 + ceil(10 * length(tracking_files))
-        
-    String outputfile = "~{sample_id}.cluster_merged.quant.tracking.gz"
-    # Machine shape (v0.47.1, generated text, identical in every C3D task). cpu: and memory:
+    Int disksize = 20 + ceil(3 * size(quant_tracking, "GB"))
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
-    # (miniwdl ignores predefinedMachineType). The command's thread count stays on the
-    # requested cpu even when the shape has more cores. Batch rejects 8 GiB on c3d-highcpu-4
-    # (7.5 GiB passes), hence 7 for that tier: such a request steps up to c3d-standard-4.
-    Int shape_cpu = merge_cpu
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
+    Int shape_cpu = 2
     Int shape_memGB = memoryGB
-    Int shape_cpu_tier = if shape_cpu <= 4 then 4
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
         else if shape_cpu <= 8 then 8
         else if shape_cpu <= 16 then 16
-        else if shape_cpu <= 30 then 30
-        else if shape_cpu <= 60 then 60
-        else if shape_cpu <= 90 then 90
-        else 180
-    Int shape_mem_tier = if shape_memGB <= 32 then 4
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
         else if shape_memGB <= 64 then 8
         else if shape_memGB <= 128 then 16
-        else if shape_memGB <= 240 then 30
-        else if shape_memGB <= 480 then 60
-        else if shape_memGB <= 720 then 90
-        else 180
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
     Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
-    Int shape_highcpu_memGB = if shape_cores == 4 then 7
-        else if shape_cores == 30 then 59
-        else if shape_cores == 60 then 118
-        else if shape_cores == 90 then 177
-        else if shape_cores == 180 then 354
-        else shape_cores * 2
-    String machine_type = if shape_memGB <= shape_highcpu_memGB then "c3d-highcpu-~{shape_cores}"
-        else if shape_memGB <= shape_cores * 4 then "c3d-standard-~{shape_cores}"
-        else "c3d-highmem-~{shape_cores}"
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
 
-    
+
     command <<<
-        set -ex
+        set -euo pipefail
 
-        lraa_version="$(LRAA --version | awk '{print $NF}')"
-        export LRAA_VERSION_COMMENT="# LRAA version ${lraa_version}"
+        # The helper is INLINED, like merge_bams' header check in LRAA_quant_by_cluster.wdl:
+        # this task runs in a separately pinned image while the .wdl comes from the
+        # checkout, so calling a newly added script by name breaks whenever the two are
+        # out of step. The text between the markers is util/sc/tracking_to_cluster_pseudobulk_exprs.py
+        # verbatim (its unit tests are the tested source); pylib/test_inlined_wdl_scripts.py
+        # fails when they differ. Edit the util script, then paste it here unchanged.
+        cat > tracking_to_cluster_pseudobulk_exprs.py <<'LRAA_INLINED_SCRIPT_EOF'
+#!/usr/bin/env python3
+"""Per-cluster pseudobulk quant.expr files from ONE pooled single-cell quantification.
 
-        lraa_merge_header.py \
-            --version_comment "$LRAA_VERSION_COMMENT" \
-            --inputs ~{sep=' ' tracking_files} \
-            --output merge_header.txt
+The cluster-guided single-cell workflow quantifies every cell against the final catalog
+in a single LRAA quant-only pass (the pooled, all-cells EM). This script splits that one
+assignment by cell cluster: each read row of the pooled tracking file is credited to the
+cluster of its cell barcode, and the rows are summed per (cluster, isoform). No EM is run
+here, so every cluster's ambiguous reads keep the fractions the pooled EM gave them.
 
-    # Same result as the former single-stream python gzip loop (the merge header once, then
-    # every shard's rows with '#' lines and repeated column headers dropped), but each shard
-    # is processed by its own job and the parts are concatenated in input order. The output
-    # is a multi-member gzip: its decompressed bytes are what is unchanged, not the .gz bytes.
-    set -o pipefail
-    mkdir parts
-    mapfile -t inputs < ~{write_lines(tracking_files)}
-    n=${#inputs[@]}
+Columns are computed exactly as LRAA's streaming quant.expr writer computes them
+(pylib/StreamingQuant.py write_expr), restricted to the cluster's reads:
 
-    # Schema check: each shard's column header (first non-'#' line) must match the first
-    # shard that has one. A shard with no such line contributes nothing.
-    first=-1
-    for i in "${!inputs[@]}"; do
-        { gzip -dcf "${inputs[$i]}" | grep -a -m1 -v '^#' > parts/hdr.$i || true; }
-        if [ -s parts/hdr.$i ]; then
-            if [ $first -lt 0 ]; then
-                first=$i
-            elif ! cmp -s parts/hdr.$first parts/hdr.$i; then
-                echo "Cannot merge tracking files with different schemas: ${inputs[$i]} differs from the first input" >&2
-                exit 1
-            fi
-        fi
-    done
+    uniq_reads                 read rows with is_unique == 1
+    all_reads                  sum of frac_assigned
+    isoform_fraction           all_reads / the gene's all_reads in the cluster
+    unique_gene_read_fraction  uniq_reads / the gene's all_reads in the cluster
+    TPM                        all_reads / the cluster's all_reads, x 1e6
+    RPM_total_reads            see below
+    uniq_FSM_reads             read rows with is_unique == 1 and is_FSM == 1
+    has_FSM_read               1 if any read row has is_FSM == 1
 
-    # merge_cpu jobs at a time; spare cores go to the compressors when shards are few.
-    threads_per_job=$(( ~{merge_cpu} / n ))
-    if [ $threads_per_job -lt 1 ]; then threads_per_job=1; fi
-    for i in "${!inputs[@]}"; do
-        while [ "$(jobs -rp | wc -l)" -ge ~{merge_cpu} ]; do wait -n; done
-        (
-            set -o pipefail
-            gzip -dcf "${inputs[$i]}" | { grep -a -v '^#' || [ $? -eq 1 ]; } \
-                | { if [ $i -eq $first ]; then cat; else tail -n +2; fi; } \
-                | pigz -n -p $threads_per_job > parts/part.$i.gz
-            touch parts/ok.$i
-        ) &
-    done
-    wait
-    # A failed background job does not fail a bare 'wait', so check that each one finished.
-    for i in "${!inputs[@]}"; do
-        if [ ! -e parts/ok.$i ]; then echo "Failed to process ${inputs[$i]}" >&2; exit 1; fi
-    done
+The remaining columns (exons, introns, splice_hash_code and any others) are copied from
+the pooled quant.expr, which also fixes the isoform list: every cluster file lists every
+isoform of the pooled file, zeros included, sorted by transcript_id as LRAA writes them.
 
-    pigz -n -c merge_header.txt > "~{outputfile}"
-    for i in "${!inputs[@]}"; do
-        cat parts/part.$i.gz >> "~{outputfile}"
-        rm parts/part.$i.gz
-    done
+RPM_total_reads: LRAA divides by the mapped reads in the bam it quantified. A cluster's
+own mapped-read total is not known here, so the denominator is the cluster's assigned
+reads (its all_reads total), which makes this column equal TPM. A comment line in each
+file says so.
 
-     >>>
+Reads from barcodes that are in no cluster are counted in the pooled quantification (and
+in the single-cell matrices built from it) but in no cluster file. Their totals are
+reported in the --partition_summary table.
 
-     output {
-         File merged_tracking = "~{outputfile}"
-     }
-    
-     runtime {
-    
-         predefinedMachineType: machine_type
-    
-         preemptible: preemptible_tries
+Before writing anything the script checks that the tracking reproduces the pooled
+quant.expr: per isoform, the per-cluster sums plus the unclustered remainder must equal
+the pooled uniq_reads, uniq_FSM_reads and has_FSM_read exactly; a mismatch means the two
+files are not from the same run and stops the script. all_reads is compared to the pooled
+file's one-decimal rounding and only warned about: LRAA's default streaming writer reports
+the tracking's sum, while the EM report path (stream_reads off) reports EM's own counts.
+
+Output files are named <output_prefix>.<cluster>.LRAA.quant-only.quant.expr, the names
+the former per-cluster quant runs wrote, so readers that take the cluster from the file
+name (util/sc/site_usage/build_site_event_read_tracks.py) keep working.
+"""
+
+import argparse
+import collections
+import gzip
+import logging
+import os
+import shutil
+import subprocess
+import sys
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s : %(levelname)s : %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+UNCLUSTERED = "__unclustered__"
+# all_reads is written with one decimal, so a correct sum can sit up to 0.05 away
+ALL_READS_TOLERANCE = 0.051
+
+
+def open_text(path):
+    """Text handle on a plain or gzipped file; gzip goes through pigz when available."""
+    if not path.endswith(".gz"):
+        return open(path, "rt")
+    if shutil.which("pigz"):
+        proc = subprocess.Popen(["pigz", "-dc", path], stdout=subprocess.PIPE, text=True)
+        return _ProcReader(proc, path)
+    return gzip.open(path, "rt")
+
+
+class _ProcReader:
+    """File-like wrapper that checks the decompressor's exit status on close."""
+
+    def __init__(self, proc, path):
+        self.proc = proc
+        self.path = path
+
+    def __iter__(self):
+        return iter(self.proc.stdout)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.proc.stdout.close()
+        rc = self.proc.wait()
+        if rc != 0 and exc[0] is None:
+            raise RuntimeError(f"pigz -dc {self.path} exited {rc}")
+        return False
+
+
+def read_cell_clusters(path):
+    """cell_barcode -> cluster, parsed as util/sc/partition_bam_by_cell_cluster.py does:
+    two tab-separated fields per line; the exact header row 'cell_barcode<TAB>cluster'
+    on line 1 is skipped; other lines without two fields are skipped."""
+    cell_to_cluster = dict()
+    with open(path, "rt") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            vals = line.rstrip().split("\t")
+            if len(vals) != 2:
+                continue
+            barcode, cluster = vals
+            if lineno == 1 and (barcode, cluster) == ("cell_barcode", "cluster"):
+                continue
+            cell_to_cluster[barcode] = cluster
+    if not cell_to_cluster:
+        raise SystemExit(f"no cell -> cluster assignments read from {path}")
+    return cell_to_cluster
+
+
+def read_pooled_expr(path):
+    """(comment lines, header fields, rows as lists) of the pooled quant.expr."""
+    comments, header, rows = [], None, []
+    with open_text(path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                comments.append(line.rstrip("\n"))
+                continue
+            vals = line.rstrip("\n").split("\t")
+            if header is None:
+                header = vals
+                continue
+            rows.append(vals)
+    if header is None:
+        raise SystemExit(f"no header line in {path}")
+    for col in ("gene_id", "transcript_id", "uniq_reads", "all_reads", "isoform_fraction",
+                "unique_gene_read_fraction", "TPM", "RPM_total_reads", "uniq_FSM_reads",
+                "has_FSM_read"):
+        if col not in header:
+            raise SystemExit(f"{path}: column {col} missing")
+    return comments, header, rows
+
+
+class Totals:
+    __slots__ = ("frac", "uniq", "uniq_fsm", "any_fsm")
+
+    def __init__(self):
+        self.frac = 0.0
+        self.uniq = 0
+        self.uniq_fsm = 0
+        self.any_fsm = False
+
+
+def tally_tracking(path, cell_to_cluster, known_transcripts):
+    """(cluster, transcript_id) -> Totals over the tracking rows, plus per-group counts of
+    read rows and distinct barcodes. Barcodes in no cluster go to UNCLUSTERED."""
+    totals = collections.defaultdict(Totals)
+    barcodes_seen = collections.defaultdict(set)
+    col = None
+    n_rows = 0
+    with open_text(path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            vals = line.rstrip("\n").split("\t")
+            if vals[0] == "gene_id":
+                if col is None:
+                    col = {name: i for i, name in enumerate(vals)}
+                    for name in ("transcript_id", "read_name", "frac_assigned", "is_unique", "is_FSM"):
+                        if name not in col:
+                            raise SystemExit(f"{path}: tracking column {name} missing")
+                    i_tx, i_read = col["transcript_id"], col["read_name"]
+                    i_frac, i_uniq, i_fsm = col["frac_assigned"], col["is_unique"], col["is_FSM"]
+                continue
+            if col is None:
+                raise SystemExit(f"{path}: data row before the column header")
+            n_rows += 1
+            transcript_id = vals[i_tx]
+            if transcript_id not in known_transcripts:
+                raise SystemExit(
+                    f"{path}: transcript {transcript_id} is not in the pooled quant.expr; "
+                    "the tracking and quant.expr must come from the same quantification")
+            barcode = vals[i_read].split("^", 1)[0]
+            cluster = cell_to_cluster.get(barcode, UNCLUSTERED)
+            barcodes_seen[cluster].add(barcode)
+            t = totals[(cluster, transcript_id)]
+            t.frac += float(vals[i_frac])
+            if vals[i_fsm] == "1":
+                t.any_fsm = True
+            if vals[i_uniq] == "1":
+                t.uniq += 1
+                if vals[i_fsm] == "1":
+                    t.uniq_fsm += 1
+    if col is None:
+        raise SystemExit(f"{path}: no tracking column header found")
+    logger.info("read %d tracking rows", n_rows)
+    return totals, barcodes_seen
+
+
+def check_against_pooled(header, rows, totals):
+    """Per isoform, clusters + unclustered must reproduce the pooled quant.expr."""
+    ix = {name: i for i, name in enumerate(header)}
+    by_tx = collections.defaultdict(Totals)
+    for (cluster, tx), t in totals.items():
+        s = by_tx[tx]
+        s.frac += t.frac
+        s.uniq += t.uniq
+        s.uniq_fsm += t.uniq_fsm
+        s.any_fsm = s.any_fsm or t.any_fsm
+    bad, off = [], []
+    for r in rows:
+        tx = r[ix["transcript_id"]]
+        s = by_tx.get(tx, Totals())
+        if (int(r[ix["uniq_reads"]]) != s.uniq
+                or int(r[ix["uniq_FSM_reads"]]) != s.uniq_fsm
+                or (r[ix["has_FSM_read"]] == "1") != s.any_fsm):
+            bad.append((tx, r[ix["uniq_reads"]], s.uniq, r[ix["uniq_FSM_reads"]], s.uniq_fsm,
+                        r[ix["has_FSM_read"]], int(s.any_fsm)))
+        pooled_all = float(r[ix["all_reads"]])
+        if abs(pooled_all - s.frac) > ALL_READS_TOLERANCE + 1e-4 * pooled_all:
+            off.append((tx, r[ix["all_reads"]], f"{s.frac:.3f}"))
+    if off:
+        # The streaming writer (LRAA's default, stream_reads) reports all_reads as the sum
+        # of the tracking's frac_assigned, so this should not happen there. The EM report
+        # path (stream_reads off) reports EM's own counts, which can differ slightly.
+        for o in off[:10]:
+            logger.warning("all_reads differs, pooled quant.expr vs tracking sum: %s %s / %s", *o)
+        logger.warning("%d of %d isoforms: pooled all_reads differs from the tracking's sum of "
+                       "frac_assigned; cluster values are tracking sums", len(off), len(rows))
+    if bad:
+        for b in bad[:10]:
+            logger.error("pooled vs tracking mismatch: %s uniq %s/%s uniqFSM %s/%s hasFSM %s/%s", *b)
+        raise SystemExit(
+            f"{len(bad)} isoforms: the tracking does not reproduce the pooled quant.expr's "
+            "uniq_reads, uniq_FSM_reads or has_FSM_read; the two files must come from the "
+            "same quantification")
+
+
+def write_cluster_expr(path, comments, header, rows, cluster, totals):
+    ix = {name: i for i, name in enumerate(header)}
+    gene_of = {r[ix["transcript_id"]]: r[ix["gene_id"]] for r in rows}
+    gene_frac = collections.defaultdict(float)
+    cluster_total = 0.0
+    for r in rows:
+        t = totals.get((cluster, r[ix["transcript_id"]]))
+        if t is not None:
+            gene_frac[gene_of[r[ix["transcript_id"]]]] += t.frac
+            cluster_total += t.frac
+    zero = Totals()
+    with open(path, "wt") as ofh:
+        for c in comments:
+            print(c, file=ofh)
+        print(f"# cluster {cluster}: derived from the pooled (all cells) quantification by "
+              "summing the cluster's cells; RPM_total_reads is per million of the cluster's "
+              "assigned reads (equal to TPM)", file=ofh)
+        print("\t".join(header), file=ofh)
+        for r in sorted(rows, key=lambda r: r[ix["transcript_id"]]):
+            tx = r[ix["transcript_id"]]
+            t = totals.get((cluster, tx), zero)
+            gene_total = gene_frac.get(gene_of[tx], 0.0)
+            out = list(r)
+            out[ix["uniq_reads"]] = f"{t.uniq}"
+            out[ix["all_reads"]] = f"{t.frac:.1f}"
+            out[ix["isoform_fraction"]] = f"{(t.frac / gene_total if gene_total > 0 else 0.0):.3f}"
+            out[ix["unique_gene_read_fraction"]] = f"{(t.uniq / gene_total if gene_total > 0 else 0.0):.3f}"
+            tpm = t.frac / cluster_total * 1e6 if cluster_total > 0 else 0.0
+            out[ix["TPM"]] = f"{tpm:.3f}"
+            out[ix["RPM_total_reads"]] = f"{tpm:.3f}"
+            out[ix["uniq_FSM_reads"]] = f"{t.uniq_fsm}"
+            out[ix["has_FSM_read"]] = "1" if t.any_fsm else "0"
+            print("\t".join(out), file=ofh)
+    return cluster_total
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--tracking", required=True,
+                        help="pooled LRAA quant.tracking (.gz ok)")
+    parser.add_argument("--quant_expr", required=True,
+                        help="pooled LRAA quant.expr from the same quantification")
+    parser.add_argument("--cell_clusters", required=True,
+                        help="cell_barcode <tab> cluster (as given to partition_bam_by_cell_cluster.py)")
+    parser.add_argument("--output_prefix", required=True,
+                        help="files are written as <output_prefix>.<cluster>.LRAA.quant-only.quant.expr")
+    parser.add_argument("--output_dir", default=".", help="directory for the per-cluster files")
+    parser.add_argument("--partition_summary", default=None,
+                        help="optional TSV: per cluster (and unclustered) barcodes with reads, "
+                             "read rows' assigned reads, unique reads")
+    args = parser.parse_args()
+
+    cell_to_cluster = read_cell_clusters(args.cell_clusters)
+    clusters = sorted(set(cell_to_cluster.values()))
+    if UNCLUSTERED in clusters:
+        raise SystemExit(f"a cluster is named {UNCLUSTERED}, which this script reserves")
+    logger.info("%d barcodes in %d clusters", len(cell_to_cluster), len(clusters))
+
+    comments, header, rows = read_pooled_expr(args.quant_expr)
+    known = {r[header.index("transcript_id")] for r in rows}
+    logger.info("%d isoforms in the pooled quant.expr", len(rows))
+
+    totals, barcodes_seen = tally_tracking(args.tracking, cell_to_cluster, known)
+    check_against_pooled(header, rows, totals)
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    assigned = dict()
+    for cluster in clusters:
+        path = os.path.join(args.output_dir, f"{args.output_prefix}.{cluster}.LRAA.quant-only.quant.expr")
+        assigned[cluster] = write_cluster_expr(path, comments, header, rows, cluster, totals)
+        logger.info("cluster %s: %.1f assigned reads -> %s", cluster, assigned[cluster], path)
+
+    group_frac = collections.defaultdict(float)
+    group_uniq = collections.defaultdict(int)
+    for (c, _), t in totals.items():
+        group_frac[c] += t.frac
+        group_uniq[c] += t.uniq
+    unclustered = group_frac[UNCLUSTERED]
+    pooled = sum(group_frac.values())
+    logger.info("unclustered barcodes: %d, %.1f assigned reads (%.2f%% of %.1f)",
+                len(barcodes_seen.get(UNCLUSTERED, ())), unclustered,
+                100.0 * unclustered / pooled if pooled else 0.0, pooled)
+
+    if args.partition_summary:
+        with open(args.partition_summary, "wt") as ofh:
+            print("# Reads of the pooled quantification by cell cluster. assigned_reads: sum of "
+                  "frac_assigned; unique_reads: read rows assigned to one isoform only. The "
+                  "__unclustered__ row holds barcodes in no cluster: counted in the single-cell "
+                  "matrices, in no cluster's pseudobulk.", file=ofh)
+            print("\t".join(["cluster", "barcodes_with_reads", "assigned_reads", "unique_reads",
+                             "fraction_of_assigned_reads"]), file=ofh)
+            for cluster in clusters + [UNCLUSTERED]:
+                a, u = group_frac[cluster], group_uniq[cluster]
+                print("\t".join([cluster, str(len(barcodes_seen.get(cluster, ()))), f"{a:.1f}", str(u),
+                                 f"{(a / pooled if pooled else 0.0):.6f}"]), file=ofh)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+LRAA_INLINED_SCRIPT_EOF
+
+        python3 tracking_to_cluster_pseudobulk_exprs.py \
+            --tracking ~{quant_tracking} \
+            --quant_expr ~{quant_expr} \
+            --cell_clusters ~{cell_clusters_info} \
+            --output_prefix ~{sample_id} \
+            --output_dir cluster_exprs \
+            --partition_summary ~{sample_id}.LRAA.final.cluster_read_partition.tsv
+    >>>
+
+    output {
+        Array[File] cluster_quant_exprs = glob("cluster_exprs/*.quant.expr")
+        File read_partition_summary = "~{sample_id}.LRAA.final.cluster_read_partition.tsv"
+    }
+
+    runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
         docker: docker
-        cpu: merge_cpu
+        # 1 core for the parse, 1 for pigz decompressing the tracking
+        cpu: 2
         memory: "~{memoryGB} GiB"
         disks: "local-disk ~{disksize} SSD"
-     }
-} 
+    }
+}
 
 
 

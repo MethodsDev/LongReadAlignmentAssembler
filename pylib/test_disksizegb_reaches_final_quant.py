@@ -16,10 +16,12 @@ that -- is silent again. So the assertion here is the whole path, hop by hop,
 ending at the runtime attribute that actually spends the number:
 
     LRAA_cell_cluster_guided
-      -> LRAA_quant_by_cluster           (final quant)
-        -> LRAA_wf                       (per cluster)
-          -> LRAA_runner
-            -> LRAA_runner_task          disks: "local-disk ~{diskSizeGB} HDD"
+      -> LRAA_wf                         (final pooled quant, and per-cluster discovery)
+        -> LRAA_runner
+          -> LRAA_runner_task            disks: "local-disk ~{diskSizeGB} HDD"
+
+    LRAA_quant_by_cluster                (standalone per-cluster quant workflow)
+      -> LRAA_wf                         (per cluster)
 
 Each hop must bind `diskSizeGB` to a plain reference to the caller's own
 same-named input. Anything else -- dropped, renamed, or hard-coded to a literal
@@ -37,10 +39,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 WDL_DIR = REPO / "WDL"
 
-# (importing document, the call to inspect). Each entry's callee is the next
-# entry's document, so the list IS the chain.
+# (importing document, the call to inspect). Each call's callee is LRAA.wdl or
+# the next entry's document.
 HOPS = [
-    ("LRAA-cell_cluster_guided.wdl", "LRAA_quant_final_bamlist"),
+    ("LRAA-cell_cluster_guided.wdl", "LRAA_final_quant"),
+    ("LRAA-cell_cluster_guided.wdl", "LRAA_by_cluster"),
     ("LRAA_quant_by_cluster.wdl", "LRAA_quant_cluster"),
     # LRAA.wdl reaches the runner two ways -- chromosome-sharded and direct --
     # and a run takes exactly one of them, so both have to carry the value.

@@ -107,7 +107,6 @@ def test_only_the_near_zero_tasks_stay_on_hdd():
     [
         "LRAA_runner_task",
         "process_chunk",
-        "LRAA_merge_trackings",
         "lraa_merge_gtf_task",
         "sc_build_sparse_matrices",
         "run_seurat_from_gene_sparseM",

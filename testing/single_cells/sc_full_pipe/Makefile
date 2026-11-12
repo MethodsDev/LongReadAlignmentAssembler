@@ -5,7 +5,7 @@ include ../../lraa_test_docker.mk
 
 # MINIWDL_CFG and MINIWDL_RUN come from the include above.
 
-test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly
+test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_cluster_guided_denovo_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly
 
 
 test_full_sc_pipe_basic_wdl:
@@ -25,6 +25,9 @@ test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf:
 
 test_full_sc_pipe_cluster_guided_wdl:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.inputs.json -d sc_pipe_outdir-cluster-guided $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+
+test_full_sc_pipe_cluster_guided_denovo_wdl:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.denovo.inputs.json -d sc_pipe_outdir-cluster-guided-denovo $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 
 test_full_sc_pipe_cluster_guided_wdl_QOnly:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose

@@ -12,6 +12,16 @@ import "LRAA.wdl" as LRAA
 # 2. Merge all normalized BAMs
 # 3. Normalize the merged BAM (final normalization)
 # 4. Quantify each original BAM in parallel using the normalized merged BAM for splice graph construction
+#
+# NOT USED BY THE SINGLE-CELL PIPELINE since the cluster-guided final quant became one
+# pooled quant-only pass (LRAA-cell_cluster_guided.wdl LRAA_final_quant). Quantified per
+# cluster, each cluster's EM divides its ambiguous reads by that cluster's own isoform
+# proportions, so pseudo-replicates within a cluster share that prior and between-cluster
+# differential-usage tests report differences the prior put there. This workflow remains
+# as a standalone entry point for per-cluster quantification, and as the home of two
+# tasks the single-cell workflows import: emit_shared_chunk_plan and
+# collate_read_assignment_summaries. Comments below that describe what the cluster-guided
+# workflow passes here describe the former wiring.
 
 workflow LRAA_quant_by_cluster {
     input {
@@ -191,7 +201,7 @@ workflow LRAA_quant_by_cluster {
     # Runs ONLY when the caller did not already emit one. Emitting here serves this
     # final quant and nothing earlier, so per-cluster DISCOVERY still selected its own
     # cuts -- measured at 76 distinct geometries over 270 extractions on the
-    # ref-guided smoke run. LRAA-cell_cluster_guided.wdl now emits the plan before its
+    # ref-guided smoke run. LRAA-cell_cluster_guided.wdl emits the plan before its
     # phase-1 discovery and passes it in as internal_chunk_plan, so a cluster-guided
     # run has ONE geometry end to end and this call is skipped. It stays for the
     # workflow's own entry point: a standalone LRAA_quant_by_cluster must not fall back
@@ -681,10 +691,10 @@ task emit_shared_chunk_plan {
     # all of them cut at identical positions.
     #
     # Called from THREE places, at most once per run: here as the fallback for a
-    # standalone final quant, and -- for a whole cluster-guided run -- once before
+    # standalone per-cluster quant, and -- for a whole cluster-guided run -- once before
     # phase 1 from LRAA-cell_cluster_guided.wdl or LRAA-singlecell.wdl, which then
-    # thread the file down so the initial pass, per-cluster discovery and the final
-    # quant share ONE geometry. Defined here rather than in a subworkflow of its own
+    # thread the file down so the initial pass, per-cluster discovery and the pooled
+    # final quant share ONE geometry. Defined here rather than in a subworkflow of its own
     # because those two already import this file, and the task belongs beside the
     # workflow whose comparability argument it exists to serve.
     input {

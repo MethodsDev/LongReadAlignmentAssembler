@@ -1,3 +1,49 @@
+Unreleased
+
+Single-cell cluster-guided workflow: the final quantification is one pooled pass over all
+cells (changes the final single-cell matrices and per-cluster pseudobulk values; the final
+GTF is unchanged):
+
+- WDL: LRAA-cell_cluster_guided.wdl quantifies every cell in ONE LRAA quant-only run on the
+  full input BAM against the final (sc_merged) GTF, with the init pass's settings: the run's
+  shared chunk plan, the contig scatter, and the single-cell sparse shards built during
+  quantification. It replaces the per-cluster quant (LRAA_quant_by_cluster.wdl), in which each
+  cluster's EM divided that cluster's ambiguous reads by its own isoform proportions. Isoform
+  discovery is still per cluster.
+- The final single-cell matrices (final_sc_*, incl_gene_symbols_*) are built from that pooled
+  tracking. They now include reads from barcodes in no cluster.
+- Per-cluster pseudobulk (final_cluster_exprs_tar, cluster_*_matrix) is the pooled assignment
+  summed over each cluster's cells (new util/sc/tracking_to_cluster_pseudobulk_exprs.py), with
+  no per-cluster EM. File names inside the tar are unchanged. RPM_total_reads in those files is
+  per million of the cluster's assigned reads (equal to TPM). Reads of unclustered barcodes are
+  in no cluster's file; new output final_cluster_read_partition gives the per-cluster and
+  unclustered totals.
+- final_tracking is the pooled tracking (all cells); new output final_quant_expr is its
+  quant.expr. final_collated_read_assignment_summary has one pooled row ("pseudobulk",
+  population pooled_thinned) instead of one row per cluster.
+- Removed outputs: final_cluster_trackings_tar (singlecell), and the cluster-guided
+  subworkflow's normalized_cluster_bams/bais, merged_normalized_bam/bai and
+  final_normalized_merged_bam/bai (no per-cluster normalization any more).
+- Removed inputs of LRAA-cell_cluster_guided.wdl: pre_normalized_cluster_bams/bais,
+  memoryGBquantNormalize, memoryGBquantMerge, normalize_max_cov_level. memoryGBquantFinal is
+  now optional in both workflows (unset: sized from the BAM, as for the init pass) and applies
+  only with scattering_final_quant = "off". New cluster-guided inputs cpuFinalQuant,
+  final_quant_partition_workers and num_total_reads; LRAA-singlecell.wdl passes cpuInit,
+  initial_partition_workers and its num_total_reads to them.
+- quant_only cluster-guided runs reuse the init pass's quant (tracking, quant.expr, matrices)
+  as the final quant instead of running the same whole-library quant twice. Applies when
+  scattering_init equals scattering_final_quant and neither init_config_update_json nor
+  region is set.
+- New cluster-guided input final_quant_config_update_json (LRAA_Globals overrides for the
+  final quant; unset by default).
+- The per-cluster split script is inlined in its WDL task, so the WDL runs on images that
+  predate the script; pylib/test_inlined_wdl_scripts.py keeps the copy equal to the util
+  script.
+- No per-cluster tracking output: a read's cluster follows from the cell barcode leading its
+  read name in final_tracking.
+- LRAA_quant_by_cluster.wdl remains as a standalone per-cluster quantification workflow.
+
+
 v0.50.1
 
 Fixes to gene-symbol naming of single-cell feature matrices (no change to LRAA models or quantification):
