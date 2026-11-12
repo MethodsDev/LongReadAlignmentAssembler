@@ -8,6 +8,7 @@ from MockTranscript import MockTranscript
 
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Pretty_alignment import Pretty_alignment
+import LRAA_Globals
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -25,13 +26,47 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 #
 #      FSM: contains full set of spliced-out introns as a reference isoform
 #      ISM:
+#
+#  FSM subcategories (two independent columns, filled only for sqanti_cat FSM; empty
+#  for every other category, including the mono-exonic se_* ones):
+#
+#      FSM_full_length_isoforms: the FSM-matched reference isoforms (same intron chain)
+#          whose 5' and 3' ends both lie within fsm_full_length_max_end_dist bases of
+#          the query's ends. Reads are measured by their alignment span (soft clips
+#          excluded). Both ends are compared, so strand does not matter.
+#
+#      FSM_ISM_of_isoforms: other reference isoforms whose intron chain contains the
+#          query's chain as a proper contiguous subset, i.e. the query would be an ISM
+#          of them if it did not already match a reference chain exactly. Structural
+#          only, like the ISM test itself: any reference isoform on the same contig and
+#          strand sharing every query intron in order counts, with no gene_id check.
+#          5'/3'/internal fragment direction is not recorded (the ISM category does not
+#          record it either).
+#
+#      FSM_ISM_of_genes: the gene of each FSM_ISM_of_isoforms entry, in the same order,
+#          as gene_name^gene_id (gene_id alone when the GTF gives no gene_name).
+#
+#      FSM_ISM_of_gene_scope: whether those containing isoforms belong to a gene of the
+#          FSM-matched isoforms: same_gene, other_gene (none does), same_and_other_gene,
+#          or empty when FSM_ISM_of_isoforms is empty.
+#
+#  A non-empty field is the flag; its value names the reference isoforms.
 
 
 class SQANTI_like_annotator:
 
     MIN_FSM_SE_FRAC_OVERLAP = 0.9
 
-    def __init__(self, ref_annot_gtf):
+    def __init__(self, ref_annot_gtf, fsm_full_length_max_end_dist=None):
+
+        # default from LRAA_Globals; callers that run in worker processes pass it
+        # explicitly, since a config override made in the parent is not inherited
+        # under the spawn start method.
+        if fsm_full_length_max_end_dist is None:
+            fsm_full_length_max_end_dist = LRAA_Globals.config[
+                "sqlike_fsm_full_length_max_end_dist"
+            ]
+        self.fsm_full_length_max_end_dist = int(fsm_full_length_max_end_dist)
 
         logger.info("-parsing gtf_file: {}".format(ref_annot_gtf))
 
@@ -80,6 +115,10 @@ class SQANTI_like_annotator:
             ),
             "num_exon_segments": num_exon_segments,
             "matching_isoforms": "",
+            "FSM_full_length_isoforms": "",
+            "FSM_ISM_of_isoforms": "",
+            "FSM_ISM_of_genes": "",
+            "FSM_ISM_of_gene_scope": "",
         }
 
         feature_classified = False
@@ -95,14 +134,30 @@ class SQANTI_like_annotator:
 
             # check FSM
             if feature_intron_string in self.splice_patterns_to_isoforms:
-                matching_isoforms = ",".join(
-                    sorted(
-                        list(self.splice_patterns_to_isoforms[feature_intron_string])
-                    )
-                )
+                fsm_isoforms = self.splice_patterns_to_isoforms[feature_intron_string]
+                matching_isoforms = ",".join(sorted(list(fsm_isoforms)))
                 feature_class_info["sqanti_cat"] = "FSM"
                 feature_class_info["matching_isoforms"] = matching_isoforms
                 feature_classified = True
+
+                # FSM subcategories (do not affect sqanti_cat)
+                feature_class_info["FSM_full_length_isoforms"] = ",".join(
+                    sorted(
+                        self._full_length_isoforms(
+                            fsm_isoforms, feature_span_lend, feature_span_rend
+                        )
+                    )
+                )
+                containing_isoforms = sorted(
+                    self._isoforms_containing_intron_chain(
+                        feature_chrom, feature_strand, transcribed_feature_obj
+                    )
+                    - fsm_isoforms
+                )
+                if containing_isoforms:
+                    feature_class_info.update(
+                        self._containment_fields(fsm_isoforms, containing_isoforms)
+                    )
 
             # check ISM, NIC, NNIC
             if not feature_classified:
@@ -363,6 +418,63 @@ class SQANTI_like_annotator:
                     ] = transcript_id
 
         return
+
+    def _full_length_isoforms(self, isoform_ids, feature_lend, feature_rend):
+        # isoforms whose both ends lie within the tolerance of the feature's ends
+        max_dist = self.fsm_full_length_max_end_dist
+        full_length = set()
+        for isoform_id in isoform_ids:
+            iso_lend, iso_rend = self.transcript_id_to_obj[isoform_id].get_coords()
+            if (
+                abs(feature_lend - iso_lend) <= max_dist
+                and abs(feature_rend - iso_rend) <= max_dist
+            ):
+                full_length.add(isoform_id)
+        return full_length
+
+    def _containment_fields(self, fsm_isoforms, containing_isoforms):
+        # the containing isoforms, their genes, and whether those genes are the FSM's
+        fsm_genes = {
+            self.transcript_id_to_obj[tid].get_gene_id() for tid in fsm_isoforms
+        }
+        containers = [self.transcript_id_to_obj[tid] for tid in containing_isoforms]
+        in_fsm_gene = {obj.get_gene_id() in fsm_genes for obj in containers}
+        if in_fsm_gene == {True}:
+            scope = "same_gene"
+        elif in_fsm_gene == {False}:
+            scope = "other_gene"
+        else:
+            scope = "same_and_other_gene"
+        return {
+            "FSM_ISM_of_isoforms": ",".join(containing_isoforms),
+            "FSM_ISM_of_genes": ",".join(
+                obj.get_output_gene_id() for obj in containers
+            ),
+            "FSM_ISM_of_gene_scope": scope,
+        }
+
+    def _isoforms_containing_intron_chain(
+        self, feature_chrom, feature_strand, transcribed_feature_obj
+    ):
+        # reference isoforms carrying every feature intron, consecutively and in order
+        # (the ISM containment test). Includes isoforms with the identical chain.
+        candidates = None
+        for intron in transcribed_feature_obj.get_introns():
+            intron_tok = make_intron_token(feature_chrom, feature_strand, intron)
+            isoforms_with_intron = self.intron_to_isoforms.get(intron_tok)
+            if not isoforms_with_intron:
+                return set()
+            if candidates is None:
+                candidates = set(isoforms_with_intron)
+            else:
+                candidates &= isoforms_with_intron
+            if not candidates:
+                return set()
+        if not candidates:
+            return set()
+        return self.restrict_splice_matched_isoforms(
+            candidates, transcribed_feature_obj
+        )
 
     def restrict_splice_matched_isoforms(
         self, isoforms_with_matching_introns, transcribed_feature_obj

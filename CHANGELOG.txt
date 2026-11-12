@@ -1,3 +1,17 @@
+devel (unreleased)
+
+- SQANTI-like classifier (util/SQANTI-like_cats_for_reads_or_isoforms.py): two FSM
+  subcategory columns appended to the iso_cats table, in both read and isoform mode.
+  FSM_full_length_isoforms lists the FSM-matched reference isoforms whose 5' and 3' ends
+  both lie within sqlike_fsm_full_length_max_end_dist bases (LRAA_Globals, default 50)
+  of the query's ends (alignment span for reads). FSM_ISM_of_isoforms lists the other
+  reference isoforms whose intron chain contains the query's as a proper contiguous
+  subset, in any gene; FSM_ISM_of_genes gives each one's gene (gene_name^gene_id) and
+  FSM_ISM_of_gene_scope says whether they are in the FSM match's gene (same_gene,
+  other_gene, same_and_other_gene). All are empty for non-FSM categories, including se_FM. sqanti_cat, the
+  existing columns, the bam tags and the summary counts are unchanged. The script takes
+  --config_update (json of LRAA_Globals.config overrides) to set the tolerance.
+
 v0.50.1
 
 Fixes to gene-symbol naming of single-cell feature matrices (no change to LRAA models or quantification):

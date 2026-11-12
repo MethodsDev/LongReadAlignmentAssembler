@@ -33,7 +33,9 @@ class MockTranscript:
         return self._introns
 
     def get_introns_string(self, chrom=None):
-        return f"{self._chrom}:{self._strand}:{self._introns}"
+        # same format as Transcript.get_introns_string(), the key the annotator's
+        # FSM lookup uses
+        return "{}:({}){}".format(self._chrom, self._strand, self._introns)
 
     def get_exons_string(self):
         return "_".join([f"{e[0]}-{e[1]}" for e in self._exons])

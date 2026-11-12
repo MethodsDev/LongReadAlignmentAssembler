@@ -1283,6 +1283,11 @@ config = {
     # else, so they are not part of the splice-graph cache key.
     "polyA_signal_motifs": ["AATAAA", "ATTAAA"],
     "polyA_signal_window": [-40, -10],
+    # SQANTI-like classifier (util/SQANTI-like_cats_for_reads_or_isoforms.py): an FSM is
+    # also reported as full-length against each matching reference isoform whose 5' and
+    # 3' ends both lie within this many bases of the query's ends (column
+    # FSM_full_length_isoforms). Annotation only; set via that script's --config_update.
+    "sqlike_fsm_full_length_max_end_dist": 50,
 }
 
 

@@ -20,6 +20,7 @@ from Transcript import Transcript, GTF_contig_to_transcripts
 from Pretty_alignment import Pretty_alignment
 import Util_funcs
 from SQANTI_like_annotator import SQANTI_like_annotator
+import LRAA_Globals
 
 FORMAT = (
     "%(asctime)-15s %(levelname)s %(module)s.%(name)s.%(funcName)s:\n\t%(message)s\n"
@@ -36,6 +37,10 @@ BAM_TSV_FIELDNAMES = [
     "num_exon_segments",
     "structure",
     "matching_isoforms",
+    "FSM_full_length_isoforms",
+    "FSM_ISM_of_isoforms",
+    "FSM_ISM_of_genes",
+    "FSM_ISM_of_gene_scope",
 ]
 
 
@@ -90,7 +95,25 @@ def main():
         "quota); auto runs serially if the bam has no index",
     )
 
+    parser.add_argument(
+        "--config_update",
+        default=None,
+        help="json file of LRAA_Globals.config overrides, e.g. "
+        '{"sqlike_fsm_full_length_max_end_dist": 50}',
+    )
+
     args = parser.parse_args()
+
+    if args.config_update:
+        import json
+
+        with open(args.config_update, "rt") as fh:
+            for key, value in json.load(fh).items():
+                if key not in LRAA_Globals.config:
+                    exit("Error, unknown config key in --config_update: {}".format(key))
+                LRAA_Globals.config[key] = value
+
+    fsm_end_dist = LRAA_Globals.config["sqlike_fsm_full_length_max_end_dist"]
 
     ref_annot_gtf = args.ref_gtf
     input_gtf = args.input_gtf
@@ -116,12 +139,17 @@ def main():
 
     if input_bam is not None and num_workers > 1:
         feature_category_counter = classify_bam_by_contig(
-            ref_annot_gtf, input_bam, output_prefix, num_workers, args.gzip_tsv
+            ref_annot_gtf,
+            input_bam,
+            output_prefix,
+            num_workers,
+            args.gzip_tsv,
+            fsm_end_dist,
         )
         write_summary_and_plot(output_prefix, feature_category_counter)
         sys.exit(0)
 
-    sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf)
+    sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf, fsm_end_dist)
 
     tsv_output_filename = output_prefix + ".iso_cats.tsv"
     if args.gzip_tsv:
@@ -178,6 +206,10 @@ def main():
                 "num_exon_segments",
                 "structure",
                 "matching_isoforms",
+                "FSM_full_length_isoforms",
+                "FSM_ISM_of_isoforms",
+                "FSM_ISM_of_genes",
+                "FSM_ISM_of_gene_scope",
             ],
             delimiter="\t",
             lineterminator="\n",
@@ -303,7 +335,12 @@ def process_bam_record(
 
 
 def classify_bam_by_contig(
-    ref_annot_gtf, input_bam, output_prefix, num_workers, gzip_tsv=False
+    ref_annot_gtf,
+    input_bam,
+    output_prefix,
+    num_workers,
+    gzip_tsv=False,
+    fsm_end_dist=None,
 ):
     """Classify a coordinate-sorted, indexed bam one contig per worker.
 
@@ -360,7 +397,9 @@ def classify_bam_by_contig(
     part_counters = [None] * len(jobs)
     with ProcessPoolExecutor(max_workers=min(num_workers, len(jobs))) as executor:
         futures = {
-            executor.submit(classify_bam_contig, input_bam, *jobs[j], gzip_tsv): j
+            executor.submit(
+                classify_bam_contig, input_bam, *jobs[j], gzip_tsv, fsm_end_dist
+            ): j
             for j in submit_order
         }
         for num_done, future in enumerate(as_completed(futures), start=1):
@@ -424,10 +463,14 @@ def split_gtf_by_contig(gtf_filename, contigs, tmpdir):
     return contig_gtfs
 
 
-def classify_bam_contig(input_bam, contig, contig_gtf, part_prefix, gzip_tsv=False):
-    # Worker: takes only paths and strings, so it runs under any start method.
+def classify_bam_contig(
+    input_bam, contig, contig_gtf, part_prefix, gzip_tsv=False, fsm_end_dist=None
+):
+    # Worker: takes only paths, strings and numbers, so it runs under any start
+    # method. fsm_end_dist is passed explicitly: a --config_update applied in the
+    # parent is not inherited by a spawned worker.
     if contig_gtf is not None:
-        sqanti_classifier = SQANTI_like_annotator(contig_gtf)
+        sqanti_classifier = SQANTI_like_annotator(contig_gtf, fsm_end_dist)
     else:
         sqanti_classifier = None  # unplaced reads are unmapped; nothing to classify
 
