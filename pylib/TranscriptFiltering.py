@@ -1631,7 +1631,7 @@ def _is_5prime_truncation_by_coords(short, long, strand, end_tolerance):
 
 
 def prune_contained_truncations_structural(
-    transcripts, contig_strand, spare=None, end_tolerance=None
+    transcripts, contig_strand, spare=None, end_tolerance=None, prune_3prime=True
 ):
     """Structure-only form of prune_likely_degradation_products, for a GTF merge.
 
@@ -1659,6 +1659,9 @@ def prune_contained_truncations_structural(
     end within end_tolerance bases of the container's, whatever either model's PolyA call.
 
     spare: optional predicate; a model for which it returns True is never pruned.
+
+    prune_3prime: when False, a model with its own TSS node is never pruned, so only the
+    5' truncation cases (no TSS node) apply.
 
     Returns (kept transcripts in input order, list of (pruned_id, container_id)).
     """
@@ -1691,7 +1694,7 @@ def prune_contained_truncations_structural(
                 if i == j or transcript_j.get_transcript_id() in pruned:
                     continue
                 j_path, j_TSS_id, j_polyA_id = trimmed[j]
-                if j_TSS_id is not None and j_polyA_id is not None:
+                if j_TSS_id is not None and (j_polyA_id is not None or not prune_3prime):
                     continue
                 if not j_path:
                     continue

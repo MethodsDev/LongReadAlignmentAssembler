@@ -547,6 +547,9 @@ config = {
     # container's, whatever the PolyA calls (inputs from different clusters end a few bases apart). None = exact
     # path containment only.
     "merge_prune_end_tolerance": 50,
+    # Merge only, with merge_prune_degradation_products: also absorb a model with its own TSS node and no PolyA
+    # node into a container sharing that TSS (a 3' truncation). False = only models without a TSS node are absorbed.
+    "merge_prune_3prime_truncations": True,
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned

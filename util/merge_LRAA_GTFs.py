@@ -358,6 +358,7 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
                 contig_strand,
                 spare=spare,
                 end_tolerance=LRAA_Globals.config.get("merge_prune_end_tolerance"),
+                prune_3prime=LRAA_Globals.config.get("merge_prune_3prime_truncations", True),
             )
         )
         logger.info(

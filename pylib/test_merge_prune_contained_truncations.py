@@ -196,3 +196,22 @@ def test_tolerant_rule_absorbs_own_polyA_within_tolerance():
         [L, S], "+", end_tolerance=50
     )
     assert [t.get_transcript_id() for t in kept] == ["L"]
+
+
+def test_prune_3prime_false_keeps_TSS_carrying_3prime_truncation():
+    # S shares L's TSS and lacks a PolyA node (a 3' truncation): absorbed by default,
+    # kept with prune_3prime=False; a TSS-less 5' truncation is absorbed either way.
+    def models():
+        L = _model("L", L_EXONS, L_PATH)
+        S3 = _model("S3", [[100, 200], [300, 400]], ["TSS:1", "E:1", "I:1", "E:2a"])
+        S5 = _model("S5", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:1"])
+        return [L, S3, S5]
+
+    kept, _ = TranscriptFiltering.prune_contained_truncations_structural(models(), "+")
+    assert [t.get_transcript_id() for t in kept] == ["L"]
+
+    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
+        models(), "+", prune_3prime=False
+    )
+    assert {t.get_transcript_id() for t in kept} == {"L", "S3"}
+    assert pruned == [("S5", "L")]
