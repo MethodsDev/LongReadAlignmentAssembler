@@ -552,6 +552,14 @@ config = {
     # (median 0.350 vs 0.349 on LSK109). Set 0 to require exact feature identity,
     # which is the prior behaviour.
     "max_frac_alt_terminal_feature_absorbable": 0.20,
+    # A contained model with a PolyA call but no TSS call is absorbed by a container
+    # WITHOUT a PolyA call whose 3' end lies within max_dist_between_alt_polyA_sites of
+    # its own (one site by that same rule); the container takes over the site and end.
+    # False = feature-call identity only, the prior behaviour.
+    "contained_PolyA_match_by_end_coords": True,
+    # The 5' mirror: a contained model with a TSS call and no PolyA call, a container
+    # WITHOUT a TSS call, 5' ends within max_dist_between_alt_TSS_sites.
+    "contained_TSS_match_by_end_coords": False,
     #
     ## read assignment to transcript criteria
     "fraction_read_align_overlap": 0.75,  # min fraction of read length that must overlap the compatible transcript isoform structure
