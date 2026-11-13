@@ -50,6 +50,13 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 #          FSM-matched isoforms: same_gene, other_gene (none does), same_and_other_gene,
 #          or empty when FSM_ISM_of_isoforms is empty.
 #
+#      FSM_ref_5prime_offset, FSM_ref_3prime_offset: signed distance of the query's 5'
+#          and 3' ends from those of the closest FSM-matched reference isoform (the one
+#          with the smallest larger-of-the-two end distances), in the reference
+#          isoform's transcribed orientation. Positive: the query extends past the
+#          reference end; negative: it stops short of it. A query is full-length
+#          exactly when both offsets are within fsm_full_length_max_end_dist.
+#
 #  A non-empty field is the flag; its value names the reference isoforms.
 
 
@@ -119,6 +126,8 @@ class SQANTI_like_annotator:
             "FSM_ISM_of_isoforms": "",
             "FSM_ISM_of_genes": "",
             "FSM_ISM_of_gene_scope": "",
+            "FSM_ref_5prime_offset": "",
+            "FSM_ref_3prime_offset": "",
         }
 
         feature_classified = False
@@ -148,6 +157,11 @@ class SQANTI_like_annotator:
                         )
                     )
                 )
+                offset_5prime, offset_3prime = self._closest_end_offsets(
+                    fsm_isoforms, feature_span_lend, feature_span_rend
+                )
+                feature_class_info["FSM_ref_5prime_offset"] = offset_5prime
+                feature_class_info["FSM_ref_3prime_offset"] = offset_3prime
                 containing_isoforms = sorted(
                     self._isoforms_containing_intron_chain(
                         feature_chrom, feature_strand, transcribed_feature_obj
@@ -431,6 +445,23 @@ class SQANTI_like_annotator:
             ):
                 full_length.add(isoform_id)
         return full_length
+
+    def _closest_end_offsets(self, isoform_ids, feature_lend, feature_rend):
+        # signed (5', 3') offsets from the isoform whose ends are closest; positive
+        # means the feature extends past the isoform's end. Ties go to the first id.
+        best = None
+        for isoform_id in sorted(isoform_ids):
+            isoform_obj = self.transcript_id_to_obj[isoform_id]
+            iso_lend, iso_rend = isoform_obj.get_coords()
+            left_ext, right_ext = iso_lend - feature_lend, feature_rend - iso_rend
+            if isoform_obj.get_strand() == "-":
+                offsets = (right_ext, left_ext)
+            else:
+                offsets = (left_ext, right_ext)
+            dist = max(abs(offsets[0]), abs(offsets[1]))
+            if best is None or dist < best[0]:
+                best = (dist, offsets)
+        return best[1]
 
     def _containment_fields(self, fsm_isoforms, containing_isoforms):
         # the containing isoforms, their genes, and whether those genes are the FSM's

@@ -41,6 +41,8 @@ BAM_TSV_FIELDNAMES = [
     "FSM_ISM_of_isoforms",
     "FSM_ISM_of_genes",
     "FSM_ISM_of_gene_scope",
+    "FSM_ref_5prime_offset",
+    "FSM_ref_3prime_offset",
 ]
 
 
@@ -138,7 +140,7 @@ def main():
     num_workers = resolve_num_workers(args.CPU, input_bam)
 
     if input_bam is not None and num_workers > 1:
-        feature_category_counter = classify_bam_by_contig(
+        feature_category_counter, fsm_subcat_counter = classify_bam_by_contig(
             ref_annot_gtf,
             input_bam,
             output_prefix,
@@ -146,7 +148,9 @@ def main():
             args.gzip_tsv,
             fsm_end_dist,
         )
-        write_summary_and_plot(output_prefix, feature_category_counter)
+        write_summary_and_plot(
+            output_prefix, feature_category_counter, fsm_subcat_counter
+        )
         sys.exit(0)
 
     sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf, fsm_end_dist)
@@ -158,6 +162,7 @@ def main():
 
     feature_counter = 0
     feature_category_counter = defaultdict(int)
+    fsm_subcat_counter = defaultdict(int)
 
     if input_bam is not None:
         ## Examine aligned reads
@@ -190,6 +195,7 @@ def main():
                 tsv_writer,
                 bamwriter,
                 feature_category_counter,
+                fsm_subcat_counter,
             )
 
         bamwriter.close()
@@ -210,6 +216,8 @@ def main():
                 "FSM_ISM_of_isoforms",
                 "FSM_ISM_of_genes",
                 "FSM_ISM_of_gene_scope",
+                "FSM_ref_5prime_offset",
+                "FSM_ref_3prime_offset",
             ],
             delimiter="\t",
             lineterminator="\n",
@@ -235,10 +243,11 @@ def main():
 
                 tsv_writer.writerow(read_class_info)
                 feature_category_counter[read_class_info["sqanti_cat"]] += 1
+                count_fsm_subcats(read_class_info, fsm_subcat_counter)
 
     tsv_ofh.close()
 
-    write_summary_and_plot(output_prefix, feature_category_counter)
+    write_summary_and_plot(output_prefix, feature_category_counter, fsm_subcat_counter)
 
     sys.exit(0)
 
@@ -272,7 +281,63 @@ def resolve_num_workers(cpu_arg, input_bam):
     return num_workers
 
 
-def write_summary_and_plot(output_prefix, feature_category_counter):
+# FSM end offsets are tallied in OFFSET_BIN-wide bins, clipped at +/- OFFSET_CLIP
+# (the outermost bins hold everything beyond), so a read-mode run keeps a small table.
+OFFSET_BIN = 10
+OFFSET_CLIP = 1000
+ISM_OF_LEVELS = ["none", "same_gene", "other_gene", "same_and_other_gene"]
+
+
+def count_fsm_subcats(class_info, fsm_subcat_counter):
+    # FSM subcategory and end-offset tallies, kept apart from the category counts
+    # so the summary_counts table and plot stay as they were.
+    if class_info["sqanti_cat"] != "FSM":
+        return
+    full_length = "yes" if class_info["FSM_full_length_isoforms"] else "no"
+    ism_of = class_info["FSM_ISM_of_gene_scope"] or "none"
+    fsm_subcat_counter[("subcat", full_length, ism_of)] += 1
+    for end in ("5prime", "3prime"):
+        offset = int(class_info["FSM_ref_{}_offset".format(end)])
+        offset = max(-OFFSET_CLIP, min(OFFSET_CLIP, offset))
+        fsm_subcat_counter[("offset", end, (offset // OFFSET_BIN) * OFFSET_BIN)] += 1
+
+
+def write_fsm_subcats_and_plot(output_prefix, fsm_subcat_counter, summary_counts_tsv):
+    subcats_tsv = output_prefix + ".iso_cats.FSM_subcats.summary_counts.tsv"
+    with open(subcats_tsv, "wt") as ofh:
+        print("\t".join(["full_length", "ISM_of", "Count"]), file=ofh)
+        for full_length in ("yes", "no"):
+            for ism_of in ISM_OF_LEVELS:
+                count = fsm_subcat_counter.get(("subcat", full_length, ism_of), 0)
+                print("\t".join([full_length, ism_of, str(count)]), file=ofh)
+
+    # offset_bin is the bin's lower bound; the bins at -OFFSET_CLIP and +OFFSET_CLIP
+    # also hold every offset beyond them.
+    offsets_tsv = output_prefix + ".iso_cats.FSM_end_offsets.tsv"
+    with open(offsets_tsv, "wt") as ofh:
+        print("\t".join(["end", "offset_bin", "Count"]), file=ofh)
+        for key in sorted(k for k in fsm_subcat_counter if k[0] == "offset"):
+            print(
+                "\t".join([key[1], str(key[2]), str(fsm_subcat_counter[key])]),
+                file=ofh,
+            )
+
+    plot_name = output_prefix + ".iso_cats.FSM_subcats.pdf"
+    subprocess.check_call(
+        [
+            os.path.join(
+                os.path.dirname(__file__), "misc/plot_SQANTI_FSM_subcats.Rscript"
+            ),
+            summary_counts_tsv,
+            subcats_tsv,
+            offsets_tsv,
+            str(LRAA_Globals.config["sqlike_fsm_full_length_max_end_dist"]),
+            plot_name,
+        ]
+    )
+
+
+def write_summary_and_plot(output_prefix, feature_category_counter, fsm_subcat_counter):
 
     # write summary counts
     summary_counts_tsv = output_prefix + ".iso_cats.summary_counts.tsv"
@@ -291,6 +356,8 @@ def write_summary_and_plot(output_prefix, feature_category_counter):
         ]
     )
     subprocess.check_call(cmd, shell=True)
+
+    write_fsm_subcats_and_plot(output_prefix, fsm_subcat_counter, summary_counts_tsv)
 
     logger.info("\nDone. See files: {}.*".format(output_prefix))
 
@@ -314,7 +381,13 @@ def get_aligned_length(read):
 
 
 def process_bam_record(
-    read, bamfile_reader, sqanti_classifier, tsv_writer, bamwriter, category_counter
+    read,
+    bamfile_reader,
+    sqanti_classifier,
+    tsv_writer,
+    bamwriter,
+    category_counter,
+    fsm_subcat_counter,
 ):
     # Shared by the serial loop and the per-contig workers, so the two paths
     # classify, tag and count identically. Every record is written to the bam;
@@ -330,6 +403,7 @@ def process_bam_record(
 
         tsv_writer.writerow(read_class_info)
         category_counter[read_class_info["sqanti_cat"]] += 1
+        count_fsm_subcats(read_class_info, fsm_subcat_counter)
 
     bamwriter.write(read)
 
@@ -395,6 +469,7 @@ def classify_bam_by_contig(
         key=lambda j: -read_counts.get(jobs[j][0], num_unplaced),
     )
     part_counters = [None] * len(jobs)
+    fsm_subcat_counter = defaultdict(int)
     with ProcessPoolExecutor(max_workers=min(num_workers, len(jobs))) as executor:
         futures = {
             executor.submit(
@@ -404,7 +479,9 @@ def classify_bam_by_contig(
         }
         for num_done, future in enumerate(as_completed(futures), start=1):
             j = futures[future]
-            part_counters[j] = future.result()
+            part_counters[j], part_fsm_subcats = future.result()
+            for key, count in part_fsm_subcats.items():
+                fsm_subcat_counter[key] += count
             logger.info(
                 "[{}/{}] done: {}".format(num_done, len(jobs), jobs[j][0] or "unplaced")
             )
@@ -439,7 +516,7 @@ def classify_bam_by_contig(
 
     shutil.rmtree(tmpdir)
 
-    return feature_category_counter
+    return feature_category_counter, fsm_subcat_counter
 
 
 def split_gtf_by_contig(gtf_filename, contigs, tmpdir):
@@ -477,6 +554,7 @@ def classify_bam_contig(
     bamfile_reader = pysam.AlignmentFile(input_bam, "rb")
     bamwriter = pysam.AlignmentFile(part_prefix + ".bam", "wb", template=bamfile_reader)
     category_counter = defaultdict(int)
+    fsm_subcat_counter = defaultdict(int)
 
     tsv_suffix = ".tsv.gz" if gzip_tsv else ".tsv"
     with open_tsv(part_prefix + tsv_suffix, gzip_tsv) as tsv_ofh:
@@ -499,12 +577,13 @@ def classify_bam_contig(
                 tsv_writer,
                 bamwriter,
                 category_counter,
+                fsm_subcat_counter,
             )
 
     bamwriter.close()
     bamfile_reader.close()
 
-    return dict(category_counter)
+    return dict(category_counter), dict(fsm_subcat_counter)
 
 
 def classify_read(read, bamfile_reader, sqanti_classifier):

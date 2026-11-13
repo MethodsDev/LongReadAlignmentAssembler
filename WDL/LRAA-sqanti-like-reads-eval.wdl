@@ -45,6 +45,9 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         File iso_cats_tsv = LRAA_sqanti_like_reads_eval_task.iso_cats_tsv
         File iso_cats_summary_counts_tsv = LRAA_sqanti_like_reads_eval_task.iso_cats_summary_counts_tsv
         File iso_cats_summary_counts_pdf = LRAA_sqanti_like_reads_eval_task.iso_cats_summary_counts_pdf
+        File FSM_subcats_summary_counts_tsv = LRAA_sqanti_like_reads_eval_task.FSM_subcats_summary_counts_tsv
+        File FSM_end_offsets_tsv = LRAA_sqanti_like_reads_eval_task.FSM_end_offsets_tsv
+        File FSM_subcats_pdf = LRAA_sqanti_like_reads_eval_task.FSM_subcats_pdf
         File? iso_cats_bam  = LRAA_sqanti_like_reads_eval_task.iso_cats_bam 
     }
 
@@ -102,6 +105,9 @@ task LRAA_sqanti_like_reads_eval_task {
         File iso_cats_tsv = "~{sample_id}.iso_cats.tsv.gz"
         File iso_cats_summary_counts_tsv = "~{sample_id}.iso_cats.summary_counts.tsv.gz"
         File iso_cats_summary_counts_pdf = "~{sample_id}.iso_cats.summary_counts.pdf"
+        File FSM_subcats_summary_counts_tsv = "~{sample_id}.iso_cats.FSM_subcats.summary_counts.tsv"
+        File FSM_end_offsets_tsv = "~{sample_id}.iso_cats.FSM_end_offsets.tsv"
+        File FSM_subcats_pdf = "~{sample_id}.iso_cats.FSM_subcats.pdf"
         File? iso_cats_bam = "~{sample_id}.iso_cats.bam"
     }
 

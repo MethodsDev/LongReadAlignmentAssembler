@@ -11,6 +11,15 @@ devel (unreleased)
   other_gene, same_and_other_gene). All are empty for non-FSM categories, including se_FM. sqanti_cat, the
   existing columns, the bam tags and the summary counts are unchanged. The script takes
   --config_update (json of LRAA_Globals.config overrides) to set the tolerance.
+- SQANTI-like classifier: FSM_ref_5prime_offset and FSM_ref_3prime_offset columns give
+  each FSM's signed end offsets from its closest FSM-matched reference isoform (positive =
+  the query extends past the reference end, in the reference's strand orientation). Each
+  run also writes <prefix>.iso_cats.FSM_subcats.summary_counts.tsv (full-length x ISM-of
+  counts), <prefix>.iso_cats.FSM_end_offsets.tsv (10-nt offset bins, clipped at +/-1000)
+  and <prefix>.iso_cats.FSM_subcats.pdf (util/misc/plot_SQANTI_FSM_subcats.Rscript:
+  multi-exon categories with the FSM bar split by subcategory, the FSM subcategories, the
+  gene scope of ISM-of FSMs, and the end-offset histograms). LRAA-sqanti-like-reads-eval.wdl
+  collects the three as outputs.
 
 v0.50.1
 

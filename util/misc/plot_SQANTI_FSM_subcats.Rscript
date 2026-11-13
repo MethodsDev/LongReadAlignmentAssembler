@@ -1,0 +1,130 @@
+#!/usr/bin/env Rscript
+
+# FSM subcategories of a SQANTI-like run (companion to plot_SQANTI_cats.Rscript):
+#   a) multi-exon categories, the FSM bar split by subcategory
+#   b) FSM subcategories, counts and % of FSMs
+#   c) gene scope of the FSMs that are also an ISM of another reference isoform
+#   d) FSM end offsets from the closest FSM-matched reference isoform
+
+args<-commandArgs(TRUE)
+
+if (length(args) != 5) {
+	stop("usage: sqanti_cats.summary_counts.tsv FSM_subcats.summary_counts.tsv FSM_end_offsets.tsv full_length_max_end_dist output_plot_name.pdf\n\n")
+}
+
+suppressPackageStartupMessages({
+    library(tidyverse)
+    library(cowplot)
+})
+
+cats = read.csv(args[1], header=T, sep="\t")
+subcats = read.csv(args[2], header=T, sep="\t")
+offsets = read.csv(args[3], header=T, sep="\t")
+max_end_dist = as.numeric(args[4])
+plot_filename = args[5]
+
+subcat_levels = c("full-length", "full-length, also ISM of another", "also ISM of another", "neither")
+subcat_colors = setNames(c("#1b7837", "#7fbf7b", "#c2a5cf", "#bdbdbd"), subcat_levels)
+
+subcats = subcats %>%
+    mutate(subcat = case_when(full_length == "yes" & ISM_of == "none" ~ subcat_levels[1],
+                              full_length == "yes" ~ subcat_levels[2],
+                              ISM_of != "none" ~ subcat_levels[3],
+                              TRUE ~ subcat_levels[4]),
+           subcat = factor(subcat, levels=subcat_levels))
+num_fsm = sum(subcats$Count)
+
+no_fsm_plot = function(title) {
+    ggplot() + annotate("text", x=0, y=0, label="no FSM features") + theme_void() + ggtitle(title)
+}
+
+
+# a) multi-exon categories, FSM split
+cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+me = cats %>% filter(Category %in% cat_levels)
+total_me = sum(me$Count)
+me_bars = bind_rows(
+    me %>% filter(Category != "FSM") %>% mutate(subcat = "non-FSM"),
+    subcats %>% group_by(subcat) %>% summarize(Count = sum(Count)) %>% mutate(Category = "FSM", subcat = as.character(subcat))
+) %>% mutate(Category = factor(Category, levels=cat_levels),
+             subcat = factor(subcat, levels=c(subcat_levels, "non-FSM")))
+me_labels = me %>% mutate(Category = factor(Category, levels=cat_levels),
+                          pct = sprintf("%.1f", Count / total_me * 100))
+
+categories_plot = me_bars %>% ggplot(aes(x=Category, y=Count)) +
+    geom_col(aes(fill=subcat)) +
+    geom_text(data=me_labels, aes(label=pct), vjust=-0.3, size=3) +
+    scale_fill_manual(values=c(subcat_colors, "non-FSM"="#6baed6"), drop=FALSE, name=NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position="bottom") +
+    guides(fill=guide_legend(ncol=2)) +
+    ggtitle("Multi-exon features by category, FSM split (% of multi-exon)")
+
+
+# b) FSM subcategories
+if (num_fsm > 0) {
+    subcat_plot = subcats %>% group_by(subcat) %>% summarize(Count = sum(Count)) %>%
+        mutate(pct = sprintf("%.1f", Count / num_fsm * 100)) %>%
+        ggplot(aes(x=subcat, y=Count, fill=subcat)) + geom_col() +
+        geom_text(aes(label=pct), vjust=-0.3, size=3) +
+        scale_fill_manual(values=subcat_colors, guide="none") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+        xlab(NULL) +
+        ggtitle(sprintf("FSM subcategories (%% of %s FSMs)\nfull-length: both ends within %g nt of a matched reference",
+                        format(num_fsm, big.mark=","), max_end_dist))
+} else {
+    subcat_plot = no_fsm_plot("FSM subcategories")
+}
+
+
+# c) gene scope of the FSMs that are also an ISM of another reference isoform
+scope_levels = c("same_gene", "other_gene", "same_and_other_gene")
+ism_of = subcats %>% filter(ISM_of != "none") %>%
+    mutate(ISM_of = factor(ISM_of, levels=scope_levels),
+           full_length = factor(ifelse(full_length == "yes", "full-length", "not full-length"),
+                                levels=c("full-length", "not full-length")))
+num_ism_of = sum(ism_of$Count)
+if (num_ism_of > 0) {
+    scope_labels = ism_of %>% group_by(ISM_of) %>% summarize(Count = sum(Count)) %>%
+        mutate(label = sprintf("%s (%.1f%%)", format(Count, big.mark=","), Count / num_ism_of * 100))
+    scope_plot = ism_of %>% ggplot(aes(x=ISM_of, y=Count)) +
+        geom_col(aes(fill=full_length)) +
+        geom_text(data=scope_labels, aes(label=label), vjust=-0.3, size=3) +
+        scale_fill_manual(values=c("full-length"="#7fbf7b", "not full-length"="#c2a5cf"), name=NULL) +
+        theme_bw() +
+        theme(legend.position="bottom") +
+        xlab("gene of the containing reference isoform(s)") +
+        ggtitle(sprintf("FSMs also an ISM of another isoform (%s), by gene", format(num_ism_of, big.mark=",")))
+} else {
+    scope_plot = no_fsm_plot("FSMs also an ISM of another isoform")
+}
+
+
+# d) end offsets; bins at the clip limits hold everything beyond them
+if (nrow(offsets) > 0) {
+    clip = max(abs(offsets$offset_bin))
+    offsets = offsets %>%
+        mutate(end = factor(ifelse(end == "5prime", "5' end", "3' end"), levels=c("5' end", "3' end")),
+               within = offset_bin >= -max_end_dist & offset_bin < max_end_dist)
+    offsets_plot = offsets %>% ggplot(aes(x=offset_bin, y=Count, fill=within)) +
+        geom_col(width=10, just=0) +
+        geom_vline(xintercept=c(-max_end_dist, max_end_dist), linetype="dashed") +
+        facet_wrap(~end, ncol=1, scales="free_y") +
+        scale_fill_manual(values=c("TRUE"="#1b7837", "FALSE"="#969696"), guide="none") +
+        scale_y_sqrt() +
+        theme_bw() +
+        xlab(sprintf("nt from the closest matched reference end\n(<0 short of it, >0 past it; outer bins hold all beyond +/-%d)", clip)) +
+        ylab("Count (square-root scale)") +
+        ggtitle(sprintf("FSM end offsets (dashed: +/-%g nt)", max_end_dist))
+} else {
+    offsets_plot = no_fsm_plot("FSM end offsets")
+}
+
+
+p = plot_grid(categories_plot, subcat_plot, scope_plot, offsets_plot,
+              ncol=2, labels=c("a", "b", "c", "d"))
+
+ggsave(p, filename=plot_filename, width=13, height=11)
+
+quit(save = "no", status = 0, runLast = FALSE)

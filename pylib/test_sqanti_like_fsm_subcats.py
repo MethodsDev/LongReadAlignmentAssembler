@@ -238,3 +238,77 @@ def test_gene_fields_empty_without_containment(annotator):
     assert r["sqanti_cat"] == "FSM"
     assert r["FSM_ISM_of_genes"] == ""
     assert r["FSM_ISM_of_gene_scope"] == ""
+
+
+def test_end_offsets_signed_from_closest_ref(annotator):
+    # vs A (100-1000): 5' +10 past, 3' -20 short ; vs A2 (150-900): -40 / +80.
+    # A is closer (larger offset 20 vs 80)
+    r = classify(annotator, [(90, 200), (300, 400), (500, 980)])
+    assert r["matching_isoforms"] == "A,A2"
+    assert (r["FSM_ref_5prime_offset"], r["FSM_ref_3prime_offset"]) == (10, -20)
+    # full-length exactly when both offsets are within the tolerance
+    assert r["FSM_full_length_isoforms"] == "A"
+
+
+def test_end_offsets_minus_strand(tmp_path):
+    # on the minus strand the 5' end is the right end
+    gtf = os.path.join(tmp_path, "ref.gtf")
+    with open(gtf, "w") as fh:
+        fh.write(_exon_lines("M", "g1", REF["A"], strand="-"))
+    ann = SQANTI_like_annotator(gtf, fsm_full_length_max_end_dist=50)
+    q = MockTranscript("q", "chr1", "-", [(130, 200), (300, 400), (500, 1100)])
+    r = ann.classify_alignment_or_isoform("chr1", "-", "q", q)
+    assert r["sqanti_cat"] == "FSM"
+    # 5' (right) end 100 past, 3' (left) end 30 short
+    assert (r["FSM_ref_5prime_offset"], r["FSM_ref_3prime_offset"]) == (100, -30)
+
+
+def test_end_offsets_empty_for_non_fsm(annotator):
+    r = classify(annotator, [(150, 200), (300, 350)])
+    assert r["sqanti_cat"] == "ISM"
+    assert r["FSM_ref_5prime_offset"] == r["FSM_ref_3prime_offset"] == ""
+
+
+def test_fsm_subcat_tallies():
+    import importlib.util
+    from collections import defaultdict
+
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "util",
+        "SQANTI-like_cats_for_reads_or_isoforms.py",
+    )
+    spec = importlib.util.spec_from_file_location("sqlike_script", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    counter = defaultdict(int)
+    base = dict(FSM_full_length_isoforms="", FSM_ISM_of_gene_scope="")
+    mod.count_fsm_subcats(dict(base, sqanti_cat="ISM"), counter)
+    assert not counter
+    mod.count_fsm_subcats(
+        dict(
+            base,
+            sqanti_cat="FSM",
+            FSM_full_length_isoforms="A",
+            FSM_ref_5prime_offset=-5,
+            FSM_ref_3prime_offset=4999,
+        ),
+        counter,
+    )
+    mod.count_fsm_subcats(
+        dict(
+            base,
+            sqanti_cat="FSM",
+            FSM_ISM_of_gene_scope="other_gene",
+            FSM_ref_5prime_offset=-1,
+            FSM_ref_3prime_offset=-1001,
+        ),
+        counter,
+    )
+    assert counter[("subcat", "yes", "none")] == 1
+    assert counter[("subcat", "no", "other_gene")] == 1
+    # 10-nt bins by lower bound, clipped at +/-1000
+    assert counter[("offset", "5prime", -10)] == 2
+    assert counter[("offset", "3prime", 1000)] == 1
+    assert counter[("offset", "3prime", -1000)] == 1
