@@ -109,13 +109,27 @@ pooled initial GTF) flagged its intron chain so, and carries the largest `ref_FS
 them; single-exon models are re-judged for `ref_supported` against the inputs.
 
 Final Quantification and Single-Cell Matrix Generation: After generating the consensus GTF,
-each cluster of cells is separately re-quantified against the merged isoform catalog and
-leveraging an identical splice graph to produce final abundance estimates. This ensures all
-cells are quantified using the same unified reference isoform catalog.The per-cluster
-read-to-isoform tracking files are merged into a single comprehensive tracking file spanning
-all cells and clusters, which serves as input for the final sparse matrix construction,
+all cells are re-quantified together against the merged isoform catalog in a single LRAA
+quantification-only pass over the full (unpartitioned) BAM, with the same chunking and
+contig scatter as the initial pass. One EM therefore apportions every ambiguous read, using
+isoform proportions estimated from all cells. Quantifying each cluster separately would
+instead divide a cluster's ambiguous reads by that cluster's own isoform proportions, so the
+cells (or pseudo-replicates) of a cluster would share a cluster-specific prior and
+between-cluster differential usage tests would see differences introduced by that prior.
+Isoform discovery remains cluster-guided; only the quantification is pooled. The pooled
+read-to-isoform tracking file is the input for the final sparse matrix construction,
 yielding separate sparse feature-by-cell count matrices at gene-level, isoform-level, and
-splice pattern-level.
+splice pattern-level. It includes reads from cell barcodes that were not assigned to any
+cluster. Per-cluster pseudobulk expression (one quant.expr per cluster, and the cluster
+pseudobulk count and TPM matrices) is obtained by summing, for each cluster, the pooled
+read assignments of its cells; reads from unclustered barcodes are in no cluster's
+pseudobulk, and their total is reported in a per-cluster read partition table. In these
+per-cluster files `RPM_total_reads` is per million of the cluster's assigned reads, so it
+equals TPM: the cluster's own mapped-read total is not counted. No per-cluster tracking file
+is written; a read's cluster follows from the cell barcode that leads its read name in the
+pooled tracking (`<barcode>^<UMI>^<read>`). In quantification-only mode the initial pass
+already is this pooled quantification (same BAM, annotation, chunk plan and settings), so
+its outputs are reused as the final quantification instead of running it twice.
 
 Reference Annotation Gene Symbol Integration: To facilitate interpretation and integration with
 reference annotations, an optional gene symbol incorporation step annotates LRAA-discovered
@@ -134,7 +148,7 @@ LRAA-assigned feature identifiers (genes, isoforms, and splice patterns).
  The workflow leverages parallel execution at multiple stages: initial discovery can be
  parallelized across genomic contigs when `main_chromosomes` is specified; per-cluster
  discovery in cluster-guided mode executes all clusters in parallel via WDL scatter blocks; and
- per-cluster quantification similarly parallelizes across cluster-specific BAMs. Resource
+ the final pooled quantification is scattered across contigs like the initial pass. Resource
  allocation is configurable through workflow inputs, with separate memory and CPU parameters
  for discovery, quantification, clustering, and matrix-building tasks.
 
@@ -145,8 +159,8 @@ This design enables expert users to provide curated cell cluster assignments to 
 the downstream cluster-guided isoform identification and quantification workflow.
 
 The workflow produces comprehensive outputs at each stage, including intermediate files for
-quality control and debugging: initial and final GTF files, per-cluster BAMs and tracking
-files, pseudobulk expression matrices, sparse single-cell matrices, Seurat objects, UMAP
+quality control and debugging: initial and final GTF files, per-cluster BAMs, the pooled
+final tracking file, pseudobulk expression matrices, sparse single-cell matrices, Seurat objects, UMAP
 visualizations, and gene symbol mappings.
 
 All source code, WDL workflows, and documentation are publicly available at
@@ -167,6 +181,12 @@ droplet-based single-cell RNA sequencing data. *Genome Biology*, 20(1), 63.
 Pertea G, Pertea M. (2020). GFF Utilities: GffRead and GffCompare. *F1000Research*, 9, 304.
 
 ## Pass-1 priors: where theta comes from (v0.28.0)
+
+This section describes per-cluster quantification as done by `WDL/LRAA_quant_by_cluster.wdl`.
+The single-cell pipeline no longer uses it: its final quantification is one pooled pass (see
+"Final Quantification and Single-Cell Matrix Generation" above), which reads the full BAM
+for both passes and normalizes coverage itself, like any bulk run. The section is kept for
+standalone per-cluster runs.
 
 Two-pass quantification estimates isoform abundances first, then uses them to
 apportion reads compatible with more than one isoform. In the cluster-guided path

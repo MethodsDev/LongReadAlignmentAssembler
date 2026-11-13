@@ -112,6 +112,20 @@ DIVERGENT_CALL_INPUTS = {
         # scattered call cannot carry one.
         "region": "requires scattering=off by validate_scattering",
     },
+    # LRAA_by_cluster (per-cluster discovery) and LRAA_final_quant (quant_only = true
+    # over the whole bam).
+    ("LRAA-cell_cluster_guided.wdl", "LRAA_wf"): {
+        # LRAA.wdl calls calibrate_TSS_cap_signature only when !quant_only, so a
+        # quant_only call has nothing to hand a calibration to.
+        "internal_cap_calibration_json": "unused when quant_only: cap calibration is gated on !quant_only in LRAA.wdl",
+        # LRAA reads --cell_list only into CELL_ROSTER, consulted only by
+        # run_transcript_assembly's min_monoexonic_supporting_cells filter: discovery.
+        "cell_list": "unused when quant_only: read only by discovery's monoexonic cell filter",
+        # A cluster discovery run quantifies a cluster partition; LRAA_wf counts the bam
+        # it is handed, and the whole-library count would be the wrong TPM denominator
+        # there (LRAA-singlecell.wdl num_total_reads).
+        "num_total_reads": "whole-library denominator; refused to the partition runs by LRAA-singlecell.wdl's num_total_reads contract",
+    },
 }
 
 

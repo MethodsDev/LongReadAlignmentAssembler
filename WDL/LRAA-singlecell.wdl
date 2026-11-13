@@ -22,8 +22,11 @@ version 1.0
 #    - Partitions BAM by cell clusters
 #    - Re-runs LRAA discovery independently on each cluster's reads
 #    - Merges cluster-specific GTFs into a refined final GTF
-#    - Re-quantifies all cells against the final GTF
-#    - Builds final single-cell sparse matrices with improved isoform definitions
+#    - Re-quantifies all cells against the final GTF in ONE pooled quant-only pass
+#      (one EM over every cell, so no cluster's isoform proportions act as a prior for
+#      its own cells)
+#    - Builds final single-cell sparse matrices from that pass, and per-cluster
+#      pseudobulk expression by summing each cluster's cells in it
 #    - Outputs: refined final GTF, improved single-cell matrices, per-cluster pseudobulk data
 #    - Use when: You want the highest quality isoform definitions tailored to cell types
 #
@@ -39,8 +42,9 @@ version 1.0
 #    - In CLUSTER-GUIDED mode with quant_only = true:
 #      * Requires: initial_annot_gtf
 #      * Skips: Both initial discovery AND per-cluster discovery
-#      * Runs: Clustering (if not precomputed), per-cluster quantification only
-#      * Outputs: Single-cell matrices from cluster-guided quantification
+#      * Runs: Clustering (if not precomputed), the pooled final quantification and
+#              its per-cluster pseudobulk
+#      * Outputs: Single-cell matrices and per-cluster pseudobulk against initial_annot_gtf
 #
 # ===== PRECOMPUTED INPUTS (OPTIMIZATION PATHS) =====
 #
@@ -71,8 +75,9 @@ version 1.0
 # 4. Cluster-Guided Quantification-Only:
 #    - Provide: precomputed_cluster_assignments_tsv + initial_annot_gtf
 #    - Set: single_cell_pipe_mode = "cluster-guided", quant_only = true
-#    - Flow: Skips all discovery, quantifies each cluster against initial_annot_gtf
-#    - Use case: Quantify known isoforms with cluster-aware quantification
+#    - Flow: Skips all discovery, quantifies all cells against initial_annot_gtf and
+#            sums them per cluster
+#    - Use case: Quantify known isoforms with per-cluster pseudobulk outputs
 #
 # ===== GENE SYMBOL INCORPORATION =====
 #
@@ -207,15 +212,14 @@ workflow LRAA_singlecell_wf {
     # the cluster runs then need the same key in cluster_config_update_json.
     String? merge_config_update_json
 
-    # The TPM denominator for the INIT pass, and only for it. Unset -- the normal
-    # case -- means LRAA counts the input bam itself, once, with its -F 0x904
-    # mapped-primary policy.
+    # The TPM denominator (RPM_total_reads) for the two WHOLE-LIBRARY passes: the init
+    # pass and the cluster-guided final quant, which quantifies every cell in one run.
+    # Unset -- the normal case -- means each LRAA run counts the input bam itself, with
+    # its -F 0x904 mapped-primary policy.
     #
-    # Deliberately NOT forwarded to the cluster-guided subworkflow below. Once the
-    # bam is partitioned by cluster, each cluster's denominator is that cluster's own
-    # read total, so each per-cluster LRAA counts the bam it was handed. Passing this
-    # whole-library number down would rescale every cluster's TPM by that cluster's
-    # share of the library, and the result would still look like TPM.
+    # Never given to the per-cluster DISCOVERY runs: each counts the cluster bam it was
+    # handed, and this whole-library number would rescale every cluster's TPM by that
+    # cluster's share of the library, while still looking like TPM.
     Int? num_total_reads
 
     # Chunk geometry. Approximate MEGABASES between cut points, and the TOTAL width
@@ -374,7 +378,10 @@ workflow LRAA_singlecell_wf {
     Int memoryGBFilterCells = 32
     Int memoryGBSeurat = 32
     Int memoryGBmergeGTFs = 64
-    Int memoryGBquantFinal = 32
+    # The cluster-guided final quant, one LRAA run over the whole library. Applies only
+    # to scattering_final_quant = "off"; unset, LRAA.wdl sizes it from the bam as for
+    # the init pass. Its cpu follows cpuInit, the other whole-library run.
+    Int? memoryGBquantFinal
     Int memoryGBscSparseMatrices = 32
     # Build the single-cell matrices per contig shard, alongside quantification,
     # and merge them; instead of one single-threaded pass over the merged
@@ -532,20 +539,19 @@ workflow LRAA_singlecell_wf {
         polyA_known = polyA_known,
         main_chromosomes = main_chromosomes,
         region = region,
-        # THE one full-library chromosome partition in a single-cell run, and the only
-        # place this is raised. The per-cluster LRAA_wf calls in
-        # LRAA-cell_cluster_guided.wdl and LRAA_quant_by_cluster.wdl deliberately do
-        # NOT pass it, so they keep LRAA.wdl's default of 1: they run 14 to 32 times
-        # for seconds each, and a wide cpu reservation there cannot be placed until
-        # the box drains.
+        # A full-library chromosome partition, so raised. The cluster-guided final quant
+        # is the other one and gets the same value (final_quant_partition_workers). The
+        # per-cluster discovery runs in LRAA-cell_cluster_guided.wdl deliberately do NOT,
+        # so they keep LRAA.wdl's default of 1: they run 14 to 32 times for seconds
+        # each, and a wide cpu reservation there cannot be placed until the box drains.
         partition_workers = initial_partition_workers,
         # single-cell: this workflow never surfaces the normalized splice-graph BAM
         retain_normalized_splice_graph_bam = false,
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         config_update_json = init_config_update_json,
-        # Init only. The cluster_guided call below deliberately does not get this --
-        # see the input's declaration for why.
+        # Also given to the cluster_guided call below, for its whole-library final
+        # quant only; see the input's declaration.
         num_total_reads = num_total_reads,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
@@ -712,6 +718,27 @@ workflow LRAA_singlecell_wf {
   File? cluster_assignments_generated = cluster_cells.cluster_assignments_tsv
   File cluster_assignments_file = if (has_precomputed_clusters) then select_first([precomputed_cluster_assignments_tsv]) else select_first([cluster_assignments_generated])
 
+  # In quant_only mode the init pass already IS the cluster-guided final quant: a
+  # quant-only run of initial_annot_gtf over the full bam, on the run's one chunk plan,
+  # with the same settings (HiFi, oversimplify, polyA_known, num_total_reads, 3' weighting,
+  # rescue, tags, contigs). So its outputs are handed down and no second identical pass
+  # runs. Only when the two passes would really be the same: the init pass ran (not
+  # precomputed), both use the same scattering (so the same plan and shards), and nothing
+  # the final quant does not get was given to the init pass (init_config_update_json,
+  # region).
+  Boolean reuse_init_as_final_quant = run_cluster_guided && quant_only && run_initial_phase
+      && scattering_init == scattering_final_quant
+      && !defined(init_config_update_json) && !defined(region)
+  if (reuse_init_as_final_quant) {
+    File reuse_final_quant_tracking = select_first([LRAA_init.mergedQuantTracking])
+    File reuse_final_quant_expr = select_first([LRAA_init.mergedQuantExpr])
+    File? reuse_final_quant_summary = LRAA_init.mergedReadAssignmentSummary
+    File? reuse_final_sc_gene_tgz = init_sc_gene_tgz
+    File? reuse_final_sc_isoform_tgz = init_sc_isoform_tgz
+    File? reuse_final_sc_splice_tgz = init_sc_splice_tgz
+    File? reuse_final_sc_mapping = init_sc_mapping
+  }
+
   # 4) Cluster-guided reconstruction + final single-cell matrices (only if mode is 'cluster-guided')
   if (run_cluster_guided) {
     call ClusterGuided.LRAA_cell_cluster_guided as cluster_guided {
@@ -740,6 +767,9 @@ workflow LRAA_singlecell_wf {
         # these partitions run once per cluster, which is 14-32 jobs sharing ONE host
         # locally and 14-32 independent VMs on Terra.
         cluster_partition_workers = cluster_partition_workers,
+        # The final quant's full-library partition has the init pass's shape.
+        final_quant_partition_workers = initial_partition_workers,
+        num_total_reads = num_total_reads,
         cell_barcode_tag = cell_barcode_tag,
         read_umi_tag = read_umi_tag,
         scattering = scattering_per_cluster,
@@ -768,13 +798,21 @@ workflow LRAA_singlecell_wf {
         chunkMergeMemoryGB = chunkMergeMemoryGB,
         memoryGBmergeGTFs = memoryGBmergeGTFs,
         memoryGBquantFinal = memoryGBquantFinal,
+        cpuFinalQuant = cpuInit,
         memoryGBscSparseMatrices = memoryGBscSparseMatrices,
         sparseMatrixCsvEngine = sparseMatrixCsvEngine,
         sparseMatrixGzipLevel = sparseMatrixGzipLevel,
         diskSizeGB = diskSizeGB,
         docker = docker,
         docker_sc = docker_sc,
-        quant_only_cluster_guided = quant_only
+        quant_only_cluster_guided = quant_only,
+        internal_final_quant_tracking = reuse_final_quant_tracking,
+        internal_final_quant_expr = reuse_final_quant_expr,
+        internal_final_quant_read_assignment_summary = reuse_final_quant_summary,
+        internal_final_sc_gene_tgz = reuse_final_sc_gene_tgz,
+        internal_final_sc_isoform_tgz = reuse_final_sc_isoform_tgz,
+        internal_final_sc_splice_pattern_tgz = reuse_final_sc_splice_tgz,
+        internal_final_sc_mapping = reuse_final_sc_mapping
     }
   }
 
@@ -896,7 +934,10 @@ workflow LRAA_singlecell_wf {
     File? final_splice_pattern_collapsed_gene_conflicts = cluster_guided.LRAA_final_splice_pattern_collapsed_gene_conflicts
     File? final_TSS_bed = cluster_guided.LRAA_final_TSS_bed
     File? final_PolyA_bed = cluster_guided.LRAA_final_PolyA_bed
+    # The pooled final quantification (all cells, one EM): its read tracking, which
+    # includes reads from barcodes in no cluster, and its quant.expr.
     File? final_tracking = cluster_guided.LRAA_final_tracking
+    File? final_quant_expr = cluster_guided.LRAA_final_quant_expr
     File? final_sc_gene_sparse_tar_gz = cluster_guided.sc_gene_sparse_tar_gz
     File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
     File? final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
@@ -908,11 +949,15 @@ workflow LRAA_singlecell_wf {
     # the prelim table is additionally absent in quant_only mode.
     File? prelim_collated_read_assignment_summary = cluster_guided.prelim_collated_read_assignment_summary
     File? final_collated_read_assignment_summary = cluster_guided.collated_read_assignment_summary
+    # Assigned reads per cluster in the pooled final quantification, plus those of
+    # barcodes in no cluster (counted in the matrices, in no cluster's pseudobulk).
+    File? final_cluster_read_partition = cluster_guided.LRAA_final_cluster_read_partition
 
     # Convenience tarballs and matrices from the cluster-guided phase
     File? partitioned_cluster_bams_tar = cluster_guided.LRAA_partitioned_cluster_bams_tar
+    # One quant.expr per cluster: the pooled final quantification summed over the
+    # cluster's cells.
     File? final_cluster_exprs_tar = cluster_guided.LRAA_final_cluster_exprs_tar
-    File? final_cluster_trackings_tar = cluster_guided.LRAA_final_cluster_trackings_tar
     
     # Preliminary intermediate outputs from cluster-guided discovery phase
     File? prelim_cluster_gtfs = cluster_guided.LRAA_prelim_cluster_gtfs

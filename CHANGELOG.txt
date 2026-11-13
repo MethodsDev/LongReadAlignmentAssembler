@@ -1,25 +1,83 @@
 devel (unreleased)
 
-- SQANTI-like classifier (util/SQANTI-like_cats_for_reads_or_isoforms.py): two FSM
-  subcategory columns appended to the iso_cats table, in both read and isoform mode.
-  FSM_full_length_isoforms lists the FSM-matched reference isoforms whose 5' and 3' ends
-  both lie within sqlike_fsm_full_length_max_end_dist bases (LRAA_Globals, default 50)
-  of the query's ends (alignment span for reads). FSM_ISM_of_isoforms lists the other
-  reference isoforms whose intron chain contains the query's as a proper contiguous
-  subset, in any gene; FSM_ISM_of_genes gives each one's gene (gene_name^gene_id) and
-  FSM_ISM_of_gene_scope says whether they are in the FSM match's gene (same_gene,
-  other_gene, same_and_other_gene). All are empty for non-FSM categories, including se_FM. sqanti_cat, the
-  existing columns, the bam tags and the summary counts are unchanged. The script takes
-  --config_update (json of LRAA_Globals.config overrides) to set the tolerance.
-- SQANTI-like classifier: FSM_ref_5prime_offset and FSM_ref_3prime_offset columns give
-  each FSM's signed end offsets from its closest FSM-matched reference isoform (positive =
-  the query extends past the reference end, in the reference's strand orientation). Each
-  run also writes <prefix>.iso_cats.FSM_subcats.summary_counts.tsv (full-length x ISM-of
-  counts), <prefix>.iso_cats.FSM_end_offsets.tsv (10-nt offset bins, clipped at +/-1000)
-  and <prefix>.iso_cats.FSM_subcats.pdf (util/misc/plot_SQANTI_FSM_subcats.Rscript:
-  multi-exon categories with the FSM bar split by subcategory, the FSM subcategories, the
-  gene scope of ISM-of FSMs, and the end-offset histograms). LRAA-sqanti-like-reads-eval.wdl
-  collects the three as outputs.
+Changes that alter run outputs (fewer 5'-truncated models with no TSS call, in every mode and
+in single-cell merged GTFs; the single-cell cluster-guided final quantification is one pooled
+pass over all cells).
+
+- Degradation prune: a contained model with no TSS call and its own PolyA call is now absorbed
+  by a containing model WITHOUT a PolyA call when their 3' ends lie within
+  max_dist_between_alt_polyA_sites (the container takes over the site and end). Before, the
+  contained model's PolyA call counted as distinguishing and it faced only the expression test.
+  A container with its own PolyA call is still judged by call identity, so a nested isoform
+  ending at a different called site is unchanged.
+- merge_LRAA_GTFs.py (single-cell merge): after reconstruction, a merged model with no TSS node
+  is absorbed into a model of its gene that contains it (its path inside the container's with no
+  PolyA node or the container's), or that it equals minus the container's 5'-most introns with a
+  3' end within max_dist_between_alt_polyA_sites of the container's. The per-cluster runs apply
+  this rule already; a cluster lacking the container kept the truncation. A model with its own
+  TSS node is never pruned by the merge. New key merge_prune_degradation_products (default
+  true; false = the merge prunes nothing).
+- Single-cell final quant (does not change the final GTF): LRAA-cell_cluster_guided.wdl
+  quantifies every cell in ONE LRAA quant-only run on the full input BAM against the final
+  (sc_merged) GTF, with the init pass's settings: the run's shared chunk plan, the contig
+  scatter, and the single-cell sparse shards built during quantification. It replaces the per-cluster quant (LRAA_quant_by_cluster.wdl), in which each
+  cluster's EM divided that cluster's ambiguous reads by its own isoform proportions. Isoform
+  discovery is still per cluster.
+- The final single-cell matrices (final_sc_*, incl_gene_symbols_*) are built from that pooled
+  tracking. They now include reads from barcodes in no cluster.
+- Per-cluster pseudobulk (final_cluster_exprs_tar, cluster_*_matrix) is the pooled assignment
+  summed over each cluster's cells (new util/sc/tracking_to_cluster_pseudobulk_exprs.py), with
+  no per-cluster EM. File names inside the tar are unchanged. RPM_total_reads in those files is
+  per million of the cluster's assigned reads (equal to TPM). Reads of unclustered barcodes are
+  in no cluster's file; new output final_cluster_read_partition gives the per-cluster and
+  unclustered totals.
+- final_tracking is the pooled tracking (all cells); new output final_quant_expr is its
+  quant.expr. final_collated_read_assignment_summary has one pooled row ("pseudobulk",
+  population pooled_thinned) instead of one row per cluster.
+- Removed outputs: final_cluster_trackings_tar (singlecell), and the cluster-guided
+  subworkflow's normalized_cluster_bams/bais, merged_normalized_bam/bai and
+  final_normalized_merged_bam/bai (no per-cluster normalization any more).
+- Removed inputs of LRAA-cell_cluster_guided.wdl: pre_normalized_cluster_bams/bais,
+  memoryGBquantNormalize, memoryGBquantMerge, normalize_max_cov_level. memoryGBquantFinal is
+  now optional in both workflows (unset: sized from the BAM, as for the init pass) and applies
+  only with scattering_final_quant = "off". New cluster-guided inputs cpuFinalQuant,
+  final_quant_partition_workers and num_total_reads; LRAA-singlecell.wdl passes cpuInit,
+  initial_partition_workers and its num_total_reads to them.
+- quant_only cluster-guided runs reuse the init pass's quant (tracking, quant.expr, matrices)
+  as the final quant instead of running the same whole-library quant twice. Applies when
+  scattering_init equals scattering_final_quant and neither init_config_update_json nor
+  region is set.
+- New cluster-guided input final_quant_config_update_json (LRAA_Globals overrides for the
+  final quant; unset by default).
+- The per-cluster split script is inlined in its WDL task, so the WDL runs on images that
+  predate the script; pylib/test_inlined_wdl_scripts.py keeps the copy equal to the util
+  script.
+- No per-cluster tracking output: a read's cluster follows from the cell barcode leading its
+  read name in final_tracking.
+- LRAA_quant_by_cluster.wdl remains as a standalone per-cluster quantification workflow.
+- Also in this version, no change to default runs:
+  - SQANTI-like classifier (util/SQANTI-like_cats_for_reads_or_isoforms.py): two FSM
+    subcategory columns appended to the iso_cats table, in both read and isoform mode.
+    FSM_full_length_isoforms lists the FSM-matched reference isoforms whose 5' and 3' ends
+    both lie within sqlike_fsm_full_length_max_end_dist bases (LRAA_Globals, default 50)
+    of the query's ends (alignment span for reads). FSM_ISM_of_isoforms lists the other
+    reference isoforms whose intron chain contains the query's as a proper contiguous
+    subset, in any gene; FSM_ISM_of_genes gives each one's gene (gene_name^gene_id) and
+    FSM_ISM_of_gene_scope says whether they are in the FSM match's gene (same_gene,
+    other_gene, same_and_other_gene). All are empty for non-FSM categories, including
+    se_FM. sqanti_cat, the existing columns, the bam tags and the summary counts are
+    unchanged. The script takes --config_update (json of LRAA_Globals.config overrides)
+    to set the tolerance.
+  - SQANTI-like classifier: FSM_ref_5prime_offset and FSM_ref_3prime_offset columns give
+    each FSM's signed end offsets from its closest FSM-matched reference isoform (positive =
+    the query extends past the reference end, in the reference's strand orientation). Each
+    run also writes <prefix>.iso_cats.FSM_subcats.summary_counts.tsv (full-length x ISM-of
+    counts), <prefix>.iso_cats.FSM_end_offsets.tsv (10-nt offset bins, clipped at +/-1000)
+    and <prefix>.iso_cats.FSM_subcats.pdf (util/misc/plot_SQANTI_FSM_subcats.Rscript:
+    multi-exon categories with the FSM bar split by subcategory, the FSM subcategories, the
+    gene scope of ISM-of FSMs, and the end-offset histograms). LRAA-sqanti-like-reads-eval.wdl
+    collects the three as outputs.
+
 
 v0.50.1
 
