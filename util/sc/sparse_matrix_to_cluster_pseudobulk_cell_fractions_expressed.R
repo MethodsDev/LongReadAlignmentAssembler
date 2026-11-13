@@ -36,6 +36,10 @@ colnames(cluster_df) = c("cell_barcode", "cluster_id")
 common_barcodes <- intersect(cluster_df$cell_barcode, colnames(seurat_obj))
 cluster_df <- cluster_df[cluster_df$cell_barcode %in% common_barcodes, ]
 
+# Drop cells in no cluster (a matrix from a pooled quant holds every barcode); otherwise the
+# reorder below brings them back with an NA cluster.
+seurat_obj <- subset(seurat_obj, cells = common_barcodes)
+
 # Set cell barcodes as rownames (required for setting identities)
 rownames(cluster_df) <- cluster_df$cell_barcode
 
