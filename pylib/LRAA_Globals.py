@@ -535,6 +535,13 @@ config = {
     # goes and the end gets the normal adjustment; merge_end_stop_at_called_site stops only on sites that pass.
     # Implies the re-path of merge_repath_before_end_adjustment.
     "merge_site_end_requires_source_support": True,
+    # Merge only: after reconstruction, absorb a merged model with no TSS node into the model of its gene
+    # that contains it: its path inside the container's with no PolyA node or the container's, or (inputs
+    # from different clusters end a few bases apart) the container minus its 5'-most introns with a 3' end
+    # within max_dist_between_alt_polyA_sites of the container's. The 5' truncation cases of
+    # prune_likely_degradation_products, which each per-cluster run applies; a cluster lacking the
+    # container keeps the truncation otherwise. False = the merge prunes nothing.
+    "merge_prune_degradation_products": True,
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned

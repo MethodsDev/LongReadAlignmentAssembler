@@ -131,3 +131,86 @@ def test_prune_degradation_products_prefers_better_supported_terminal_twin():
         )
         retained_ids = {transcript.get_transcript_id() for transcript in retained}
         assert retained_ids == {"t.more"}
+
+
+class _PlusSpliceGraph(_DummySpliceGraph):
+    def get_contig_strand(self):
+        return "+"
+
+
+def _plus_transcript(transcript_id, exons, simple_path, read_count):
+    transcript = Transcript("chr1", exons, "+")
+    transcript.set_gene_id("g1")
+    transcript.set_transcript_id(transcript_id)
+    transcript.set_simple_path(simple_path)
+    transcript.set_read_counts_assigned(read_count)
+    return transcript
+
+
+def _prune_pair(short_end, longer_path):
+    """A longer model ending at 400 (path `longer_path`) and an abundant 5'-truncated
+    model of the same chain, no TSS call, PolyA call, ending at `short_end`."""
+    longer = _plus_transcript(
+        "t.long", [[100, 150], [200, 250], [300, 400]], longer_path, 2.0
+    )
+    shorter = _plus_transcript(
+        "t.short",
+        [[210, 250], [300, short_end]],
+        ["E:2", "I:2", "E:3", "POLYA:1"],
+        8.0,
+    )
+    frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
+    retained = TranscriptFiltering.prune_likely_degradation_products(
+        [longer, shorter], _PlusSpliceGraph(), frac
+    )
+    return {t.get_transcript_id(): t for t in retained}
+
+
+NO_POLYA = ["E:1", "I:1", "E:2", "I:2", "E:3"]
+
+
+def test_polyA_less_container_absorbs_and_adopts_coincident_3prime_end():
+    # The container ends 1 bp from the contained model's PolyA site but never reached
+    # the site vertex: identity sees a distinguishing PolyA, end coordinates do not.
+    retained = _prune_pair(401, NO_POLYA)
+    assert set(retained) == {"t.long"}
+    survivor = retained["t.long"]
+    assert survivor.get_simple_path()[-1] == "POLYA:1"
+    assert survivor.has_PolyA()
+    assert survivor.get_coords() == (100, 401)
+
+
+def test_container_with_its_own_polyA_is_judged_by_identity_only():
+    # The container carries a DIFFERENT PolyA call within 50 bp: the coordinate rule
+    # does not apply and the abundant contained model survives, as before.
+    retained = _prune_pair(401, NO_POLYA + ["POLYA:2"])
+    assert set(retained) == {"t.long", "t.short"}
+    assert retained["t.long"].get_simple_path()[-1] == "POLYA:2"
+
+
+def test_nested_alternative_polyA_is_not_absorbed_by_end_coords():
+    # Ends farther apart than max_dist_between_alt_polyA_sites: a nested APA isoform,
+    # left to the expression test, which it passes.
+    import LRAA_Globals
+
+    assert 400 - 330 > LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
+    retained = _prune_pair(330, NO_POLYA)
+    assert set(retained) == {"t.long", "t.short"}
+    assert not retained["t.long"].has_PolyA()
+
+
+def test_TSS_less_container_does_not_absorb_by_5prime_end_coords():
+    # No 5' mirror of the end-coordinate rule: an abundant 3'-truncated model with a TSS
+    # call 1 bp from a TSS-less container's start is left to the expression test, which
+    # it passes.
+    longer = _plus_transcript(
+        "t.long", [[100, 250], [300, 350], [400, 500]], ["E:1", "I:1", "E:2", "I:2", "E:3"], 2.0
+    )
+    shorter = _plus_transcript(
+        "t.short", [[99, 250], [300, 320]], ["TSS:1", "E:1", "I:1", "E:2"], 8.0
+    )
+    frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
+    retained = TranscriptFiltering.prune_likely_degradation_products(
+        [longer, shorter], _PlusSpliceGraph(), frac
+    )
+    assert {t.get_transcript_id() for t in retained} == {"t.long", "t.short"}
