@@ -344,21 +344,14 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
     # that contains it) into its container (prune_likely_degradation_products). A
     # cluster where the container is weak or absent keeps the truncation, and without
     # this step the merge carries it next to the container rebuilt elsewhere. Only the
-    # structural cases apply: a merge has no reads to weigh.
+    # structural 5' truncation cases apply: a merge has no reads to weigh.
     if LRAA_Globals.config.get("merge_prune_degradation_products", False):
-        spare = (
-            _has_pooled_source
-            if LRAA_Globals.config.get("merge_prune_spare_pooled_models", False)
-            else None
-        )
         num_before = len(transcripts)
         transcripts, pruned_pairs = (
             TranscriptFiltering.prune_contained_truncations_structural(
                 transcripts,
                 contig_strand,
-                spare=spare,
-                end_tolerance=LRAA_Globals.config.get("merge_prune_end_tolerance"),
-                prune_3prime=LRAA_Globals.config.get("merge_prune_3prime_truncations", False),
+                LRAA_Globals.config["max_dist_between_alt_polyA_sites"],
             )
         )
         logger.info(
@@ -478,15 +471,6 @@ def merge_stranded_contig(stranded_contig, transcript_list, genome_fasta_file):
             pass
 
     return "".join(gtf_chunks), tracking_records
-
-
-def _has_pooled_source(transcript):
-    """True when any input model merged into this one came from --pooled_gtf."""
-    for mp in transcript.get_multipaths_evidence_assigned():
-        for rn in mp.get_read_names():
-            if isinstance(rn, str) and rn.startswith("fake_for_merge|") and "|pooled=1" in rn:
-                return True
-    return False
 
 
 def transfer_reference_identity(merged_transcripts, input_transcripts):

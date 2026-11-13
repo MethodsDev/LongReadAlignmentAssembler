@@ -1302,29 +1302,21 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
         # is judged by identity as before, so a nested alternative polyA isoform ending
         # at a different called site is untouched.
         #
-        # The 5' mirror (contained_TSS_match_by_end_coords) applies the same test to a
-        # contained model with a TSS call and no PolyA call, against a container with
-        # no TSS call, within max_dist_between_alt_TSS_sites.
-        match_polyA_by_coords = LRAA_Globals.config.get(
-            "contained_PolyA_match_by_end_coords", False
-        )
-        match_TSS_by_coords = LRAA_Globals.config.get(
-            "contained_TSS_match_by_end_coords", False
-        )
+        # Not mirrored at the 5' end (a TSS-called model against a TSS-less container):
+        # tested on PBMC and FTD it absorbed read-supported alternative starts, since
+        # real starts and degradation starts look alike there without read evidence.
         max_polyA_dist = LRAA_Globals.config["max_dist_between_alt_polyA_sites"]
-        max_TSS_dist = LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
 
-        def _end(transcript, kind):
+        def _3prime_end(transcript):
             lend, rend = transcript.get_coords()
-            on_left = (kind == "PolyA") == (contig_strand == "-")
-            return lend if on_left else rend
+            return lend if contig_strand == "-" else rend
 
-        def _adopt_end(t_i, t_j, kind):
-            """t_i takes t_j's terminal path nodes at the `kind` end (through the first
-            node they share) and that end's coordinate. Returns False, changing
-            nothing, when the paths share no node or the end would fall outside t_i's
-            terminal exon."""
-            on_left = (kind == "PolyA") == (contig_strand == "-")
+        def _adopt_3prime_end(t_i, t_j):
+            """t_i takes t_j's terminal path nodes at the 3' end (through the first node
+            they share) and that end's coordinate. Returns False, changing nothing,
+            when the paths share no node or the end would fall outside t_i's terminal
+            exon."""
+            on_left = contig_strand == "-"
             i_path = list(t_i.get_simple_path())
             j_path = list(t_j.get_simple_path())
             exons = [list(seg) for seg in t_i.get_exon_segments()]
@@ -1345,9 +1337,8 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                 new_path = i_path[: i_path.index(j_path[k]) + 1] + j_path[k + 1 :]
                 exons[-1][1] = j_rend
             logger.debug(
-                "{} adopts the {} end of {}: path {} -> {}, coords {} -> {}-{}".format(
+                "{} adopts the 3' end of {}: path {} -> {}, coords {} -> {}-{}".format(
                     t_i.get_transcript_id(),
-                    kind,
                     t_j.get_transcript_id(),
                     i_path,
                     new_path,
@@ -1362,10 +1353,7 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
             t_i._rend = exons[-1][1]
             t_i._cdna_len = sum(seg[1] - seg[0] + 1 for seg in exons)
             t_i.refresh_boundary_annotations_from_simple_path()
-            if kind == "PolyA":
-                t_i.set_PolyA_read_count(t_j.get_PolyA_read_count())
-            else:
-                t_i.set_TSS_read_count(t_j.get_TSS_read_count())
+            t_i.set_PolyA_read_count(t_j.get_PolyA_read_count())
             return True
 
         transcript_prune_as_degradation = set()
@@ -1477,22 +1465,12 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
 
                     subsume_J = False  # init
                     polyA_by_coords = (
-                        match_polyA_by_coords
-                        and j_TSS_id is None
+                        j_TSS_id is None
                         and j_polyA_id is not None
                         and i_polyA_id is None
-                        and abs(_end(transcript_i, "PolyA") - _end(transcript_j, "PolyA"))
+                        and abs(_3prime_end(transcript_i) - _3prime_end(transcript_j))
                         <= max_polyA_dist
                     )
-                    TSS_by_coords = (
-                        match_TSS_by_coords
-                        and j_polyA_id is None
-                        and j_TSS_id is not None
-                        and i_TSS_id is None
-                        and abs(_end(transcript_i, "TSS") - _end(transcript_j, "TSS"))
-                        <= max_TSS_dist
-                    )
-                    adopt_kind = None
 
                     # no TSS or PolyA on j - prune.
                     if j_TSS_id is None and j_polyA_id is None:
@@ -1531,7 +1509,6 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         and (
                             j_TSS_id == i_TSS_id
                             or _is_degradation_rung(j_TSS_id, "TSS")
-                            or TSS_by_coords
                         )
                     ):
                         logger.debug(
@@ -1562,14 +1539,10 @@ def prune_likely_degradation_products(transcripts, splice_graph, frac_read_assig
                         )
                         transcript_prune_as_degradation.add(transcript_j)
                         transcript_i.absorb_other_transcript_multipaths(transcript_j)
-                        if polyA_by_coords and not _is_degradation_rung(
-                            j_polyA_id, "PolyA"
-                        ):
-                            adopt_kind = "PolyA"
-                        elif TSS_by_coords and not _is_degradation_rung(j_TSS_id, "TSS"):
-                            adopt_kind = "TSS"
-                        if adopt_kind is not None and _adopt_end(
-                            transcript_i, transcript_j, adopt_kind
+                        if (
+                            polyA_by_coords
+                            and not _is_degradation_rung(j_polyA_id, "PolyA")
+                            and _adopt_3prime_end(transcript_i, transcript_j)
                         ):
                             transcript_i_simple_path = transcript_i.get_simple_path()
                             i_path_trimmed, i_TSS_id, i_polyA_id = SPU.trim_TSS_and_PolyA(
@@ -1630,38 +1603,28 @@ def _is_5prime_truncation_by_coords(short, long, strand, end_tolerance):
         )
 
 
-def prune_contained_truncations_structural(
-    transcripts, contig_strand, spare=None, end_tolerance=None, prune_3prime=True
-):
+def prune_contained_truncations_structural(transcripts, contig_strand, end_tolerance):
     """Structure-only form of prune_likely_degradation_products, for a GTF merge.
 
     A merge has no reads, so only the containment cases that never consult expression
-    are applied. A model j is absorbed into a model i of the same gene when j's intron
-    chain and exons (TSS/PolyA nodes trimmed) lie inside i's path and j has no terminal
-    feature of its own:
-
-      - j has neither a TSS nor a PolyA node;
-      - j has no TSS node and its PolyA node is i's PolyA node (a 5' truncation);
-      - j has no PolyA node and its TSS node is i's TSS node (a 3' truncation).
-
-    These are the structural cases that prune_likely_degradation_products applies in
-    every per-cluster run regardless of read counts. The merge needs them again because a
+    are applied, and only to 5' truncations. A model j with no TSS node is absorbed into
+    a model i of the same gene when j's intron chain and exons (TSS/PolyA nodes trimmed)
+    lie inside i's path and j has no PolyA node or i's PolyA node. These are the
+    structural cases that prune_likely_degradation_products applies in every per-cluster
+    run regardless of read counts. The merge needs them again because a
     cluster in which the container is weak or absent has nothing to absorb the truncation
     into, while the container is built in other clusters or the pooled run. The
     expression test (max_rel_frac_expr_alt_compat_contained) and the dominance test
     (max_frac_alt_terminal_feature_absorbable) are not applied: in a merge a node's
-    support counts asserting input models, not reads. A model with its own TSS and PolyA
-    is never touched here.
+    support counts asserting input models, not reads. A model with its own TSS node is
+    never touched here: the per-cluster case of a 3' truncation sharing its container's
+    TSS also catches models ending at an alternative polyA site, which only reads can
+    tell apart.
 
-    end_tolerance: when set, a model with no TSS node is also absorbed when it is a 5'
-    truncation of a spliced container by coordinates (_is_5prime_truncation_by_coords):
-    the container's 3'-most introns, a first exon inside the container's exon, and a 3'
-    end within end_tolerance bases of the container's, whatever either model's PolyA call.
-
-    spare: optional predicate; a model for which it returns True is never pruned.
-
-    prune_3prime: when False, a model with its own TSS node is never pruned, so only the
-    5' truncation cases (no TSS node) apply.
+    end_tolerance: a model with no TSS node is also absorbed when it is a 5' truncation
+    of a spliced container by coordinates (_is_5prime_truncation_by_coords): the
+    container's 3'-most introns, a first exon inside the container's exon, and a 3' end
+    within end_tolerance bases of the container's, whatever either model's PolyA call.
 
     Returns (kept transcripts in input order, list of (pruned_id, container_id)).
     """
@@ -1686,7 +1649,7 @@ def prune_contained_truncations_structural(
         for i, transcript_i in enumerate(transcript_list):
             if transcript_i.get_transcript_id() in pruned:
                 continue
-            i_path, i_TSS_id, i_polyA_id = trimmed[i]
+            i_path, _, i_polyA_id = trimmed[i]
             if not i_path:
                 continue
 
@@ -1694,37 +1657,26 @@ def prune_contained_truncations_structural(
                 if i == j or transcript_j.get_transcript_id() in pruned:
                     continue
                 j_path, j_TSS_id, j_polyA_id = trimmed[j]
-                if j_TSS_id is not None and (j_polyA_id is not None or not prune_3prime):
+                if j_TSS_id is not None:
                     continue
                 if not j_path:
                     continue
 
-                if len(j_path) <= len(i_path) and SPU.path_A_contains_path_B(
-                    i_path, j_path
-                ):
-                    if j_TSS_id is None and j_polyA_id is None:
-                        subsume = True
-                    elif j_TSS_id is None:
-                        subsume = j_polyA_id == i_polyA_id
-                    else:
-                        subsume = j_TSS_id == i_TSS_id
-                else:
-                    subsume = False
+                subsume = (
+                    len(j_path) <= len(i_path)
+                    and SPU.path_A_contains_path_B(i_path, j_path)
+                    and (j_polyA_id is None or j_polyA_id == i_polyA_id)
+                )
 
                 # Inputs from different clusters end a few bases apart, so a 5'
                 # truncation can overhang its container's 3' end, or keep a PolyA call
                 # its container lost, and fail the exact path test above.
-                if (
-                    not subsume
-                    and j_TSS_id is None
-                    and end_tolerance is not None
-                    and _is_5prime_truncation_by_coords(
-                        transcript_j, transcript_i, contig_strand, end_tolerance
-                    )
+                if not subsume and _is_5prime_truncation_by_coords(
+                    transcript_j, transcript_i, contig_strand, end_tolerance
                 ):
                     subsume = True
 
-                if not subsume or (spare is not None and spare(transcript_j)):
+                if not subsume:
                     continue
 
                 pruned.add(transcript_j.get_transcript_id())

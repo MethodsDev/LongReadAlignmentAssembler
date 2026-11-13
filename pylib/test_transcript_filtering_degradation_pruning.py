@@ -147,30 +147,23 @@ def _plus_transcript(transcript_id, exons, simple_path, read_count):
     return transcript
 
 
-def _prune_pair(short_end, longer_path, enabled=True):
+def _prune_pair(short_end, longer_path):
     """A longer model ending at 400 (path `longer_path`) and an abundant 5'-truncated
     model of the same chain, no TSS call, PolyA call, ending at `short_end`."""
-    import LRAA_Globals
-
-    saved = LRAA_Globals.config.get("contained_PolyA_match_by_end_coords")
-    LRAA_Globals.config["contained_PolyA_match_by_end_coords"] = enabled
-    try:
-        longer = _plus_transcript(
-            "t.long", [[100, 150], [200, 250], [300, 400]], longer_path, 2.0
-        )
-        shorter = _plus_transcript(
-            "t.short",
-            [[210, 250], [300, short_end]],
-            ["E:2", "I:2", "E:3", "POLYA:1"],
-            8.0,
-        )
-        frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
-        retained = TranscriptFiltering.prune_likely_degradation_products(
-            [longer, shorter], _PlusSpliceGraph(), frac
-        )
-        return {t.get_transcript_id(): t for t in retained}
-    finally:
-        LRAA_Globals.config["contained_PolyA_match_by_end_coords"] = saved
+    longer = _plus_transcript(
+        "t.long", [[100, 150], [200, 250], [300, 400]], longer_path, 2.0
+    )
+    shorter = _plus_transcript(
+        "t.short",
+        [[210, 250], [300, short_end]],
+        ["E:2", "I:2", "E:3", "POLYA:1"],
+        8.0,
+    )
+    frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
+    retained = TranscriptFiltering.prune_likely_degradation_products(
+        [longer, shorter], _PlusSpliceGraph(), frac
+    )
+    return {t.get_transcript_id(): t for t in retained}
 
 
 NO_POLYA = ["E:1", "I:1", "E:2", "I:2", "E:3"]
@@ -185,8 +178,6 @@ def test_polyA_less_container_absorbs_and_adopts_coincident_3prime_end():
     assert survivor.get_simple_path()[-1] == "POLYA:1"
     assert survivor.has_PolyA()
     assert survivor.get_coords() == (100, 401)
-
-    assert set(_prune_pair(401, NO_POLYA, enabled=False)) == {"t.long", "t.short"}
 
 
 def test_container_with_its_own_polyA_is_judged_by_identity_only():
@@ -208,57 +199,18 @@ def test_nested_alternative_polyA_is_not_absorbed_by_end_coords():
     assert not retained["t.long"].has_PolyA()
 
 
-def _prune_tss_pair(short_start, longer_path, enabled=True):
-    """The 5' mirror: a longer model starting at 100 (path `longer_path`) and an
-    abundant 3'-truncated model of the same chain, TSS call, no PolyA call, starting
-    at `short_start`."""
-    import LRAA_Globals
-
-    saved = LRAA_Globals.config.get("contained_TSS_match_by_end_coords")
-    LRAA_Globals.config["contained_TSS_match_by_end_coords"] = enabled
-    try:
-        longer = _plus_transcript(
-            "t.long", [[100, 250], [300, 350], [400, 500]], longer_path, 2.0
-        )
-        shorter = _plus_transcript(
-            "t.short",
-            [[short_start, 250], [300, 320]],
-            ["TSS:1", "E:1", "I:1", "E:2"],
-            8.0,
-        )
-        frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
-        retained = TranscriptFiltering.prune_likely_degradation_products(
-            [longer, shorter], _PlusSpliceGraph(), frac
-        )
-        return {t.get_transcript_id(): t for t in retained}
-    finally:
-        LRAA_Globals.config["contained_TSS_match_by_end_coords"] = saved
-
-
-NO_TSS = ["E:1", "I:1", "E:2", "I:2", "E:3"]
-
-
-def test_TSS_less_container_absorbs_and_adopts_coincident_5prime_end():
-    retained = _prune_tss_pair(99, NO_TSS)
-    assert set(retained) == {"t.long"}
-    survivor = retained["t.long"]
-    assert survivor.get_simple_path()[0] == "TSS:1"
-    assert survivor.has_TSS()
-    assert survivor.get_coords() == (99, 500)
-
-    assert set(_prune_tss_pair(99, NO_TSS, enabled=False)) == {"t.long", "t.short"}
-
-
-def test_container_with_its_own_TSS_is_judged_by_identity_only():
-    retained = _prune_tss_pair(99, ["TSS:2"] + NO_TSS)
-    assert set(retained) == {"t.long", "t.short"}
-    assert retained["t.long"].get_simple_path()[0] == "TSS:2"
-
-
-def test_nested_alternative_TSS_is_not_absorbed_by_end_coords():
-    import LRAA_Globals
-
-    assert 190 - 100 > LRAA_Globals.config["max_dist_between_alt_TSS_sites"]
-    retained = _prune_tss_pair(190, NO_TSS)
-    assert set(retained) == {"t.long", "t.short"}
-    assert not retained["t.long"].has_TSS()
+def test_TSS_less_container_does_not_absorb_by_5prime_end_coords():
+    # No 5' mirror of the end-coordinate rule: an abundant 3'-truncated model with a TSS
+    # call 1 bp from a TSS-less container's start is left to the expression test, which
+    # it passes.
+    longer = _plus_transcript(
+        "t.long", [[100, 250], [300, 350], [400, 500]], ["E:1", "I:1", "E:2", "I:2", "E:3"], 2.0
+    )
+    shorter = _plus_transcript(
+        "t.short", [[99, 250], [300, 320]], ["TSS:1", "E:1", "I:1", "E:2"], 8.0
+    )
+    frac = {"t.long": {_DummyMP(2): 1.0}, "t.short": {_DummyMP(8): 1.0}}
+    retained = TranscriptFiltering.prune_likely_degradation_products(
+        [longer, shorter], _PlusSpliceGraph(), frac
+    )
+    assert {t.get_transcript_id() for t in retained} == {"t.long", "t.short"}

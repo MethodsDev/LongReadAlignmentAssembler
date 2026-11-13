@@ -31,6 +31,12 @@ def _model(tid, exons, path, strand="+", gene_id="g1"):
 # + strand container L: TSS, E1, I1, E2a, E2b, I2, E3, PolyA
 # E2 is split at the short model's start (E2a | E2b), as the merge graph splits it.
 L_EXONS = [[100, 200], [300, 450], [600, 700]]
+
+
+def _prune(transcripts, strand, end_tolerance=50):
+    return TranscriptFiltering.prune_contained_truncations_structural(
+        transcripts, strand, end_tolerance
+    )
 L_PATH = ["TSS:1", "E:1", "I:1", "E:2a", "E:2b", "I:2", "E:3", "POLYA:1"]
 
 
@@ -38,7 +44,7 @@ def test_5prime_truncation_sharing_polyA_is_absorbed():
     L = _model("L", L_EXONS, L_PATH)
     S = _model("S", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:1"])
 
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
+    kept, pruned = _prune(
         [S, L], "+"
     )
 
@@ -53,7 +59,7 @@ def test_own_TSS_is_kept():
         "S", [[380, 450], [600, 700]], ["TSS:2", "E:2b", "I:2", "E:3", "POLYA:1"]
     )
 
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
+    kept, pruned = _prune(
         [L, S], "+"
     )
 
@@ -62,11 +68,12 @@ def test_own_TSS_is_kept():
 
 
 def test_distinct_polyA_is_kept():
-    # no TSS, but its own PolyA: possible alternative polyadenylation, left alone
+    # no TSS, but its own PolyA 60 bases short of L's: possible alternative
+    # polyadenylation, left alone
     L = _model("L", L_EXONS, L_PATH)
-    S = _model("S", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:2"])
+    S = _model("S", [[380, 450], [600, 640]], ["E:2b", "I:2", "E:3a", "POLYA:2"])
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural([L, S], "+")
+    kept, _ = _prune([L, S], "+")
 
     assert {t.get_transcript_id() for t in kept} == {"L", "S"}
 
@@ -76,7 +83,7 @@ def test_not_contained_is_kept():
     L = _model("L", L_EXONS, L_PATH)
     S = _model("S", [[380, 450], [650, 700]], ["E:2b", "I:9", "E:3b", "POLYA:1"])
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural([L, S], "+")
+    kept, _ = _prune([L, S], "+")
 
     assert {t.get_transcript_id() for t in kept} == {"L", "S"}
 
@@ -87,12 +94,12 @@ def test_other_gene_is_not_a_container():
         "S", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:1"], gene_id="g2"
     )
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural([L, S], "+")
+    kept, _ = _prune([L, S], "+")
 
     assert {t.get_transcript_id() for t in kept} == {"L", "S"}
 
 
-def test_minus_strand_and_spare_predicate():
+def test_minus_strand():
     # - strand paths run low to high coordinate: PolyA first, TSS last
     L = _model(
         "L",
@@ -104,26 +111,11 @@ def test_minus_strand_and_spare_predicate():
         "S", [[100, 200], [300, 400]], ["POLYA:1", "E:1", "I:1", "E:2a"], strand="-"
     )
 
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
+    kept, pruned = _prune(
         [L, S], "-"
     )
     assert [t.get_transcript_id() for t in kept] == ["L"]
     assert pruned == [("S", "L")]
-
-    L2 = _model(
-        "L",
-        L_EXONS,
-        ["POLYA:1", "E:1", "I:1", "E:2a", "E:2b", "I:2", "E:3", "TSS:1"],
-        strand="-",
-    )
-    S2 = _model(
-        "S", [[100, 200], [300, 400]], ["POLYA:1", "E:1", "I:1", "E:2a"], strand="-"
-    )
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
-        [L2, S2], "-", spare=lambda t: t.get_transcript_id() == "S"
-    )
-    assert {t.get_transcript_id() for t in kept} == {"L", "S"}
-    assert pruned == []
 
 
 def test_tolerant_end_overhang_is_absorbed():
@@ -131,12 +123,10 @@ def test_tolerant_end_overhang_is_absorbed():
     L = _model("L", L_EXONS, L_PATH)
     S = _model("S", [[380, 450], [600, 706]], ["E:2b", "I:2", "E:3", "E:3x"])
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural([L, S], "+")
+    kept, _ = _prune([L, S], "+", end_tolerance=0)
     assert {t.get_transcript_id() for t in kept} == {"L", "S"}
 
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
-        [L, S], "+", end_tolerance=50
-    )
+    kept, pruned = _prune([L, S], "+")
     assert [t.get_transcript_id() for t in kept] == ["L"]
     assert pruned == [("S", "L")]
 
@@ -147,8 +137,8 @@ def test_tolerant_rule_keeps_far_end_and_own_TSS():
     own_tss = _model(
         "own", [[380, 450], [600, 706]], ["TSS:2", "E:2b", "I:2", "E:3", "E:3x"]
     )
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural(
-        [L, far, own_tss], "+", end_tolerance=50
+    kept, _ = _prune(
+        [L, far, own_tss], "+"
     )
     assert {t.get_transcript_id() for t in kept} == {"L", "far", "own"}
 
@@ -164,8 +154,8 @@ def test_tolerant_rule_minus_strand():
     S = _model(
         "S", [[95, 200], [300, 400]], ["POLYA:2", "E:0", "E:1", "I:1", "E:2a"], strand="-"
     )
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
-        [L, S], "-", end_tolerance=50
+    kept, pruned = _prune(
+        [L, S], "-"
     )
     assert [t.get_transcript_id() for t in kept] == ["L"]
 
@@ -179,39 +169,32 @@ def test_tolerant_rule_minus_strand():
         ["POLYA:1", "E:1", "I:1", "E:2a", "E:2b", "I:2", "E:3", "TSS:1"],
         strand="-",
     )
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural(
-        [L2, S2], "-", end_tolerance=50
+    kept, _ = _prune(
+        [L2, S2], "-"
     )
     assert {t.get_transcript_id() for t in kept} == {"L", "S2"}
 
 
 def test_tolerant_rule_absorbs_own_polyA_within_tolerance():
     # Documents a deliberate departure from the per-cluster rule, which needs the SAME
-    # PolyA node: with end_tolerance set, a no-TSS 5' truncation ending within the
+    # PolyA node: a no-TSS 5' truncation ending within the
     # tolerance of its container's 3' end is absorbed even with a PolyA node of its own.
     L = _model("L", L_EXONS, L_PATH)
     S = _model("S", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:2"])
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural(
-        [L, S], "+", end_tolerance=50
+    kept, _ = _prune(
+        [L, S], "+"
     )
     assert [t.get_transcript_id() for t in kept] == ["L"]
 
 
-def test_prune_3prime_false_keeps_TSS_carrying_3prime_truncation():
-    # S shares L's TSS and lacks a PolyA node (a 3' truncation): absorbed by default,
-    # kept with prune_3prime=False; a TSS-less 5' truncation is absorbed either way.
-    def models():
-        L = _model("L", L_EXONS, L_PATH)
-        S3 = _model("S3", [[100, 200], [300, 400]], ["TSS:1", "E:1", "I:1", "E:2a"])
-        S5 = _model("S5", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:1"])
-        return [L, S3, S5]
+def test_TSS_carrying_3prime_truncation_is_kept():
+    # S3 shares L's TSS and lacks a PolyA node (a 3' truncation, or a model ending at an
+    # alternative polyA site): kept. The TSS-less 5' truncation S5 is absorbed.
+    L = _model("L", L_EXONS, L_PATH)
+    S3 = _model("S3", [[100, 200], [300, 400]], ["TSS:1", "E:1", "I:1", "E:2a"])
+    S5 = _model("S5", [[380, 450], [600, 700]], ["E:2b", "I:2", "E:3", "POLYA:1"])
 
-    kept, _ = TranscriptFiltering.prune_contained_truncations_structural(models(), "+")
-    assert [t.get_transcript_id() for t in kept] == ["L"]
-
-    kept, pruned = TranscriptFiltering.prune_contained_truncations_structural(
-        models(), "+", prune_3prime=False
-    )
+    kept, pruned = _prune([L, S3, S5], "+")
     assert {t.get_transcript_id() for t in kept} == {"L", "S3"}
     assert pruned == [("S5", "L")]

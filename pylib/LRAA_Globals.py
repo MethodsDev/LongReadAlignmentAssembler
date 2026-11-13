@@ -535,21 +535,13 @@ config = {
     # goes and the end gets the normal adjustment; merge_end_stop_at_called_site stops only on sites that pass.
     # Implies the re-path of merge_repath_before_end_adjustment.
     "merge_site_end_requires_source_support": True,
-    # Merge only: after reconstruction, absorb a merged model with no terminal feature of its own (no TSS
-    # node and the same PolyA node as a containing model, or no PolyA and the same TSS, or neither) into the
-    # model of its gene that contains its path. The structural cases of prune_likely_degradation_products,
-    # which each per-cluster run applies; a cluster lacking the container keeps the truncation otherwise.
+    # Merge only: after reconstruction, absorb a merged model with no TSS node into the model of its gene
+    # that contains it: its path inside the container's with no PolyA node or the container's, or (inputs
+    # from different clusters end a few bases apart) the container minus its 5'-most introns with a 3' end
+    # within max_dist_between_alt_polyA_sites of the container's. The 5' truncation cases of
+    # prune_likely_degradation_products, which each per-cluster run applies; a cluster lacking the
+    # container keeps the truncation otherwise. False = the merge prunes nothing.
     "merge_prune_degradation_products": True,
-    # Merge only, with merge_prune_degradation_products: never prune a model with a --pooled_gtf source.
-    "merge_prune_spare_pooled_models": False,
-    # Merge only, with merge_prune_degradation_products: a spliced model with no TSS node is also absorbed when
-    # it is its container minus the 5'-most introns and its 3' end lies within this many bases of the
-    # container's, whatever the PolyA calls (inputs from different clusters end a few bases apart). None = exact
-    # path containment only.
-    "merge_prune_end_tolerance": 50,
-    # Merge only, with merge_prune_degradation_products: also absorb a model with its own TSS node and no PolyA
-    # node into a container sharing that TSS (a 3' truncation). False = only models without a TSS node are absorbed.
-    "merge_prune_3prime_truncations": False,
     #
     # compatible and contained isoform filtering
     "max_rel_frac_expr_alt_compat_contained": 0.2,  # if iso-j contained by iso-i has < this frac of their combined expression, iso-j gets pruned
@@ -567,14 +559,6 @@ config = {
     # (median 0.350 vs 0.349 on LSK109). Set 0 to require exact feature identity,
     # which is the prior behaviour.
     "max_frac_alt_terminal_feature_absorbable": 0.20,
-    # A contained model with a PolyA call but no TSS call is absorbed by a container
-    # WITHOUT a PolyA call whose 3' end lies within max_dist_between_alt_polyA_sites of
-    # its own (one site by that same rule); the container takes over the site and end.
-    # False = feature-call identity only, the prior behaviour.
-    "contained_PolyA_match_by_end_coords": True,
-    # The 5' mirror: a contained model with a TSS call and no PolyA call, a container
-    # WITHOUT a TSS call, 5' ends within max_dist_between_alt_TSS_sites.
-    "contained_TSS_match_by_end_coords": False,
     #
     ## read assignment to transcript criteria
     "fraction_read_align_overlap": 0.75,  # min fraction of read length that must overlap the compatible transcript isoform structure
