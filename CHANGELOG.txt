@@ -1,4 +1,4 @@
-devel (unreleased)
+v0.51.0
 
 Changes that alter run outputs (fewer 5'-truncated models with no TSS call, in every mode and
 in single-cell merged GTFs; the single-cell cluster-guided final quantification is one pooled
@@ -20,9 +20,10 @@ pass over all cells).
 - Single-cell final quant (does not change the final GTF): LRAA-cell_cluster_guided.wdl
   quantifies every cell in ONE LRAA quant-only run on the full input BAM against the final
   (sc_merged) GTF, with the init pass's settings: the run's shared chunk plan, the contig
-  scatter, and the single-cell sparse shards built during quantification. It replaces the per-cluster quant (LRAA_quant_by_cluster.wdl), in which each
-  cluster's EM divided that cluster's ambiguous reads by its own isoform proportions. Isoform
-  discovery is still per cluster.
+  scatter, and the single-cell sparse shards built during quantification. It replaces the
+  per-cluster quant (LRAA_quant_by_cluster.wdl), in which each cluster's EM divided that
+  cluster's ambiguous reads by its own isoform proportions. Isoform discovery is still per
+  cluster.
 - The final single-cell matrices (final_sc_*, incl_gene_symbols_*) are built from that pooled
   tracking. They now include reads from barcodes in no cluster.
 - Per-cluster pseudobulk (final_cluster_exprs_tar, cluster_*_matrix) is the pooled assignment
