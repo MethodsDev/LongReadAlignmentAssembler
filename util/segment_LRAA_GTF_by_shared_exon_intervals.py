@@ -199,6 +199,10 @@ def segment_transcript_coordinates(transcript_list):
         transcript_id = transcript_obj.get_transcript_id()
         if transcript_id in transcript_to_segments:
             transcript_obj._exon_segments = transcript_to_segments[transcript_id]
+            # segments abut, so they have no introns: drop the reference splice-pattern identity,
+            # whose splice hash the GTF writer would compute from them
+            transcript_obj.set_ref_splice_pattern(None)
+            transcript_obj.set_ref_FSM_reads(None)
     
     return transcript_list
 
