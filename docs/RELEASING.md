@@ -138,3 +138,6 @@ No internal paths or commit hashes in the notes.
   (`0.50.0-bcf1ca3`) produced the LRAA paper's v0.50.0 benchmark and single-cell analyses;
   includes v0.47.1-v0.49.0, which were not released separately. The changelog sections from
   v0.47.1 on were rewritten afterwards on `devel` to hold feature notes only.
+- `LRAA_v0.51.0` (2026-11-15): released from `de5e127b`, whose development images (`0.51.0-de5e127`)
+  produced the LRAA paper's v0.51.0 benchmark and single-cell analyses. The two later devel commits (a
+  cluster-pseudobulk subset guard and the exon segmenter fix for ref-guided GTFs) go into the next release.
