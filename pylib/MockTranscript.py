@@ -17,6 +17,9 @@ class MockTranscript:
     def get_transcript_id(self):
         return self._id
 
+    def get_strand(self):
+        return self._strand
+
     def get_coords(self):
         return (self._exons[0][0], self._exons[-1][1])
 

@@ -160,6 +160,8 @@ def test_quant_only_reference_gtf_with_attributes_between_ids(tmp_path):
     tracking = tmp_path / "gffcmp.tracking"
     sparse_matrix_dir = tmp_path / "isoform-sparseM"
     sparse_matrix_dir.mkdir()
+    gene_matrix_dir = tmp_path / "gene-sparseM"
+    gene_matrix_dir.mkdir()
 
     attrs = 'gene_id "ENSG01"; gene_version "5"; transcript_id "ENST01"; transcript_version "2"; gene_name "GENE_A";'
     ref_gtf.write_text(
@@ -176,6 +178,8 @@ def test_quant_only_reference_gtf_with_attributes_between_ids(tmp_path):
     )
     with gzip.open(sparse_matrix_dir / "features.tsv.gz", "wt") as features:
         features.write("ENST01\n")
+    with gzip.open(gene_matrix_dir / "features.tsv.gz", "wt") as features:
+        features.write("ENSG01\n")
 
     result = subprocess.run(
         [
@@ -186,6 +190,7 @@ def test_quant_only_reference_gtf_with_attributes_between_ids(tmp_path):
             "--id_mappings",
             str(id_mappings),
             "--sparseM_dirs",
+            str(gene_matrix_dir),
             str(sparse_matrix_dir),
             "--gffcompare_tracking",
             str(tracking),
@@ -202,6 +207,8 @@ def test_quant_only_reference_gtf_with_attributes_between_ids(tmp_path):
         assert features.read().splitlines() == ["GENE_A^ENST01"]
     updated = (tmp_path / "genes.gtf.updated.gtf").read_text().splitlines()
     assert len(updated) == 3
+    assert updated[0].endswith('gene_id "GENE_A^ENSG01"; gene_version "5"; gene_name "GENE_A";')
+    assert 'gene_id "GENE_A^ENSG01"; gene_version "5";' in updated[1]
     assert 'transcript_id "GENE_A^ENST01"; transcript_version "2";' in updated[1]
     assert 'gene_version "5";' in updated[1]
     assert 'transcript_id "GENE_A^ENST01"' in updated[2]
