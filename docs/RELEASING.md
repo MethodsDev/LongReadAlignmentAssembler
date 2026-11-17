@@ -141,3 +141,7 @@ No internal paths or commit hashes in the notes.
 - `LRAA_v0.51.0` (2026-11-15): released from `de5e127b`, whose development images (`0.51.0-de5e127`)
   produced the LRAA paper's v0.51.0 benchmark and single-cell analyses. The two later devel commits (a
   cluster-pseudobulk subset guard and the exon segmenter fix for ref-guided GTFs) go into the next release.
+- `LRAA_v0.51.1` (2026-11-17): patch released from `bd1655eb`: quant_only single-cell gene symbols on
+  GENCODE/10x GTFs (attributes between gene_id and transcript_id), plus the two devel fixes left out of
+  v0.51.0. No change to LRAA code or WDLs, so run outputs are those of v0.51.0. The release commit also
+  repairs a stale test mock (MockTranscript.get_strand), which failed the suite at v0.51.0.
