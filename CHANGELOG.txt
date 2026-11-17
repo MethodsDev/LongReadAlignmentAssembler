@@ -1,3 +1,18 @@
+v0.51.1
+
+No change to run outputs (fixes to steps that failed in narrow cases).
+
+- Single-cell gene symbols (incorporate_gene_symbols_in_sc_features.py): in quant_only mode the
+  features are named from the input reference GTF, and the step failed ("no feature ids were
+  updated") when attributes sit between gene_id and transcript_id, as gene_version does in
+  GENCODE and 10x GTFs. gene_id and transcript_id are now read wherever they sit in the line;
+  gene lines are renamed too. Output on LRAA GTFs is unchanged.
+- segment_LRAA_GTF_by_shared_exon_intervals.py: segmented transcripts no longer carry the
+  reference splice-pattern identity, which made the GTF writer fail on every ref-guided GTF.
+- Cluster pseudobulk scripts (sparse_matrix_to_cluster_pseudobulk_matrix.R,
+  ..._cell_fractions_expressed.R): cells in no cluster are dropped before ordering by barcode,
+  rather than relying on SeuratObject to drop NA identities.
+
 v0.51.0
 
 Changes that alter run outputs (fewer 5'-truncated models with no TSS call, in every mode and
