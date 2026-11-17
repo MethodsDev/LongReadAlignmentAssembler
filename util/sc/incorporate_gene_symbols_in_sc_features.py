@@ -235,6 +235,22 @@ def lookup_gene_name(feature_id, gff_compare_LRAA_id_to_REF_id_mapping, ref_id_t
     return None
 
 
+def _gtf_attribute_regex(attribute):
+    # the attribute starts the field or follows a ';', so gene_id never matches ref_gene_id
+    return re.compile('(^|;)(\\s*{} \\")([^\\"]*)(\\")'.format(re.escape(attribute)))
+
+
+def get_gtf_attribute(info, attribute):
+    m = _gtf_attribute_regex(attribute).search(info)
+    return m.group(3) if m else None
+
+
+def set_gtf_attribute(info, attribute, value):
+    return _gtf_attribute_regex(attribute).sub(
+        lambda m: m.group(1) + m.group(2) + value + m.group(4), info, count=1
+    )
+
+
 def update_LRAA_gff_feature_ids(
     LRAA_gtf_filename, new_LRAA_gtf_filename, feature_ids_updated, revised_id_mappings
 ):
@@ -247,31 +263,34 @@ def update_LRAA_gff_feature_ids(
             for line in fh:
                 line = line.rstrip()
                 vals = line.split("\t")
-                if len(vals) < 8:
+                if len(vals) < 9:
                     continue
                 info = vals[8]
-                m = re.search(
-                    'gene_id \\"([^\\"]+)\\"; transcript_id \\"([^\\"]+)\\";', info
-                )
-                if m:
-                    gene_id = m.group(1)
-                    transcript_id = m.group(2)
+                # each attribute is read on its own: a reference GTF (the one quant_only
+                # mode names its features from) can put others between them, e.g. gene_version
+                gene_id = get_gtf_attribute(info, "gene_id")
+                transcript_id = get_gtf_attribute(info, "transcript_id")
 
-                    if gene_id in feature_ids_updated:
-                        new_gene_id = feature_ids_updated[gene_id]
-                        line = line.replace(gene_id, new_gene_id)
-                        num_fields_updated += 1
+                if gene_id is not None and gene_id in feature_ids_updated:
+                    info = set_gtf_attribute(
+                        info, "gene_id", feature_ids_updated[gene_id]
+                    )
+                    num_fields_updated += 1
 
-                    if transcript_id in feature_ids_updated:
-                        new_transcript_id = feature_ids_updated[transcript_id]
-                        line = line.replace(transcript_id, new_transcript_id)
-                        num_fields_updated += 1
+                if transcript_id is not None and transcript_id in feature_ids_updated:
+                    info = set_gtf_attribute(
+                        info, "transcript_id", feature_ids_updated[transcript_id]
+                    )
+                    num_fields_updated += 1
 
-                    if transcript_id in revised_id_mappings:
-                        new_transcript_splice_hash_code = revised_id_mappings[
-                            transcript_id
-                        ]["new_transcript_splice_hash_code"]
-                        line += f' splice_pattern "{new_transcript_splice_hash_code}";'
+                vals[8] = info
+                line = "\t".join(vals)
+
+                if transcript_id is not None and transcript_id in revised_id_mappings:
+                    new_transcript_splice_hash_code = revised_id_mappings[
+                        transcript_id
+                    ]["new_transcript_splice_hash_code"]
+                    line += f' splice_pattern "{new_transcript_splice_hash_code}";'
 
                 print(line, file=ofh)
 

@@ -149,3 +149,59 @@ def test_splice_hash_is_named_from_any_member_and_kept_when_unnamed(tmp_path):
     assert mapped[1].split("\t")[-1] == "GENE_G^HASH_AB"
     assert mapped[2].split("\t")[-1] == "GENE_G^HASH_AB"
     assert mapped[3].split("\t")[-1] == "HASH_NOVEL"
+
+
+def test_quant_only_reference_gtf_with_attributes_between_ids(tmp_path):
+    # quant_only names its features from the reference GTF it quantified against; in GENCODE /
+    # 10x GTFs gene_version sits between gene_id and transcript_id, which once matched nothing.
+    script = Path(__file__).with_name("incorporate_gene_symbols_in_sc_features.py")
+    ref_gtf = tmp_path / "genes.gtf"
+    id_mappings = tmp_path / "id_mappings.tsv"
+    tracking = tmp_path / "gffcmp.tracking"
+    sparse_matrix_dir = tmp_path / "isoform-sparseM"
+    sparse_matrix_dir.mkdir()
+
+    attrs = 'gene_id "ENSG01"; gene_version "5"; transcript_id "ENST01"; transcript_version "2"; gene_name "GENE_A";'
+    ref_gtf.write_text(
+        "#!genome-build GRCh38\n"
+        'chr1\tref\tgene\t1\t100\t.\t+\t.\tgene_id "ENSG01"; gene_version "5"; gene_name "GENE_A";\n'
+        f"chr1\tref\ttranscript\t1\t100\t.\t+\t.\t{attrs}\n"
+        f"chr1\tref\texon\t1\t100\t.\t+\t.\t{attrs} exon_number \"1\";\n"
+    )
+    id_mappings.write_text(
+        "gene_id\ttranscript_id\ttranscript_splice_hash_code\nENSG01\tENST01\tHASH_A\n"
+    )
+    tracking.write_text(
+        "TCONS_1\tXLOC_1\tENSG01|ENST01\t=\tq1:ENSG01|ENST01|1|1.0|1.0|1.0\n"
+    )
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "wt") as features:
+        features.write("ENST01\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ref_gtf",
+            str(ref_gtf),
+            "--id_mappings",
+            str(id_mappings),
+            "--sparseM_dirs",
+            str(sparse_matrix_dir),
+            "--gffcompare_tracking",
+            str(tracking),
+            "--LRAA_gtf",
+            str(ref_gtf),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with gzip.open(sparse_matrix_dir / "features.tsv.gz", "rt") as features:
+        assert features.read().splitlines() == ["GENE_A^ENST01"]
+    updated = (tmp_path / "genes.gtf.updated.gtf").read_text().splitlines()
+    assert len(updated) == 3
+    assert 'transcript_id "GENE_A^ENST01"; transcript_version "2";' in updated[1]
+    assert 'gene_version "5";' in updated[1]
+    assert 'transcript_id "GENE_A^ENST01"' in updated[2]
