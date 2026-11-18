@@ -174,11 +174,11 @@ classes that include isoform i but are compatible with more than one isoform. Th
 therefore scales with how much ambiguous evidence an isoform competes for; it is not a constant
 $\alpha - 1$. An isoform with no ambiguous support receives no prior mass.
 
-Counts and TPM are derived from estimated proportions with effective-length or read-depth
-normalization as appropriate for long reads. Iteration stops when the Euclidean norm of the
+Counts are the summed fractional read assignments, and TPM is assigned reads per million reads
+assigned to all reported isoforms, without length normalization (each long read is one molecule). Iteration stops when the Euclidean norm of the
 change in the proportion vector between consecutive iterations falls below
-`config['EM_convergence_tol']`, or at the iteration cap (`max_EM_iterations_during_asm` during
-assembly, `max_EM_iterations_quant_only` for final quantification and quantification-only
+`config['EM_convergence_tol']`, or at the iteration cap (`max_EM_iterations_quant_only`, 250, in every pass: draft
+quantification and filtering during assembly, final quantification and quantification-only
 analysis). No log-likelihood is computed.
 
 Iteration stops after an M-step, so a final E-step is then run at the proportions being

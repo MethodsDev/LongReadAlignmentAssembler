@@ -2245,8 +2245,6 @@ def main():
     LRAA_Globals.config["min_FSM_reads_retain_isoform"] = (
         args.min_FSM_reads_retain_isoform
     )
-    # TSS/PolyA inference defaults are OFF for ONT/LowFi and are configured in the HiFi block below.
-    # The --no_infer_* flags are only meaningful in HiFi mode and are handled there.
     LRAA_Globals.config["min_monoexonic_TPM"] = args.min_monoexonic_TPM
     LRAA_Globals.config["min_multiexonic_TPM"] = args.min_multiexonic_TPM
     LRAA_Globals.config["min_monoexonic_read_span_peak_frac"] = (
