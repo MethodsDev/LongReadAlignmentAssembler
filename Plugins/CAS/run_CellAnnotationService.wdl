@@ -4,8 +4,10 @@ workflow RunCellAnnotationService {
   input {
     File matrix_dir_tarball
     String? matrix_dir_subpath
-    String api_token
+    String? api_token
+    File? api_token_file
     String sample_id
+    Int min_counts = 1
     Int chunk_size = 500
     Float min_acceptable_score = 0.2
     Int top_k = 3
@@ -19,7 +21,9 @@ workflow RunCellAnnotationService {
       matrix_dir_tarball = matrix_dir_tarball,
       matrix_dir_subpath = matrix_dir_subpath,
       api_token = api_token,
+      api_token_file = api_token_file,
       sample_id = sample_id,
+      min_counts = min_counts,
       chunk_size = chunk_size,
       min_acceptable_score = min_acceptable_score,
       top_k = top_k,
@@ -46,7 +50,13 @@ workflow RunCellAnnotationService {
       description: "Optional relative path inside the tarball that contains matrix.mtx/barcodes/feature files; leave unset to auto-detect."
     }
     api_token: {
-      description: "Cellarium CAS API token; store this securely in Terra (e.g., in a workspace secret)."
+      description: "Cellarium CAS API token; store this securely in Terra (e.g., in a workspace secret). Set this or api_token_file. The value is written into the task's command script, so prefer api_token_file."
+    }
+    api_token_file: {
+      description: "File holding the Cellarium CAS API token (preferred over api_token: the token stays out of the command script and logs)."
+    }
+    min_counts: {
+      description: "Cells with fewer total counts are dropped before CAS and are absent from the outputs (default 1: drop empty cells, which CAS otherwise labels confidently)."
     }
     sample_id: {
       description: "Sample identifier; outputs will be named {sample_id}.CAS.h5ad and {sample_id}.CAS.tsv."
@@ -64,7 +74,7 @@ workflow RunCellAnnotationService {
       description: "Prefix for the CAS cell type columns in AnnData.obs."
     }
     cas_model_name: {
-      description: "Optional CAS model override; leave unset to use Cellarium's default."
+      description: "CAS model name; leave unset for scanvi-classification-v8.hs-general (the script's default). Pass 'server-default' for the CAS server's default, still the older cellarium-pca-v1.1beta."
     }
     docker_image: {
       description: "Docker image containing run_CellAnnotationService.py and dependencies."
@@ -85,8 +95,10 @@ task RunCAS {
   input {
     File matrix_dir_tarball
     String? matrix_dir_subpath
-    String api_token
+    String? api_token
+    File? api_token_file
     String sample_id
+    Int min_counts
     Int chunk_size
     Float min_acceptable_score
     Int top_k
@@ -115,10 +127,19 @@ task RunCAS {
       fi
     fi
 
+    # Token: from a file if given, else via the environment; never on the command line.
+    if [[ -n "~{api_token_file}" ]]; then
+      TOKEN_ARGS=(--api-token-file "~{api_token_file}")
+    else
+      export CAS_API_TOKEN='~{api_token}'
+      TOKEN_ARGS=()
+    fi
+
     run_CellAnnotationService.py \
       --matrix-dir "$CAS_MATRIX_DIR" \
-      --api-token "~{api_token}" \
+      ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
       --output-prefix "$output_prefix_basename" \
+      --min-counts ~{min_counts} \
       --chunk-size ~{chunk_size} \
       --min-acceptable-score ~{min_acceptable_score} \
       --top-k ~{top_k} \
@@ -162,7 +183,13 @@ task RunCAS {
       description: "Optional relative path inside the tarball to use as the matrix directory."
     }
     api_token: {
-      description: "Cellarium CAS API token (sensitive)."
+      description: "Cellarium CAS API token (sensitive); used only when api_token_file is unset."
+    }
+    api_token_file: {
+      description: "File holding the Cellarium CAS API token."
+    }
+    min_counts: {
+      description: "Minimum total counts for a cell to be sent to CAS."
     }
     sample_id: {
       description: "Sample identifier used to construct output filenames."
@@ -180,7 +207,7 @@ task RunCAS {
       description: "Prefix for CAS columns written to AnnData.obs."
     }
     cas_model_name: {
-      description: "Optional CAS model name override."
+      description: "Optional CAS model name; unset uses the script's default."
     }
     docker_image: {
       description: "Docker image reference for the CAS runner."
