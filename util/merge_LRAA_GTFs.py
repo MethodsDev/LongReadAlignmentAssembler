@@ -787,6 +787,16 @@ def main():
         _configure_logging(debug=True)
         logger.debug("Debug logging enabled for merge script.")
 
+    # No --HiFi here, deliberately. LRAA's --HiFi preset (pylib/HiFiPreset.py) changes
+    # thresholds that cannot act in a merge: the alternative-splice and isoform minimum
+    # fractions and adjacent splice-boundary aggregation prune only NON-reference
+    # introns, and every intron here comes from an input model, so all of them count as
+    # reference; exon spurs overlapping an input exon are always kept; the identity
+    # floor and rescue indel limit act on read alignments, which a merge does not have.
+    # Measured on the v0.51.0 PBMC chr22 merge (14 cluster GTFs + pooled): byte-identical
+    # with and without the HiFi values, and the genome-wide PBMC and FTD merges keep
+    # every input intron. Revisit only if the merge ever prunes its own input models.
+    #
     # Merge collapses isoforms via simple-path equivalence; fracturing the splice
     # graph at every input transcript boundary breaks that equivalence and prevents
     # collapsing of transcripts whose starts/ends differ within the alt-TSS/PolyA

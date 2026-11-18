@@ -1235,12 +1235,13 @@ def test_the_hifi_identity_floor_has_exactly_one_definition():
     """
 
     assert LRAA_Globals.HIFI_MIN_PER_ID == 97.0
-    hits = re.findall(r"min_per_id\"\]\s*=\s*97", (REPO / "LRAA").read_text())
-    assert hits == [], hits
-    assert (
-        'config["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID'
-        in (REPO / "LRAA").read_text()
-    )
+    preset = (REPO / "pylib" / "HiFiPreset.py").read_text()
+    for src in ((REPO / "LRAA").read_text(), preset):
+        hits = re.findall(r"min_per_id\"\]\s*=\s*97", src)
+        assert hits == [], hits
+    # the driver's preset lives in pylib/HiFiPreset.py, which the driver imports
+    assert 'config["min_per_id"] = LRAA_Globals.HIFI_MIN_PER_ID' in preset
+    assert "from HiFiPreset import" in (REPO / "LRAA").read_text()
 
 
 def test_a_namespaced_model_id_survives_gffcompare_tracking(tmp_path):
