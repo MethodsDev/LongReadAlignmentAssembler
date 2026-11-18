@@ -164,7 +164,7 @@ final tracking file, pseudobulk expression matrices, sparse single-cell matrices
 visualizations, and gene symbol mappings.
 
 All source code, WDL workflows, and documentation are publicly available at
-https://github.com/MethodsDev/LongReadAlignmentAssembler under the MIT License.
+https://github.com/MethodsDev/LongReadAlignmentAssembler under the BSD 3-Clause License.
 
 
 ## References
