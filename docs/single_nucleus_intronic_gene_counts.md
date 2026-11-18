@@ -4,8 +4,8 @@ Status: design plus a working prototype on branch `sn-intronic-gene-counts` (not
 Second revision, 2026-11-18, which applies the user's answers to the first round's open
 questions (section 6). It is opt-in via `--config_update '{"gene_body_counts": true}'`.
 With the key off, LRAA's outputs are unchanged. With it on, `quant.expr` and
-`quant.tracking` stay identical to a key-off run (tested; the `--oversimplify` caveat is in
-section 5).
+`quant.tracking` stay identical to a key-off run (tested, chrM included since the
+`--oversimplify` tie-break became deterministic; section 5).
 
 ## The problem
 
@@ -28,7 +28,9 @@ the single-cell workflow). Its quant-only implementation, `LRAA:_run_oversimplif
 
 - works per contig;
 - assigns each read to the single transcript with the most exonic bases of overlap, breaking
-  ties with `random.choice`;
+  ties with `_oversimplify_tie_break` (sorted tied ids indexed by an md5 of the read name, so
+  the pick does not depend on run, chunking or read order; it was an unseeded `random.choice`
+  until 2026-11-18);
 - does no EM;
 - skips any read with zero exonic overlap.
 
@@ -388,12 +390,14 @@ What changed between the columns:
 - 13 MT- genes now appear in gene_full, for example MT-ND3 1,463, MT-ATP6 1,410 and
   MT-CO2 1,362, all `isoform` rows, class A. The same rows come back from the chunked run.
 - Sidecar `isoform` rows match tracking for all 13,407 isoform-assigned reads.
-- **Caveat: the on/off identity check does not hold exactly with `--oversimplify`, and the
-  cause is upstream.** On/off `quant.tracking` differs in exactly 1 read: a chrM read tied
-  between two MT models (`is_unique=0`), which `random.choice` breaks differently from run
-  to run. Three key-off runs also differ from each other in `quant.expr` and
-  `quant.tracking`. So this is existing nondeterminism in the oversimplify path, not
-  something gene-body counting introduced. Outside chrM, on and off are identical.
+- **Deterministic tie-break (2026-11-18, user-approved).** Before it, on/off
+  `quant.tracking` differed in exactly 1 read: a chrM read tied between two MT models
+  (`is_unique=0`) that the unseeded `random.choice` broke differently from run to run, and
+  three key-off runs differed from each other. With `_oversimplify_tie_break`, three key-off
+  runs give identical `quant.expr` (103 rows) and `quant.tracking` (24,443 rows), key-on
+  equals key-off on both, and the chunked run equals the unchunked one (`quant.expr` up to
+  row order; tracking compared without the per-process `mp_id` column).
+  Test: `pylib/test_oversimplify_deterministic_ties.py`.
 
 **Cost.** In round 1, every read through `assign()` against all GENCODE v39 chr8 genes took
 24-39 us. Round 2: ALS window wall time 96.5 s on versus 98.0 s off (`--no_chunk`, 4 CPUs).
@@ -405,9 +409,6 @@ What changed between the columns:
   prunes still counts as a junction for rule 1 and for S.
 - Rule 4 weights come from the unit's own isoform reads. A unit routed through the
   geometry-only pass has none, so its ties fall to the 3' end, innermost and drop rules.
-- `--oversimplify` breaks ties with an unseeded `random.choice` (the existing behavior noted
-  above). Its gene-body rows follow whichever choice was made, so they stay consistent with
-  the tracking file.
 - The matrix builder accumulates in a dict (bounded by non-zero entries). At genome scale it
   should reuse `LevelAccumulator`'s chunked path.
 
@@ -434,7 +435,5 @@ What changed between the columns:
 - The single-nucleus WDL plumbing and the discovery-mode final-quant hook (section 4 plan).
 - A genome-scale matrix builder (`LevelAccumulator` reuse).
 - Optionally, a per-unit gene-body summary TSV (the counts are logged per contig-strand now).
-- A deterministic tie-break in `--oversimplify` would make on/off identity exact on chrM.
-  That changes devel behavior, so it is the user's call.
 - Running on the full ALS sample on a fleet VM or Terra (never on this workstation), and
   comparing with Cell Ranger include-introns counts if they exist for LP00714.

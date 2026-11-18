@@ -17,7 +17,6 @@ import tempfile
 import gzip
 from multiprocessing import Process
 from collections import defaultdict, deque
-import random
 from pathlib import Path
 import shlex
 
@@ -5722,6 +5721,23 @@ def _oversimplify_alignments(
         yield pretty_alignment
 
 
+def _oversimplify_tie_break(read_name, candidate_tids):
+    """Pick one of `candidate_tids` for a read whose best exonic overlap is tied.
+
+    The pick depends only on the read name and the set of tied transcript ids: the ids
+    are sorted, and a stable hash of the read name (md5, not Python's per-process salted
+    hash()) indexes into them. Reruns, chunking and read order therefore give the same
+    answer. Different reads hash to different positions, so tied reads are spread over
+    the tied models about evenly, as the unseeded random.choice this replaces did on
+    average, instead of all going to one model.
+    """
+    if len(candidate_tids) == 1:
+        return candidate_tids[0]
+    ordered = sorted(candidate_tids)
+    digest = hashlib.md5(str(read_name).encode("utf-8")).digest()
+    return ordered[int.from_bytes(digest[:8], "big") % len(ordered)]
+
+
 def _run_oversimplify_best_overlap(
     contig_acc,
     contig_strand,
@@ -5743,7 +5759,9 @@ def _run_oversimplify_best_overlap(
     any unassigned read.
 
     - Uses exonic base-pair overlap (raw bp) between the read's exon blocks and each transcript's exon blocks.
-    - Ties are broken randomly among top-scoring transcripts.
+    - Ties among top-scoring transcripts are broken by _oversimplify_tie_break, which
+      depends only on the read name and the tied transcript ids, so reruns, chunking
+      and processing order give the same choice.
     - Always strand-specific (reads are fetched already filtered by strand).
     - Outputs quant.expr and quant.tracking rows directly (no EM, no multipath graph).
 
@@ -5874,13 +5892,13 @@ def _run_oversimplify_best_overlap(
                 )
             continue
 
-        tid = random.choice(candidate_tids)
+        tid = _oversimplify_tie_break(read_name, candidate_tids)
         transcript = tid_to_tx[tid]
         transcript.set_read_counts_assigned(transcript.get_assigned_read_count() + 1.0)
         assigned_read_count += 1
         assigned_tids.add(tid)
         # A tie means several isoforms overlap this read equally well and one was
-        # picked at random above, so the read could have been credited elsewhere and
+        # picked by _oversimplify_tie_break above, so the read could have been credited elsewhere and
         # is NOT uniquely assignable. Only a sole candidate is.
         if len(candidate_tids) == 1:
             uniq_read_counts[tid] = uniq_read_counts.get(tid, 0) + 1
@@ -5913,7 +5931,7 @@ def _run_oversimplify_best_overlap(
                 read_name,
                 "1.000000",
                 "1.000000",
-                # A tie was broken at random above, so a tied read could have been
+                # A tie was broken by _oversimplify_tie_break above, so a tied read could have been
                 # credited elsewhere and is not exclusively assignable -- even
                 # though exactly one row is emitted for it.
                 "1" if len(candidate_tids) == 1 else "0",
@@ -5961,7 +5979,7 @@ def _run_oversimplify_best_overlap(
         counts = t.get_assigned_read_count()
         isoform_frac = t.get_isoform_fraction()
         # Reads whose best overlap was this model ALONE. Not the assigned total: a
-        # tie was broken at random, so a tied read is not uniquely assignable even
+        # tie was broken by rule, not by the reads, so a tied read is not uniquely assignable even
         # though exactly one model was credited with it.
         uniq_reads = int(uniq_read_counts.get(tid, 0))
         gene_total = gene_totals.get(gene_id, 0.0)
