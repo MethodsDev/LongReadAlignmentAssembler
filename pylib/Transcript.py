@@ -224,6 +224,10 @@ class Transcript(GenomeFeature):
         else:
             return None
 
+    def get_gtf_tags(self):
+        """GTF `tag` values of this transcript and its gene line (empty if none parsed)."""
+        return getattr(self, "_gtf_tags", frozenset())
+
     def get_output_gene_id(self):
         return combine_gene_name_and_id(self.get_gene_name(), self.get_gene_id())
 
@@ -1085,6 +1089,11 @@ class GTF_contig_to_transcripts:
 
         gene_id_to_meta = defaultdict(dict)
         transcript_id_to_meta = defaultdict(dict)
+        # GTF `tag` attributes (GENCODE repeats the key, e.g. tag "basic"; tag
+        # "readthrough_transcript"), which _parse_info's dict keeps only the last of.
+        # Held apart from meta so nothing that writes meta back out changes.
+        transcript_id_to_tags = defaultdict(set)
+        gene_id_to_tags = defaultdict(set)
         transcript_id_to_genome_info = defaultdict(dict)
 
         # Transcripts with at least one feature row outside a restricted region.
@@ -1173,10 +1182,14 @@ class GTF_contig_to_transcripts:
 
                 info = vals[8]
                 info_dict = cls._parse_info(info)
+                line_tags = (
+                    re.findall(r'(?:^|;)\s*tag "([^"]+)"', info) if 'tag "' in info else ()
+                )
 
                 if feature_type == "gene":
                     gene_id = info_dict["gene_id"]
                     gene_id_to_meta[gene_id] = info_dict
+                    gene_id_to_tags[gene_id].update(line_tags)
 
                 if "transcript_id" not in info_dict:
                     if local_debug:
@@ -1186,6 +1199,7 @@ class GTF_contig_to_transcripts:
                     continue
 
                 transcript_id = info_dict["transcript_id"]
+                transcript_id_to_tags[transcript_id].update(line_tags)
 
                 if transcript_id not in transcript_id_to_meta:
                     transcript_id_to_meta[transcript_id] = info_dict
@@ -1241,6 +1255,9 @@ class GTF_contig_to_transcripts:
 
             transcript_obj.set_gene_id(gene_id)
             transcript_obj.set_transcript_id(transcript_id)
+            transcript_obj._gtf_tags = frozenset(
+                transcript_id_to_tags.get(transcript_id, ())
+            ) | frozenset(gene_id_to_tags.get(gene_id, ()))
 
             # GTF column 2 "LRAA" marks a model LRAA wrote (init, cluster, merged and
             # gene-symbol GTFs all keep it); any other source is a reference annotation.

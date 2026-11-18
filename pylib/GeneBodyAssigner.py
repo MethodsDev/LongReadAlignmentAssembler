@@ -14,33 +14,41 @@ overlap too, and is additive: reads that isoform quantification assigns keep tha
 assignment and its EM split, and only the reads it leaves unassigned are placed here.
 
 Pure geometry, no pysam or splice graph, so it is unit-testable on its own. The
-caller (StreamingQuant.stream_assign via GeneBodyRecorder) supplies read segments.
+callers (StreamingQuant.stream_assign and the --oversimplify path, via
+GeneBodyRecorder) supply read segments.
 
 Coordinates are 1-based inclusive throughout, as in Transcript.get_exon_segments().
 
-Decision order for a read with no isoform assignment (all candidates are on the
-read's transcribed strand; this runs inside one contig-strand pass, so an antisense
-gene is never a candidate):
+Strand: every candidate is on the read's transcribed strand (each contig-strand pass
+sees only its own reads and genes), so an antisense gene is never a candidate. An
+unspliced read has no `ts` evidence and takes its aligned strand: inputs are expected
+to be strand-specific (oriented 10x / Kinnex reads); an unstranded library would put
+half its unspliced reads on the wrong strand. No special handling.
+
+Decision order for a read with no isoform assignment:
 
   0. candidate: the gene span (first exon start .. last exon end over all isoforms)
-     holds >= gene_body_min_read_frac_in_span of the read's aligned bases.
+     holds >= gene_body_min_read_frac_in_span of the read's aligned bases. With
+     gene_body_exclude_readthrough_genes (default on), a gene whose transcripts all
+     carry the GTF tag "readthrough_transcript" (or whose gene line carries
+     "readthrough_gene") is never a candidate; its isoform-assigned reads still count;
   1. most read junctions that match an annotated intron of the gene;
   2. most exonic bases (overlap with the gene's exon union); exonic overlap below
      gene_body_min_feature_bp counts as none, so a read end grazing an exon does not
      outrank a gene whose intron holds the read;
   3. the read lies wholly inside the gene span;
-  4. the read's 3' end (strand-aware) lies inside the gene span;
-  5. split among the tied genes in proportion to their isoform-assigned reads in this
-     contig-strand unit (full library; config gene_body_tie_weighting
-     "isoform_reads", or "none" to skip). A gene with no isoform-assigned read gets
-     none. This is what keeps an annotated readthrough gene (MRPS28-TPD52,
-     ENSG00000276418) from taking the intronic reads of the gene it overlaps: in the
-     ALS test window it has 0 isoform reads against TPD52's 1,536;
-  6. no tied gene has isoform reads: the smaller gene span (innermost gene);
+  4. weight by isoform-assigned reads in this contig-strand unit (full library;
+     gene_body_tie_weighting "isoform_reads", or "none" to skip): a gene holding
+     >= gene_body_dominance_frac (0.9) of the tied genes' weight takes the whole read;
+     otherwise the read is split in proportion, genes with no weight getting none;
+  5. no tied gene has isoform reads: the read's 3' end (strand-aware) inside the span.
+     For internally primed pre-mRNA the 3' end is a priming site, so it comes after
+     the expression evidence;
+  6. the smaller gene span (innermost gene);
   7. still tied: ambiguous. gene_body_ambiguous_policy "drop" records the read
      against every tied gene with frac 0 (counted nowhere); "split" gives 1/n each.
 
-Tiers 5-7 need the unit's isoform counts, which exist only at the end of the
+Rules 4-7 need the unit's isoform counts, which exist only at the end of the
 stream, so a tied read is spilled to a temp file and resolved by
 GeneBodyRecorder.finish(); the sidecar is not in read order.
 
@@ -49,6 +57,7 @@ Splice class, against the gene the read is credited to:
      (gene span minus exon union), spliced or not -- pre-mRNA or partially spliced;
   S  otherwise, and the read carries at least one junction;
   A  otherwise: unspliced and exonic, compatible with mature and pre-mRNA alike.
+gene_full = S + U + A.
 """
 
 import bisect
@@ -63,6 +72,16 @@ AMBIGUOUS = "A"
 
 POLICY_DROP = "drop"
 POLICY_SPLIT = "split"
+
+READTHROUGH_TRANSCRIPT_TAG = "readthrough_transcript"
+READTHROUGH_GENE_TAG = "readthrough_gene"
+
+# how a read tied after rules 0-3 was settled (GeneBodyRecorder.counts keys)
+RULE_DOMINANCE = "dominance"
+RULE_WEIGHT_SPLIT = "weight_split"
+RULE_THREE_PRIME = "three_prime"
+RULE_INNERMOST = "innermost"
+RULE_AMBIGUOUS = "ambiguous"
 
 
 def _merge_intervals(intervals):
@@ -128,11 +147,22 @@ def segments_from_cigar(reference_start, cigartuples):
     return segments, introns
 
 
-class GeneModel:
-    __slots__ = ("gene_id", "lend", "rend", "exons", "introns", "intronic")
+def introns_from_segments(segments):
+    """Gaps between consecutive aligned blocks (Pretty_alignment segments)."""
+    segments = sorted(segments)
+    return [
+        (segments[k - 1][1] + 1, segments[k][0] - 1)
+        for k in range(1, len(segments))
+        if segments[k][0] - segments[k - 1][1] > 1
+    ]
 
-    def __init__(self, gene_id, exon_segment_lists):
+
+class GeneModel:
+    __slots__ = ("gene_id", "lend", "rend", "exons", "introns", "intronic", "readthrough")
+
+    def __init__(self, gene_id, exon_segment_lists, readthrough=False):
         self.gene_id = gene_id
+        self.readthrough = readthrough
         all_exons = [tuple(e) for segs in exon_segment_lists for e in segs]
         self.exons = _merge_intervals(all_exons)
         self.lend = self.exons[0][0]
@@ -153,6 +183,11 @@ class GeneModel:
         return self.rend - self.lend + 1
 
 
+def _transcript_is_readthrough(t):
+    tags = t.get_gtf_tags() if hasattr(t, "get_gtf_tags") else ()
+    return READTHROUGH_TRANSCRIPT_TAG in tags or READTHROUGH_GENE_TAG in tags
+
+
 class ReadGeneEvidence:
     __slots__ = (
         "gene",
@@ -165,15 +200,35 @@ class ReadGeneEvidence:
     )
 
 
-class GeneBodyCall:
-    """Genes left after tiers 0-4: [(gene_id, splice_class, evidence)], sorted by id,
-    and a parallel list flagging the innermost (smallest-span) ones."""
+class TiedGene:
+    """What resolve() needs of one gene left after rules 0-3 (also the spill record)."""
 
-    __slots__ = ("genes", "innermost")
+    __slots__ = ("gene_id", "splice_class", "exonic_bp", "intronic_bp", "three_prime", "span_len")
 
-    def __init__(self, genes, innermost):
-        self.genes = genes
-        self.innermost = innermost
+    def __init__(self, gene_id, splice_class, exonic_bp, intronic_bp, three_prime, span_len):
+        self.gene_id = gene_id
+        self.splice_class = splice_class
+        self.exonic_bp = exonic_bp
+        self.intronic_bp = intronic_bp
+        self.three_prime = three_prime
+        self.span_len = span_len
+
+    def to_fields(self):
+        return [
+            self.gene_id,
+            self.splice_class,
+            str(self.exonic_bp),
+            str(self.intronic_bp),
+            "1" if self.three_prime else "0",
+            str(self.span_len),
+        ]
+
+    @classmethod
+    def from_fields(cls, f):
+        return cls(f[0], f[1], f[2], f[3], f[4] == "1", int(f[5]))
+
+
+TIED_GENE_NFIELDS = 6
 
 
 class GeneBodyIndex:
@@ -181,12 +236,18 @@ class GeneBodyIndex:
 
     def __init__(self, transcripts, contig_strand):
         by_gene = defaultdict(list)
+        all_readthrough = {}
         for t in transcripts or []:
             if contig_strand and t.get_strand() != contig_strand:
                 continue
-            by_gene[t.get_output_gene_id()].append(t.get_exon_segments())
+            gid = t.get_output_gene_id()
+            by_gene[gid].append(t.get_exon_segments())
+            all_readthrough[gid] = all_readthrough.get(gid, True) and _transcript_is_readthrough(t)
         self.contig_strand = contig_strand
-        self.genes = {gid: GeneModel(gid, segs) for gid, segs in by_gene.items()}
+        self.genes = {
+            gid: GeneModel(gid, segs, readthrough=all_readthrough[gid])
+            for gid, segs in by_gene.items()
+        }
         self._sorted = sorted(self.genes.values(), key=lambda g: (g.lend, g.rend, g.gene_id))
         self._lends = [g.lend for g in self._sorted]
         # running max of rend lets an overlap query stop scanning left early
@@ -218,7 +279,7 @@ class GeneBodyIndex:
         return (
             float(cfg.get("gene_body_min_read_frac_in_span", 0.5)),
             int(cfg.get("gene_body_min_feature_bp", 20)),
-            str(cfg.get("gene_body_ambiguous_policy", POLICY_DROP)),
+            bool(cfg.get("gene_body_exclude_readthrough_genes", True)),
         )
 
     # ------------------------------------------------------------------ evidence
@@ -252,20 +313,22 @@ class GeneBodyIndex:
 
     # ------------------------------------------------------------------ choice
     def assign(self, segments, read_introns, strand=None):
-        """Candidate gene(s) for a read isoform quantification did not assign, or None.
+        """Genes left after rules 0-3 for a read isoform quant did not assign, or None.
 
-        Applies tiers 0-4. More than one gene left is a tie for resolve() to settle;
-        `innermost` marks the tied genes with the smallest span (tier 6).
+        Returns a list of TiedGene sorted by gene id. More than one is a tie for
+        resolve() to settle.
         """
         if not segments:
             return None
         strand = strand or self.contig_strand
-        min_frac, min_bp, _ = self._settings()
+        min_frac, min_bp, exclude_readthrough = self._settings()
         aligned_bp = sum(r - l + 1 for l, r in segments)
         if aligned_bp <= 0:
             return None
         cands = []
         for gene in self.overlapping_genes(segments[0][0], segments[-1][1]):
+            if exclude_readthrough and gene.readthrough:
+                continue
             ev = self.evidence(gene, segments, read_introns, strand)
             if ev.span_bp / aligned_bp >= min_frac:
                 cands.append(ev)
@@ -277,49 +340,52 @@ class GeneBodyIndex:
                 ev.shared_junctions,
                 ev.exonic_bp if ev.exonic_bp >= min_bp else 0,
                 1 if ev.contained else 0,
-                1 if ev.three_prime_in_span else 0,
             )
 
         best = max(key(ev) for ev in cands)
         tied = sorted((ev for ev in cands if key(ev) == best), key=lambda e: e.gene.gene_id)
-        smallest = min(ev.gene.span_len() for ev in tied)
-        return GeneBodyCall(
-            [
-                (ev.gene.gene_id, self.splice_class(ev, read_introns, min_bp), ev)
-                for ev in tied
-            ],
-            [ev.gene.span_len() == smallest for ev in tied],
-        )
+        return [
+            TiedGene(
+                ev.gene.gene_id,
+                self.splice_class(ev, read_introns, min_bp),
+                ev.exonic_bp,
+                ev.intronic_bp,
+                ev.three_prime_in_span,
+                ev.gene.span_len(),
+            )
+            for ev in tied
+        ]
 
     @staticmethod
-    def resolve(call, gene_weights=None):
-        """Fractions for a call's genes: [(gene_id, frac, splice_class, evidence)].
+    def resolve(tied, gene_weights=None):
+        """Settle rules 4-7: ([(TiedGene, frac)], rule) for a list of TiedGene.
 
-        One gene: 1. Several (tier 5): split in proportion to gene_weights (the
-        genes' isoform-assigned reads), genes with no weight getting none; with no
-        weight on any (or no weights given), the innermost gene(s) (tier 6); still
-        several: gene_body_ambiguous_policy, "drop" (0 each) or "split" (1/n).
+        rule is None when only one gene was left after rules 0-3.
         """
-        genes = call.genes
-        if len(genes) == 1:
-            g, cls, ev = genes[0]
-            return [(g, 1.0, cls, ev)], False
+        if len(tied) == 1:
+            return [(tied[0], 1.0)], None
+        cfg = LRAA_Globals.config
         if gene_weights is not None:
-            w = [float(gene_weights.get(g, 0.0)) for g, _, _ in genes]
+            w = [float(gene_weights.get(t.gene_id, 0.0)) for t in tied]
             tot = sum(w)
             if tot > 0:
-                return [
-                    (g, wi / tot, cls, ev)
-                    for (g, cls, ev), wi in zip(genes, w)
-                    if wi > 0
-                ], False
-        inner = [x for x, keep in zip(genes, call.innermost) if keep]
+                dominance = float(cfg.get("gene_body_dominance_frac", 0.9))
+                top = max(range(len(tied)), key=lambda k: w[k])
+                if w[top] / tot >= dominance:
+                    return [(tied[top], 1.0)], RULE_DOMINANCE
+                return [(t, wi / tot) for t, wi in zip(tied, w) if wi > 0], RULE_WEIGHT_SPLIT
+        three = [t for t in tied if t.three_prime]
+        if len(three) == 1:
+            return [(three[0], 1.0)], RULE_THREE_PRIME
+        if three:
+            tied = three
+        smallest = min(t.span_len for t in tied)
+        inner = [t for t in tied if t.span_len == smallest]
         if len(inner) == 1:
-            g, cls, ev = inner[0]
-            return [(g, 1.0, cls, ev)], False
-        policy = str(LRAA_Globals.config.get("gene_body_ambiguous_policy", POLICY_DROP))
+            return [(inner[0], 1.0)], RULE_INNERMOST
+        policy = str(cfg.get("gene_body_ambiguous_policy", POLICY_DROP))
         frac = 1.0 / len(inner) if policy == POLICY_SPLIT else 0.0
-        return [(g, frac, cls, ev) for g, cls, ev in inner], True
+        return [(t, frac) for t in inner], RULE_AMBIGUOUS
 
 
 GENE_BODY_TRACKING_HEADER = [
@@ -339,26 +405,17 @@ def gene_body_tracking_suffix():
     return ".quant.gene_body.tracking.gz"
 
 
-class _Ev:
-    """Evidence fields a spilled read needs back: what the sidecar row prints."""
-
-    __slots__ = ("exonic_bp", "intronic_bp")
-
-    def __init__(self, exonic_bp, intronic_bp):
-        self.exonic_bp = exonic_bp
-        self.intronic_bp = intronic_bp
-
-
 class GeneBodyRecorder:
     """Writes one sidecar row per (read, gene) for every retained read of a contig-strand.
 
     source = "isoform": the read's isoform assignment (EM split summed per gene).
     source = "gene_body:<why>": placed by GeneBodyIndex; <why> is the reason isoform
-             assignment failed (no_path, spacer_path, unassignable).
+             assignment failed (no_path, spacer_path, unassignable, no_quant_unit,
+             oversimplify_no_exon_overlap).
     Reads with no candidate gene are counted, not written.
 
-    A read tied between genes after tiers 0-4 is spilled to a temp file and resolved by
-    finish(), once the whole stream has been seen: tier 5 weights the tied genes by
+    A read tied between genes after rules 0-3 is spilled to a temp file and resolved by
+    finish(), once the whole stream has been seen: rule 4 weights the tied genes by
     their isoform-assigned reads over the FULL library of this unit, which only exists
     at the end. Memory stays bounded by the gene count, whatever the tie count.
     """
@@ -371,18 +428,10 @@ class GeneBodyRecorder:
         self._spill = None
         self._spill_dir = spill_dir
 
-    def _write(self, gene_id, read_name, frac, cls, source, n, aligned_bp, ev):
+    def _write(self, gene_id, read_name, frac, cls, source, n, aligned_bp, exonic_bp, intronic_bp):
         self.fh.write(
             "{}\t{}\t{:.6f}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(
-                gene_id,
-                read_name,
-                frac,
-                cls,
-                source,
-                n,
-                aligned_bp,
-                ev.exonic_bp if ev is not None else "",
-                ev.intronic_bp if ev is not None else "",
+                gene_id, read_name, frac, cls, source, n, aligned_bp, exonic_bp, intronic_bp
             )
         )
 
@@ -395,35 +444,43 @@ class GeneBodyRecorder:
         n = len(by_gene)
         for gene_id in sorted(by_gene):
             cls, ev = self.index.classify_for_gene(gene_id, segments, read_introns)
-            self._write(gene_id, read_name, by_gene[gene_id], cls, "isoform", n, aligned_bp, ev)
+            self._write(
+                gene_id, read_name, by_gene[gene_id], cls, "isoform", n, aligned_bp,
+                ev.exonic_bp if ev is not None else "",
+                ev.intronic_bp if ev is not None else "",
+            )
             self.counts["isoform_" + cls] += by_gene[gene_id]
             self.gene_isoform_reads[gene_id] += by_gene[gene_id]
         self.counts["reads_isoform"] += 1
 
-    def _emit(self, read_name, source, aligned_bp, resolved, ambiguous):
+    def _emit(self, read_name, source, aligned_bp, resolved, rule):
         n = len(resolved)
-        for gene_id, frac, cls, ev in resolved:
-            self._write(gene_id, read_name, frac, cls, source, n, aligned_bp, ev)
-            self.counts["gene_body_" + cls] += frac
-        self.counts["reads_gene_body_ambiguous" if ambiguous else "reads_gene_body"] += 1
+        for t, frac in resolved:
+            self._write(
+                t.gene_id, read_name, frac, t.splice_class, source, n, aligned_bp,
+                t.exonic_bp, t.intronic_bp,
+            )
+            self.counts["gene_body_" + t.splice_class] += frac
+        self.counts["reads_gene_body"] += 1
+        if rule is not None:
+            self.counts["tie_" + rule] += 1
 
     def record_unassigned(self, read_name, segments, read_introns, reason):
-        call = self.index.assign(segments, read_introns)
-        if call is None:
+        tied = self.index.assign(segments, read_introns)
+        if tied is None:
             self.counts["reads_no_gene"] += 1
             return
         aligned_bp = sum(r - l + 1 for l, r in segments)
         source = "gene_body:" + reason
-        if len(call.genes) == 1:
-            resolved, ambiguous = GeneBodyIndex.resolve(call)
-            self._emit(read_name, source, aligned_bp, resolved, ambiguous)
+        if len(tied) == 1:
+            self._emit(read_name, source, aligned_bp, [(tied[0], 1.0)], None)
             return
         self.counts["reads_gene_tied"] += 1
         if self._spill is None:
             self._spill = tempfile.TemporaryFile(mode="w+t", dir=self._spill_dir)
         fields = [read_name, source, str(aligned_bp)]
-        for (g, cls, ev), inner in zip(call.genes, call.innermost):
-            fields += [g, cls, str(ev.exonic_bp), str(ev.intronic_bp), "1" if inner else "0"]
+        for t in tied:
+            fields += t.to_fields()
         self._spill.write("\t".join(fields) + "\n")
 
     def finish(self):
@@ -439,11 +496,11 @@ class GeneBodyRecorder:
         for line in self._spill:
             f = line.rstrip("\n").split("\t")
             read_name, source, aligned_bp = f[0], f[1], f[2]
-            genes, innermost = [], []
-            for k in range(3, len(f), 5):
-                genes.append((f[k], f[k + 1], _Ev(f[k + 2], f[k + 3])))
-                innermost.append(f[k + 4] == "1")
-            resolved, ambiguous = GeneBodyIndex.resolve(GeneBodyCall(genes, innermost), weights)
-            self._emit(read_name, source, aligned_bp, resolved, ambiguous)
+            tied = [
+                TiedGene.from_fields(f[k : k + TIED_GENE_NFIELDS])
+                for k in range(3, len(f), TIED_GENE_NFIELDS)
+            ]
+            resolved, rule = GeneBodyIndex.resolve(tied, weights)
+            self._emit(read_name, source, aligned_bp, resolved, rule)
         self._spill.close()
         self._spill = None

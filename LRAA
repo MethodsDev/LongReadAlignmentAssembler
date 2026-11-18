@@ -2443,6 +2443,9 @@ def main():
             "none",
         ):
             sys.exit("Error, gene_body_tie_weighting must be 'isoform_reads' or 'none'")
+        _dom = float(LRAA_Globals.config.get("gene_body_dominance_frac", 0.9))
+        if not (0.5 < _dom <= 1.0):
+            sys.exit("Error, gene_body_dominance_frac must be in (0.5, 1]")
 
     # AFTER --config_update, because that file can still turn boundary inference off,
     # and these outputs exist to report boundary evidence: a run that inferred no TSS
@@ -5452,6 +5455,7 @@ def _contig_job_runner(job):
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
                 read_assignment_summary_path=read_assignment_summary_tmp,
+                gene_body_fh=ofh_gene_body,
             )
         elif (
             # Ref-guided, non-quant-only: skip discovery on oversimplified contigs; use provided GTF as-is and quantify via best-overlap
@@ -5729,8 +5733,14 @@ def _run_oversimplify_best_overlap(
     ofh_quant,
     ofh_track,
     read_assignment_summary_path=None,
+    gene_body_fh=None,
 ):
     """Assign each read to the single best-overlapping reference transcript on this contig/strand.
+
+    `gene_body_fh` (config gene_body_counts): each assigned read also gets a gene-body
+    sidecar row (source "isoform", its chosen model's gene), so chrM genes reach
+    gene_full and percent.mt; a read with no exonic overlap goes to GeneBodyIndex like
+    any unassigned read.
 
     - Uses exonic base-pair overlap (raw bp) between the read's exon blocks and each transcript's exon blocks.
     - Ties are broken randomly among top-scoring transcripts.
@@ -5766,6 +5776,14 @@ def _run_oversimplify_best_overlap(
         restrict_region_lend,
         restrict_region_rend,
     )
+
+    gene_body_recorder = None
+    if gene_body_fh is not None:
+        gene_body_recorder = GeneBodyAssigner.GeneBodyRecorder(
+            GeneBodyAssigner.GeneBodyIndex(input_transcripts, contig_strand),
+            gene_body_fh,
+            spill_dir=os.environ.get("LRAA_TMP_DIR"),
+        )
 
     # Precompute transcript exon intervals and maps
     tx_list = list(input_transcripts)
@@ -5846,6 +5864,14 @@ def _run_oversimplify_best_overlap(
                 candidate_tids.append(tid)
         if best_ov <= 0:
             # no exonic bp overlap; skip assignment
+            if gene_body_recorder is not None:
+                gb_segs = sorted(tuple(x) for x in segs)
+                gene_body_recorder.record_unassigned(
+                    read_name,
+                    gb_segs,
+                    GeneBodyAssigner.introns_from_segments(gb_segs),
+                    "oversimplify_no_exon_overlap",
+                )
             continue
 
         tid = random.choice(candidate_tids)
@@ -5895,6 +5921,17 @@ def _run_oversimplify_best_overlap(
             ]
         )
         print(track_row, file=ofh_track)
+        if gene_body_recorder is not None:
+            gb_segs = sorted(tuple(x) for x in segs)
+            gene_body_recorder.record_isoform(
+                read_name,
+                gb_segs,
+                GeneBodyAssigner.introns_from_segments(gb_segs),
+                [(transcript.get_output_gene_id(), tid, splice_hash, num_exons, mp_id_token, 1.0)],
+            )
+
+    if gene_body_recorder is not None:
+        gene_body_recorder.finish()
 
 
     gene_totals = {}
@@ -6802,6 +6839,55 @@ def _merge_read_assignment_summary_files(summary_paths, output_path):
         writer.writerow(total_row)
 
 
+def _gene_body_geometry_only_pass(
+    gene_body_fh,
+    transcripts,
+    contig_acc,
+    contig_strand,
+    bam_file,
+    restrict_region_lend,
+    restrict_region_rend,
+    reason,
+):
+    """Gene-body rows for a unit run_quant_only leaves without isoform quant.
+
+    run_quant_only returns early when it builds no splice graph or no annotated model maps
+    into it; such a unit never reaches the streaming pass, so its reads would have no
+    gene-body rows. Every retained read (the same Util_funcs.quant_discard_reason filter,
+    called while the final-quant thresholds are in force) goes through GeneBodyIndex as an
+    unassigned read instead. No isoform rows exist for this unit, so rule 4 has no weights.
+    """
+    recorder = GeneBodyAssigner.GeneBodyRecorder(
+        GeneBodyAssigner.GeneBodyIndex(transcripts, contig_strand),
+        gene_body_fh,
+        spill_dir=os.environ.get("LRAA_TMP_DIR"),
+    )
+    if len(recorder.index) == 0:
+        return
+    with pysam.AlignmentFile(bam_file, "rb") as reader:
+        if restrict_region_lend is not None and restrict_region_rend is not None:
+            fetcher = reader.fetch(contig_acc, restrict_region_lend, restrict_region_rend)
+        else:
+            fetcher = reader.fetch(contig_acc)
+        for read in fetcher:
+            if Util_funcs.quant_discard_reason(read, contig_strand) is not None:
+                continue
+            segments, introns = GeneBodyAssigner.segments_from_cigar(
+                read.reference_start, read.cigartuples
+            )
+            recorder.record_unassigned(
+                Util_funcs.get_read_name_include_sc_encoding(read), segments, introns, reason
+            )
+    recorder.finish()
+    logger.info(
+        "[%s%s] gene-body counts (geometry only, %s): %s",
+        contig_acc,
+        contig_strand,
+        reason,
+        {k: round(v, 3) for k, v in sorted(recorder.counts.items())},
+    )
+
+
 def run_quant_only(
     contig_acc,
     contig_strand,
@@ -6933,6 +7019,17 @@ def run_quant_only(
                 restrict_region_rend,
                 "no splice graph created",
             )
+        if gene_body_fh is not None:
+            _gene_body_geometry_only_pass(
+                gene_body_fh,
+                gene_body_source_transcripts,
+                contig_acc,
+                contig_strand,
+                bam_file_for_quant,
+                restrict_region_lend,
+                restrict_region_rend,
+                "no_quant_unit",
+            )
         # Restored on EVERY exit, not just the normal one and the
         # input_transcripts-is-None one at :5736. This key is process-global and
         # a contig worker handles many shards in sequence, so leaking the
@@ -6984,6 +7081,17 @@ def run_quant_only(
                 restrict_region_lend,
                 restrict_region_rend,
                 "no input transcripts mapped into the splice graph",
+            )
+        if gene_body_fh is not None:
+            _gene_body_geometry_only_pass(
+                gene_body_fh,
+                gene_body_source_transcripts,
+                contig_acc,
+                contig_strand,
+                bam_file_for_quant,
+                restrict_region_lend,
+                restrict_region_rend,
+                "no_quant_unit",
             )
         LRAA_Globals.config["min_mapping_quality"] = _saved_min_mapq
         return None, None

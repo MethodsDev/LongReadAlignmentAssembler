@@ -1300,6 +1300,13 @@ config = {
     # genes' isoform-assigned reads ("isoform_reads"); "none" goes straight to the
     # innermost-gene rule and then gene_body_ambiguous_policy
     "gene_body_tie_weighting": "isoform_reads",
+    # with that weighting, a gene holding at least this share of the tied genes' weight
+    # takes the whole read; below it the read is split in proportion
+    "gene_body_dominance_frac": 0.9,
+    # genes whose transcripts all carry the GTF tag "readthrough_transcript" (GENCODE),
+    # or whose gene line carries "readthrough_gene", are never gene-body candidates
+    # (their isoform-assigned reads still count). Cell Ranger's references drop them.
+    "gene_body_exclude_readthrough_genes": True,
     # Polyadenylation signal annotation.  Defaults are human: the two canonical hexamers
     # and the transcript-sense window LRAA's own PAS analyses used.  Both are settable
     # for other organisms -- plant and many invertebrate signals are more degenerate and

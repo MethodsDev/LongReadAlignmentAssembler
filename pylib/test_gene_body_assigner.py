@@ -38,13 +38,17 @@ def defaults(monkeypatch):
     monkeypatch.setitem(LRAA_Globals.config, "gene_body_ambiguous_policy", "drop")
 
 
-def only_gene(call, weights=None):
-    assert call is not None
-    resolved, ambiguous = GBA.GeneBodyIndex.resolve(call, weights)
-    assert not ambiguous and len(resolved) == 1, resolved
-    gene_id, frac, cls, _ = resolved[0]
+def only_gene(tied, weights=None):
+    assert tied is not None
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, weights)
+    assert rule != GBA.RULE_AMBIGUOUS and len(resolved) == 1, resolved
+    t, frac = resolved[0]
     assert frac == 1.0
-    return gene_id, cls
+    return t.gene_id, t.splice_class
+
+
+def ids_fracs(resolved):
+    return [(t.gene_id, f) for t, f in resolved]
 
 
 # G: exons 1000-1999, 5000-5999, 9000-9999 (introns 2000-4999, 6000-8999)
@@ -188,33 +192,119 @@ def test_unresolvable_tie_drop_and_split(monkeypatch):
     X = Tx("X", [(1000, 1999), (5000, 5999)])
     Y = Tx("Y", [(1000, 1999), (5000, 5999)])
     idx = GBA.GeneBodyIndex([Y, X], "+")
-    call = idx.assign([(3000, 3500)], [])
-    resolved, ambiguous = GBA.GeneBodyIndex.resolve(call)
-    assert ambiguous
-    assert [(g, f) for g, f, _, _ in resolved] == [("X", 0.0), ("Y", 0.0)]
+    tied = idx.assign([(3000, 3500)], [])
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied)
+    assert rule == GBA.RULE_AMBIGUOUS
+    assert ids_fracs(resolved) == [("X", 0.0), ("Y", 0.0)]
     # weights with nothing on either gene change nothing
-    assert GBA.GeneBodyIndex.resolve(call, {"Z": 5})[1]
+    assert GBA.GeneBodyIndex.resolve(tied, {"Z": 5})[1] == GBA.RULE_AMBIGUOUS
     monkeypatch.setitem(LRAA_Globals.config, "gene_body_ambiguous_policy", "split")
-    resolved, ambiguous = GBA.GeneBodyIndex.resolve(call)
-    assert ambiguous and [(g, f) for g, f, _, _ in resolved] == [("X", 0.5), ("Y", 0.5)]
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied)
+    assert rule == GBA.RULE_AMBIGUOUS and ids_fracs(resolved) == [("X", 0.5), ("Y", 0.5)]
     # deterministic: same order on repeat, sorted by gene id
-    assert [g for g, _, _ in idx.assign([(3000, 3500)], []).genes] == ["X", "Y"]
+    assert [t.gene_id for t in idx.assign([(3000, 3500)], [])] == ["X", "Y"]
 
 
-def test_tie_split_by_isoform_reads_beats_innermost():
-    # The ALS chr8 case: an annotated readthrough gene (MRPS28-TPD52) with a SMALLER
+def test_tie_weighting_dominance_and_split(monkeypatch):
+    # The ALS chr8 geometry: an annotated readthrough gene (MRPS28-TPD52) with a SMALLER
     # span than the gene whose 3' region it overlaps. Innermost alone hands it TPD52's
     # intronic reads; weighting by isoform-assigned reads gives them back.
     TPD52 = Tx("TPD52", [(34000, 34999), (60000, 60999), (90000, 90999)])
     RT = Tx("RT", [(20000, 20999), (60000, 60999)])
     idx = GBA.GeneBodyIndex([TPD52, RT], "+")
-    call = idx.assign([(40000, 41000)], [])
-    assert [g for g, _, _ in call.genes] == ["RT", "TPD52"]
-    assert only_gene(call) == ("RT", "U")  # innermost, no weights
-    assert only_gene(call, {"TPD52": 1536.0, "RT": 0.0}) == ("TPD52", "U")
-    resolved, ambiguous = GBA.GeneBodyIndex.resolve(call, {"TPD52": 3.0, "RT": 1.0})
-    assert not ambiguous
-    assert [(g, f) for g, f, _, _ in resolved] == [("RT", 0.25), ("TPD52", 0.75)]
+    tied = idx.assign([(40000, 41000)], [])
+    assert [t.gene_id for t in tied] == ["RT", "TPD52"]
+    assert only_gene(tied) == ("RT", "U")  # innermost, no weights
+    assert GBA.GeneBodyIndex.resolve(tied)[1] == GBA.RULE_INNERMOST
+    # dominance: >= 0.9 of the weight takes the whole read
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 1536.0, "RT": 0.0})
+    assert rule == GBA.RULE_DOMINANCE and ids_fracs(resolved) == [("TPD52", 1.0)]
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 95.0, "RT": 5.0})
+    assert rule == GBA.RULE_DOMINANCE and ids_fracs(resolved) == [("TPD52", 1.0)]
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 90.0, "RT": 10.0})
+    assert rule == GBA.RULE_DOMINANCE  # exactly at the cut
+    # below the cut: fractional by weight
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 3.0, "RT": 1.0})
+    assert rule == GBA.RULE_WEIGHT_SPLIT
+    assert ids_fracs(resolved) == [("RT", 0.25), ("TPD52", 0.75)]
+    # the cut is a config key
+    monkeypatch.setitem(LRAA_Globals.config, "gene_body_dominance_frac", 0.7)
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 3.0, "RT": 1.0})
+    assert rule == GBA.RULE_DOMINANCE and ids_fracs(resolved) == [("TPD52", 1.0)]
+    monkeypatch.setitem(LRAA_Globals.config, "gene_body_dominance_frac", 1.0)
+    resolved, rule = GBA.GeneBodyIndex.resolve(tied, {"TPD52": 95.0, "RT": 5.0})
+    assert rule == GBA.RULE_WEIGHT_SPLIT
+
+
+def test_isoform_weight_outranks_three_prime_end():
+    # neither span contains the read; its '+' 3' end lies in B only, but A has the
+    # isoform-assigned reads: weighting comes first
+    A = Tx("A", [(1000, 1099), (2990, 3000)])
+    B = Tx("B", [(2500, 2510), (5000, 5099)])
+    idx = GBA.GeneBodyIndex([A, B], "+")
+    tied = idx.assign([(2300, 3300)], [])
+    assert [t.gene_id for t in tied] == ["A", "B"]
+    assert only_gene(tied) == ("B", "U")  # 3' end, no weights
+    assert GBA.GeneBodyIndex.resolve(tied)[1] == GBA.RULE_THREE_PRIME
+    assert only_gene(tied, {"A": 50.0}) == ("A", "U")
+
+
+class TaggedTx(Tx):
+    def __init__(self, gene, exons, tags, strand="+"):
+        super().__init__(gene, exons, strand)
+        self._tags = frozenset(tags)
+
+    def get_gtf_tags(self):
+        return self._tags
+
+
+def test_readthrough_genes_excluded_as_candidates_by_default(monkeypatch):
+    TPD52 = Tx("TPD52", [(34000, 34999), (60000, 60999), (90000, 90999)])
+    RT = TaggedTx("RT", [(20000, 20999), (60000, 60999)], ["basic", "readthrough_transcript"])
+    idx = GBA.GeneBodyIndex([TPD52, RT], "+")
+    assert idx.genes["RT"].readthrough and not idx.genes["TPD52"].readthrough
+    # TPD52 intron: no tie at all, RT is not a candidate
+    assert [t.gene_id for t in idx.assign([(40000, 41000)], [])] == ["TPD52"]
+    # RT-only region (its own intron upstream of TPD52): no gene
+    assert idx.assign([(25000, 26000)], []) is None
+    # isoform rows still classify against RT
+    cls, ev = idx.classify_for_gene("RT", [(20100, 20900)], [])
+    assert cls == "A" and ev is not None
+    monkeypatch.setitem(LRAA_Globals.config, "gene_body_exclude_readthrough_genes", False)
+    assert [t.gene_id for t in idx.assign([(40000, 41000)], [])] == ["RT", "TPD52"]
+
+
+def test_gene_is_readthrough_only_if_every_transcript_is():
+    mixed = [
+        TaggedTx("M", [(1000, 1999), (5000, 5999)], ["readthrough_transcript"]),
+        TaggedTx("M", [(1000, 1999), (7000, 7999)], ["basic"]),
+    ]
+    assert not GBA.GeneBodyIndex(mixed, "+").genes["M"].readthrough
+    gene_tag = TaggedTx("Q", [(1000, 1999)], ["readthrough_gene"])
+    assert GBA.GeneBodyIndex([gene_tag], "+").genes["Q"].readthrough
+
+
+def test_gtf_parser_keeps_repeated_tags(tmp_path):
+    from Transcript import GTF_contig_to_transcripts
+
+    gtf = tmp_path / "t.gtf"
+    attrs = (
+        'gene_id "G1"; transcript_id "T1"; gene_name "RTG"; tag "basic"; '
+        'tag "readthrough_transcript"; tag "CCDS";'
+    )
+    lines = [
+        "\t".join(["chr1", "HAVANA", "exon", "100", "200", ".", "+", ".", attrs]),
+        "\t".join(["chr1", "HAVANA", "exon", "300", "400", ".", "+", ".", attrs]),
+        "\t".join(["chr1", "HAVANA", "exon", "100", "200", ".", "+", ".",
+                   'gene_id "G2"; transcript_id "T2";']),
+    ]
+    gtf.write_text("\n".join(lines) + "\n")
+    parsed = GTF_contig_to_transcripts.parse_GTF_to_Transcripts(str(gtf))
+    txs = {t.get_transcript_id(): t for t in parsed["chr1"]}
+    assert txs["T1"].get_gtf_tags() == frozenset({"basic", "readthrough_transcript", "CCDS"})
+    assert txs["T2"].get_gtf_tags() == frozenset()
+    # the parsed meta holds what it held before (the last tag wins there)
+    assert txs["T1"].get_meta()["tag"] == "CCDS"
 
 
 def test_segments_from_cigar():
@@ -264,6 +354,7 @@ def test_recorder_spills_ties_and_resolves_with_full_stream_counts(tmp_path):
         ("Y", "bc^u^tied", "1.000000", "U", "gene_body:unassignable", "1", "0", "501"),
     ]
     assert rec.counts["reads_gene_tied"] == 1
+    assert rec.counts["tie_" + GBA.RULE_DOMINANCE] == 1
 
 
 def test_chunked_merge_of_gene_body_sidecars(tmp_path):
