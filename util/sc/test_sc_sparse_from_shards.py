@@ -198,3 +198,28 @@ def test_column_indices_ascending_within_each_row(tmp_path):
             r, c = int(r), int(c)
             assert c > seen.get(r, 0), f"row {r}: column {c} not ascending"
             seen[r] = c
+
+
+def test_untagged_reads_make_no_barcode(tmp_path):
+    """Reads without both cell tags (plain read name, no ^) belong to no cell."""
+    rows = [("GA", "TA1", "HA1", 3, "AAAA", "u1", 1.0),
+            ("GA", "TA1", "HA1", 3, "CCCC", "u2", 0.5)]
+    trk = tmp_path / "s.tracking"
+    write_tracking(str(trk), rows)
+    with open(trk, "a") as fh:
+        for i in range(5):
+            fh.write("\t".join(["GA", "TA1", "HA1", "3", "MP1",
+                                f"m84000/{i}/ccs", "1.000000", "1.000000"]) + "\n")
+    outdir = tmp_path / "shard_s"
+    subprocess.run([sys.executable, BUILD, "--tracking", str(trk), "--outdir",
+                    str(outdir), "--shard", "s"], check=True, capture_output=True)
+    prefix = str(tmp_path / "merged")
+    subprocess.run([sys.executable, MERGE, "--shard_dirs", str(outdir),
+                    "--output_prefix", prefix, "--no_gzip"], check=True, capture_output=True)
+    ref = reference(rows)
+    for level in LEVEL_COL:
+        d = f"{prefix}^{level}-sparseM"
+        bcs = [l.rstrip("\n") for l in open(os.path.join(d, "barcodes.tsv"))]
+        nr, nc, trip = read_mtx(os.path.join(d, "matrix.mtx"))
+        assert bcs == ref[level][1]
+        assert trip == pytest.approx(ref[level][2])

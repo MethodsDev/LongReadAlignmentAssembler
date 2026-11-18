@@ -147,3 +147,28 @@ def test_mapping_file(tracking):
                                      "transcript_splice_hash_code", "num_exons"])
     assert len(got) == len(want)
     assert set(map(tuple, got.to_numpy())) == set(map(tuple, want.to_numpy()))
+
+
+@pytest.mark.parametrize("engine", ["direct", "python", "c"])
+def test_untagged_reads_make_no_barcode(tmp_path, engine):
+    """A read without both cell tags keeps its plain name (no ^): it must not become a
+    one-read barcode column. Rows placed so whole --chunksize 97 chunks are untagged."""
+    rows = make_rows(seed=3)
+    p = tmp_path / "untagged.tracking"
+    write_tracking(str(p), rows)
+    with open(p, "a") as fh:
+        for i in range(250):
+            fh.write("\t".join(["G000", "G000.T0", "H000_0", "1", "MP1",
+                                f"m84000_000000_000000_s1/{i}/ccs", "1.000000",
+                                "1.000000"]) + "\n")
+        g, t, h, n, bc, umi, frac = rows[1]
+        fh.write("\t".join([g, t, h, str(n), "MP1", f"{bc}^{umi}x^rd",
+                            f"{frac:.6f}", "1.000000"]) + "\n")
+    prefix = run(tmp_path, p, engine)
+    expected = rows + [rows[1][:5] + (rows[1][5] + "x", rows[1][6])]
+    for level in LEVEL_COL:
+        feats, bcs, shape, trip = read_out(prefix, level)
+        r_feats, r_bcs, r_trip = reference(expected, level)
+        assert bcs == r_bcs and feats == r_feats
+        for k, v in r_trip.items():
+            assert trip[k] == pytest.approx(v, rel=1e-6, abs=1e-9)

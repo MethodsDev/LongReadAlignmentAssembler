@@ -190,26 +190,30 @@ def stream_tracking(path, builder, chunksize=1_000_000):
             raise SystemExit(f"Error, {path} lacks column(s): {missing}")
         ig, it, ih, ine, irn, ifr = (hdr.index(c) for c in NEEDED)
 
-        while True:
+        eof = False
+        while not eof:
             g = []; t = []; h = []; nx = []; b = []; f = []
             ga, ta, ha, na, ba, fa = (g.append, t.append, h.append,
                                       nx.append, b.append, f.append)
             for _ in range(chunksize):
                 l = fh.readline()
                 if not l:
+                    eof = True
                     break
                 p = l.split("\t")
+                # LRAA writes barcode^UMI^name only for reads carrying both tags; a read
+                # without them has no cell, and its plain name must not become a barcode
+                barcode, tagged, _ = p[irn].partition("^")
+                if not tagged:
+                    continue
                 # interning the low-cardinality ids makes every downstream dict
                 # lookup a pointer compare; measured 1.29 s/Mrow off the loop
                 ga(intern(p[ig])); ta(intern(p[it])); ha(intern(p[ih]))
-                na(p[ine]); ba(intern(p[irn].partition("^")[0])); fa(p[ifr])
-            if not t:
-                break
-            builder.add_chunk(g, t, h,
-                              np.array(nx, dtype=np.int64), b,
-                              np.array(f, dtype=np.float32))
-            if len(t) < chunksize:
-                break
+                na(p[ine]); ba(intern(barcode)); fa(p[ifr])
+            if t:
+                builder.add_chunk(g, t, h,
+                                  np.array(nx, dtype=np.int64), b,
+                                  np.array(f, dtype=np.float32))
     finally:
         fh.close()
 

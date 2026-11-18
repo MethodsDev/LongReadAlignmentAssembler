@@ -308,25 +308,29 @@ def _iter_chunks_direct(filename, chunksize):
             sys.exit(f"Error, {filename} lacks required column(s): {missing}")
         i_rn, i_g, i_t, i_h, i_n, i_f = (header.index(c) for c in USECOLS)
 
-        while True:
+        eof = False
+        while not eof:
             bc = []; g = []; t = []; h = []; n = []; f = []
             bca, ga, ta, ha, na, fa = (bc.append, g.append, t.append,
                                        h.append, n.append, f.append)
             for _ in range(chunksize):
                 raw = handle.readline()
                 if not raw:
+                    eof = True
                     break
                 if raw.startswith("#"):
                     continue
                 parts = raw.split("\t")
-                bca(intern(parts[i_rn].partition("^")[0]))
+                # LRAA writes barcode^UMI^name only for reads carrying both tags; a read
+                # without them has no cell, and its plain name must not become a barcode
+                barcode, tagged, _ = parts[i_rn].partition("^")
+                if not tagged:
+                    continue
+                bca(intern(barcode))
                 ga(intern(parts[i_g])); ta(intern(parts[i_t]))
                 ha(intern(parts[i_h])); na(parts[i_n]); fa(parts[i_f])
-            if not t:
-                return
-            yield _chunk_frame(bc, g, t, h, n, f)
-            if len(t) < chunksize:
-                return
+            if t:
+                yield _chunk_frame(bc, g, t, h, n, f)
 
 
 def _iter_chunks_pandas(filename, chunksize, engine):
@@ -348,6 +352,10 @@ def _iter_chunks_pandas(filename, chunksize, engine):
         for chunk in pd.read_csv(handle, **kwargs):
             chunk = chunk.fillna({"gene_id": "", "transcript_id": "",
                                   "transcript_splice_hash_code": ""})
+            # reads without both cell tags carry no ^ and belong to no cell
+            chunk = chunk[chunk["read_name"].str.contains("^", regex=False)]
+            if chunk.empty:
+                continue
             out = _chunk_frame(
                 chunk["read_name"].str.split("^", n=1, expand=True)[0].to_numpy(),
                 chunk["gene_id"].to_numpy(), chunk["transcript_id"].to_numpy(),
