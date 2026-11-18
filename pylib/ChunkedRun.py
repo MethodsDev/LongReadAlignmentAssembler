@@ -5727,6 +5727,54 @@ def merge_read_assignment_summaries(merged_dir, units):
     }
 
 
+GENE_BODY_TRACKING_SUFFIX = ".quant.gene_body.tracking.gz"
+
+
+def merge_gene_body_tracking(merged_dir, units):
+    """Concatenate the units' gene-body sidecars (config gene_body_counts), or None.
+
+    Keyed on the files, not on config, so a scattered merge (util/misc/
+    merge_chunk_outputs.py) behaves the same as the in-process one. All units or none:
+    a partial set would publish gene counts with whole chunks silently missing.
+    Rows hold no coordinates and quant-only gene ids are global, so there is nothing
+    to translate; each unit holds a read's rows once, so there is nothing to sort.
+    """
+    paths = [unit["quant_prefix"] + GENE_BODY_TRACKING_SUFFIX for unit in units]
+    present = [os.path.exists(p) for p in paths]
+    if not any(present):
+        return None
+    if not all(present):
+        missing = [p for p, ok in zip(paths, present) if not ok]
+        raise PipelineError(
+            "{} of {} units have no gene-body sidecar, e.g. {}".format(
+                len(missing), len(paths), missing[0]
+            )
+        )
+    out_path = os.path.join(merged_dir, "chunked" + GENE_BODY_TRACKING_SUFFIX)
+    header = None
+    with gzip.open(out_path, "wt") as ofh:
+        for p in paths:
+            with gzip.open(p, "rt") as fh:
+                seen_header = False
+                for line in fh:
+                    if line.startswith("#"):
+                        if header is None:
+                            ofh.write(line)
+                        continue
+                    if not seen_header:
+                        seen_header = True
+                        if header is None:
+                            header = line
+                            ofh.write(line)
+                        elif line != header:
+                            raise PipelineError(
+                                "gene-body sidecar header differs: {}".format(p)
+                            )
+                        continue
+                    ofh.write(line)
+    return out_path
+
+
 def merge_and_translate(outdir, units, discovery=False):
     """Stage 6. Concatenate per-chunk quant output, back in the whole-run frame.
 
@@ -5909,10 +5957,13 @@ def merge_and_translate(outdir, units, discovery=False):
     )
 
     merged_summary = merge_read_assignment_summaries(merged_dir, units)
+    gene_body_tracking = merge_gene_body_tracking(merged_dir, units)
 
     merged = {
         "quant_expr": expr_out,
         "quant_tracking": track_out,
+        # None unless the units wrote gene-body sidecars (config gene_body_counts)
+        "gene_body_tracking": gene_body_tracking,
         "tpm_chunk_local_audit": tpm_audit,
         "expr_rows": len(expr_rows),
         "tracking_rows": track_row_count,

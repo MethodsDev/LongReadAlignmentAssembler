@@ -35,6 +35,7 @@ from collections import defaultdict
 
 import pysam
 
+import GeneBodyAssigner
 import IsoformReadRescue
 import LRAA_Globals
 import MultiPath
@@ -638,8 +639,15 @@ def stream_assign(
     region_lend=None,
     region_rend=None,
     rescuer=None,
+    gene_body_recorder=None,
 ):
     """Stream the bam, emit one tracking row per (read, compatible isoform).
+
+    `gene_body_recorder` (GeneBodyAssigner.GeneBodyRecorder, config["gene_body_counts"])
+    additionally sees every retained read: an isoform-assigned read with the rows just
+    written for it, any other read with why it went unassigned, after rescue had its
+    turn. A cross-component-ambiguous read is not offered, for the reason rescue is not.
+    It writes only its own sidecar file; nothing here changes for the tracking file.
 
     Holds no per-read state: each read is mapped, looked up, written, and dropped.
 
@@ -707,7 +715,7 @@ def stream_assign(
     # comes back as a plain cache hit indistinguishable from "matched no isoform".
     cross_component_ambiguous_paths = set()
 
-    def assign_path(read, path, count_fallback=True):
+    def assign_path(read, path, count_fallback=True, sink=None):
         """Table lookup, in-stream resolution and tracking write for one path.
 
         Shared by the genomic route and the rescue route, so a rescued read reaches its
@@ -775,6 +783,8 @@ def stream_assign(
                 )
             )
         totals.record(rows)
+        if sink is not None:
+            sink.extend(rows)
         return len(rows)
 
     def offer_to_rescue(read, category):
@@ -788,15 +798,30 @@ def stream_assign(
         totals.rescue_offered[category] += 1
         rescued_paths = rescuer.offer(read, category)
         if not rescued_paths:
-            return
+            return []
         rows_written = 0
+        rows = []
         for rescued_path in rescued_paths:
-            rows_written += assign_path(read, rescued_path, count_fallback=False)
+            rows_written += assign_path(
+                read, rescued_path, count_fallback=False, sink=rows
+            )
         if rows_written:
             totals.rescue_assigned[category] += 1
             totals.rescue_rows_written += rows_written
         else:
             totals.rescue_unassignable[category] += 1
+        return rows
+
+    def to_gene_body(read, rows, reason):
+        """Hand one read to the gene-body recorder: its isoform rows, or why it has none."""
+        segments, introns = GeneBodyAssigner.segments_from_cigar(
+            read.reference_start, read.cigartuples
+        )
+        read_name = Util_funcs.get_read_name_include_sc_encoding(read)
+        if rows:
+            gene_body_recorder.record_isoform(read_name, segments, introns, rows)
+        else:
+            gene_body_recorder.record_unassigned(read_name, segments, introns, reason)
 
     with pysam.AlignmentFile(bam_file, "rb") as reader:
         if region_lend is not None and region_rend is not None:
@@ -826,9 +851,13 @@ def stream_assign(
                     and discard_reason
                     == IsoformReadRescue.RESCUE_CANDIDATE_LOW_PER_ID
                 ):
-                    offer_to_rescue(
+                    rows = offer_to_rescue(
                         read, IsoformReadRescue.RESCUE_CANDIDATE_LOW_PER_ID
                     )
+                    # Only a rescued read: a filtered read stays filtered for gene
+                    # counts as it does for isoform counts.
+                    if rows and gene_body_recorder is not None:
+                        to_gene_body(read, rows, "rescued")
                 continue
 
             totals.reads_streamed += 1
@@ -838,20 +867,27 @@ def stream_assign(
             )
             if not path or path == SPACER:
                 totals.reads_no_path += 1
+                rows = []
                 if rescuer is not None:
-                    offer_to_rescue(
+                    rows = offer_to_rescue(
                         read, IsoformReadRescue.RESCUE_CANDIDATE_NO_GRAPH_PATH
                     )
+                if gene_body_recorder is not None:
+                    to_gene_body(read, rows, "no_path")
                 continue
             if SPACER in path:
                 totals.reads_spacer_path += 1
+                rows = []
                 if rescuer is not None:
-                    offer_to_rescue(
+                    rows = offer_to_rescue(
                         read, IsoformReadRescue.RESCUE_CANDIDATE_SPACER_PATH
                     )
+                if gene_body_recorder is not None:
+                    to_gene_body(read, rows, "spacer_path")
                 continue
 
-            if not assign_path(read, path):
+            assigned_rows = [] if gene_body_recorder is not None else None
+            if not assign_path(read, path, sink=assigned_rows):
                 totals.reads_unassignable += 1
                 # A cross-component-ambiguous path is deliberately dropped, not merely
                 # unresolved: offering it to rescue could hand the SAME read a second,
@@ -861,16 +897,24 @@ def stream_assign(
                 # exactly the outcome rows_for_multipath's raise exists to prevent -- so
                 # this category is excluded from rescue regardless of the flag.
                 canon = splice_graph.canonical_simple_path(path)
+                rows = []
                 if (
                     rescuer is not None
                     and rescue_unassigned_to_targets
                     and canon not in cross_component_ambiguous_paths
                 ):
-                    offer_to_rescue(
+                    rows = offer_to_rescue(
                         read, IsoformReadRescue.RESCUE_CANDIDATE_UNASSIGNED_TO_TARGETS
                     )
+                if (
+                    gene_body_recorder is not None
+                    and canon not in cross_component_ambiguous_paths
+                ):
+                    to_gene_body(read, rows, "unassignable")
                 continue
             totals.reads_assigned += 1
+            if gene_body_recorder is not None:
+                to_gene_body(read, assigned_rows, "assigned")
 
     _report(contig_acc, contig_strand, totals, len(table))
     return totals

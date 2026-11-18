@@ -1280,6 +1280,26 @@ config = {
     # will bypass graph/EM and assign each read to the single best-overlapping reference transcript.
     "oversimplify_enabled": False,
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
+    # Gene-body counting (single-nucleus / pre-mRNA), pylib/GeneBodyAssigner.py and
+    # docs/single_nucleus_intronic_gene_counts.md. Quant-only with --stream_reads. When on,
+    # every retained read is also written to <prefix>.quant.gene_body.tracking.gz: reads
+    # isoform quant assigns keep that assignment (EM split summed per gene); reads it leaves
+    # unassigned (intronic, partial, novel junctions) go to the most appropriate same-strand
+    # gene. Each row carries a spliced/unspliced/ambiguous class. quant.expr and
+    # quant.tracking are unchanged either way.
+    "gene_body_counts": False,
+    # candidate gene: its span (first exon start .. last exon end) must hold this fraction
+    # of the read's aligned bases
+    "gene_body_min_read_frac_in_span": 0.5,
+    # bp of exonic overlap that counts as exonic evidence in the gene choice, and bp of
+    # intronic overlap that makes a read unspliced (U)
+    "gene_body_min_feature_bp": 20,
+    # a read tied between genes after every rule: "drop" (rows with frac 0) or "split" (1/n)
+    "gene_body_ambiguous_policy": "drop",
+    # a read tied between genes after the geometric rules is split in proportion to the
+    # genes' isoform-assigned reads ("isoform_reads"); "none" goes straight to the
+    # innermost-gene rule and then gene_body_ambiguous_policy
+    "gene_body_tie_weighting": "isoform_reads",
     # Polyadenylation signal annotation.  Defaults are human: the two canonical hexamers
     # and the transcript-sense window LRAA's own PAS analyses used.  Both are settable
     # for other organisms -- plant and many invertebrate signals are more degenerate and
