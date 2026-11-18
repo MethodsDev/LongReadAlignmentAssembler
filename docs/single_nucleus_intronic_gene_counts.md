@@ -206,8 +206,9 @@ columns there would have broken them, or inflated isoform TPMs.
 - `LRAA:_run_jobs_schedule_and_merge`:
   - concatenates the per-unit sidecars;
   - removes them from the cleanup list;
-  - refuses to reuse a shard (resume) that lacks the sidecar when the key is on. This bug was
-    found while testing: a rerun silently reused shards written without the sidecar.
+  - refuses to reuse a shard (resume) that lacks the sidecar when the key is on. Before this
+    check, a rerun silently reused shards written without the sidecar; the fix is tested in
+    section 5.
 - `pylib/ChunkedRun.py:merge_gene_body_tracking` merges the units' sidecars (all or none;
   some-but-not-all is an error). `LRAA:_run_chunked_mode` publishes the result and exits with
   an error if the key is on and no sidecar came back. Chunked mode is the default.
@@ -306,6 +307,36 @@ also pass (90 + 55).
 **Chunked parity.** With chunked mode at `--approx_MB_per_cut 1` (145 chunks, 144 cuts, 0
 reads severed), the sidecar has the same 14,633 rows as the unchunked run, ignoring order.
 
+**Builder parity.** `--exclude_gene_body` matrices built from the ALS sidecar equal the
+existing builder's `^gene-sparseM` cell by cell: 3,609 non-zero (gene, cell) entries, none
+different.
+
+**Resume.** A run with the key off, then a rerun with the key on under the same prefix
+(`--no_cleanup`): the finished shards are recomputed, not reused, and the sidecar has the
+full 14,633 rows.
+
+**Cost.** Every read sent through `assign()` against all GENCODE v39 chr8 genes (778 on +,
+779 on -): 24 us/read on +, 39 us/read on - (the minus strand is where most of the ALS ties
+are). The real pass is cheaper, because isoform-assigned reads only get a per-gene class.
+That is small next to the streaming pass's own per-read graph mapping. Wall clock and parent
+RSS on the PBMC fixture: 17.9 s / 110 MB off, 18.1 s / 111 MB on.
+
+### Known limitations of the prototype
+
+- Classification and the junction rule read the raw CIGAR. The isoform verdict uses LRAA's
+  soft-clip-corrected, terminal-intron-pruned alignment. So a terminal intron that LRAA
+  prunes still counts as a junction for rule 1 and for the S class.
+- `run_quant_only` returns early when it builds no splice graph or no annotated model maps
+  into it. Those units never reach the stream, so their sidecar is header-only and their
+  intronic reads are uncounted, even though the index would have come from
+  `reference_transcripts`. A fix is a geometry-only pass over the BAM on those exits.
+- Rule 5 leaks. If the competing gene has a few isoform-assigned reads (EM leakage, such as
+  the `XF:0.982/0.018` splits seen in the ALS BAM), every tied intronic read sends it the
+  same small share.
+- Rule 4 (3' end inside the span) treats the read's 3' end as a transcript end. For
+  internally primed pre-mRNA reads it is a priming site. It is a weak signal, but it comes
+  before rule 5.
+
 ## 6. Open questions for the user
 
 1. **Should the S / U / A split be kept as built?** Long-read U includes partially spliced
@@ -328,6 +359,9 @@ reads severed), the sidecar has the same 14,633 rows as the unchunked run, ignor
 7. **Readthrough genes.** Rule 5 handled MRPS28-TPD52. Should LRAA also offer to ignore
    `readthrough_transcript`-tagged genes (Cell Ranger's reference practice)? That would need
    the GTF parser to keep tags.
+8. **Rule-5 leakage.** Should rule 5 have a dominance threshold, so that a gene with at
+   least X% of the tied genes' isoform reads takes the whole read? Should rule 4 move after
+   rule 5, given that internal priming makes the 3' end a weak signal?
 
 ## 7. Next steps if adopted
 
