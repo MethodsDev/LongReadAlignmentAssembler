@@ -4,12 +4,18 @@ Run Cellarium Cell Annotation Service (CAS) on a 10x-style sparse matrix folder.
 
 This script:
   1. Reads a 10x Genomics matrix directory (matrix.mtx[.gz], barcodes.tsv[.gz], features.tsv[.gz])
-  2. Calls Cellarium CAS for ontology-aware cell type annotation
-  3. Inserts the CAS response into the AnnData object
-  4. Computes most granular top-k cell type calls per cell
-  5. Writes:
+  2. Drops cells with fewer than --min-counts total counts (CAS labels even empty
+     cells, often confidently, so they must not reach it)
+  3. Calls Cellarium CAS for ontology-aware cell type annotation
+  4. Inserts the CAS response into the AnnData object
+  5. Computes most granular top-k cell type calls per cell
+  6. Writes:
        - <output_prefix>.h5ad
        - <output_prefix>.tsv (cell-barcode + all obs columns)
+
+The API token is read from --api-token-file, else the CAS_API_TOKEN environment
+variable, else --api-token. Prefer the first two: a command-line argument is
+visible to other users in the process list and is kept in workflow logs.
 """
 
 import argparse
@@ -20,8 +26,37 @@ import re
 import shutil
 import sys
 
+import numpy as np
+
 import scanpy as sc
 from cellarium.cas.client import CASClient
+
+
+# Best of the cellarium-cas 1.9 human models on our single-nucleus brain data;
+# the server default (cellarium-pca-v1.1beta) is the older model.
+DEFAULT_CAS_MODEL = "scanvi-classification-v8.hs-general"
+
+
+def resolve_api_token(args):
+    """Token from --api-token-file, else $CAS_API_TOKEN, else --api-token. Never logged."""
+    if args.api_token_file:
+        with open(args.api_token_file) as f:
+            token = f.read().strip()
+        source = "--api-token-file"
+    elif os.environ.get("CAS_API_TOKEN"):
+        token = os.environ["CAS_API_TOKEN"].strip()
+        source = "CAS_API_TOKEN"
+    elif args.api_token:
+        token = args.api_token.strip()
+        source = "--api-token"
+    else:
+        logging.error("No CAS API token: use --api-token-file, CAS_API_TOKEN or --api-token.")
+        sys.exit(1)
+    if not token:
+        logging.error("The CAS API token from %s is empty.", source)
+        sys.exit(1)
+    logging.info("Using the CAS API token from %s.", source)
+    return token
 
 
 def parse_args():
@@ -34,9 +69,15 @@ def parse_args():
         help="Path to 10x-style matrix directory (matrix.mtx[.gz], barcodes.tsv[.gz], features.tsv[.gz]).",
     )
     parser.add_argument(
+        "--api-token-file",
+        default=None,
+        help="File holding the Cellarium CAS API token (preferred).",
+    )
+    parser.add_argument(
         "--api-token",
-        required=True,
-        help="Cellarium CAS API token (REQUIRED).",
+        default=None,
+        help="Cellarium CAS API token. Avoid: visible in the process list. "
+        "Use --api-token-file or the CAS_API_TOKEN environment variable instead.",
     )
     parser.add_argument(
         "--output-prefix",
@@ -45,8 +86,16 @@ def parse_args():
     )
     parser.add_argument(
         "--cas-model-name",
-        default=None,
-        help="Optional CAS model name. Leave empty to use default.",
+        default=DEFAULT_CAS_MODEL,
+        help=f"CAS model name (default: {DEFAULT_CAS_MODEL}). Pass 'server-default' "
+        "for the CAS server's own default, which is still the older cellarium-pca-v1.1beta.",
+    )
+    parser.add_argument(
+        "--min-counts",
+        type=int,
+        default=1,
+        help="Drop cells with fewer total counts before calling CAS (default: 1, "
+        "which drops only empty cells). Dropped cells are absent from the outputs.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -337,7 +386,8 @@ def main():
     )
 
     matrix_dir = args.matrix_dir
-    token = args.api_token
+    token = resolve_api_token(args)
+    cas_model_name = None if args.cas_model_name == "server-default" else args.cas_model_name
     output_prefix = args.output_prefix
 
     out_h5ad = f"{output_prefix}.h5ad"
@@ -377,18 +427,31 @@ def main():
     adata = sc.read_10x_mtx(cas_matrix_dir, var_names="gene_symbols", cache=True)
     logging.info("Loaded AnnData: %d cells × %d genes", adata.n_obs, adata.n_vars)
 
+    totals = np.asarray(adata.X.sum(axis=1)).ravel()
+    keep = totals >= args.min_counts
+    if not keep.all():
+        logging.info(
+            "Dropping %d cells with fewer than %d counts; they are not sent to CAS.",
+            int((~keep).sum()), args.min_counts,
+        )
+        adata = adata[keep].copy()
+    if adata.n_obs == 0:
+        logging.error("No cells left with at least %d counts.", args.min_counts)
+        sys.exit(1)
+
     # 2) CAS client
     logging.info("Initializing CAS client...")
     cas = CASClient(api_token=token)
+    del token
 
     # 3) CAS annotation request
-    logging.info("Submitting to CAS ...")
+    logging.info("Submitting to CAS (model: %s) ...", cas_model_name or "server default")
     cas_response = cas.annotate_matrix_cell_type_ontology_aware_strategy(
         matrix=adata,
         chunk_size=args.chunk_size,
         feature_ids_column_name="gene_ids",
         feature_names_column_name="index",
-        cas_model_name=args.cas_model_name,
+        cas_model_name=cas_model_name,
     )
     logging.info("CAS response received with %d entries.", len(cas_response.data))
 
