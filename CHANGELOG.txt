@@ -1,3 +1,31 @@
+v0.52.0
+
+New opt-in single-nucleus mode. Default runs are unchanged, apart from the row order of the
+cluster pseudobulk expression matrices (now sorted by id).
+
+- Gene-body counts (LRAA key gene_body_counts, default false; quant-only and discovery modes):
+  reads not assigned to an isoform (intronic pre-mRNA, exon-only reads) are credited to the
+  best same-strand gene whose span holds them. Written to <prefix>.quant.gene_body.tracking.gz
+  beside the unchanged quant outputs, with each read classed spliced, unspliced or ambiguous
+  (exon-only, no junction). Ties between genes are split by isoform-read weight; a gene with at
+  least gene_body_dominance_frac (0.9) of the weight takes the whole read. Read-through genes
+  are excluded by default. Inputs are expected to be strand-specific; the log warns when more
+  than 20% of the spliced reads (at least 200) align antisense.
+- LRAA-singlecell.wdl: Boolean sc_nucseq (default false; never set from the data). On, it turns
+  on gene-body counts and writes gene_full (spliced + unspliced + ambiguous), gene_spliced,
+  gene_unspliced and gene_ambiguous sparse matrices, with gene symbols, plus a per-barcode
+  table of the three fractions (gene_body_cell_stats). emptyDrops calls cells on gene_full,
+  and Seurat clusters on it with min_features_nucseq (1000) and variable genes chosen within
+  gene-length bins. Isoform, splice-pattern and standard gene matrices are unchanged. Not
+  supported with a precomputed init GTF/tracking file when clustering runs (the workflow stops
+  with a message).
+- New utilities: util/misc/concat_gene_body_tracking.py, util/sc/gene_body_cell_stats.py,
+  util/sc/gtf_gene_spans.py; filter_good_cells.R --gene_matrix_dir;
+  gene_sparseM_to_seurat_clusters_and_umap.R --nucseq.
+- util/build_LRAA_expr_matrices.py: rows are written sorted by id (their order followed set
+  iteration and changed from run to run).
+- Design and test notes: docs/single_nucleus_intronic_gene_counts.md.
+
 v0.51.1
 
 No change to run outputs (fixes to steps that failed in narrow cases).
