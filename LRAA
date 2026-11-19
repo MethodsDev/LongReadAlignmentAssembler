@@ -2425,11 +2425,13 @@ def main():
         LRAA_Globals.config["stream_reads_rescue_unassigned_to_targets"] = False
 
     # Gene-body counting is a by-product of the streaming pass (the one place that sees
-    # every retained read once, with its isoform verdict), so it needs that pass and a
-    # supplied annotation. Refused rather than silently writing an empty sidecar.
+    # every retained read once, with its isoform verdict), so it needs that pass. In
+    # quant-only mode the genes are the --gtf's; in discovery mode they are the models
+    # the run reports, quantified by its final quant, so ids match quant.tracking.
+    # Refused rather than silently writing an empty sidecar.
     if LRAA_Globals.config.get("gene_body_counts", False):
-        if not (args.quant_only and args.gtf):
-            sys.exit("Error, gene_body_counts requires --quant_only --gtf")
+        if args.quant_only and not args.gtf:
+            sys.exit("Error, gene_body_counts with --quant_only requires --gtf")
         if not args.stream_reads:
             sys.exit("Error, gene_body_counts requires --stream_reads (the default)")
         if LRAA_Globals.config.get("gene_body_ambiguous_policy") not in (
@@ -4706,8 +4708,8 @@ def _run_jobs_schedule_and_merge(
                 have_gtf = True if j["QUANT_ONLY"] else os.path.exists(f"{p}.gtf")
                 # A shard finished by a run without gene_body_counts has no sidecar; reusing
                 # it would leave that unit's reads out of the merged gene-body file silently.
-                have_gene_body = not (
-                    j["QUANT_ONLY"] and LRAA_Globals.config.get("gene_body_counts", False)
+                have_gene_body = not LRAA_Globals.config.get(
+                    "gene_body_counts", False
                 ) or os.path.exists(
                     f"{p}{GeneBodyAssigner.gene_body_tracking_suffix()}"
                 )
@@ -4974,7 +4976,7 @@ def _run_jobs_schedule_and_merge(
     rescue_summary_paths = list()
     gene_body_out_fh = None
     gene_body_out_fn = None
-    if quant_only and LRAA_Globals.config.get("gene_body_counts", False):
+    if LRAA_Globals.config.get("gene_body_counts", False):
         gene_body_out_fn = f"{output_prefix}{GeneBodyAssigner.gene_body_tracking_suffix()}"
         gene_body_out_fh = _open_text(gene_body_out_fn, "wt")
         _write_lraa_version_comment(gene_body_out_fh)
@@ -5404,10 +5406,10 @@ def _contig_job_runner(job):
     ofh_quant = open(quant_expr_tmp, "wt")
     print("\t".join(quant_header), file=ofh_quant)
 
-    # Gene-body sidecar: written by every quant-only unit when enabled (header only where
-    # the unit took a path that does not record, e.g. --oversimplify), so the merge
+    # Gene-body sidecar: written by every unit when enabled (header only where the unit
+    # recorded nothing, e.g. a discovery unit that assembled no models), so the merge
     # finds one file per unit.
-    if job["QUANT_ONLY"] and LRAA_Globals.config.get("gene_body_counts", False):
+    if LRAA_Globals.config.get("gene_body_counts", False):
         ofh_gene_body = _open_text(
             f"{tmp_prefix}{GeneBodyAssigner.gene_body_tracking_suffix()}", "wt"
         )
@@ -5482,6 +5484,7 @@ def _contig_job_runner(job):
                 # annotation and are carried forward whatever the reads did, so that
                 # every run over this contig reports the same set -- which is what
                 # merge_LRAA_GTFs requires of the per-cluster gtfs it carries forward.
+                gene_body_fh=ofh_gene_body,
             )
             # Emit exactly what was quantified, not the supplied list: the two must name
             # the same models, and taking the GTF from the return value is what makes
@@ -5529,6 +5532,7 @@ def _contig_job_runner(job):
                 ofh_quant=ofh_quant,
                 ofh_track=ofh_track,
                 read_assignment_summary_path=read_assignment_summary_tmp,
+                gene_body_fh=ofh_gene_body,
             )
         else:
             # Default behavior
@@ -5585,6 +5589,7 @@ def _contig_job_runner(job):
                     read_assignment_summary_path=read_assignment_summary_tmp,
                     rescue_summary_path=rescue_summary_tmp,
                     bam_file_for_priors=job.get("bam_file_for_priors"),
+                    gene_body_fh=ofh_gene_body,
                 )
 
         # Count-then-report backstop: no work unit may finish without saying how
@@ -6047,6 +6052,7 @@ def _run_oversimplify_aggregate(
     ofh_quant,
     ofh_track,
     read_assignment_summary_path=None,
+    gene_body_fh=None,
 ):
     """De novo oversimplify: create a single pseudo-transcript spanning the contig (or region) and
     assign all reads on this (contig,strand) to it.
@@ -6055,6 +6061,8 @@ def _run_oversimplify_aggregate(
     - Per-strand: this is invoked within a strand-specific worker.
     - Outputs: writes one GTF transcript (with one exon), quant row, and tracking rows,
       and the unit's read-assignment summary row.
+    - `gene_body_fh` (config gene_body_counts): each read also gets a gene-body row for
+      the aggregate gene, so a de novo chrM still reaches gene_full and percent.mt.
     """
 
     # Determine span
@@ -6115,6 +6123,13 @@ def _run_oversimplify_aggregate(
         if num_exons > 1
         else t.get_transcript_id()
     )
+    gene_body_recorder = None
+    if gene_body_fh is not None:
+        gene_body_recorder = GeneBodyAssigner.GeneBodyRecorder(
+            GeneBodyAssigner.GeneBodyIndex([t], contig_strand),
+            gene_body_fh,
+            spill_dir=os.environ.get("LRAA_TMP_DIR"),
+        )
     reads_seen = 0
     read_count = 0.0
     for pa in _oversimplify_alignments(
@@ -6129,6 +6144,14 @@ def _run_oversimplify_aggregate(
         if not rn:
             continue
         read_count += 1.0
+        if gene_body_recorder is not None:
+            gb_segs = sorted(tuple(x) for x in pa.get_pretty_alignment_segments())
+            gene_body_recorder.record_isoform(
+                rn,
+                gb_segs,
+                GeneBodyAssigner.introns_from_segments(gb_segs),
+                [(gene_id, trans_id, splice_hash, num_exons, mp_id_token, 1.0)],
+            )
         print(
             "\t".join(
                 [
@@ -6148,6 +6171,9 @@ def _run_oversimplify_aggregate(
             ),
             file=ofh_track,
         )
+
+    if gene_body_recorder is not None:
+        gene_body_recorder.finish()
 
     # Assign counts and isoform fraction (only isoform in its gene)
     t.set_read_counts_assigned(read_count)
@@ -6937,14 +6963,24 @@ def run_quant_only(
     keep_boundary_annotations_for=None,
     # Open text handle for the gene-body sidecar (config["gene_body_counts"]), or None.
     gene_body_fh=None,
+    # The genes the sidecar credits reads to. Unset, the annotation (quant-only). The
+    # discovery tail call passes the models it is about to report: those are the gene
+    # ids quant.tracking carries, while reference_transcripts there is only the
+    # reference subset (and nothing in de novo).
+    gene_body_index_transcripts=None,
 ):
 
     # The gene-body index is built from the annotation as supplied, before
     # assign_transcripts_paths_in_graph rebinds input_transcripts to the models that
     # mapped into the graph: a gene whose models all failed to map still owns its reads.
-    gene_body_source_transcripts = (
-        reference_transcripts if reference_transcripts is not None else input_transcripts
-    )
+    if gene_body_index_transcripts is not None:
+        gene_body_source_transcripts = gene_body_index_transcripts
+    else:
+        gene_body_source_transcripts = (
+            reference_transcripts
+            if reference_transcripts is not None
+            else input_transcripts
+        )
 
     # Quantification stage swaps in min_mapping_quality_for_final_quant so callers can
     # hold final quant to a stricter threshold than discovery, which stays permissive
@@ -7382,6 +7418,7 @@ def run_quant_only(
                 gene_body_fh,
                 # tied reads spill here until the stream ends; the unit's own tmp dir
                 spill_dir=os.environ.get("LRAA_TMP_DIR"),
+                label=f"{contig_acc}{contig_strand}",
             )
         try:
             totals = StreamingQuant.stream_assign(
@@ -7510,6 +7547,8 @@ def run_transcript_assembly(
     # Forwarded to the final quant below, and to the draft quant, which by
     # construction estimates on the same footing as the final one.
     bam_file_for_priors=None,
+    # Gene-body sidecar handle (config gene_body_counts), final quant only.
+    gene_body_fh=None,
 ):
 
     ##---------------------
@@ -8223,6 +8262,10 @@ def run_transcript_assembly(
         # on one node at 31,730,260 while ending at 31,730,260-263 and 268, and the TSS
         # bed listed that site five times. The models reported are the ones assembled.
         keep_boundary_annotations_for=transcripts,
+        # Gene-body rows ride on this pass, the one that writes quant.tracking, and
+        # credit reads to the genes of the models reported here.
+        gene_body_fh=gene_body_fh,
+        gene_body_index_transcripts=transcripts,
     )
 
     # reset

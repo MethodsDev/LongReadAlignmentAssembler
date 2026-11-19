@@ -72,12 +72,14 @@ _EXPECTED_TAIL = {
     # this cluster's own reads. Appended, never inserted. keep_boundary_annotations_for
     # (the final quant leaves the reported models' TSS / PolyA claims as assembled) is
     # appended after it, likewise keyword-only in practice. gene_body_fh (config
-    # gene_body_counts: the gene-body sidecar handle) is appended last.
+    # gene_body_counts: the gene-body sidecar handle) follows, then
+    # gene_body_index_transcripts (the discovery call's reported models).
     "run_quant_only": (
         "reference_transcripts",
         "bam_file_for_priors",
         "keep_boundary_annotations_for",
         "gene_body_fh",
+        "gene_body_index_transcripts",
     ),
 }
 

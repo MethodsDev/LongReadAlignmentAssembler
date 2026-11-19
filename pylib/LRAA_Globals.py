@@ -1281,8 +1281,9 @@ config = {
     "oversimplify_enabled": False,
     "oversimplify_contigs": [],  # list of contig names (e.g., ["chrM", "MT"]) to treat with simplified assignment
     # Gene-body counting (single-nucleus / pre-mRNA), pylib/GeneBodyAssigner.py and
-    # docs/single_nucleus_intronic_gene_counts.md. Quant-only with --stream_reads. When on,
-    # every retained read is also written to <prefix>.quant.gene_body.tracking.gz: reads
+    # docs/single_nucleus_intronic_gene_counts.md. Needs --stream_reads; in discovery mode
+    # it rides on the final quant of the assembled models. When on, every retained read
+    # of the final quant is also written to <prefix>.quant.gene_body.tracking.gz: reads
     # isoform quant assigns keep that assignment (EM split summed per gene); reads it leaves
     # unassigned (intronic, partial, novel junctions) go to the most appropriate same-strand
     # gene. Each row carries a spliced/unspliced/ambiguous class. quant.expr and

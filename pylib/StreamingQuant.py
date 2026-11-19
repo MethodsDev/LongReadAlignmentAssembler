@@ -818,6 +818,9 @@ def stream_assign(
             read.reference_start, read.cigartuples
         )
         read_name = Util_funcs.get_read_name_include_sc_encoding(read)
+        gene_body_recorder.note_aligned_strand(
+            "-" if read.is_reverse else "+", bool(introns)
+        )
         if rows:
             gene_body_recorder.record_isoform(read_name, segments, introns, rows)
         else:

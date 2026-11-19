@@ -5730,14 +5730,16 @@ def merge_read_assignment_summaries(merged_dir, units):
 GENE_BODY_TRACKING_SUFFIX = ".quant.gene_body.tracking.gz"
 
 
-def merge_gene_body_tracking(merged_dir, units):
+def merge_gene_body_tracking(merged_dir, units, id_map=None):
     """Concatenate the units' gene-body sidecars (config gene_body_counts), or None.
 
     Keyed on the files, not on config, so a scattered merge (util/misc/
     merge_chunk_outputs.py) behaves the same as the in-process one. All units or none:
     a partial set would publish gene counts with whole chunks silently missing.
-    Rows hold no coordinates and quant-only gene ids are global, so there is nothing
-    to translate; each unit holds a read's rows once, so there is nothing to sort.
+    Rows hold no coordinates, so nothing is shifted; each unit holds a read's rows
+    once, so there is nothing to sort. Quant-only gene ids are global. A discovery
+    run passes the id plan the tracking merge applies (merged_id_plan), so a gene id
+    two chunks minted for different models is renamed here exactly as it is there.
     """
     paths = [unit["quant_prefix"] + GENE_BODY_TRACKING_SUFFIX for unit in units]
     present = [os.path.exists(p) for p in paths]
@@ -5753,7 +5755,7 @@ def merge_gene_body_tracking(merged_dir, units):
     out_path = os.path.join(merged_dir, "chunked" + GENE_BODY_TRACKING_SUFFIX)
     header = None
     with gzip.open(out_path, "wt") as ofh:
-        for p in paths:
+        for unit, p in zip(units, paths):
             with gzip.open(p, "rt") as fh:
                 seen_header = False
                 for line in fh:
@@ -5771,6 +5773,12 @@ def merge_gene_body_tracking(merged_dir, units):
                                 "gene-body sidecar header differs: {}".format(p)
                             )
                         continue
+                    if id_map:
+                        gene_id, sep, rest = line.partition("\t")
+                        gene_id = mapped_id(
+                            id_map, unit["unit_id"], ID_KIND_GENE, gene_id
+                        )
+                        line = gene_id + sep + rest
                     ofh.write(line)
     return out_path
 
@@ -5957,7 +5965,7 @@ def merge_and_translate(outdir, units, discovery=False):
     )
 
     merged_summary = merge_read_assignment_summaries(merged_dir, units)
-    gene_body_tracking = merge_gene_body_tracking(merged_dir, units)
+    gene_body_tracking = merge_gene_body_tracking(merged_dir, units, id_map)
 
     merged = {
         "quant_expr": expr_out,

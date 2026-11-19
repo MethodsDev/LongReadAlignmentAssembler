@@ -379,3 +379,54 @@ def test_chunked_merge_of_gene_body_sidecars(tmp_path):
     assert ChunkedRun.merge_gene_body_tracking(str(tmp_path), [absent]) is None
     with pytest.raises(ChunkedRun.PipelineError):
         ChunkedRun.merge_gene_body_tracking(str(tmp_path), units + [absent])
+
+
+def test_chunked_merge_applies_discovery_gene_id_plan(tmp_path):
+    # Discovery chunks mint gene ids independently; the merge renames a colliding id
+    # with the plan the tracking merge uses, so sidecar and tracking agree.
+    import gzip
+    import ChunkedRun
+
+    header = "\t".join(GBA.GENE_BODY_TRACKING_HEADER) + "\n"
+    units = []
+    for k in range(2):
+        prefix = str(tmp_path / f"u{k}")
+        with gzip.open(prefix + ChunkedRun.GENE_BODY_TRACKING_SUFFIX, "wt") as fh:
+            fh.write(header)
+            fh.write(f"g:comp-1\tbc^u^r{k}\t1.000000\tS\tisoform\t1\t10\t10\t0\n")
+        units.append({"quant_prefix": prefix, "unit_id": f"u{k}"})
+    id_map = {
+        ("u0", ChunkedRun.ID_KIND_GENE, "g:comp-1"): "u0@g:comp-1",
+        ("u1", ChunkedRun.ID_KIND_GENE, "g:comp-1"): "u1@g:comp-1",
+    }
+    out = ChunkedRun.merge_gene_body_tracking(str(tmp_path), units, id_map)
+    rows = [l.split("\t") for l in gzip.open(out, "rt").read().splitlines()[1:]]
+    assert [(r[0], r[1]) for r in rows] == [
+        ("u0@g:comp-1", "bc^u^r0"),
+        ("u1@g:comp-1", "bc^u^r1"),
+    ]
+    # quant-only: no plan, ids pass through
+    out = ChunkedRun.merge_gene_body_tracking(str(tmp_path), units)
+    rows = [l.split("\t") for l in gzip.open(out, "rt").read().splitlines()[1:]]
+    assert [r[0] for r in rows] == ["g:comp-1", "g:comp-1"]
+
+
+def test_unstranded_library_warning_is_log_only(caplog):
+    G2 = Tx("G", [(1000, 1999), (3000, 3999)])
+    for antisense_every, expect_warning in ((2, True), (0, False)):
+        fh = io.StringIO()
+        rec = GBA.GeneBodyRecorder(GBA.GeneBodyIndex([G2], "+"), fh, label="chrT+")
+        rows = [("G", "t1", "h", "2", "mp", 1.0, 1.0, "1")]
+        for k in range(GBA.STRAND_CHECK_MIN_SPLICED_READS):
+            aligned = "-" if (antisense_every and k % antisense_every == 0) else "+"
+            rec.note_aligned_strand(aligned, spliced=True)
+            rec.note_aligned_strand("-", spliced=False)  # unspliced reads are not counted
+            rec.record_isoform(f"bc^u^r{k}", [(1500, 1999), (3000, 3500)], [(2000, 2999)], rows)
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="GeneBodyAssigner"):
+            rec.finish()
+        warned = any("unstranded" in r.getMessage() for r in caplog.records)
+        assert warned == expect_warning
+        assert rec.counts["strand_check_spliced"] == GBA.STRAND_CHECK_MIN_SPLICED_READS
+        # the sidecar is the same either way
+        assert len(fh.getvalue().splitlines()) == GBA.STRAND_CHECK_MIN_SPLICED_READS

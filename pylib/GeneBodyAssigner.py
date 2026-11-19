@@ -23,7 +23,8 @@ Strand: every candidate is on the read's transcribed strand (each contig-strand 
 sees only its own reads and genes), so an antisense gene is never a candidate. An
 unspliced read has no `ts` evidence and takes its aligned strand: inputs are expected
 to be strand-specific (oriented 10x / Kinnex reads); an unstranded library would put
-half its unspliced reads on the wrong strand. No special handling.
+half its unspliced reads on the wrong strand. No special handling, but GeneBodyRecorder
+logs a warning when the spliced reads show it (STRAND_CHECK_*).
 
 Decision order for a read with no isoform assignment:
 
@@ -61,10 +62,13 @@ gene_full = S + U + A.
 """
 
 import bisect
+import logging
 import tempfile
 from collections import defaultdict
 
 import LRAA_Globals
+
+logger = logging.getLogger(__name__)
 
 SPLICED = "S"
 UNSPLICED = "U"
@@ -75,6 +79,13 @@ POLICY_SPLIT = "split"
 
 READTHROUGH_TRANSCRIPT_TAG = "readthrough_transcript"
 READTHROUGH_GENE_TAG = "readthrough_gene"
+
+# Strandedness check (log only). A spliced read's transcribed strand is known from its
+# junctions, so in an oriented library its aligned strand agrees with the unit's strand
+# nearly always. Unstranded cDNA gives about half antisense, and then every unspliced
+# read, which can only take its aligned strand, lands on the wrong strand half the time.
+STRAND_CHECK_MIN_SPLICED_READS = 200
+STRAND_CHECK_MAX_ANTISENSE_FRAC = 0.2
 
 # how a read tied after rules 0-3 was settled (GeneBodyRecorder.counts keys)
 RULE_DOMINANCE = "dominance"
@@ -420,13 +431,36 @@ class GeneBodyRecorder:
     at the end. Memory stays bounded by the gene count, whatever the tie count.
     """
 
-    def __init__(self, index, fh, spill_dir=None):
+    def __init__(self, index, fh, spill_dir=None, label=None):
         self.index = index
         self.fh = fh
         self.counts = defaultdict(float)
         self.gene_isoform_reads = defaultdict(float)
         self._spill = None
         self._spill_dir = spill_dir
+        self.label = label if label is not None else str(index.contig_strand)
+
+    def note_aligned_strand(self, aligned_strand, spliced):
+        """Count a spliced read whose aligned strand disagrees with this unit's strand."""
+        if not spliced:
+            return
+        self.counts["strand_check_spliced"] += 1
+        if aligned_strand != self.index.contig_strand:
+            self.counts["strand_check_spliced_antisense"] += 1
+
+    def _warn_if_unstranded(self):
+        n = self.counts.get("strand_check_spliced", 0)
+        if n < STRAND_CHECK_MIN_SPLICED_READS:
+            return
+        frac = self.counts.get("strand_check_spliced_antisense", 0) / n
+        if frac > STRAND_CHECK_MAX_ANTISENSE_FRAC:
+            logger.warning(
+                "[%s] gene-body counts: %.1f%% of %d spliced reads align to the strand "
+                "opposite the one their junctions are transcribed from. The library looks "
+                "unstranded (or reverse-stranded); unspliced reads take their aligned "
+                "strand, so their gene-body counts will be wrong.",
+                self.label, 100.0 * frac, n,
+            )
 
     def _write(self, gene_id, read_name, frac, cls, source, n, aligned_bp, exonic_bp, intronic_bp):
         self.fh.write(
@@ -485,6 +519,7 @@ class GeneBodyRecorder:
 
     def finish(self):
         """Resolve the spilled ties with this unit's isoform-assigned gene counts."""
+        self._warn_if_unstranded()
         if self._spill is None:
             return
         use_weights = (
