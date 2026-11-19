@@ -162,6 +162,11 @@ task run_filter_good_cells {
     # Extract the good cell barcodes to a standalone file
     zcat ${BASIS_OUT}/barcodes.tsv.gz > ~{output_prefix}.good_cell_barcodes.txt
 
+    # The gene matrix's directory carries the summary whichever matrix called the cells
+    if [ ! -f gene-sparseM-filtered/filtering_summary.tsv ]; then
+      cp ${BASIS_OUT}/filtering_summary.tsv gene-sparseM-filtered/
+    fi
+
     # Tar and compress the filtered sparse matrix directory
     tar -czf ~{output_prefix}.gene-sparseM.tar.gz gene-sparseM-filtered
 

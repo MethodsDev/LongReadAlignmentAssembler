@@ -433,8 +433,9 @@ What changed between the columns:
   prunes still counts as a junction for rule 1 and for S.
 - Rule 4 weights come from the unit's own isoform reads. A unit routed through the
   geometry-only pass has none, so its ties fall to the 3' end, innermost and drop rules.
-- The matrix builder accumulates in a dict (bounded by non-zero entries). At genome scale it
-  should reuse `LevelAccumulator`'s chunked path.
+- The matrix builder holds rows as integer (gene, barcode) triples and folds them into
+  sparse matrices every 5 M rows, so memory follows the nonzeros (2026-11-19; it was a
+  string-keyed dict). Not yet run at genome scale.
 
 ## 6. Decisions on the round-1 questions (user, 2026-11-18)
 
@@ -456,7 +457,7 @@ What changed between the columns:
 
 - A Terra or fleet-VM run of `sc_nucseq` on a full single-nucleus sample (only the 2 Mb
   test fixture has been run through the workflow).
-- A genome-scale matrix builder (`LevelAccumulator` reuse).
+- Sizing the matrix-build task (`memoryGBbuildSparseMatrices`) on a genome-scale sidecar.
 - Optionally, a per-unit gene-body summary TSV (the counts are logged per contig-strand now).
 - Running on the full ALS sample on a fleet VM or Terra (never on this workstation), and
   comparing with Cell Ranger include-introns counts if they exist for LP00714.

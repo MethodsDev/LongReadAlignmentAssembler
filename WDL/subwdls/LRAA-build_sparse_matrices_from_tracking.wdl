@@ -358,8 +358,8 @@ task merge_sc_shard_sparse {
 # feature and one barcode list, and the per-barcode table of their totals
 # (util/sc/gene_body_cell_stats.py).
 #
-# The builder accumulates one dict entry per (gene, barcode, class): memory follows
-# the nonzeros, not the reads (docs/single_nucleus_intronic_gene_counts.md).
+# Memory follows the nonzeros, not the reads: the builder folds integer triples into
+# sparse matrices as it streams (docs/single_nucleus_intronic_gene_counts.md).
 # ---------------------------------------------------------------------------
 
 task sc_build_gene_body_sparse {
