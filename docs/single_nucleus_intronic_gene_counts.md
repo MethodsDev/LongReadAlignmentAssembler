@@ -426,6 +426,29 @@ What changed between the columns:
 **Cost.** In round 1, every read through `assign()` against all GENCODE v39 chr8 genes took
 24-39 us. Round 2: ALS window wall time 96.5 s on versus 98.0 s off (`--no_chunk`, 4 CPUs).
 
+**Discovery mode and `sc_nucseq` (2026-11-19, chr19 2 Mb PBMC Kinnex fixture,
+`testing/single_cells/sc_full_pipe`, whole cells, so few intronic reads).**
+
+- LRAA CLI, chunked at 0.2 Mb, key on vs off: de novo and ref-guided gtf, `quant.expr` and
+  `quant.tracking` byte-identical. The sidecar's `isoform` rows equal the tracking file per
+  (read, gene): 342,139 pairs de novo, 344,807 ref-guided, 0 mismatches, with the chunk id
+  plan applied in both. gene_full / tracking = 1.06 (S 87%, U 4%, A 9% de novo).
+  Strandedness check: 0 antisense spliced reads (oriented library), no warning.
+- Workflow, local images built from the branch, `sc_nucseq` off vs the branch's base
+  commit: quant-only basic on the shard path (17 outputs) and on the library-wide path with
+  emptyDrops (22), cluster-guided quant-only (32) and cluster-guided de novo (53) all
+  identical, except a chunk plan's `bam_identity` (a path fingerprint) and the
+  cluster pseudobulk matrices' row order (`util/build_LRAA_expr_matrices.py` iterates a set;
+  same rows).
+- `sc_nucseq` on (min_features_nucseq 1 for the fixture): init gtf, tracking and standard
+  matrices unchanged; gene_full 90 genes x 12,655 barcodes (standard 82 x 12,427),
+  S + U + A = gene_full entry for entry; per-barcode table for every barcode; emptyDrops on
+  gene_full kept 3,003 cells (2,861 on the gene matrix, `lower_threshold` 20); clusters
+  from gene_full. Cluster-guided quant-only reused the init pass's gene-body outputs as the
+  final ones (no second quant); de novo built them from the final quant (177 genes). In de
+  novo, 4 of 165 genes had no span: the mismapping filter had dropped their models from the
+  init gtf, while the tracking file keeps their reads.
+
 ### Known limitations
 
 - Classification and the junction rule read the raw CIGAR, while the isoform verdict uses
