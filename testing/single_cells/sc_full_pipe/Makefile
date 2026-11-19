@@ -5,7 +5,7 @@ include ../../lraa_test_docker.mk
 
 # MINIWDL_CFG and MINIWDL_RUN come from the include above.
 
-test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_cluster_guided_denovo_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly
+test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_cluster_guided_denovo_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_nucseq test_full_sc_pipe_cluster_guided_denovo_nucseq_wdl
 
 
 test_full_sc_pipe_basic_wdl:
@@ -31,6 +31,17 @@ test_full_sc_pipe_cluster_guided_denovo_wdl:
 
 test_full_sc_pipe_cluster_guided_wdl_QOnly:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.QUANTONLY.inputs.json -d sc_pipe_outdir-cluster-guided-QOnly $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+
+# sc_nucseq (single-nucleus mode): gene-body counts, gene_full matrices and clustering on
+# them. Quant-only basic calls cells on gene_full with emptyDrops; de novo cluster-guided
+# builds the gene-body matrices from discovery's final quant and from the pooled final quant.
+test_full_sc_pipe_basic_wdl_QOnly_nucseq:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-basic.QUANTONLY.nucseq.inputs.json -d sc_pipe_outdir-basic-QOnly-nucseq $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+	python3 check_nucseq_outputs.py sc_pipe_outdir-basic-QOnly-nucseq
+
+test_full_sc_pipe_cluster_guided_denovo_nucseq_wdl:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.denovo.nucseq.inputs.json -d sc_pipe_outdir-cluster-guided-denovo-nucseq $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+	python3 check_nucseq_outputs.py sc_pipe_outdir-cluster-guided-denovo-nucseq --final
 
 
 

@@ -121,6 +121,10 @@ if (nucseq) {
   gene_span <- span_by_gene[rownames(hvf)]
   message("- length-aware variable genes: ", sum(!is.na(gene_span)), " of ", nrow(hvf),
           " genes have a span")
+  if (sum(!is.na(gene_span)) == 0) {
+    stop("no gene in the matrix has a span in ", gene_spans_file,
+         ": its gene ids do not match the matrix's features")
+  }
   log_span <- log10(gene_span)
   breaks <- unique(quantile(log_span, probs = seq(0, 1, length.out = span_bins + 1), na.rm = TRUE))
   span_bin <- if (length(breaks) > 1) {

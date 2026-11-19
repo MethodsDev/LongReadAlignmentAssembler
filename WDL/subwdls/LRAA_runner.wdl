@@ -406,6 +406,14 @@ GENE_BODY_PY
             exit $cmd_status
         fi
 
+        # The gene-body strandedness warning is logged by the chunk workers, whose logs
+        # stay in chunked_work and are not delocalized; repeat it where the task log
+        # shows it.
+        if [[ "~{gene_body_counts}" == "true" ]]; then
+            grep -h "looks unstranded" command_output.log \
+                ~{output_prefix_use}.~{output_suffix}.chunked_work/logs/*.log >&2 2>/dev/null || true
+        fi
+
         if [[ -f ~{output_prefix_use}.~{output_suffix}.quant.tracking ]]; then
             gzip ~{output_prefix_use}.~{output_suffix}.quant.tracking    
         fi
